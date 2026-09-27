@@ -538,6 +538,7 @@ export const setProviderModelsEnabledSchema = z.object({
 
 export const limitsCodexEnabledSchema = z.object({ enabled: z.boolean() }).strict();
 export const limitsNoInputSchema = z.undefined();
+export const updateNoInputSchema = z.undefined();
 
 export const reviewStartSchema = z.object({
   cwd: nonEmptyString,

@@ -72,6 +72,7 @@ import type {
   TestCustomProviderResult,
   ThinkingLevel,
   UpdateModelConfigInput,
+  UpdateState,
   UpsertCustomProviderInput,
   WorkingChangeStats,
   WorkspaceAgentsState,
@@ -483,6 +484,19 @@ export type ModusApi = {
     close(): Promise<void>;
     getState(): Promise<{ maximized: boolean }>;
     onStateChange(listener: (state: { maximized: boolean }) => void): () => void;
+  };
+  /** App auto-update (GitHub Releases). Everything is a no-op in dev and beta builds. */
+  update: {
+    getState(): Promise<UpdateState>;
+    /** Downloads and installs (restart waits for running agents), or opens the release page. */
+    install(): Promise<void>;
+    retry(): Promise<void>;
+    /** In `waiting-for-agents`: restart now instead of waiting for running agents. */
+    restartNow(): Promise<void>;
+    /** Hides the notice for this version until a newer one appears (in memory only). */
+    dismiss(): Promise<void>;
+    openReleasePage(): Promise<void>;
+    onStateChange(listener: (state: UpdateState) => void): () => void;
   };
   clipboard: {
     /** Write PNG bytes to the OS clipboard as an image. */

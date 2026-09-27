@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Configuration } from "electron-builder";
+import { RELEASE_REPO } from "./src/shared/release-repo";
 
 const fastCodebaseResource = join("resources", "bin", "codegraph");
 
@@ -62,11 +63,17 @@ const config: Configuration = {
    * electron-builder is pinned to 26.8.1 (apps/desktop/package.json). Stay below v28:
    * from v28 the NSIS updater fails closed on unsigned builds, and the Windows build
    * is not Authenticode-signed yet. See docs/releasing.md.
+   *
+   * electron-updater (runtime dependency) is pinned to 6.8.3: the release published
+   * together with electron-builder 26.8.x, sharing builder-util-runtime 9.5.1. Upgrade
+   * the two in step. 6.8.3's NsisUpdater.verifySignature skips verification when
+   * app-update.yml has no publisherName, which is the case for unsigned builds.
    */
   publish: {
     provider: "github",
-    owner: "stoltembergg-png",
-    repo: "modus",
+    // Shared with the in-app updater's URL allowlist (src/main/updater/update-policy.ts).
+    owner: RELEASE_REPO.owner,
+    repo: RELEASE_REPO.repo,
     releaseType: "draft",
     channel: updateChannel,
   },
