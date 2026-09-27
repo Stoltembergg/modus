@@ -24,7 +24,6 @@ const config: Configuration = {
   npmRebuild: false,
   nodeGypRebuild: false,
   buildDependenciesFromSource: false,
-  compression: "store",
   directories: {
     output: "dist",
     buildResources: "resources",
