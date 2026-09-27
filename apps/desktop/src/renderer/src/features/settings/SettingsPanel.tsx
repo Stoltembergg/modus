@@ -26,7 +26,7 @@ import { RulesSettingsPanel } from "./sections/rules";
 import { SettingsSidebar } from "./sections/SettingsSidebar";
 import { SkillsSettingsPanel } from "./sections/skills";
 import { SubagentsSettingsPanel } from "./sections/subagents";
-import type { SettingsSectionId } from "./settings-types";
+import type { ModelConfigPatch, SettingsSectionId } from "./settings-types";
 
 export type { HarnessInsightsViewState } from "./sections/harness-insights";
 export {
@@ -74,12 +74,6 @@ type SettingsPanelProps = {
   workspaces?: WorkspaceInfo[] | undefined;
   /** Active project scope for the memory manager; omitted in Inbox. */
   workspaceId?: string | undefined;
-};
-
-type ModelConfigPatch = {
-  thinkingVariant?: string;
-  contextWindow?: number;
-  maxTokens?: number;
 };
 
 export function SettingsPanel({

@@ -159,7 +159,7 @@ export function ApprovalModeSettings({ cwd, workspaces = [] }: ApprovalModeSetti
 
       <section className="flex flex-col gap-4">
         <div>
-          <h3 className="text-sm font-normal text-fg">
+          <h3 className="text-md font-normal text-fg">
             {isHome
               ? "Global approval mode"
               : `${selectedProject?.displayName ?? "Project"} approval mode`}

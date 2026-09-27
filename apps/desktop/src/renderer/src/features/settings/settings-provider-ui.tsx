@@ -33,12 +33,7 @@ import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
 import { ReadOnlyPill } from "./settings-layout";
 import { UnofficialProviderMark, UnofficialProviderNotice } from "./UnofficialProviderNotice";
-
-type ModelConfigPatch = {
-  thinkingVariant?: string;
-  contextWindow?: number;
-  maxTokens?: number;
-};
+import type { ModelConfigPatch } from "./settings-types";
 
 export function ProviderGroup({ children, title }: { children: ReactNode; title: string }) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
@@ -249,14 +244,14 @@ export function ProviderDetail({
           <div className="pt-3">
             <div className="flex flex-wrap items-center justify-end gap-2">
               {busy ? (
-                <span className="rounded-md bg-chip px-2.5 py-1 text-xs text-fg-muted">
+                <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">
                   <ShinyText>Saving</ShinyText>
                 </span>
               ) : (
                 <ReadOnlyPill>{modelResultLabel(filteredModels.length)}</ReadOnlyPill>
               )}
               <button
-                className="flex h-8 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+                className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
                 disabled={busy || allEnabled || models.length === 0}
                 onClick={() => onSetAllModels(true)}
                 type="button"
@@ -264,7 +259,7 @@ export function ProviderDetail({
                 Enable all
               </button>
               <button
-                className="flex h-8 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+                className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
                 disabled={busy || noneEnabled}
                 onClick={() => onSetAllModels(false)}
                 type="button"
@@ -273,7 +268,7 @@ export function ProviderDetail({
               </button>
               {detail.source === "custom" ? (
                 <button
-                  className="flex h-8 items-center gap-1.5 rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                  className="flex h-9 items-center gap-1.5 rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
                   onClick={() => onEditProvider(detail.id)}
                   type="button"
                 >
@@ -418,7 +413,7 @@ export function ProviderCredentials({
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           <button
-            className="h-8 rounded-full bg-canvas/70 px-3 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+            className="h-7 rounded-full bg-canvas/70 px-3 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
             onClick={detail.source === "custom" ? onEditProvider : onOpenConnection}
             type="button"
           >
@@ -426,7 +421,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -436,7 +431,7 @@ export function ProviderCredentials({
           {detail.source === "custom" ? (
             <button
               aria-label={`Remove ${detail.name}`}
-              className="flex size-8 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
+              className="flex size-7 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
               onClick={onDeleteProvider}
               type="button"
             >
@@ -660,7 +655,7 @@ export function ModelRow({
             <button
               aria-expanded={open}
               aria-label={`Configure ${model.name}`}
-              className="flex size-8 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+              className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               onClick={() => setOpen((value) => !value)}
               type="button"
             >
@@ -829,7 +824,7 @@ export function SearchField({
       {value ? (
         <button
           aria-label={`Clear ${ariaLabel.toLowerCase()}`}
-          className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+          className="absolute top-1/2 right-1.5 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
           onClick={() => onChange("")}
           type="button"
         >
@@ -843,27 +838,27 @@ export function SearchField({
 export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
   if (status === "error") {
     return (
-      <span className="rounded-md bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
+      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
     );
   }
 
   if (status === "connected") {
     return (
-      <span className="flex items-center gap-1 rounded-md bg-success/10 px-2 py-1 text-xs text-success">
+      <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs text-success">
         <IconCheck size={12} stroke={2} />
         Connected
       </span>
     );
   }
 
-  return <span className="rounded-md bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
+  return <span className="rounded-full bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
 }
 
 export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
   return (
     <span
       className={cn(
-        "flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs",
+        "flex items-center gap-1 rounded-full px-1.5 py-0.5 text-2xs",
         model.reasoning ? "bg-chip-strong text-fg-muted" : "bg-chip text-fg-faint",
       )}
     >
@@ -874,7 +869,9 @@ export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
 }
 
 export function TinyBadge({ children }: { children: string }) {
-  return <span className="rounded bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>;
+  return (
+    <span className="rounded-full bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>
+  );
 }
 
 export type ProviderStatus = "available" | "connected" | "error";

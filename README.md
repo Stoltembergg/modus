@@ -6,8 +6,6 @@
   <img alt="Modus logo" src="./docs/media/modus-logo.png" width="96" height="96">
 </p>
 
-<h1 align="center">Modus</h1>
-
 <p align="center">
   Local-first desktop workspace for AI coding agents.
 </p>
@@ -93,6 +91,8 @@ npm --workspace @modus/desktop run package:linux -- --publish never
 ```
 
 Run the platform-matching package command on that OS.
+
+Releases are built by CI from `v*` tags; see [docs/releasing.md](docs/releasing.md).
 
 ## MCP Config
 

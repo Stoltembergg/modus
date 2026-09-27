@@ -165,6 +165,7 @@ import {
   resizeTerminal,
   writeTerminal,
 } from "../terminal/terminal-service";
+import { getUpdateService } from "../updater/update-service";
 import {
   archiveProjectChats,
   deleteProjectChats,
@@ -260,6 +261,7 @@ import {
   workspaceRenameSchema,
 } from "./schemas";
 import { assertTrustedSender } from "./trusted-sender";
+import { registerUpdateIpcHandlers } from "./update-ipc";
 import { clearSelectedWorkspace } from "./workspace-selection";
 
 function resolveReviewTarget(
@@ -1355,6 +1357,8 @@ export function registerAppIpc({
     refreshProviderLimits,
     setCodexLimitsEnabled,
   });
+
+  registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {
     getProjectMemorySnapshot,

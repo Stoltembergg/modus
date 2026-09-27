@@ -402,6 +402,46 @@ describe("PiSdkRuntime", () => {
     }
   });
 
+  it("reports active turns only while a prompt is running", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    let activeDuringPrompt: boolean | undefined;
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        activeDuringPrompt = runtime.hasActiveTurns();
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    expect(runtime.hasActiveTurns()).toBe(false);
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+    });
+
+    expect(activeDuringPrompt).toBe(true);
+    expect(runtime.hasActiveTurns()).toBe(false);
+  });
+
+  it("counts running background subagents as active turns", () => {
+    const runtime = new PiSdkRuntime();
+    const backgroundTasks = (
+      runtime as unknown as {
+        backgroundChildTasks: Map<
+          string,
+          { parentSessionId: string; task: string; status: "running" | "completed" }
+        >;
+      }
+    ).backgroundChildTasks;
+    backgroundTasks.set("child", { parentSessionId: "parent", task: "t", status: "completed" });
+    expect(runtime.hasActiveTurns()).toBe(false);
+    backgroundTasks.set("child", { parentSessionId: "parent", task: "t", status: "running" });
+    expect(runtime.hasActiveTurns()).toBe(true);
+  });
+
   it("expires MCP citations when a run completes", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));

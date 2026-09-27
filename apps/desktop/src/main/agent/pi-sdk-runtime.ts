@@ -2425,6 +2425,17 @@ export class PiSdkRuntime implements AgentRuntime {
     return { id, task, status: "missing" };
   }
 
+  hasActiveTurns(): boolean {
+    if (this.runOutputTrackers.size > 0 || this.preflightReservations.size > 0) return true;
+    for (const task of this.backgroundChildTasks.values()) {
+      if (task.status === "running") return true;
+    }
+    for (const runtimeSession of this.sessions.values()) {
+      if (runtimeSession.session.isStreaming || runtimeSession.session.isCompacting) return true;
+    }
+    return false;
+  }
+
   async abort(sessionId: string): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);

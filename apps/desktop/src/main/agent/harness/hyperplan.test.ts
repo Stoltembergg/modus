@@ -149,6 +149,10 @@ afterEach(() => {
 
 describe("runHyperPlanReview", () => {
   it("runs four fixed independent critics concurrently, then one synthesis pass", async () => {
+    // Fake timers: every critic schedules its delay against the same frozen clock, so the
+    // finish order below is fixed. With real timers, a >2ms scheduling gap between critic
+    // starts (loaded CI runner) let "architecture" finish before "failure".
+    vi.useFakeTimers();
     let active = 0;
     let maxActive = 0;
     const completionOrder: string[] = [];
@@ -168,7 +172,9 @@ describe("runHyperPlanReview", () => {
       }
     };
 
-    const result = await runHyperPlanReview(reviewInput());
+    const pending = runHyperPlanReview(reviewInput());
+    await vi.advanceTimersByTimeAsync(6);
+    const result = await pending;
 
     expect(maxActive).toBe(4);
     expect(mocks.promptTexts.filter((prompt) => criticId(prompt)).map(criticId)).toEqual([

@@ -208,10 +208,8 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                 className="overflow-hidden rounded-lg border border-hairline-soft bg-panel"
                 key={provider}
               >
-                <h3 className="border-hairline-soft border-b px-3 py-2 text-xs text-fg-muted">
-                  {provider}
-                </h3>
-                <div className="divide-y divide-hairline-soft">
+                <h3 className="px-3 py-2 text-xs text-fg-muted">{provider}</h3>
+                <div>
                   {rows.map((row) => (
                     <div
                       className="grid gap-2 px-3 py-3 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center"
@@ -287,10 +285,7 @@ export function LimitsSettingsPanel({ models }: { models: ModelInfo[] }) {
                 {account.metrics.length ? (
                   <dl className="mt-3 grid gap-2 sm:grid-cols-2">
                     {account.metrics.map((metric) => (
-                      <div
-                        className="rounded-md border border-hairline-soft bg-canvas px-3 py-2"
-                        key={metric.id}
-                      >
+                      <div className="rounded-md bg-canvas px-3 py-2" key={metric.id}>
                         <dt className="text-2xs text-fg-faint">{accountMetricLabel(metric)}</dt>
                         <dd className="mt-1 text-sm tabular-nums text-fg">
                           {usageMetricText(metric)}
