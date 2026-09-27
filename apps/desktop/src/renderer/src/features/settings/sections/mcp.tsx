@@ -20,8 +20,8 @@ import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
 import { SelectField } from "../form-controls";
-import { McpTypeCard, settingsProjectTabs, type SettingsProjectTab } from "../settings-provider-ui";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
+import { McpTypeCard, type SettingsProjectTab, settingsProjectTabs } from "../settings-provider-ui";
 
 const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
   connected: { dot: "bg-success", label: "Connected" },
