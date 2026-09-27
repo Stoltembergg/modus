@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -254,6 +262,8 @@ describe("mac zip installer", () => {
       "/usr/bin/xattr",
       "6000",
       join(workDir, "install.lock"),
+      join(workDir, "install-failure.json"),
+      "1.1.0",
     ]);
     expect(logPath).toBe(join(workDir, "install.log"));
     expect(deps.quit).toHaveBeenCalledTimes(1);
@@ -304,5 +314,22 @@ describe("mac zip installer", () => {
       join(attemptDir(2), "extracted", "Modus.app"),
     ]);
     expect(existsSync(join(attemptDir(1), "extracted", "Modus.app"))).toBe(true);
+  });
+
+  it("logs a backup it cannot remove on the next start at info", async () => {
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const apps = join(root, "Applications");
+    mkdirSync(macBackupPath(bundlePath), { recursive: true });
+    chmodSync(apps, 0o555);
+    try {
+      logger.info.mockClear();
+      await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
+      expect(existsSync(macBackupPath(bundlePath))).toBe(true);
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining(`could not remove ${macBackupPath(bundlePath)}`),
+      );
+    } finally {
+      chmodSync(apps, 0o755);
+    }
   });
 });

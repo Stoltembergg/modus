@@ -15,6 +15,10 @@ import {
   pageOnlyInstaller,
 } from "./electron-updater-source";
 import {
+  type PreviousInstallFailure,
+  restorePreviousMacInstallFailure,
+} from "./mac-install-failure";
+import {
   cleanupMacUpdateArtifacts,
   createMacZipInstaller,
   type HttpResponse,
@@ -179,11 +183,21 @@ export async function startUpdateService(): Promise<void> {
   });
 
   let installer: PlatformInstaller;
+  let previousFailure: PreviousInstallFailure | null = null;
   if (!installInPlace) {
     installer = pageOnlyInstaller;
   } else if (policy.platform === "darwin") {
     const bundlePath = resolve(app.getPath("exe"), "../../..");
     const workDir = join(app.getPath("userData"), "updater");
+    // The script's failure marker lives in workDir: take it before the cleanup.
+    await restorePreviousMacInstallFailure({
+      workDir,
+      currentVersion: app.getVersion(),
+      logger: updaterLogger,
+      report: (failure) => {
+        previousFailure = failure;
+      },
+    });
     await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger: updaterLogger });
     installer = createMacZipInstaller({
       bundlePath,
@@ -222,6 +236,8 @@ export async function startUpdateService(): Promise<void> {
     beforeInstallRestart,
   });
   controller.subscribe(broadcastUpdateState);
+  // Shown as a retryable failure so the notice can offer Retry / the release page.
+  if (previousFailure) controller.reportPreviousFailure(previousFailure);
   controller.start();
   updaterLogger.info(
     `update checks enabled (${policy.platform}, ${installInPlace ? "in-place install" : "release page only"})`,

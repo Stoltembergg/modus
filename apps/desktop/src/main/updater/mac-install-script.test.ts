@@ -11,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MAC_INSTALL_WAIT_TICKS, macInstallScriptArgs } from "./mac-install-script";
+import {
+  MAC_INSTALL_EXIT_REASONS,
+  MAC_INSTALL_WAIT_TICKS,
+  macInstallScriptArgs,
+} from "./mac-install-script";
 
 // Runs the real script with /bin/sh against a fake bundle layout; `open`/`xattr` are shims.
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -38,6 +42,7 @@ describePosix("mac install script", () => {
       pid?: number;
       maxWaitTicks?: number;
       env?: Record<string, string>;
+      lockPath?: string;
     } = {},
   ) => {
     const args = macInstallScriptArgs({
@@ -48,7 +53,9 @@ describePosix("mac install script", () => {
       openBin: overrides.open ?? writeShim("open", "exit 0"),
       xattrBin: writeShim("xattr", "exit 0"),
       maxWaitTicks: overrides.maxWaitTicks ?? 5,
-      lockPath: join(root, "install.lock"),
+      lockPath: overrides.lockPath ?? join(root, "install.lock"),
+      markerPath: markerPath(),
+      version: "1.1.0",
     });
     return spawnSync("/bin/sh", args, {
       encoding: "utf8",
@@ -78,6 +85,14 @@ describePosix("mac install script", () => {
     chmodSync(join(bin, "mv"), 0o755);
     return `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`;
   };
+  const markerPath = () => join(root, "install-failure.json");
+  const marker = () => JSON.parse(readFileSync(markerPath(), "utf8"));
+  const expectMarker = (code: number) =>
+    expect(marker()).toEqual({
+      code,
+      reason: MAC_INSTALL_EXIT_REASONS[code],
+      version: "1.1.0",
+    });
   const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
   const backupPath = () => join(apps, ".Modus.app.update-backup");
 
@@ -142,7 +157,7 @@ describePosix("mac install script", () => {
     chmodSync(stuck, 0o555);
     const result = run();
     expect(result.status).toBe(8);
-    expect(result.stdout).toContain("could not remove old backup");
+    expect(result.stdout).toContain("failed (8 backup-not-removed)");
     expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
     expect(existsSync(join(backupPath(), "Modus.app"))).toBe(false);
     expect(version(join(root, "staged", "Modus.app"))).toBe("1.1.0");
@@ -165,7 +180,7 @@ describePosix("mac install script", () => {
       env: { PATH: shimPath(), SHIM_RM_KEEP: current },
     });
     expect(result.status).toBe(9);
-    expect(result.stdout).toContain("rollback failed");
+    expect(result.stdout).toContain("failed (9 rollback-remove-failed)");
     // The previous version stays intact at the backup path and is launched from there.
     expect(version(backupPath())).toBe("1.0.0");
     expect(existsSync(join(current, ".Modus.app.update-backup"))).toBe(false);
@@ -202,7 +217,7 @@ describePosix("mac install script", () => {
     mkdirSync(join(root, "install.lock"));
     const result = run();
     expect(result.status).toBe(11);
-    expect(result.stdout).toContain("another update install is running");
+    expect(result.stdout).toContain("failed (11 install-in-progress)");
     expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
     expect(version(join(root, "staged", "Modus.app"))).toBe("1.1.0");
     expect(existsSync(calls)).toBe(false);
@@ -228,6 +243,8 @@ describePosix("mac install script", () => {
       xattrBin: writeShim("xattr", "exit 0"),
       maxWaitTicks: 20,
       lockPath: join(root, "install.lock"),
+      markerPath: markerPath(),
+      version: "1.1.0",
     });
     const first = spawn("/bin/sh", args, { stdio: "ignore" });
     try {
@@ -249,7 +266,89 @@ describePosix("mac install script", () => {
       stagedAppPath: "/s/Modus.app",
       backupPath: "/Applications/.Modus.app.update-backup",
       lockPath: "/u/install.lock",
+      markerPath: "/u/install-failure.json",
+      version: "1.1.0",
     });
-    expect(args.slice(-2)).toEqual(["6000", "/u/install.lock"]);
+    expect(args.slice(-4)).toEqual(["6000", "/u/install.lock", "/u/install-failure.json", "1.1.0"]);
+  });
+
+  describe("failure marker", () => {
+    const current = () => join(apps, "Modus.app");
+    const failCurrentOpen = () => writeShim("open", `[ "$1" = "${current()}" ] && exit 1; exit 0`);
+
+    it("is written for app-did-not-quit (3) without touching or reopening anything", () => {
+      expect(run({ pid: process.pid, maxWaitTicks: 1 }).status).toBe(3);
+      expectMarker(3);
+      expect(version(current())).toBe("1.0.0");
+      expect(existsSync(calls)).toBe(false);
+    });
+
+    it("is written for staged-missing (4) and the old app is reopened", () => {
+      rmSync(join(root, "staged"), { recursive: true });
+      expect(run().status).toBe(4);
+      expectMarker(4);
+      expect(readFileSync(calls, "utf8").trim()).toBe(`open ${current()}`);
+    });
+
+    it("is written for move-current-failed (5); nothing moved, old app reopened", () => {
+      expect(run({ env: { PATH: shimPath(), SHIM_MV_FAIL: current() } }).status).toBe(5);
+      expectMarker(5);
+      expect(version(current())).toBe("1.0.0");
+      expect(readFileSync(calls, "utf8").trim()).toBe(`open ${current()}`);
+    });
+
+    it("is written for move-new-failed (6) after restoring and reopening the old app", () => {
+      const staged = join(root, "staged", "Modus.app");
+      expect(run({ env: { PATH: shimPath(), SHIM_MV_FAIL: staged } }).status).toBe(6);
+      expectMarker(6);
+      expect(version(current())).toBe("1.0.0");
+      expect(existsSync(backupPath())).toBe(false);
+      expect(readFileSync(calls, "utf8").trim()).toBe(`open ${current()}`);
+    });
+
+    it("is written for launch-failed (7) after restoring the old app", () => {
+      expect(run({ open: failCurrentOpen() }).status).toBe(7);
+      expectMarker(7);
+      expect(version(current())).toBe("1.0.0");
+    });
+
+    it("is written for backup-not-removed (8)", () => {
+      bundle(backupPath(), "0.9.0");
+      const result = run({ env: { PATH: shimPath(), SHIM_RM_KEEP: backupPath() } });
+      expect(result.status).toBe(8);
+      expectMarker(8);
+    });
+
+    it("is written for rollback failures (9, 10), launching the backup where it is", () => {
+      expect(
+        run({ open: failCurrentOpen(), env: { PATH: shimPath(), SHIM_RM_KEEP: current() } }).status,
+      ).toBe(9);
+      expectMarker(9);
+      rmSync(root, { recursive: true, force: true });
+      mkdirSync(root, { recursive: true });
+      bundle(current(), "1.0.0");
+      bundle(join(root, "staged", "Modus.app"), "1.1.0");
+      expect(
+        run({ open: failCurrentOpen(), env: { PATH: shimPath(), SHIM_MV_FAIL: backupPath() } })
+          .status,
+      ).toBe(10);
+      expectMarker(10);
+      expect(readFileSync(calls, "utf8")).toContain(`open ${backupPath()}`);
+    });
+
+    it("is written for install-in-progress (11) and lock-unavailable (12)", () => {
+      mkdirSync(join(root, "install.lock"));
+      expect(run().status).toBe(11);
+      expectMarker(11);
+      expect(run({ lockPath: join(root, "missing", "install.lock") }).status).toBe(12);
+      expectMarker(12);
+      expect(version(current())).toBe("1.0.0");
+    });
+
+    it("is removed by a successful install", () => {
+      writeFileSync(markerPath(), '{"code":3}');
+      expect(run().status).toBe(0);
+      expect(existsSync(markerPath())).toBe(false);
+    });
   });
 });

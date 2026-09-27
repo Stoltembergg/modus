@@ -49,6 +49,15 @@ export type UpdateController = {
    * restarts now. The service itself never interrupts an agent turn.
    */
   restartNow(): Promise<void>;
+  /**
+   * Shows a failure from the previous run (the mac install script failed after the
+   * app quit). Only applies while idle, i.e. right after start.
+   */
+  reportPreviousFailure(failure: {
+    version: string;
+    retryable: boolean;
+    action: UpdateAction;
+  }): void;
   dismiss(): void;
   openReleasePage(): Promise<void>;
 };
@@ -139,8 +148,11 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
     }
     const action = await deps.installer.actionFor(candidate);
     dispatch({ type: "check-found", version: candidate.version, action });
-    if (state.status === "available" && state.version === candidate.version) {
-      if (offered?.version !== candidate.version) {
+    if (
+      (state.status === "available" || state.status === "failed") &&
+      state.version === candidate.version
+    ) {
+      if (state.status === "available" && offered?.version !== candidate.version) {
         deps.logger.info(`update ${candidate.version} available (action: ${action})`);
       }
       offered = candidate;
@@ -251,10 +263,24 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
   const install = async () => {
     if (busy) return;
     if (state.status !== "available" && state.status !== "failed") return;
-    const candidate = offered;
-    if (!candidate || candidate.version !== state.version) return;
     if (state.action === "download-page" || (state.status === "failed" && !state.retryable)) {
       await openReleasePage();
+      return;
+    }
+    if (offered?.version !== state.version) {
+      // A failure restored at startup has no release details yet: look them up.
+      await checkNow();
+      // `state` changes during the await (TS keeps the earlier narrowing).
+      const latest = state as UpdateState;
+      if (latest.status !== "available" && latest.status !== "failed") return;
+      if (latest.action === "download-page") {
+        await openReleasePage();
+        return;
+      }
+    }
+    const current = state as UpdateState;
+    const candidate = offered;
+    if (!candidate || !("version" in current) || candidate.version !== current.version || busy) {
       return;
     }
     busy = true;
@@ -294,6 +320,9 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
     install,
     retry: install,
     restartNow,
+    reportPreviousFailure(failure) {
+      dispatch({ type: "previous-install-failed", ...failure });
+    },
     dismiss() {
       if (state.status !== "available" && state.status !== "failed") return;
       dismissedVersion = state.version;

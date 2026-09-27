@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants, createWriteStream } from "node:fs";
 import { access, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { macInstallFailurePath } from "./mac-install-failure";
 import { macInstallScriptArgs } from "./mac-install-script";
 import type { PlatformInstaller, UpdateCandidate, UpdateLogger } from "./update-controller";
 import { UpdateInstallError } from "./update-errors";
@@ -79,7 +80,10 @@ export async function isDirWritable(dir: string): Promise<boolean> {
   }
 }
 
-/** Runs on startup: a leftover backup means the previous update installed and relaunched. */
+/**
+ * Runs on startup (after takeMacInstallFailure): a leftover backup means the previous
+ * update installed and relaunched.
+ */
 export async function cleanupMacUpdateArtifacts(input: {
   bundlePath: string;
   workDir: string;
@@ -97,7 +101,8 @@ export async function cleanupMacUpdateArtifacts(input: {
     try {
       await rm(target, { recursive: true, force: true });
     } catch (error) {
-      input.logger.debug(`could not remove ${target}: ${String(error)}`);
+      // A leftover backup can be hundreds of MB: never drop this silently.
+      input.logger.info(`could not remove ${target}: ${String(error)}`);
     }
   }
 }
@@ -338,6 +343,8 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
           stagedAppPath: staged.appPath,
           backupPath: macBackupPath(deps.bundlePath),
           lockPath: macInstallLockPath(deps.workDir),
+          markerPath: macInstallFailurePath(deps.workDir),
+          version: candidate.version,
         }),
         join(deps.workDir, "install.log"),
       );

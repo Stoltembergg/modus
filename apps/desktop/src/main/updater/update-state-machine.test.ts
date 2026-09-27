@@ -86,6 +86,25 @@ describe("reduceUpdateState", () => {
   });
 });
 
+describe("previous-install-failed", () => {
+  it("restores a failure from the last run only while idle", () => {
+    const event: UpdateEvent = {
+      type: "previous-install-failed",
+      version: "1.1.0",
+      retryable: true,
+      action: "download-page",
+    };
+    expect(run([event])).toEqual({
+      status: "failed",
+      version: "1.1.0",
+      retryable: true,
+      action: "download-page",
+    });
+    const downloading: UpdateState = { status: "downloading", version: "1.2.0", percent: 1 };
+    expect(run([event], downloading)).toBe(downloading);
+  });
+});
+
 describe("isCheckAllowed", () => {
   it("never checks while checking, downloading or once an install is pending", () => {
     expect(isCheckAllowed(IDLE)).toBe(true);

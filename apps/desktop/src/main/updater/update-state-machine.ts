@@ -16,7 +16,9 @@ export type UpdateEvent =
   | { type: "restart-deferred" }
   | { type: "install-started" }
   | { type: "failed"; retryable: boolean; action: UpdateAction }
-  | { type: "dismissed" };
+  | { type: "dismissed" }
+  /** Restored at startup from the mac install script's failure marker. */
+  | { type: "previous-install-failed"; version: string; retryable: boolean; action: UpdateAction };
 
 export const IDLE: UpdateState = { status: "idle" };
 
@@ -76,6 +78,15 @@ export function reduceUpdateState(state: UpdateState, event: UpdateEvent): Updat
         };
       }
       return state;
+    case "previous-install-failed":
+      return state.status === "idle" || state.status === "checking"
+        ? {
+            status: "failed",
+            version: event.version,
+            retryable: event.retryable,
+            action: event.action,
+          }
+        : state;
     case "dismissed":
       return state.status === "available" || state.status === "failed" ? IDLE : state;
   }
