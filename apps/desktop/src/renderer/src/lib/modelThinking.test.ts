@@ -42,12 +42,13 @@ describe("modelThinkingOptions", () => {
   });
 
   it("labels token-budget selections without inventing named levels", () => {
+    const tokens = 32_768;
     expect(
       selectedThinkingLabel({
         thinkingLevel: "high",
-        thinkingVariant: "32768",
-        thinkingBudget: { min: 128, max: 32_768 },
+        thinkingVariant: String(tokens),
+        thinkingBudget: { min: 128, max: tokens },
       }),
-    ).toBe("32,768 tokens");
+    ).toBe(`${tokens.toLocaleString()} tokens`);
   });
 });
