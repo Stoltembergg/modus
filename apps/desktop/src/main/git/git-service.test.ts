@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runGitSafe } from "./git-runner";
@@ -44,6 +44,54 @@ async function git(args: string[]): Promise<string> {
   return stdout;
 }
 
+/** Release linked worktrees and in-progress merges so Windows can delete the temp repo. */
+async function teardownTestRepository(repoPath: string): Promise<void> {
+  if (!repoPath || !existsSync(repoPath)) return;
+  const gitDir = join(repoPath, ".git");
+  if (!existsSync(gitDir)) return;
+
+  try {
+    if (existsSync(join(gitDir, "MERGE_HEAD"))) {
+      await execFileAsync("git", ["merge", "--abort"], {
+        cwd: repoPath,
+        windowsHide: true,
+      }).catch(() => undefined);
+    }
+
+    const worktreesDir = join(gitDir, "worktrees");
+    if (!existsSync(worktreesDir)) return;
+
+    const { stdout } = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd: repoPath,
+      windowsHide: true,
+    });
+    const repoRoot = resolve(repoPath);
+    const linkedWorktrees: string[] = [];
+    for (const line of stdout.split("\n")) {
+      if (!line.startsWith("worktree ")) continue;
+      const worktreePath = line.slice("worktree ".length).trim();
+      if (worktreePath && resolve(worktreePath) !== repoRoot) {
+        linkedWorktrees.push(worktreePath);
+      }
+    }
+    for (const worktreePath of linkedWorktrees) {
+      await execFileAsync("git", ["worktree", "remove", "--force", worktreePath], {
+        cwd: repoPath,
+        windowsHide: true,
+      }).catch(() => undefined);
+      await rm(worktreePath, { recursive: true, force: true }).catch(() => undefined);
+    }
+    if (linkedWorktrees.length > 0) {
+      await execFileAsync("git", ["worktree", "prune"], {
+        cwd: repoPath,
+        windowsHide: true,
+      }).catch(() => undefined);
+    }
+  } catch {
+    // Best-effort cleanup before removing the temp directory.
+  }
+}
+
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), "modus-git-test-"));
   await git(["init"]);
@@ -55,6 +103,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  await teardownTestRepository(repo);
   await rm(repo, { recursive: true, force: true });
 });
 
