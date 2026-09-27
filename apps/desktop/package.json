@@ -19,7 +19,7 @@
     "package:win": "npm run prepare:fast-codebase && electron-builder --win --config electron-builder.config.ts",
     "package:linux": "npm run prepare:fast-codebase && electron-builder --linux --config electron-builder.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --root ../.. apps/desktop/src"
+    "test": "vitest run --root ../.. apps/desktop/src apps/desktop/scripts"
   },
   "devDependencies": {
     "@colbymchenry/codegraph": "^1.1.1",
@@ -32,6 +32,7 @@
     "electron": "^42.3.0",
     "electron-builder": "26.8.1",
     "electron-vite": "^5.0.0",
+    "js-yaml": "^4.1.1",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"
   },
