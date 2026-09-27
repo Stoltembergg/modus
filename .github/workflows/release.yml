@@ -197,6 +197,10 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           MODUS_CODEGRAPH_PLATFORM: darwin
           MODUS_CODEGRAPH_ARCH: ${{ matrix.codegraph_arch }}
+          # electron-builder skips ALL mac signing when GITHUB_BASE_REF is set (PR runs),
+          # which would leave the dry run with a broken signature. Safe here: the only
+          # identity is ad-hoc (mac.identity "-"); no certificate or secret is involved.
+          CSC_FOR_PULL_REQUEST: "true"
         run: npm --workspace @modus/desktop run package:mac -- "--$ARCH" --publish never
 
       - name: List dist

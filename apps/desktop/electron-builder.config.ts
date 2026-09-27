@@ -75,6 +75,12 @@ const config: Configuration = {
     category: "public.app-category.developer-tools",
     icon: "resources/icon.icns",
     target: ["dmg", "zip"],
+    // Ad-hoc signature ("-") for both arches. There is no Developer ID certificate yet.
+    // Without an identity electron-builder 26 only falls back to ad-hoc on arm64 and
+    // leaves x64 unsigned; the release workflow's `codesign --verify --deep --strict`
+    // needs a valid (ad-hoc) signature on x64 too. Replace with the Developer ID name
+    // once there is one (CSC_NAME does not override an explicit identity).
+    identity: "-",
     // Arch in every name so the arm64 and x64 jobs never upload colliding assets.
     // biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder artifact macros
     artifactName: "${productName}-${version}-mac-${arch}.${ext}",

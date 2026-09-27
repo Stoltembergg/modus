@@ -75,6 +75,12 @@ There are no signing certificates yet:
   `xattr -dr com.apple.quarantine /Applications/Modus.app`). macOS auto-update
   (Squirrel.Mac) needs a properly signed app, so on mac the update can be detected
   but not installed automatically.
+- Both mac arches are ad-hoc signed (`mac.identity: "-"` in
+  `electron-builder.config.ts`); without it electron-builder 26 only ad-hoc signs
+  arm64 and leaves x64 unsigned. The release workflow also sets
+  `CSC_FOR_PULL_REQUEST=true` on the mac packaging step, because electron-builder
+  otherwise skips signing entirely on pull request runs. That is safe only while the
+  identity is ad-hoc: revisit it when a real certificate is added.
 - Each mac job runs `codesign --verify --deep --strict` on the built `Modus.app` and on
   the copy extracted from the zip, and logs `codesign -dv`. The job fails if the
   signature does not verify, which catches builds that macOS would report as damaged.
