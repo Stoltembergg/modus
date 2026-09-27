@@ -94,6 +94,8 @@ npm --workspace @modus/desktop run package:linux -- --publish never
 
 Run the platform-matching package command on that OS.
 
+Releases are built by CI from `v*` tags; see [docs/releasing.md](docs/releasing.md).
+
 ## MCP Config
 
 Modus only auto-loads its own MCP config files:
