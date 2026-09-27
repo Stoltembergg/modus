@@ -114,7 +114,8 @@ export function applyTodoWrite(current: TodoItem[], input: Static<typeof todoPar
   for (const incoming of input.todos) {
     const content = sanitizeContent(incoming.content);
     const status = incoming.status as TodoStatus;
-    const blockedReason = status === "blocked" ? sanitizeBlockedReason(incoming.blockedReason) : undefined;
+    const blockedReason =
+      status === "blocked" ? sanitizeBlockedReason(incoming.blockedReason) : undefined;
     if (!content) {
       continue;
     }

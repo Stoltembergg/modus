@@ -128,9 +128,10 @@ export function createPiEventNormalizer(
 function toolResultExitCode(result: unknown): number | undefined {
   if (!result || typeof result !== "object") return undefined;
   const outer = result as { exitCode?: unknown; details?: unknown };
-  const details = outer.details && typeof outer.details === "object"
-    ? (outer.details as { exitCode?: unknown })
-    : undefined;
+  const details =
+    outer.details && typeof outer.details === "object"
+      ? (outer.details as { exitCode?: unknown })
+      : undefined;
   const value = details?.exitCode ?? outer.exitCode;
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
@@ -138,9 +139,10 @@ function toolResultExitCode(result: unknown): number | undefined {
 function toolResultFlag(result: unknown, flag: "aborted" | "skipped"): boolean {
   if (!result || typeof result !== "object") return false;
   const outer = result as Record<string, unknown>;
-  const details = outer.details && typeof outer.details === "object"
-    ? (outer.details as Record<string, unknown>)
-    : undefined;
+  const details =
+    outer.details && typeof outer.details === "object"
+      ? (outer.details as Record<string, unknown>)
+      : undefined;
   return outer[flag] === true || details?.[flag] === true;
 }
 

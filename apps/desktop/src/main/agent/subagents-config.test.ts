@@ -177,7 +177,9 @@ describe("loadWorkspaceSubagents", () => {
       isolation: "shared",
     });
     expect(profile?.tools).toEqual(["read", "grep", "find", "ls", "fast_codebase"]);
-    expect(profile?.disallowedTools).toEqual(expect.arrayContaining(["shell", "process", "terminal_run", "write", "edit"]));
+    expect(profile?.disallowedTools).toEqual(
+      expect.arrayContaining(["shell", "process", "terminal_run", "write", "edit"]),
+    );
   });
 
   it("creates, updates, deletes, and renders the manifest without bodies", () => {
