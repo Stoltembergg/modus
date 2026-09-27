@@ -17,7 +17,7 @@ import {
   SettingsPageHeader,
   SettingsSection,
 } from "../settings-layout";
-import { McpTypeCard, settingsProjectTabs } from "./mcp";
+import { McpTypeCard, settingsProjectTabs } from "../settings-provider-ui";
 
 type SubagentFormState = {
   path?: string;

@@ -17,6 +17,7 @@ import type {
   ModelProviderDetail,
   ModelProviderInfo,
   ProviderModelConfig,
+  WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { EmptyState } from "../../components/ui/Panel";
@@ -898,3 +899,62 @@ export function modelMatchesQuery(model: ProviderModelConfig, query: string): bo
     .toLowerCase();
   return haystack.includes(query);
 }
+
+type SettingsProjectTab = { rootPath: string; displayName: string };
+
+const projectLabel = (cwd: string): string =>
+  cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "Project";
+
+export function settingsProjectTabs(
+  cwd: string | undefined,
+  workspaces: WorkspaceInfo[],
+): SettingsProjectTab[] {
+  const seen = new Set<string>();
+  const tabs: SettingsProjectTab[] = [];
+  const push = (rootPath: string, displayName: string): void => {
+    if (!rootPath || seen.has(rootPath)) return;
+    seen.add(rootPath);
+    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath) });
+  };
+  if (cwd) push(cwd, workspaces.find((workspace) => workspace.rootPath === cwd)?.displayName ?? "");
+  for (const workspace of workspaces) push(workspace.rootPath, workspace.displayName);
+  return tabs;
+}
+
+export function McpTypeCard({
+  active,
+  description,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  description: string;
+  icon: ReactNode;
+  label: string;
+  onClick(): void;
+}) {
+  return (
+    <button
+      aria-pressed={active}
+      className={cn(
+        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
+        active
+          ? "border-focus-ring bg-chip-faint"
+          : "border-hairline-soft bg-surface/45 hover:border-hairline-strong",
+      )}
+      onClick={onClick}
+      type="button"
+    >
+      <span
+        className={cn("flex items-center gap-1.5 text-sm", active ? "text-fg" : "text-fg-muted")}
+      >
+        {icon}
+        {label}
+      </span>
+      <span className="text-2xs text-fg-faint leading-relaxed">{description}</span>
+    </button>
+  );
+}
+
+export type { SettingsProjectTab };

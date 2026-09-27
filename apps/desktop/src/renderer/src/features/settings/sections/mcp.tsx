@@ -20,6 +20,7 @@ import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
 import { SelectField } from "../form-controls";
+import { McpTypeCard, settingsProjectTabs, type SettingsProjectTab } from "../settings-provider-ui";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
@@ -42,7 +43,6 @@ const MCP_PRESETS: ReadonlyArray<{ label: string; name: string; command: string 
 
 type KeyValuePair = { id: string; key: string; value: string };
 type McpScope = "user" | "project";
-type SettingsProjectTab = { rootPath: string; displayName: string };
 
 export type McpFormState = {
   /** undefined = creating; otherwise the server being edited. */
@@ -133,25 +133,6 @@ const recordToPairs = (record: unknown): KeyValuePair[] =>
         .filter((entry): entry is [string, string] => typeof entry[1] === "string")
         .map(([key, value]) => pair(key, value))
     : [];
-
-const projectLabel = (cwd: string): string =>
-  cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "Project";
-
-export function settingsProjectTabs(
-  cwd: string | undefined,
-  workspaces: WorkspaceInfo[],
-): SettingsProjectTab[] {
-  const seen = new Set<string>();
-  const tabs: SettingsProjectTab[] = [];
-  const push = (rootPath: string, displayName: string): void => {
-    if (!rootPath || seen.has(rootPath)) return;
-    seen.add(rootPath);
-    tabs.push({ rootPath, displayName: displayName || projectLabel(rootPath) });
-  };
-  if (cwd) push(cwd, workspaces.find((workspace) => workspace.rootPath === cwd)?.displayName ?? "");
-  for (const workspace of workspaces) push(workspace.rootPath, workspace.displayName);
-  return tabs;
-}
 
 const mcpInitial = (name: string): string => name.trim().slice(0, 1).toUpperCase() || "?";
 
@@ -843,42 +824,6 @@ export function McpServerForm({
         </div>
       </div>
     </form>
-  );
-}
-
-export function McpTypeCard({
-  active,
-  description,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  description: string;
-  icon: ReactNode;
-  label: string;
-  onClick(): void;
-}) {
-  return (
-    <button
-      aria-pressed={active}
-      className={cn(
-        "flex flex-col items-start gap-1 rounded-lg border p-3 text-left transition-colors",
-        active
-          ? "border-focus-ring bg-chip-faint"
-          : "border-hairline-soft bg-surface/45 hover:border-hairline-strong",
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      <span
-        className={cn("flex items-center gap-1.5 text-sm", active ? "text-fg" : "text-fg-muted")}
-      >
-        {icon}
-        {label}
-      </span>
-      <span className="text-2xs text-fg-faint leading-relaxed">{description}</span>
-    </button>
   );
 }
 
