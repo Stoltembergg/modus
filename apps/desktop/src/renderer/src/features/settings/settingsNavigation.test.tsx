@@ -130,10 +130,33 @@ describe("Settings navigation search", () => {
     expect(trimmed).toContain('value="  skills "');
   });
 
+  it("hides a group together with its heading when none of its items match", () => {
+    const appear = renderSidebar({ query: "appear" });
+    expect(groupHeadings(appear)).toEqual(["Interface"]);
+    expect(navLabels(appear)).toEqual(["Appearance"]);
+
+    const limit = renderSidebar({ query: "limit" });
+    expect(groupHeadings(limit)).toEqual(["Models & limits"]);
+    expect(navLabels(limit)).toEqual(["Limits"]);
+    expect(limit).not.toContain("No settings match");
+  });
+
+  it("keeps the heading of every group that still has a partial match", () => {
+    const markup = renderSidebar({ query: "li" });
+
+    expect(groupHeadings(markup)).toEqual(["Models & limits", "Interface"]);
+    expect(navLabels(markup)).toEqual(["Limits", "Personalization"]);
+
+    const acrossAll = renderSidebar({ query: "en" });
+    expect(groupHeadings(acrossAll)).toEqual(["Workspace", "Interface"]);
+    expect(navLabels(acrossAll)).toEqual(["Subagents", "General"]);
+  });
+
   it("shows an empty state when no nav item matches", () => {
     const markup = renderSidebar({ query: "no such setting" });
 
     expect(navLabels(markup)).toEqual([]);
+    expect(groupHeadings(markup)).toEqual([]);
     expect(markup).toContain("No settings match");
     expect(markup).toContain('value="no such setting"');
   });

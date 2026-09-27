@@ -65,7 +65,7 @@ export function SettingsSidebar({
           stroke={1.7}
         />
         <input
-          className="h-9 w-full rounded-lg border border-hairline-soft bg-surface/45 pr-3 pl-8 text-sm text-fg outline-none placeholder:text-fg-faint focus:border-hairline-strong"
+          className="h-9 w-full rounded-lg bg-surface/45 pr-3 pl-8 text-sm text-fg outline-none transition-colors placeholder:text-fg-faint focus:bg-surface focus-visible:ring-2 focus-visible:ring-focus-ring/35"
           onChange={(event) => onQueryChange(event.target.value)}
           placeholder="Search settings..."
           value={query}
@@ -74,20 +74,22 @@ export function SettingsSidebar({
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         {visibleItems.length > 0 ? (
-          groupSettingsNav(visibleItems).map(({ group, items }) => (
-            <SettingsNavGroup key={group.id} title={group.title}>
-              {items.map((item) => (
-                <SettingsNavItem
-                  active={activeSection === item.id}
-                  icon={SETTINGS_NAV_ICONS[item.id]}
-                  key={item.id}
-                  onClick={() => onSectionChange(item.id)}
-                >
-                  {item.label}
-                </SettingsNavItem>
-              ))}
-            </SettingsNavGroup>
-          ))
+          groupSettingsNav(visibleItems)
+            .filter(({ items }) => items.length > 0)
+            .map(({ group, items }) => (
+              <SettingsNavGroup key={group.id} title={group.title}>
+                {items.map((item) => (
+                  <SettingsNavItem
+                    active={activeSection === item.id}
+                    icon={SETTINGS_NAV_ICONS[item.id]}
+                    key={item.id}
+                    onClick={() => onSectionChange(item.id)}
+                  >
+                    {item.label}
+                  </SettingsNavItem>
+                ))}
+              </SettingsNavGroup>
+            ))
         ) : (
           <p className="px-2 text-sm text-fg-muted">No settings match</p>
         )}
