@@ -622,7 +622,7 @@ export function ModelRow({
                 value={budgetDraft}
               />
               <button
-                className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveBudget}
                 type="button"
@@ -630,7 +630,7 @@ export function ModelRow({
                 Apply
               </button>
               <button
-                className="flex h-9 items-center justify-center rounded-md px-3 text-fg-muted text-sm transition-colors hover:bg-hover hover:text-fg"
+                className="flex h-10 items-center justify-center rounded-md px-3 text-fg-muted text-sm transition-colors hover:bg-hover hover:text-fg"
                 disabled={busy || model.thinkingLevel === "off"}
                 onClick={() => onEditModel(model, { thinkingVariant: "off" })}
                 type="button"
@@ -663,7 +663,7 @@ export function ModelRow({
                 value={maxTokensDraft}
               />
               <button
-                className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveLimits}
                 type="button"
