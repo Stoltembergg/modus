@@ -94,6 +94,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           </>
         }
         description="Skills are specialized capabilities that help the agent accomplish specific tasks. Skills are invoked by the agent when relevant, or triggered manually with / in chat."
+        singleLineDescription
         title="Skills"
       />
 
