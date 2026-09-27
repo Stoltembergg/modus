@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { macInstallScriptArgs } from "./mac-install-script";
+import { MAC_INSTALL_WAIT_TICKS, macInstallScriptArgs } from "./mac-install-script";
 
 // Runs the real script with /bin/sh against a fake bundle layout; `open`/`xattr` are shims.
 const describePosix = process.platform === "win32" ? describe.skip : describe;
@@ -48,6 +48,7 @@ describePosix("mac install script", () => {
       openBin: overrides.open ?? writeShim("open", "exit 0"),
       xattrBin: writeShim("xattr", "exit 0"),
       maxWaitTicks: overrides.maxWaitTicks ?? 5,
+      lockPath: join(root, "install.lock"),
     });
     return spawnSync("/bin/sh", args, {
       encoding: "utf8",
@@ -195,5 +196,60 @@ describePosix("mac install script", () => {
     expect(version(backupPath())).toBe("1.0.0");
     expect(existsSync(current)).toBe(false);
     expect(readFileSync(calls, "utf8")).toContain(`open ${backupPath()}`);
+  });
+
+  it("exits without touching anything when another install holds the lock", () => {
+    mkdirSync(join(root, "install.lock"));
+    const result = run();
+    expect(result.status).toBe(11);
+    expect(result.stdout).toContain("another update install is running");
+    expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
+    expect(version(join(root, "staged", "Modus.app"))).toBe("1.1.0");
+    expect(existsSync(calls)).toBe(false);
+    // The lock belongs to the other script and stays.
+    expect(existsSync(join(root, "install.lock"))).toBe(true);
+  });
+
+  it("releases the lock when it finishes, on success and on failure", () => {
+    expect(run().status).toBe(0);
+    expect(existsSync(join(root, "install.lock"))).toBe(false);
+    bundle(join(root, "staged", "Modus.app"), "1.2.0");
+    expect(run({ pid: process.pid, maxWaitTicks: 1 }).status).toBe(3);
+    expect(existsSync(join(root, "install.lock"))).toBe(false);
+  });
+
+  it("holds the lock while waiting, so a second script started meanwhile backs off", () => {
+    const args = macInstallScriptArgs({
+      pid: process.pid,
+      bundlePath: join(apps, "Modus.app"),
+      stagedAppPath: join(root, "staged", "Modus.app"),
+      backupPath: backupPath(),
+      openBin: writeShim("open", "exit 0"),
+      xattrBin: writeShim("xattr", "exit 0"),
+      maxWaitTicks: 20,
+      lockPath: join(root, "install.lock"),
+    });
+    const first = spawn("/bin/sh", args, { stdio: "ignore" });
+    try {
+      const deadline = Date.now() + 2000;
+      while (!existsSync(join(root, "install.lock")) && Date.now() < deadline) {
+        spawnSync("sleep", ["0.05"]);
+      }
+      expect(run().status).toBe(11);
+    } finally {
+      first.kill("SIGTERM");
+    }
+  });
+
+  it("waits about 10 minutes for the app to quit by default", () => {
+    expect(MAC_INSTALL_WAIT_TICKS).toBe(6000);
+    const args = macInstallScriptArgs({
+      pid: 1,
+      bundlePath: "/Applications/Modus.app",
+      stagedAppPath: "/s/Modus.app",
+      backupPath: "/Applications/.Modus.app.update-backup",
+      lockPath: "/u/install.lock",
+    });
+    expect(args.slice(-2)).toEqual(["6000", "/u/install.lock"]);
   });
 });

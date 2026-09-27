@@ -1,7 +1,7 @@
 /**
  * Detached /bin/sh script that swaps the app bundle after Modus quits. Positional args:
  *   $1 PID to wait for, $2 current bundle, $3 staged new bundle, $4 backup path,
- *   $5 `open` binary, $6 `xattr` binary, $7 max wait in 1/10 s.
+ *   $5 `open` binary, $6 `xattr` binary, $7 max wait in 1/10 s, $8 lock directory.
  * Exit codes:
  *   0 installed
  *   3 app never quit (nothing changed)
@@ -10,12 +10,25 @@
  *   6 new bundle could not be moved in, 7 new version failed to launch (rolled back)
  *   9 rollback could not clear the new bundle, 10 rollback could not move the backup
  *     back (the backup is left as is and launched from where it is)
+ *   11 another install script holds the lock, 12 the lock could not be created
+ *     (nothing changed)
  * Every `rm -rf` is checked: `mv` into an existing directory would nest the bundle
  * inside it instead of replacing it.
  */
 export const MAC_INSTALL_SCRIPT = `set -u
 pid="$1"; current="$2"; staged="$3"; backup="$4"; open_bin="$5"; xattr_bin="$6"; max_ticks="$7"
+lock="$8"
 log() { echo "[modus-update] $*"; }
+# One install at a time: mkdir is atomic. Released on exit (stale locks are removed
+# with the staging directory on the next app start).
+if ! mkdir "$lock" 2>/dev/null; then
+  if [ -d "$lock" ]; then log "another update install is running"; exit 11; fi
+  log "could not create install lock"; exit 12
+fi
+trap 'rmdir "$lock" 2>/dev/null' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # rm -rf, then fail if anything is left (e.g. an undeletable file inside).
 remove_all() { rm -rf "$1" 2>/dev/null; [ ! -e "$1" ] && [ ! -L "$1" ]; }
 # Put the backup back in place; exits with 9/10 (never nesting) if that is impossible.
@@ -49,13 +62,19 @@ log "installed"
 exit 0
 `;
 
-export const MAC_INSTALL_WAIT_TICKS = 600;
+/**
+ * The script waits up to 10 minutes for the app to quit (MCP servers, terminals and
+ * agents can make a quit slow). The service's 60 s watchdog only reports a retryable
+ * failure in the UI; it does not stop this script.
+ */
+export const MAC_INSTALL_WAIT_TICKS = 6000;
 
 export function macInstallScriptArgs(input: {
   pid: number;
   bundlePath: string;
   stagedAppPath: string;
   backupPath: string;
+  lockPath: string;
   openBin?: string;
   xattrBin?: string;
   maxWaitTicks?: number;
@@ -71,5 +90,6 @@ export function macInstallScriptArgs(input: {
     input.openBin ?? "/usr/bin/open",
     input.xattrBin ?? "/usr/bin/xattr",
     String(input.maxWaitTicks ?? MAC_INSTALL_WAIT_TICKS),
+    input.lockPath,
   ];
 }

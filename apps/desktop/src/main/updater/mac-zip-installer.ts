@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { constants, createWriteStream } from "node:fs";
 import { access, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
@@ -50,6 +50,8 @@ export type MacZipInstallerDeps = {
   isWritable?: (dir: string) => Promise<boolean>;
   /** Abort when no bytes arrive for this long. */
   stallTimeoutMs?: number;
+  /** Unique id per download attempt (staging directory name). */
+  newAttemptId?: () => string;
 };
 
 const MAX_REDIRECTS = 5;
@@ -57,6 +59,15 @@ const STALL_TIMEOUT_MS = 60_000;
 
 export function macBackupPath(bundlePath: string): string {
   return join(dirname(bundlePath), `.${basename(bundlePath)}.update-backup`);
+}
+
+/** Held (mkdir) by the detached install script so two scripts never swap at once. */
+export function macInstallLockPath(workDir: string): string {
+  return join(workDir, "install.lock");
+}
+
+function defaultAttemptId(): string {
+  return `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
 }
 
 export async function isDirWritable(dir: string): Promise<boolean> {
@@ -215,7 +226,14 @@ async function readPlistString(exec: ExecFile, plistPath: string, key: string): 
 
 export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstaller {
   const isWritable = deps.isWritable ?? isDirWritable;
-  let staged: { version: string; appPath: string } | null = null;
+  const newAttemptId = deps.newAttemptId ?? defaultAttemptId;
+  /**
+   * Each download gets its own staging directory, so a retry never writes into the
+   * directory an already spawned install script is waiting to move. Directories
+   * handed to a script are left alone; everything is removed on the next start.
+   */
+  let staged: { version: string; appPath: string; attemptDir: string; handedOff: boolean } | null =
+    null;
 
   const blocker = async () =>
     macInstallBlocker({
@@ -250,11 +268,13 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
     async download(candidate, onProgress) {
       const file = zipFor(candidate);
       if (!file) throw pageError(`No installable mac zip for ${candidate.version}`);
+      if (staged && !staged.handedOff) {
+        await rm(staged.attemptDir, { recursive: true, force: true }).catch(() => undefined);
+      }
       staged = null;
-      await rm(deps.workDir, { recursive: true, force: true });
-      const versionDir = join(deps.workDir, candidate.version);
-      const extractDir = join(versionDir, "extracted");
-      const zipPath = join(versionDir, "update.zip");
+      const attemptDir = join(deps.workDir, "attempts", `${candidate.version}-${newAttemptId()}`);
+      const extractDir = join(attemptDir, "extracted");
+      const zipPath = join(attemptDir, "update.zip");
       await mkdir(extractDir, { recursive: true, mode: 0o700 });
       try {
         await downloadVerifiedFile({
@@ -283,9 +303,9 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
         } catch (error) {
           throw pageError("The downloaded app failed codesign verification", error);
         }
-        staged = { version: candidate.version, appPath };
+        staged = { version: candidate.version, appPath, attemptDir, handedOff: false };
       } catch (error) {
-        await rm(deps.workDir, { recursive: true, force: true }).catch(() => undefined);
+        await rm(attemptDir, { recursive: true, force: true }).catch(() => undefined);
         if (error instanceof UpdateInstallError) throw error;
         const code = (error as { code?: unknown })?.code;
         if (code === "EACCES" || code === "EPERM") throw error;
@@ -317,9 +337,11 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
           bundlePath: deps.bundlePath,
           stagedAppPath: staged.appPath,
           backupPath: macBackupPath(deps.bundlePath),
+          lockPath: macInstallLockPath(deps.workDir),
         }),
         join(deps.workDir, "install.log"),
       );
+      staged.handedOff = true;
       deps.quit();
     },
   };

@@ -68,8 +68,14 @@ describe("mac zip installer", () => {
     throw new Error(`unexpected exec ${file}`);
   });
 
+  let attempt = 0;
+  const attemptDir = (n: number) => join(workDir, "attempts", `1.1.0-a${n}`);
+  const attemptsLeft = () =>
+    existsSync(join(workDir, "attempts")) ? readdirSync(join(workDir, "attempts")) : [];
+
   const makeInstaller = (overrides: Partial<Parameters<typeof createMacZipInstaller>[0]> = {}) => {
     const deps = {
+      newAttemptId: () => `a${++attempt}`,
       bundlePath,
       isInApplicationsFolder: () => true,
       arm64Mac: true,
@@ -95,6 +101,7 @@ describe("mac zip installer", () => {
     mkdirSync(bundlePath, { recursive: true });
     plist = { CFBundleIdentifier: "dev.modus.desktop", CFBundleShortVersionString: "1.1.0" };
     codesignOk = true;
+    attempt = 0;
     exec.mockClear();
   });
 
@@ -108,11 +115,11 @@ describe("mac zip installer", () => {
     await installer.download(candidate(), (percent) => progress.push(percent));
     expect(deps.httpGet).toHaveBeenCalledWith(`${BASE}/Modus-1.1.0-mac-arm64.zip`);
     expect(progress.at(-1)).toBe(100);
-    const extractDir = join(workDir, "1.1.0", "extracted");
+    const extractDir = join(attemptDir(1), "extracted");
     expect(exec).toHaveBeenCalledWith("/usr/bin/ditto", [
       "-x",
       "-k",
-      join(workDir, "1.1.0", "update.zip"),
+      join(attemptDir(1), "update.zip"),
       extractDir,
     ]);
     expect(exec).toHaveBeenCalledWith("/usr/bin/codesign", [
@@ -121,7 +128,7 @@ describe("mac zip installer", () => {
       "--strict",
       join(extractDir, "Modus.app"),
     ]);
-    expect(existsSync(join(workDir, "1.1.0", "update.zip"))).toBe(false);
+    expect(existsSync(join(attemptDir(1), "update.zip"))).toBe(false);
   });
 
   it("follows allowlisted redirects to GitHub's asset CDN", async () => {
@@ -147,7 +154,7 @@ describe("mac zip installer", () => {
       "Refusing update redirect",
     );
     expect(httpGet).toHaveBeenCalledTimes(1);
-    expect(existsSync(workDir)).toBe(false);
+    expect(attemptsLeft()).toEqual([]);
   });
 
   it("aborts on a sha512 mismatch, keeps the current app and removes temp files", async () => {
@@ -158,7 +165,7 @@ describe("mac zip installer", () => {
     expect(error.message).toContain("sha512 mismatch");
     expect(error.retryable).toBe(true);
     expect(exec).not.toHaveBeenCalled();
-    expect(existsSync(workDir)).toBe(false);
+    expect(attemptsLeft()).toEqual([]);
     expect(existsSync(bundlePath)).toBe(true);
     await expect(installer.install(candidate())).rejects.toThrow("not downloaded");
     expect(deps.spawnDetached).not.toHaveBeenCalled();
@@ -172,7 +179,7 @@ describe("mac zip installer", () => {
     await expect(installer.download(candidate({ size: ZIP.length + 1 }), () => {})).rejects.toThrow(
       "size mismatch",
     );
-    expect(existsSync(workDir)).toBe(false);
+    expect(attemptsLeft()).toEqual([]);
   });
 
   it("fails retryably on HTTP errors", async () => {
@@ -201,7 +208,7 @@ describe("mac zip installer", () => {
     await expect(installer.download(candidate(), () => {})).rejects.toThrow(
       "codesign verification",
     );
-    expect(existsSync(workDir)).toBe(false);
+    expect(attemptsLeft()).toEqual([]);
   });
 
   it("offers the release page when the install location cannot be replaced", async () => {
@@ -241,11 +248,12 @@ describe("mac zip installer", () => {
     expect(args?.slice(3)).toEqual([
       "4242",
       bundlePath,
-      join(workDir, "1.1.0", "extracted", "Modus.app"),
+      join(attemptDir(1), "extracted", "Modus.app"),
       macBackupPath(bundlePath),
       "/usr/bin/open",
       "/usr/bin/xattr",
-      "600",
+      "6000",
+      join(workDir, "install.lock"),
     ]);
     expect(logPath).toBe(join(workDir, "install.log"));
     expect(deps.quit).toHaveBeenCalledTimes(1);
@@ -263,13 +271,38 @@ describe("mac zip installer", () => {
 
   it("removes the backup and staging directory on the next start", async () => {
     mkdirSync(macBackupPath(bundlePath), { recursive: true });
-    mkdirSync(join(workDir, "1.1.0"), { recursive: true });
+    mkdirSync(attemptDir(1), { recursive: true });
+    mkdirSync(join(workDir, "install.lock"));
     writeFileSync(join(workDir, "install.log"), "[modus-update] installed\n");
     logger.info.mockClear();
     await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
     expect(logger.info).toHaveBeenCalledWith("previous update install: [modus-update] installed");
     expect(existsSync(macBackupPath(bundlePath))).toBe(false);
-    expect(existsSync(workDir)).toBe(false);
+    expect(existsSync(workDir)).toBe(false); // attempts, stale lock and log
     expect(readdirSync(join(root, "Applications"))).toEqual(["Modus.app"]);
+  });
+
+  it("stages every download attempt in its own directory", async () => {
+    const { installer } = makeInstaller();
+    await installer.download(candidate(), () => {});
+    await installer.download(candidate(), () => {});
+    // The first attempt was never handed to a script, so it is replaced.
+    expect(attemptsLeft()).toEqual(["1.1.0-a2"]);
+  });
+
+  it("never touches a staging directory already handed to an install script", async () => {
+    const { installer, deps } = makeInstaller();
+    await installer.download(candidate(), () => {});
+    await installer.install(candidate());
+    // Watchdog fired, the user retries: the first script still waits on attempt 1.
+    await installer.download(candidate(), () => {});
+    await installer.install(candidate());
+    expect(attemptsLeft().sort()).toEqual(["1.1.0-a1", "1.1.0-a2"]);
+    const staged = vi.mocked(deps.spawnDetached).mock.calls.map(([, args]) => args[5]);
+    expect(staged).toEqual([
+      join(attemptDir(1), "extracted", "Modus.app"),
+      join(attemptDir(2), "extracted", "Modus.app"),
+    ]);
+    expect(existsSync(join(attemptDir(1), "extracted", "Modus.app"))).toBe(true);
   });
 });
