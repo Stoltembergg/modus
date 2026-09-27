@@ -34,12 +34,7 @@ import {
   providerMatchesQuery,
   SearchField,
 } from "../settings-provider-ui";
-
-type ModelConfigPatch = {
-  thinkingVariant?: string;
-  contextWindow?: number;
-  maxTokens?: number;
-};
+import type { ModelConfigPatch } from "../settings-types";
 
 export function ModelProviderSettingsPanel({
   authOperation,

@@ -32,12 +32,7 @@ import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-
 import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
 import { ReadOnlyPill } from "./settings-layout";
-
-type ModelConfigPatch = {
-  thinkingVariant?: string;
-  contextWindow?: number;
-  maxTokens?: number;
-};
+import type { ModelConfigPatch } from "./settings-types";
 
 export function ProviderGroup({ children, title }: { children: ReactNode; title: string }) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];

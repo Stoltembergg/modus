@@ -10,3 +10,9 @@ export type SettingsSectionId =
   | "project-memory"
   | "harness-insights"
   | "limits";
+
+export type ModelConfigPatch = {
+  thinkingVariant?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+};
