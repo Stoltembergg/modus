@@ -32,7 +32,14 @@ describePosix("mac install script", () => {
     mkdirSync(join(path, "Contents"), { recursive: true });
     writeFileSync(join(path, "Contents", "version"), version);
   };
-  const run = (overrides: { open?: string; pid?: number; maxWaitTicks?: number } = {}) => {
+  const run = (
+    overrides: {
+      open?: string;
+      pid?: number;
+      maxWaitTicks?: number;
+      env?: Record<string, string>;
+    } = {},
+  ) => {
     const args = macInstallScriptArgs({
       pid: overrides.pid ?? EXITED_PID,
       bundlePath: join(apps, "Modus.app"),
@@ -42,9 +49,36 @@ describePosix("mac install script", () => {
       xattrBin: writeShim("xattr", "exit 0"),
       maxWaitTicks: overrides.maxWaitTicks ?? 5,
     });
-    return spawnSync("/bin/sh", args, { encoding: "utf8" });
+    return spawnSync("/bin/sh", args, {
+      encoding: "utf8",
+      env: { ...process.env, ...overrides.env },
+    });
   };
   const version = (path: string) => readFileSync(join(path, "Contents", "version"), "utf8");
+  /**
+   * PATH shims for rm/mv that work even as root (where chmod cannot make files
+   * undeletable): rm "succeeds" but leaves $SHIM_RM_KEEP in place, and mv fails for
+   * the source $SHIM_MV_FAIL. Everything else goes to the real binaries.
+   */
+  const shimPath = () => {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const real = (name: string) =>
+      spawnSync("/bin/sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).stdout.trim();
+    writeFileSync(
+      join(bin, "rm"),
+      `#!/bin/sh\nfor a; do last="$a"; done\n[ -n "\${SHIM_RM_KEEP:-}" ] && [ "$last" = "$SHIM_RM_KEEP" ] && exit 0\nexec ${real("rm")} "$@"\n`,
+    );
+    writeFileSync(
+      join(bin, "mv"),
+      `#!/bin/sh\n[ -n "\${SHIM_MV_FAIL:-}" ] && [ "$1" = "$SHIM_MV_FAIL" ] && exit 1\nexec ${real("mv")} "$@"\n`,
+    );
+    chmodSync(join(bin, "rm"), 0o755);
+    chmodSync(join(bin, "mv"), 0o755);
+    return `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`;
+  };
+  const isRoot = typeof process.getuid === "function" && process.getuid() === 0;
+  const backupPath = () => join(apps, ".Modus.app.update-backup");
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "modus-mac-script-"));
@@ -55,6 +89,8 @@ describePosix("mac install script", () => {
   });
 
   afterEach(() => {
+    // Undo read-only fixtures so the temp dir can be removed.
+    spawnSync("/bin/sh", ["-c", `chmod -R u+w "${root}" 2>/dev/null`]);
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -94,5 +130,70 @@ describePosix("mac install script", () => {
     expect(result.status).toBe(3);
     expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
     expect(existsSync(calls)).toBe(false);
+  });
+
+  it("never nests the app into a backup that could not be removed (read-only dir)", () => {
+    if (isRoot) return; // root can delete read-only dirs; the PATH-shim test covers root.
+    const stuck = join(backupPath(), "junk");
+    bundle(backupPath(), "0.9.0");
+    mkdirSync(stuck, { recursive: true });
+    writeFileSync(join(stuck, "file"), "old");
+    chmodSync(stuck, 0o555);
+    const result = run();
+    expect(result.status).toBe(8);
+    expect(result.stdout).toContain("could not remove old backup");
+    expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
+    expect(existsSync(join(backupPath(), "Modus.app"))).toBe(false);
+    expect(version(join(root, "staged", "Modus.app"))).toBe("1.1.0");
+    expect(readFileSync(calls, "utf8").trim()).toBe(`open ${join(apps, "Modus.app")}`);
+  });
+
+  it("checks that the backup is really gone, not rm's exit status (works as root)", () => {
+    bundle(backupPath(), "0.9.0");
+    const result = run({ env: { PATH: shimPath(), SHIM_RM_KEEP: backupPath() } });
+    expect(result.status).toBe(8);
+    expect(version(join(apps, "Modus.app"))).toBe("1.0.0");
+    expect(version(backupPath())).toBe("0.9.0");
+    expect(existsSync(join(backupPath(), "Modus.app"))).toBe(false);
+  });
+
+  it("rollback never moves the backup into a new bundle it could not remove", () => {
+    const current = join(apps, "Modus.app");
+    const result = run({
+      open: writeShim("open", `[ "$1" = "${current}" ] && exit 1; exit 0`),
+      env: { PATH: shimPath(), SHIM_RM_KEEP: current },
+    });
+    expect(result.status).toBe(9);
+    expect(result.stdout).toContain("rollback failed");
+    // The previous version stays intact at the backup path and is launched from there.
+    expect(version(backupPath())).toBe("1.0.0");
+    expect(existsSync(join(current, ".Modus.app.update-backup"))).toBe(false);
+    expect(existsSync(join(current, "Modus.app"))).toBe(false);
+    expect(readFileSync(calls, "utf8")).toContain(`open ${backupPath()}`);
+  });
+
+  it("rollback with a read-only file in the new bundle keeps the backup separate", () => {
+    if (isRoot) return;
+    const current = join(apps, "Modus.app");
+    const stuck = join(root, "staged", "Modus.app", "Contents", "Frameworks");
+    mkdirSync(stuck, { recursive: true });
+    writeFileSync(join(stuck, "lib"), "new");
+    chmodSync(stuck, 0o555);
+    const result = run({ open: writeShim("open", `[ "$1" = "${current}" ] && exit 1; exit 0`) });
+    expect(result.status).toBe(9);
+    expect(version(backupPath())).toBe("1.0.0");
+    expect(existsSync(join(current, ".Modus.app.update-backup"))).toBe(false);
+  });
+
+  it("launches the backup where it is when it cannot be moved back", () => {
+    const current = join(apps, "Modus.app");
+    const result = run({
+      open: writeShim("open", `[ "$1" = "${current}" ] && exit 1; exit 0`),
+      env: { PATH: shimPath(), SHIM_MV_FAIL: backupPath() },
+    });
+    expect(result.status).toBe(10);
+    expect(version(backupPath())).toBe("1.0.0");
+    expect(existsSync(current)).toBe(false);
+    expect(readFileSync(calls, "utf8")).toContain(`open ${backupPath()}`);
   });
 });
