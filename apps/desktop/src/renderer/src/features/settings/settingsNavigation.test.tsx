@@ -2,7 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsSidebar } from "./sections/SettingsSidebar";
 import type { SettingsSectionId } from "./settings-types";
-import { filterSettingsNav, SETTINGS_NAV_ITEMS } from "./settingsNav";
+import {
+  filterSettingsNav,
+  groupSettingsNav,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_NAV_ITEMS,
+} from "./settingsNav";
 
 const NAV_LABELS = [
   "General",
@@ -17,6 +22,14 @@ const NAV_LABELS = [
   "Rules",
   "Limits",
 ] as const;
+
+const GROUPED_NAV = {
+  Workspace: ["Project memory", "Harness Insights", "MCP", "Skills", "Subagents", "Rules"],
+  "Models & limits": ["Model & Provider", "Limits"],
+  Interface: ["General", "Appearance", "Personalization"],
+} as const;
+
+const RENDERED_NAV_LABELS = Object.values(GROUPED_NAV).flat();
 
 function renderSidebar({
   activeSection = "general",
@@ -41,6 +54,12 @@ function renderSidebar({
 function activeNavLabel(markup: string): string | undefined {
   const activeButton = markup.split("<button").find((chunk) => chunk.includes("bg-active"));
   return activeButton ? navLabels(activeButton)[0] : undefined;
+}
+
+function groupHeadings(markup: string): string[] {
+  return [...markup.matchAll(/<h3[^>]*>([^<]*)<\/h3>/g)].map((match) =>
+    (match[1] ?? "").replaceAll("&amp;", "&"),
+  );
 }
 
 function navLabels(markup: string): string[] {
@@ -81,11 +100,24 @@ describe("filterSettingsNav", () => {
   });
 });
 
+describe("groupSettingsNav", () => {
+  it("assigns every nav item to Workspace, Models & limits, or Interface in display order", () => {
+    expect(SETTINGS_NAV_GROUPS.map((group) => group.title)).toEqual(Object.keys(GROUPED_NAV));
+    expect(
+      groupSettingsNav(SETTINGS_NAV_ITEMS).map(({ group, items }) => [
+        group.title,
+        items.map((item) => item.label),
+      ]),
+    ).toEqual(Object.entries(GROUPED_NAV));
+  });
+});
+
 describe("Settings navigation search", () => {
   it("shows all eleven nav items when the query is empty", () => {
     const markup = renderSidebar({ query: "" });
 
-    expect(navLabels(markup)).toEqual(NAV_LABELS);
+    expect(navLabels(markup)).toEqual(RENDERED_NAV_LABELS);
+    expect(groupHeadings(markup)).toEqual(Object.keys(GROUPED_NAV));
     expect(markup).not.toContain("No settings match");
   });
 
@@ -98,10 +130,33 @@ describe("Settings navigation search", () => {
     expect(trimmed).toContain('value="  skills "');
   });
 
+  it("hides a group together with its heading when none of its items match", () => {
+    const appear = renderSidebar({ query: "appear" });
+    expect(groupHeadings(appear)).toEqual(["Interface"]);
+    expect(navLabels(appear)).toEqual(["Appearance"]);
+
+    const limit = renderSidebar({ query: "limit" });
+    expect(groupHeadings(limit)).toEqual(["Models & limits"]);
+    expect(navLabels(limit)).toEqual(["Limits"]);
+    expect(limit).not.toContain("No settings match");
+  });
+
+  it("keeps the heading of every group that still has a partial match", () => {
+    const markup = renderSidebar({ query: "li" });
+
+    expect(groupHeadings(markup)).toEqual(["Models & limits", "Interface"]);
+    expect(navLabels(markup)).toEqual(["Limits", "Personalization"]);
+
+    const acrossAll = renderSidebar({ query: "en" });
+    expect(groupHeadings(acrossAll)).toEqual(["Workspace", "Interface"]);
+    expect(navLabels(acrossAll)).toEqual(["Subagents", "General"]);
+  });
+
   it("shows an empty state when no nav item matches", () => {
     const markup = renderSidebar({ query: "no such setting" });
 
     expect(navLabels(markup)).toEqual([]);
+    expect(groupHeadings(markup)).toEqual([]);
     expect(markup).toContain("No settings match");
     expect(markup).toContain('value="no such setting"');
   });
@@ -115,7 +170,7 @@ describe("Settings navigation search", () => {
     expect(onSectionChange).not.toHaveBeenCalled();
 
     const cleared = renderSidebar({ activeSection: "limits", onSectionChange, query: "" });
-    expect(navLabels(cleared)).toEqual(NAV_LABELS);
+    expect(navLabels(cleared)).toEqual(RENDERED_NAV_LABELS);
     expect(activeNavLabel(cleared)).toBe("Limits");
     expect(onSectionChange).not.toHaveBeenCalled();
   });

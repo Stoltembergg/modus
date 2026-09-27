@@ -1,19 +1,27 @@
 import type { ReactNode } from "react";
+import { cn } from "../../lib/cn";
 
 export function SettingsPageHeader({
   actions,
   description,
+  singleLineDescription = false,
   title,
 }: {
   actions?: ReactNode;
   description: string;
+  singleLineDescription?: boolean;
   title: string;
 }) {
   return (
     <header className="sticky top-0 z-10 -mx-10 -mt-16 flex items-end justify-between gap-5 bg-gradient-to-b from-canvas via-canvas to-canvas/0 px-10 pt-16 pb-8">
       <div className="min-w-0">
         <h2 className="text-lg font-normal text-fg">{title}</h2>
-        <p className="mt-2 text-sm text-fg-muted">{description}</p>
+        <p
+          className={cn("mt-2 text-sm text-fg-muted", singleLineDescription && "truncate")}
+          title={singleLineDescription ? description : undefined}
+        >
+          {description}
+        </p>
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2 pb-0.5">{actions}</div> : null}
     </header>
@@ -32,7 +40,7 @@ export function SettingsSection({
   return (
     <section className="flex flex-col gap-4">
       <div className="min-w-0">
-        <h3 className="text-sm font-normal text-fg">{title}</h3>
+        <h3 className="text-md font-normal text-fg">{title}</h3>
         {description ? <p className="mt-1 text-xs text-fg-faint">{description}</p> : null}
       </div>
       {children}
@@ -69,5 +77,5 @@ export function SettingsRow({
 }
 
 export function ReadOnlyPill({ children }: { children: string }) {
-  return <span className="rounded-md bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
+  return <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
 }

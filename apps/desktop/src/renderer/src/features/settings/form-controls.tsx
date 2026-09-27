@@ -297,7 +297,7 @@ export function KeyValueEditor({
               />
               <button
                 aria-label="Remove row"
-                className="flex size-9 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+                className="flex size-7 items-center justify-center self-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
                 onClick={() => onRemove(row.rowId)}
                 type="button"
               >

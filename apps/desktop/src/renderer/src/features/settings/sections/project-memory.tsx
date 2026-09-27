@@ -293,7 +293,7 @@ export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: stri
         <div className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">
           <span>{error}</span>
           <button
-            className="shrink-0 rounded-md px-2 py-1 text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+            className="h-7 shrink-0 rounded-md px-2 text-fg-muted transition-colors hover:bg-hover hover:text-fg"
             onClick={() => void loadSnapshot()}
             type="button"
           >
@@ -378,7 +378,7 @@ function ProjectMemoryScopeSection({
     <section className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
       <div className="flex items-center justify-between gap-4 border-hairline-soft border-b px-4 py-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-normal text-fg">{title}</h3>
+          <h3 className="text-md font-normal text-fg">{title}</h3>
           <p className="mt-1 text-xs text-fg-faint">{description}</p>
         </div>
         <SwitchControl
@@ -438,7 +438,7 @@ export function ProjectMemoryRow({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-sm font-normal text-fg">{memory.title}</h4>
-            <span className={cn("rounded border px-1.5 py-0.5 text-2xs", statusStyle)}>
+            <span className={cn("rounded-full border px-1.5 py-0.5 text-2xs", statusStyle)}>
               {status}
             </span>
           </div>

@@ -568,7 +568,7 @@ function ModelRowEditor({
         </span>
         <button
           aria-label="Remove model"
-          className="flex size-8 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
+          className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-35"
           disabled={!removable}
           onClick={onRemove}
           type="button"
