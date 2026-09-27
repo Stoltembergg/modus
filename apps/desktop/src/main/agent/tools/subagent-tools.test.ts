@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveTaskModelId, resolveTaskRoute, resolveTaskMode, registerSubagentTools } from "./subagent-tools";
-import { setAgentToolContext } from "./tool-context";
 import { toolRegistry } from "./registry";
+import {
+  registerSubagentTools,
+  resolveTaskMode,
+  resolveTaskModelId,
+  resolveTaskRoute,
+} from "./subagent-tools";
+import { setAgentToolContext } from "./tool-context";
 
 vi.mock("../model-service", () => ({ listModels: () => [] }));
 
@@ -22,12 +27,25 @@ describe("resolveTaskModelId", () => {
 
 describe("resolveTaskRoute", () => {
   it("routes high-confidence specialist work and leaves simple or low-confidence work generic", () => {
-    expect(resolveTaskRoute({ text: "Review the authentication changes", mode: "build", contextPaths: [], changedPaths: [] })).toMatchObject({
+    expect(
+      resolveTaskRoute({
+        text: "Review the authentication changes",
+        mode: "build",
+        contextPaths: [],
+        changedPaths: [],
+      }),
+    ).toMatchObject({
       role: "reviewer",
       classification: { confidence: "high", complexity: "moderate" },
     });
-    expect(resolveTaskRoute({ text: "Fix this typo", mode: "build", contextPaths: [], changedPaths: [] }).role).toBeUndefined();
-    expect(resolveTaskRoute({ text: "Handle this", mode: "build", contextPaths: [], changedPaths: [] }).role).toBeUndefined();
+    expect(
+      resolveTaskRoute({ text: "Fix this typo", mode: "build", contextPaths: [], changedPaths: [] })
+        .role,
+    ).toBeUndefined();
+    expect(
+      resolveTaskRoute({ text: "Handle this", mode: "build", contextPaths: [], changedPaths: [] })
+        .role,
+    ).toBeUndefined();
   });
 
   it("uses only the owning tool profile to determine mode", () => {
@@ -38,7 +56,12 @@ describe("resolveTaskRoute", () => {
 
   it("does not dispatch merely by resolving a route", () => {
     const dispatch = vi.fn();
-    const route = resolveTaskRoute({ text: "Research the latest API docs", mode: "build", contextPaths: [], changedPaths: [] });
+    const route = resolveTaskRoute({
+      text: "Research the latest API docs",
+      mode: "build",
+      contextPaths: [],
+      changedPaths: [],
+    });
     expect(route.role).toBe("librarian");
     expect(dispatch).not.toHaveBeenCalled();
   });
@@ -57,19 +80,30 @@ describe("task routing event and explicit roles", () => {
       window: {} as never,
       emit: (event) => events.push(event),
     });
-    const taskTool = toolRegistry.getCustomToolDefinitions("chat").find((item) => item.name === "task");
+    const taskTool = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((item) => item.name === "task");
     expect(taskTool).toBeDefined();
     const call = taskTool?.execute as (...args: unknown[]) => Promise<unknown>;
 
-    await call("task-1", {
-      description: "Review auth",
-      prompt: "PRIVATE TASK PROMPT",
-      subagent: "reviewer",
-    }, new AbortController().signal, undefined, { cwd: process.cwd() });
+    await call(
+      "task-1",
+      {
+        description: "Review auth",
+        prompt: "PRIVATE TASK PROMPT",
+        subagent: "reviewer",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd: process.cwd() },
+    );
 
-    expect(dispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      subagentType: "reviewer",
-    }));
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        subagentType: "reviewer",
+      }),
+    );
     const event = events.find((item) => (item as { type?: string }).type === "harness.route");
     expect(event).toEqual({
       type: "harness.route",
@@ -94,18 +128,29 @@ describe("task routing event and explicit roles", () => {
       window: {} as never,
       emit: (event) => events.push(event),
     });
-    const taskTool = toolRegistry.getCustomToolDefinitions("chat").find((item) => item.name === "task");
+    const taskTool = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((item) => item.name === "task");
     const call = taskTool?.execute as (...args: unknown[]) => Promise<unknown>;
 
-    await call("task-2", {
-      description: "Do work",
-      prompt: "Task details",
-      subagent: "not-a-known-profile",
-    }, new AbortController().signal, undefined, { cwd: process.cwd() });
+    await call(
+      "task-2",
+      {
+        description: "Do work",
+        prompt: "Task details",
+        subagent: "not-a-known-profile",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd: process.cwd() },
+    );
 
-    expect(dispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      subagentType: "task",
-    }));
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        subagentType: "task",
+      }),
+    );
     const event = events.find((item) => (item as { type?: string }).type === "harness.route");
     expect(event).not.toHaveProperty("selectedRole");
   });
@@ -123,20 +168,35 @@ describe("task routing event and explicit roles", () => {
       emit: (event) => events.push(event),
     });
     expect(dispatch).not.toHaveBeenCalled();
-    const taskTool = toolRegistry.getCustomToolDefinitions("chat").find((item) => item.name === "task");
+    const taskTool = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((item) => item.name === "task");
     const call = taskTool?.execute as (...args: unknown[]) => Promise<unknown>;
 
-    await call("task-3", {
-      description: "Research API docs",
-      prompt: "SECRET: research these docs",
-    }, new AbortController().signal, undefined, { cwd: process.cwd() });
+    await call(
+      "task-3",
+      {
+        description: "Research API docs",
+        prompt: "SECRET: research these docs",
+      },
+      new AbortController().signal,
+      undefined,
+      { cwd: process.cwd() },
+    );
 
-    expect(dispatch).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      subagentType: "librarian",
-      subagent: expect.objectContaining({ readOnly: true }),
-    }));
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        subagentType: "librarian",
+        subagent: expect.objectContaining({ readOnly: true }),
+      }),
+    );
     const event = events.find((item) => (item as { type?: string }).type === "harness.route");
-    expect(event).toMatchObject({ type: "harness.route", taskType: "librarian", selectedRole: "librarian" });
+    expect(event).toMatchObject({
+      type: "harness.route",
+      taskType: "librarian",
+      selectedRole: "librarian",
+    });
     expect(JSON.stringify(event)).not.toContain("SECRET");
   });
 });

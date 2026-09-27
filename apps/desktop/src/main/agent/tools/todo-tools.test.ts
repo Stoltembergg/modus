@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { toolRegistry } from "./registry";
 import {
   applyTodoWrite,
   clearTodoSessionCache,
@@ -6,9 +7,14 @@ import {
   registerTodoTools,
 } from "./todo-tools";
 import { setAgentToolContext } from "./tool-context";
-import { toolRegistry } from "./registry";
 
-const persistedTodos = vi.hoisted(() => ({ current: [] as Array<{ id: string; content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }> }));
+const persistedTodos = vi.hoisted(() => ({
+  current: [] as Array<{
+    id: string;
+    content: string;
+    status: "pending" | "in_progress" | "completed" | "cancelled";
+  }>,
+}));
 vi.mock("../agent-event-store", () => ({
   getLatestSessionTodos: () => persistedTodos.current,
 }));
@@ -89,7 +95,9 @@ describe("clearTodoSessionCache", () => {
   it("rehydrates the single todo list from the latest persisted event after cache clear", async () => {
     const sessionId = "todo-cache-rehydrate-test";
     registerTodoTools();
-    persistedTodos.current = [{ id: "todo-1", content: "Persisted after rollback", status: "pending" }];
+    persistedTodos.current = [
+      { id: "todo-1", content: "Persisted after rollback", status: "pending" },
+    ];
     setAgentToolContext({
       workspaceId: "workspace",
       cwd: process.cwd(),
@@ -101,7 +109,9 @@ describe("clearTodoSessionCache", () => {
       .getCustomToolDefinitions("chat")
       .find((tool) => tool.name === "todo_write");
     if (!definition) throw new Error("todo_write tool is not registered");
-    const execute = definition.execute as (...args: unknown[]) => Promise<{ content: Array<{ text: string }> }>;
+    const execute = definition.execute as (
+      ...args: unknown[]
+    ) => Promise<{ content: Array<{ text: string }> }>;
     const call = async (content: string) =>
       await execute(
         "todo-test",

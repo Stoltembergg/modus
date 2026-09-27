@@ -17,8 +17,8 @@ import type {
   UpdateSubagentInput,
 } from "../../shared/contracts";
 import { normalizeSkillName, parseFrontmatter } from "../skills/skills-config";
-import { listModels } from "./model-service";
 import { BUILTIN_SUBAGENTS, type BuiltinSubagentRole } from "./builtin-subagents";
+import { listModels } from "./model-service";
 
 const USER_AGENT_FAMILIES = [".codex", ".claude", ".cursor", ".modus"] as const;
 const WORKSPACE_AGENT_FAMILIES = [".codex", ".claude", ".cursor", ".modus"] as const;
@@ -154,9 +154,7 @@ function isBuiltinRole(name: string): name is BuiltinSubagentRole {
   return BUILTIN_SUBAGENTS.some((profile) => profile.name === name);
 }
 
-function enforceUiUxReadOnlyBoundary(
-  profile: AvailableSubagentProfile,
-): AvailableSubagentProfile {
+function enforceUiUxReadOnlyBoundary(profile: AvailableSubagentProfile): AvailableSubagentProfile {
   if (profile.name !== "ui-ux") return profile;
   return {
     ...profile,
