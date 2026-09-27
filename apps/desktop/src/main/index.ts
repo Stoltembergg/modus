@@ -6,6 +6,7 @@ import { registerAppIpc } from "./ipc/register-app-ipc";
 import { disposeAllMcp } from "./mcp/mcp-service";
 import { createStartupTimeline } from "./startup/startup-timeline";
 import { shutdownTerminals } from "./terminal/terminal-service";
+import { startUpdateServiceInBackground, stopUpdateService } from "./updater/update-service";
 import { installApplicationMenu } from "./windows/application-menu";
 import { createMainWindow } from "./windows/main-window";
 
@@ -68,6 +69,8 @@ if (!app.requestSingleInstanceLock()) {
         }
       });
       openMainWindow();
+      // No-op in dev, beta builds and unsupported platforms; first check runs after a delay.
+      startUpdateServiceInBackground();
 
       // Register after ready so the first launch does not race activate → boot.
       // Recreate the window only — IPC stays registered for the process lifetime.
@@ -89,7 +92,9 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   // Close MCP transports on quit so stdio servers never outlive the app.
+  // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
   app.on("before-quit", () => {
+    stopUpdateService();
     stopRemoteModelCatalog();
     shutdownTerminals();
     void disposeAllMcp();

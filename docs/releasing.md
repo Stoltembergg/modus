@@ -72,9 +72,9 @@ There are no signing certificates yet:
   install ("Windows protected your PC" → *More info* → *Run anyway*).
 - **macOS:** builds are not signed with a Developer ID or notarized. Gatekeeper blocks
   the first launch of a downloaded app (right-click → *Open*, or
-  `xattr -dr com.apple.quarantine /Applications/Modus.app`). macOS auto-update
-  (Squirrel.Mac) needs a properly signed app, so on mac the update can be detected
-  but not installed automatically.
+  `xattr -dr com.apple.quarantine /Applications/Modus.app`). electron-updater's mac
+  installer (Squirrel.Mac) rejects apps without a Developer ID, so the app installs mac
+  updates with its own installer instead (see [In-app updates](#in-app-updates)).
 - Both mac arches are ad-hoc signed (`mac.identity: "-"` in
   `electron-builder.config.ts`); without it electron-builder 26 only ad-hoc signs
   arm64 and leaves x64 unsigned. The release workflow also sets
@@ -95,6 +95,30 @@ to the release pipeline and dry-run it (next section).
 `electron-updater` (the in-app updater) is pinned to `6.8.3`, the version released
 together with electron-builder 26.8.x (both use `builder-util-runtime` 9.5.1). Upgrade
 the two together, and keep them below electron-builder v28.
+
+## In-app updates
+
+The main-process update service (`apps/desktop/src/main/updater/`) reads the stable
+channel of this repository's GitHub Releases through electron-updater
+(`resources/app-update.yml`). It checks 15 s after startup and every 5 minutes, and only
+ever moves to a newer `X.Y.Z` release: no downgrades, no pre-releases. It does nothing
+in dev (`npm run dev`) or in builds whose version is not a plain `X.Y.Z` (betas).
+
+- Until the first release is published every check fails (no releases, missing
+  `latest*.yml`, 404). That is expected: background failures never show up in the UI and
+  are logged at most once an hour as `[modus-updater] background update check failed`.
+  Set `MODUS_UPDATER_DEBUG=1` to log every check.
+- Downloads start only when the user clicks Install. The restart waits until no agent
+  turn is running.
+- **Windows / AppImage:** electron-updater downloads the installer (sha512 from
+  `latest*.yml`) and restarts into it.
+- **macOS:** electron-updater only checks. The app downloads the zip for its
+  architecture from the release, checks its sha512 and size against `latest-mac.yml`,
+  extracts it with `ditto`, checks the bundle id, version and `codesign --verify`, then a
+  detached script swaps `/Applications/Modus.app` after the app quits (keeping a backup
+  until the new version starts). Apps outside `/Applications`, translocated, on a
+  mounted volume, or in a folder the user cannot write get a link to the release instead.
+- **Linux deb:** the app cannot replace itself, so it only links to the release page.
 
 ## Dry runs on pull requests
 
