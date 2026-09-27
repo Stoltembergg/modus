@@ -1841,3 +1841,23 @@ export type CreateSubagentInput = {
 export type UpdateSubagentInput = CreateSubagentInput & {
   path: string;
 };
+
+/**
+ * What the renderer offers for an available update: install in place, or open the
+ * GitHub Release page (Linux deb installs, macOS installs that cannot be replaced).
+ */
+export type UpdateAction = "install" | "download-page";
+
+/** App auto-update state pushed from the main-process update service. */
+export type UpdateState =
+  | { status: "idle" }
+  | { status: "checking" }
+  | { status: "available"; version: string; action: UpdateAction }
+  | { status: "downloading"; version: string; percent: number }
+  /** Downloaded and verified; the restart follows right away or after agents finish. */
+  | { status: "ready"; version: string }
+  /** Ready, but the restart waits until no agent turn is running. */
+  | { status: "waiting-for-agents"; version: string }
+  | { status: "installing"; version: string }
+  /** Only user-initiated downloads/installs fail visibly; background checks stay idle. */
+  | { status: "failed"; version: string; retryable: boolean; action: UpdateAction };
