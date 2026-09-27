@@ -13,43 +13,12 @@ import type {
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { AppearanceSettingsPanel } from "./sections/appearance";
 import { GeneralSettingsPanel } from "./sections/general";
-import {
-  HarnessInsightsSettingsPanel,
-  HarnessInsightsView,
-  harnessInsightConfidenceLabel,
-  harnessInsightsQueryForWorkspace,
-} from "./sections/harness-insights";
-import {
-  accountMetricLabel,
-  accountStatusLabel,
-  configuredModelLimits,
-  groupConfiguredModelLimits,
-  LimitsSettingsPanel,
-  usageMetricText,
-} from "./sections/limits";
-import {
-  canSaveReadOnlyMcpAllowlist,
-  confirmedReadOnlyMcpAllowlist,
-  type McpFormState,
-  McpServerForm,
-  McpSettingsPanel,
-  normalizeReadOnlyMcpAllowlist,
-  toggleReadOnlyMcpTool,
-} from "./sections/mcp";
+import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
+import { LimitsSettingsPanel } from "./sections/limits";
+import { McpSettingsPanel } from "./sections/mcp";
 import { ModelProviderSettingsPanel } from "./sections/model-provider";
 import { PersonalizationSettingsPanel } from "./sections/personalization";
-import {
-  confirmProjectMemoryRemoval,
-  groupProjectMemories,
-  ProjectMemoryRow,
-  ProjectMemorySettingsPanel,
-  projectMemoryProvisionalExplanation,
-  projectMemoryStatusLabel,
-  projectMemoryVerificationLabel,
-  projectMemoryVerifyVisible,
-  safeExternalReferenceUrl,
-  setProjectMemoryScopeEnabled,
-} from "./sections/project-memory";
+import { ProjectMemorySettingsPanel } from "./sections/project-memory";
 import { RulesSettingsPanel } from "./sections/rules";
 import { SettingsSidebar } from "./sections/SettingsSidebar";
 import { SkillsSettingsPanel } from "./sections/skills";

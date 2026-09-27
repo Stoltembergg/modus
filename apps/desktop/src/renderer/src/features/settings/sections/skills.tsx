@@ -1,19 +1,8 @@
-import {
-  IconCube,
-  IconEdit,
-  IconPlus,
-  IconRefresh,
-  IconTrash,
-  IconWorld,
-} from "@tabler/icons-react";
+import { IconCube, IconPlus, IconWorld } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { SkillInfo } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { EmptyState } from "../../../components/ui/Panel";
 import { ShinyText } from "../../../components/ui/ShinyText";
-import { Tooltip } from "../../../components/ui/Tooltip";
-import { cn } from "../../../lib/cn";
-import { Field } from "../form-controls";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {

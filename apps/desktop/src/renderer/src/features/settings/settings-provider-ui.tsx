@@ -5,7 +5,6 @@ import {
   IconChevronRight,
   IconFilter,
   IconKey,
-  IconPlugConnected,
   IconPlus,
   IconSearch,
   IconTrash,
@@ -22,9 +21,7 @@ import type {
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { EmptyState } from "../../components/ui/Panel";
 import { ShinyText } from "../../components/ui/ShinyText";
-import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
-import { formatClock } from "../../lib/formatClock";
 import {
   modelThinkingOptions,
   selectedThinkingLabel,

@@ -1,7 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import {
   IconArrowLeft,
-  IconCheck,
   IconChevronRight,
   IconCopy,
   IconKey,

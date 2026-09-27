@@ -1,13 +1,5 @@
-import {
-  IconArchiveOff,
-  IconCheck,
-  IconEdit,
-  IconExternalLink,
-  IconPlus,
-  IconRefresh,
-  IconTrash,
-} from "@tabler/icons-react";
-import { useEffect, useMemo, useState } from "react";
+import { IconArchiveOff, IconCheck, IconExternalLink, IconTrash } from "@tabler/icons-react";
+import { useEffect, useState } from "react";
 import type {
   ProjectMemoryCategory,
   ProjectMemoryExternalReference,
@@ -15,23 +7,13 @@ import type {
   ProjectMemoryScope,
   ProjectMemorySnapshot,
   ProjectMemoryStatus,
-  ProjectMemoryVerification,
 } from "../../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
-import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { EmptyState } from "../../../components/ui/Panel";
-import { ShinyText } from "../../../components/ui/ShinyText";
-import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
 import { formatClock } from "../../../lib/formatClock";
 import { SwitchControl } from "../form-controls";
-import {
-  ReadOnlyPill,
-  SettingsList,
-  SettingsPageHeader,
-  SettingsRow,
-  SettingsSection,
-} from "../settings-layout";
+import { SettingsPageHeader } from "../settings-layout";
 
 export function groupProjectMemories(
   memories: ProjectMemoryRecord[],

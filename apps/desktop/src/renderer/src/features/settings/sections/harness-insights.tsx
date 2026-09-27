@@ -7,7 +7,6 @@ import type {
   HarnessInsightsResult,
 } from "../../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
-import { ShinyText } from "../../../components/ui/ShinyText";
 import { SettingsPageHeader } from "../settings-layout";
 
 const HARNESS_INSIGHTS_WINDOW_DAYS = 30;

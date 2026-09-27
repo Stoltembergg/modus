@@ -2,10 +2,8 @@ import { Switch } from "@base-ui/react/switch";
 import {
   IconChevronRight,
   IconCodeDots,
-  IconCopy,
   IconCube,
   IconEdit,
-  IconPlugConnected,
   IconPlus,
   IconRefresh,
   IconTerminal2,
@@ -18,18 +16,11 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "re
 import { joinCommandLine, splitCommandLine } from "../../../../../shared/command-line";
 import type { McpServerInfo, WorkspaceInfo } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { EmptyState } from "../../../components/ui/Panel";
 import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
-import { Field, SelectField, SwitchControl } from "../form-controls";
-import {
-  ReadOnlyPill,
-  SettingsList,
-  SettingsPageHeader,
-  SettingsRow,
-  SettingsSection,
-} from "../settings-layout";
+import { SelectField } from "../form-controls";
+import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
   connected: { dot: "bg-success", label: "Connected" },

@@ -1,12 +1,4 @@
-import {
-  IconCheck,
-  IconEdit,
-  IconFileText,
-  IconGavel,
-  IconPlus,
-  IconRefresh,
-  IconTrash,
-} from "@tabler/icons-react";
+import { IconCheck, IconFileText, IconGavel, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type {
   RuleFileInfo,
@@ -14,16 +6,12 @@ import type {
   RuleSource,
   WorkspaceAgentsState,
 } from "../../../../../shared/contracts";
-import { EmptyState } from "../../../components/ui/Panel";
 import { ShinyText } from "../../../components/ui/ShinyText";
-import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
-import { Field } from "../form-controls";
 import {
   ReadOnlyPill,
   SettingsList,
   SettingsPageHeader,
-  SettingsRow,
   SettingsSection,
 } from "../settings-layout";
 

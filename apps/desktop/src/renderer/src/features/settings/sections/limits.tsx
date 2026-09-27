@@ -9,18 +9,10 @@ import type {
   ProviderUsageStatus,
 } from "../../../../../shared/contracts";
 import { EmptyState } from "../../../components/ui/Panel";
-import { ShinyText } from "../../../components/ui/ShinyText";
-import { Tooltip } from "../../../components/ui/Tooltip";
 import { cn } from "../../../lib/cn";
 import { formatClock } from "../../../lib/formatClock";
 import { SwitchControl } from "../form-controls";
-import {
-  ReadOnlyPill,
-  SettingsList,
-  SettingsPageHeader,
-  SettingsRow,
-  SettingsSection,
-} from "../settings-layout";
+import { SettingsPageHeader, SettingsRow, SettingsSection } from "../settings-layout";
 
 type ConfiguredModelLimit = {
   id: string;

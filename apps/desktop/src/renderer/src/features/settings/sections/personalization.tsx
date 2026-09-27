@@ -1,10 +1,7 @@
-import { IconCheck, IconFileText, IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconCheck, IconFileText } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { PersonalizationState } from "../../../../../shared/contracts";
 import { ShinyText } from "../../../components/ui/ShinyText";
-import { Tooltip } from "../../../components/ui/Tooltip";
-import { cn } from "../../../lib/cn";
-import { Field } from "../form-controls";
 import {
   ReadOnlyPill,
   SettingsList,
