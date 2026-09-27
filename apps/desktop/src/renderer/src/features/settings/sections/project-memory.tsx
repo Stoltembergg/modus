@@ -293,7 +293,7 @@ export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: stri
         <div className="flex items-center justify-between gap-3 rounded-lg border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">
           <span>{error}</span>
           <button
-            className="shrink-0 rounded-md px-2 py-1 text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+            className="h-7 shrink-0 rounded-md px-2 text-fg-muted transition-colors hover:bg-hover hover:text-fg"
             onClick={() => void loadSnapshot()}
             type="button"
           >

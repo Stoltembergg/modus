@@ -236,7 +236,7 @@ export function ProviderDetail({
                 <ReadOnlyPill>{modelResultLabel(filteredModels.length)}</ReadOnlyPill>
               )}
               <button
-                className="flex h-8 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+                className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
                 disabled={busy || allEnabled || models.length === 0}
                 onClick={() => onSetAllModels(true)}
                 type="button"
@@ -244,7 +244,7 @@ export function ProviderDetail({
                 Enable all
               </button>
               <button
-                className="flex h-8 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+                className="flex h-9 items-center rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
                 disabled={busy || noneEnabled}
                 onClick={() => onSetAllModels(false)}
                 type="button"
@@ -253,7 +253,7 @@ export function ProviderDetail({
               </button>
               {detail.source === "custom" ? (
                 <button
-                  className="flex h-8 items-center gap-1.5 rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                  className="flex h-9 items-center gap-1.5 rounded-md bg-chip-faint px-3 text-sm text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
                   onClick={() => onEditProvider(detail.id)}
                   type="button"
                 >
@@ -353,7 +353,7 @@ export function ProviderCredentials({
         </span>
         <span className="flex shrink-0 items-center gap-1.5">
           <button
-            className="h-8 rounded-full bg-canvas/70 px-3 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+            className="h-7 rounded-full bg-canvas/70 px-3 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
             onClick={detail.source === "custom" ? onEditProvider : onOpenConnection}
             type="button"
           >
@@ -361,7 +361,7 @@ export function ProviderCredentials({
           </button>
           {canDisconnect ? (
             <button
-              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              className="h-7 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
               onClick={onDisconnectProvider}
               type="button"
             >
@@ -371,7 +371,7 @@ export function ProviderCredentials({
           {detail.source === "custom" ? (
             <button
               aria-label={`Remove ${detail.name}`}
-              className="flex size-8 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
+              className="flex size-7 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
               onClick={onDeleteProvider}
               type="button"
             >
@@ -595,7 +595,7 @@ export function ModelRow({
             <button
               aria-expanded={open}
               aria-label={`Configure ${model.name}`}
-              className="flex size-8 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+              className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               onClick={() => setOpen((value) => !value)}
               type="button"
             >
@@ -622,7 +622,7 @@ export function ModelRow({
                 value={budgetDraft}
               />
               <button
-                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveBudget}
                 type="button"
@@ -630,7 +630,7 @@ export function ModelRow({
                 Apply
               </button>
               <button
-                className="flex h-10 items-center justify-center rounded-md px-3 text-fg-muted text-sm transition-colors hover:bg-hover hover:text-fg"
+                className="flex h-9 items-center justify-center rounded-md px-3 text-fg-muted text-sm transition-colors hover:bg-hover hover:text-fg"
                 disabled={busy || model.thinkingLevel === "off"}
                 onClick={() => onEditModel(model, { thinkingVariant: "off" })}
                 type="button"
@@ -663,7 +663,7 @@ export function ModelRow({
                 value={maxTokensDraft}
               />
               <button
-                className="flex h-10 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+                className="flex h-9 items-center justify-center rounded-md bg-fg px-3 text-sm text-canvas transition-colors hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={busy}
                 onClick={saveLimits}
                 type="button"
@@ -764,7 +764,7 @@ export function SearchField({
       {value ? (
         <button
           aria-label={`Clear ${ariaLabel.toLowerCase()}`}
-          className="absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+          className="absolute top-1/2 right-1.5 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
           onClick={() => onChange("")}
           type="button"
         >

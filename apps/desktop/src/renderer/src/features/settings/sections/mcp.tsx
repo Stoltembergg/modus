@@ -610,7 +610,7 @@ export function McpServerForm({
           <div className="flex gap-1">
             {MCP_PRESETS.map((preset) => (
               <button
-                className="h-6 rounded-md bg-chip px-2 text-2xs text-fg-subtle transition-colors hover:bg-chip-strong hover:text-fg"
+                className="h-7 rounded-md bg-chip px-2 text-2xs text-fg-subtle transition-colors hover:bg-chip-strong hover:text-fg"
                 key={preset.name}
                 onClick={() =>
                   set({

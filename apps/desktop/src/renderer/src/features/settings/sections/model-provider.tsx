@@ -131,7 +131,7 @@ export function ModelProviderSettingsPanel({
             <Tooltip content="Refresh providers">
               <button
                 aria-label="Refresh providers"
-                className="flex size-8 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+                className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
                 onClick={() => {
                   onError(undefined);
                   void onRefreshCatalog().catch((error) =>
@@ -352,13 +352,13 @@ function ProviderConfigDialogShell({
             <div className="flex h-[52px] items-center justify-between gap-3 px-5">
               <Dialog.Close
                 aria-label={`Back from ${title}`}
-                className="flex size-8 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+                className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               >
                 <IconArrowLeft size={16} stroke={1.7} />
               </Dialog.Close>
               <Dialog.Close
                 aria-label={closeLabel}
-                className="flex size-8 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+                className="flex size-7 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"
               >
                 <IconX size={16} stroke={1.7} />
               </Dialog.Close>
@@ -574,7 +574,7 @@ function ProviderAuthDialog({
               <div className="rounded-md border border-hairline-soft bg-panel px-3 py-3">
                 <div className="break-all font-mono text-xs text-fg-muted">{operation.url}</div>
                 <button
-                  className="mt-3 flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-canvas px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                  className="mt-3 flex h-7 items-center gap-1.5 rounded-md border border-hairline bg-canvas px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
                   onClick={() => copy(operation.url)}
                   type="button"
                 >
