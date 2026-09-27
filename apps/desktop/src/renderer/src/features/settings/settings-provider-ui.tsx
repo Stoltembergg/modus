@@ -32,6 +32,7 @@ import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-
 import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
 import { ReadOnlyPill } from "./settings-layout";
+import { UnofficialProviderMark, UnofficialProviderNotice } from "./UnofficialProviderNotice";
 
 type ModelConfigPatch = {
   thinkingVariant?: string;
@@ -98,6 +99,9 @@ export function ProviderRow({
         <span className="flex min-w-0 items-center gap-2">
           <span className="truncate text-sm text-fg">{provider.name}</span>
           {provider.source === "custom" ? <TinyBadge>custom</TinyBadge> : null}
+          {provider.id === "antigravity" ? (
+            <UnofficialProviderMark>Unofficial</UnofficialProviderMark>
+          ) : null}
         </span>
         <span className="mt-0.5 block truncate text-xs text-fg-faint">
           {providerSummary(provider)}
@@ -184,7 +188,17 @@ export function ProviderDetail({
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h3 className="truncate text-md font-normal text-fg">{detail.name}</h3>
                 {detail.source === "custom" ? <TinyBadge>custom</TinyBadge> : null}
+                {detail.id === "antigravity" ? (
+                  <UnofficialProviderMark>Unofficial</UnofficialProviderMark>
+                ) : null}
+                {detail.id === "commandcode" ? <TinyBadge>pricing unknown</TinyBadge> : null}
               </div>
+              {detail.id === "commandcode" ? (
+                <p className="mt-2 text-xs leading-5 text-fg-muted">
+                  Pricing is not published for these models and is not shown to avoid implying any
+                  cost.
+                </p>
+              ) : null}
             </div>
           </div>
           <ProviderStatusPill status={providerStatus(detail)} />
@@ -204,6 +218,12 @@ export function ProviderDetail({
         onKeyChange={onKeyChange}
         onOpenConnection={onOpenProviderConnection}
       />
+
+      {detail.id === "antigravity" && detail.configured ? (
+        <div className="mt-3">
+          <UnofficialProviderNotice />
+        </div>
+      ) : null}
 
       <div className="mt-4">
         <button
@@ -336,13 +356,58 @@ export function ProviderCredentials({
   const canSubmit = Boolean(keyValue.trim()) || baseUrlChanged;
   const canDisconnect = detail.authSource === "stored" && Boolean(detail.authKind);
   const editing = detail.source === "builtin" && (!detail.configured || credentialEditorOpen);
-  const connectionLabel = !detail.configured
-    ? "Not connected"
-    : canDisconnect
-      ? (detail.authLabel ?? "Connected locally")
-      : detail.authSource
-        ? `Managed by ${detail.authLabel ?? detail.authSource}`
-        : "Saved in Modus";
+  const isNativeProvider = detail.id === "commandcode" || detail.id === "antigravity";
+  const connectionLabel = isNativeProvider
+    ? providerDetailConnectionLabel(detail)
+    : !detail.configured
+      ? "Not connected"
+      : canDisconnect
+        ? (detail.authLabel ?? "Connected locally")
+        : detail.authSource
+          ? `Managed by ${detail.authLabel ?? detail.authSource}`
+          : "Saved in Modus";
+
+  // Antigravity never exposes an API key input. Show a single OAuth CTA and a
+  // persistent status line; the risk acknowledgement interstitial is the
+  // gate before the OAuth dance actually starts (handled in SettingsPanel).
+  if (detail.id === "antigravity") {
+    return (
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-chip-faint px-3 py-3">
+        <span className="min-w-0">
+          <span className="block text-sm text-fg">Connection</span>
+          <span className="mt-0.5 block truncate text-xs text-fg-faint">{connectionLabel}</span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1.5">
+          <button
+            className="h-8 rounded-full bg-canvas/70 px-3 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+            onClick={onOpenConnection}
+            type="button"
+          >
+            {detail.configured ? "Re-authenticate" : "Sign in with Antigravity"}
+          </button>
+          {canDisconnect ? (
+            <button
+              className="h-8 rounded-full bg-danger/10 px-3 text-xs text-danger transition-[background-color,transform] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-danger/15 active:scale-[0.97]"
+              onClick={onDisconnectProvider}
+              type="button"
+            >
+              Disconnect
+            </button>
+          ) : null}
+          {detail.source === "custom" ? (
+            <button
+              aria-label={`Remove ${detail.name}`}
+              className="flex size-8 items-center justify-center rounded-full text-danger transition-colors hover:bg-danger/10"
+              onClick={onDeleteProvider}
+              type="button"
+            >
+              <IconTrash size={14} stroke={1.7} />
+            </button>
+          ) : null}
+        </span>
+      </section>
+    );
+  }
 
   if (!editing) {
     return (
@@ -825,7 +890,34 @@ export function providerStatus(provider: ModelProviderInfo): ProviderStatus {
   return "available";
 }
 
+/**
+ * Per-provider catalog summary that powers the `ProviderRow`. Native providers
+ * (Command Code, Antigravity) get explicit, plan-approved copy; stock providers
+ * fall back to the existing `enabled / configured / model count` phrasing.
+ */
 export function providerSummary(provider: ModelProviderInfo): string {
+  return providerCatalogSummary(provider);
+}
+
+export function providerCatalogSummary(provider: ModelProviderInfo): string {
+  if (provider.id === "commandcode") {
+    if (provider.enabledModelCount > 0) {
+      return `${provider.enabledModelCount} enabled · ${provider.modelCount} models · pricing unknown`;
+    }
+    if (provider.configured) {
+      return `${provider.modelCount} models · key saved · unverified`;
+    }
+    return `${provider.modelCount} models · API key · pricing unknown`;
+  }
+  if (provider.id === "antigravity") {
+    if (provider.enabledModelCount > 0) {
+      return `${provider.enabledModelCount} enabled · ${provider.modelCount} models`;
+    }
+    if (provider.configured) {
+      return `${provider.modelCount} models · signed in`;
+    }
+    return `${provider.modelCount} models · OAuth only · unofficial endpoints`;
+  }
   if (provider.enabledModelCount > 0) {
     return `${provider.enabledModelCount} enabled · ${provider.modelCount} models`;
   }
@@ -833,6 +925,36 @@ export function providerSummary(provider: ModelProviderInfo): string {
     return `${provider.modelCount} models · key configured`;
   }
   return `${provider.modelCount} models`;
+}
+
+/**
+ * Detail-level "Connection" caption. For native providers we surface the
+ * exact plan-approved wording (Command Code's `API key saved — not verified`,
+ * Antigravity's OAuth-only or OAuth state); stock providers keep the existing
+ * "Saved in Modus"/"Managed by …" labels from the original credential block.
+ */
+export function providerDetailConnectionLabel(
+  detail: Pick<ModelProviderInfo, "id" | "configured" | "authKind" | "authLabel" | "authSource">,
+): string {
+  if (detail.id === "commandcode") {
+    if (!detail.configured) return "API key required";
+    return detail.authLabel ?? "API key saved — not verified";
+  }
+  if (detail.id === "antigravity") {
+    if (!detail.configured) return "OAuth sign-in required";
+    return detail.authLabel ?? "OAuth";
+  }
+  if (!detail.configured) return "Not connected";
+  if (detail.authSource) {
+    if (detail.authSource === "stored" && detail.authKind === "oauth") {
+      return "Connected locally";
+    }
+    if (detail.authSource === "stored" && detail.authKind === "api-key") {
+      return "API key";
+    }
+    return `Managed by ${detail.authLabel ?? detail.authSource}`;
+  }
+  return "Saved in Modus";
 }
 
 export function normalizeSearchValue(value: string): string {

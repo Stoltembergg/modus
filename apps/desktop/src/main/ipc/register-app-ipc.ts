@@ -1401,7 +1401,9 @@ export function registerAppIpc({
       input,
       IPC_CHANNELS.modelProviderAuthStart,
     );
-    return startProviderAuth(parsed.provider, (url) => shell.openExternal(url));
+    return startProviderAuth(parsed.provider, (url) => shell.openExternal(url), {
+      ...(parsed.riskAcknowledged === true ? { riskAcknowledged: true } : {}),
+    });
   });
 
   ipcMain.handle(IPC_CHANNELS.modelProviderAuthState, (event, input) => {
@@ -1434,9 +1436,9 @@ export function registerAppIpc({
     cancelProviderAuth(parsed.operationId);
   });
 
-  ipcMain.handle(IPC_CHANNELS.modelDisconnectProvider, (event, provider: string) => {
+  ipcMain.handle(IPC_CHANNELS.modelDisconnectProvider, async (event, provider: string) => {
     assertTrustedSender(event);
-    disconnectProvider(
+    await disconnectProvider(
       parseIpcInput(sessionIdSchema, provider, IPC_CHANNELS.modelDisconnectProvider),
     );
   });

@@ -2,9 +2,10 @@
 
 ## Status
 
-The feature scope was approved in conversation. This revision incorporates implementation
-constraints found in an independent review and is the written-spec review checkpoint. The plan and
-implementation remain blocked until the user approves this revision.
+The feature scope, revised design, and implementation plan were approved in conversation on
+2026-09-27. The user selected delegated-specialist execution and later confirmed deterministic
+per-model Antigravity quota routing. Implementation is in progress under the verification gates
+below.
 
 ## Summary
 
@@ -162,10 +163,20 @@ slashes.
   - Gemini CLI quota: `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`,
     `gemini-3-pro-preview`, `gemini-3.1-pro-preview`,
     `gemini-3.1-pro-preview-customtools`.
-  A single authenticated account is supported in V1; no account rotation or fallback between
-  multiple accounts. The six Gemini CLI quota models require a usable Google Cloud project ID from
-  the account's `loadCodeAssist` discovery; if discovery cannot provide one, surface those models as
-  unavailable rather than substituting a project or claiming guaranteed availability.
+  The user confirmed deterministic routing by these exact IDs: the five `antigravity-*` models use
+  the Antigravity quota route and the six bare `gemini-*` models use the Gemini CLI quota route. Do
+  not add automatic cross-pool retry/fallback for quota exhaustion or request errors. This is an
+  intentional Modus behavior difference from the reviewed upstream resolver, where Gemini models
+  may prefer/fall back between pools according to a setting. A single authenticated account is
+  supported in V1; no account rotation. The six fixed Gemini CLI quota models require a usable
+  Google Cloud project ID from the account's `loadCodeAssist` discovery; if discovery cannot provide
+  one, surface those models as unavailable rather than substituting a project or claiming guaranteed
+  availability.
+- The reviewed Antigravity catalog source is pinned to commit
+  `16e0056431d0a1291ee66e5938c732720b13a851`. Preserve its exact model names, declared limits,
+  supported input modalities, and explicit reasoning variants. The source does not declare
+  per-model tool-call support; omit that metadata rather than inferring `true` or `false`. Resolver
+  defaults for reasoning belong in the request adapter, not fabricated model-catalog declarations.
 - Persist OAuth credentials through Modus' existing provider credential storage. Storage inherits
   the application's existing local-file protection; this design does not claim OS-keychain
   encryption. Do not log access/refresh tokens, authorization codes, or raw credential responses.
@@ -265,10 +276,10 @@ runtime, stop and return for a new scope decision rather than silently broadenin
   timeout, cancellation, app shutdown, listener cleanup, and both IPv4/IPv6 resolution of localhost.
   Verify the IPC/service reject OAuth start without explicit risk acknowledgement. No live Google
   credentials in automated tests.
-- **Antigravity transport:** mock text, reasoning, tool-call, and SSE responses; verify request and
-  response transformations, route selection, explicit missing-project behavior for Gemini CLI
-  quota models, errors, complete assistant messages, and secret redaction. No live endpoints in
-  automated tests.
+- **Antigravity transport:** mock text, reasoning, tool-call, and SSE responses; verify exact
+  per-ID quota routing, no cross-pool retries, explicit missing-project behavior for Gemini CLI
+  quota models, request/response transformations, errors, complete assistant messages, and secret
+  redaction. Do not assume pools require distinct hostnames. No live endpoints in automated tests.
 - **UI:** verify API-key and OAuth entry points, acknowledgement required before OAuth, cancel
   leaves no credentials, ongoing Antigravity risk notice, correct Command Code copy, and disconnect
   behavior.
@@ -281,10 +292,12 @@ runtime, stop and return for a new scope decision rather than silently broadenin
 - [Command Code PR #19 — proposed 55-model catalog](https://github.com/brent-weatherall/opencode-commandcode-provider/pull/19)
 - [Pinned PR head `7846a5c1`](https://github.com/brent-weatherall/opencode-commandcode-provider/commit/7846a5c1d65f7732d69c96a65df74df4d6f3d521): [model transport](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/src/model.ts), [request conversion](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/src/convert.ts), [stream parser](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/src/stream.ts), [key flow](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/plugin.ts), [license](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/LICENSE), and [model snapshot](https://github.com/brent-weatherall/opencode-commandcode-provider/blob/7846a5c1d65f7732d69c96a65df74df4d6f3d521/models.json).
 - [Antigravity auth plugin](https://github.com/NoeFabris/opencode-antigravity-auth)
-- [Antigravity plugin ToS warning](https://github.com/NoeFabris/opencode-antigravity-auth/blob/main/README.md#terms-of-service-warning--read-before-installing)
+- [Reviewed Antigravity source commit `16e00564`](https://github.com/NoeFabris/opencode-antigravity-auth/commit/16e0056431d0a1291ee66e5938c732720b13a851): [model catalog](https://github.com/NoeFabris/opencode-antigravity-auth/blob/16e0056431d0a1291ee66e5938c732720b13a851/src/plugin/config/models.ts), [model resolver](https://github.com/NoeFabris/opencode-antigravity-auth/blob/16e0056431d0a1291ee66e5938c732720b13a851/src/plugin/transform/model-resolver.ts), and [ToS warning](https://github.com/NoeFabris/opencode-antigravity-auth/blob/16e0056431d0a1291ee66e5938c732720b13a851/README.md#terms-of-service-warning--read-before-installing).
 - [Pi custom-provider documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/custom-provider.md)
 
 ## Approval checkpoint
 
-This is the written design checkpoint. No implementation has started. The user must review and
-approve this spec before the TDD implementation plan is written and code changes begin.
+This written design and its TDD plan were approved in conversation; delegated-specialist execution
+was selected. The user also confirmed deterministic per-ID quota routing after an upstream resolver
+discrepancy was found. Implementation is in progress; the verification requirements above remain
+mandatory.

@@ -157,7 +157,10 @@ describe("native provider manifest", () => {
   });
 
   it("merges without mutating the catalog and rejects duplicate identities", () => {
-    const base = { providers: { openai: [{ id: "gpt-4.1" }] } };
+    const base: {
+      providers: Record<string, readonly ({ id: string } & Record<string, unknown>)[]>;
+      [key: string]: unknown;
+    } = { providers: { openai: [{ id: "gpt-4.1" }] } };
     const merged = mergeNativeProviderMetadata(base, {
       providers: { commandcode: commandCodeModels },
     });

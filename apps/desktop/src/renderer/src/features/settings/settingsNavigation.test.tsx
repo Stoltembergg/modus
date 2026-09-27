@@ -56,6 +56,16 @@ describe("filterSettingsNav", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "   ")).toEqual(SETTINGS_NAV_ITEMS);
   });
 
+  it("keeps Model & Provider as the single entry point for new provider disclosures", () => {
+    // Command Code pricing-unknown text lives under "Model & Provider". A
+    // partial-query reachability check guards against accidentally splitting
+    // provider UX across multiple nav items.
+    const matchByProvider = filterSettingsNav(SETTINGS_NAV_ITEMS, "model");
+    expect(matchByProvider.map((item) => item.id)).toEqual(["model-provider"]);
+    const matchByName = filterSettingsNav(SETTINGS_NAV_ITEMS, "commandcode");
+    expect(matchByName).toEqual([]);
+  });
+
   it("matches partial labels as a substring", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "en").map((item) => item.label)).toEqual([
       "General",

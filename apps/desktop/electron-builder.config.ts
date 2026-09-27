@@ -30,6 +30,10 @@ const config: Configuration = {
       to: "skills",
     },
     {
+      from: "resources/licenses",
+      to: "licenses",
+    },
+    {
       from: `../../target/release/${ptyHostBinary}`,
       to: `bin/${ptyHostBinary}`,
     },

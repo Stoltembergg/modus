@@ -383,7 +383,7 @@ export type ModusApi = {
     onCatalogChanged(callback: () => void): () => void;
     providerDetail(provider: string): Promise<ModelProviderDetail | undefined>;
     connectionMethods(provider: string): Promise<ProviderConnectionMethod[]>;
-    startProviderAuth(input: { provider: string }): Promise<ProviderAuthOperationState>;
+    startProviderAuth(input: { provider: string; riskAcknowledged?: true }): Promise<ProviderAuthOperationState>;
     providerAuthState(input: { operationId: string }): Promise<ProviderAuthOperationState>;
     respondProviderAuth(input: { operationId: string; value?: string }): Promise<void>;
     cancelProviderAuth(input: { operationId: string }): Promise<void>;

@@ -17,7 +17,14 @@ const CLIENT_IDENTITY = "Modus";
 export interface CommandCodeInput {
   modelId: string;
   systemPrompt?: string;
-  messages: Array<{ role: string; content: unknown }>;
+  messages: Array<{
+    role: string;
+    content: unknown;
+    toolCallId?: string;
+    toolName?: string;
+    isError?: boolean;
+    timestamp?: number;
+  }>;
   tools: Array<{ name: string; description?: string; inputSchema: Record<string, unknown> }>;
   maxTokens?: number;
   temperature?: number;
@@ -27,9 +34,9 @@ export interface CommandCodeInput {
 
 interface CommandCodeRequestBody {
   config: Record<string, unknown>;
-  memory: Record<string, unknown>;
-  taste: Record<string, unknown>;
-  skills: unknown[];
+  memory: string;
+  taste: string;
+  skills: null;
   permissionMode: string;
   params: Record<string, unknown>;
 }
@@ -44,20 +51,22 @@ export function buildCommandCodeRequest(
   input: CommandCodeInput,
   credentials: { apiKey: string; sessionId?: string },
 ): CommandCodeRequest {
-  const config: Record<string, unknown> = {};
-  if (input.systemPrompt !== undefined) config.systemPrompt = input.systemPrompt;
-  const memory: Record<string, unknown> = {};
-  if (credentials.sessionId) memory.sessionId = credentials.sessionId;
   const params: Record<string, unknown> = {
     model: input.modelId,
     stream: true,
-    messages: input.messages,
-    tools: input.tools,
+    messages: input.messages.map(normalizeMessage),
+    tools: input.tools.map((tool) => ({
+      type: "function",
+      name: tool.name,
+      ...(tool.description !== undefined ? { description: tool.description } : {}),
+      input_schema: tool.inputSchema,
+    })),
   };
-  if (input.maxTokens !== undefined) params.maxTokens = input.maxTokens;
+  if (input.systemPrompt !== undefined) params.system = input.systemPrompt;
+  if (input.maxTokens !== undefined) params.max_tokens = input.maxTokens;
   if (input.temperature !== undefined) params.temperature = input.temperature;
-  if (input.topP !== undefined) params.topP = input.topP;
-  if (input.topK !== undefined) params.topK = input.topK;
+  if (input.topP !== undefined) params.top_p = input.topP;
+  if (input.topK !== undefined) params.top_k = input.topK;
   return {
     url: COMMAND_CODE_URL,
     headers: {
@@ -65,9 +74,56 @@ export function buildCommandCodeRequest(
       "Content-Type": "application/json",
       "x-project-slug": "modus",
       "x-client-name": CLIENT_IDENTITY,
+      "x-command-code-version": "modus-native-adapter/0.1.0",
+      "x-cli-environment": "production",
     },
-    body: { config, memory, taste: {}, skills: [], permissionMode: "default", params },
+    body: { config: {}, memory: "", taste: "", skills: null, permissionMode: "standard", params },
   };
+}
+
+function normalizeMessage(message: CommandCodeInput["messages"][number]): { role: string; content: unknown } {
+  if (message.role === "toolResult") {
+    return {
+      role: "tool",
+      content: [{
+        type: "tool-result",
+        toolCallId: message.toolCallId,
+        toolName: message.toolName,
+        output: {
+          type: message.isError ? "error-text" : "text",
+          value: normalizeToolOutput(message.content),
+        },
+      }],
+    };
+  }
+  if (message.role !== "tool" || !Array.isArray(message.content)) return message;
+  return {
+    role: "tool",
+    content: message.content.map((part: unknown) => {
+      if (!part || typeof part !== "object" || (part as { type?: unknown }).type !== "tool-result") return part;
+      const result = part as Record<string, unknown>;
+      return {
+        type: "tool-result",
+        toolCallId: result.toolCallId,
+        toolName: result.toolName,
+        output: typeof result.output === "object" && result.output !== null &&
+          ((result.output as Record<string, unknown>).type === "text" || (result.output as Record<string, unknown>).type === "error-text")
+          ? result.output
+          : { type: "text", value: normalizeToolOutput(result.output) },
+      };
+    }),
+  };
+}
+
+function normalizeToolOutput(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (!Array.isArray(output)) return output == null ? "" : JSON.stringify(output) ?? "";
+  return output.flatMap((part: unknown) => {
+    if (typeof part === "string") return [part];
+    if (!part || typeof part !== "object") return [];
+    const value = part as Record<string, unknown>;
+    return value.type === "text" && typeof value.text === "string" ? [value.text] : [];
+  }).join("\n");
 }
 
 export type CommandCodeEvent = Record<string, unknown> & { type: string };
@@ -127,10 +183,17 @@ function errorTerminal(modelId: string, message: string, reason: "error" | "abor
   return { type: "error", reason, error };
 }
 
+function sanitizedFailure(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : "";
+  const status = /^Command Code request failed \((\d{3})\)$/.exec(message);
+  return status ? `Command Code request failed (${status[1]})` : fallback;
+}
+
 export async function* mapCommandCodeResponse(response: Response, modelId: string): AsyncGenerator<AssistantMessageEvent> {
   let message = assistant(modelId);
   let started = false;
   let terminal = false;
+  const activeToolInputs = new Map<string, { contentIndex: number; name: string; raw: string }>();
   const start = (): AssistantMessageEvent => ({ type: "start", partial: message });
   try {
     for await (const event of parseCommandCodeEvents(response)) {
@@ -146,8 +209,8 @@ export async function* mapCommandCodeResponse(response: Response, modelId: strin
           yield { type: "text_delta", contentIndex: message.content.length - 1, delta, partial: message };
         } else {
           const previous = message.content[contentIndex];
-          if (previous.type === "text") {
-            message = { ...message, content: message.content.map((part, index) => index === contentIndex ? { ...part, text: part.text + delta } : part) };
+          if (previous?.type === "text") {
+            message = { ...message, content: message.content.map((part, index) => index === contentIndex && part.type === "text" ? { ...part, text: part.text + delta } : part) };
             yield { type: "text_delta", contentIndex, delta, partial: message };
           }
         }
@@ -160,14 +223,49 @@ export async function* mapCommandCodeResponse(response: Response, modelId: strin
           yield { type: "thinking_delta", contentIndex: message.content.length - 1, delta, partial: message };
         } else {
           const previous = message.content[contentIndex];
-          if (previous.type === "thinking") {
-            message = { ...message, content: message.content.map((part, index) => index === contentIndex ? { ...part, thinking: part.thinking + delta } : part) };
+          if (previous?.type === "thinking") {
+            message = { ...message, content: message.content.map((part, index) => index === contentIndex && part.type === "thinking" ? { ...part, thinking: part.thinking + delta } : part) };
             yield { type: "thinking_delta", contentIndex, delta, partial: message };
           }
         }
-      } else if (type === "tool-call" || type === "tool-input" || type === "tool-input-delta") {
+      } else if (type === "tool-input-start") {
         const id = String(event.toolCallId ?? event.id ?? `tool-${message.content.length}`);
-        const name = typeof event.name === "string" ? event.name : "";
+        const name = typeof event.toolName === "string" ? event.toolName : typeof event.name === "string" ? event.name : "";
+        const toolCall = { type: "toolCall" as const, id, name, arguments: {} };
+        const contentIndex = message.content.length;
+        message = { ...message, content: [...message.content, toolCall] };
+        activeToolInputs.set(id, { contentIndex, name, raw: "" });
+        yield { type: "toolcall_start", contentIndex, partial: message };
+      } else if (type === "tool-input-delta") {
+        const id = String(event.toolCallId ?? event.id ?? "");
+        const active = activeToolInputs.get(id);
+        const delta = typeof event.delta === "string" ? event.delta : typeof event.inputTextDelta === "string" ? event.inputTextDelta : "";
+        if (!active || !delta) continue;
+        active.raw += delta;
+        let argumentsValue: Record<string, unknown> = {};
+        try {
+          const parsed: unknown = JSON.parse(active.raw);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) argumentsValue = parsed as Record<string, unknown>;
+        } catch { /* keep partial JSON as a delta until the final input arrives */ }
+        const toolCall = { type: "toolCall" as const, id, name: active.name, arguments: argumentsValue };
+        message = { ...message, content: message.content.map((part, index) => index === active.contentIndex ? toolCall : part) };
+        yield { type: "toolcall_delta", contentIndex: active.contentIndex, delta, partial: message };
+      } else if (type === "tool-input-end") {
+        const id = String(event.toolCallId ?? event.id ?? "");
+        const active = activeToolInputs.get(id);
+        if (!active) continue;
+        const argsRaw = event.arguments ?? event.input ?? active.raw;
+        let args: Record<string, unknown> = {};
+        if (typeof argsRaw === "string") {
+          try { const parsed: unknown = JSON.parse(argsRaw); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed as Record<string, unknown>; } catch { /* invalid final input remains empty */ }
+        } else if (argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)) args = argsRaw as Record<string, unknown>;
+        const toolCall = { type: "toolCall" as const, id, name: active.name, arguments: args };
+        message = { ...message, content: message.content.map((part, index) => index === active.contentIndex ? toolCall : part) };
+        activeToolInputs.delete(id);
+        yield { type: "toolcall_end", contentIndex: active.contentIndex, toolCall, partial: message };
+      } else if (type === "tool-call" || type === "tool-input") {
+        const id = String(event.toolCallId ?? event.id ?? `tool-${message.content.length}`);
+        const name = typeof event.toolName === "string" ? event.toolName : typeof event.name === "string" ? event.name : "";
         const argsRaw = event.arguments ?? event.input ?? "{}";
         let args: Record<string, unknown> = {};
         if (typeof argsRaw === "string") {
@@ -195,26 +293,31 @@ export async function* mapCommandCodeResponse(response: Response, modelId: strin
         }
       } else if (type === "error") {
         terminal = true;
-        yield errorTerminal(modelId, typeof event.message === "string" ? event.message : "Command Code returned an error");
+        yield errorTerminal(modelId, "Command Code returned an error");
         return;
       }
     }
     if (!terminal) yield errorTerminal(modelId, "Command Code stream ended before finish-step");
   } catch (error) {
-    yield errorTerminal(modelId, error instanceof Error ? error.message : "Command Code stream failed");
+    yield errorTerminal(modelId, sanitizedFailure(error, "Command Code stream failed"));
   }
 }
+
+type CommandCodeMessagePart =
+  | { type: "text"; text: unknown }
+  | { type: "reasoning"; text: unknown }
+  | { type: "tool-call"; toolCallId: unknown; toolName: unknown; input: unknown };
 
 function piContentToText(content: unknown): unknown {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return content;
-  return content.flatMap((part) => {
+  return content.flatMap<CommandCodeMessagePart>((part: unknown) => {
     if (!part || typeof part !== "object") return [];
     const value = part as Record<string, unknown>;
     if (value.type === "image") return [];
     if (value.type === "text") return [{ type: "text", text: value.text }];
     if (value.type === "thinking") return [{ type: "reasoning", text: value.thinking }];
-    if (value.type === "toolCall") return [{ type: "tool-call", id: value.id, name: value.name, arguments: value.arguments }];
+    if (value.type === "toolCall") return [{ type: "tool-call", toolCallId: value.id, toolName: value.name, input: value.arguments }];
     return [];
   });
 }
@@ -222,8 +325,14 @@ function piContentToText(content: unknown): unknown {
 function contextInput(model: Model<Api>, context: Context, options?: SimpleStreamOptions): CommandCodeInput {
   const params: CommandCodeInput = {
     modelId: model.id,
-    systemPrompt: context.systemPrompt,
-    messages: context.messages.map((message) => ({ role: message.role, content: piContentToText(message.content) })),
+    ...(context.systemPrompt !== undefined ? { systemPrompt: context.systemPrompt } : {}),
+    messages: context.messages.map((message) => ({
+      role: message.role,
+      content: piContentToText(message.content),
+      ...("toolCallId" in message ? { toolCallId: message.toolCallId } : {}),
+      ...("toolName" in message ? { toolName: message.toolName } : {}),
+      ...("isError" in message ? { isError: message.isError } : {}),
+    })),
     tools: (context.tools ?? []).map((tool) => ({
       name: tool.name,
       description: tool.description,
@@ -251,10 +360,15 @@ export const commandCodeStream = (
     try {
       const key = options?.apiKey;
       if (!key) throw new Error("Command Code API key is missing");
-      let request = buildCommandCodeRequest(contextInput(model, context, options), { apiKey: key, sessionId: options?.sessionId });
+      let request = buildCommandCodeRequest(contextInput(model, context, options), {
+        apiKey: key,
+        ...(options?.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+      });
       if (options?.headers) {
         for (const [name, value] of Object.entries(options.headers)) {
-          if (name.toLowerCase() === "authorization") continue;
+          const lowerName = name.toLowerCase();
+          if (lowerName === "authorization" || lowerName === "x-project-slug" || lowerName === "x-client-name" ||
+            lowerName === "x-command-code-version" || lowerName === "x-cli-environment" || lowerName.includes("opencode")) continue;
           if (value === null) delete request.headers[name];
           else request.headers[name] = value;
         }
@@ -272,7 +386,7 @@ export const commandCodeStream = (
       for await (const event of mapCommandCodeResponse(response, model.id)) stream.push(event);
     } catch (error) {
       const aborted = controller.signal.aborted;
-      stream.push(errorTerminal(model.id, aborted ? "Command Code request was cancelled or timed out" : error instanceof Error ? error.message : "Command Code request failed", aborted ? "aborted" : "error"));
+      stream.push(errorTerminal(model.id, aborted ? "Command Code request was cancelled or timed out" : sanitizedFailure(error, "Command Code request failed"), aborted ? "aborted" : "error"));
     } finally {
       clearTimeout(timeout);
       options?.signal?.removeEventListener("abort", abort);

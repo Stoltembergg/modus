@@ -7,6 +7,7 @@ import {
   mcpUpsertSchema,
   parseIpcInput,
   permissionDecideSchema,
+  providerAuthStartSchema,
 } from "./schemas";
 
 describe("IPC schemas", () => {
@@ -17,6 +18,13 @@ describe("IPC schemas", () => {
     command: "run",
     enabled: true,
   };
+
+  it("requires acknowledgement only for Antigravity sign-in", () => {
+    expect(() => parseIpcInput(providerAuthStartSchema, { provider: "antigravity" }, "model:provider-auth-start")).toThrow("Invalid IPC payload");
+    expect(() => parseIpcInput(providerAuthStartSchema, { provider: "antigravity", riskAcknowledged: false }, "model:provider-auth-start")).toThrow("Invalid IPC payload");
+    expect(parseIpcInput(providerAuthStartSchema, { provider: "antigravity", riskAcknowledged: true }, "model:provider-auth-start")).toEqual({ provider: "antigravity", riskAcknowledged: true });
+    expect(parseIpcInput(providerAuthStartSchema, { provider: "openai" }, "model:provider-auth-start")).toEqual({ provider: "openai" });
+  });
 
   it("accepts exact MCP allowlist tool names without trimming them", () => {
     expect(
