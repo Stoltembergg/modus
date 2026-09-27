@@ -18,6 +18,12 @@ import {
 } from "./mac-install-script";
 
 // Runs the real script with /bin/sh against a fake bundle layout; `open`/`xattr` are shims.
+// MODUS_SCRIPT_SHELL="bash --posix" runs it the way macOS's /bin/sh (bash in POSIX mode) does.
+const [SCRIPT_SHELL = "/bin/sh", ...SCRIPT_SHELL_FLAGS] = (
+  process.env.MODUS_SCRIPT_SHELL ?? "/bin/sh"
+)
+  .split(" ")
+  .filter(Boolean);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 const EXITED_PID = 999_999_999;
 
@@ -36,16 +42,16 @@ describePosix("mac install script", () => {
     mkdirSync(join(path, "Contents"), { recursive: true });
     writeFileSync(join(path, "Contents", "version"), version);
   };
-  const run = (
-    overrides: {
-      open?: string;
-      pid?: number;
-      maxWaitTicks?: number;
-      env?: Record<string, string>;
-      lockPath?: string;
-    } = {},
-  ) => {
-    const args = macInstallScriptArgs({
+  type RunOverrides = {
+    open?: string;
+    pid?: number;
+    maxWaitTicks?: number;
+    env?: Record<string, string>;
+    lockPath?: string;
+  };
+  const scriptArgs = (overrides: RunOverrides) => [
+    ...SCRIPT_SHELL_FLAGS,
+    ...macInstallScriptArgs({
       pid: overrides.pid ?? EXITED_PID,
       bundlePath: join(apps, "Modus.app"),
       stagedAppPath: join(root, "staged", "Modus.app"),
@@ -56,12 +62,27 @@ describePosix("mac install script", () => {
       lockPath: overrides.lockPath ?? join(root, "install.lock"),
       markerPath: markerPath(),
       version: "1.1.0",
-    });
-    return spawnSync("/bin/sh", args, {
+    }),
+  ];
+  const run = (overrides: RunOverrides = {}) =>
+    spawnSync(SCRIPT_SHELL, scriptArgs(overrides), {
       encoding: "utf8",
       env: { ...process.env, ...overrides.env },
     });
-  };
+  /** Like run, but keeps the event loop free so exited child processes get reaped. */
+  const runAsync = (overrides: RunOverrides = {}) =>
+    new Promise<{ status: number | null; stdout: string }>((resolve, reject) => {
+      const child = spawn(SCRIPT_SHELL, scriptArgs(overrides), {
+        env: { ...process.env, ...overrides.env },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      let stdout = "";
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.on("error", reject);
+      child.on("close", (status) => resolve({ status, stdout }));
+    });
   const version = (path: string) => readFileSync(join(path, "Contents", "version"), "utf8");
   /**
    * PATH shims for rm/mv that work even as root (where chmod cannot make files
@@ -246,7 +267,7 @@ describePosix("mac install script", () => {
       markerPath: markerPath(),
       version: "1.1.0",
     });
-    const first = spawn("/bin/sh", args, { stdio: "ignore" });
+    const first = spawn(SCRIPT_SHELL, [...SCRIPT_SHELL_FLAGS, ...args], { stdio: "ignore" });
     try {
       const deadline = Date.now() + 2000;
       while (!existsSync(join(root, "install.lock")) && Date.now() < deadline) {
@@ -340,9 +361,61 @@ describePosix("mac install script", () => {
       mkdirSync(join(root, "install.lock"));
       expect(run().status).toBe(11);
       expectMarker(11);
+      // 11: the other script relaunches the app, this one does not.
+      expect(existsSync(calls)).toBe(false);
       expect(run({ lockPath: join(root, "missing", "install.lock") }).status).toBe(12);
       expectMarker(12);
       expect(version(current())).toBe("1.0.0");
+      expect(readFileSync(calls, "utf8").trim()).toBe(`open ${current()}`);
+    });
+
+    it("lock-unavailable (12) waits for the app to quit, relaunches it, then writes the marker", async () => {
+      const app = spawn("sleep", ["0.6"], { stdio: "ignore" });
+      let appExited = false;
+      app.on("exit", () => {
+        appExited = true;
+      });
+      // The shim records if it ran while the app was still up or the marker already existed.
+      const open = writeShim(
+        "open",
+        `kill -0 ${app.pid} 2>/dev/null && echo "app still running" >> "${calls}"\n` +
+          `[ -e "${markerPath()}" ] && echo "marker written before open" >> "${calls}"\nexit 0`,
+      );
+      if (app.pid === undefined) throw new Error("sleep did not start");
+      const result = await runAsync({
+        pid: app.pid,
+        open,
+        maxWaitTicks: 100,
+        lockPath: join(root, "missing", "install.lock"),
+      });
+      expect(appExited).toBe(true);
+      expect(result.status).toBe(12);
+      expect(result.stdout).toContain("failed (12 lock-unavailable)");
+      expect(readFileSync(calls, "utf8").trim()).toBe(`open ${current()}`);
+      expectMarker(12);
+      expect(version(current())).toBe("1.0.0");
+      expect(version(join(root, "staged", "Modus.app"))).toBe("1.1.0");
+    });
+
+    it("lock-unavailable (12) does not open a second copy when the app never quits", () => {
+      const result = run({
+        pid: process.pid,
+        maxWaitTicks: 1,
+        lockPath: join(root, "missing", "install.lock"),
+      });
+      expect(result.status).toBe(12);
+      expectMarker(12);
+      expect(existsSync(calls)).toBe(false);
+    });
+
+    it("install-in-progress (11) neither waits for the app nor relaunches it", () => {
+      mkdirSync(join(root, "install.lock"));
+      const started = Date.now();
+      // If it waited, the still-running app (this process) would hold it for 3 s.
+      expect(run({ pid: process.pid, maxWaitTicks: 30 }).status).toBe(11);
+      expect(Date.now() - started).toBeLessThan(2000);
+      expectMarker(11);
+      expect(existsSync(calls)).toBe(false);
     });
 
     it("is removed by a successful install", () => {

@@ -12,8 +12,10 @@
  *     and old app relaunched)
  *   9 rollback could not clear the new bundle, 10 rollback could not move the backup
  *     back (the backup is left as is and launched from where it is)
- *   11 another install script holds the lock, 12 the lock could not be created
- *     (nothing changed)
+ *   11 another install script holds the lock (nothing changed; that script installs
+ *     and relaunches), 12 the lock could not be created and no other script exists
+ *     (nothing changed; waits for the app to quit like the normal path, then
+ *     relaunches the current version; if the app never quits it is left running)
  * Every error exit writes the failure marker ({"code","reason","version"} JSON) that
  * the service reads on the next start; success removes a stale marker.
  * Every `rm -rf` is checked: `mv` into an existing directory would nest the bundle
@@ -32,10 +34,23 @@ fail() {
   fi
   exit "$1"
 }
+# Wait up to max_ticks (1/10 s) for the app to quit; returns 1 if it never does.
+wait_for_app() {
+  ticks=0
+  while kill -0 "$pid" 2>/dev/null; do
+    ticks=$((ticks + 1))
+    if [ "$ticks" -gt "$max_ticks" ]; then return 1; fi
+    sleep 0.1
+  done
+}
 # One install at a time: mkdir is atomic. Released on exit (stale locks are removed
 # with the staging directory on the next app start).
 if ! mkdir "$lock" 2>/dev/null; then
+  # Another script owns the install and relaunches the app itself.
   if [ -d "$lock" ]; then fail 11 install-in-progress; fi
+  # No other script will reopen the quitting app: wait for it, relaunch the current
+  # version, then report. If it never quits it is still running; do not open it again.
+  if wait_for_app; then "$open_bin" "$current" || true; fi
   fail 12 lock-unavailable
 fi
 trap 'rmdir "$lock" 2>/dev/null' EXIT
@@ -59,12 +74,7 @@ restore() {
   log "restored previous version"
   "$open_bin" "$current" || true
 }
-ticks=0
-while kill -0 "$pid" 2>/dev/null; do
-  ticks=$((ticks + 1))
-  if [ "$ticks" -gt "$max_ticks" ]; then fail 3 app-did-not-quit; fi
-  sleep 0.1
-done
+if ! wait_for_app; then fail 3 app-did-not-quit; fi
 if [ ! -d "$staged" ]; then "$open_bin" "$current" || true; fail 4 staged-missing; fi
 if ! remove_all "$backup"; then "$open_bin" "$current" || true; fail 8 backup-not-removed; fi
 if ! mv "$current" "$backup"; then "$open_bin" "$current" || true; fail 5 move-current-failed; fi

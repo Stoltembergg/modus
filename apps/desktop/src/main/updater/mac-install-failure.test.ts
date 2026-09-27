@@ -14,6 +14,12 @@ import { macInstallLockPath } from "./mac-zip-installer";
 import { createUpdateController, type UpdateCandidate } from "./update-controller";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+// MODUS_SCRIPT_SHELL="bash --posix" runs the script the way macOS's /bin/sh does.
+const [SCRIPT_SHELL = "/bin/sh", ...SCRIPT_SHELL_FLAGS] = (
+  process.env.MODUS_SCRIPT_SHELL ?? "/bin/sh"
+)
+  .split(" ")
+  .filter(Boolean);
 const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() });
 
 function controllerFor(check: () => Promise<UpdateCandidate | null>) {
@@ -52,24 +58,27 @@ describePosix("mac install failure marker, end to end", () => {
   /** Runs the real install script, as the installer would spawn it, with failing `open`. */
   const runScript = (options: { pid?: number; maxWaitTicks?: number; openFails?: boolean }) =>
     spawnSync(
-      "/bin/sh",
-      macInstallScriptArgs({
-        pid: options.pid ?? 999_999_999,
-        bundlePath: join(apps, "Modus.app"),
-        stagedAppPath: join(workDir, "attempts", "1.1.0-a1", "extracted", "Modus.app"),
-        backupPath: join(apps, ".Modus.app.update-backup"),
-        lockPath: macInstallLockPath(workDir),
-        markerPath: macInstallFailurePath(workDir),
-        version: "1.1.0",
-        openBin: shim(
-          "open",
-          options.openFails
-            ? `[ "$1" = "${join(apps, "Modus.app")}" ] && exit 1; exit 0`
-            : "exit 0",
-        ),
-        xattrBin: shim("xattr", "exit 0"),
-        maxWaitTicks: options.maxWaitTicks ?? 5,
-      }),
+      SCRIPT_SHELL,
+      [
+        ...SCRIPT_SHELL_FLAGS,
+        ...macInstallScriptArgs({
+          pid: options.pid ?? 999_999_999,
+          bundlePath: join(apps, "Modus.app"),
+          stagedAppPath: join(workDir, "attempts", "1.1.0-a1", "extracted", "Modus.app"),
+          backupPath: join(apps, ".Modus.app.update-backup"),
+          lockPath: macInstallLockPath(workDir),
+          markerPath: macInstallFailurePath(workDir),
+          version: "1.1.0",
+          openBin: shim(
+            "open",
+            options.openFails
+              ? `[ "$1" = "${join(apps, "Modus.app")}" ] && exit 1; exit 0`
+              : "exit 0",
+          ),
+          xattrBin: shim("xattr", "exit 0"),
+          maxWaitTicks: options.maxWaitTicks ?? 5,
+        }),
+      ],
       { encoding: "utf8" },
     );
 
