@@ -5,10 +5,12 @@ name: Release
 # is a manual step (see docs/releasing.md).
 #
 # Pull requests that touch the release pipeline run the exact same builds as a dry
-# run: all platforms, mac codesign verification and the mac metadata merge. Update
-# metadata is kept as Actions artifacts for inspection. Nothing touches GitHub
-# Releases unless the ref is a v* tag: the two jobs that can write are tag-only, and
-# every step inside them that creates or uploads to a release is gated as well.
+# run: all platforms, mac codesign verification and the mac metadata merge. Only the
+# update metadata is kept as Actions artifacts (7 days) for inspection; installers
+# are uploaded as artifacts on tag runs only (1 day, consumed by publish-assets).
+# Nothing touches GitHub Releases unless the ref is a v* tag: the two jobs that can
+# write are tag-only, and every step inside them that creates or uploads to a release
+# is gated as well.
 
 on:
   push:
@@ -247,6 +249,9 @@ jobs:
           retention-days: 7
 
       - name: Upload release assets
+        # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
+        # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-mac-${{ matrix.electron_arch }}
@@ -256,7 +261,7 @@ jobs:
             apps/desktop/dist/*.zip
             apps/desktop/dist/*.zip.blockmap
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   package-win:
     name: package windows (x64)
@@ -319,6 +324,9 @@ jobs:
           retention-days: 7
 
       - name: Upload release assets
+        # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
+        # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-win-x64
@@ -327,7 +335,7 @@ jobs:
             apps/desktop/dist/*.exe.blockmap
             apps/desktop/dist/${{ needs.prepare.outputs.windows_metadata }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   package-linux:
     name: package linux (x64)
@@ -389,6 +397,9 @@ jobs:
           retention-days: 7
 
       - name: Upload release assets
+        # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
+        # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v4
         with:
           name: release-assets-linux-x64
@@ -397,7 +408,7 @@ jobs:
             apps/desktop/dist/*.deb
             apps/desktop/dist/${{ needs.prepare.outputs.linux_metadata }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   merge-mac-metadata:
     name: merge mac update metadata

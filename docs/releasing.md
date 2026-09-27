@@ -103,9 +103,14 @@ A pull request that changes the release workflow, `apps/desktop/scripts/release/
   otherwise latest), since there is no tag;
 - the jobs that create or upload to a GitHub release are skipped, and the run only has
   `contents: read`;
-- the update metadata is kept as Actions artifacts for 7 days (`update-metadata-*`,
-  including `update-metadata-mac-merged`), along with the installers
-  (`release-assets-*`), so the real files can be inspected.
+- only the update metadata is kept as Actions artifacts, for 7 days
+  (`update-metadata-mac-merged`, `update-metadata-mac-{arm64,x64}`,
+  `update-metadata-win-x64`, `update-metadata-linux-x64`), so the real files can be
+  inspected. Installers are not uploaded on pull requests.
+
+On tag runs the installers are passed to `publish-assets` as `release-assets-*`
+artifacts with a 1-day retention. To redo a release later, re-run the whole workflow
+(the existing draft is reused), not just the upload job.
 
 `workflow_dispatch` is not used because it only works once the workflow is on the
 default branch.
