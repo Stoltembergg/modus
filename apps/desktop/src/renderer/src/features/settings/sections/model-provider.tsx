@@ -1,4 +1,48 @@
-function ModelProviderSettingsPanel({
+import { Dialog } from "@base-ui/react/dialog";
+import {
+  IconArrowLeft,
+  IconCheck,
+  IconChevronRight,
+  IconCopy,
+  IconKey,
+  IconPlugConnected,
+  IconPlus,
+  IconRefresh,
+  IconX,
+} from "@tabler/icons-react";
+import { AnimatePresence, m } from "motion/react";
+import { type ReactNode, useMemo, useState } from "react";
+import type {
+  CustomProviderConfig,
+  ModelProviderDetail,
+  ModelProviderInfo,
+  ProviderAuthOperationState,
+  ProviderConnectionMethod,
+  ProviderModelConfig,
+} from "../../../../../shared/contracts";
+import { EmptyState } from "../../../components/ui/Panel";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { CustomProviderForm } from "../CustomProviderForm";
+import { ProviderLogo } from "../ProviderLogo";
+import { ReadOnlyPill, SettingsPageHeader } from "../settings-layout";
+import {
+  normalizeSearchValue,
+  ProviderCatalogRow,
+  ProviderDetail,
+  ProviderDetailLoading,
+  ProviderGroup,
+  providerMatchesQuery,
+  SearchField,
+} from "../settings-provider-ui";
+
+type ModelConfigPatch = {
+  thinkingVariant?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+};
+
+export function ModelProviderSettingsPanel({
   authOperation,
   busy,
   connected,

@@ -1,4 +1,6 @@
-function SettingsPageHeader({
+import type { ReactNode } from "react";
+
+export function SettingsPageHeader({
   actions,
   description,
   title,
@@ -18,7 +20,7 @@ function SettingsPageHeader({
   );
 }
 
-function SettingsSection({
+export function SettingsSection({
   children,
   description,
   title,
@@ -38,7 +40,7 @@ function SettingsSection({
   );
 }
 
-function SettingsList({ children }: { children: ReactNode }) {
+export function SettingsList({ children }: { children: ReactNode }) {
   return (
     <div className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
       {children}
@@ -46,7 +48,7 @@ function SettingsList({ children }: { children: ReactNode }) {
   );
 }
 
-function SettingsRow({
+export function SettingsRow({
   control,
   description,
   title,
@@ -66,6 +68,6 @@ function SettingsRow({
   );
 }
 
-function ReadOnlyPill({ children }: { children: string }) {
+export function ReadOnlyPill({ children }: { children: string }) {
   return <span className="rounded-md bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
 }

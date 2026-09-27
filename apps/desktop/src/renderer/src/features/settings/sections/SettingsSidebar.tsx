@@ -1,3 +1,21 @@
+import {
+  IconArrowLeft,
+  IconBrain,
+  IconBulb,
+  IconCube,
+  IconGauge,
+  IconGavel,
+  IconPalette,
+  IconPlugConnected,
+  IconSearch,
+  IconServerCog,
+  IconSettings,
+  IconUser,
+} from "@tabler/icons-react";
+import type { ReactNode } from "react";
+import { cn } from "../../../lib/cn";
+import type { SettingsSectionId } from "../settings-types";
+
 export function SettingsSidebar({
   activeSection,
   query,

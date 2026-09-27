@@ -1,3 +1,34 @@
+import {
+  IconCube,
+  IconEdit,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+  IconUser,
+  IconWorld,
+} from "@tabler/icons-react";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ConfigScope,
+  SubagentDetail,
+  SubagentInfo,
+  WorkspaceInfo,
+} from "../../../../../shared/contracts";
+import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
+import { EmptyState } from "../../../components/ui/Panel";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { cn } from "../../../lib/cn";
+import { Field, SelectField, SwitchControl } from "../form-controls";
+import {
+  ReadOnlyPill,
+  SettingsList,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
+import { McpTypeCard, settingsProjectTabs } from "./mcp";
+
 type SubagentFormState = {
   path?: string;
   scope: ConfigScope;
@@ -51,7 +82,7 @@ function splitToolList(value: string): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
-function SubagentsSettingsPanel({
+export function SubagentsSettingsPanel({
   cwd,
   workspaces,
 }: {

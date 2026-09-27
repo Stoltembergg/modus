@@ -1,3 +1,15 @@
+import { IconRefresh } from "@tabler/icons-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  HarnessInsight,
+  HarnessInsightConfidence,
+  HarnessInsightsQuery,
+  HarnessInsightsResult,
+} from "../../../../../shared/contracts";
+import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { SettingsPageHeader } from "../settings-layout";
+
 const HARNESS_INSIGHTS_WINDOW_DAYS = 30;
 const HARNESS_INSIGHTS_LIMIT = 50;
 const MIN_COMPARABLE_INSIGHT_EPISODES = 3;
@@ -254,7 +266,11 @@ function HarnessInsightLimitations({ limitations }: { limitations: string[] }) {
   ) : null;
 }
 
-function HarnessInsightsSettingsPanel({ workspaceId }: { workspaceId?: string | undefined }) {
+export function HarnessInsightsSettingsPanel({
+  workspaceId,
+}: {
+  workspaceId?: string | undefined;
+}) {
   const [periodDays, setPeriodDays] = useState<HarnessInsightsWindowDays>(30);
   const [state, setState] = useState<HarnessInsightsViewState>(() =>
     harnessInsightsQueryForWorkspace(workspaceId, new Date(), 30)

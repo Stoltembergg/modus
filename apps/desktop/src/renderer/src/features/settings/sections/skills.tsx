@@ -1,4 +1,22 @@
-function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
+import {
+  IconCube,
+  IconEdit,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+  IconWorld,
+} from "@tabler/icons-react";
+import { useEffect, useState } from "react";
+import type { SkillInfo } from "../../../../../shared/contracts";
+import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
+import { EmptyState } from "../../../components/ui/Panel";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { cn } from "../../../lib/cn";
+import { Field } from "../form-controls";
+import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
+
+export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [skillsError, setSkillsError] = useState<string | undefined>();

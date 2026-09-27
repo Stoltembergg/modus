@@ -1,4 +1,47 @@
-function ProviderGroup({ children, title }: { children: ReactNode; title: string }) {
+import {
+  IconAdjustments,
+  IconBrain,
+  IconCheck,
+  IconChevronRight,
+  IconFilter,
+  IconKey,
+  IconPlugConnected,
+  IconPlus,
+  IconSearch,
+  IconTrash,
+  IconWorld,
+  IconX,
+} from "@tabler/icons-react";
+import { AnimatePresence, m } from "motion/react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import type {
+  ModelProviderDetail,
+  ModelProviderInfo,
+  ProviderModelConfig,
+} from "../../../../shared/contracts";
+import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
+import { EmptyState } from "../../components/ui/Panel";
+import { ShinyText } from "../../components/ui/ShinyText";
+import { Tooltip } from "../../components/ui/Tooltip";
+import { cn } from "../../lib/cn";
+import { formatClock } from "../../lib/formatClock";
+import {
+  modelThinkingOptions,
+  selectedThinkingLabel,
+  selectedThinkingOption,
+} from "../../lib/modelThinking";
+import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
+import { groupProviderModels, modelResultLabel } from "./modelListUtils";
+import { ProviderLogo } from "./ProviderLogo";
+import { ReadOnlyPill } from "./settings-layout";
+
+type ModelConfigPatch = {
+  thinkingVariant?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+};
+
+export function ProviderGroup({ children, title }: { children: ReactNode; title: string }) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];
   if (items.length === 0) {
     return null;
@@ -15,7 +58,7 @@ function ProviderGroup({ children, title }: { children: ReactNode; title: string
   );
 }
 
-function ProviderCatalogRow({
+export function ProviderCatalogRow({
   provider,
   active,
   onClick,
@@ -27,7 +70,7 @@ function ProviderCatalogRow({
   return <ProviderRow active={active} onClick={onClick} provider={provider} />;
 }
 
-function ProviderRow({
+export function ProviderRow({
   provider,
   active,
   onClick,
@@ -77,7 +120,7 @@ function ProviderRow({
   );
 }
 
-function ProviderDetail({
+export function ProviderDetail({
   detail,
   busy,
   credentialEditorOpen,
@@ -264,7 +307,7 @@ function ProviderDetail({
   );
 }
 
-function ProviderCredentials({
+export function ProviderCredentials({
   detail,
   busy,
   credentialEditorOpen,
@@ -412,7 +455,7 @@ function ProviderCredentials({
   );
 }
 
-function ModelGroupSection({
+export function ModelGroupSection({
   group,
   busy,
   editableLimits,
@@ -450,7 +493,7 @@ function ModelGroupSection({
   );
 }
 
-function ModelRow({
+export function ModelRow({
   model,
   busy,
   editableLimits,
@@ -637,7 +680,7 @@ function ModelRow({
   );
 }
 
-function SegmentedFilter({
+export function SegmentedFilter({
   enabledCount,
   thinkingCount,
   value,
@@ -680,7 +723,7 @@ function SegmentedFilter({
   );
 }
 
-function ProviderDetailLoading() {
+export function ProviderDetailLoading() {
   return (
     <m.section
       animate={{ opacity: 1, y: 0 }}
@@ -694,7 +737,7 @@ function ProviderDetailLoading() {
   );
 }
 
-function SearchField({
+export function SearchField({
   ariaLabel,
   placeholder,
   value,
@@ -734,7 +777,7 @@ function SearchField({
   );
 }
 
-function ProviderStatusPill({ status }: { status: ProviderStatus }) {
+export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
   if (status === "error") {
     return (
       <span className="rounded-md bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
@@ -753,7 +796,7 @@ function ProviderStatusPill({ status }: { status: ProviderStatus }) {
   return <span className="rounded-md bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
 }
 
-function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
+export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
   return (
     <span
       className={cn(
@@ -767,14 +810,14 @@ function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
   );
 }
 
-function TinyBadge({ children }: { children: string }) {
+export function TinyBadge({ children }: { children: string }) {
   return <span className="rounded bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>;
 }
 
-type ProviderStatus = "available" | "connected" | "error";
-type ModelFilter = "all" | "enabled" | "thinking";
+export type ProviderStatus = "available" | "connected" | "error";
+export type ModelFilter = "all" | "enabled" | "thinking";
 
-function providerStatus(provider: ModelProviderInfo): ProviderStatus {
+export function providerStatus(provider: ModelProviderInfo): ProviderStatus {
   if (provider.error) {
     return "error";
   }
@@ -784,7 +827,7 @@ function providerStatus(provider: ModelProviderInfo): ProviderStatus {
   return "available";
 }
 
-function providerSummary(provider: ModelProviderInfo): string {
+export function providerSummary(provider: ModelProviderInfo): string {
   if (provider.enabledModelCount > 0) {
     return `${provider.enabledModelCount} enabled · ${provider.modelCount} models`;
   }
@@ -794,11 +837,11 @@ function providerSummary(provider: ModelProviderInfo): string {
   return `${provider.modelCount} models`;
 }
 
-function normalizeSearchValue(value: string): string {
+export function normalizeSearchValue(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function providerMatchesQuery(provider: ModelProviderInfo, query: string): boolean {
+export function providerMatchesQuery(provider: ModelProviderInfo, query: string): boolean {
   if (!query) {
     return true;
   }
@@ -818,7 +861,7 @@ function providerMatchesQuery(provider: ModelProviderInfo, query: string): boole
   return haystack.includes(query);
 }
 
-function compareModelConfig(a: ProviderModelConfig, b: ProviderModelConfig): number {
+export function compareModelConfig(a: ProviderModelConfig, b: ProviderModelConfig): number {
   if (a.enabled !== b.enabled) {
     return a.enabled ? -1 : 1;
   }
@@ -828,7 +871,7 @@ function compareModelConfig(a: ProviderModelConfig, b: ProviderModelConfig): num
   return a.name.localeCompare(b.name);
 }
 
-function modelMatchesFilter(model: ProviderModelConfig, filter: ModelFilter): boolean {
+export function modelMatchesFilter(model: ProviderModelConfig, filter: ModelFilter): boolean {
   if (filter === "enabled") {
     return model.enabled;
   }
@@ -838,7 +881,7 @@ function modelMatchesFilter(model: ProviderModelConfig, filter: ModelFilter): bo
   return true;
 }
 
-function modelMatchesQuery(model: ProviderModelConfig, query: string): boolean {
+export function modelMatchesQuery(model: ProviderModelConfig, query: string): boolean {
   if (!query) {
     return true;
   }

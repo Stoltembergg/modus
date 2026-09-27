@@ -1,3 +1,38 @@
+import {
+  IconArchiveOff,
+  IconCheck,
+  IconEdit,
+  IconExternalLink,
+  IconPlus,
+  IconRefresh,
+  IconTrash,
+} from "@tabler/icons-react";
+import { useEffect, useMemo, useState } from "react";
+import type {
+  ProjectMemoryCategory,
+  ProjectMemoryExternalReference,
+  ProjectMemoryRecord,
+  ProjectMemoryScope,
+  ProjectMemorySnapshot,
+  ProjectMemoryStatus,
+  ProjectMemoryVerification,
+} from "../../../../../shared/contracts";
+import { CHATS_WORKSPACE_ID } from "../../../../../shared/contracts";
+import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
+import { EmptyState } from "../../../components/ui/Panel";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { cn } from "../../../lib/cn";
+import { formatClock } from "../../../lib/formatClock";
+import { SwitchControl } from "../form-controls";
+import {
+  ReadOnlyPill,
+  SettingsList,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
+
 export function groupProjectMemories(
   memories: ProjectMemoryRecord[],
   workspaceId?: string,
@@ -164,7 +199,7 @@ function ExternalMemoryReference({ reference }: { reference: ProjectMemoryExtern
   );
 }
 
-function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: string | undefined }) {
+export function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: string | undefined }) {
   const hasProjectScope = Boolean(workspaceId && workspaceId !== CHATS_WORKSPACE_ID);
   const [snapshot, setSnapshot] = useState<ProjectMemorySnapshot | null>(null);
   const [loading, setLoading] = useState(true);

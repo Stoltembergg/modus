@@ -1,105 +1,94 @@
-import { Dialog } from "@base-ui/react/dialog";
-import { Switch } from "@base-ui/react/switch";
-import {
-  IconAdjustments,
-  IconArchiveOff,
-  IconArrowLeft,
-  IconBrain,
-  IconBulb,
-  IconCheck,
-  IconChevronRight,
-  IconCodeDots,
-  IconCopy,
-  IconCube,
-  IconEdit,
-  IconExternalLink,
-  IconFileText,
-  IconFilter,
-  IconGauge,
-  IconGavel,
-  IconKey,
-  IconMoon,
-  IconMoonStars,
-  IconPalette,
-  IconPlugConnected,
-  IconPlus,
-  IconRefresh,
-  IconSearch,
-  IconServerCog,
-  IconSettings,
-  IconSun,
-  IconTerminal2,
-  IconTrash,
-  IconUser,
-  IconWorld,
-  IconX,
-} from "@tabler/icons-react";
-import { AnimatePresence, m, useReducedMotion } from "motion/react";
-import {
-  type FormEvent,
-  type ReactNode,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { joinCommandLine, splitCommandLine } from "../../../../shared/command-line";
+import { m, useReducedMotion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import type {
-  ConfigScope,
   CustomProviderConfig,
-  HarnessInsight,
-  HarnessInsightConfidence,
-  HarnessInsightsQuery,
-  HarnessInsightsResult,
-  McpServerInfo,
-  ModelInfo,
   ModelProviderDetail,
   ModelProviderInfo,
   ModelSettingsState,
-  PersonalizationState,
-  ProjectMemoryCategory,
-  ProjectMemoryExternalReference,
-  ProjectMemoryRecord,
-  ProjectMemoryScope,
-  ProjectMemorySnapshot,
-  ProjectMemoryStatus,
-  ProviderAccountUsage,
   ProviderAuthOperationState,
   ProviderConnectionMethod,
-  ProviderLimitsState,
   ProviderModelConfig,
-  ProviderUsageMessage,
-  ProviderUsageMetric,
-  ProviderUsageStatus,
-  RuleFileInfo,
-  RuleMode,
-  RuleSource,
-  SkillInfo,
-  SubagentDetail,
-  SubagentInfo,
-  WorkspaceAgentsState,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
-import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
-import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { ContentTransition } from "../../components/ui/ContentTransition";
-import { EmptyState } from "../../components/ui/Panel";
-import { ShinyText } from "../../components/ui/ShinyText";
-import { Tooltip } from "../../components/ui/Tooltip";
-import { cn } from "../../lib/cn";
-import { formatClock } from "../../lib/formatClock";
+import { AppearanceSettingsPanel } from "./sections/appearance";
+import { GeneralSettingsPanel } from "./sections/general";
 import {
-  modelThinkingOptions,
-  selectedThinkingLabel,
-  selectedThinkingOption,
-} from "../../lib/modelThinking";
-import { type ThemeMode, useTheme } from "../../lib/theme";
-import { ApprovalModeSettings } from "./ApprovalModeSettings";
-import { CustomProviderForm } from "./CustomProviderForm";
-import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-controls";
-import { groupProviderModels, modelResultLabel } from "./modelListUtils";
-import { ProviderLogo } from "./ProviderLogo";
+  HarnessInsightsSettingsPanel,
+  HarnessInsightsView,
+  harnessInsightConfidenceLabel,
+  harnessInsightsQueryForWorkspace,
+} from "./sections/harness-insights";
+import {
+  accountMetricLabel,
+  accountStatusLabel,
+  configuredModelLimits,
+  groupConfiguredModelLimits,
+  LimitsSettingsPanel,
+  usageMetricText,
+} from "./sections/limits";
+import {
+  canSaveReadOnlyMcpAllowlist,
+  confirmedReadOnlyMcpAllowlist,
+  type McpFormState,
+  McpServerForm,
+  McpSettingsPanel,
+  normalizeReadOnlyMcpAllowlist,
+  toggleReadOnlyMcpTool,
+} from "./sections/mcp";
+import { ModelProviderSettingsPanel } from "./sections/model-provider";
+import { PersonalizationSettingsPanel } from "./sections/personalization";
+import {
+  confirmProjectMemoryRemoval,
+  groupProjectMemories,
+  ProjectMemoryRow,
+  ProjectMemorySettingsPanel,
+  projectMemoryProvisionalExplanation,
+  projectMemoryStatusLabel,
+  projectMemoryVerificationLabel,
+  projectMemoryVerifyVisible,
+  safeExternalReferenceUrl,
+  setProjectMemoryScopeEnabled,
+} from "./sections/project-memory";
+import { RulesSettingsPanel } from "./sections/rules";
+import { SettingsSidebar } from "./sections/SettingsSidebar";
+import { SkillsSettingsPanel } from "./sections/skills";
+import { SubagentsSettingsPanel } from "./sections/subagents";
+import type { SettingsSectionId } from "./settings-types";
+
+export type { HarnessInsightsViewState } from "./sections/harness-insights";
+export {
+  HarnessInsightsView,
+  harnessInsightConfidenceLabel,
+  harnessInsightsQueryForWorkspace,
+} from "./sections/harness-insights";
+export {
+  accountMetricLabel,
+  accountStatusLabel,
+  configuredModelLimits,
+  groupConfiguredModelLimits,
+  usageMetricText,
+} from "./sections/limits";
+export {
+  canSaveReadOnlyMcpAllowlist,
+  confirmedReadOnlyMcpAllowlist,
+  type McpFormState,
+  McpServerForm,
+  normalizeReadOnlyMcpAllowlist,
+  toggleReadOnlyMcpTool,
+} from "./sections/mcp";
+export {
+  confirmProjectMemoryRemoval,
+  groupProjectMemories,
+  ProjectMemoryRow,
+  projectMemoryProvisionalExplanation,
+  projectMemoryStatusLabel,
+  projectMemoryVerificationLabel,
+  projectMemoryVerifyVisible,
+  safeExternalReferenceUrl,
+  setProjectMemoryScopeEnabled,
+} from "./sections/project-memory";
+export { SettingsSidebar } from "./sections/SettingsSidebar";
 
 type SettingsPanelProps = {
   state: ModelSettingsState | null;
@@ -115,18 +104,6 @@ type SettingsPanelProps = {
   workspaceId?: string | undefined;
 };
 
-type SettingsSectionId =
-  | "general"
-  | "model-provider"
-  | "appearance"
-  | "personalization"
-  | "skills"
-  | "subagents"
-  | "mcp"
-  | "rules"
-  | "project-memory"
-  | "harness-insights"
-  | "limits";
 type ModelConfigPatch = {
   thinkingVariant?: string;
   contextWindow?: number;

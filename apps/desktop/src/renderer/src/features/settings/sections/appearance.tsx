@@ -1,4 +1,15 @@
-function AppearanceSettingsPanel() {
+import { IconMoon, IconMoonStars, IconSun } from "@tabler/icons-react";
+import { cn } from "../../../lib/cn";
+import { type ThemeMode, useTheme } from "../../../lib/theme";
+import {
+  ReadOnlyPill,
+  SettingsList,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
+
+export function AppearanceSettingsPanel() {
   const [theme, setTheme] = useTheme();
   return (
     <>

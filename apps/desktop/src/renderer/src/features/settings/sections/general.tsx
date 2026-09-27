@@ -1,4 +1,8 @@
-function GeneralSettingsPanel({
+import type { WorkspaceInfo } from "../../../../../shared/contracts";
+import { ApprovalModeSettings } from "../ApprovalModeSettings";
+import { SettingsPageHeader } from "../settings-layout";
+
+export function GeneralSettingsPanel({
   cwd,
   workspaces = [],
 }: {

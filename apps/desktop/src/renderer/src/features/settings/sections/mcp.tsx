@@ -1,3 +1,36 @@
+import { Switch } from "@base-ui/react/switch";
+import {
+  IconChevronRight,
+  IconCodeDots,
+  IconCopy,
+  IconCube,
+  IconEdit,
+  IconPlugConnected,
+  IconPlus,
+  IconRefresh,
+  IconTerminal2,
+  IconTrash,
+  IconUser,
+  IconWorld,
+  IconX,
+} from "@tabler/icons-react";
+import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "react";
+import { joinCommandLine, splitCommandLine } from "../../../../../shared/command-line";
+import type { McpServerInfo, WorkspaceInfo } from "../../../../../shared/contracts";
+import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
+import { EmptyState } from "../../../components/ui/Panel";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { cn } from "../../../lib/cn";
+import { Field, SelectField, SwitchControl } from "../form-controls";
+import {
+  ReadOnlyPill,
+  SettingsList,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
+
 const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
   connected: { dot: "bg-success", label: "Connected" },
   connecting: { dot: "bg-focus-ring-soft", label: "Connecting" },
@@ -113,7 +146,7 @@ const recordToPairs = (record: unknown): KeyValuePair[] =>
 const projectLabel = (cwd: string): string =>
   cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? "Project";
 
-function settingsProjectTabs(
+export function settingsProjectTabs(
   cwd: string | undefined,
   workspaces: WorkspaceInfo[],
 ): SettingsProjectTab[] {
@@ -149,7 +182,7 @@ function mcpServerSummary(server: McpServerInfo): string {
  * without touching JSON; Modus writes the Cursor-compatible mcp.json behind
  * the scenes (the file stays available for power users).
  */
-function McpSettingsPanel({
+export function McpSettingsPanel({
   cwd,
   workspaces,
 }: {
@@ -822,7 +855,7 @@ export function McpServerForm({
   );
 }
 
-function McpTypeCard({
+export function McpTypeCard({
   active,
   description,
   icon,

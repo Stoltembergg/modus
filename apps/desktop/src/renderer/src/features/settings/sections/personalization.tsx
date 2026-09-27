@@ -1,4 +1,19 @@
-function PersonalizationSettingsPanel() {
+import { IconCheck, IconFileText, IconPlus, IconTrash } from "@tabler/icons-react";
+import { useEffect, useState } from "react";
+import type { PersonalizationState } from "../../../../../shared/contracts";
+import { ShinyText } from "../../../components/ui/ShinyText";
+import { Tooltip } from "../../../components/ui/Tooltip";
+import { cn } from "../../../lib/cn";
+import { Field } from "../form-controls";
+import {
+  ReadOnlyPill,
+  SettingsList,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from "../settings-layout";
+
+export function PersonalizationSettingsPanel() {
   const [state, setState] = useState<PersonalizationState | undefined>();
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
