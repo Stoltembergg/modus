@@ -21,6 +21,7 @@ import { resolveAgentToolContext } from "./tool-context";
 
 const MAX_TODOS = 30;
 const MAX_CONTENT_CHARS = 240;
+const MAX_BLOCKED_REASON_CHARS = 240;
 
 const todoItemSchema = Type.Object({
   id: Type.Optional(
@@ -37,7 +38,14 @@ const todoItemSchema = Type.Object({
     Type.Literal("in_progress"),
     Type.Literal("completed"),
     Type.Literal("cancelled"),
+    Type.Literal("blocked"),
   ]),
+  blockedReason: Type.Optional(
+    Type.String({
+      maxLength: MAX_BLOCKED_REASON_CHARS,
+      description: "Why this item needs user input.",
+    }),
+  ),
 });
 
 const todoParams = Type.Object({
@@ -56,6 +64,11 @@ const todoParams = Type.Object({
 
 /** In-memory list per session; rehydrated from the event store after restarts. */
 const todosBySession = new Map<string, TodoItem[]>();
+
+/** Drop the in-memory projection so the next read rehydrates from todos.updated. */
+export function clearTodoSessionCache(sessionId: string): void {
+  todosBySession.delete(sessionId);
+}
 
 function currentTodos(sessionId: string): TodoItem[] {
   const cached = todosBySession.get(sessionId);
@@ -85,6 +98,11 @@ function sanitizeContent(content: string): string {
     : trimmed;
 }
 
+function sanitizeBlockedReason(reason: string | undefined): string | undefined {
+  const trimmed = reason?.trim();
+  return trimmed ? trimmed.slice(0, MAX_BLOCKED_REASON_CHARS) : undefined;
+}
+
 /**
  * Apply one `todo_write` call to the current list. Exported for tests.
  * Replace mode rebuilds the list (ids preserved when provided); merge mode
@@ -96,6 +114,8 @@ export function applyTodoWrite(current: TodoItem[], input: Static<typeof todoPar
   for (const incoming of input.todos) {
     const content = sanitizeContent(incoming.content);
     const status = incoming.status as TodoStatus;
+    const blockedReason =
+      status === "blocked" ? sanitizeBlockedReason(incoming.blockedReason) : undefined;
     if (!content) {
       continue;
     }
@@ -104,6 +124,8 @@ export function applyTodoWrite(current: TodoItem[], input: Static<typeof todoPar
       if (existing) {
         existing.content = content;
         existing.status = status;
+        if (blockedReason) existing.blockedReason = blockedReason;
+        else if (status !== "blocked") delete existing.blockedReason;
         continue;
       }
     }
@@ -111,6 +133,7 @@ export function applyTodoWrite(current: TodoItem[], input: Static<typeof todoPar
       id: incoming.id?.trim() || nextTodoId(next),
       content,
       status,
+      ...(blockedReason ? { blockedReason } : {}),
     });
   }
 
@@ -127,8 +150,13 @@ export function formatTodosForModel(todos: TodoItem[]): string {
         ? "[>]"
         : status === "cancelled"
           ? "[-]"
-          : "[ ]";
-  const lines = todos.map((item) => `${marker(item.status)} ${item.id}: ${item.content}`);
+          : status === "blocked"
+            ? "[!]"
+            : "[ ]";
+  const lines = todos.map(
+    (item) =>
+      `${marker(item.status)} ${item.id}: ${item.content}${item.blockedReason ? ` — ${item.blockedReason}` : ""}`,
+  );
   return `To-dos (${done} of ${todos.length} done):\n${lines.join("\n")}`;
 }
 

@@ -5,6 +5,7 @@ import type {
   BrowserEvent,
   FilesChangeEvent,
   GitChangeEvent,
+  HarnessInsightsQuery,
   TerminalEvent,
 } from "../shared/contracts";
 import type { ModusApi, SecurityState } from "./types";
@@ -40,6 +41,7 @@ const api: ModusApi = {
     ensure: (sessionId) => ipcRenderer.invoke("agent:ensure", sessionId),
     releaseRuntime: (sessionId) => ipcRenderer.invoke("agent:release-runtime", sessionId),
     prompt: (input) => ipcRenderer.invoke("agent:prompt", input),
+    reviewPlanWithHyperPlan: (input) => ipcRenderer.invoke("agent:review-plan-hyperplan", input),
     compact: (sessionId) => ipcRenderer.invoke("agent:compact", sessionId),
     abort: (sessionId) => ipcRenderer.invoke("agent:abort", sessionId),
     rollback: (input) => ipcRenderer.invoke("agent:rollback", input),
@@ -186,6 +188,9 @@ const api: ModusApi = {
     verify: (input) => ipcRenderer.invoke("project-memory:verify", input),
     markObsolete: (input) => ipcRenderer.invoke("project-memory:mark-obsolete", input),
     delete: (input) => ipcRenderer.invoke("project-memory:delete", input),
+  },
+  harnessInsights: {
+    get: (input: HarnessInsightsQuery) => ipcRenderer.invoke("harness-insights:get", input),
   },
   model: {
     list: () => ipcRenderer.invoke("model:list"),

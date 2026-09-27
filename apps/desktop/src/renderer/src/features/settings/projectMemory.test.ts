@@ -1,5 +1,8 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ProjectMemoryExternalReference,
   ProjectMemoryRecord,
   ProjectMemoryScope,
   ProjectMemorySnapshot,
@@ -8,10 +11,12 @@ import type {
 import {
   confirmProjectMemoryRemoval,
   groupProjectMemories,
+  ProjectMemoryRow,
   projectMemoryProvisionalExplanation,
   projectMemoryStatusLabel,
   projectMemoryVerificationLabel,
   projectMemoryVerifyVisible,
+  safeExternalReferenceUrl,
   setProjectMemoryScopeEnabled,
 } from "./SettingsPanel";
 
@@ -38,6 +43,32 @@ const snapshot = (memories: ProjectMemoryRecord[]): ProjectMemorySnapshot => ({
   projectEnabled: true,
   memories,
 });
+
+const externalMemory = (
+  reference: ProjectMemoryExternalReference,
+  overrides: Partial<ProjectMemoryRecord> = {},
+): ProjectMemoryRecord =>
+  record(
+    "external",
+    { kind: "global" },
+    {
+      status: "needs_review",
+      verification: "unverified",
+      evidence: [{ kind: "external_reference", externalReference: reference }],
+      ...overrides,
+    },
+  );
+
+function renderMemory(memory: ProjectMemoryRecord): string {
+  return renderToStaticMarkup(
+    createElement(ProjectMemoryRow, {
+      memory,
+      busy: false,
+      onVerify: () => {},
+      onRemove: () => {},
+    }),
+  );
+}
 
 describe("groupProjectMemories", () => {
   it("returns global and matching project records, excluding other projects", () => {
@@ -96,6 +127,80 @@ describe("project memory trust labels", () => {
     expect(projectMemoryVerificationLabel(verification satisfies ProjectMemoryVerification)).toBe(
       expected,
     );
+  });
+});
+
+describe("external project-memory references", () => {
+  it("renders agent-supplied references as untrusted links with needs-review status only", () => {
+    const reference = {
+      url: "https://example.test/account-security",
+      title: "Account security guide",
+      sourceLabel: "Agent-supplied",
+      retrievedAt: "2026-09-01T00:00:00.000Z",
+      origin: "agent_supplied_unverified",
+      excerpt: "COPIED_PAGE_BODY_MUST_NOT_RENDER",
+    } as ProjectMemoryExternalReference;
+    const markup = renderMemory(externalMemory(reference));
+
+    expect(markup).toContain('href="https://example.test/account-security"');
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain('rel="noopener noreferrer"');
+    expect(markup).toContain("Account security guide");
+    expect(markup).toContain("https://example.test/account-security");
+    expect(markup).toContain("Agent-supplied");
+    expect(markup).toContain("Untrusted external reference");
+    expect(markup).toContain("Needs review");
+    expect(markup).not.toContain("Verified external");
+    expect(markup).not.toContain("COPIED_PAGE_BODY_MUST_NOT_RENDER");
+  });
+
+  it("shows only the typed source label for MCP-attested metadata without trust claims", () => {
+    const markup = renderMemory(
+      externalMemory({
+        url: "https://docs.example.test/api",
+        sourceLabel: "Docs Search",
+        retrievedAt: "2026-09-01T00:00:00.000Z",
+        origin: "mcp_attested",
+      }),
+    );
+
+    expect(markup).toContain("Docs Search");
+    expect(markup).toContain("Untrusted external reference");
+    expect(markup).not.toContain("MCP attested");
+    expect(markup).not.toContain("Verified source");
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "https://user:pass@example.test/",
+  ])("does not create a link for unsafe URL %s", (url) => {
+    expect(safeExternalReferenceUrl(url)).toBeUndefined();
+    const markup = renderMemory(
+      externalMemory({
+        url,
+        sourceLabel: "Agent-supplied",
+        retrievedAt: "2026-09-01T00:00:00.000Z",
+        origin: "agent_supplied_unverified",
+      }),
+    );
+    expect(markup).not.toContain("<a ");
+  });
+
+  it("bounds long titles and URLs to a single ellipsized line", () => {
+    const longValue = `https://example.test/${"long-path-segment-".repeat(20)}`;
+    const markup = renderMemory(
+      externalMemory({
+        url: longValue,
+        title: "A very long external reference title ".repeat(10),
+        sourceLabel: "Agent-supplied",
+        retrievedAt: "2026-09-01T00:00:00.000Z",
+        origin: "agent_supplied_unverified",
+      }),
+    );
+
+    expect(markup).toContain("truncate");
+    expect(markup).toContain("max-w-full");
   });
 });
 

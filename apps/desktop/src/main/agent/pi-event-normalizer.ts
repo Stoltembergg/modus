@@ -115,19 +115,42 @@ function streamingToolCall(event: {
 
 export function createPiEventNormalizer(
   sessionId: string,
+  getActiveRunId: () => string | undefined = () => undefined,
 ): (event: AgentSessionEvent) => AgentEvent[] {
   const state: NormalizerState = {
     nextFallbackId: 0,
     activeMessageIds: {},
     idPrefix: `message:${randomUUID().slice(0, 8)}:`,
   };
-  return (event) => normalizePiEvent(sessionId, event, state);
+  return (event) => normalizePiEvent(sessionId, event, state, getActiveRunId());
+}
+
+function toolResultExitCode(result: unknown): number | undefined {
+  if (!result || typeof result !== "object") return undefined;
+  const outer = result as { exitCode?: unknown; details?: unknown };
+  const details =
+    outer.details && typeof outer.details === "object"
+      ? (outer.details as { exitCode?: unknown })
+      : undefined;
+  const value = details?.exitCode ?? outer.exitCode;
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
+function toolResultFlag(result: unknown, flag: "aborted" | "skipped"): boolean {
+  if (!result || typeof result !== "object") return false;
+  const outer = result as Record<string, unknown>;
+  const details =
+    outer.details && typeof outer.details === "object"
+      ? (outer.details as Record<string, unknown>)
+      : undefined;
+  return outer[flag] === true || details?.[flag] === true;
 }
 
 export function normalizePiEvent(
   sessionId: string,
   event: AgentSessionEvent,
   state: NormalizerState = { nextFallbackId: 0, activeMessageIds: {}, idPrefix: "message:" },
+  runId?: string,
 ): AgentEvent[] {
   switch (event.type) {
     case "agent_start":
@@ -221,6 +244,7 @@ export function normalizePiEvent(
         {
           type: "tool.started",
           sessionId,
+          ...(runId ? { runId } : {}),
           toolCallId: event.toolCallId,
           toolName: event.toolName,
           args: event.args,
@@ -235,15 +259,23 @@ export function normalizePiEvent(
           output: stringify(event.partialResult),
         },
       ];
-    case "tool_execution_end":
+    case "tool_execution_end": {
+      const exitCode = toolResultExitCode(event.result);
+      const aborted = toolResultFlag(event.result, "aborted");
+      const skipped = toolResultFlag(event.result, "skipped");
       return [
         {
           type: "tool.ended",
           sessionId,
+          ...(runId ? { runId } : {}),
           toolCallId: event.toolCallId,
           isError: event.isError,
+          ...(exitCode !== undefined ? { exitCode } : {}),
+          ...(aborted ? { aborted: true } : {}),
+          ...(skipped ? { skipped: true } : {}),
         },
       ];
+    }
     case "queue_update":
       return [
         {

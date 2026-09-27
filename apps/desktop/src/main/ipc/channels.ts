@@ -21,6 +21,7 @@ export const IPC_CHANNELS = {
   agentEnsure: "agent:ensure",
   agentReleaseRuntime: "agent:release-runtime",
   agentPrompt: "agent:prompt",
+  agentReviewPlanWithHyperPlan: "agent:review-plan-hyperplan",
   agentCompact: "agent:compact",
   agentAbort: "agent:abort",
   agentRollback: "agent:rollback",
@@ -165,6 +166,7 @@ export const IPC_CHANNELS = {
   projectMemoryVerify: "project-memory:verify",
   projectMemoryMarkObsolete: "project-memory:mark-obsolete",
   projectMemoryDelete: "project-memory:delete",
+  harnessInsights: "harness-insights:get",
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

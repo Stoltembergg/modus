@@ -4,14 +4,53 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import type {
+  BuiltinAgentRole,
+  HarnessRouteEvent,
+  TaskClassificationInput,
+} from "../../../shared/contracts";
+import type { ToolProfileName } from "../../../shared/tools";
 import { SUBAGENT_TOOL_UI } from "../../../shared/tools";
+import { getActiveAgentRun } from "../agent-run-store";
+import { classifyHarnessTask } from "../harness/task-classifier";
 import { listModels } from "../model-service";
 import type { AgentRuntime } from "../runtime";
-import { resolveSubagent } from "../subagents-config";
+import { resolveAvailableSubagent } from "../subagents-config";
 import { toolRegistry } from "./registry";
 import { type AgentToolContext, resolveAgentToolContext } from "./tool-context";
 
 type SubagentToolOps = Pick<AgentRuntime, "runSubagent">;
+
+export type TaskRoute = {
+  role?: BuiltinAgentRole;
+  reason: string;
+  classification: ReturnType<typeof classifyHarnessTask>;
+};
+
+export function resolveTaskMode(
+  profile: ToolProfileName | "spec",
+): TaskClassificationInput["mode"] {
+  if (profile === "plan") return "plan";
+  if (profile === "spec") return "spec";
+  return "build";
+}
+
+export function resolveTaskRoute(
+  input: Pick<TaskClassificationInput, "text" | "mode" | "contextPaths" | "changedPaths">,
+): TaskRoute {
+  const classification = classifyHarnessTask(input);
+  const role =
+    classification.confidence === "high" &&
+    classification.complexity !== "simple" &&
+    classification.suggestedRole
+      ? classification.suggestedRole
+      : undefined;
+  return {
+    ...(role ? { role } : {}),
+    reason: role ? "high_confidence_specialist_work" : "generic_task_fallback",
+    classification,
+  };
+}
 
 let ops: SubagentToolOps | undefined;
 let registered = false;
@@ -97,13 +136,54 @@ const taskTool: ToolDefinition = defineTool({
     if (!context.window || !context.sessionId) {
       throw new Error("No active Modus session for this subagent task.");
     }
-    const configured = params.subagent?.trim()
-      ? resolveSubagent(ctx.cwd, params.subagent.trim())
-      : undefined;
+    const explicitRole = params.subagent;
+    const taskMode = resolveTaskMode(context.profile ?? "chat");
+    // The tool context has no trusted path inventory yet. Do not infer scope by
+    // parsing task prose or loading transcripts; absent structured scope stays empty.
+    const route = resolveTaskRoute({
+      text: `${params.description.trim()}\n${params.prompt}`,
+      mode: taskMode,
+      contextPaths: [],
+      changedPaths: [],
+    });
+    const roleName = explicitRole ?? route.role;
+    const configured = roleName ? resolveAvailableSubagent(ctx.cwd, roleName) : undefined;
     const modelId = resolveTaskModelId(params.model);
     const model = modelId ?? configured?.model ?? "inherit";
+    const ownerId = ownerSessionId(context);
+    const activeRun = getActiveAgentRun(ownerId);
+    if (!activeRun?.id || !context.emit) {
+      throw new Error("Task routing requires an active run and event context.");
+    }
+    const isBuiltinRole = (name: string | undefined): name is BuiltinAgentRole =>
+      name === "explore" ||
+      name === "librarian" ||
+      name === "oracle" ||
+      name === "reviewer" ||
+      name === "debugger" ||
+      name === "ui-ux";
+    const reasonCodes = explicitRole
+      ? ["explicit_subagent"]
+      : route.role
+        ? [...route.classification.reasons, "high_confidence_specialist_work"]
+        : [...route.classification.reasons, "generic_task_fallback"];
+    const routeEvent: HarnessRouteEvent = {
+      type: "harness.route",
+      sessionId: ownerId,
+      runId: activeRun.id,
+      taskType: route.classification.taskType,
+      ...(explicitRole
+        ? isBuiltinRole(explicitRole)
+          ? { selectedRole: explicitRole }
+          : {}
+        : route.role
+          ? { selectedRole: route.role }
+          : {}),
+      reasonCodes,
+    };
+    context.emit(routeEvent);
     const result = await currentOps().runSubagent(context.window, {
-      parentSessionId: ownerSessionId(context),
+      parentSessionId: ownerId,
       task: params.description.trim(),
       prompt: params.prompt,
       subagentType: configured?.name ?? "task",

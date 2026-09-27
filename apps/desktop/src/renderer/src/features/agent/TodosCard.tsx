@@ -1,4 +1,5 @@
 import {
+  IconAlertCircle,
   IconChevronRight,
   IconCircleArrowRight,
   IconCircleCheck,
@@ -96,14 +97,31 @@ const TODO_ROW_STYLES: Record<
     iconStroke: 1.7,
     textClass: "text-fg-faint line-through decoration-fg-faint",
   },
+  blocked: {
+    Glyph: IconAlertCircle,
+    iconClass: "text-warning",
+    iconStroke: 1.7,
+    textClass: "text-fg-subtle",
+  },
 };
 
 function TodoRow({ todo }: { todo: TodoItem }) {
   const { Glyph, iconClass, iconStroke, textClass } = TODO_ROW_STYLES[todo.status];
+  const blocked = todo.status === "blocked";
   return (
     <li className="flex items-start gap-2.5 py-1.5">
       <Glyph className={cn("mt-0.5 shrink-0", iconClass)} size={14} stroke={iconStroke} />
-      <span className={cn("min-w-0 flex-1 text-sm leading-snug", textClass)}>{todo.content}</span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+          <span className={cn("text-sm leading-snug", textClass)}>{todo.content}</span>
+          {blocked ? <span className="text-xs font-medium text-warning">Blocked</span> : null}
+        </div>
+        {blocked && todo.blockedReason ? (
+          <p className="mt-0.5 break-words text-xs leading-snug text-fg-muted">
+            {todo.blockedReason}
+          </p>
+        ) : null}
+      </div>
     </li>
   );
 }

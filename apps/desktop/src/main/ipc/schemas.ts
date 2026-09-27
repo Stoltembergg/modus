@@ -7,6 +7,16 @@ const optionalNonEmptyString = nonEmptyString.optional();
 const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const optionalHeadersSchema = z.record(z.string(), z.string()).optional();
+const mcpReadOnlyToolAllowlistSchema = z
+  .array(
+    z
+      .string()
+      .max(256)
+      .refine((name) => name.trim().length > 0, "Tool names cannot be empty."),
+  )
+  .max(100)
+  .refine((names) => new Set(names).size === names.length, "Tool names must be unique.")
+  .optional();
 export const startupMetricSchema = z.object({
   milestone: z.enum(STARTUP_RENDERER_MILESTONES),
   rendererElapsedMs: z.number().finite().nonnegative(),
@@ -77,7 +87,7 @@ export const agentPromptSchema = z.object({
   userMessageId: optionalNonEmptyString,
   attachments: z.array(promptImageAttachmentSchema).max(6).optional(),
   skills: z.array(skillSelectionSchema).max(10).optional(),
-  mode: z.enum(["build", "plan"]).optional(),
+  mode: z.enum(["build", "plan", "spec"]).optional(),
   model: optionalNonEmptyString,
   thinkingLevel: thinkingLevelSchema.optional(),
   thinkingVariant: optionalNonEmptyString,
@@ -85,6 +95,13 @@ export const agentPromptSchema = z.object({
 });
 
 export const sessionIdSchema = nonEmptyString;
+
+export const agentReviewPlanWithHyperPlanSchema = z
+  .object({
+    sessionId: nonEmptyString.max(128),
+    planId: nonEmptyString.max(128),
+  })
+  .strict();
 
 export const agentListSchema = z
   .object({
@@ -451,6 +468,14 @@ export const projectMemorySetEnabledSchema = z
 
 export const projectMemoryIdSchema = z.object({ memoryId: nonEmptyString }).strict();
 
+export const harnessInsightsQuerySchema = z
+  .object({
+    workspaceId: nonEmptyString.max(128).optional(),
+    since: z.string().datetime({ offset: true }),
+    limit: z.number().int().min(1).max(200).optional(),
+  })
+  .strict();
+
 export const checkpointRestoreSchema = z.object({
   checkpointId: nonEmptyString,
 });
@@ -474,6 +499,7 @@ export const mcpUpsertSchema = z
     env: stringRecordSchema.optional(),
     url: z.string().trim().optional(),
     headers: stringRecordSchema.optional(),
+    readOnlyToolAllowlist: mcpReadOnlyToolAllowlistSchema,
     enabled: z.boolean(),
   })
   .refine((value) => (value.transport === "stdio" ? Boolean(value.command?.trim()) : true), {

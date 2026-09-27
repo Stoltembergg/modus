@@ -7,6 +7,72 @@ function event(value: unknown): AgentSessionEvent {
 }
 
 describe("normalizePiEvent", () => {
+  it("attaches the active run id to durable tool start and end events", () => {
+    const normalize = createPiEventNormalizer("session-qa", () => "run-qa-current");
+    const start = normalize(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "tool-qa",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      }),
+    );
+    const end = normalize(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "tool-qa",
+        toolName: "terminal_run",
+        isError: false,
+      }),
+    );
+
+    expect(start[0]).toMatchObject({ type: "tool.started", runId: "run-qa-current" });
+    expect(end[0]).toMatchObject({ type: "tool.ended", runId: "run-qa-current" });
+  });
+
+  it("preserves only structured check exit state from tool results", () => {
+    const normalize = createPiEventNormalizer("session-qa", () => "run-qa-result");
+    const ended = normalize(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "tool-qa-result",
+        toolName: "terminal_run",
+        isError: false,
+        result: { details: { exitCode: 2, output: "raw output SECRET=value" } },
+      }),
+    );
+
+    expect(ended[0]).toMatchObject({ type: "tool.ended", runId: "run-qa-result", exitCode: 2 });
+    expect(JSON.stringify(ended)).not.toContain("raw output");
+    expect(JSON.stringify(ended)).not.toContain("SECRET=value");
+  });
+
+  it("preserves only structured skipped or aborted tool outcome flags", () => {
+    const normalize = createPiEventNormalizer("session-qa", () => "run-qa-flags");
+    const skipped = normalize(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "tool-skipped",
+        toolName: "terminal_run",
+        isError: false,
+        result: { details: { skipped: true, output: "secret skipped output" } },
+      }),
+    );
+    const aborted = normalize(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "tool-aborted",
+        toolName: "terminal_run",
+        isError: false,
+        result: { details: { aborted: true, output: "secret aborted output" } },
+      }),
+    );
+
+    expect(skipped[0]).toMatchObject({ type: "tool.ended", skipped: true });
+    expect(aborted[0]).toMatchObject({ type: "tool.ended", aborted: true });
+    expect(JSON.stringify([...skipped, ...aborted])).not.toContain("secret");
+  });
+
   it("maps PI assistant text deltas to Modus message deltas", () => {
     expect(
       normalizePiEvent(

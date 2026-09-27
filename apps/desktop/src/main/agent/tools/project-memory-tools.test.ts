@@ -8,6 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import { getDatabase } from "../../db/database";
 import { getProjectMemorySnapshot } from "../../memory/project-memory-service";
+import { clearRun, registerMcpCitations } from "../harness/mcp-citation-registry";
 import { PROJECT_MEMORY_TOOL_NAME } from "./project-memory-tools";
 import { toolRegistry } from "./registry";
 import { type AgentToolContext, runWithAgentToolContext } from "./tool-context";
@@ -133,6 +134,38 @@ describe("project_memory_propose", () => {
     expect(Value.Check(schema, input({ sessionId: "spoofed-session", runId: "spoofed-run" }))).toBe(
       false,
     );
+    expect(
+      Value.Check(
+        schema,
+        input({ evidence: [{ kind: "external_reference", url: "https://example.com" }] }),
+      ),
+    ).toBe(true);
+    expect(
+      Value.Check(
+        schema,
+        input({
+          evidence: [
+            {
+              kind: "external_reference",
+              citationId: "citation-id",
+              url: "https://example.com",
+            },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    for (const metadata of ["sourceLabel", "origin", "retrievedAt"]) {
+      expect(
+        Value.Check(
+          schema,
+          input({
+            evidence: [
+              { kind: "external_reference", url: "https://example.com", [metadata]: "forged" },
+            ],
+          }),
+        ),
+      ).toBe(false);
+    }
   });
 
   it("requires an owning session and active run", async () => {
@@ -209,6 +242,177 @@ describe("project_memory_propose", () => {
         runId: current.runId,
       }),
     );
+  });
+
+  it("accepts an external URL but rejects caller attempts to spoof trust metadata", async () => {
+    activeRun();
+    const result = await execute(
+      input({
+        evidence: [
+          {
+            kind: "external_reference",
+            url: "https://example.com/reference#frag",
+            title: "Reference",
+          },
+        ],
+      }),
+    );
+    const candidateId = (result?.details as { candidateId: string }).candidateId;
+    const evidence = getProjectMemorySnapshot("ws-tool").memories.find(
+      (item) => item.id === candidateId,
+    )?.evidence[0];
+    expect(evidence).toMatchObject({
+      kind: "external_reference",
+      externalReference: {
+        url: "https://example.com/reference",
+        title: "Reference",
+        sourceLabel: "Agent-supplied",
+        origin: "agent_supplied_unverified",
+      },
+    });
+    expect(
+      Value.Check(
+        tool().parameters,
+        input({
+          evidence: [
+            { kind: "external_reference", url: "https://example.com", sourceLabel: "Trusted" },
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("accepts citation IDs in the schema without accepting caller-supplied attestation metadata", () => {
+    const schema = tool().parameters;
+    expect(
+      Value.Check(
+        schema,
+        input({ evidence: [{ kind: "external_reference", citationId: "citation-id" }] }),
+      ),
+    ).toBe(true);
+    expect(
+      Value.Check(
+        schema,
+        input({ evidence: [{ kind: "external_reference", url: "https://example.com" }] }),
+      ),
+    ).toBe(true);
+    for (const field of ["sourceLabel", "origin", "retrievedAt"]) {
+      expect(
+        Value.Check(
+          schema,
+          input({
+            evidence: [
+              { kind: "external_reference", citationId: "citation-id", [field]: "forged" },
+            ],
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("stores registry-issued metadata only when the citation belongs to the current session and run", async () => {
+    const current = activeRun();
+    const [citation] = registerMcpCitations(
+      "session-tool",
+      current.runId,
+      "Trusted MCP",
+      "search",
+      {
+        content: [
+          { type: "resource_link", uri: "https://example.com/spec#section", name: "Spec title" },
+        ],
+      } as never,
+    );
+    if (!citation) throw new Error("Expected registered citation");
+    const result = await execute(
+      input({ evidence: [{ kind: "external_reference", citationId: citation.id }] }),
+    );
+    const id = (result?.details as { candidateId: string }).candidateId;
+    expect(
+      getProjectMemorySnapshot("ws-tool").memories.find((item) => item.id === id)?.evidence[0],
+    ).toMatchObject({
+      externalReference: {
+        url: "https://example.com/spec",
+        title: "Spec title",
+        sourceLabel: "Trusted MCP",
+        retrievedAt: citation.retrievedAt,
+        origin: "mcp_attested",
+      },
+    });
+  });
+
+  it.each([
+    "forged",
+    "wrong-run",
+    "wrong-session",
+    "expired",
+  ])("fails closed for %s citation IDs", async (mode) => {
+    const current = activeRun();
+    const [citation] = registerMcpCitations(
+      "session-tool",
+      current.runId,
+      "Trusted MCP",
+      "search",
+      {
+        content: [{ type: "resource_link", uri: "https://example.com/spec" }],
+      } as never,
+    );
+    let citationId =
+      mode === "forged" ? "forged-citation-id" : (citation?.id ?? "unknown-citation-id");
+    if (mode === "forged") {
+      citationId = "forged-citation-id";
+    } else if (mode === "wrong-run") {
+      const [otherCitation] = registerMcpCitations(
+        "session-tool",
+        "different-run",
+        "Trusted MCP",
+        "search",
+        {
+          content: [{ type: "resource_link", uri: "https://other.example/spec" }],
+        } as never,
+      );
+      if (!otherCitation) throw new Error("Expected other-run citation");
+      citationId = otherCitation.id;
+    } else if (mode === "wrong-session") {
+      const [otherCitation] = registerMcpCitations(
+        "another-session",
+        current.runId,
+        "Trusted MCP",
+        "search",
+        {
+          content: [{ type: "resource_link", uri: "https://other.example/spec" }],
+        } as never,
+      );
+      if (!otherCitation) throw new Error("Expected other-session citation");
+      citationId = otherCitation.id;
+    } else if (mode === "expired") clearRun("session-tool", current.runId);
+    await expect(
+      execute(input({ evidence: [{ kind: "external_reference", citationId }] })),
+    ).rejects.toThrow(/citation|attest/i);
+    expect(getProjectMemorySnapshot("ws-tool").memories).toHaveLength(0);
+  });
+
+  it("does not persist attestation when the memory proposal fails validation", async () => {
+    const current = activeRun();
+    const [citation] = registerMcpCitations(
+      "session-tool",
+      current.runId,
+      "Trusted MCP",
+      "search",
+      {
+        content: [{ type: "resource_link", uri: "https://example.com/spec" }],
+      } as never,
+    );
+    if (!citation) throw new Error("Expected registered citation");
+    await expect(
+      execute(
+        input({
+          claim: "bad",
+          evidence: [{ kind: "external_reference", citationId: citation.id }],
+        }),
+      ),
+    ).rejects.toThrow();
+    expect(getProjectMemorySnapshot("ws-tool").memories).toHaveLength(0);
   });
 
   it("creates worktree proposals as provisional from persisted session ownership", async () => {

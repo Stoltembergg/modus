@@ -28,6 +28,8 @@ import {
   listCheckpoints,
   restoreCheckpoint,
 } from "../agent/checkpoint-service";
+import { getHarnessInsights } from "../agent/harness/harness-insights-service";
+import { runHyperPlanReview } from "../agent/harness/hyperplan";
 import {
   cancelProviderAuth,
   configureProvider,
@@ -65,6 +67,7 @@ import {
   listSubagents,
   updateSubagent,
 } from "../agent/subagents-config";
+import { plansRoot } from "../agent/tools/plan-tools";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -148,6 +151,7 @@ import {
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
+import { readPlanById } from "../plan/plan-store";
 import { onManagedProcessChange } from "../process/managed-process-bus";
 import { killManagedProcess, listManagedProcesses } from "../process/managed-process-facade";
 import { getWorkspaceAgents, listRuleFiles, saveWorkspaceAgents } from "../rules/rules-service";
@@ -174,6 +178,7 @@ import {
 } from "../workspace/workspace-service";
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { IPC_CHANNELS } from "./channels";
+import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
@@ -181,6 +186,7 @@ import {
   agentCycleModelSchema,
   agentListSchema,
   agentPromptSchema,
+  agentReviewPlanWithHyperPlanSchema,
   agentRollbackSchema,
   agentSetModelSchema,
   approvalModeClearProjectSchema,
@@ -463,6 +469,27 @@ export function registerAppIpc({
       ...(parsed.thinkingVariant !== undefined ? { thinkingVariant: parsed.thinkingVariant } : {}),
       ...(parsed.planId !== undefined ? { planId: parsed.planId } : {}),
     });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentReviewPlanWithHyperPlan, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      agentReviewPlanWithHyperPlanSchema,
+      input,
+      IPC_CHANNELS.agentReviewPlanWithHyperPlan,
+    );
+    const session = getAgentSession(parsed.sessionId);
+    if (!session) throw new Error("Agent session not found.");
+    const plan = readPlanById(plansRoot(), parsed.planId);
+    if (
+      !plan?.spec ||
+      plan.id !== parsed.planId ||
+      plan.sessionId !== session.id ||
+      plan.workspaceId !== session.workspaceId
+    ) {
+      throw new Error("Spec plan does not belong to this session.");
+    }
+    return await runHyperPlanReview({ planContent: plan.content, spec: plan.spec });
   });
 
   ipcMain.handle(IPC_CHANNELS.agentCompact, async (event, sessionId: string) => {
@@ -1336,6 +1363,7 @@ export function registerAppIpc({
     markProjectMemoryObsolete,
     deleteProjectMemory,
   });
+  registerHarnessInsightsIpcHandlers(ipcMain, assertTrustedSender, { getHarnessInsights });
 
   ipcMain.handle(IPC_CHANNELS.modelSetDefault, (event, model: string) => {
     assertTrustedSender(event);

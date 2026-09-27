@@ -6,10 +6,13 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { app } from "electron";
 import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { PLAN_TOOL_NAME, PLAN_TOOL_UI } from "../../../shared/tools";
 import { writePlan } from "../../plan/plan-store";
 import { toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
+
+const MAX_PLAN_CONTENT_BYTES = 64 * 1024;
 
 /**
  * Plan Mode tool. In Plan Mode the agent is read-only on the codebase
@@ -43,23 +46,87 @@ const planParams = Type.Object(
         "subtitle in the Review card. Keep it to 1–3 sentences.",
     }),
     todos: Type.Array(
-      Type.String({
-        minLength: 1,
-        description: "One implementation step, action-oriented.",
-      }),
+      Type.Union([
+        Type.String({
+          minLength: 1,
+          description: "One implementation step, action-oriented.",
+        }),
+        Type.Object(
+          {
+            id: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+            content: Type.String({ minLength: 1 }),
+            acceptanceCriterionIds: Type.Optional(
+              Type.Array(Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }), {
+                maxItems: 100,
+              }),
+            ),
+          },
+          { additionalProperties: false },
+        ),
+      ]),
       {
         minItems: 1,
+        maxItems: 100,
         description:
-          "Ordered implementation steps as plain strings. These drive execution, so each step " +
-          "must be a self-contained unit of work.",
+          "Ordered implementation steps. Use plain strings for Plan Mode; in Spec Mode use objects " +
+          "with stable ids and acceptanceCriterionIds. These drive execution, so each step must be " +
+          "a self-contained unit of work.",
       },
     ),
     content: Type.String({
       minLength: 1,
+      maxLength: MAX_PLAN_CONTENT_BYTES,
       description:
         "Markdown plan body after the title (last field). Modus renders `title` separately, so " +
         "do not repeat it here. This text is the executor's source of truth.",
     }),
+    spec: Type.Optional(
+      Type.Object(
+        {
+          requirements: Type.Array(
+            Type.Object(
+              {
+                id: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+                text: Type.String({ minLength: 1, maxLength: 2000 }),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 100 },
+          ),
+          acceptanceCriteria: Type.Array(
+            Type.Object(
+              {
+                id: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+                requirementId: Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }),
+                description: Type.String({ minLength: 1, maxLength: 2000 }),
+                todoIds: Type.Array(Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" }), {
+                  maxItems: 100,
+                }),
+                requiredCheckKinds: Type.Optional(
+                  Type.Array(
+                    Type.Union([
+                      Type.Literal("tests"),
+                      Type.Literal("typecheck"),
+                      Type.Literal("lint"),
+                      Type.Literal("build"),
+                    ]),
+                    { uniqueItems: true, maxItems: 4 },
+                  ),
+                ),
+                status: Type.Optional(Type.Literal("pending")),
+              },
+              { additionalProperties: false },
+            ),
+            { maxItems: 100 },
+          ),
+          assumptions: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), { maxItems: 20 }),
+          openQuestions: Type.Array(Type.String({ minLength: 1, maxLength: 500 }), {
+            maxItems: 20,
+          }),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
@@ -85,9 +152,19 @@ const planTool: ToolDefinition = defineTool({
   ],
   parameters: planParams,
   execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+    if (!Value.Check(planParams, params)) {
+      throw new Error("Invalid plan_write parameters.");
+    }
+    if (Buffer.byteLength(params.content, "utf8") > MAX_PLAN_CONTENT_BYTES) {
+      throw new Error("Plan content exceeds the maximum allowed size.");
+    }
     const context = resolveAgentToolContext(ctx.cwd);
     if (!context.workspaceId || !context.sessionId) {
       throw new Error("No active Modus workspace for this plan.");
+    }
+    const hasStructuredTodos = params.todos.some((todo) => typeof todo !== "string");
+    if ((params.spec || hasStructuredTodos) && context.mode !== "spec") {
+      throw new Error("Structured plan metadata is available only in Spec Mode.");
     }
     const plan = writePlan(plansRoot(), {
       workspaceId: context.workspaceId,
@@ -95,7 +172,18 @@ const planTool: ToolDefinition = defineTool({
       title: params.title,
       overview: params.overview,
       content: params.content,
-      todos: params.todos.map((content) => ({ content })),
+      todos: params.todos.map((todo) => (typeof todo === "string" ? { content: todo } : todo)),
+      ...(params.spec
+        ? {
+            spec: {
+              ...params.spec,
+              acceptanceCriteria: params.spec.acceptanceCriteria.map((criterion) => ({
+                ...criterion,
+                status: "pending" as const,
+              })),
+            },
+          }
+        : {}),
     });
     context.emit?.({ type: "plan.updated", sessionId: context.sessionId, plan, toolCallId });
     return toResult(`Plan "${plan.title}" written to ${plan.path}.`, plan);

@@ -35,6 +35,9 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  HarnessInsightsQuery,
+  HarnessInsightsResult,
+  HyperPlanSummary,
   ManagedProcessInfo,
   ManagedProcessOrigin,
   McpServerInfo,
@@ -162,6 +165,10 @@ export type ModusApi = {
       /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */
       planId?: string;
     }): Promise<void>;
+    reviewPlanWithHyperPlan(input: {
+      sessionId: string;
+      planId: string;
+    }): Promise<HyperPlanSummary>;
     compact(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     /**
@@ -361,6 +368,9 @@ export type ModusApi = {
     verify(input: { memoryId: string }): Promise<ProjectMemorySnapshot>;
     markObsolete(input: { memoryId: string }): Promise<ProjectMemorySnapshot>;
     delete(input: { memoryId: string }): Promise<ProjectMemorySnapshot>;
+  };
+  harnessInsights: {
+    get(input: HarnessInsightsQuery): Promise<HarnessInsightsResult>;
   };
   model: {
     list(): Promise<ModelInfo[]>;

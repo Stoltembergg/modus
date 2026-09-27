@@ -240,7 +240,7 @@ export function migrateDatabase(db: DatabaseSync): void {
     create table if not exists project_memory_evidence (
       id text primary key,
       memory_id text not null references project_memory_records(id) on delete cascade,
-      kind text not null check (kind in ('user_message','run','task','subagent','commit','file','symbol')),
+      kind text not null check (kind in ('user_message','run','task','subagent','commit','file','symbol','external_reference')),
       session_id text references agent_sessions(id) on delete set null,
       run_id text,
       user_message_id text,
@@ -249,7 +249,8 @@ export function migrateDatabase(db: DatabaseSync): void {
       branch text,
       path text,
       symbol text,
-      detached integer not null default 0 check (detached in (0,1))
+      detached integer not null default 0 check (detached in (0,1)),
+      external_reference_json text
     );
     create index if not exists idx_project_memory_evidence_memory on project_memory_evidence(memory_id);
     create index if not exists idx_project_memory_evidence_session on project_memory_evidence(session_id);
@@ -290,6 +291,55 @@ export function migrateDatabase(db: DatabaseSync): void {
         );
     end;
   `);
+
+  const evidenceSql =
+    (
+      db
+        .prepare(
+          "select sql from sqlite_master where type = 'table' and name = 'project_memory_evidence'",
+        )
+        .get() as { sql: string } | undefined
+    )?.sql ?? "";
+  if (
+    !evidenceSql.includes("'external_reference'") ||
+    !hasColumn(db, "project_memory_evidence", "external_reference_json")
+  ) {
+    db.exec("begin");
+    try {
+      db.exec(`drop trigger if exists trg_detach_project_memory_before_session_delete;
+        create table project_memory_evidence_replacement (
+          id text primary key,
+          memory_id text not null references project_memory_records(id) on delete cascade,
+          kind text not null check (kind in ('user_message','run','task','subagent','commit','file','symbol','external_reference')),
+          session_id text references agent_sessions(id) on delete set null,
+          run_id text, user_message_id text, task_ref text, commit_sha text, branch text,
+          path text, symbol text,
+          detached integer not null default 0 check (detached in (0,1)),
+          external_reference_json text
+        );
+        insert into project_memory_evidence_replacement
+          (id,memory_id,kind,session_id,run_id,user_message_id,task_ref,commit_sha,branch,path,symbol,detached)
+          select id,memory_id,kind,session_id,run_id,user_message_id,task_ref,commit_sha,branch,path,symbol,detached
+          from project_memory_evidence;
+        drop table project_memory_evidence;
+        alter table project_memory_evidence_replacement rename to project_memory_evidence;
+        create index idx_project_memory_evidence_memory on project_memory_evidence(memory_id);
+        create index idx_project_memory_evidence_session on project_memory_evidence(session_id);
+        create trigger trg_detach_project_memory_before_session_delete
+        before delete on agent_sessions begin
+          update project_memory_evidence
+          set session_id = null, run_id = null, user_message_id = null, detached = 1
+          where session_id = old.id
+            or run_id in (select id from agent_runs where session_id = old.id)
+            or user_message_id in (select user_message_id from agent_runs
+              where session_id = old.id and user_message_id is not null);
+        end;`);
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
 }
 
 export function getDatabase(): DatabaseSync {

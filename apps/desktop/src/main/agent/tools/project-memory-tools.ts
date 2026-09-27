@@ -4,9 +4,13 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import type { ProjectMemoryCategory, ProjectMemoryEvidence } from "../../../shared/contracts";
-import { proposeProjectMemory } from "../../memory/project-memory-service";
+import type { ProjectMemoryCategory } from "../../../shared/contracts";
+import {
+  type ProjectMemoryProposalInput,
+  proposeProjectMemory,
+} from "../../memory/project-memory-service";
 import { getActiveAgentRun } from "../agent-run-store";
+import { resolveMcpCitation } from "../harness/mcp-citation-registry";
 import { toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
 
@@ -24,7 +28,7 @@ const categorySchema = Type.Union([
   Type.Literal("preference"),
 ]);
 
-const evidenceSchema = Type.Object(
+const localEvidenceSchema = Type.Object(
   {
     kind: Type.Union([
       Type.Literal("user_message"),
@@ -43,6 +47,26 @@ const evidenceSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+const externalUrlReferenceSchema = Type.Object(
+  {
+    kind: Type.Literal("external_reference"),
+    url: Type.String({ minLength: 1, maxLength: 1024 }),
+    title: Type.Optional(Type.String({ maxLength: 1024 })),
+  },
+  { additionalProperties: false },
+);
+const externalCitationReferenceSchema = Type.Object(
+  {
+    kind: Type.Literal("external_reference"),
+    citationId: Type.String({ minLength: 1, maxLength: 256 }),
+  },
+  { additionalProperties: false },
+);
+const evidenceSchema = Type.Union([
+  localEvidenceSchema,
+  externalUrlReferenceSchema,
+  externalCitationReferenceSchema,
+]);
 
 const proposalSchema = Type.Object(
   {
@@ -93,14 +117,35 @@ const projectMemoryTool: ToolDefinition = defineTool({
       throw new Error("Project memory proposal requires an active owning run.");
     }
 
-    const evidence: ProjectMemoryEvidence[] = params.evidence.map((item) => ({
-      ...item,
-      sessionId: owner.sessionId,
-      runId: run.id,
-      ...(item.kind === "user_message" && run.userMessageId
-        ? { userMessageId: run.userMessageId }
-        : {}),
-    }));
+    const evidence: ProjectMemoryProposalInput["evidence"] = params.evidence.map((item) => {
+      if (item.kind === "external_reference" && "citationId" in item) {
+        const citation = resolveMcpCitation(owner.sessionId, run.id, item.citationId);
+        if (!citation)
+          throw new Error("External citation ID is unknown, expired, or not owned by this run.");
+        return { kind: "external_reference", citationId: citation.id };
+      }
+      return item.kind === "external_reference"
+        ? {
+            kind: "external_reference",
+            externalReference: {
+              url: item.url,
+              ...(item.title ? { title: item.title } : {}),
+              sourceLabel: "Agent-supplied",
+              retrievedAt: new Date().toISOString(),
+              origin: "agent_supplied_unverified",
+            },
+            sessionId: owner.sessionId,
+            runId: run.id,
+          }
+        : {
+            ...item,
+            sessionId: owner.sessionId,
+            runId: run.id,
+            ...(item.kind === "user_message" && run.userMessageId
+              ? { userMessageId: run.userMessageId }
+              : {}),
+          };
+    });
     const record = proposeProjectMemory(
       { ...params, category: params.category as ProjectMemoryCategory, evidence },
       {

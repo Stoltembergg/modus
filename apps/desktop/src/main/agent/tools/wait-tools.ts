@@ -124,6 +124,17 @@ const waitTool: ToolDefinition = defineTool({
       for (const memory of child.memoryCandidates ?? []) {
         lines.push(`memory candidate ${memory.id} [${memory.category}]: ${memory.claim}`);
       }
+      if (child.discoveries?.length) {
+        lines.push("CodeGraph discoveries:");
+        for (const discovery of child.discoveries) {
+          const location = `${discovery.path}${discovery.line ? `:${discovery.line}` : ""}`;
+          const label = [discovery.kind, discovery.symbol].filter(Boolean).join(" ");
+          const provisional = discovery.provisional
+            ? " [provisional worktree reference; verify]"
+            : "";
+          lines.push(`- ${location}${label ? ` — ${label}` : ""}${provisional}`);
+        }
+      }
       if (child.output) {
         lines.push(excerptForWaitTool(child.output));
         lines.push("---");

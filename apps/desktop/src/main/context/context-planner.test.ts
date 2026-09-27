@@ -382,6 +382,38 @@ describe("Context Planner fixed corpus", () => {
     expect(diagnostic.ranked[0]).not.toHaveProperty("claim");
   });
 
+  it("excludes external-only memories until verification and labels retained references untrusted", async () => {
+    const record = memory.proposeProjectMemory(
+      {
+        scope: "project",
+        category: "decision",
+        title: "External-only claim",
+        claim: "This claim relies only on a remote source.",
+        evidence: [
+          {
+            kind: "external_reference",
+            externalReference: {
+              url: "https://example.com/spec",
+              title: "Spec",
+              sourceLabel: "Agent-supplied",
+              retrievedAt: new Date().toISOString(),
+              origin: "agent_supplied_unverified",
+            },
+          },
+        ],
+      },
+      ownerA,
+    );
+    expect(record.status).toBe("needs_review");
+    expect((await planTurnContext(plannerInput())).memoryIds).not.toContain(record.id);
+    memory.verifyProjectMemory(record.id);
+    const digest = await planTurnContext(plannerInput());
+    expect(digest.memoryIds).toContain(record.id);
+    expect(digest.text).toContain(
+      "untrusted external reference:Agent-supplied https://example.com/spec",
+    );
+  });
+
   it("keeps local results when optional sources fail and returns an empty digest for an empty index", async () => {
     const local = propose("Local fallback memory", "The local evidence remains available offline.");
     finalize();

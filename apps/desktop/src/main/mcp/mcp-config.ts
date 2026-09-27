@@ -36,7 +36,32 @@ export type McpServerConfig = {
   /** Absolute path of the config file that defined this server. */
   source: string;
   enabled: boolean;
+  /** Exact MCP tool names explicitly allowlisted as read-only by the user. */
+  readOnlyToolAllowlist: string[];
 } & (McpStdioConfig | McpHttpConfig);
+
+const MAX_READ_ONLY_TOOL_ALLOWLIST = 100;
+const MAX_MCP_TOOL_NAME_LENGTH = 256;
+
+function validateReadOnlyToolAllowlist(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_READ_ONLY_TOOL_ALLOWLIST) {
+    throw new Error(
+      `readOnlyToolAllowlist must contain at most ${MAX_READ_ONLY_TOOL_ALLOWLIST} names.`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const name of value) {
+    if (typeof name !== "string" || !name.trim() || name.length > MAX_MCP_TOOL_NAME_LENGTH) {
+      throw new Error(
+        `readOnlyToolAllowlist names must be non-empty strings of at most ${MAX_MCP_TOOL_NAME_LENGTH} characters.`,
+      );
+    }
+    if (seen.has(name)) throw new Error("readOnlyToolAllowlist names must be unique.");
+    seen.add(name);
+  }
+  return value;
+}
 
 export type McpConfigLoadResult = {
   servers: McpServerConfig[];
@@ -128,12 +153,23 @@ export function parseMcpConfig(
     }
     const entry = raw as Record<string, unknown>;
     const enabled = entry.disabled !== true && entry.enabled !== false;
+    let readOnlyToolAllowlist: string[];
+    try {
+      readOnlyToolAllowlist = validateReadOnlyToolAllowlist(entry.readOnlyToolAllowlist);
+    } catch (error) {
+      errors.push({
+        source,
+        message: `Server "${name}": ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
 
     if (typeof entry.url === "string" && entry.url.trim()) {
       servers.push({
         name,
         source,
         enabled,
+        readOnlyToolAllowlist,
         transport: "http",
         url: interpolateEnv(entry.url.trim(), env),
         headers: interpolateRecord(asStringRecord(entry.headers), env),
@@ -149,6 +185,7 @@ export function parseMcpConfig(
         name,
         source,
         enabled,
+        readOnlyToolAllowlist,
         transport: "stdio",
         command: interpolateEnv(entry.command.trim(), env),
         args: args.map((arg) => interpolateEnv(arg, env)),
@@ -275,6 +312,8 @@ export function findRawMcpEntry(
 }
 
 function buildRawEntry(input: McpServerUpsertInput): Record<string, unknown> {
+  const readOnlyToolAllowlist = validateReadOnlyToolAllowlist(input.readOnlyToolAllowlist);
+  const allowlist = readOnlyToolAllowlist.length > 0 ? { readOnlyToolAllowlist } : {};
   if (input.transport === "http") {
     const url = input.url?.trim();
     if (!url) {
@@ -283,6 +322,7 @@ function buildRawEntry(input: McpServerUpsertInput): Record<string, unknown> {
     return {
       url,
       ...(input.headers && Object.keys(input.headers).length > 0 ? { headers: input.headers } : {}),
+      ...allowlist,
       ...(input.enabled ? {} : { disabled: true }),
     };
   }
@@ -294,6 +334,7 @@ function buildRawEntry(input: McpServerUpsertInput): Record<string, unknown> {
     command,
     ...(input.args && input.args.length > 0 ? { args: input.args } : {}),
     ...(input.env && Object.keys(input.env).length > 0 ? { env: input.env } : {}),
+    ...allowlist,
     ...(input.enabled ? {} : { disabled: true }),
   };
 }

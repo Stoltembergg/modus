@@ -103,6 +103,12 @@ type ComposerProps = {
   onDraftChange?(update: ComposerDraftUpdate): void;
 };
 
+export function cycleComposerMode(mode: AgentMode): AgentMode {
+  if (mode === "build") return "plan";
+  if (mode === "plan") return "spec";
+  return "build";
+}
+
 export type ComposerDraft = {
   value: string;
   images: ComposerImage[];
@@ -427,10 +433,10 @@ export function Composer({
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    // Shift+Tab rotates the composer mode (build ⇄ plan), mirroring Cursor.
+    // Shift+Tab rotates Build, Plan, and Spec modes.
     if (event.key === "Tab" && event.shiftKey && !slash.isOpen && !isOpen) {
       event.preventDefault();
-      setMode(mode === "plan" ? "build" : "plan");
+      setMode(cycleComposerMode(mode));
       return;
     }
 
@@ -694,7 +700,11 @@ export function Composer({
 
           {!isInlineEdit ? (
             <>
-              {mode === "plan" ? <PlanModePill onExit={() => setMode("build")} /> : null}
+              <ModePill
+                mode={mode}
+                onCycle={() => setMode(cycleComposerMode(mode))}
+                onExit={() => setMode("build")}
+              />
               <ModelSelect
                 model={model}
                 models={models}
@@ -767,25 +777,55 @@ export function Composer({
   );
 }
 
-function PlanModePill({ onExit }: { onExit: () => void }) {
-  // Cursor-style mode pill: a compact accent token that shows Plan Mode is
-  // active, with an inline dismiss. Shift+Tab also toggles it (see handleKeyDown).
+function ModePill({
+  mode,
+  onCycle,
+  onExit,
+}: {
+  mode: AgentMode;
+  onCycle: () => void;
+  onExit: () => void;
+}) {
+  const label = mode === "spec" ? "Spec" : mode === "plan" ? "Plan" : "Build";
+  const activePlanningMode = mode !== "build";
   return (
-    <span
-      className="app-no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/10 pr-1 pl-1.5 text-accent"
-      title="Plan Mode — research read-only and draft a plan (Shift+Tab to toggle)"
-    >
-      <IconListCheck size={ICON.sm} stroke={ICON_STROKE.sm} />
-      <span className="font-medium text-xs">Plan</span>
+    <div className="app-no-drag inline-flex h-7 shrink-0 items-center gap-0.5">
       <button
-        aria-label="Exit Plan Mode"
-        className="flex size-4 items-center justify-center rounded-sm text-accent/70 transition-colors hover:bg-accent/15 hover:text-accent"
-        onClick={onExit}
+        aria-label={`Change mode, currently ${label}`}
+        className={cn(
+          "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2 transition-colors",
+          activePlanningMode
+            ? "border-accent/30 bg-accent/10 text-accent hover:bg-accent/15"
+            : "border-hairline text-fg-muted hover:bg-hover hover:text-fg",
+        )}
+        onClick={onCycle}
+        title={`${label} mode — click or press Shift+Tab to change mode`}
         type="button"
       >
-        <IconX size={ICON.xs} stroke={ICON_STROKE.xs} />
+        {activePlanningMode ? (
+          <IconListCheck aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+        ) : (
+          <IconSparkles aria-hidden size={ICON.sm} stroke={ICON_STROKE.sm} />
+        )}
+        <span className="font-medium text-xs">{label}</span>
+        <IconChevronDown
+          aria-hidden
+          className="opacity-70"
+          size={ICON.xs}
+          stroke={ICON_STROKE.xs}
+        />
       </button>
-    </span>
+      {activePlanningMode ? (
+        <button
+          aria-label={`Exit ${label} mode`}
+          className="flex size-6 items-center justify-center rounded-md text-accent/70 transition-colors hover:bg-accent/15 hover:text-accent"
+          onClick={onExit}
+          type="button"
+        >
+          <IconX aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />
+        </button>
+      ) : null}
+    </div>
   );
 }
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -140,6 +140,7 @@ describe("Fast Codebase service", () => {
 
     expect(result.details.indexed).toBe(false);
     expect(result.text).toContain("outside the current workspace");
+    expect(result.hits).toEqual([]);
   });
 
   it("queries an existing clean index without syncing", async () => {
@@ -249,6 +250,133 @@ describe("Fast Codebase service", () => {
     expect(result.text).not.toContain("function run(): void");
     expect(result.text).toContain("**Code map**");
     expect(result.text.indexOf("**Exact hits**")).toBeLessThan(result.text.indexOf("**Code map**"));
+  });
+
+  it("returns bounded structured hit references while preserving the display text", async () => {
+    const root = tempWorkspace();
+    const runner: CodeGraphRunner = async (args) =>
+      ok(
+        args[0] === "query"
+          ? JSON.stringify([
+              {
+                node: {
+                  filePath: join(root, "src", "run.ts"),
+                  kind: "function",
+                  name: "run",
+                  qualifiedName: "Agent.run",
+                  startLine: 7,
+                  signature: "source body must not enter hit refs",
+                },
+              },
+              { node: { filePath: "src/invalid.ts", startLine: 0, name: " " } },
+            ])
+          : args[0] === "explore"
+            ? "Existing display map remains."
+            : "ok",
+      );
+
+    const result = await runFastCodebase({ cwd: root, query: "run", runner });
+
+    expect(result.hits).toEqual([
+      { path: "src/run.ts", symbol: "Agent.run", line: 7, kind: "function" },
+      { path: "src/invalid.ts" },
+    ]);
+    expect(result.text).toContain("**Exact hits**");
+    expect(result.text).toContain("Existing display map remains.");
+    expect(JSON.stringify(result.hits)).not.toContain("source body");
+  });
+
+  it("rejects discovery paths outside the owning workspace and through symlinks", async () => {
+    const root = tempWorkspace();
+    const outside = tempWorkspace();
+    const linkedDir = join(root, "linked");
+    try {
+      symlinkSync(outside, linkedDir, "junction");
+    } catch {
+      // Some Windows environments do not permit creating directory symlinks.
+    }
+    const runner: CodeGraphRunner = async (args) =>
+      ok(
+        args[0] === "query"
+          ? JSON.stringify([
+              { node: { filePath: join(outside, "secret.ts"), kind: "file" } },
+              { node: { filePath: "../outside.ts", kind: "file" } },
+              { node: { filePath: join(linkedDir, "secret.ts"), kind: "file" } },
+            ])
+          : args[0] === "explore"
+            ? "map"
+            : "ok",
+      );
+
+    const result = await runFastCodebase({ cwd: root, query: "secret", runner });
+
+    expect(result.hits).toEqual([]);
+  });
+
+  it("does not index a workspace_path symlink that resolves outside the workspace", async () => {
+    const root = tempWorkspace();
+    const outside = tempWorkspace();
+    const linked = join(root, "linked");
+    try {
+      symlinkSync(outside, linked, "junction");
+    } catch {
+      return;
+    }
+    const calls: string[][] = [];
+    const runner: CodeGraphRunner = async (args) => {
+      calls.push(args);
+      return ok("map");
+    };
+
+    const result = await runFastCodebase({
+      cwd: root,
+      query: "outside",
+      runner,
+      workspacePath: "linked",
+    });
+
+    expect(calls).toEqual([]);
+    expect(result.details.indexed).toBe(false);
+    expect(result.hits).toEqual([]);
+  });
+
+  it("deduplicates and bounds hit count and metadata fields", async () => {
+    const root = tempWorkspace();
+    const nodes = Array.from({ length: 60 }, (_, index) => ({
+      node: {
+        filePath: `src/file-${index}.ts`,
+        kind: "function".repeat(20),
+        name: `symbol-${index}-${"x".repeat(600)}`,
+        startLine: index + 1,
+      },
+    }));
+    const duplicate = nodes[0];
+    if (duplicate) nodes.push(duplicate);
+    const runner: CodeGraphRunner = async (args) =>
+      ok(args[0] === "query" ? JSON.stringify(nodes) : "map");
+
+    const result = await runFastCodebase({ cwd: root, query: "symbols", runner });
+
+    expect(result.hits).toHaveLength(50);
+    expect(new Set(result.hits.map((hit) => hit.path)).size).toBe(result.hits.length);
+    expect(result.hits.every((hit) => (hit.symbol?.length ?? 0) <= 256)).toBe(true);
+    expect(result.hits.every((hit) => (hit.kind?.length ?? 0) <= 64)).toBe(true);
+    expect(result.hits.every((hit) => hit.line === undefined || hit.line > 0)).toBe(true);
+  });
+
+  it("returns no typed hits when the exact CodeGraph query fails", async () => {
+    const root = tempWorkspace();
+    writeIndex(root);
+    const runner: CodeGraphRunner = async (args) =>
+      args[0] === "status"
+        ? ok(statusJson())
+        : args[0] === "query"
+          ? fail("query failed", "network unavailable")
+          : ok("map");
+
+    const result = await runFastCodebase({ cwd: root, query: "failed", runner });
+    expect(result.hits).toEqual([]);
+    expect(result.text).toContain("map");
   });
 
   it("caps long tool output with a narrower-query hint", async () => {

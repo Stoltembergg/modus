@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
@@ -16,10 +16,14 @@ import type {
   AgentRunInfo,
   AgentRunTokenUsage,
   AgentSessionInfo,
+  CodeGraphDiscoveryRef,
   ContextItem,
   ContextUsageInfo,
   ModelInfo,
   PlanBuildStatus,
+  PlanEvidenceRef,
+  PlanRef,
+  QuestionResponse,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
@@ -33,8 +37,12 @@ import {
   getGitMemoryContext,
 } from "../git/git-service";
 import { resolveGlobalGuidancePrompt } from "../guidance/guidance-service";
-import { denyPendingQuestionRequestsForSession } from "../interaction/question-broker";
+import {
+  denyPendingQuestionRequestsForSession,
+  requestQuestions,
+} from "../interaction/question-broker";
 import { IPC_CHANNELS } from "../ipc/channels";
+import { listAllowlistedMcpToolNames } from "../mcp/mcp-service";
 import {
   finalizeProjectMemoryRun,
   getProjectMemorySessionSummaries,
@@ -42,13 +50,26 @@ import {
 } from "../memory/project-memory-service";
 import { maybeNotifyAgentEvent } from "../notifications/agent-notifications";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
-import { readPlanById, setPlanBuildStatusById } from "../plan/plan-store";
+import {
+  applyPlanAcceptanceEvidenceById,
+  hashContent,
+  isPlanCriterionLinkedToTodos,
+  readPlanById,
+  setPlanBuildStatusById,
+} from "../plan/plan-store";
 import { summarizeApps } from "../process/app-process-service";
 import { killManagedProcess, listManagedProcesses } from "../process/managed-process-facade";
 import { RULES_MAX_TOTAL_BYTES, resolveAlwaysRulesPrompt } from "../rules/rules-service";
 import { resolveSkillsPrompt } from "../skills/skills-service";
 import { summarizeTerminals } from "../terminal/terminal-service";
-import { listAgentEvents, recordAgentEvent } from "./agent-event-store";
+import {
+  getLatestSessionTodos,
+  getLatestTodoContinuationAttempt,
+  getRunToolEvidence,
+  getSessionCodeGraphDiscoveries,
+  listAgentEvents,
+  recordAgentEvent,
+} from "./agent-event-store";
 import {
   createAgentRun,
   getActiveAgentRun,
@@ -67,6 +88,15 @@ import {
   updateAgentSessionWorktree,
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
+import { evaluateIntentGate } from "./harness/intent-gate";
+import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
+import {
+  type RunQAEvent,
+  recognizeCheckInvocation,
+  resolvePackageCheckScript,
+  summarizeRunQA,
+} from "./harness/qa-evidence";
+import { evaluateTodoContinuation } from "./harness/todo-continuation";
 import {
   cycleDefaultModel,
   findModel,
@@ -92,7 +122,7 @@ import type {
 } from "./runtime";
 import { deriveSessionTitle, shouldReplaceSessionTitle } from "./session-title";
 import { describeAgentShellForPrompt, resolveAgentShell } from "./shell-resolver";
-import { resolveSubagent, resolveSubagentsPrompt } from "./subagents-config";
+import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-config";
 import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
@@ -102,7 +132,7 @@ import { registerQuestionTools } from "./tools/question-tools";
 import { toolRegistry } from "./tools/registry";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
-import { registerTodoTools } from "./tools/todo-tools";
+import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
 import {
   type AgentToolContext,
   runWithAgentToolContext,
@@ -184,6 +214,7 @@ type RunOutputTracker = {
   startedAt: number;
   tokenUsage: AgentRunTokenUsage;
   hasReportedUsage: boolean;
+  hasQueuedInput: boolean;
   responseModel?: AgentResponseModel;
 };
 
@@ -207,6 +238,9 @@ const MAX_SUBAGENTS_PER_SESSION = 6;
 const MAX_PROJECT_MEMORY_CONTEXT_HINTS = 32;
 const MAX_WAIT_MEMORY_CANDIDATES = 8;
 const WAIT_MEMORY_CLAIM_CHARS = 320;
+const MAX_WAIT_CODEGRAPH_DISCOVERIES = 50;
+const INTENT_ASSUMPTION_MAX_CHARS = 1000;
+const MCP_READ_ONLY_ALLOWLIST_SELECTOR = "mcp:read-only-allowlist";
 
 function finalizeProjectMemoryRunBestEffort(input: {
   sessionId: string;
@@ -248,6 +282,273 @@ function projectMemoryHints(
   return { paths: [...paths], symbols: [...symbols] };
 }
 
+function negatedCheckAction(text: string, actionStart: number): boolean {
+  const before = text.slice(0, actionStart);
+  const boundaries = /[.!?;,\n]|\b(?:but|however|instead)\b/gi;
+  let clauseStart = 0;
+  for (const match of before.matchAll(boundaries)) {
+    clauseStart = (match.index ?? 0) + match[0].length;
+  }
+  return /\b(?:do\s+not|don't|dont|never|avoid|skip|not)\s*$/i.test(before.slice(clauseStart));
+}
+
+function negatedCheckTarget(text: string, targetStart: number): boolean {
+  const before = text.slice(0, targetStart);
+  const boundaries = /[.!?;,\n]|\b(?:but|however|instead)\b/gi;
+  let clauseStart = 0;
+  for (const match of before.matchAll(boundaries)) {
+    clauseStart = (match.index ?? 0) + match[0].length;
+  }
+  return /\b(?:do\s+not|don't|dont|never|avoid|skip)\s+(?:(?:run|execute|rerun|verify|check)\s+)?$/i.test(
+    before.slice(clauseStart),
+  );
+}
+
+function requestsCheck(text: string, target: RegExp): boolean {
+  const actions = /\b(?:run|execute|rerun|verify|check)\b/gi;
+  const clauseBoundaries =
+    /[.!?;,\n]|\b(?:but|however|instead)\b|\b(?:run|execute|rerun|verify|check)\b/gi;
+  const targetMatches = new RegExp(target.source, `${target.flags.replace(/[gy]/g, "")}g`);
+  for (const action of text.matchAll(actions)) {
+    const start = action.index ?? 0;
+    const afterAction = start + action[0].length;
+    clauseBoundaries.lastIndex = afterAction;
+    const boundary = clauseBoundaries.exec(text);
+    const targetWindow = text.slice(start, boundary?.index ?? text.length);
+    if (
+      !negatedCheckAction(text, start) &&
+      [...targetWindow.matchAll(targetMatches)].some(
+        (match) => !negatedCheckTarget(text, start + (match.index ?? 0)),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): string[] {
+  if ((input.mode ?? "build") !== "build") return [];
+  const text = input.message;
+  const checks: string[] = [];
+  if (requestsCheck(text, /\b(?:tests?|vitest|jest)\b/i)) {
+    checks.push("tests");
+  }
+  if (requestsCheck(text, /\btype[ -]?check\b/i)) {
+    checks.push("typecheck");
+  }
+  if (requestsCheck(text, /\b(?:lint|eslint|biome)\b/i)) {
+    checks.push("lint");
+  }
+  if (requestsCheck(text, /\bbuild\b/i)) {
+    checks.push("build");
+  }
+  if (plan?.spec) {
+    for (const criterion of plan.spec.acceptanceCriteria) {
+      if (isPlanCriterionLinkedToTodos(criterion, plan.todos)) {
+        checks.push(...(criterion.requiredCheckKinds ?? []));
+      }
+    }
+  }
+  return [...new Set(checks)];
+}
+
+const PLAN_CHECK_LABELS: Record<string, string> = {
+  tests: "Tests",
+  typecheck: "Typecheck",
+  lint: "Lint",
+  build: "Build",
+};
+
+function planEvidenceFromQA(
+  plan: PlanRef,
+  qa: ReturnType<typeof summarizeRunQA>,
+): PlanEvidenceRef[] {
+  if (!plan.spec) return [];
+  const evidence: PlanEvidenceRef[] = [];
+  for (const criterion of plan.spec.acceptanceCriteria) {
+    if (
+      !isPlanCriterionLinkedToTodos(criterion, plan.todos) ||
+      !criterion.requiredCheckKinds?.length
+    ) {
+      continue;
+    }
+    for (const checkKind of criterion.requiredCheckKinds) {
+      const label = PLAN_CHECK_LABELS[checkKind];
+      if (!label) continue;
+      const qaEvidence = qa.evidence.find((item) => item.label === label);
+      const reference = qaEvidence ?? {
+        id: `missing:${plan.id}:${criterion.id}:${checkKind}`,
+        kind: "check",
+        status: "missing" as const,
+        label,
+      };
+      evidence.push({
+        ...reference,
+        id: hashContent(`${plan.id}:${criterion.id}:${checkKind}:${reference.id}`),
+        criterionId: criterion.id,
+      });
+    }
+  }
+  return evidence;
+}
+
+const CHECK_SCRIPT_BY_KIND: Record<string, string> = {
+  tests: "test",
+  typecheck: "typecheck",
+  lint: "lint",
+  build: "build",
+};
+const MAX_QA_WORKSPACE_MANIFESTS = 32;
+const MAX_QA_PACKAGE_BYTES = 256_000;
+
+type TrustedPackageScripts = {
+  name?: string;
+  scripts?: Record<string, unknown>;
+  workspaces?: string[] | { packages?: string[] };
+};
+
+function readTrustedPackageScripts(path: string): TrustedPackageScripts | undefined {
+  try {
+    const content = readFileSync(path, "utf8");
+    if (Buffer.byteLength(content, "utf8") > MAX_QA_PACKAGE_BYTES) return undefined;
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const scripts = parsed.scripts;
+    const workspaces = parsed.workspaces;
+    return {
+      ...(typeof parsed.name === "string" ? { name: parsed.name } : {}),
+      ...(scripts && typeof scripts === "object" && !Array.isArray(scripts)
+        ? { scripts: scripts as Record<string, unknown> }
+        : {}),
+      ...(Array.isArray(workspaces)
+        ? { workspaces: workspaces.filter((entry): entry is string => typeof entry === "string") }
+        : workspaces &&
+            typeof workspaces === "object" &&
+            Array.isArray((workspaces as { packages?: unknown }).packages)
+          ? {
+              workspaces: {
+                packages: (workspaces as { packages: unknown[] }).packages.filter(
+                  (entry): entry is string => typeof entry === "string",
+                ),
+              },
+            }
+          : {}),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function packageCheckScripts(
+  scripts: Record<string, unknown> | undefined,
+  requiredChecks: string[],
+  cwd: string,
+  workspaceName?: string,
+): string[] {
+  if (!scripts) return [];
+  return [
+    ...new Set(
+      requiredChecks
+        .map((check) => CHECK_SCRIPT_BY_KIND[check])
+        .filter((name): name is string => {
+          if (!name || typeof scripts[name] !== "string") return false;
+          const resolved = resolvePackageCheckScript(cwd, workspaceName, name);
+          if (!resolved || resolved.body !== scripts[name]) return false;
+          const invocation = recognizeCheckInvocation("terminal_run", resolved.body);
+          return Boolean(
+            invocation &&
+              !invocation.mutatesSource &&
+              invocation.checkName ===
+                requiredChecks.find((check) => CHECK_SCRIPT_BY_KIND[check] === name),
+          );
+        }),
+    ),
+  ];
+}
+
+function eligibleCheckScripts(cwd: string, requiredChecks: string[]): string[] {
+  if (requiredChecks.length === 0) return [];
+  const rootManifest = readTrustedPackageScripts(join(cwd, "package.json"));
+  if (!rootManifest) return [];
+  const eligible = packageCheckScripts(rootManifest.scripts, requiredChecks, cwd);
+  const workspacePatterns = Array.isArray(rootManifest.workspaces)
+    ? rootManifest.workspaces
+    : (rootManifest.workspaces?.packages ?? []);
+  let scanned = 0;
+  for (const pattern of workspacePatterns) {
+    const match = /^([a-zA-Z0-9._-]+)\/\*$/.exec(pattern);
+    if (!match?.[1]) continue;
+    let childNames: string[];
+    try {
+      childNames = readdirSync(join(cwd, match[1]), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      continue;
+    }
+    for (const childName of childNames) {
+      if (scanned >= MAX_QA_WORKSPACE_MANIFESTS) return [...new Set(eligible)];
+      scanned += 1;
+      const manifest = readTrustedPackageScripts(join(cwd, match[1], childName, "package.json"));
+      if (!manifest?.name || !/^@[a-z0-9._-]+\/[a-z0-9._-]+$/i.test(manifest.name)) continue;
+      for (const scriptName of packageCheckScripts(
+        manifest.scripts,
+        requiredChecks,
+        cwd,
+        manifest.name,
+      )) {
+        eligible.push(`npm --workspace ${manifest.name} run ${scriptName}`);
+      }
+    }
+  }
+  return [...new Set(eligible)];
+}
+
+function todoContinuationMessage(eligibleScripts: string[], includeQA: boolean): string {
+  const todo =
+    "Continue the remaining actionable to-dos from the current list. Update their statuses as work completes.";
+  if (!includeQA || eligibleScripts.length === 0) {
+    return `${todo} This is the single bounded continuation for this user turn; do not request another continuation.`;
+  }
+  return `${todo} Required QA is still unverified. Eligible existing project check scripts: ${eligibleScripts.join(", ")}. Run only these named scripts through the current tool permission flow. This is the single bounded continuation for this user turn; do not request another continuation.`;
+}
+
+function summarizeHarnessQA(input: {
+  sessionId: string;
+  runId: string;
+  changedPaths: string[];
+  requiredChecks: string[];
+  aborted?: boolean;
+}): ReturnType<typeof summarizeRunQA> {
+  const events: RunQAEvent[] = getRunToolEvidence(input.sessionId, input.runId).map((event) =>
+    input.aborted && event.type === "tool.ended" ? { ...event, aborted: true } : event,
+  );
+  if (input.aborted) {
+    const endedCallIds = new Set(
+      events.flatMap((event) => (event.type === "tool.ended" ? [event.toolCallId] : [])),
+    );
+    for (const event of events) {
+      if (event.type !== "tool.started" || endedCallIds.has(event.toolCallId) || !event.checkName) {
+        continue;
+      }
+      events.push({
+        type: "tool.ended",
+        sessionId: event.sessionId,
+        runId: event.runId,
+        eventId: `aborted:${event.eventId}`.slice(0, 240),
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        checkName: event.checkName,
+        ...(event.paths ? { paths: event.paths } : {}),
+        error: true,
+        aborted: true,
+      });
+    }
+  }
+  return summarizeRunQA({ ...input, events });
+}
+
 function setSessionThinkingBudget(session: AgentSession, budget: number | undefined): void {
   if (budget === undefined) {
     delete session.agent.thinkingBudgets;
@@ -265,19 +566,33 @@ function dedupeToolsByName<T extends { name: string }>(tools: T[]): T[] {
   return [...byName.values()];
 }
 
-function activeToolNamesForSession(info: AgentSessionInfo, profile: ToolProfileName): string[] {
+export function activeToolNamesForSession(
+  info: AgentSessionInfo,
+  profile: ToolProfileName,
+): string[] {
   let active = toolRegistry.resolveActiveTools(profile);
   const configCwd = info.parentSessionId
     ? (getAgentSession(info.parentSessionId)?.cwd ?? info.cwd)
     : info.cwd;
   const subagent =
     info.parentSessionId && info.subagentType
-      ? resolveSubagent(configCwd, info.subagentType)
+      ? resolveAvailableSubagent(configCwd, info.subagentType)
       : undefined;
-  if (subagent?.tools?.length) {
-    active = active.filter((name) =>
-      subagent.tools?.some((selector) => toolRegistry.matchesSelector(name, selector)),
+  const allowlistedMcpNames = info.parentSessionId ? listAllowlistedMcpToolNames() : [];
+  const includeAllowlistedMcp =
+    subagent?.role === "librarian" &&
+    subagent.tools?.includes(MCP_READ_ONLY_ALLOWLIST_SELECTOR) === true;
+  if (info.parentSessionId) {
+    const selectors = (subagent?.tools ?? []).filter(
+      (selector) => selector !== MCP_READ_ONLY_ALLOWLIST_SELECTOR,
     );
+    active = active.filter((name) => {
+      if (allowlistedMcpNames.includes(name)) return includeAllowlistedMcp;
+      return (
+        !subagent?.tools?.length ||
+        selectors.some((selector) => toolRegistry.matchesSelector(name, selector))
+      );
+    });
   }
   const disabled = new Set<string>();
   if (info.parentSessionId) {
@@ -326,6 +641,8 @@ export class PiSdkRuntime implements AgentRuntime {
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
   private cancellingRuns = new Set<string>();
+  private preflightReservations = new Map<string, symbol>();
+  private pendingIntentGates = new Map<string, { runId: string; controller: AbortController }>();
   private parentSessionByChild = new Map<string, string | null>();
   /**
    * Background subagents: running until settled. `wait` is the sole harvest path —
@@ -357,6 +674,107 @@ export class PiSdkRuntime implements AgentRuntime {
     registerQuestionTools();
     registerSubagentTools(this);
     registerWaitTools(this);
+  }
+
+  private cancelPendingIntentGate(sessionId: string): void {
+    this.pendingIntentGates.get(sessionId)?.controller.abort();
+  }
+
+  private settleCancelledIntentRun(
+    runtimeSession: SdkRuntimeSession,
+    sessionId: string,
+    runId: string,
+    outputTracker: RunOutputTracker,
+    preflightReservation: symbol | undefined,
+  ): void {
+    clearMcpCitationRun(sessionId, runId);
+    const ownsActiveSession =
+      this.runOutputTrackers.get(sessionId) === outputTracker &&
+      getActiveAgentRun(sessionId)?.id === runId;
+    if (getAgentRun(runId)?.status === "running") {
+      updateAgentRunStatus(runId, "cancelled");
+      runtimeSession.emit({ type: "run.cancelled", sessionId, runId });
+    }
+    removeRunOutputTrackerIfOwned(this.runOutputTrackers, sessionId, outputTracker);
+    this.releasePromptPreflight(sessionId, preflightReservation);
+    if (ownsActiveSession) {
+      updateAgentSessionStatus(sessionId, "idle");
+      runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
+      if (runtimeSession.info.workspaceId) {
+        releaseAgentBrowserControl(runtimeSession.info.workspaceId);
+      }
+    }
+  }
+
+  private releasePromptPreflight(sessionId: string, reservation: symbol | undefined): void {
+    if (reservation && this.preflightReservations.get(sessionId) === reservation) {
+      this.preflightReservations.delete(sessionId);
+    }
+  }
+
+  private specBuildPlan(
+    runtimeSession: SdkRuntimeSession,
+    input: PromptAgentInput,
+  ): PlanRef | undefined {
+    if ((input.mode ?? "build") !== "build" || !input.planId) return undefined;
+    const plan = readPlanById(plansRoot(), input.planId);
+    if (
+      !plan?.spec ||
+      plan.sessionId !== input.sessionId ||
+      plan.workspaceId !== runtimeSession.info.workspaceId
+    ) {
+      return undefined;
+    }
+    return plan;
+  }
+
+  private requireOwnedBuildPlan(input: PromptAgentInput): PlanRef | undefined {
+    if (input.planId === undefined) return undefined;
+    if ((input.mode ?? "build") !== "build") {
+      throw new Error("A plan can only be built from Build mode.");
+    }
+    const ownerSession = getAgentSession(input.sessionId);
+    const plan = readPlanById(plansRoot(), input.planId);
+    if (
+      !ownerSession ||
+      !plan ||
+      plan.sessionId !== input.sessionId ||
+      plan.workspaceId !== ownerSession.workspaceId
+    ) {
+      throw new Error("The requested plan is missing or is not owned by this session workspace.");
+    }
+    return plan;
+  }
+
+  private emitHarnessQA(
+    runtimeSession: SdkRuntimeSession,
+    input: PromptAgentInput,
+    runId: string,
+    changedPaths: string[],
+    aborted = false,
+  ): void {
+    const plan = this.specBuildPlan(runtimeSession, input);
+    const result = summarizeHarnessQA({
+      sessionId: input.sessionId,
+      runId,
+      changedPaths,
+      requiredChecks: requiredChecksForRun(input, plan),
+      aborted,
+    });
+    if (plan) {
+      const evidence = planEvidenceFromQA(plan, result);
+      if (evidence.length > 0) {
+        const updatedPlan = applyPlanAcceptanceEvidenceById(plansRoot(), plan.id, evidence);
+        if (updatedPlan) {
+          runtimeSession.emit({
+            type: "plan.updated",
+            sessionId: input.sessionId,
+            plan: updatedPlan,
+          });
+        }
+      }
+    }
+    runtimeSession.emit({ type: "harness.qa", sessionId: input.sessionId, runId, result });
   }
 
   private emitToWindow(window: BrowserWindowType): EmitAgentEvent {
@@ -487,12 +905,14 @@ export class PiSdkRuntime implements AgentRuntime {
     runtimeSession: SdkRuntimeSession,
     window: BrowserWindowType,
     profile: ToolProfileName,
+    mode: PromptAgentInput["mode"],
   ): AgentToolContext {
     return {
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       sessionId: runtimeSession.info.id,
       profile,
+      ...(mode ? { mode } : {}),
       ...(runtimeSession.info.parentSessionId
         ? { parentSessionId: runtimeSession.info.parentSessionId }
         : {}),
@@ -619,7 +1039,10 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const { session } = await createAgentSession(sessionOptions);
     setSessionThinkingBudget(session, params.thinkingBudget);
-    const normalizePiEvent = createPiEventNormalizer(params.info.id);
+    const normalizePiEvent = createPiEventNormalizer(
+      params.info.id,
+      () => getActiveAgentRun(params.info.id)?.id,
+    );
     const publishContextUsage = () => {
       const event = createContextUsageEvent(params.info.id, session);
       if (event) {
@@ -867,9 +1290,26 @@ export class PiSdkRuntime implements AgentRuntime {
 
   async prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<void> {
     const delivery = input.delivery ?? "normal";
+    const buildPlan = this.requireOwnedBuildPlan(input);
+    if (this.preflightReservations.has(input.sessionId)) {
+      throw new Error(
+        "This session is waiting for an intent-gate response. Answer or stop the current turn before sending another prompt.",
+      );
+    }
+    const cachedSession = this.sessions.get(input.sessionId);
+    const joiningStreamingTurn =
+      cachedSession?.session.isStreaming === true &&
+      (delivery !== "normal" || this.runOutputTrackers.has(input.sessionId));
+    const preflightReservation = joiningStreamingTurn ? undefined : Symbol(input.sessionId);
+    if (preflightReservation) {
+      this.preflightReservations.set(input.sessionId, preflightReservation);
+    }
+    const releasePreflight = (): void =>
+      this.releasePromptPreflight(input.sessionId, preflightReservation);
     const emit = this.emitToWindow(window);
     let earlyUserMessageId: string | undefined;
     const failEarlyPrompt = (error: unknown): Error => {
+      releasePreflight();
       const message = error instanceof Error ? error.message : String(error);
       if (earlyUserMessageId !== undefined) {
         updateAgentSessionStatus(input.sessionId, "error");
@@ -880,7 +1320,6 @@ export class PiSdkRuntime implements AgentRuntime {
     };
     if (delivery === "normal") {
       earlyUserMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
-      const buildPlan = input.planId ? readPlanById(plansRoot(), input.planId) : undefined;
       this.emitUserMessage(
         emit,
         input,
@@ -911,7 +1350,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const profile = profileForMode(input.mode);
     runtimeSession.profile = profile;
-    const toolContext = this.toolContextFor(runtimeSession, window, profile);
+    const toolContext = this.toolContextFor(runtimeSession, window, profile, input.mode);
     setAgentToolContext(toolContext);
 
     try {
@@ -980,6 +1419,7 @@ export class PiSdkRuntime implements AgentRuntime {
     // here means a fresh turn (normal delivery, or a steer/follow-up that found
     // no live turn to join), so the anchor is always meaningful.
     runInput.piLeafBefore = runtimeSession.session.sessionManager.getLeafId() ?? PI_ROOT_LEAF;
+    clearTodoSessionCache(input.sessionId);
     const run = createAgentRun(runInput);
     const outputTracker: RunOutputTracker = {
       runId: run.id,
@@ -987,6 +1427,7 @@ export class PiSdkRuntime implements AgentRuntime {
       startedAt: Date.now(),
       tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
       hasReportedUsage: false,
+      hasQueuedInput: false,
     };
     this.runOutputTrackers.set(input.sessionId, outputTracker);
 
@@ -995,7 +1436,6 @@ export class PiSdkRuntime implements AgentRuntime {
     // A "Build this plan" turn carries planId: tag the user message so the
     // timeline renders a compact Build card, and bind the plan's build status to
     // this run's authoritative lifecycle (building now → built/not_built later).
-    const buildPlan = input.planId ? readPlanById(plansRoot(), input.planId) : undefined;
     if (earlyUserMessageId === undefined) {
       this.emitUserMessage(
         runtimeSession.emit,
@@ -1024,8 +1464,104 @@ export class PiSdkRuntime implements AgentRuntime {
         status: { type: "busy" },
       });
     }
-    if (input.planId) {
-      this.transitionPlanBuild(runtimeSession, input.planId, "building");
+    const intentGate = runtimeSession.info.parentSessionId
+      ? ({ action: "proceed" } as const)
+      : evaluateIntentGate({
+          text: input.message,
+          mode: input.mode ?? "build",
+          contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
+          changedPaths: [],
+        });
+    let intentAssumption: string | undefined;
+    if (intentGate.action === "clarify" || intentGate.action === "confirm") {
+      const pendingGate = { runId: run.id, controller: new AbortController() };
+      this.pendingIntentGates.set(input.sessionId, pendingGate);
+      try {
+        const response: QuestionResponse = await requestQuestions({
+          sessionId: input.sessionId,
+          runId: run.id,
+          questions: [intentGate.question],
+          emit: runtimeSession.emit,
+          signal: pendingGate.controller.signal,
+        });
+        const gateStillOwnsRun =
+          this.pendingIntentGates.get(input.sessionId) === pendingGate &&
+          (!preflightReservation ||
+            this.preflightReservations.get(input.sessionId) === preflightReservation) &&
+          !pendingGate.controller.signal.aborted &&
+          getActiveAgentRun(input.sessionId)?.id === run.id &&
+          getAgentRun(run.id)?.status === "running";
+        if (!gateStillOwnsRun) {
+          this.settleCancelledIntentRun(
+            runtimeSession,
+            input.sessionId,
+            run.id,
+            outputTracker,
+            preflightReservation,
+          );
+          return;
+        }
+
+        const answer = response.answers.find(
+          (candidate) => candidate.questionId === intentGate.question.id,
+        );
+        const selectedAnswers = answer?.selected ?? [];
+        const customAnswer = answer?.custom?.trim().slice(0, INTENT_ASSUMPTION_MAX_CHARS);
+        const shouldBlock =
+          intentGate.action === "confirm"
+            ? response.skipped ||
+              !selectedAnswers.includes("Proceed") ||
+              selectedAnswers.includes("Cancel")
+            : !response.skipped &&
+              (selectedAnswers.includes("Cancel this turn") ||
+                (!customAnswer && !selectedAnswers.includes("Use a conservative default")));
+        if (shouldBlock) {
+          const ownsActiveSession =
+            this.runOutputTrackers.get(input.sessionId) === outputTracker &&
+            getActiveAgentRun(input.sessionId)?.id === run.id;
+          updateAgentRunStatus(run.id, "blocked");
+          runtimeSession.emit({
+            type: "run.blocked",
+            sessionId: input.sessionId,
+            runId: run.id,
+            requestId: response.requestId,
+            reason: "The intent gate did not receive the required confirmation.",
+          });
+          removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
+          releasePreflight();
+          if (ownsActiveSession) {
+            updateAgentSessionStatus(input.sessionId, "idle");
+            runtimeSession.emit({
+              type: "session.status",
+              sessionId: input.sessionId,
+              status: { type: "idle" },
+            });
+            if (runtimeSession.info.workspaceId) {
+              releaseAgentBrowserControl(runtimeSession.info.workspaceId);
+            }
+          }
+          return;
+        }
+        if (intentGate.action === "clarify") {
+          if (response.skipped) {
+            intentAssumption = intentGate.default;
+          } else if (customAnswer) {
+            intentAssumption = customAnswer;
+          } else {
+            intentAssumption = intentGate.default;
+          }
+        }
+      } catch (error) {
+        releasePreflight();
+        throw error;
+      } finally {
+        if (this.pendingIntentGates.get(input.sessionId) === pendingGate) {
+          this.pendingIntentGates.delete(input.sessionId);
+        }
+      }
+    }
+    if (buildPlan) {
+      this.transitionPlanBuild(runtimeSession, buildPlan.id, "building");
     }
     // Snapshot the working tree before the agent touches anything, so this
     // message gets a one-click restore point in the timeline. Never blocks
@@ -1064,6 +1600,7 @@ export class PiSdkRuntime implements AgentRuntime {
         return undefined;
       });
     };
+    let settledChangedPaths: string[] = [];
     try {
       const message = await this.composeTurnMessage(runtimeSession, input, { runId: run.id });
       console.info(
@@ -1071,18 +1608,37 @@ export class PiSdkRuntime implements AgentRuntime {
       );
       const images = buildTurnImages(input);
       let turnMessage = message;
+      if (intentAssumption) {
+        const safeAssumption = intentAssumption
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+        turnMessage += `\n\n<intent_assumption>Assumption: ${safeAssumption}</intent_assumption>`;
+      }
+      if (intentGate.action === "suggest_plan") {
+        turnMessage +=
+          "\n\n<plan_mode_suggestion>Optional plan suggestion: this task has complex scope. Consider Plan Mode, but continue in the current mode unless the user chooses otherwise.</plan_mode_suggestion>";
+      }
       let thresholdContinues = 0;
       let isFirstPrompt = true;
+      const specBuildPlan = this.specBuildPlan(runtimeSession, input);
+      const requiredChecks = requiredChecksForRun(input, specBuildPlan);
+      const eligibleScripts = eligibleCheckScripts(runtimeSession.info.cwd, requiredChecks);
+      let continuationAttempt = getLatestTodoContinuationAttempt(input.sessionId, run.id);
+      let continuationStarted = continuationAttempt > 0;
       while (true) {
-        await runWithAgentToolContext(toolContext, () =>
-          runtimeSession.session.prompt(turnMessage, {
+        const modelPrompt = runWithAgentToolContext(toolContext, () => {
+          const promptResult = runtimeSession.session.prompt(turnMessage, {
             source: "rpc",
             ...(isFirstPrompt && images.length > 0 ? { images } : {}),
             ...(isFirstPrompt && delivery !== "normal"
               ? { streamingBehavior: delivery === "follow-up" ? "followUp" : "steer" }
               : {}),
-          }),
-        );
+            preflightResult: () => releasePreflight(),
+          });
+          return promptResult;
+        });
+        await modelPrompt;
         isFirstPrompt = false;
         console.info(`[modus-timing] prompt() resolved +${Date.now() - outputTracker.startedAt}ms`);
         this.emitContextUsage(runtimeSession);
@@ -1105,6 +1661,58 @@ export class PiSdkRuntime implements AgentRuntime {
           );
           continue;
         }
+        const settledRun = getAgentRun(run.id);
+        const turnError = lastAssistantTurnError(runtimeSession.session);
+        if (
+          settledRun?.status === "running" &&
+          outputTracker.hasVisibleOutput &&
+          !turnError &&
+          !this.cancellingRuns.has(run.id) &&
+          !continuationStarted
+        ) {
+          if (requiredChecks.length > 0 && runCheckpoint) {
+            const scopedChanges = await getChangeStatsSince(
+              runtimeSession.info.cwd,
+              runCheckpoint.commitHash,
+            ).catch(() => undefined);
+            settledChangedPaths = scopedChanges?.files.map((file) => file.path) ?? [];
+          }
+          const qa = summarizeHarnessQA({
+            sessionId: input.sessionId,
+            runId: run.id,
+            changedPaths: settledChangedPaths,
+            requiredChecks,
+          });
+          const todos = getLatestSessionTodos(input.sessionId) ?? [];
+          const decision = evaluateTodoContinuation({
+            todos,
+            outcome: "completed",
+            aborted: false,
+            hasQueuedInput: outputTracker.hasQueuedInput,
+            attempts: continuationAttempt,
+          });
+          const todoNeedsContinuation = decision.action === "continue";
+          const qaNeedsContinuation =
+            decision.action !== "blocked" &&
+            !outputTracker.hasQueuedInput &&
+            continuationAttempt < 1 &&
+            eligibleScripts.length > 0 &&
+            qa.required &&
+            (qa.status === "missing" || qa.status === "unavailable");
+          if (todoNeedsContinuation || qaNeedsContinuation) {
+            continuationAttempt = 1;
+            continuationStarted = true;
+            runtimeSession.emit({
+              type: "harness.continuation",
+              sessionId: input.sessionId,
+              runId: run.id,
+              attempt: 1,
+              reasonCode: todoNeedsContinuation ? "actionable_todos" : "missing_qa",
+            });
+            turnMessage = todoContinuationMessage(eligibleScripts, qaNeedsContinuation);
+            continue;
+          }
+        }
         break;
       }
       const currentRun = getAgentRun(run.id);
@@ -1117,6 +1725,7 @@ export class PiSdkRuntime implements AgentRuntime {
         const turnError = lastAssistantTurnError(runtimeSession.session);
         if (turnError) {
           await captureTurnEnd();
+          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
           updateAgentRunStatus(run.id, "failed", turnError);
           finalizeProjectMemoryRunBestEffort({
             sessionId: input.sessionId,
@@ -1131,8 +1740,8 @@ export class PiSdkRuntime implements AgentRuntime {
             message: turnError,
             ...this.runResponseMetadata(outputTracker),
           });
-          if (input.planId) {
-            this.transitionPlanBuild(runtimeSession, input.planId, "not_built");
+          if (buildPlan) {
+            this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
           }
         } else if (outputTracker.hasVisibleOutput) {
           // Per-turn change summary (Codex-style "N files changed" card):
@@ -1145,6 +1754,8 @@ export class PiSdkRuntime implements AgentRuntime {
               runCheckpoint.commitHash,
             ).catch(() => undefined);
           }
+          settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
+          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
           console.info(
             `[modus-timing] getChangeStatsSince +${Date.now() - outputTracker.startedAt}ms`,
           );
@@ -1163,13 +1774,14 @@ export class PiSdkRuntime implements AgentRuntime {
             ...this.runResponseMetadata(outputTracker),
           });
           // The build turn completed cleanly → the plan is built.
-          if (input.planId) {
-            this.transitionPlanBuild(runtimeSession, input.planId, "built");
+          if (buildPlan) {
+            this.transitionPlanBuild(runtimeSession, buildPlan.id, "built");
           }
         } else {
           const message =
             "The selected model finished without returning any assistant output. Check the custom provider URL, model id, API type, and reasoning compatibility settings.";
           await captureTurnEnd();
+          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
           updateAgentRunStatus(run.id, "failed", message);
           finalizeProjectMemoryRunBestEffort({
             sessionId: input.sessionId,
@@ -1185,26 +1797,31 @@ export class PiSdkRuntime implements AgentRuntime {
             ...this.runResponseMetadata(outputTracker),
           });
           runtimeSession.emit({ type: "runtime.error", sessionId: input.sessionId, message });
-          if (input.planId) {
-            this.transitionPlanBuild(runtimeSession, input.planId, "not_built");
+          if (buildPlan) {
+            this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
           }
         }
       }
     } catch (error) {
       // The build turn ended without completing (manual stop, disconnect, or a
       // real failure) → the plan reverts to not_built so it can be built again.
-      if (input.planId) {
-        this.transitionPlanBuild(runtimeSession, input.planId, "not_built");
+      if (buildPlan) {
+        this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
       }
       // A missing run row means a rollback removed this run while it was being
       // aborted — swallow the rejection instead of resurrecting ghost
       // run.failed / runtime.error events into the rolled-back timeline.
       const currentRun = getAgentRun(run.id);
-      if (!currentRun || currentRun.status === "cancelled") {
+      if (!currentRun) {
+        return;
+      }
+      if (currentRun.status === "cancelled") {
+        this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths, true);
         return;
       }
       if (this.cancellingRuns.has(run.id)) {
         await captureTurnEnd();
+        this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths, true);
         updateAgentRunStatus(run.id, "cancelled");
         finalizeProjectMemoryRunBestEffort({
           sessionId: input.sessionId,
@@ -1220,6 +1837,7 @@ export class PiSdkRuntime implements AgentRuntime {
         return;
       }
       await captureTurnEnd();
+      this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
       updateAgentRunStatus(
         run.id,
         "failed",
@@ -1245,6 +1863,8 @@ export class PiSdkRuntime implements AgentRuntime {
       });
       throw error;
     } finally {
+      clearMcpCitationRun(input.sessionId, run.id);
+      releasePreflight();
       await captureTurnEnd();
       removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
       console.info(
@@ -1451,6 +2071,8 @@ export class PiSdkRuntime implements AgentRuntime {
     toolContext: AgentToolContext,
     emitUserMessage = true,
   ): Promise<void> {
+    const tracker = this.runOutputTrackers.get(runtimeSession.info.id);
+    if (tracker) tracker.hasQueuedInput = true;
     const userMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
     if (emitUserMessage) this.emitUserMessage(runtimeSession.emit, input, userMessageId);
     try {
@@ -1691,7 +2313,34 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const waitedMs = Date.now() - startedAt;
     const timedOut = snapshot.pending > 0;
-    for (const child of snapshot.subagents) {
+    const seenDiscoveries = new Set<string>();
+    let discoveryCount = 0;
+    const harvestedSubagents = snapshot.subagents.map((child) => {
+      if (
+        (child.status !== "completed" && child.status !== "error") ||
+        discoveryCount >= MAX_WAIT_CODEGRAPH_DISCOVERIES
+      ) {
+        return child;
+      }
+      const persistedChild = getAgentSession(child.id);
+      if (!persistedChild || persistedChild.parentSessionId !== input.sessionId) return child;
+
+      const discoveries: Array<CodeGraphDiscoveryRef & { provisional?: true }> = [];
+      for (const reference of getSessionCodeGraphDiscoveries(child.id)) {
+        const key = JSON.stringify(reference);
+        if (seenDiscoveries.has(key)) continue;
+        seenDiscoveries.add(key);
+        discoveries.push({
+          ...reference,
+          ...(persistedChild.subagentWorktree ? { provisional: true as const } : {}),
+        });
+        discoveryCount += 1;
+        if (discoveryCount >= MAX_WAIT_CODEGRAPH_DISCOVERIES) break;
+      }
+      return discoveries.length > 0 ? { ...child, discoveries } : child;
+    });
+
+    for (const child of harvestedSubagents) {
       if (child.status === "completed" || child.status === "error") {
         this.backgroundChildTasks.delete(child.id);
       }
@@ -1700,7 +2349,7 @@ export class PiSdkRuntime implements AgentRuntime {
     return {
       waitedMs,
       timedOut,
-      subagents: snapshot.subagents,
+      subagents: harvestedSubagents,
     };
   }
 
@@ -1777,6 +2426,8 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   async abort(sessionId: string): Promise<void> {
+    this.cancelPendingIntentGate(sessionId);
+    clearTodoSessionCache(sessionId);
     await this.closeSubagentTree(sessionId, "Parent session aborted");
     this.clearBackgroundTasksForParent(sessionId);
     this.backgroundChildTasks.delete(sessionId);
@@ -1784,11 +2435,14 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   private async abortSessionOnly(sessionId: string): Promise<void> {
+    this.cancelPendingIntentGate(sessionId);
+    clearTodoSessionCache(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     const runtimeSession = this.sessions.get(sessionId);
     if (!runtimeSession) {
       return;
     }
-    const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) {
       this.cancellingRuns.add(activeRun.id);
     }
@@ -1799,7 +2453,16 @@ export class PiSdkRuntime implements AgentRuntime {
       if (activeRun) {
         this.cancellingRuns.delete(activeRun.id);
       }
-      updateAgentSessionStatus(sessionId, "idle");
+      const activeRunNow = getActiveAgentRun(sessionId);
+      const outputTrackerNow = this.runOutputTrackers.get(sessionId);
+      const stillOwnsSession = activeRun
+        ? (activeRunNow?.id === activeRun.id &&
+            (!outputTrackerNow || outputTrackerNow.runId === activeRun.id)) ||
+          (!activeRunNow && !outputTrackerNow && getAgentRun(activeRun.id)?.status === "cancelled")
+        : !activeRunNow && !outputTrackerNow;
+      if (stillOwnsSession) {
+        updateAgentSessionStatus(sessionId, "idle");
+      }
     }
   }
 
@@ -1808,6 +2471,7 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   async dispose(sessionId: string): Promise<void> {
+    this.cancelPendingIntentGate(sessionId);
     await this.closeSubagentTree(sessionId, "Session disposed");
     await this.cleanupSessionProcesses(sessionId);
     this.clearBackgroundTasksForParent(sessionId);
@@ -1817,6 +2481,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
   async releaseRuntime(sessionId: string): Promise<void> {
     // A pane owns the SDK cache, never the session's managed processes.
+    this.cancelPendingIntentGate(sessionId);
     await this.disposeSessionOnly(sessionId);
   }
 
@@ -1829,6 +2494,10 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   private async disposeSessionOnly(sessionId: string): Promise<void> {
+    this.cancelPendingIntentGate(sessionId);
+    clearTodoSessionCache(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     // Settle any in-flight resume first: it would otherwise re-cache a live
     // session right after this dispose (and a rollback would then truncate the
     // session file while a stale in-memory tree keeps answering prompts).

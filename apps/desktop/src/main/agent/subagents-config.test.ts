@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createSubagent,
   deleteSubagent,
+  listAvailableSubagents,
   listSubagents,
   loadWorkspaceSubagents,
   parseSubagent,
+  resolveAvailableSubagent,
   resolveSubagentsPrompt,
   subagentsDir,
   updateSubagent,
@@ -87,6 +89,39 @@ describe("loadWorkspaceSubagents", () => {
     });
   });
 
+  it("places built-ins below user overrides and workspace overrides below user overrides", () => {
+    expect(resolveAvailableSubagent(cwd, "reviewer", home)).toMatchObject({
+      name: "reviewer",
+      source: "builtin",
+      readOnly: true,
+    });
+
+    const user = writeAgent(join(home, ".modus"), "reviewer", "user reviewer");
+    expect(resolveAvailableSubagent(cwd, "reviewer", home)).toMatchObject({
+      source: "user",
+      path: user,
+      description: "user reviewer",
+    });
+
+    const workspace = writeAgent(join(cwd, ".modus"), "reviewer", "workspace reviewer");
+    expect(resolveAvailableSubagent(cwd, "reviewer", home)).toMatchObject({
+      source: "workspace",
+      path: workspace,
+      description: "workspace reviewer",
+    });
+  });
+
+  it("lists built-ins as non-editable defaults without adding them to Settings CRUD", () => {
+    const available = listAvailableSubagents(cwd, home);
+    expect(available.map((agent) => agent.name)).toContain("explore");
+    expect(available.every((agent) => agent.source === "builtin")).toBe(true);
+    expect(listSubagents(cwd, home)).toEqual([]);
+  });
+
+  it("preserves generic profile fallback for unknown names", () => {
+    expect(resolveAvailableSubagent(cwd, "not-configured", home)).toBeUndefined();
+  });
+
   it("keeps overridden user agents visible for settings management", () => {
     const user = writeAgent(join(home, ".modus"), "reviewer", "home modus");
     const workspace = writeAgent(join(cwd, ".modus"), "reviewer", "workspace modus");
@@ -106,12 +141,45 @@ describe("loadWorkspaceSubagents", () => {
   it("renders an empty manifest that prevents invented subagent names", () => {
     const prompt = resolveSubagentsPrompt(cwd, [{ id: "openai/gpt-5.5", name: "GPT 5.5" }]);
 
-    expect(prompt).toContain("No configured subagents are available");
+    expect(prompt).toContain("built-in defaults");
+    expect(prompt).toContain("- explore:");
     expect(prompt).toContain("without the `subagent` field");
     expect(prompt).toContain("do not invent subagent names");
     expect(prompt).toContain("returns immediately");
     expect(prompt).toContain("`wait`");
     expect(prompt).toContain("openai/gpt-5.5");
+  });
+
+  it("renders one effective manifest entry when Markdown overrides a built-in", () => {
+    writeAgent(join(home, ".modus"), "reviewer", "custom reviewer profile");
+    const prompt = resolveSubagentsPrompt(cwd, [], home);
+
+    expect(prompt.match(/- reviewer:/g)).toHaveLength(1);
+    expect(prompt).toContain("custom reviewer profile");
+    expect(prompt).not.toContain("Review changes for correctness");
+  });
+
+  it("clamps UI/UX Markdown capabilities while preserving safe override fields", () => {
+    const dir = join(home, ".modus", "agents");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "ui-ux.md"),
+      "---\nname: ui-ux\ndescription: Approved custom description\nmodel: mock/model\nreadonly: false\ntools: [write, shell]\ndisallowedTools: [read]\nisolation: shared\n---\nApproved custom body",
+      "utf8",
+    );
+    const profile = resolveAvailableSubagent(cwd, "ui-ux", home);
+
+    expect(profile).toMatchObject({
+      description: "Approved custom description",
+      model: "mock/model",
+      body: "Approved custom body",
+      readOnly: true,
+      isolation: "shared",
+    });
+    expect(profile?.tools).toEqual(["read", "grep", "find", "ls", "fast_codebase"]);
+    expect(profile?.disallowedTools).toEqual(
+      expect.arrayContaining(["shell", "process", "terminal_run", "write", "edit"]),
+    );
   });
 
   it("creates, updates, deletes, and renders the manifest without bodies", () => {

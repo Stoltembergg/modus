@@ -43,12 +43,25 @@ const PLAN_MODE_INSTRUCTION = [
   "</plan_mode>",
 ].join("\n");
 
-/** The planner preamble for `plan` turns, or empty string for `build` turns. */
+const SPEC_MODE_INSTRUCTION = [
+  PLAN_MODE_INSTRUCTION.replace("PLAN MODE", "SPEC MODE"),
+  "",
+  "## Structured specification metadata",
+  "- Call plan_write with the existing title, overview, todos, and Markdown content plus the structured `spec` field.",
+  "- In addition to the Markdown plan, include a `spec` object with stable requirement IDs, observable acceptance criteria, evidence references, assumptions, and open questions.",
+  "- Give every todo a stable `id` and link its `acceptanceCriterionIds` to the criteria it implements; each criterion's `todoIds` must use those exact todo IDs.",
+  "- New acceptance criteria must remain `pending`. Never claim a criterion passed based on the request, plan text, or an assumption; record only actual structured evidence references and their existing evidence status.",
+  "- Keep evidence references structured and concise (kind, label, status, and available run/event/revision/path references only); never copy raw output or transcript text.",
+  "- Record unresolved decisions in the concise `assumptions` and `openQuestions` arrays. Do not invent requirement or evidence IDs that conflict with another entry.",
+].join("\n");
+
+/** The planner preamble for `plan` and `spec` turns, or empty for `build`. */
 export function planModePreamble(mode: AgentMode | undefined): string {
+  if (mode === "spec") return SPEC_MODE_INSTRUCTION;
   return mode === "plan" ? PLAN_MODE_INSTRUCTION : "";
 }
 
 /** Tool profile a turn runs under, derived from its mode. */
 export function profileForMode(mode: AgentMode | undefined): ToolProfileName {
-  return mode === "plan" ? "plan" : "chat";
+  return mode === "plan" || mode === "spec" ? "plan" : "chat";
 }

@@ -85,4 +85,62 @@ describe("wait memory candidate summaries", () => {
     expect(text).toContain("Normalize keys before caching.");
     expect(text).not.toContain("private raw transcript");
   });
+
+  it("prints CodeGraph discoveries separately from output excerpts and marks worktree refs provisional", async () => {
+    registerWaitTools({
+      waitBackground: async () =>
+        ({
+          waitedMs: 5,
+          timedOut: false,
+          subagents: [
+            {
+              id: "child-session",
+              task: "Find implementation",
+              status: "completed",
+              output: "Ordinary child output excerpt.",
+              discoveries: [
+                {
+                  runId: "child-run",
+                  path: "src/agent.ts",
+                  symbol: "Agent.run",
+                  line: 19,
+                  kind: "function",
+                  provisional: true,
+                },
+              ],
+            },
+          ],
+        }) as never,
+    });
+    const wait = toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === "wait");
+    if (!wait?.execute) throw new Error("wait tool missing");
+
+    const result = await runWithAgentToolContext(
+      { workspaceId: "ws", cwd: "/repo", sessionId: "parent-session" },
+      () => wait.execute?.("wait-codegraph", {}, undefined, undefined, { cwd: "/repo" } as never),
+    );
+    const text = result?.content[0]?.type === "text" ? result.content[0].text : "";
+    const details = result?.details as {
+      subagents: Array<{ discoveries?: Array<Record<string, unknown>>; output?: string }>;
+    };
+    const discoveries = details.subagents[0]?.discoveries ?? [];
+
+    expect(text).toContain("CodeGraph discoveries:");
+    expect(text).toContain("src/agent.ts:19");
+    expect(text).toContain("Agent.run");
+    expect(text).toContain("provisional");
+    expect(text).toContain("Ordinary child output excerpt.");
+    expect(discoveries).toEqual([
+      expect.objectContaining({
+        runId: "child-run",
+        path: "src/agent.ts",
+        symbol: "Agent.run",
+        line: 19,
+        kind: "function",
+        provisional: true,
+      }),
+    ]);
+    expect(JSON.stringify(discoveries)).not.toContain("query");
+    expect(JSON.stringify(discoveries)).not.toContain("Ordinary child output excerpt");
+  });
 });

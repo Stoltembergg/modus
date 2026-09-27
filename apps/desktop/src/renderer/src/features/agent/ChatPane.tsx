@@ -7,6 +7,7 @@ import type {
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
+  HyperPlanSummary,
   ModelInfo,
   PermissionDecision,
   PermissionRequest,
@@ -74,6 +75,17 @@ export function canSubmitPromptForSession(
   modelId: string | undefined,
 ): boolean {
   return Boolean(modelId) && (Boolean(workspace) || sessionWorkspaceId === CHATS_WORKSPACE_ID);
+}
+
+export async function requestHyperPlanReview(
+  input: { sessionId: string; planId: string },
+  review: (input: { sessionId: string; planId: string }) => Promise<HyperPlanSummary>,
+): Promise<{ status: "completed"; summary: HyperPlanSummary } | { status: "error" }> {
+  try {
+    return { status: "completed", summary: await review(input) };
+  } catch {
+    return { status: "error" };
+  }
 }
 
 type ChatPaneProps = {
@@ -406,6 +418,13 @@ export function ChatPane({
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
   const [dismissedPlanHash, setDismissedPlanHash] = useState<string | undefined>(undefined);
+  const [hyperPlanReview, setHyperPlanReview] = useState<{
+    planId: string;
+    planHash: string;
+    status: "loading" | "error" | "completed";
+    summary?: HyperPlanSummary;
+  }>();
+  const hyperPlanRequestId = useRef(0);
   const [previewSubagentId, setPreviewSubagentId] = useState<string | undefined>();
   const managedProcesses = useManagedProcesses({
     workspaceId: workspace?.id,
@@ -674,6 +693,8 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(false);
     setWorkingStats(undefined);
+    hyperPlanRequestId.current += 1;
+    setHyperPlanReview(undefined);
     refreshStats();
 
     const unsubscribe = hub.subscribe(sessionId, (item) => {
@@ -721,6 +742,7 @@ export function ChatPane({
 
     return () => {
       cancelled = true;
+      hyperPlanRequestId.current += 1;
       const el = scrollContainerRef.current;
       if (el) {
         rememberSessionScroll(sessionId, el.scrollTop);
@@ -750,6 +772,24 @@ export function ChatPane({
     effectiveBuildStatus(latestPlan, sessionStatus.type !== "idle") === "not_built"
       ? latestPlan
       : undefined;
+  const visibleHyperPlanReview =
+    reviewPlan &&
+    hyperPlanReview?.planId === reviewPlan.id &&
+    hyperPlanReview.planHash === reviewPlan.hash
+      ? hyperPlanReview
+      : undefined;
+
+  async function reviewPlanWithHyperPlan(plan: PlanRef): Promise<void> {
+    if (!plan.spec) return;
+    const requestId = ++hyperPlanRequestId.current;
+    setHyperPlanReview({ planId: plan.id, planHash: plan.hash, status: "loading" });
+    const result = await requestHyperPlanReview({ sessionId, planId: plan.id }, (input) =>
+      window.modus.agent.reviewPlanWithHyperPlan(input),
+    );
+    if (requestId === hyperPlanRequestId.current) {
+      setHyperPlanReview({ planId: plan.id, planHash: plan.hash, ...result });
+    }
+  }
   const pendingPermission = useMemo(
     () => latestPendingPermissionRequest(agentEvents),
     [agentEvents],
@@ -1096,6 +1136,12 @@ export function ChatPane({
                 ) : reviewPlan ? (
                   <ReviewPlanCard
                     onBuildLocally={() => buildPlanLocally(reviewPlan)}
+                    onReviewWithHyperPlan={() => void reviewPlanWithHyperPlan(reviewPlan)}
+                    plan={reviewPlan}
+                    hyperPlanStatus={visibleHyperPlanReview?.status ?? "idle"}
+                    {...(visibleHyperPlanReview?.summary
+                      ? { hyperPlanSummary: visibleHyperPlanReview.summary }
+                      : {})}
                     onContinuePlanning={() => {
                       setComposerMode("plan");
                       setDismissedPlanHash(reviewPlan.hash);

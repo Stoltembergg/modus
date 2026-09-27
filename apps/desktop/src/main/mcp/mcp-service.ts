@@ -9,6 +9,7 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { TSchema } from "typebox";
 import type {
@@ -17,8 +18,10 @@ import type {
   McpToolInfo,
   RawMcpEntry,
 } from "../../shared/contracts";
-import { getMcpToolUiMeta } from "../../shared/tools";
+import { getActiveAgentRun } from "../agent/agent-run-store";
+import { registerMcpCitations } from "../agent/harness/mcp-citation-registry";
 import { toolRegistry } from "../agent/tools/registry";
+import { resolveAgentToolContext } from "../agent/tools/tool-context";
 import {
   defaultMcpConfigPath,
   findRawMcpEntry,
@@ -43,6 +46,10 @@ import {
 
 const CONNECT_TIMEOUT_MS = 15_000;
 const CALL_TIMEOUT_MS = 120_000;
+const MAX_MCP_TOOL_PAGES = 100;
+const MAX_MCP_TOOLS_PER_SERVER = 500;
+const MAX_MCP_CONTENT_BLOCKS = 50;
+const MAX_MCP_CONTENT_BYTES = 64 * 1024;
 
 type ManagedServer = {
   config: McpServerConfig;
@@ -58,11 +65,24 @@ type ManagedServer = {
 const servers = new Map<string, ManagedServer>();
 /** Tool names currently registered per server, for clean unregistration. */
 const registeredTools = new Map<string, string[]>();
+/** Registered names have one owner so cleanup never unregisters another server. */
+const registeredToolOwners = new Map<string, string>();
+/** Allowlist-selected names only, kept in sync with each server's registrations. */
+const registeredAllowlistedTools = new Map<string, string[]>();
 
-const sanitize = (value: string): string => value.replace(/[^a-zA-Z0-9_-]/g, "_");
+export type McpToolPermissionMode = "allowlisted" | "dangerous";
 
-export function mcpToolName(server: string, tool: string): string {
-  return `mcp_${sanitize(server)}_${sanitize(tool)}`;
+function encodeMcpIdentityPart(value: string): string {
+  const bytes = Buffer.from(value, "utf8");
+  return `${bytes.length}_${bytes.toString("hex")}`;
+}
+
+export function mcpToolName(
+  server: string,
+  tool: string,
+  permissionMode: McpToolPermissionMode = "dangerous",
+): string {
+  return `mcp_v1_${permissionMode}_${encodeMcpIdentityPart(server)}_${encodeMcpIdentityPart(tool)}`;
 }
 
 function configKey(config: McpServerConfig): string {
@@ -85,6 +105,35 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
       },
     );
   });
+}
+
+async function closeClientAndTransport(
+  client: Client,
+  transport: { close: () => Promise<void> },
+): Promise<void> {
+  await Promise.all([client.close().catch(() => {}), transport.close().catch(() => {})]);
+}
+
+async function connectWithCleanup(
+  client: Client,
+  transport: Parameters<Client["connect"]>[0],
+  label: string,
+): Promise<void> {
+  let timedOut = false;
+  try {
+    const connecting = client.connect(transport);
+    void connecting.then(
+      () => {
+        if (timedOut) void closeClientAndTransport(client, transport);
+      },
+      () => {},
+    );
+    await withTimeout(connecting, CONNECT_TIMEOUT_MS, label);
+  } catch (error) {
+    timedOut = true;
+    await closeClientAndTransport(client, transport);
+    throw error;
+  }
 }
 
 /**
@@ -113,7 +162,7 @@ async function createConnectedClient(config: McpServerConfig): Promise<Client> {
       stderr: "ignore",
       ...(config.cwd !== undefined ? { cwd: config.cwd } : {}),
     });
-    await withTimeout(client.connect(transport), CONNECT_TIMEOUT_MS, `connect ${config.name}`);
+    await connectWithCleanup(client, transport, `connect ${config.name}`);
     return client;
   }
 
@@ -128,18 +177,18 @@ async function createConnectedClient(config: McpServerConfig): Promise<Client> {
     // Cast: the SDK's transport classes type `sessionId` as `string | undefined`
     // while its own Transport interface says `sessionId?: string`, which is
     // incompatible under exactOptionalPropertyTypes.
-    await withTimeout(
-      client.connect(transport as unknown as Parameters<Client["connect"]>[0]),
-      CONNECT_TIMEOUT_MS,
+    await connectWithCleanup(
+      client,
+      transport as unknown as Parameters<Client["connect"]>[0],
       `connect ${config.name}`,
     );
     return client;
   } catch {
     const fallback = new Client({ name: "modus", version: "0.1.0" });
     const transport = new SSEClientTransport(url, { requestInit: { headers } });
-    await withTimeout(
-      fallback.connect(transport as unknown as Parameters<Client["connect"]>[0]),
-      CONNECT_TIMEOUT_MS,
+    await connectWithCleanup(
+      fallback,
+      transport as unknown as Parameters<Client["connect"]>[0],
       `connect ${config.name}`,
     );
     return fallback;
@@ -160,55 +209,172 @@ function toParametersSchema(inputSchema: unknown): TSchema {
 }
 
 type McpContentItem = {
-  type: string;
-  text?: string;
-  data?: string;
-  mimeType?: string;
+  type?: unknown;
+  text?: unknown;
+  data?: unknown;
+  mimeType?: unknown;
 };
 
-function toAgentContent(items: McpContentItem[]): (TextContent | ImageContent)[] {
+function truncateUtf8(text: string, maxBytes: number): string {
+  if (maxBytes <= 0) return "";
+  let output = "";
+  let used = 0;
+  for (const character of text) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (used + bytes > maxBytes) break;
+    output += character;
+    used += bytes;
+  }
+  return output;
+}
+
+function toAgentContent(
+  items: readonly unknown[],
+  appendedText?: string,
+): (TextContent | ImageContent)[] {
   const parts: (TextContent | ImageContent)[] = [];
-  for (const item of items) {
-    if (item.type === "text" && typeof item.text === "string") {
-      parts.push({ type: "text", text: item.text });
-    } else if (item.type === "image" && item.data && item.mimeType) {
-      parts.push({ type: "image", data: item.data, mimeType: item.mimeType });
+  const safeExtra = appendedText ? truncateUtf8(appendedText, MAX_MCP_CONTENT_BYTES) : "";
+  const extraBytes = Buffer.byteLength(safeExtra, "utf8");
+  const reservedSlots = safeExtra ? 1 : 0;
+  const needsBlockMarker = items.length > MAX_MCP_CONTENT_BLOCKS - reservedSlots;
+  const sourceSlots = MAX_MCP_CONTENT_BLOCKS - reservedSlots - (needsBlockMarker ? 1 : 0);
+  const bodyByteBudget = MAX_MCP_CONTENT_BYTES - extraBytes;
+  let bodyBytes = 0;
+  const appendText = (value: string): void => {
+    const text = truncateUtf8(value, bodyByteBudget - bodyBytes);
+    if (!text) return;
+    parts.push({ type: "text", text });
+    bodyBytes += Buffer.byteLength(text, "utf8");
+  };
+
+  for (const rawItem of items.slice(0, sourceSlots)) {
+    const item =
+      rawItem !== null && typeof rawItem === "object" && !Array.isArray(rawItem)
+        ? (rawItem as McpContentItem)
+        : undefined;
+    if (item?.type === "text" && typeof item.text === "string") {
+      appendText(item.text);
+    } else if (
+      item?.type === "image" &&
+      typeof item.data === "string" &&
+      typeof item.mimeType === "string" &&
+      item.data.length > 0 &&
+      item.mimeType.length > 0
+    ) {
+      const imageBytes =
+        Buffer.byteLength(item.data, "utf8") + Buffer.byteLength(item.mimeType, "utf8");
+      if (imageBytes <= bodyByteBudget - bodyBytes) {
+        parts.push({ type: "image", data: item.data, mimeType: item.mimeType });
+        bodyBytes += imageBytes;
+      } else {
+        appendText("[MCP image omitted: content limit exceeded.]");
+      }
     } else {
-      parts.push({ type: "text", text: JSON.stringify(item) });
+      appendText("[Unsupported MCP content omitted.]");
     }
   }
-  return parts.length > 0 ? parts : [{ type: "text", text: "(no content)" }];
+  if (needsBlockMarker) appendText("[Additional MCP content omitted.]");
+  if (safeExtra) parts.push({ type: "text", text: safeExtra });
+  if (parts.length === 0) return [{ type: "text", text: "(no content)" }];
+  return parts;
+}
+
+async function callToolWithDeadline(
+  client: Client,
+  toolName: string,
+  params: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<Client["callTool"]>>> {
+  if (signal?.aborted) throw new Error(`MCP tool ${toolName} call aborted.`);
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let rejectAborted: ((error: Error) => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    rejectAborted = reject;
+  });
+  const onAbort = (): void => {
+    controller.abort();
+    rejectAborted?.(new Error(`MCP tool ${toolName} call aborted.`));
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`MCP tool ${toolName} timed out after ${CALL_TIMEOUT_MS}ms.`));
+    }, CALL_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([
+      client.callTool({ name: toolName, arguments: params }, undefined, {
+        timeout: CALL_TIMEOUT_MS,
+        resetTimeoutOnProgress: false,
+        signal: controller.signal,
+      }),
+      timeout,
+      ...(signal ? [aborted] : []),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 function buildToolDefinition(
   serverName: string,
   client: Client,
   tool: { name: string; description?: string | undefined; inputSchema?: unknown },
+  readOnlyAllowlisted: boolean,
 ): ToolDefinition {
-  const registeredName = mcpToolName(serverName, tool.name);
+  const registeredName = mcpToolName(
+    serverName,
+    tool.name,
+    readOnlyAllowlisted ? "allowlisted" : "dangerous",
+  );
   return defineTool({
     name: registeredName,
     label: `${serverName}: ${tool.name}`,
     description:
       tool.description?.trim() || `Tool "${tool.name}" provided by the "${serverName}" MCP server.`,
     parameters: toParametersSchema(tool.inputSchema),
-    execute: async (_toolCallId, params, signal) => {
-      const result = await client.callTool(
-        { name: tool.name, arguments: (params ?? {}) as Record<string, unknown> },
-        undefined,
-        {
-          timeout: CALL_TIMEOUT_MS,
-          resetTimeoutOnProgress: true,
-          ...(signal ? { signal } : {}),
-        },
+    execute: async (_toolCallId, params, signal, _onUpdate, toolContext) => {
+      const result = await callToolWithDeadline(
+        client,
+        tool.name,
+        (params ?? {}) as Record<string, unknown>,
+        signal,
       );
-      const content = toAgentContent((result.content ?? []) as McpContentItem[]);
-      if (result.isError) {
+      const resultContent: unknown[] =
+        "content" in result && Array.isArray(result.content) ? result.content : [];
+      if ("isError" in result && result.isError === true) {
+        const content = toAgentContent(resultContent);
         const message = content
           .map((part) => (part.type === "text" ? part.text : `[image ${part.mimeType}]`))
           .join("\n");
         throw new Error(message || `MCP tool ${tool.name} failed.`);
       }
+      let citationText: string | undefined;
+      if (readOnlyAllowlisted && "content" in result) {
+        const owner = resolveAgentToolContext(toolContext.cwd);
+        const activeRun = getActiveAgentRun(owner.sessionId);
+        if (activeRun) {
+          const citations = registerMcpCitations(
+            owner.sessionId,
+            activeRun.id,
+            serverName,
+            tool.name,
+            result as CallToolResult,
+          );
+          if (citations.length > 0) {
+            citationText = `MCP citations:\n${citations
+              .map((citation) => {
+                const source = citation.title ?? new URL(citation.url).hostname;
+                return `[${citation.id}] ${citation.serverName}/${citation.toolName} — ${source}`;
+              })
+              .join("\n")}`;
+          }
+        }
+      }
+      const content = toAgentContent(resultContent, citationText);
       return { content, details: { server: serverName, tool: tool.name } };
     },
   });
@@ -216,9 +382,20 @@ function buildToolDefinition(
 
 function unregisterServerTools(serverName: string): void {
   for (const name of registeredTools.get(serverName) ?? []) {
-    toolRegistry.unregisterTool(name);
+    if (registeredToolOwners.get(name) === serverName) {
+      toolRegistry.unregisterTool(name);
+      registeredToolOwners.delete(name);
+    }
   }
   registeredTools.delete(serverName);
+  registeredAllowlistedTools.delete(serverName);
+}
+
+/** Currently registered allowlisted MCP tool names for the Librarian role. */
+export function listAllowlistedMcpToolNames(): string[] {
+  return [...new Set([...registeredAllowlistedTools.values()].flat())].sort((a, b) =>
+    a.localeCompare(b),
+  );
 }
 
 async function refreshServerTools(managed: ManagedServer): Promise<void> {
@@ -226,23 +403,82 @@ async function refreshServerTools(managed: ManagedServer): Promise<void> {
   if (!client) {
     return;
   }
-  const listedTools = await listAllMcpTools(client, managed.config.name);
+  let listedTools: Awaited<ReturnType<typeof listAllMcpTools>>;
+  try {
+    listedTools = await listAllMcpTools(client, managed.config.name);
+  } catch (error) {
+    if (
+      servers.get(managed.config.name) !== managed ||
+      !managed.config.enabled ||
+      managed.client !== client
+    ) {
+      return;
+    }
+    unregisterServerTools(managed.config.name);
+    managed.tools = [];
+    throw error;
+  }
+
+  if (
+    servers.get(managed.config.name) !== managed ||
+    !managed.config.enabled ||
+    managed.client !== client
+  ) {
+    return;
+  }
 
   unregisterServerTools(managed.config.name);
+  managed.tools = [];
   const names: string[] = [];
   const tools: McpToolInfo[] = [];
+  const rawToolNameCounts = new Map<string, number>();
   for (const tool of listedTools) {
-    const definition = buildToolDefinition(managed.config.name, client, tool);
+    rawToolNameCounts.set(tool.name, (rawToolNameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const candidates = listedTools.map((tool) => {
+    const readOnlyAllowlisted = managed.config.readOnlyToolAllowlist.includes(tool.name);
+    return {
+      tool,
+      readOnlyAllowlisted,
+      registeredName: mcpToolName(
+        managed.config.name,
+        tool.name,
+        readOnlyAllowlisted ? "allowlisted" : "dangerous",
+      ),
+    };
+  });
+  const candidateNames = new Set<string>();
+  for (const candidate of candidates) {
+    const owner = registeredToolOwners.get(candidate.registeredName);
+    if (
+      rawToolNameCounts.get(candidate.tool.name) !== 1 ||
+      candidateNames.has(candidate.registeredName) ||
+      (owner !== undefined && owner !== managed.config.name) ||
+      (toolRegistry.getEntry(candidate.registeredName) !== undefined && owner === undefined)
+    ) {
+      throw new Error(`MCP tool registration name collision: ${candidate.registeredName}`);
+    }
+    candidateNames.add(candidate.registeredName);
+  }
+
+  const allowlistedNames: string[] = [];
+  for (const { tool, readOnlyAllowlisted } of candidates) {
+    const definition = buildToolDefinition(managed.config.name, client, tool, readOnlyAllowlisted);
     toolRegistry.registerTool({
       entry: {
         name: definition.name,
-        profiles: ["chat"],
-        permission: { danger: "dangerous", action: "mcp.call" },
-        ui: getMcpToolUiMeta(definition.name),
+        profiles: readOnlyAllowlisted ? ["chat", "plan"] : ["chat"],
+        permission: readOnlyAllowlisted
+          ? { danger: "safe" }
+          : { danger: "dangerous", action: "mcp.call" },
+        ...(readOnlyAllowlisted ? { capabilities: ["read"] } : {}),
+        ui: { verb: managed.config.name },
       },
       definition,
     });
     names.push(definition.name);
+    registeredToolOwners.set(definition.name, managed.config.name);
+    if (readOnlyAllowlisted) allowlistedNames.push(definition.name);
     tools.push({
       name: tool.name,
       registeredName: definition.name,
@@ -250,6 +486,7 @@ async function refreshServerTools(managed: ManagedServer): Promise<void> {
     });
   }
   registeredTools.set(managed.config.name, names);
+  registeredAllowlistedTools.set(managed.config.name, allowlistedNames);
   managed.tools = tools;
 }
 
@@ -259,16 +496,36 @@ export async function listAllMcpTools(
 ): Promise<Awaited<ReturnType<Client["listTools"]>>["tools"]> {
   const tools: Awaited<ReturnType<Client["listTools"]>>["tools"] = [];
   let cursor: string | undefined;
-  do {
+  const seenCursors = new Set<string>();
+  for (let pageNumber = 0; pageNumber < MAX_MCP_TOOL_PAGES; pageNumber += 1) {
+    if (cursor !== undefined) {
+      if (seenCursors.has(cursor)) {
+        throw new Error(`MCP server ${serverName} repeated a tool-list cursor.`);
+      }
+      seenCursors.add(cursor);
+    }
     const page = await withTimeout(
       client.listTools(cursor === undefined ? undefined : { cursor }),
       CONNECT_TIMEOUT_MS,
       `list tools ${serverName}`,
     );
+    if (tools.length + page.tools.length > MAX_MCP_TOOLS_PER_SERVER) {
+      throw new Error(
+        `MCP server ${serverName} exceeded the ${MAX_MCP_TOOLS_PER_SERVER}-tool limit.`,
+      );
+    }
     tools.push(...page.tools);
-    cursor = page.nextCursor;
-  } while (cursor);
-  return tools;
+    const nextCursor = page.nextCursor;
+    if (!nextCursor) return tools;
+    if (seenCursors.has(nextCursor)) {
+      throw new Error(`MCP server ${serverName} repeated a tool-list cursor.`);
+    }
+    if (pageNumber + 1 >= MAX_MCP_TOOL_PAGES) {
+      throw new Error(`MCP server ${serverName} exceeded the ${MAX_MCP_TOOL_PAGES}-page limit.`);
+    }
+    cursor = nextCursor;
+  }
+  throw new Error(`MCP server ${serverName} exceeded the ${MAX_MCP_TOOL_PAGES}-page limit.`);
 }
 
 async function connectServer(managed: ManagedServer): Promise<void> {
@@ -276,6 +533,10 @@ async function connectServer(managed: ManagedServer): Promise<void> {
   managed.error = undefined;
   try {
     const client = await createConnectedClient(managed.config);
+    if (servers.get(managed.config.name) !== managed || !managed.config.enabled) {
+      await client.close().catch(() => {});
+      return;
+    }
     managed.client = client;
 
     // Servers may add/remove tools at runtime; keep the registry in sync.
@@ -283,7 +544,7 @@ async function connectServer(managed: ManagedServer): Promise<void> {
       void refreshServerTools(managed).catch(() => {});
     });
     client.onclose = () => {
-      if (managed.client === client) {
+      if (servers.get(managed.config.name) === managed && managed.client === client) {
         managed.client = undefined;
         if (managed.status === "connected") {
           managed.status = "failed";
@@ -294,8 +555,13 @@ async function connectServer(managed: ManagedServer): Promise<void> {
     };
 
     await refreshServerTools(managed);
-    managed.status = "connected";
+    if (servers.get(managed.config.name) === managed && managed.config.enabled) {
+      managed.status = "connected";
+    }
   } catch (error) {
+    if (servers.get(managed.config.name) !== managed || !managed.config.enabled) {
+      return;
+    }
     managed.status = "failed";
     managed.error = error instanceof Error ? error.message : String(error);
     managed.tools = [];
@@ -310,8 +576,8 @@ async function disposeServer(name: string): Promise<void> {
     return;
   }
   unregisterServerTools(name);
-  await managed.client?.close().catch(() => {});
   servers.delete(name);
+  await managed.client?.close().catch(() => {});
 }
 
 /**
