@@ -77,5 +77,5 @@ export function SettingsRow({
 }
 
 export function ReadOnlyPill({ children }: { children: string }) {
-  return <span className="rounded-md bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
+  return <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">{children}</span>;
 }

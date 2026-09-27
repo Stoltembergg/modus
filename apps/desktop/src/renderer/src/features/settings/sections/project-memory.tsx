@@ -438,7 +438,7 @@ export function ProjectMemoryRow({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h4 className="text-sm font-normal text-fg">{memory.title}</h4>
-            <span className={cn("rounded border px-1.5 py-0.5 text-2xs", statusStyle)}>
+            <span className={cn("rounded-full border px-1.5 py-0.5 text-2xs", statusStyle)}>
               {status}
             </span>
           </div>

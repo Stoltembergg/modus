@@ -239,7 +239,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
                     </p>
                   ) : null}
                 </div>
-                <span className="shrink-0 rounded bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
+                <span className="shrink-0 rounded-full bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
                   {ruleSourceLabel(rule.source)}
                 </span>
               </button>
@@ -288,5 +288,5 @@ function RuleModeBadge({ mode }: { mode: RuleMode }) {
     mode === "always"
       ? "bg-focus-ring-soft/15 text-focus-ring-soft"
       : "bg-chip-faint text-fg-faint";
-  return <span className={cn("shrink-0 rounded px-1.5 py-px text-2xs", tone)}>{label}</span>;
+  return <span className={cn("shrink-0 rounded-full px-1.5 py-px text-2xs", tone)}>{label}</span>;
 }

@@ -187,7 +187,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
                     </span>
                   ) : null}
                 </div>
-                <span className="shrink-0 rounded bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
+                <span className="shrink-0 rounded-full bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
                   {scopeBadge(skill)}
                 </span>
               </div>

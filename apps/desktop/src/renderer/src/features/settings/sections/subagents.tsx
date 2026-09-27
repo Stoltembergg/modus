@@ -497,7 +497,7 @@ export function SubagentsSettingsPanel({
                     {subagent.isolation === "worktree" ? (
                       <ReadOnlyPill>worktree</ReadOnlyPill>
                     ) : null}
-                    <span className="rounded bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
+                    <span className="rounded-full bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
                       {scopeBadge(subagent)}
                     </span>
                   </div>

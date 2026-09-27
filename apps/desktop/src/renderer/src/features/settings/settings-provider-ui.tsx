@@ -229,7 +229,7 @@ export function ProviderDetail({
           <div className="pt-3">
             <div className="flex flex-wrap items-center justify-end gap-2">
               {busy ? (
-                <span className="rounded-md bg-chip px-2.5 py-1 text-xs text-fg-muted">
+                <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">
                   <ShinyText>Saving</ShinyText>
                 </span>
               ) : (
@@ -778,27 +778,27 @@ export function SearchField({
 export function ProviderStatusPill({ status }: { status: ProviderStatus }) {
   if (status === "error") {
     return (
-      <span className="rounded-md bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
+      <span className="rounded-full bg-danger/10 px-2 py-1 text-xs text-danger">Needs review</span>
     );
   }
 
   if (status === "connected") {
     return (
-      <span className="flex items-center gap-1 rounded-md bg-success/10 px-2 py-1 text-xs text-success">
+      <span className="flex items-center gap-1 rounded-full bg-success/10 px-2 py-1 text-xs text-success">
         <IconCheck size={12} stroke={2} />
         Connected
       </span>
     );
   }
 
-  return <span className="rounded-md bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
+  return <span className="rounded-full bg-chip px-2 py-1 text-xs text-fg-muted">Setup</span>;
 }
 
 export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
   return (
     <span
       className={cn(
-        "flex items-center gap-1 rounded-md px-1.5 py-0.5 text-2xs",
+        "flex items-center gap-1 rounded-full px-1.5 py-0.5 text-2xs",
         model.reasoning ? "bg-chip-strong text-fg-muted" : "bg-chip text-fg-faint",
       )}
     >
@@ -809,7 +809,9 @@ export function ModelKindBadge({ model }: { model: ProviderModelConfig }) {
 }
 
 export function TinyBadge({ children }: { children: string }) {
-  return <span className="rounded bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>;
+  return (
+    <span className="rounded-full bg-chip px-1.5 py-0.5 text-2xs text-fg-faint">{children}</span>
+  );
 }
 
 export type ProviderStatus = "available" | "connected" | "error";
