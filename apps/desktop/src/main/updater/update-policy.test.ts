@@ -158,6 +158,19 @@ describe("macInstallBlocker", () => {
     expect(macInstallBlocker(ok)).toBeNull();
   });
 
+  it("refuses to swap from a renamed bundle or the swap backup", () => {
+    for (const bundlePath of [
+      "/Applications/.Modus.app.update-backup",
+      "/Applications/.Modus.app.update-backup/",
+      "/Applications/Modus 2.app",
+      "/Applications/modus.app",
+      "/Applications/Modus.app.update-backup",
+    ]) {
+      expect(macInstallBlocker({ ...ok, bundlePath }), bundlePath).toBe("unexpected-bundle-path");
+    }
+    expect(macInstallBlocker({ ...ok, bundlePath: "/Applications/Modus.app/" })).toBeNull();
+  });
+
   it("blocks translocated, mounted, non-Applications and read-only installs", () => {
     expect(
       macInstallBlocker({

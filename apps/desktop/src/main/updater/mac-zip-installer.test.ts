@@ -18,7 +18,7 @@ import {
   type HttpResponse,
   macBackupPath,
 } from "./mac-zip-installer";
-import type { UpdateCandidate } from "./update-controller";
+import { createUpdateController, type UpdateCandidate } from "./update-controller";
 import { UpdateInstallError } from "./update-errors";
 
 const ZIP = Buffer.from("PK fake zip bytes for the update ".repeat(64));
@@ -331,5 +331,44 @@ describe("mac zip installer", () => {
     } finally {
       chmodSync(apps, 0o755);
     }
+  });
+
+  it("never swaps from the backup path or a renamed bundle: release page, no download", async () => {
+    for (const odd of [
+      join(root, "Applications", ".Modus.app.update-backup"),
+      join(root, "Applications", "Modus 2.app"),
+    ]) {
+      mkdirSync(odd, { recursive: true });
+      const { installer, deps } = makeInstaller({ bundlePath: odd });
+      expect(await installer.actionFor(candidate())).toBe("download-page");
+      // Through the controller, Install on a page action opens the release page only.
+      const openExternal = vi.fn(async (_url: string) => undefined);
+      const controller = createUpdateController({
+        currentVersion: "1.0.0",
+        source: { check: async () => candidate() },
+        installer,
+        agents: { hasActiveTurns: () => false },
+        timers: { setTimeout: () => undefined, clearTimeout: () => undefined },
+        logger,
+        now: () => 0,
+        openExternal,
+        beforeInstallRestart: () => undefined,
+      });
+      await controller.checkNow();
+      expect(controller.getState()).toEqual({
+        status: "available",
+        version: "1.1.0",
+        action: "download-page",
+      });
+      await controller.install();
+      expect(openExternal).toHaveBeenCalledWith(
+        "https://github.com/stoltembergg-png/modus/releases/tag/v1.1.0",
+      );
+      expect(deps.httpGet).not.toHaveBeenCalled();
+      expect(deps.spawnDetached).not.toHaveBeenCalled();
+      await expect(installer.install(candidate())).rejects.toThrow("not downloaded");
+    }
+    // The normal bundle is still installed in place.
+    expect(await makeInstaller().installer.actionFor(candidate())).toBe("install");
   });
 });

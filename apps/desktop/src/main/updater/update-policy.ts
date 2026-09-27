@@ -146,7 +146,11 @@ export function selectMacZip(files: UpdateFile[], arm64Mac: boolean): UpdateFile
   return eligible.find((file) => file.url.endsWith(".zip"));
 }
 
+/** The only bundle name the mac installer swaps (electron-builder productName "Modus"). */
+export const MAC_BUNDLE_NAME = "Modus.app";
+
 export type MacInstallBlocker =
+  | "unexpected-bundle-path"
   | "not-in-applications"
   | "translocated"
   | "mounted-volume"
@@ -158,6 +162,14 @@ export function macInstallBlocker(input: {
   isInApplicationsFolder: boolean;
   parentWritable: boolean;
 }): MacInstallBlocker | null {
+  // Only swap a bundle named exactly Modus.app. A renamed copy ("Modus 2.app") or the
+  // previous version running from the swap backup after a failed rollback
+  // (".Modus.app.update-backup") must not become the swap target.
+  const path = input.bundlePath.replace(/\/+$/, "");
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  if (name !== MAC_BUNDLE_NAME || path.endsWith(".update-backup")) {
+    return "unexpected-bundle-path";
+  }
   if (input.bundlePath.includes("/AppTranslocation/")) return "translocated";
   if (input.bundlePath.includes("/Volumes/")) return "mounted-volume";
   if (!input.isInApplicationsFolder) return "not-in-applications";
