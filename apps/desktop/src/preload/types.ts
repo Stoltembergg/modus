@@ -491,6 +491,8 @@ export type ModusApi = {
     /** Downloads and installs (restart waits for running agents), or opens the release page. */
     install(): Promise<void>;
     retry(): Promise<void>;
+    /** In `waiting-for-agents`: restart now instead of waiting for running agents. */
+    restartNow(): Promise<void>;
     /** Hides the notice for this version until a newer one appears (in memory only). */
     dismiss(): Promise<void>;
     openReleasePage(): Promise<void>;

@@ -7,6 +7,7 @@ export type UpdateIpcService = {
   getState(): UpdateState;
   install(): Promise<void>;
   retry(): Promise<void>;
+  restartNow(): Promise<void>;
   dismiss(): void;
   openReleasePage(): Promise<void>;
 };
@@ -36,6 +37,9 @@ export function registerUpdateIpcHandlers(
   });
   handle(IPC_CHANNELS.updateRetry, () => {
     void service.retry();
+  });
+  handle(IPC_CHANNELS.updateRestartNow, () => {
+    void service.restartNow();
   });
   handle(IPC_CHANNELS.updateDismiss, () => {
     service.dismiss();

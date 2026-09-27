@@ -69,6 +69,7 @@ export function getUpdateService(): UpdateIpcService {
     getState: () => controller?.getState() ?? IDLE,
     install: async () => controller?.install(),
     retry: async () => controller?.retry(),
+    restartNow: async () => controller?.restartNow(),
     dismiss: () => controller?.dismiss(),
     openReleasePage: async () => {
       if (controller) return controller.openReleasePage();

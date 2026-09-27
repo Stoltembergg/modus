@@ -333,6 +333,49 @@ describe("install flow", () => {
   });
 });
 
+describe("restart now", () => {
+  it("installs immediately from waiting-for-agents even though agents are still running", async () => {
+    const { controller, installer, agents, beforeInstallRestart } = setup({
+      check: async () => candidate("1.1.0"),
+    });
+    agents.hasActiveTurns.mockReturnValue(true);
+    await controller.checkNow();
+    const installing = controller.install();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.getState()).toEqual({ status: "waiting-for-agents", version: "1.1.0" });
+    await controller.restartNow();
+    expect(controller.getState()).toEqual({ status: "installing", version: "1.1.0" });
+    expect(agents.hasActiveTurns()).toBe(true);
+    expect(beforeInstallRestart).toHaveBeenCalledTimes(1);
+    expect(installer.install).toHaveBeenCalledTimes(1);
+    // The pending install() settles and the agent poll is gone: no second install.
+    await installing;
+    agents.hasActiveTurns.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(installer.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("is ignored in every other state", async () => {
+    const download = deferred<void>();
+    const { controller, installer } = setup({ check: async () => candidate("1.1.0") });
+    await controller.restartNow(); // idle
+    await controller.checkNow();
+    await controller.restartNow(); // available
+    expect(controller.getState()).toMatchObject({ status: "available" });
+    installer.download.mockImplementationOnce(() => download.promise);
+    void controller.install();
+    await vi.advanceTimersByTimeAsync(0);
+    await controller.restartNow(); // downloading
+    expect(controller.getState()).toMatchObject({ status: "downloading" });
+    expect(installer.install).not.toHaveBeenCalled();
+    download.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(installer.install).toHaveBeenCalledTimes(1); // no agents: normal restart
+    await controller.restartNow(); // installing
+    expect(installer.install).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("dismiss", () => {
   it("hides a version until a newer one appears", async () => {
     let latest = "1.1.0";

@@ -5,6 +5,7 @@ const UPDATE_CHANNELS = [
   "update:get-state",
   "update:install",
   "update:retry",
+  "update:restart-now",
   "update:dismiss",
   "update:open-release-page",
 ];
@@ -23,6 +24,7 @@ async function register() {
     getState: vi.fn(() => ({ status: "idle" as const })),
     install: vi.fn(async () => undefined),
     retry: vi.fn(async () => undefined),
+    restartNow: vi.fn(async () => undefined),
     dismiss: vi.fn(),
     openReleasePage: vi.fn(async () => undefined),
   };
@@ -58,10 +60,14 @@ describe("update IPC registration", () => {
       expect(handlers.get("update:install")?.(trusted, undefined)).toBeUndefined();
       handlers.get("update:retry")?.(trusted, undefined);
       handlers.get("update:dismiss")?.(trusted, undefined);
+      expect(handlers.get("update:restart-now")?.(trusted, undefined)).toBeUndefined();
       await handlers.get("update:open-release-page")?.(trusted, undefined);
       expect(service.install).toHaveBeenCalledTimes(1);
       expect(service.retry).toHaveBeenCalledTimes(1);
       expect(service.dismiss).toHaveBeenCalledTimes(1);
+      expect(service.restartNow).toHaveBeenCalledTimes(1);
+      expect(() => handlers.get("update:restart-now")?.(trusted, { force: true })).toThrow();
+      expect(service.restartNow).toHaveBeenCalledTimes(1);
       expect(service.openReleasePage).toHaveBeenCalledTimes(1);
       expect(() => handlers.get("update:install")?.(trusted, { url: "https://evil" })).toThrow();
       expect(service.install).toHaveBeenCalledTimes(1);

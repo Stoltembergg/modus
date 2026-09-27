@@ -170,6 +170,7 @@ export const IPC_CHANNELS = {
   updateGetState: "update:get-state",
   updateInstall: "update:install",
   updateRetry: "update:retry",
+  updateRestartNow: "update:restart-now",
   updateDismiss: "update:dismiss",
   updateOpenReleasePage: "update:open-release-page",
   updateStateEvent: "update:state-event",

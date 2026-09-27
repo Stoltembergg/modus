@@ -44,6 +44,11 @@ export type UpdateController = {
   checkNow(): Promise<void>;
   install(): Promise<void>;
   retry(): Promise<void>;
+  /**
+   * Only in `waiting-for-agents`: the user chose not to wait for running agents and
+   * restarts now. The service itself never interrupts an agent turn.
+   */
+  restartNow(): Promise<void>;
   dismiss(): void;
   openReleasePage(): Promise<void>;
 };
@@ -84,6 +89,8 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
   let checkInFlight: Promise<void> | null = null;
   let busy = false;
   let agentPoll: unknown;
+  /** Set while waiting for agents; ends the wait and installs right away. */
+  let forceRestart: (() => Promise<void>) | null = null;
   let lastFailureLogAt: number | null = null;
   let suppressedFailures = 0;
 
@@ -199,15 +206,37 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
     dispatch({ type: "restart-deferred" });
     deps.logger.info(`update ${candidate.version} ready; restart waits for running agents`);
     await new Promise<void>((resolve) => {
+      let done = false;
+      const finish = async () => {
+        if (done) return;
+        done = true;
+        forceRestart = null;
+        if (agentPoll !== undefined) deps.timers.clearTimeout(agentPoll);
+        agentPoll = undefined;
+        try {
+          if (state.status === "waiting-for-agents") await installNow(candidate);
+        } finally {
+          resolve();
+        }
+      };
+      forceRestart = finish;
       const poll = () => {
         agentPoll = deps.timers.setTimeout(() => {
-          if (state.status !== "waiting-for-agents") return resolve();
-          if (deps.agents.hasActiveTurns()) return poll();
-          void installNow(candidate).finally(resolve);
+          if (state.status !== "waiting-for-agents" || !deps.agents.hasActiveTurns()) {
+            void finish();
+            return;
+          }
+          poll();
         }, agentPollMs);
       };
       poll();
     });
+  };
+
+  const restartNow = async () => {
+    if (state.status !== "waiting-for-agents" || !forceRestart) return;
+    deps.logger.info(`restarting for update ${state.version} without waiting for agents`);
+    await forceRestart();
   };
 
   const openReleasePage = async () => {
@@ -264,6 +293,7 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
     checkNow,
     install,
     retry: install,
+    restartNow,
     dismiss() {
       if (state.status !== "available" && state.status !== "failed") return;
       dismissedVersion = state.version;

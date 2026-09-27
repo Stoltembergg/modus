@@ -283,6 +283,7 @@ const api: ModusApi = {
     getState: () => ipcRenderer.invoke("update:get-state") as Promise<UpdateState>,
     install: () => ipcRenderer.invoke("update:install") as Promise<void>,
     retry: () => ipcRenderer.invoke("update:retry") as Promise<void>,
+    restartNow: () => ipcRenderer.invoke("update:restart-now") as Promise<void>,
     dismiss: () => ipcRenderer.invoke("update:dismiss") as Promise<void>,
     openReleasePage: () => ipcRenderer.invoke("update:open-release-page") as Promise<void>,
     onStateChange: (callback) => {
