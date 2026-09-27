@@ -100,7 +100,9 @@ the two together, and keep them below electron-builder v28.
 
 The main-process update service (`apps/desktop/src/main/updater/`) reads the stable
 channel of this repository's GitHub Releases through electron-updater
-(`resources/app-update.yml`). It checks 15 s after startup and every 5 minutes, and only
+(`resources/app-update.yml`). The repository is defined once, in
+`apps/desktop/src/shared/release-repo.ts`, for both the electron-builder `publish`
+config and the updater's download URL allowlist. It checks 15 s after startup and every 5 minutes, and only
 ever moves to a newer `X.Y.Z` release: no downgrades, no pre-releases. It does nothing
 in dev (`npm run dev`) or in builds whose version is not a plain `X.Y.Z` (betas).
 

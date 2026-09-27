@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Configuration } from "electron-builder";
+import { RELEASE_REPO } from "./src/shared/release-repo";
 
 const fastCodebaseResource = join("resources", "bin", "codegraph");
 
@@ -71,8 +72,9 @@ const config: Configuration = {
    */
   publish: {
     provider: "github",
-    owner: "stoltembergg-png",
-    repo: "modus",
+    // Shared with the in-app updater's URL allowlist (src/main/updater/update-policy.ts).
+    owner: RELEASE_REPO.owner,
+    repo: RELEASE_REPO.repo,
     releaseType: "draft",
     channel: updateChannel,
   },

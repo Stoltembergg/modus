@@ -3,9 +3,10 @@
  * every rule is unit-testable.
  */
 
-/** Must match `publish` in apps/desktop/electron-builder.config.ts. */
-export const UPDATE_REPO = { owner: "stoltembergg-png", repo: "modus" } as const;
-export const RELEASES_URL = `https://github.com/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases`;
+import { RELEASE_REPO } from "../../shared/release-repo";
+
+/** Same repository as electron-builder's `publish` config (both use RELEASE_REPO). */
+export const RELEASES_URL = `https://github.com/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/releases`;
 export const APP_BUNDLE_ID = "dev.modus.desktop";
 
 export type UpdatePolicy =
@@ -79,7 +80,7 @@ export function releaseAssetUrl(version: string, fileName: string): string {
 }
 
 /**
- * Only `https://github.com/stoltembergg-png/modus/releases/download/v<X.Y.Z>/<file>`
+ * Only `https://github.com/<RELEASE_REPO>/releases/download/v<X.Y.Z>/<file>`
  * (optionally for one specific version) is accepted as an update download.
  */
 export function isAllowedReleaseAssetUrl(rawUrl: string, version?: string): boolean {
@@ -91,7 +92,7 @@ export function isAllowedReleaseAssetUrl(rawUrl: string, version?: string): bool
   }
   if (url.protocol !== "https:" || url.hostname !== "github.com") return false;
   if (url.port || url.username || url.password || url.search || url.hash) return false;
-  const prefix = `/${UPDATE_REPO.owner}/${UPDATE_REPO.repo}/releases/download/`;
+  const prefix = `/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/releases/download/`;
   if (!url.pathname.startsWith(prefix)) return false;
   const rest = url.pathname.slice(prefix.length).split("/");
   if (rest.length !== 2) return false;
