@@ -92,6 +92,10 @@ v28: starting with v28 the NSIS updater fails closed on unsigned builds, which w
 break Windows auto-update until the installer is signed. Treat any upgrade as a change
 to the release pipeline and dry-run it (next section).
 
+`electron-updater` (the in-app updater) is pinned to `6.8.3`, the version released
+together with electron-builder 26.8.x (both use `builder-util-runtime` 9.5.1). Upgrade
+the two together, and keep them below electron-builder v28.
+
 ## Dry runs on pull requests
 
 A pull request that changes the release workflow, `apps/desktop/scripts/release/**` or
