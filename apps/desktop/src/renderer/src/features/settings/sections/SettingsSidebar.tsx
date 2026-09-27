@@ -11,6 +11,7 @@ import {
   IconServerCog,
   IconSettings,
   IconUser,
+  IconUsers,
 } from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { cn } from "../../../lib/cn";
@@ -26,7 +27,7 @@ const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   "harness-insights": <IconBulb size={16} stroke={1.7} />,
   mcp: <IconPlugConnected size={16} stroke={1.7} />,
   skills: <IconCube size={16} stroke={1.7} />,
-  subagents: <IconUser size={16} stroke={1.7} />,
+  subagents: <IconUsers size={16} stroke={1.7} />,
   rules: <IconGavel size={16} stroke={1.7} />,
   limits: <IconGauge size={16} stroke={1.7} />,
 };
