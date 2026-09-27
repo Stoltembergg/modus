@@ -265,7 +265,7 @@ function ProviderCatalog({
     <section className="min-w-0">
       <div className="mb-3 flex items-end justify-between gap-4">
         <div className="min-w-0">
-          <h3 className="text-sm font-normal text-fg">Providers</h3>
+          <h3 className="text-md font-normal text-fg">Providers</h3>
           <p className="mt-1 text-xs text-fg-faint">
             Connected, available, and custom providers in one place.
           </p>

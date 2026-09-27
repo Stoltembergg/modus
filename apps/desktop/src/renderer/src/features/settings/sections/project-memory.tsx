@@ -378,7 +378,7 @@ function ProjectMemoryScopeSection({
     <section className="overflow-hidden rounded-lg border border-hairline-soft bg-panel">
       <div className="flex items-center justify-between gap-4 border-hairline-soft border-b px-4 py-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-normal text-fg">{title}</h3>
+          <h3 className="text-md font-normal text-fg">{title}</h3>
           <p className="mt-1 text-xs text-fg-faint">{description}</p>
         </div>
         <SwitchControl

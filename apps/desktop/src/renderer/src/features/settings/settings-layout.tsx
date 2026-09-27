@@ -32,7 +32,7 @@ export function SettingsSection({
   return (
     <section className="flex flex-col gap-4">
       <div className="min-w-0">
-        <h3 className="text-sm font-normal text-fg">{title}</h3>
+        <h3 className="text-md font-normal text-fg">{title}</h3>
         {description ? <p className="mt-1 text-xs text-fg-faint">{description}</p> : null}
       </div>
       {children}

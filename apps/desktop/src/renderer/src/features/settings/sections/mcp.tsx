@@ -603,7 +603,7 @@ export function McpServerForm({
       }}
     >
       <div className="flex items-center justify-between">
-        <h4 className="text-sm text-fg">
+        <h4 className="text-md text-fg">
           {isNew ? "Add MCP server" : `Edit “${form.originalName}”`}
         </h4>
         {isNew ? (
