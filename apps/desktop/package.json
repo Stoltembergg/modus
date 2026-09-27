@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Local-first Modus desktop agent window.",
   "author": "Modus contributors",
+  "homepage": "https://github.com/stoltembergg-png/modus",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -29,7 +30,7 @@
     "@types/turndown": "^5.0.6",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "^42.3.0",
-    "electron-builder": "^26.8.1",
+    "electron-builder": "26.8.1",
     "electron-vite": "^5.0.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.7"

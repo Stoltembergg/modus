@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Configuration } from "electron-builder";
 
@@ -6,6 +6,16 @@ const fastCodebaseResource = join("resources", "bin", "codegraph");
 
 /** Sidecar name matches `terminal-service` resolution (`.exe` only on Windows). */
 const ptyHostBinary = process.platform === "win32" ? "modus-pty-host.exe" : "modus-pty-host";
+
+/**
+ * Update channel for this build: "-beta.N" versions => beta (beta*.yml), everything
+ * else => latest (latest*.yml). electron-builder 26 does not derive this from the
+ * version for the GitHub provider (a beta build would otherwise write latest*.yml and
+ * be offered to stable users). Kept in sync with scripts/release/release-channel.mjs.
+ * electron-builder runs with apps/desktop as cwd, like the relative paths below.
+ */
+const appVersion: string = JSON.parse(readFileSync("package.json", "utf8")).version;
+const updateChannel = /-beta\.(0|[1-9]\d*)$/.test(appVersion) ? "beta" : "latest";
 
 const config: Configuration = {
   appId: "dev.modus.desktop",
@@ -44,20 +54,49 @@ const config: Configuration = {
   ],
   asar: true,
   icon: "resources/icon.png",
+  /**
+   * Release metadata target. Configuring a provider is what makes electron-builder
+   * write the update metadata files (latest*.yml / beta*.yml) and embed
+   * app-update.yml in the app. Builds always run with `--publish never`; the release
+   * workflow uploads the files itself into a draft it created beforehand.
+   *
+   * electron-builder is pinned to 26.8.1 (apps/desktop/package.json). Stay below v28:
+   * from v28 the NSIS updater fails closed on unsigned builds, and the Windows build
+   * is not Authenticode-signed yet. See docs/releasing.md.
+   */
+  publish: {
+    provider: "github",
+    owner: "stoltembergg-png",
+    repo: "modus",
+    releaseType: "draft",
+    channel: updateChannel,
+  },
   mac: {
     category: "public.app-category.developer-tools",
     icon: "resources/icon.icns",
     target: ["dmg", "zip"],
+    // Arch in every name so the arm64 and x64 jobs never upload colliding assets.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder artifact macros
+    artifactName: "${productName}-${version}-mac-${arch}.${ext}",
   },
   win: {
     icon: "resources/icon.ico",
     target: ["nsis"],
     signAndEditExecutable: false,
   },
+  nsis: {
+    // No spaces: GitHub rewrites spaces in asset names, which would break latest.yml.
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder artifact macros
+    artifactName: "${productName}-${version}-win-${arch}-setup.${ext}",
+  },
   linux: {
     category: "Development",
     icon: "resources/icon.png",
     target: ["AppImage", "deb"],
+    // Required by the deb target (fpm). No contact email is published for the project.
+    maintainer: "Modus contributors",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: electron-builder artifact macros
+    artifactName: "${productName}-${version}-linux-${arch}.${ext}",
   },
 };
 
