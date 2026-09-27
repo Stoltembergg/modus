@@ -106,6 +106,11 @@ export type AgentRuntime = {
     sessionId: string | undefined,
     direction?: "forward" | "backward",
   ): Promise<ModelInfo>;
+  /**
+   * True while any agent turn (including subagents and compaction) is starting or
+   * running in this process. In-memory only: DB run rows can be stale after a crash.
+   */
+  hasActiveTurns(): boolean;
 };
 
 export type BackgroundWaitResult = {
