@@ -1,0 +1,527 @@
+name: Release
+
+# Tag push (vX.Y.Z / vX.Y.Z-beta.N): build every platform, create or reuse a DRAFT
+# GitHub release and upload installers + update metadata to it. Publishing the draft
+# is a manual step (see docs/releasing.md).
+#
+# Pull requests that touch the release pipeline run the exact same builds as a dry
+# run: all platforms, mac codesign verification and the mac metadata merge. Update
+# metadata is kept as Actions artifacts for inspection. Nothing touches GitHub
+# Releases unless the ref is a v* tag: the two jobs that can write are tag-only, and
+# every step inside them that creates or uploads to a release is gated as well.
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - "apps/desktop/scripts/release/**"
+      - "apps/desktop/electron-builder.config.ts"
+
+# Default for every job. Only the tag-only draft-release / publish-assets jobs raise
+# this to contents: write, so pull request runs never get a write token.
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # Never cancel a tag release half-way; superseded PR dry runs can go.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CHANNEL_SCRIPT: apps/desktop/scripts/release/release-channel.mjs
+
+jobs:
+  prepare:
+    name: resolve version and channel
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.tag.outputs.version || steps.pr.outputs.version }}
+      channel: ${{ steps.tag.outputs.channel || steps.pr.outputs.channel }}
+      update_channel: ${{ steps.tag.outputs.update_channel || steps.pr.outputs.update_channel }}
+      prerelease: ${{ steps.tag.outputs.prerelease || steps.pr.outputs.prerelease }}
+      mac_metadata: ${{ steps.tag.outputs.mac_metadata || steps.pr.outputs.mac_metadata }}
+      windows_metadata: ${{ steps.tag.outputs.windows_metadata || steps.pr.outputs.windows_metadata }}
+      linux_metadata: ${{ steps.tag.outputs.linux_metadata || steps.pr.outputs.linux_metadata }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+
+      # Rejects anything but vX.Y.Z / vX.Y.Z-beta.N and fails when the tag does not
+      # equal apps/desktop/package.json "version" (that version is what ends up in
+      # the update metadata, so a mismatch would publish a broken update feed).
+      - name: Check tag against apps/desktop/package.json
+        id: tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          node "$CHANNEL_SCRIPT" tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
+
+      # PR dry run: no tag, so derive the channel from package.json
+      # ("-beta.N" => beta, anything else => latest).
+      - name: Derive channel from apps/desktop/package.json (dry run)
+        id: pr
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          node "$CHANNEL_SCRIPT" version | tee -a "$GITHUB_OUTPUT"
+
+  draft-release:
+    name: create or reuse draft release
+    needs: prepare
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      # Missing -> create a draft (pre-release for betas).
+      # Existing draft with the same pre-release flag -> reuse it (re-running a tag).
+      # Existing published release -> fail: never modify something users may have.
+      # Existing draft with the wrong pre-release flag -> fail with instructions.
+      - name: Create or reuse draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          if info="$(gh release view "$TAG" --json isDraft,isPrerelease 2>"$RUNNER_TEMP/view.err")"; then
+            is_draft="$(jq -r '.isDraft' <<<"$info")"
+            is_prerelease="$(jq -r '.isPrerelease' <<<"$info")"
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::Release $TAG is already published. Published releases are never modified; bump apps/desktop/package.json and push a new tag."
+              exit 1
+            fi
+            if [[ "$is_prerelease" != "$PRERELEASE" ]]; then
+              echo "::error::Draft release $TAG exists with prerelease=$is_prerelease, but $TAG needs prerelease=$PRERELEASE. Fix the draft (gh release edit $TAG --prerelease=$PRERELEASE) or delete it, then re-run this workflow."
+              exit 1
+            fi
+            echo "Reusing existing draft release $TAG (prerelease=$is_prerelease)."
+          elif grep -qi "release not found" "$RUNNER_TEMP/view.err"; then
+            args=(--draft --verify-tag --title "$TAG" --generate-notes)
+            if [[ "$PRERELEASE" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "$TAG" "${args[@]}"
+            echo "Created draft release $TAG (prerelease=$PRERELEASE)."
+          else
+            cat "$RUNNER_TEMP/view.err" >&2
+            exit 1
+          fi
+
+  package-mac:
+    name: package mac (${{ matrix.electron_arch }})
+    needs: [prepare, draft-release]
+    # draft-release is skipped on PR dry runs; run anyway as long as nothing failed.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
+    runs-on: macos-14
+    timeout-minutes: 75
+    strategy:
+      # Let both arches finish so one run shows every problem.
+      fail-fast: false
+      matrix:
+        include:
+          - electron_arch: arm64
+            rust_target: aarch64-apple-darwin
+            codegraph_arch: arm64
+            app_dir: mac-arm64
+          - electron_arch: x64
+            rust_target: x86_64-apple-darwin
+            codegraph_arch: x64
+            app_dir: mac
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      MAC_METADATA: ${{ needs.prepare.outputs.mac_metadata }}
+      ARCH: ${{ matrix.electron_arch }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+
+      - name: Install Rust stable (${{ matrix.rust_target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Ensure CodeGraph package for target arch
+        env:
+          PKG: "@colbymchenry/codegraph-darwin-${{ matrix.codegraph_arch }}"
+        run: |
+          set -euo pipefail
+          if node -e "require.resolve(process.env.PKG + '/package.json')" 2>/dev/null; then
+            echo "already resolvable: ${PKG}"
+            node -e "console.log(require.resolve(process.env.PKG + '/package.json'))"
+            exit 0
+          fi
+          echo "Fetching ${PKG}@1.1.1 via npm pack"
+          TARBALL="$(npm pack "${PKG}@1.1.1")"
+          mkdir -p "node_modules/${PKG}"
+          tar -xzf "${TARBALL}" -C "node_modules/${PKG}" --strip-components=1
+          rm -f "${TARBALL}"
+          node -e "console.log(require.resolve(process.env.PKG + '/package.json'))"
+
+      - name: Build PTY host (${{ matrix.rust_target }})
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          cargo build --release -p modus-pty-host --target "$RUST_TARGET"
+          mkdir -p target/release
+          cp "target/$RUST_TARGET/release/modus-pty-host" target/release/modus-pty-host
+          file target/release/modus-pty-host
+
+      - name: Build Electron app
+        env:
+          # Large renderer (Monaco/Mermaid) can abort under default heap on GHA mac runners.
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm --workspace @modus/desktop exec -- electron-vite build
+
+      - name: Package macOS ${{ matrix.electron_arch }} (unsigned)
+        env:
+          # No Developer ID / notarization yet: builds are ad-hoc signed at best.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          NODE_OPTIONS: --max-old-space-size=8192
+          MODUS_CODEGRAPH_PLATFORM: darwin
+          MODUS_CODEGRAPH_ARCH: ${{ matrix.codegraph_arch }}
+        run: npm --workspace @modus/desktop run package:mac -- "--$ARCH" --publish never
+
+      - name: List dist
+        run: ls -lah apps/desktop/dist
+
+      - name: Verify expected files
+        working-directory: apps/desktop/dist
+        run: |
+          set -euo pipefail
+          for f in "Modus-$VERSION-mac-$ARCH.zip" "Modus-$VERSION-mac-$ARCH.zip.blockmap" \
+                   "Modus-$VERSION-mac-$ARCH.dmg" "Modus-$VERSION-mac-$ARCH.dmg.blockmap" \
+                   "$MAC_METADATA"; do
+            [[ -s "$f" ]] || { echo "::error::missing $f"; exit 1; }
+          done
+          cat "$MAC_METADATA"
+
+      # The app has to pass a strict signature check or macOS reports it as damaged
+      # after download. Check both the .app electron-builder produced and the one
+      # inside the zip the updater downloads (zip packaging can break signatures).
+      - name: Verify code signature (${{ matrix.electron_arch }})
+        env:
+          APP_DIR: ${{ matrix.app_dir }}
+        run: |
+          set -euo pipefail
+          verify() {
+            echo "::group::codesign $1"
+            codesign -dv --verbose=4 "$1" 2>&1 || true
+            codesign --verify --deep --strict --verbose=2 "$1"
+            echo "::endgroup::"
+          }
+          verify "apps/desktop/dist/$APP_DIR/Modus.app"
+          unzipped="$RUNNER_TEMP/unzipped-$ARCH"
+          rm -rf "$unzipped"
+          ditto -x -k "apps/desktop/dist/Modus-$VERSION-mac-$ARCH.zip" "$unzipped"
+          verify "$unzipped/Modus.app"
+
+      # Per-arch metadata; merge-mac-metadata combines arm64 + x64 into one file.
+      - name: Upload update metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-metadata-mac-${{ matrix.electron_arch }}
+          path: apps/desktop/dist/${{ needs.prepare.outputs.mac_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-mac-${{ matrix.electron_arch }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.dmg.blockmap
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.zip.blockmap
+          if-no-files-found: error
+          retention-days: 7
+
+  package-win:
+    name: package windows (x64)
+    needs: [prepare, draft-release]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      WINDOWS_METADATA: ${{ needs.prepare.outputs.windows_metadata }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build PTY host
+        run: |
+          cargo build --release -p modus-pty-host
+          if (!(Test-Path "target\release\modus-pty-host.exe")) { throw "modus-pty-host.exe missing" }
+          Get-Item "target\release\modus-pty-host.exe" | Format-List Name, Length
+
+      - name: Build Electron app
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm --workspace @modus/desktop exec -- electron-vite build
+
+      - name: Package Windows x64 (unsigned)
+        env:
+          # No Authenticode certificate yet: SmartScreen will warn on first install.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm --workspace @modus/desktop run package:win -- --x64 --publish never
+
+      - name: Verify expected files
+        shell: bash
+        working-directory: apps/desktop/dist
+        run: |
+          set -euo pipefail
+          ls -lah
+          for f in "Modus-$VERSION-win-x64-setup.exe" "Modus-$VERSION-win-x64-setup.exe.blockmap" "$WINDOWS_METADATA"; do
+            [[ -s "$f" ]] || { echo "::error::missing $f"; exit 1; }
+          done
+          cat "$WINDOWS_METADATA"
+
+      - name: Upload update metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-metadata-win-x64
+          path: apps/desktop/dist/${{ needs.prepare.outputs.windows_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-win-x64
+          path: |
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.exe.blockmap
+            apps/desktop/dist/${{ needs.prepare.outputs.windows_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+  package-linux:
+    name: package linux (x64)
+    needs: [prepare, draft-release]
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      LINUX_METADATA: ${{ needs.prepare.outputs.linux_metadata }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build PTY host
+        run: |
+          cargo build --release -p modus-pty-host
+          test -x target/release/modus-pty-host
+          file target/release/modus-pty-host
+
+      - name: Build Electron app
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm --workspace @modus/desktop exec -- electron-vite build
+
+      - name: Package Linux x64 (AppImage + deb)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: npm --workspace @modus/desktop run package:linux -- --x64 --publish never
+
+      - name: Verify expected files
+        working-directory: apps/desktop/dist
+        run: |
+          set -euo pipefail
+          ls -lah
+          # electron-builder's ${arch} is x86_64 for AppImage and amd64 for deb.
+          for f in "Modus-$VERSION-linux-x86_64.AppImage" "Modus-$VERSION-linux-amd64.deb" "$LINUX_METADATA"; do
+            [[ -s "$f" ]] || { echo "::error::missing $f"; exit 1; }
+          done
+          cat "$LINUX_METADATA"
+
+      - name: Upload update metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-metadata-linux-x64
+          path: apps/desktop/dist/${{ needs.prepare.outputs.linux_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-linux-x64
+          path: |
+            apps/desktop/dist/*.AppImage
+            apps/desktop/dist/*.deb
+            apps/desktop/dist/${{ needs.prepare.outputs.linux_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+  merge-mac-metadata:
+    name: merge mac update metadata
+    needs: [prepare, package-mac]
+    if: ${{ !cancelled() && needs.package-mac.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MAC_METADATA: ${{ needs.prepare.outputs.mac_metadata }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+          cache: npm
+
+      # Only js-yaml is needed; skip postinstall scripts (electron download etc.).
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Download per-arch mac metadata
+        uses: actions/download-artifact@v4
+        with:
+          pattern: update-metadata-mac-*
+          path: mac-metadata
+
+      - name: Merge arm64 + x64
+        run: |
+          set -euo pipefail
+          mkdir -p merged
+          node apps/desktop/scripts/release/merge-mac-update-yml.mjs \
+            --out "merged/$MAC_METADATA" \
+            "mac-metadata/update-metadata-mac-arm64/$MAC_METADATA" \
+            "mac-metadata/update-metadata-mac-x64/$MAC_METADATA"
+          cat "merged/$MAC_METADATA"
+
+      # Kept on PR runs too so the merged file can be reviewed before anything ships.
+      - name: Upload merged mac metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: update-metadata-mac-merged
+          path: merged/${{ needs.prepare.outputs.mac_metadata }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-assets:
+    name: upload assets to draft release
+    needs: [prepare, draft-release, package-mac, package-win, package-linux, merge-mac-metadata]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      MAC_METADATA: ${{ needs.prepare.outputs.mac_metadata }}
+      WINDOWS_METADATA: ${{ needs.prepare.outputs.windows_metadata }}
+      LINUX_METADATA: ${{ needs.prepare.outputs.linux_metadata }}
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: assets
+          merge-multiple: true
+
+      - name: Download merged mac metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: update-metadata-mac-merged
+          path: assets
+
+      - name: Check asset set
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          ls -lah
+          required=(
+            "$MAC_METADATA" "$WINDOWS_METADATA" "$LINUX_METADATA"
+            "Modus-$VERSION-mac-arm64.dmg" "Modus-$VERSION-mac-arm64.zip" "Modus-$VERSION-mac-arm64.zip.blockmap"
+            "Modus-$VERSION-mac-x64.dmg" "Modus-$VERSION-mac-x64.zip" "Modus-$VERSION-mac-x64.zip.blockmap"
+            "Modus-$VERSION-win-x64-setup.exe" "Modus-$VERSION-win-x64-setup.exe.blockmap"
+            "Modus-$VERSION-linux-x86_64.AppImage" "Modus-$VERSION-linux-amd64.deb"
+          )
+          for f in "${required[@]}"; do
+            [[ -s "$f" ]] || { echo "::error::missing $f"; exit 1; }
+          done
+
+      - name: Upload to draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          is_draft="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
+          if [[ "$is_draft" != "true" ]]; then
+            echo "::error::Release $TAG is no longer a draft; refusing to upload."
+            exit 1
+          fi
+          shopt -s nullglob
+          gh release upload "$TAG" --clobber ./*
+
+      - name: Verify draft assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          uploaded="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          missing=0
+          for f in *; do
+            if ! grep -Fxq "$f" <<<"$uploaded"; then
+              echo "::error::$f is not on the draft release"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Summary
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          {
+            echo "### Draft release $TAG is ready"
+            echo
+            echo "Channel: \`${{ needs.prepare.outputs.channel }}\` (metadata: \`$MAC_METADATA\`, \`$WINDOWS_METADATA\`, \`$LINUX_METADATA\`)."
+            echo
+            echo "The release is still a **draft**. Review the assets and publish it manually on GitHub;"
+            echo "clients only see the update once it is published."
+          } >> "$GITHUB_STEP_SUMMARY"
