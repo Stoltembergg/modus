@@ -113,6 +113,7 @@ const EVIDENCE_VALUE: Record<ProjectMemoryEvidence["kind"], number> = {
   commit: 6,
   file: 8,
   symbol: 10,
+  external_reference: 0,
 };
 
 type LocalCandidate = ContextCandidate & {
@@ -343,13 +344,19 @@ function citations(evidence: ProjectMemoryEvidence[]): string {
   const references = evidence
     .map((item, index) => {
       let text: string;
-      if (item.path) text = `file:${normalizeRelativePath(item.path)}`;
+      if (item.kind === "external_reference" && item.externalReference) {
+        text = `untrusted external reference:${item.externalReference.sourceLabel} ${item.externalReference.url}`;
+      } else if (item.path) text = `file:${normalizeRelativePath(item.path)}`;
       else if (item.symbol) text = `symbol:${item.symbol}`;
       else if (item.commitSha) text = `commit:${item.commitSha}`;
       else if (item.branch) text = `branch:${item.branch}`;
       else if (item.taskRef) text = `task:${item.taskRef}`;
       else text = item.kind;
-      return { text, priority: priority[item.kind], index };
+      return {
+        text,
+        priority: item.kind === "external_reference" ? 8 : priority[item.kind],
+        index,
+      };
     })
     .sort((a, b) => a.priority - b.priority || a.index - b.index)
     .slice(0, 3)

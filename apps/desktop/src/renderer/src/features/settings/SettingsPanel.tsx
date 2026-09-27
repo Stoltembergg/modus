@@ -5,12 +5,14 @@ import {
   IconArchiveOff,
   IconArrowLeft,
   IconBrain,
+  IconBulb,
   IconCheck,
   IconChevronRight,
   IconCodeDots,
   IconCopy,
   IconCube,
   IconEdit,
+  IconExternalLink,
   IconFileText,
   IconFilter,
   IconGauge,
@@ -33,11 +35,23 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { AnimatePresence, m, useReducedMotion } from "motion/react";
-import { type FormEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { joinCommandLine, splitCommandLine } from "../../../../shared/command-line";
 import type {
   ConfigScope,
   CustomProviderConfig,
+  HarnessInsight,
+  HarnessInsightConfidence,
+  HarnessInsightsQuery,
+  HarnessInsightsResult,
   McpServerInfo,
   ModelInfo,
   ModelProviderDetail,
@@ -45,6 +59,7 @@ import type {
   ModelSettingsState,
   PersonalizationState,
   ProjectMemoryCategory,
+  ProjectMemoryExternalReference,
   ProjectMemoryRecord,
   ProjectMemoryScope,
   ProjectMemorySnapshot,
@@ -110,6 +125,7 @@ type SettingsSectionId =
   | "mcp"
   | "rules"
   | "project-memory"
+  | "harness-insights"
   | "limits";
 type ModelConfigPatch = {
   thinkingVariant?: string;
@@ -543,6 +559,9 @@ export function SettingsPanel({
           {activeSection === "project-memory" ? (
             <ProjectMemorySettingsPanel workspaceId={workspaceId} />
           ) : null}
+          {activeSection === "harness-insights" ? (
+            <HarnessInsightsSettingsPanel workspaceId={workspaceId} />
+          ) : null}
           {activeSection === "limits" ? <LimitsSettingsPanel models={state?.models ?? []} /> : null}
           {activeSection === "model-provider" ? (
             <ModelProviderSettingsPanel
@@ -634,7 +653,7 @@ export function SettingsPanel({
   );
 }
 
-function SettingsSidebar({
+export function SettingsSidebar({
   activeSection,
   query,
   onBack,
@@ -708,6 +727,13 @@ function SettingsSidebar({
             onClick={() => onSectionChange("project-memory")}
           >
             Project memory
+          </SettingsNavItem>
+          <SettingsNavItem
+            active={activeSection === "harness-insights"}
+            icon={<IconBulb size={16} stroke={1.7} />}
+            onClick={() => onSectionChange("harness-insights")}
+          >
+            Harness Insights
           </SettingsNavItem>
           <SettingsNavItem
             active={activeSection === "mcp"}
@@ -1427,6 +1453,310 @@ function GeneralSettingsPanel({
   );
 }
 
+const HARNESS_INSIGHTS_WINDOW_DAYS = 30;
+const HARNESS_INSIGHTS_LIMIT = 50;
+const MIN_COMPARABLE_INSIGHT_EPISODES = 3;
+type HarnessInsightsWindowDays = 7 | 30 | 90;
+
+export function harnessInsightsQueryForWorkspace(
+  workspaceId: string | undefined,
+  now = new Date(),
+  windowDays: HarnessInsightsWindowDays = HARNESS_INSIGHTS_WINDOW_DAYS,
+): HarnessInsightsQuery | undefined {
+  if (!workspaceId || workspaceId === CHATS_WORKSPACE_ID) return undefined;
+  return {
+    workspaceId,
+    since: new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000).toISOString(),
+    limit: HARNESS_INSIGHTS_LIMIT,
+  };
+}
+
+export function harnessInsightConfidenceLabel(confidence: HarnessInsightConfidence): string {
+  return `${confidence.charAt(0).toUpperCase()}${confidence.slice(1)} confidence`;
+}
+
+function harnessInsightKindLabel(kind: HarnessInsight["kind"]): string {
+  const labels: Record<HarnessInsight["kind"], string> = {
+    repeated_failures: "Repeated failures",
+    same_path_rework: "Same-path rework",
+    context_pressure: "Context pressure",
+    delegation_mismatch: "Delegation mismatch",
+    missing_verification: "Missing verification",
+  };
+  return labels[kind];
+}
+
+function harnessInsightDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      }).format(date)
+    : "Date unavailable";
+}
+
+function harnessInsightPeriod(period: HarnessInsight["period"]): string {
+  return `${harnessInsightDate(period.since)} – ${harnessInsightDate(period.until)}`;
+}
+
+export type HarnessInsightsViewState =
+  | { status: "unavailable" }
+  | { status: "loading" }
+  | { status: "error" }
+  | { status: "loaded"; result: HarnessInsightsResult };
+
+export function HarnessInsightsView({
+  onPeriodChange,
+  onRefresh,
+  periodDays,
+  state,
+}: {
+  onPeriodChange(days: HarnessInsightsWindowDays): void;
+  onRefresh(): void;
+  periodDays: HarnessInsightsWindowDays;
+  state: HarnessInsightsViewState;
+}) {
+  return (
+    <>
+      <SettingsPageHeader
+        actions={
+          state.status !== "unavailable" ? (
+            <>
+              <label className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2 text-xs text-fg-muted">
+                <span className="sr-only">Insights time window</span>
+                <select
+                  aria-label="Insights time window"
+                  className="h-full cursor-pointer bg-transparent text-fg outline-none"
+                  onChange={(event) =>
+                    onPeriodChange(Number(event.target.value) as HarnessInsightsWindowDays)
+                  }
+                  value={periodDays}
+                >
+                  <option value={7}>7 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={90}>90 days</option>
+                </select>
+              </label>
+              <button
+                aria-label="Refresh Harness Insights"
+                className="flex h-8 items-center gap-1.5 rounded-md border border-hairline-soft px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:cursor-wait disabled:opacity-50"
+                disabled={state.status === "loading"}
+                onClick={onRefresh}
+                type="button"
+              >
+                <IconRefresh
+                  aria-hidden
+                  className={
+                    state.status === "loading" ? "animate-spin motion-reduce:animate-none" : ""
+                  }
+                  size={14}
+                />
+                Refresh
+              </button>
+            </>
+          ) : undefined
+        }
+        description="A local, on-demand summary of patterns in this workspace. Findings are hypotheses, not proof."
+        title="Harness Insights"
+      />
+      {state.status === "unavailable" ? (
+        <div className="rounded-xl border border-hairline-soft bg-panel p-5 text-sm text-fg-muted">
+          Choose a workspace to view local insights.
+        </div>
+      ) : state.status === "loading" ? (
+        <div
+          aria-live="polite"
+          className="flex min-h-28 items-center justify-center gap-2 rounded-xl border border-hairline-soft bg-panel text-sm text-fg-muted"
+          role="status"
+        >
+          <IconRefresh aria-hidden className="animate-spin motion-reduce:animate-none" size={16} />
+          Loading local insights…
+        </div>
+      ) : state.status === "error" ? (
+        <div
+          className="flex flex-col items-start gap-3 rounded-xl border border-danger/20 bg-danger/5 p-5"
+          role="alert"
+        >
+          <p className="text-sm text-fg">Insights could not be loaded.</p>
+          <button
+            className="h-8 rounded-md border border-hairline-soft px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+            onClick={onRefresh}
+            type="button"
+          >
+            Try again
+          </button>
+        </div>
+      ) : (
+        <HarnessInsightsResults result={state.result} />
+      )}
+    </>
+  );
+}
+
+function HarnessInsightsResults({ result }: { result: HarnessInsightsResult }) {
+  const insufficient =
+    result.evidenceState === "unknown" || result.sampleCount < MIN_COMPARABLE_INSIGHT_EPISODES;
+
+  return (
+    <div className="space-y-5">
+      <section className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-hairline-soft bg-panel p-4">
+        <div className="min-w-0">
+          <p className="font-medium text-fg text-sm">Local evidence</p>
+          <p className="mt-1 text-xs text-fg-muted">
+            {result.sampleCount} {result.sampleCount === 1 ? "episode" : "episodes"} sampled
+          </p>
+        </div>
+        <span className="max-w-full break-words rounded-full border border-hairline-soft px-2.5 py-1 text-2xs text-fg-faint">
+          <span className="mr-1 font-medium">Period</span>
+          {harnessInsightPeriod(result.period)}
+        </span>
+      </section>
+
+      <p className="text-xs leading-relaxed text-fg-faint">
+        Patterns are suggestions from structured local activity. Nothing is applied or changed.
+      </p>
+
+      {insufficient ? (
+        <section
+          aria-live="polite"
+          className="rounded-xl border border-hairline-soft bg-panel p-5"
+          role="status"
+        >
+          <h3 className="font-medium text-fg text-sm">Not enough comparable activity yet</h3>
+          <p className="mt-1 text-xs leading-relaxed text-fg-muted">
+            At least {MIN_COMPARABLE_INSIGHT_EPISODES} similar task episodes are needed before
+            patterns can be suggested. Unknown means there is not enough comparable evidence, not
+            zero activity.
+          </p>
+          <HarnessInsightLimitations limitations={result.limitations} />
+        </section>
+      ) : result.insights.length === 0 ? (
+        <section className="rounded-xl border border-hairline-soft bg-panel p-5">
+          <h3 className="font-medium text-fg text-sm">No findings for this period.</h3>
+          <p className="mt-1 text-xs text-fg-muted">
+            No clear pattern was surfaced from these episodes.
+          </p>
+          <HarnessInsightLimitations limitations={result.limitations} />
+        </section>
+      ) : (
+        <>
+          <HarnessInsightLimitations limitations={result.limitations} />
+          <div className="grid min-w-0 gap-3">
+            {result.insights.map((insight) => (
+              <article
+                className="min-w-0 rounded-xl border border-hairline-soft bg-panel p-4"
+                key={insight.id}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-medium text-fg text-sm">
+                    {harnessInsightKindLabel(insight.kind)}
+                  </h3>
+                  <span className="rounded-full border border-warning/25 bg-warning/8 px-2 py-0.5 text-2xs text-warning">
+                    Hypothesis
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-fg">{insight.claim}</p>
+                <div className="mt-3 rounded-lg bg-surface/60 p-3">
+                  <p className="text-2xs font-medium text-fg-muted">Suggestion</p>
+                  <p className="mt-1 text-xs leading-relaxed text-fg-subtle">
+                    {insight.recommendation}
+                  </p>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-faint">
+                  <span>
+                    {insight.sampleCount} {insight.sampleCount === 1 ? "sample" : "samples"}
+                  </span>
+                  <span>{harnessInsightConfidenceLabel(insight.confidence)}</span>
+                  <span>Period · {harnessInsightPeriod(insight.period)}</span>
+                </div>
+                <HarnessInsightLimitations limitations={insight.limitations} />
+                {insight.sourceRefs.length ? (
+                  <div className="mt-3 border-hairline-soft border-t pt-2.5">
+                    <p className="text-2xs font-medium text-fg-muted">Source references</p>
+                    <ul className="mt-1 flex flex-wrap gap-1.5">
+                      {insight.sourceRefs.slice(0, 6).map((reference) => (
+                        <li
+                          className="max-w-full break-all rounded-md bg-surface px-2 py-1 font-mono text-2xs text-fg-faint"
+                          key={`${insight.id}-${reference.runId}-${reference.eventId ?? "run"}`}
+                        >
+                          Run {reference.runId}
+                          {reference.eventId ? ` · Event ${reference.eventId}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function HarnessInsightLimitations({ limitations }: { limitations: string[] }) {
+  return limitations.length ? (
+    <ul className="mt-3 space-y-1 text-2xs leading-relaxed text-fg-faint">
+      {limitations.slice(0, 4).map((limitation) => (
+        <li className="break-words" key={limitation}>
+          {limitation}
+        </li>
+      ))}
+    </ul>
+  ) : null;
+}
+
+function HarnessInsightsSettingsPanel({ workspaceId }: { workspaceId?: string | undefined }) {
+  const [periodDays, setPeriodDays] = useState<HarnessInsightsWindowDays>(30);
+  const [state, setState] = useState<HarnessInsightsViewState>(() =>
+    harnessInsightsQueryForWorkspace(workspaceId, new Date(), 30)
+      ? { status: "loading" }
+      : { status: "unavailable" },
+  );
+  const requestId = useRef(0);
+
+  const load = useCallback(async (): Promise<void> => {
+    const currentRequestId = ++requestId.current;
+    const query = harnessInsightsQueryForWorkspace(workspaceId, new Date(), periodDays);
+    if (!query) {
+      setState({ status: "unavailable" });
+      return;
+    }
+    setState({ status: "loading" });
+    try {
+      const result = await window.modus.harnessInsights.get(query);
+      if (currentRequestId === requestId.current) {
+        setState(
+          result.workspaceId === query.workspaceId
+            ? { status: "loaded", result }
+            : { status: "error" },
+        );
+      }
+    } catch {
+      if (currentRequestId === requestId.current) setState({ status: "error" });
+    }
+  }, [workspaceId, periodDays]);
+
+  useEffect(() => {
+    void load();
+    return () => {
+      requestId.current += 1;
+    };
+  }, [load]);
+
+  return (
+    <HarnessInsightsView
+      onPeriodChange={setPeriodDays}
+      onRefresh={() => void load()}
+      periodDays={periodDays}
+      state={state}
+    />
+  );
+}
+
 export function groupProjectMemories(
   memories: ProjectMemoryRecord[],
   workspaceId?: string,
@@ -1530,11 +1860,67 @@ function projectMemoryCategoryLabel(category: ProjectMemoryCategory): string {
 function projectMemorySourceLabel(memory: ProjectMemoryRecord): string {
   const source = memory.evidence[0];
   if (!source) return "No source details";
+  if (source.externalReference) return source.externalReference.sourceLabel;
   const detail =
     source.path ?? source.symbol ?? source.branch ?? source.commitSha ?? source.taskRef;
   return detail
     ? `${source.kind.replaceAll("_", " ")} · ${detail}`
     : source.kind.replaceAll("_", " ");
+}
+
+export function safeExternalReferenceUrl(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+      return undefined;
+    }
+    return url.href;
+  } catch {
+    return undefined;
+  }
+}
+
+function ExternalMemoryReference({ reference }: { reference: ProjectMemoryExternalReference }) {
+  const href = safeExternalReferenceUrl(reference.url);
+  const label = reference.title?.trim() || reference.url;
+  const attribution =
+    reference.origin === "agent_supplied_unverified"
+      ? `Untrusted · ${reference.sourceLabel} · Needs review`
+      : reference.sourceLabel;
+
+  return (
+    <div className="flex min-w-0 items-start gap-2 rounded-lg border border-warning/20 bg-warning/5 px-2.5 py-2">
+      <IconExternalLink aria-hidden className="mt-0.5 shrink-0 text-warning" size={14} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="font-medium text-2xs text-warning">Untrusted external reference</span>
+          <span className="max-w-full truncate text-2xs text-fg-faint">{attribution}</span>
+        </div>
+        <p className="mt-0.5 text-2xs text-fg-faint">External page content is not verified.</p>
+        {href ? (
+          <a
+            aria-label={`Open external reference: ${label}`}
+            className="mt-1 inline-flex max-w-full items-center gap-1 rounded-sm text-xs text-accent underline decoration-accent/40 underline-offset-2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
+            href={href}
+            rel="noopener noreferrer"
+            target="_blank"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="block max-w-full truncate">{label}</span>
+              {reference.title?.trim() ? (
+                <span className="block max-w-full truncate text-2xs text-fg-faint">{href}</span>
+              ) : null}
+            </span>
+            <IconExternalLink aria-hidden className="shrink-0" size={12} />
+          </a>
+        ) : (
+          <span className="mt-1 block max-w-full truncate text-xs text-fg-faint">
+            External URL unavailable
+          </span>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function ProjectMemorySettingsPanel({ workspaceId }: { workspaceId?: string | undefined }) {
@@ -1763,7 +2149,7 @@ function ProjectMemoryScopeSection({
   );
 }
 
-function ProjectMemoryRow({
+export function ProjectMemoryRow({
   memory,
   busy,
   onVerify,
@@ -1784,6 +2170,9 @@ function ProjectMemoryRow({
   const lastVerified = memory.lastVerifiedAt
     ? formatClock(Date.parse(memory.lastVerifiedAt))
     : "Not verified";
+  const externalReferences = memory.evidence.flatMap((evidence) =>
+    evidence.externalReference ? [evidence.externalReference] : [],
+  );
 
   return (
     <article className="px-4 py-3">
@@ -1804,6 +2193,17 @@ function ProjectMemoryRow({
             <span>Verification: {projectMemoryVerificationLabel(memory.verification)}</span>
             <span>Last verified: {lastVerified}</span>
           </div>
+          {externalReferences.length ? (
+            <fieldset className="mt-2 min-w-0 border-0 p-0">
+              <legend className="sr-only">External evidence</legend>
+              {externalReferences.map((reference) => (
+                <ExternalMemoryReference
+                  key={`${memory.id}-${reference.url}-${reference.retrievedAt}`}
+                  reference={reference}
+                />
+              ))}
+            </fieldset>
+          ) : null}
           {projectMemoryVerifyVisible(memory.status) ? (
             <p className="mt-2 text-xs text-warning">
               {memory.status === "provisional"
@@ -2384,7 +2784,7 @@ type KeyValuePair = { id: string; key: string; value: string };
 type McpScope = "user" | "project";
 type SettingsProjectTab = { rootPath: string; displayName: string };
 
-type McpFormState = {
+export type McpFormState = {
   /** undefined = creating; otherwise the server being edited. */
   originalName: string | undefined;
   scope: McpScope;
@@ -2396,6 +2796,10 @@ type McpFormState = {
   env: KeyValuePair[];
   headers: KeyValuePair[];
   enabled: boolean;
+  /** Exact raw tool names from a currently connected server. */
+  discoveredTools: string[];
+  readOnlyToolAllowlist: string[];
+  confirmReadOnlyToolAllowlist: boolean;
 };
 
 const emptyMcpForm = (scope: McpScope = "project", projectCwd = ""): McpFormState => ({
@@ -2409,7 +2813,52 @@ const emptyMcpForm = (scope: McpScope = "project", projectCwd = ""): McpFormStat
   env: [],
   headers: [],
   enabled: true,
+  discoveredTools: [],
+  readOnlyToolAllowlist: [],
+  confirmReadOnlyToolAllowlist: false,
 });
+
+export function normalizeReadOnlyMcpAllowlist(
+  discoveredTools: string[],
+  configuredNames: unknown,
+  connected: boolean,
+): string[] {
+  if (!connected || !Array.isArray(configuredNames)) return [];
+  const selected = new Set(
+    configuredNames.filter((name): name is string => typeof name === "string"),
+  );
+  return [...new Set(discoveredTools)].filter((name) => selected.has(name));
+}
+
+export function toggleReadOnlyMcpTool(
+  discoveredTools: string[],
+  selectedNames: string[],
+  toolName: string,
+  checked: boolean,
+): string[] {
+  const available = [...new Set(discoveredTools)];
+  if (!available.includes(toolName)) {
+    return available.filter((name) => selectedNames.includes(name));
+  }
+  const selected = new Set(available.filter((name) => selectedNames.includes(name)));
+  if (checked) selected.add(toolName);
+  else selected.delete(toolName);
+  return available.filter((name) => selected.has(name));
+}
+
+export function canSaveReadOnlyMcpAllowlist(selectedNames: string[], confirmed: boolean): boolean {
+  return selectedNames.length === 0 || confirmed;
+}
+
+export function confirmedReadOnlyMcpAllowlist(
+  discoveredTools: string[],
+  selectedNames: string[],
+  confirmed: boolean,
+  connected: boolean,
+): string[] | undefined {
+  const selected = normalizeReadOnlyMcpAllowlist(discoveredTools, selectedNames, connected);
+  return canSaveReadOnlyMcpAllowlist(selected, confirmed) ? selected : undefined;
+}
 
 const pair = (key = "", value = ""): KeyValuePair => ({ id: crypto.randomUUID(), key, value });
 
@@ -2532,6 +2981,8 @@ function McpSettingsPanel({
       const args = Array.isArray(entry.args)
         ? entry.args.filter((item: unknown): item is string => typeof item === "string")
         : [];
+      const discoveredTools =
+        server.status === "connected" ? [...new Set(server.tools.map((tool) => tool.name))] : [];
       setForm({
         originalName: server.name,
         scope,
@@ -2543,6 +2994,13 @@ function McpSettingsPanel({
         env: recordToPairs(entry.env),
         headers: recordToPairs(entry.headers),
         enabled: server.status !== "disabled",
+        discoveredTools,
+        readOnlyToolAllowlist: normalizeReadOnlyMcpAllowlist(
+          discoveredTools,
+          entry.readOnlyToolAllowlist,
+          server.status === "connected",
+        ),
+        confirmReadOnlyToolAllowlist: false,
       });
     } catch (err) {
       setMcpError(err instanceof Error ? err.message : String(err));
@@ -2552,6 +3010,16 @@ function McpSettingsPanel({
   async function saveForm(current: McpFormState): Promise<void> {
     const targetCwd = current.scope === "project" ? current.projectCwd : effectiveProjectCwd;
     if (!targetCwd) return;
+    const readOnlyToolAllowlist = confirmedReadOnlyMcpAllowlist(
+      current.discoveredTools,
+      current.readOnlyToolAllowlist,
+      current.confirmReadOnlyToolAllowlist,
+      current.discoveredTools.length > 0,
+    );
+    if (readOnlyToolAllowlist === undefined) {
+      setMcpError("Confirm that every selected MCP tool is read-only before saving.");
+      return;
+    }
     setSaving(true);
     setMcpError(undefined);
     try {
@@ -2564,6 +3032,7 @@ function McpSettingsPanel({
           scope: current.scope,
           transport: current.transport,
           enabled: current.enabled,
+          readOnlyToolAllowlist,
           ...(current.transport === "stdio"
             ? { command: command ?? "", args, env: pairsToRecord(current.env) }
             : { url: current.url.trim(), headers: pairsToRecord(current.headers) }),
@@ -2848,7 +3317,7 @@ function McpSettingsPanel({
 }
 
 /** The add/edit server form — one paste-friendly command field, no JSON. */
-function McpServerForm({
+export function McpServerForm({
   busy,
   form,
   isNew,
@@ -2875,6 +3344,10 @@ function McpServerForm({
     (form.transport === "stdio"
       ? form.commandLine.trim().length > 0
       : /^https?:\/\//.test(form.url.trim()));
+  const allowlistConfirmed = canSaveReadOnlyMcpAllowlist(
+    form.readOnlyToolAllowlist,
+    form.confirmReadOnlyToolAllowlist,
+  );
 
   const set = (patch: Partial<McpFormState>): void => onChange({ ...form, ...patch });
 
@@ -2883,7 +3356,7 @@ function McpServerForm({
       className="flex flex-col gap-4 rounded-lg border border-hairline bg-panel p-5"
       onSubmit={(event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
-        if (canSave && !busy) {
+        if (canSave && allowlistConfirmed && !busy) {
           onSubmit(form);
         }
       }}
@@ -3023,6 +3496,57 @@ function McpServerForm({
         </>
       )}
 
+      <fieldset className="min-w-0 rounded-lg border border-hairline-soft p-3">
+        <legend className="px-1 font-medium text-fg text-sm">Read-only tools</legend>
+        <p className="mb-2 text-xs leading-relaxed text-fg-muted">
+          Only checked raw tool names are saved. Check each tool before marking it read-only.
+        </p>
+        {form.discoveredTools.length > 0 ? (
+          <ul className="grid min-w-0 gap-1.5 sm:grid-cols-2">
+            {form.discoveredTools.map((toolName) => (
+              <li key={toolName}>
+                <label className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-xs text-fg-subtle transition-colors hover:bg-hover">
+                  <input
+                    aria-label={`Allow ${toolName} as read-only`}
+                    checked={form.readOnlyToolAllowlist.includes(toolName)}
+                    className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-accent)]"
+                    onChange={(event) =>
+                      set({
+                        readOnlyToolAllowlist: toggleReadOnlyMcpTool(
+                          form.discoveredTools,
+                          form.readOnlyToolAllowlist,
+                          toolName,
+                          event.target.checked,
+                        ),
+                        confirmReadOnlyToolAllowlist: false,
+                      })
+                    }
+                    type="checkbox"
+                  />
+                  <span className="min-w-0 break-all font-mono">{toolName}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="rounded-md bg-surface px-2.5 py-2 text-xs text-fg-faint" role="status">
+            Tool list unavailable. No tools are allowed by default.
+          </p>
+        )}
+        {form.readOnlyToolAllowlist.length > 0 ? (
+          <label className="mt-3 flex cursor-pointer items-start gap-2 border-hairline-soft border-t pt-3 text-xs text-warning">
+            <input
+              aria-label="Confirm selected tools are read-only"
+              checked={form.confirmReadOnlyToolAllowlist}
+              className="mt-0.5 size-3.5 shrink-0 accent-[var(--color-warning)]"
+              onChange={(event) => set({ confirmReadOnlyToolAllowlist: event.target.checked })}
+              type="checkbox"
+            />
+            <span>I confirm that each selected tool is read-only.</span>
+          </label>
+        ) : null}
+      </fieldset>
+
       <div className="flex items-center justify-between border-hairline-soft border-t pt-4">
         <div className="flex items-center gap-2 text-fg-muted text-xs">
           <Switch.Root
@@ -3045,7 +3569,7 @@ function McpServerForm({
           </button>
           <button
             className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-3 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
-            disabled={!canSave || busy}
+            disabled={!canSave || !allowlistConfirmed || busy}
             type="submit"
           >
             {busy ? (

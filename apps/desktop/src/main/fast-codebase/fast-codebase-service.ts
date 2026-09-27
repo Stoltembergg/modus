@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const OUTPUT_CAP = 60_000;
 const RESULT_BODY_CAP = 24_000;
@@ -8,6 +8,10 @@ const STDERR_CAP = 20_000;
 const SOURCE_FILE_LIMIT = 1;
 const INDEX_TIMEOUT_MS = 5 * 60_000;
 const QUERY_TIMEOUT_MS = 90_000;
+const MAX_DISCOVERY_HITS = 50;
+const MAX_DISCOVERY_PATH_LENGTH = 512;
+const MAX_DISCOVERY_SYMBOL_LENGTH = 256;
+const MAX_DISCOVERY_KIND_LENGTH = 64;
 // biome-ignore lint/complexity/useRegexLiterals: regex literals with ESC trip noControlCharactersInRegex.
 const ANSI_ESCAPE = new RegExp("\\x1b(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", "g");
 
@@ -18,6 +22,7 @@ export type FastCodebaseProgress = {
 
 export type FastCodebaseResult = {
   text: string;
+  hits: FastCodebaseHit[];
   details: {
     indexDir: string;
     indexed: boolean;
@@ -26,6 +31,13 @@ export type FastCodebaseResult = {
     query: string;
     workspace: string;
   };
+};
+
+export type FastCodebaseHit = {
+  path: string;
+  symbol?: string;
+  line?: number;
+  kind?: string;
 };
 
 type CodeGraphCommand = {
@@ -278,6 +290,87 @@ function isPathInside(parent: string, child: string): boolean {
   return rel === "" || (!!rel && !rel.startsWith("..") && !isAbsolute(rel));
 }
 
+function realPathWithMissingSuffix(path: string): string | undefined {
+  let current = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) return undefined;
+    suffix.unshift(basename(current));
+    current = parent;
+  }
+  try {
+    return resolve(realpathSync(current), ...suffix);
+  } catch {
+    return undefined;
+  }
+}
+
+function boundedNodeName(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const name = value.trim();
+  return name ? name.slice(0, maxLength) : undefined;
+}
+
+function structuredDiscoveryHits(
+  text: string,
+  owningWorkspace: string,
+  queryWorkspace: string,
+): FastCodebaseHit[] {
+  try {
+    const parsed = JSON.parse(text) as CodeGraphQueryResult[];
+    if (!Array.isArray(parsed)) return [];
+    const ownerRealPath = realPathWithMissingSuffix(owningWorkspace);
+    if (!ownerRealPath) return [];
+    const hits: FastCodebaseHit[] = [];
+    const seen = new Set<string>();
+    for (const result of parsed) {
+      const node = result?.node;
+      if (
+        typeof node?.filePath !== "string" ||
+        !node.filePath.trim() ||
+        node.filePath.includes("\0") ||
+        node.filePath.replace(/\\/g, "/").split("/").includes("..")
+      ) {
+        continue;
+      }
+      const absolutePath = isAbsolute(node.filePath)
+        ? resolve(node.filePath)
+        : resolve(queryWorkspace, node.filePath);
+      const realPath = realPathWithMissingSuffix(absolutePath);
+      if (!realPath || !isPathInside(ownerRealPath, realPath)) continue;
+      const path = relative(resolve(owningWorkspace), absolutePath).replace(/\\/g, "/");
+      if (!isCodeGraphReferencePath(path) || path === ".") {
+        continue;
+      }
+      const symbol =
+        boundedNodeName(node.qualifiedName, MAX_DISCOVERY_SYMBOL_LENGTH) ??
+        boundedNodeName(node.name, MAX_DISCOVERY_SYMBOL_LENGTH);
+      const kind = boundedNodeName(node.kind, MAX_DISCOVERY_KIND_LENGTH);
+      const line =
+        typeof node.startLine === "number" &&
+        Number.isSafeInteger(node.startLine) &&
+        node.startLine > 0
+          ? node.startLine
+          : undefined;
+      const hit: FastCodebaseHit = {
+        path,
+        ...(symbol ? { symbol } : {}),
+        ...(line !== undefined ? { line } : {}),
+        ...(kind ? { kind } : {}),
+      };
+      const key = JSON.stringify(hit);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(hit);
+      if (hits.length >= MAX_DISCOVERY_HITS) break;
+    }
+    return hits;
+  } catch {
+    return [];
+  }
+}
+
 function details(input: {
   indexed: boolean;
   query: string;
@@ -308,6 +401,7 @@ function skippedResult(input: {
       "",
       "Next: use a workspace_path inside the current workspace, or fall back to read/grep/find for this turn.",
     ].join("\n"),
+    hits: [],
     details: details({
       indexed: false,
       query: input.query,
@@ -343,28 +437,29 @@ function parseStatus(result: CodeGraphCallResult): { pending: boolean } {
   }
 }
 
-function exactHitsText(text: string, limit: number): string {
-  try {
-    const results = JSON.parse(text) as CodeGraphQueryResult[];
-    if (!Array.isArray(results)) {
-      return "";
-    }
-    const hits = results
-      .map(({ node }) => {
-        if (!node?.filePath) {
-          return undefined;
-        }
-        const line = typeof node.startLine === "number" ? `:${node.startLine}` : "";
-        const symbol = node.qualifiedName ?? node.name;
-        const label = [node.kind, symbol].filter(Boolean).join(" ");
-        return `- ${node.filePath}${line}${label ? ` — ${label}` : ""}`;
-      })
-      .filter((line): line is string => Boolean(line))
-      .slice(0, limit);
-    return hits.length ? `**Exact hits**\n\n${hits.join("\n")}\n\n` : "";
-  } catch {
-    return "";
+function exactHitsText(hits: FastCodebaseHit[]): string {
+  const lines = hits.map((hit) => {
+    const line = hit.line ? `:${hit.line}` : "";
+    const label = [hit.kind, hit.symbol].filter(Boolean).join(" ");
+    return `- ${hit.path}${line}${label ? ` — ${label}` : ""}`;
+  });
+  return lines.length ? `**Exact hits**\n\n${lines.join("\n")}\n\n` : "";
+}
+
+function isCodeGraphReferencePath(path: unknown): path is string {
+  if (
+    typeof path !== "string" ||
+    !path ||
+    path === "." ||
+    path.length > MAX_DISCOVERY_PATH_LENGTH ||
+    path.includes("\0") ||
+    path.includes("\\") ||
+    isAbsolute(path) ||
+    /^[a-zA-Z]:/.test(path)
+  ) {
+    return false;
   }
+  return !path.split("/").some((segment) => segment === ".." || segment === "");
 }
 
 type IndexFlight = {
@@ -510,13 +605,14 @@ async function ensureIndexed(input: {
 
 async function queryCodeGraph(input: {
   cwd: string;
+  owningWorkspace: string;
   includeCode: boolean;
   limit: number;
   query: string;
   runner: CodeGraphRunner;
   signal?: AbortSignal | undefined;
   onProgress?: ((progress: FastCodebaseProgress) => void) | undefined;
-}): Promise<string> {
+}): Promise<{ text: string; hits: FastCodebaseHit[] }> {
   input.onProgress?.({ phase: "querying", message: "Querying CodeGraph..." });
   const exact = await input.runner(
     ["query", "-p", input.cwd, "-l", String(input.limit), "--json", input.query],
@@ -542,7 +638,10 @@ async function queryCodeGraph(input: {
   if (result.isError) {
     throw new Error(`Fast Codebase query failed:\n${failureText(result)}`);
   }
-  return capResultBody(
+  const hits = exact.isError
+    ? []
+    : structuredDiscoveryHits(exact.text, input.owningWorkspace, input.cwd);
+  const text = capResultBody(
     `How to use this map:
 - Read exact hit line ranges first, not whole files.
 - Prefer small reads around listed lines.
@@ -550,10 +649,11 @@ async function queryCodeGraph(input: {
 - Keep follow-up maps coordinate-first; use include_code only for a narrow implementation lookup.
 - Use grep for exact text existence or absence checks, preferably scoped to files or directories found here.
 
-${exact.isError ? "" : exactHitsText(exact.text, input.limit)}**Code map**
+${exactHitsText(hits)}**Code map**
 
 ${result.text.replaceAll("codegraph_explore", "fast_codebase")}`,
   );
+  return { text, hits };
 }
 
 function snapshot(cwd: string): string | undefined {
@@ -566,7 +666,14 @@ export async function runFastCodebase(input: FastCodebaseInput): Promise<FastCod
   const cwd = input.workspacePath ? resolve(baseCwd, input.workspacePath) : baseCwd;
   const limit = Math.max(1, Math.min(input.limit ?? 8, 12));
   const runner = input.runner ?? runCodeGraphCli;
-  if (!isPathInside(baseCwd, cwd)) {
+  const baseRealPath = realPathWithMissingSuffix(baseCwd);
+  const workspaceRealPath = realPathWithMissingSuffix(cwd);
+  if (
+    !isPathInside(baseCwd, cwd) ||
+    !baseRealPath ||
+    !workspaceRealPath ||
+    !isPathInside(baseRealPath, workspaceRealPath)
+  ) {
     return skippedResult({
       query: input.query,
       reason: `Fast Codebase did not start indexing because workspace_path is outside the current workspace: ${cwd}`,
@@ -581,6 +688,7 @@ export async function runFastCodebase(input: FastCodebaseInput): Promise<FastCod
   });
   const body = await queryCodeGraph({
     cwd,
+    owningWorkspace: baseCwd,
     includeCode: input.includeCode ?? false,
     limit,
     query: input.query,
@@ -595,10 +703,11 @@ export async function runFastCodebase(input: FastCodebaseInput): Promise<FastCod
       snapshot(cwd) ? ` (snapshot: ${snapshot(cwd)})` : ""
     }`,
     "",
-    body,
+    body.text,
   ].join("\n");
   return {
     text,
+    hits: body.hits,
     details: details({
       indexed: true,
       query: input.query,

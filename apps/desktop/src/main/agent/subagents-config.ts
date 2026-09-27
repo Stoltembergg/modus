@@ -18,6 +18,7 @@ import type {
 } from "../../shared/contracts";
 import { normalizeSkillName, parseFrontmatter } from "../skills/skills-config";
 import { listModels } from "./model-service";
+import { BUILTIN_SUBAGENTS, type BuiltinSubagentRole } from "./builtin-subagents";
 
 const USER_AGENT_FAMILIES = [".codex", ".claude", ".cursor", ".modus"] as const;
 const WORKSPACE_AGENT_FAMILIES = [".codex", ".claude", ".cursor", ".modus"] as const;
@@ -34,6 +35,20 @@ export type ParsedSubagent = {
   tools?: string[];
   disallowedTools?: string[];
   isolation: "shared" | "worktree";
+  body: string;
+};
+
+export type AvailableSubagentProfile = {
+  name: string;
+  role?: BuiltinSubagentRole;
+  description: string;
+  model: string;
+  readOnly: boolean;
+  tools?: string[];
+  disallowedTools?: string[];
+  isolation: "shared" | "worktree";
+  source: "builtin" | "user" | "workspace";
+  path?: string;
   body: string;
 };
 
@@ -98,6 +113,72 @@ function loadSubagentsForSettings(cwd: string, home: string = homedir()): Subage
 export function resolveSubagent(cwd: string, name: string): SubagentDetail | undefined {
   const normalized = normalizeSkillName(name);
   return loadWorkspaceSubagents(cwd).find((subagent) => subagent.name === normalized);
+}
+
+/** Runtime catalog: built-in defaults first, then workspace-winning Markdown profiles. */
+export function listAvailableSubagents(
+  cwd: string,
+  home: string = homedir(),
+): AvailableSubagentProfile[] {
+  const available = new Map<string, AvailableSubagentProfile>(
+    BUILTIN_SUBAGENTS.map((profile) => [profile.name, { ...profile }]),
+  );
+  for (const subagent of loadWorkspaceSubagents(cwd, home)) {
+    available.set(subagent.name, {
+      name: subagent.name,
+      ...(isBuiltinRole(subagent.name) ? { role: subagent.name } : {}),
+      description: subagent.description,
+      model: subagent.model,
+      readOnly: subagent.readOnly,
+      ...(subagent.tools ? { tools: subagent.tools } : {}),
+      ...(subagent.disallowedTools ? { disallowedTools: subagent.disallowedTools } : {}),
+      isolation: subagent.isolation,
+      source: subagent.scope,
+      path: subagent.path,
+      body: subagent.body,
+    });
+  }
+  return [...available.values()].map(enforceUiUxReadOnlyBoundary);
+}
+
+export function resolveAvailableSubagent(
+  cwd: string,
+  role: string,
+  home: string = homedir(),
+): AvailableSubagentProfile | undefined {
+  const normalized = normalizeSkillName(role);
+  return listAvailableSubagents(cwd, home).find((profile) => profile.name === normalized);
+}
+
+function isBuiltinRole(name: string): name is BuiltinSubagentRole {
+  return BUILTIN_SUBAGENTS.some((profile) => profile.name === name);
+}
+
+function enforceUiUxReadOnlyBoundary(
+  profile: AvailableSubagentProfile,
+): AvailableSubagentProfile {
+  if (profile.name !== "ui-ux") return profile;
+  return {
+    ...profile,
+    readOnly: true,
+    tools: ["read", "grep", "find", "ls", "fast_codebase"],
+    disallowedTools: [
+      ...new Set([
+        ...(profile.disallowedTools ?? []),
+        "write",
+        "edit",
+        "shell",
+        "process",
+        "terminal_run",
+        "terminal_read",
+        "terminal_list",
+        "terminal_write",
+        "terminal_kill",
+        "mcp",
+      ]),
+    ],
+    isolation: "shared",
+  };
 }
 
 export function getSubagent(cwd: string, path: string): SubagentDetail | undefined {
@@ -177,8 +258,9 @@ function composerModelsForPrompt(): Array<{ id: string; name: string }> {
 export function resolveSubagentsPrompt(
   cwd: string,
   models: ReadonlyArray<{ id: string; name: string }> = composerModelsForPrompt(),
+  home: string = homedir(),
 ): string {
-  const subagents = loadWorkspaceSubagents(cwd);
+  const subagents = listAvailableSubagents(cwd, home);
   const modelLines = [
     "### Available models",
     "Optional `task.model` must be an exact catalog id from this composer list; omit to inherit the parent model.",
@@ -187,7 +269,7 @@ export function resolveSubagentsPrompt(
   if (subagents.length === 0) {
     return [
       "## Subagents",
-      "No configured subagents are available. Use `task` without the `subagent` field for generic delegation; do not invent subagent names.",
+      "No custom subagents are configured. Built-ins are available defaults; use `task` without the `subagent` field for generic delegation and do not invent names.",
       "`task` starts a child and returns immediately; collect results with `wait` in the same turn — do not block inside `task`.",
       "",
       ...modelLines,
@@ -195,7 +277,8 @@ export function resolveSubagentsPrompt(
   }
   const lines = [
     "## Subagents",
-    "Subagents are local Markdown-defined specialists. Set the `subagent` field only to an exact name listed below; otherwise omit it for generic task delegation.",
+    "Subagents are built-in defaults and local Markdown-defined specialists. Set `subagent` only to an exact name listed below; otherwise omit it for generic task delegation.",
+    "Use `task` without the `subagent` field for generic delegation; do not invent subagent names.",
     "`task` starts a child and returns immediately; collect results with `wait` in the same turn — do not block inside `task`.",
     "If the user starts a message with `/name` and `name` is listed below, invoke that subagent.",
     "",

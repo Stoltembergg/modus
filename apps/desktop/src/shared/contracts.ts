@@ -40,8 +40,23 @@ export type ProjectMemoryVerification =
   | "tests_passed"
   | "parent_verified"
   | "unverified";
+export type ProjectMemoryExternalReference = {
+  url: string;
+  title?: string;
+  sourceLabel: string;
+  retrievedAt: string;
+  origin: "mcp_attested" | "agent_supplied_unverified";
+};
 export type ProjectMemoryEvidence = {
-  kind: "user_message" | "run" | "task" | "subagent" | "commit" | "file" | "symbol";
+  kind:
+    | "user_message"
+    | "run"
+    | "task"
+    | "subagent"
+    | "commit"
+    | "file"
+    | "symbol"
+    | "external_reference";
   sessionId?: string;
   runId?: string;
   userMessageId?: string;
@@ -51,6 +66,7 @@ export type ProjectMemoryEvidence = {
   path?: string;
   symbol?: string;
   detached?: boolean;
+  externalReference?: ProjectMemoryExternalReference;
 };
 export type ProjectMemoryRecord = {
   id: string;
@@ -95,6 +111,66 @@ export type AgentSessionInfo = {
 };
 
 export type AgentRunStatus = "running" | "completed" | "failed" | "blocked" | "cancelled";
+
+/* ── Agent harness classification and evidence ────────────────────────── */
+
+export type BuiltinAgentRole =
+  | "explore"
+  | "librarian"
+  | "oracle"
+  | "reviewer"
+  | "debugger"
+  | "ui-ux";
+export type HarnessTaskType = BuiltinAgentRole | "implementation" | "unknown";
+export type HarnessComplexity = "simple" | "moderate" | "complex";
+export type HarnessRisk = "low" | "medium" | "high";
+export type VerificationEvidenceStatus =
+  | "passed"
+  | "failed"
+  | "skipped"
+  | "missing"
+  | "unavailable"
+  | "user_confirmed";
+export type AutoQAStatus = VerificationEvidenceStatus | "not_required";
+export type HarnessEvidenceRef = {
+  id: string;
+  kind: string;
+  status: VerificationEvidenceStatus;
+  runId?: string;
+  eventId?: string;
+  revision?: string;
+  paths?: string[];
+  label: string;
+};
+export type HarnessQAResult = {
+  required: boolean;
+  status: AutoQAStatus;
+  reasonCode: string;
+  evidence: HarnessEvidenceRef[];
+};
+export type HarnessTaskClassification = {
+  taskType: HarnessTaskType;
+  complexity: HarnessComplexity;
+  risk: HarnessRisk;
+  confidence: "low" | "high";
+  suggestedRole?: BuiltinAgentRole;
+  reasons: string[];
+};
+export type HarnessRouteEvent = {
+  type: "harness.route";
+  sessionId: string;
+  runId: string;
+  taskType: HarnessTaskType;
+  selectedRole?: BuiltinAgentRole;
+  reasonCodes: string[];
+};
+export type TaskClassificationInput = {
+  text: string;
+  mode: "build" | "plan" | "spec";
+  contextPaths: string[];
+  changedPaths: string[];
+  hasDestructiveAction?: boolean;
+};
 
 export type SubagentWorktreeInfo = {
   path: string;
@@ -175,13 +251,15 @@ export type AgentRollbackResult = {
 
 /* ── Agent to-dos (live task list, Cursor-style) ───────────────────────── */
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled" | "blocked";
 
 export type TodoItem = {
   /** Stable id within the session (assigned by the todo tool when omitted). */
   id: string;
   content: string;
   status: TodoStatus;
+  /** Bounded explanation shown when a task is blocked on user input. */
+  blockedReason?: string;
 };
 
 /* ── Project rules (AGENTS.md / .cursor/rules) ─────────────────────────── */
@@ -326,7 +404,51 @@ export type AgentResponseModel = {
   responseModel?: string;
 };
 
+export type CodeGraphDiscoveryHit = {
+  path: string;
+  symbol?: string;
+  line?: number;
+  kind?: string;
+};
+
+export type CodeGraphDiscoveryRef = CodeGraphDiscoveryHit & { runId: string };
+
+export type HarnessInsightKind =
+  | "repeated_failures"
+  | "same_path_rework"
+  | "context_pressure"
+  | "delegation_mismatch"
+  | "missing_verification";
+export type HarnessInsightConfidence = "low" | "medium" | "high";
+export type HarnessInsightSourceRef = { runId: string; eventId?: string };
+export type HarnessInsight = {
+  id: string;
+  kind: HarnessInsightKind;
+  claim: string;
+  recommendation: string;
+  hypothesis: true;
+  period: { since: string; until: string };
+  sampleCount: number;
+  confidence: HarnessInsightConfidence;
+  limitations: string[];
+  sourceRefs: HarnessInsightSourceRef[];
+};
+export type HarnessInsightsQuery = {
+  workspaceId?: string;
+  since: string;
+  limit?: number;
+};
+export type HarnessInsightsResult = {
+  workspaceId: string;
+  period: { since: string; until: string };
+  evidenceState: "known" | "unknown";
+  sampleCount: number;
+  limitations: string[];
+  insights: HarnessInsight[];
+};
+
 export type AgentEvent =
+  | HarnessRouteEvent
   | { type: "agent.started"; sessionId: string }
   | { type: "agent.ended"; sessionId: string }
   | {
@@ -393,6 +515,7 @@ export type AgentEvent =
   | {
       type: "tool.started";
       sessionId: string;
+      runId?: string;
       toolCallId: string;
       toolName: string;
       args?: unknown;
@@ -413,7 +536,17 @@ export type AgentEvent =
       args?: unknown;
     }
   | { type: "tool.output"; sessionId: string; toolCallId: string; output: string }
-  | { type: "tool.ended"; sessionId: string; toolCallId: string; isError: boolean }
+  | {
+      type: "tool.ended";
+      sessionId: string;
+      runId?: string;
+      toolCallId: string;
+      toolName?: string;
+      isError: boolean;
+      exitCode?: number;
+      aborted?: boolean;
+      skipped?: boolean;
+    }
   | { type: "permission.requested"; sessionId: string; request: PermissionRequest }
   | {
       type: "permission.resolved";
@@ -451,6 +584,21 @@ export type AgentEvent =
   | { type: "checkpoint.created"; sessionId: string; checkpoint: CheckpointInfo }
   | { type: "checkpoint.restored"; sessionId: string; checkpointId: string }
   | { type: "todos.updated"; sessionId: string; todos: TodoItem[] }
+  | {
+      type: "harness.continuation";
+      sessionId: string;
+      /** Original/root run whose single continuation budget this marker consumes. */
+      runId: string;
+      attempt: 1;
+      reasonCode: "actionable_todos" | "missing_qa";
+    }
+  | { type: "harness.qa"; sessionId: string; runId: string; result: HarnessQAResult }
+  | {
+      type: "codegraph.discoveries";
+      sessionId: string;
+      runId: string;
+      hits: CodeGraphDiscoveryHit[];
+    }
   | {
       type: "subagent.started";
       sessionId: string;
@@ -677,7 +825,7 @@ export type ApprovalModeState = {
  * read-only planning harness (research + write a single plan.md via plan_write;
  * no edit/write/bash). Carried per-prompt so the user can toggle it freely.
  */
-export type AgentMode = "build" | "plan";
+export type AgentMode = "build" | "plan" | "spec";
 
 /** Branch / remote / sync state for the git review panel header + commit dialog. */
 export type GitStatusSummary = {
@@ -1428,6 +1576,8 @@ export type McpServerUpsertInput = {
   env?: Record<string, string> | undefined;
   url?: string | undefined;
   headers?: Record<string, string> | undefined;
+  /** Exact MCP tool names explicitly allowlisted as read-only by the user. */
+  readOnlyToolAllowlist?: string[] | undefined;
   enabled: boolean;
 };
 
@@ -1531,7 +1681,51 @@ export type FilesChangeEvent = {
  * ordered steps. `status` is `pending` until the
  * v2 runtime binds live `todo_write` progress; v1 never fakes completion.
  */
-export type PlanTodo = { id: string; content: string; status: "pending" | "completed" };
+export type PlanTodo = {
+  id: string;
+  content: string;
+  status: "pending" | "completed";
+  acceptanceCriterionIds?: string[];
+};
+
+export type PlanRequirement = { id: string; text: string };
+
+export type PlanAcceptanceCriterion = {
+  id: string;
+  requirementId: string;
+  description: string;
+  todoIds: string[];
+  requiredCheckKinds?: Array<"tests" | "typecheck" | "lint" | "build">;
+  status: "pending" | "passed" | "failed" | "skipped" | "blocked";
+};
+
+export type PlanEvidenceRef = HarnessEvidenceRef & { criterionId: string };
+
+export type PlanSpec = {
+  requirements: PlanRequirement[];
+  acceptanceCriteria: PlanAcceptanceCriterion[];
+  evidence: PlanEvidenceRef[];
+  assumptions: string[];
+  openQuestions: string[];
+};
+
+export type HyperPlanCriticId = "architecture" | "risk" | "simplicity" | "failure";
+
+export type HyperPlanCriticResult = {
+  critic: HyperPlanCriticId;
+  status: "completed" | "unavailable";
+  findings: string[];
+  references: string[];
+};
+
+export type HyperPlanSummary = {
+  critiques: HyperPlanCriticResult[];
+  agreements: string[];
+  disagreements: string[];
+  risks: string[];
+  openQuestions: string[];
+  references: string[];
+};
 
 /**
  * Build lifecycle of a plan, driven authoritatively by the build turn's run
@@ -1561,6 +1755,8 @@ export type PlanRef = {
   content: string;
   /** Structured task list used by the approval/build flow. */
   todos: PlanTodo[];
+  /** Optional structured requirements and evidence authored in Spec Mode. */
+  spec?: PlanSpec;
   /** Build lifecycle state (see PlanBuildStatus). */
   buildStatus: PlanBuildStatus;
   createdAt: string;

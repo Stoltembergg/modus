@@ -39,6 +39,7 @@ const mocks = vi.hoisted(() => {
     sessionManagerOpen: vi.fn(() => ({ kind: "open" })),
     resourceLoaderOptions: [] as unknown[],
     globalGuidance: undefined as string | undefined,
+    allowlistedMcpToolNames: [] as string[],
   };
 });
 
@@ -92,6 +93,10 @@ vi.mock("../process/managed-process-facade", () => ({
   listManagedProcesses: mocks.listManagedProcesses,
 }));
 
+vi.mock("../mcp/mcp-service", () => ({
+  listAllowlistedMcpToolNames: () => mocks.allowlistedMcpToolNames,
+}));
+
 vi.mock("./model-service", () => ({
   cycleDefaultModel: vi.fn(() => ({
     id: "mock/model",
@@ -133,21 +138,44 @@ vi.mock("./model-service", () => ({
 }));
 
 const { getDatabase } = await import("../db/database");
-const { PiSdkRuntime, removeRunOutputTrackerIfOwned } = await import("./pi-sdk-runtime");
+const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned } = await import(
+  "./pi-sdk-runtime"
+);
 const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
 const { recordAgentEvent } = await import("./agent-event-store");
-const { getAgentSession } = await import("./agent-store");
-const { getActiveAgentRun, createAgentRun, updateAgentRunStatus } = await import(
+const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
+const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
   "./agent-run-store"
 );
+const mcpCitations = await import("./harness/mcp-citation-registry");
 const projectMemory = await import("../memory/project-memory-service");
 const { writePlan, readPlanById } = await import("../plan/plan-store");
-const { setAgentToolContext } = await import("./tools/tool-context");
+const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/tool-context");
+const { resolveQuestionRequest } = await import("../interaction/question-broker");
+const todoToolRuntime = await import("./tools/todo-tools");
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
+  const prompt = vi.fn(
+    (
+      message: string,
+      options?: {
+        preflightResult?: (success: boolean) => void;
+        streamingBehavior?: string;
+      },
+    ) => {
+      if (deferPreflight !== true) options?.preflightResult?.(true);
+      if (typeof promptOverride === "function") {
+        return Promise.resolve(
+          (promptOverride as (text: string, options?: unknown) => unknown)(message, options),
+        );
+      }
+      return Promise.resolve();
+    },
+  );
   return {
     abort: vi.fn(async () => undefined),
     agent: { thinkingBudgets: undefined },
@@ -159,7 +187,7 @@ function createMockPiSession(overrides: Record<string, unknown> = {}): Record<st
       tokens: 240,
     })),
     model: mocks.model,
-    prompt: vi.fn(async () => undefined),
+    prompt,
     sessionFile: join(userData, "pi-sessions", "resumed.jsonl"),
     sessionId: "pi-resumed",
     // Authoritative turn state read by the runtime: whether a turn is streaming
@@ -176,7 +204,7 @@ function createMockPiSession(overrides: Record<string, unknown> = {}): Record<st
       mocks.setPiSubscriber(callback);
       return vi.fn();
     }),
-    ...overrides,
+    ...sessionOverrides,
   };
 }
 
@@ -211,6 +239,18 @@ function insertSession(
     now,
     now,
   );
+}
+
+function setTaskToolContext(workspaceId: string, sessionId: string, window: unknown): void {
+  createAgentRun({ sessionId, prompt: "Direct task-tool invocation test" });
+  setAgentToolContext({
+    workspaceId,
+    cwd,
+    sessionId,
+    profile: "chat",
+    window: window as never,
+    emit: vi.fn(),
+  });
 }
 
 function proposeMemoryForRun(input: {
@@ -293,12 +333,14 @@ async function initGitRepo(): Promise<void> {
 beforeEach(async () => {
   userData = await mkdtemp(join(tmpdir(), "modus-pi-runtime-test-"));
   cwd = await mkdtemp(join(tmpdir(), "modus-pi-runtime-cwd-"));
+  await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
   mocks.setPiSubscriber(undefined);
   mocks.sessionManagerCreate.mockClear();
   mocks.sessionManagerOpen.mockClear();
   mocks.resourceLoaderOptions = [];
   mocks.globalGuidance = undefined;
+  mocks.allowlistedMcpToolNames = [];
   mocks.killManagedProcess.mockClear();
   mocks.listManagedProcesses.mockClear();
   mocks.setManagedProcesses([]);
@@ -317,6 +359,1243 @@ afterAll(async () => {
 });
 
 describe("PiSdkRuntime", () => {
+  it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
+    const registeredName = "mcp_docs_search";
+    mocks.allowlistedMcpToolNames = [registeredName];
+    toolRegistry.registerTool({
+      entry: {
+        name: registeredName,
+        profiles: ["chat", "plan"],
+        permission: { danger: "safe" },
+        capabilities: ["read"],
+        ui: { verb: "Search" },
+      },
+      definition: { name: registeredName } as never,
+    });
+    const info = {
+      id: "librarian-child",
+      workspaceId: "workspace",
+      title: "Librarian",
+      cwd,
+      status: "idle" as const,
+      parentSessionId: "missing-parent",
+      subagentType: "librarian",
+      createdAt: "",
+      updatedAt: "",
+    };
+
+    try {
+      expect(activeToolNamesForSession(info, "chat")).toContain(registeredName);
+      expect(
+        activeToolNamesForSession({ ...info, subagentType: "reviewer" }, "chat"),
+      ).not.toContain(registeredName);
+
+      const agentsDir = join(cwd, ".modus", "agents");
+      await mkdir(agentsDir, { recursive: true });
+      await writeFile(
+        join(agentsDir, "librarian.md"),
+        "---\nname: librarian\ntools: read, grep, find, ls\n---\nWorkspace librarian override.",
+      );
+      expect(activeToolNamesForSession(info, "chat")).not.toContain(registeredName);
+    } finally {
+      toolRegistry.unregisterTool(registeredName);
+    }
+  });
+
+  it("expires MCP citations when a run completes", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let citationId = "";
+    let runId = "";
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for citation ownership");
+        runId = run.id;
+        const citation = mcpCitations.registerMcpCitations(sessionId, run.id, "docs", "search", {
+          content: [
+            { type: "resource_link", uri: "https://runtime.example.test/guide", name: "Guide" },
+          ],
+        } as never)[0];
+        citationId = citation?.id ?? "";
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Completed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+    });
+
+    expect(citationId).not.toBe("");
+    expect(mcpCitations.resolveMcpCitation(sessionId, runId, citationId)).toBeUndefined();
+  });
+
+  it("expires MCP citations when an active run is aborted", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyCitationCreated: (() => void) | undefined;
+    let citationId = "";
+    const citationCreated = new Promise<void>((resolve) => {
+      notifyCitationCreated = resolve;
+    });
+    const session = createMockPiSession({
+      abort: vi.fn(async () => rejectPrompt?.(new Error("Aborted"))),
+      prompt: vi.fn(() => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for citation ownership");
+        citationId =
+          mcpCitations.registerMcpCitations(sessionId, run.id, "docs", "search", {
+            content: [
+              { type: "resource_link", uri: "https://runtime.example.test/abort", name: "Abort" },
+            ],
+          } as never)[0]?.id ?? "";
+        notifyCitationCreated?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+    });
+    await citationCreated;
+    const runId = getActiveAgentRun(sessionId)?.id;
+    expect(runId).toBeDefined();
+
+    await runtime.abort(sessionId);
+    await prompt;
+
+    expect(citationId).not.toBe("");
+    expect(mcpCitations.resolveMcpCitation(sessionId, runId ?? "", citationId)).toBeUndefined();
+  });
+
+  it("continues actionable todos once under the original root run and persists the attempt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const prompts: string[] = [];
+    let promptCount = 0;
+    let rootRunId: string | undefined;
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        promptCount += 1;
+        prompts.push(message);
+        const rootRun = getActiveAgentRun(sessionId);
+        if (!rootRun) throw new Error("expected current root run");
+        rootRunId ??= rootRun.id;
+        if (promptCount === 1) {
+          recordAgentEvent({
+            type: "todos.updated",
+            sessionId,
+            todos: [{ id: "todo-1", content: "Finish implementation", status: "pending" }],
+          });
+        }
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: `response ${promptCount}` },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Implement the feature",
+      sessionId,
+      userMessageId: "todo-root-user",
+    });
+
+    expect(promptCount).toBe(2);
+    expect(prompts[1]).toContain("Continue the remaining actionable to-dos");
+    const markers = getDatabase()
+      .prepare(
+        "select payload_json from agent_events where session_id = ? and type = 'harness.continuation'",
+      )
+      .all(sessionId) as Array<{ payload_json: string }>;
+    expect(markers).toHaveLength(1);
+    expect(JSON.parse(markers[0]?.payload_json ?? "{}")).toMatchObject({
+      type: "harness.continuation",
+      runId: rootRunId,
+      attempt: 1,
+      reasonCode: "actionable_todos",
+    });
+    expect(markers[0]?.payload_json).not.toContain("Implement the feature");
+  });
+
+  it.each([
+    [false, "passed"],
+    [true, "failed"],
+  ] as const)("emits structured QA for a completed test tool call (error=%s)", async (isError, status) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "qa-terminal-call",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "qa-terminal-call",
+          toolName: "terminal_run",
+          isError,
+          result: { details: { exitCode: isError ? 1 : 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Check completed" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    expect(JSON.parse(qaPayload)).toMatchObject({
+      type: "harness.qa",
+      result: {
+        required: true,
+        status,
+        evidence: [expect.objectContaining({ label: "Tests", status })],
+      },
+    });
+    expect(qaPayload).not.toContain("npm test");
+  });
+
+  it("uses the shared continuation budget once when a requested QA check is missing", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run --root ." } }),
+    );
+    let promptCount = 0;
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        promptCount += 1;
+        prompts.push(message);
+        if (promptCount === 1) {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "missing-result-test-call",
+            toolName: "terminal_run",
+            args: { command: "npm test" },
+          });
+        }
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: `No check yet ${promptCount}` },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests for this change",
+      sessionId,
+    });
+
+    expect(promptCount).toBe(2);
+    expect(prompts[1]).toContain("Eligible existing project check scripts: test");
+    expect(prompts[1]).not.toContain("vitest run --root .");
+    const events = getDatabase()
+      .prepare(
+        "select type, payload_json from agent_events where session_id = ? and type in ('harness.continuation', 'harness.qa')",
+      )
+      .all(sessionId) as Array<{ type: string; payload_json: string }>;
+    const markers = events.filter((event) => event.type === "harness.continuation");
+    const qa = events.filter((event) => event.type === "harness.qa");
+    expect(markers).toHaveLength(1);
+    expect(JSON.parse(markers[0]?.payload_json ?? "{}")).toMatchObject({
+      attempt: 1,
+      reasonCode: "missing_qa",
+    });
+    expect(qa).toHaveLength(1);
+    expect(JSON.parse(qa[0]?.payload_json ?? "{}")).toMatchObject({
+      result: { required: true, status: "missing", reasonCode: "required_check_missing" },
+    });
+  });
+
+  it("does not spend the QA continuation budget when no trusted project check script exists", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest list", lint: "eslint --fix ." } }),
+    );
+    const modelPrompt = vi.fn(async () => {
+      mocks.emitPiEvent({
+        type: "tool_execution_start",
+        toolCallId: "listed-tests-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      });
+      mocks.emitPiEvent({
+        type: "tool_execution_end",
+        toolCallId: "listed-tests-call",
+        toolName: "terminal_run",
+        isError: false,
+        result: { details: { exitCode: 0 } },
+      });
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "No known test script" },
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+
+    expect(modelPrompt).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        getDatabase()
+          .prepare(
+            "select count(*) as count from agent_events where session_id = ? and type = 'harness.continuation'",
+          )
+          .get(sessionId) as { count: number }
+      ).count,
+    ).toBe(0);
+    expect(
+      JSON.parse(
+        (
+          getDatabase()
+            .prepare(
+              "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+            )
+            .get(sessionId) as { payload_json: string }
+        ).payload_json,
+      ),
+    ).toMatchObject({ result: { status: "missing", required: true } });
+  });
+
+  it.each([
+    ["rejects a posttest hook that mutates source", "eslint --fix .", false],
+    ["allows a safe script without lifecycle hooks", undefined, true],
+  ] as const)("%s", async (_label, posttest, eligible) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run", ...(posttest ? { posttest } : {}) },
+      }),
+    );
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "No test evidence" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+
+    if (eligible) {
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("Eligible existing project check scripts: test");
+    } else {
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).not.toContain("Eligible existing project check scripts: test");
+    }
+  });
+
+  it("does not offer package check scripts whose bodies contain shell expansion", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run $VITEST_FLAGS" } }),
+    );
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "No test evidence" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).not.toContain("Eligible existing project check scripts: test");
+  });
+
+  it("does not use a check script from a package outside the declared workspace set", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await mkdir(join(cwd, "apps", "desktop"), { recursive: true });
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ workspaces: ["packages/*"] }));
+    await writeFile(
+      join(cwd, "apps", "desktop", "package.json"),
+      JSON.stringify({ name: "@modus/desktop", scripts: { typecheck: "tsc -p tsconfig.json" } }),
+    );
+    const modelPrompt = vi.fn(async () => {
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "No declared typecheck workspace" },
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run typecheck",
+      sessionId,
+    });
+
+    expect(modelPrompt).toHaveBeenCalledTimes(1);
+    expect(
+      (
+        getDatabase()
+          .prepare(
+            "select count(*) as count from agent_events where session_id = ? and type = 'harness.continuation'",
+          )
+          .get(sessionId) as { count: number }
+      ).count,
+    ).toBe(0);
+  });
+
+  it("discovers bounded declared workspace scripts and passes only the exact eligible command", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await mkdir(join(cwd, "apps", "desktop"), { recursive: true });
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ workspaces: ["apps/*"], scripts: { build: "build-root" } }),
+    );
+    await writeFile(
+      join(cwd, "apps", "desktop", "package.json"),
+      JSON.stringify({ name: "@modus/desktop", scripts: { typecheck: "tsc -p tsconfig.json" } }),
+    );
+    const prompts: string[] = [];
+    let calls = 0;
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        calls += 1;
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: `response ${calls}` },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run typecheck",
+      sessionId,
+    });
+
+    expect(calls).toBe(2);
+    expect(prompts[1]).toContain("npm --workspace @modus/desktop run typecheck");
+    expect(prompts[1]).not.toContain("tsc -p tsconfig.json");
+    expect(prompts[1]).not.toContain("build-root");
+  });
+
+  it("records not_required for a simple run without requested checks", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "Done" },
+          });
+        }),
+      }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+    });
+
+    expect(
+      JSON.parse(
+        (
+          getDatabase()
+            .prepare(
+              "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+            )
+            .get(sessionId) as { payload_json: string }
+        ).payload_json,
+      ),
+    ).toMatchObject({ result: { required: false, status: "not_required", evidence: [] } });
+  });
+
+  it("does not require or retry a check explicitly negated in the Build request", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const modelPrompt = vi.fn(async () => {
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "I will not run tests." },
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Do not run tests",
+      sessionId,
+    });
+
+    expect(modelPrompt).toHaveBeenCalledTimes(1);
+    expect(
+      JSON.parse(
+        (
+          getDatabase()
+            .prepare(
+              "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+            )
+            .get(sessionId) as { payload_json: string }
+        ).payload_json,
+      ),
+    ).toMatchObject({ result: { required: false, status: "not_required" } });
+    expect(
+      (
+        getDatabase()
+          .prepare(
+            "select count(*) as count from agent_events where session_id = ? and type = 'harness.continuation'",
+          )
+          .get(sessionId) as { count: number }
+      ).count,
+    ).toBe(0);
+  });
+
+  it("keeps an affirmative tests request when a different check is negated", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run", typecheck: "tsc --noEmit" } }),
+    );
+    const prompts: string[] = [];
+    const modelPrompt = vi.fn(async (message: string) => {
+      prompts.push(message);
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "No check result." },
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Don't run typecheck, but run tests",
+      sessionId,
+    });
+
+    expect(modelPrompt).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain("Eligible existing project check scripts: test");
+    expect(prompts[1]).not.toContain("typecheck");
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { evidence: Array<{ label: string }> } };
+    expect(qa.result.evidence.map((ref) => ref.label)).toEqual(["Tests"]);
+  });
+
+  it.each([
+    ["Run tests, but don't run typecheck", "test", "typecheck"],
+    ["Don't run tests, but run typecheck", "typecheck", "test"],
+    ["Run tests and skip typecheck", "test", "typecheck"],
+    ["Run tests and typecheck", "test, typecheck", "lint"],
+  ])("limits continuation QA guidance to the affirmative clause in %s", async (message, allowed, prohibited) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run", typecheck: "tsc --noEmit" } }),
+    );
+    const prompts: string[] = [];
+    const modelPrompt = vi.fn(async (prompt: string) => {
+      prompts.push(prompt);
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "No check result." },
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message,
+      sessionId,
+    });
+
+    expect(modelPrompt).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain(`Eligible existing project check scripts: ${allowed}`);
+    expect(prompts[1]).not.toContain(prohibited);
+  });
+
+  it("marks a started check unavailable when its run is aborted before the tool ends", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyCheckStarted: (() => void) | undefined;
+    const checkStarted = new Promise<void>((resolve) => {
+      notifyCheckStarted = resolve;
+    });
+    const abort = vi.fn(async () => rejectPrompt?.(new Error("Aborted")));
+    const session = createMockPiSession({
+      abort,
+      prompt: vi.fn(() => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "aborted-check-call",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        notifyCheckStarted?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+    await checkStarted;
+    await runtime.abort(sessionId);
+    await prompt;
+
+    const result = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { required: boolean; status: string } };
+    expect(result.result).toMatchObject({ required: true, status: "unavailable" });
+    expect(result.result.status).not.toBe("passed");
+  });
+
+  it("does not continue todos after input is queued into the current run", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let releaseModel: (() => void) | undefined;
+    let notifyStarted: (() => void) | undefined;
+    const modelGate = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    const modelStarted = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    let session: Record<string, unknown>;
+    const modelPrompt = vi.fn(async () => {
+      if (modelPrompt.mock.calls.length > 1) return;
+      session.isStreaming = true;
+      recordAgentEvent({
+        type: "todos.updated",
+        sessionId,
+        todos: [{ id: "todo-1", content: "Finish work", status: "pending" }],
+      });
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "Working" },
+      });
+      notifyStarted?.();
+      await modelGate;
+      session.isStreaming = false;
+      mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+    });
+    session = createMockPiSession({ prompt: modelPrompt });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const firstRun = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Work through the todo list",
+      sessionId,
+    });
+    await modelStarted;
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "steer",
+      message: "Take this new input into account",
+      sessionId,
+    });
+    releaseModel?.();
+    await firstRun;
+
+    expect(modelPrompt).toHaveBeenCalledTimes(2);
+    expect(
+      (
+        getDatabase()
+          .prepare(
+            "select count(*) as count from agent_events where session_id = ? and type = 'harness.continuation'",
+          )
+          .get(sessionId) as { count: number }
+      ).count,
+    ).toBe(0);
+  });
+
+  it("clears the in-memory TODO projection when runtime resources are released", async () => {
+    const clearCache = vi.spyOn(todoToolRuntime, "clearTodoSessionCache");
+    await new PiSdkRuntime().releaseRuntime("released-todo-cache-session");
+    expect(clearCache).toHaveBeenCalledWith("released-todo-cache-session");
+  });
+
+  it("applies the intent gate once to a fresh turn and not its queued steer", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let releaseModelPrompt: (() => void) | undefined;
+    let notifyModelPrompt: (() => void) | undefined;
+    const modelPromptStarted = new Promise<void>((resolve) => {
+      notifyModelPrompt = resolve;
+    });
+    const modelPromptGate = new Promise<void>((resolve) => {
+      releaseModelPrompt = resolve;
+    });
+    let session: Record<string, unknown>;
+    session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        if (session.isStreaming) return;
+        session.isStreaming = true;
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+        notifyModelPrompt?.();
+        await modelPromptGate;
+        session.isStreaming = false;
+        mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() => resolveQuestionRequest(event.request?.id ?? "", [], true));
+        }
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    const firstTurn = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Which deployment option should I choose?",
+      sessionId,
+      userMessageId: "intent-user-one",
+    });
+    await modelPromptStarted;
+    await runtime.prompt(window, {
+      context: [],
+      delivery: "steer",
+      message: "Which rollout option should I choose?",
+      sessionId,
+      userMessageId: "intent-user-steer",
+    });
+    releaseModelPrompt?.();
+    await firstTurn;
+
+    const questionEvents = getDatabase()
+      .prepare(
+        "select payload_json from agent_events where session_id = ? and type = 'question.requested'",
+      )
+      .all(sessionId) as Array<{ payload_json: string }>;
+    expect(questionEvents).toHaveLength(1);
+    expect(questionEvents[0]?.payload_json).not.toContain("Which deployment option");
+    expect(questionEvents[0]?.payload_json).not.toContain("Which rollout option");
+  });
+
+  it("proceeds with only the default assumption when clarification is skipped", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() => resolveQuestionRequest(event.request?.id ?? "", [], true));
+        }
+      },
+    );
+
+    await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Which rollout option should I choose? PRIVATE_INTENT_TEXT",
+      sessionId,
+    });
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Assumption: Use a conservative default and proceed.");
+    const questionPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'question.requested'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    expect(questionPayload).not.toContain("PRIVATE_INTENT_TEXT");
+  });
+
+  it("blocks a consequential action when confirmation is skipped", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const modelPrompt = vi.fn(async () => undefined);
+    const session = createMockPiSession({ prompt: modelPrompt });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() => resolveQuestionRequest(event.request?.id ?? "", [], true));
+        }
+      },
+    );
+
+    await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete the production database PRIVATE_INTENT_TEXT",
+      sessionId,
+    });
+
+    expect(modelPrompt).not.toHaveBeenCalled();
+    const events = getDatabase()
+      .prepare("select type, payload_json from agent_events where session_id = ? order by rowid")
+      .all(sessionId) as Array<{ type: string; payload_json: string }>;
+    expect(events.some((event) => event.type === "run.blocked")).toBe(true);
+    const questions = events.filter((event) => event.type === "question.requested");
+    expect(questions).toHaveLength(1);
+    expect(questions[0]?.payload_json).not.toContain("PRIVATE_INTENT_TEXT");
+  });
+
+  it("uses a bounded clarification answer as the intent assumption", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const answer = "Prefer the legacy-compatible deployment strategy.";
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() =>
+            resolveQuestionRequest(
+              event.request?.id ?? "",
+              [
+                {
+                  questionId: "intent-clarification",
+                  selected: ["Use a conservative default"],
+                  custom: answer,
+                },
+              ],
+              false,
+            ),
+          );
+        }
+      },
+    );
+
+    await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Which rollout option should I choose? PRIVATE_INTENT_TEXT",
+      sessionId,
+    });
+
+    expect(prompts[0]).toContain(`Assumption: ${answer}`);
+    expect(prompts[0]).not.toContain("Use a conservative default and proceed.");
+  });
+
+  it.each([
+    "abort",
+    "releaseRuntime",
+    "dispose",
+  ] as const)("cancels a pending gate on %s and ignores a late confirmation", async (cancellation) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const modelPrompt = vi.fn(async () => undefined);
+    const session = createMockPiSession({ prompt: modelPrompt });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    let requestId: string | undefined;
+    let runId: string | undefined;
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string; runId?: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          requestId = event.request.id;
+          runId = event.request.runId;
+        }
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    const pendingPrompt = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete production data",
+      sessionId,
+    });
+    await vi.waitFor(() => expect(requestId).toBeDefined());
+
+    if (cancellation === "abort") await runtime.abort(sessionId);
+    else if (cancellation === "releaseRuntime") await runtime.releaseRuntime(sessionId);
+    else await runtime.dispose(sessionId);
+    resolveQuestionRequest(
+      requestId ?? "",
+      [{ questionId: "intent-confirmation", selected: ["Proceed"] }],
+      false,
+    );
+    await pendingPrompt;
+
+    expect(modelPrompt).not.toHaveBeenCalled();
+    expect(getAgentRun(runId ?? "")?.status).toBe("cancelled");
+    const events = getDatabase()
+      .prepare("select type from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string }>;
+    expect(events.some((event) => event.type === "run.cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "run.blocked")).toBe(false);
+  });
+
+  it("rejects concurrent prompts during intent preflight before recording the second user turn", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const modelPrompt = vi.fn(async () => undefined);
+    const session = createMockPiSession({ prompt: modelPrompt });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const requests: Array<{ id: string; runId?: string }> = [];
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string; runId?: string } }) => {
+        if (event.type === "question.requested" && event.request) requests.push(event.request);
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    const firstPrompt = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete production data",
+      sessionId,
+      userMessageId: "preflight-user-one",
+    });
+    await vi.waitFor(() => expect(requests).toHaveLength(1));
+    const secondPrompt = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete customer records",
+      sessionId,
+      userMessageId: "preflight-user-two",
+    });
+    const secondOutcome = secondPrompt.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    await runtime.abort(sessionId);
+    for (const request of requests) {
+      resolveQuestionRequest(
+        request.id,
+        [{ questionId: "intent-confirmation", selected: ["Proceed"] }],
+        false,
+      );
+    }
+    await Promise.allSettled([firstPrompt, secondPrompt]);
+
+    expect(await secondOutcome).toBe("rejected");
+    expect(modelPrompt).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    const eventTypes = getDatabase()
+      .prepare("select type from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string }>;
+    expect(eventTypes.filter((event) => event.type === "message.started")).toHaveLength(1);
+    expect(eventTypes.filter((event) => event.type === "run.started")).toHaveLength(1);
+    expect(eventTypes.filter((event) => event.type === "run.cancelled")).toHaveLength(1);
+    expect(getAgentRun(requests[0]?.runId ?? "")?.status).toBe("cancelled");
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(
+      (
+        getDatabase().prepare("select status from agent_sessions where id = ?").get(sessionId) as {
+          status: string;
+        }
+      ).status,
+    ).toBe("idle");
+  });
+
+  it("holds the preflight reservation until the SDK reports preflight completion", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    let releaseHook: (() => void) | undefined;
+    let notifyHookEntered: (() => void) | undefined;
+    let notifyPreflightComplete: (() => void) | undefined;
+    let releaseAgentRun: (() => void) | undefined;
+    const hookGate = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookEntered = new Promise<void>((resolve) => {
+      notifyHookEntered = resolve;
+    });
+    const preflightComplete = new Promise<void>((resolve) => {
+      notifyPreflightComplete = resolve;
+    });
+    const agentGate = new Promise<void>((resolve) => {
+      releaseAgentRun = resolve;
+    });
+    type PromptOpts = { preflightResult?: (success: boolean) => void; streamingBehavior?: string };
+    let session: Record<string, unknown>;
+    const promptCalls: Array<{ message: string; options?: PromptOpts }> = [];
+    session = createMockPiSession({
+      deferPreflight: true,
+      prompt: vi.fn(async (message: string, options?: PromptOpts) => {
+        promptCalls.push({ message, ...(options ? { options } : {}) });
+        if (promptCalls.length === 1) {
+          notifyHookEntered?.();
+          await hookGate;
+          session.isStreaming = true;
+          options?.preflightResult?.(true);
+          notifyPreflightComplete?.();
+          await agentGate;
+          session.isStreaming = false;
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "done" },
+          });
+          mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+          return;
+        }
+        options?.preflightResult?.(true);
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (
+        _channel: string,
+        event: { type?: string; request?: { id: string; questions: Array<{ id: string }> } },
+      ) => {
+        if (event.type === "question.requested" && event.request) {
+          queueMicrotask(() =>
+            resolveQuestionRequest(
+              event.request?.id ?? "",
+              [{ questionId: event.request?.questions[0]?.id ?? "", selected: ["Proceed"] }],
+              false,
+            ),
+          );
+        }
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    const firstPrompt = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete production data",
+      sessionId,
+      userMessageId: "hook-user-one",
+    });
+    await hookEntered;
+
+    const secondBeforePreflight = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+      userMessageId: "hook-user-two-early",
+    });
+    const earlyOutcome = secondBeforePreflight.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const beforeCallback = getDatabase()
+      .prepare("select type from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string }>;
+    releaseHook?.();
+    await preflightComplete;
+    const secondAfterPreflight = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Follow up after preflight",
+      sessionId,
+      userMessageId: "hook-user-two-late",
+    });
+    const lateOutcome = secondAfterPreflight.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    releaseAgentRun?.();
+    await Promise.allSettled([firstPrompt, secondBeforePreflight, secondAfterPreflight]);
+
+    expect(await earlyOutcome).toBe("rejected");
+    expect(beforeCallback.filter((event) => event.type === "message.started")).toHaveLength(1);
+    expect(beforeCallback.filter((event) => event.type === "run.started")).toHaveLength(1);
+    expect(await lateOutcome).toBe("resolved");
+    expect(promptCalls).toHaveLength(2);
+    expect(promptCalls[1]?.options?.streamingBehavior).toBe("followUp");
+    expect(
+      (
+        getDatabase()
+          .prepare("select count(*) as count from agent_runs where session_id = ?")
+          .get(sessionId) as { count: number }
+      ).count,
+    ).toBe(1);
+    releaseAgentRun?.();
+    await firstPrompt;
+  });
+
+  it("surfaces complex-work plan guidance in the first model prompt without asking or switching mode", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const prompts: string[] = [];
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        prompts.push(message);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const window = createWindowStub();
+    await new PiSdkRuntime().prompt(window, {
+      context: ["src/main/a.ts", "src/main/b.ts", "src/renderer/c.tsx", "src/shared/d.ts"].map(
+        (path) => ({ type: "file" as const, path }),
+      ),
+      delivery: "normal",
+      message: "Implement a cross-cutting feature",
+      sessionId,
+    });
+
+    expect(prompts[0]).toContain("Optional plan suggestion");
+    expect(prompts[0]).toContain("continue in the current mode unless the user chooses otherwise");
+    const questions = getDatabase()
+      .prepare(
+        "select count(*) as count from agent_events where session_id = ? and type = 'question.requested'",
+      )
+      .get(sessionId) as { count: number };
+    expect(questions.count).toBe(0);
+  });
+
   it("removes a run output tracker only when that run still owns the session entry", () => {
     const trackerA = { runId: "run-a" };
     const trackerB = { runId: "run-b" };
@@ -1201,6 +2480,48 @@ describe("PiSdkRuntime", () => {
     expect(activeTools).not.toContain("visual_write");
   });
 
+  it("wires Spec Mode through the read-only Plan profile and tool context", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
+    let observedMode: string | undefined;
+    let observedProfile: string | undefined;
+    let observedPrompt = "";
+    const session = createMockPiSession({
+      prompt: vi.fn(async (message: string) => {
+        observedPrompt = message;
+        const context = resolveAgentToolContext(cwd);
+        observedMode = context.mode;
+        observedProfile = context.profile;
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "spec complete" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Specify the feature",
+      mode: "spec",
+      sessionId,
+    });
+
+    expect(observedMode).toBe("spec");
+    expect(observedProfile).toBe("plan");
+    expect(observedPrompt).toContain("SPEC MODE");
+    expect(session.setActiveToolsByName).toHaveBeenCalledWith(
+      expect.arrayContaining(["plan_write"]),
+    );
+    const activeTools = (session.setActiveToolsByName as ReturnType<typeof vi.fn>).mock.calls.at(
+      -1,
+    )?.[0] as string[];
+    expect(activeTools).not.toContain("visual_write");
+  });
+
   it("task tool returns immediately; wait harvests the child output", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -1234,7 +2555,7 @@ describe("PiSdkRuntime", () => {
     }));
     new PiSdkRuntime();
     const window = createWindowStub();
-    setAgentToolContext({ workspaceId, cwd, sessionId: parentSessionId, window });
+    setTaskToolContext(workspaceId, parentSessionId, window);
     const tools = toolRegistry.getCustomToolDefinitions("chat");
     const taskTool = tools.find((definition) => definition.name === "task") as {
       execute(
@@ -1301,7 +2622,7 @@ describe("PiSdkRuntime", () => {
     }));
     new PiSdkRuntime();
     const window = createWindowStub();
-    setAgentToolContext({ workspaceId, cwd, sessionId: parentSessionId, window });
+    setTaskToolContext(workspaceId, parentSessionId, window);
     const taskTool = toolRegistry
       .getCustomToolDefinitions("chat")
       .find((definition) => definition.name === "task") as {
@@ -2094,7 +3415,7 @@ describe("PiSdkRuntime", () => {
     }));
     new PiSdkRuntime();
     const window = createWindowStub();
-    setAgentToolContext({ workspaceId, cwd, sessionId: parentSessionId, window });
+    setTaskToolContext(workspaceId, parentSessionId, window);
     const taskTool = toolRegistry
       .getCustomToolDefinitions("chat")
       .find((definition) => definition.name === "task") as {
@@ -2146,7 +3467,7 @@ describe("PiSdkRuntime", () => {
     }));
     new PiSdkRuntime();
     const window = createWindowStub();
-    setAgentToolContext({ workspaceId, cwd, sessionId: parentSessionId, window });
+    setTaskToolContext(workspaceId, parentSessionId, window);
     const tools = toolRegistry.getCustomToolDefinitions("chat");
     const taskTool = tools.find((definition) => definition.name === "task") as {
       execute(
@@ -2888,6 +4209,409 @@ describe("PiSdkRuntime", () => {
     expect(rows.filter((row) => row.type === "plan.updated").length).toBeGreaterThanOrEqual(2);
   });
 
+  it("derives and persists checks for a todo-side-only linked criterion", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Reciprocal Spec");
+    const plansRoot = join(userData, "plans");
+    const plan = writePlan(plansRoot, {
+      workspaceId,
+      sessionId,
+      title: "Reciprocal Spec",
+      overview: "Use todo-side links.",
+      content: "# Reciprocal Spec",
+      todos: [
+        {
+          id: "todo-reciprocal",
+          content: "Implement the check",
+          acceptanceCriterionIds: ["ac-reciprocal"],
+        },
+      ],
+      spec: {
+        requirements: [{ id: "req", text: "Verify the linked criterion." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-reciprocal",
+            requirementId: "req",
+            description: "Check is linked from the todo.",
+            todoIds: [],
+            requiredCheckKinds: ["typecheck"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "reciprocal-typecheck",
+          toolName: "terminal_run",
+          args: { command: "tsc --noEmit" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "reciprocal-typecheck",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Reciprocal Spec finished." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build the approved plan.",
+      sessionId,
+      planId: plan.id,
+    });
+
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    expect(JSON.parse(qaPayload)).toMatchObject({
+      result: {
+        required: true,
+        evidence: [expect.objectContaining({ label: "Typecheck", status: "passed" })],
+      },
+    });
+    const updated = readPlanById(plansRoot, plan.id);
+    expect(updated?.spec?.acceptanceCriteria[0]?.status).toBe("passed");
+    expect(updated?.spec?.evidence).toEqual([
+      expect.objectContaining({
+        criterionId: "ac-reciprocal",
+        label: "Typecheck",
+        status: "passed",
+      }),
+    ]);
+  });
+
+  it("harvests discoveries only for selected completed children owned by the parent", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    const foreignParentId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(parentSessionId, workspaceId, join(userData, "missing.jsonl"), "Parent");
+    const foreignWorkspaceId = `workspace-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(foreignWorkspaceId, join(cwd, "foreign-root"), "foreign", 1, now, now);
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(foreignParentId, foreignWorkspaceId, "Foreign Parent", cwd, "idle", now, now);
+    const ownedChildId = `child-${crypto.randomUUID()}`;
+    const foreignChildId = `child-${crypto.randomUUID()}`;
+    const unselectedChildId = `child-${crypto.randomUUID()}`;
+    const runningChildId = `child-${crypto.randomUUID()}`;
+    const sharedChildId = `child-${crypto.randomUUID()}`;
+    insertSubagentSession(ownedChildId, parentSessionId, workspaceId);
+    insertSubagentSession(foreignChildId, foreignParentId, foreignWorkspaceId);
+    insertSubagentSession(unselectedChildId, parentSessionId, workspaceId);
+    insertSubagentSession(runningChildId, parentSessionId, workspaceId);
+    insertSubagentSession(sharedChildId, parentSessionId, workspaceId);
+    const ownedHit = { path: "src/owned.ts", symbol: "owned", line: 4 };
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: ownedChildId,
+      runId: "owned-run",
+      hits: [ownedHit],
+      query: "private query text",
+      sourceBody: "private source body",
+    } as never);
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: foreignChildId,
+      runId: "foreign-run",
+      hits: [{ path: "src/foreign.ts" }],
+    });
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: unselectedChildId,
+      runId: "unselected-run",
+      hits: [{ path: "src/unselected.ts" }],
+    });
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: runningChildId,
+      runId: "running-run",
+      hits: [{ path: "src/running.ts" }],
+    });
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: sharedChildId,
+      runId: "shared-run",
+      hits: [{ path: "src/shared.ts", symbol: "shared" }],
+    });
+
+    const runtime = new PiSdkRuntime();
+    const backgroundTasks = (
+      runtime as unknown as {
+        backgroundChildTasks: Map<
+          string,
+          { parentSessionId: string; task: string; status: "running" | "completed"; output: string }
+        >;
+      }
+    ).backgroundChildTasks;
+    backgroundTasks.set(ownedChildId, {
+      parentSessionId,
+      task: "owned task",
+      status: "completed",
+      output: "owned output",
+    });
+    backgroundTasks.set(foreignChildId, {
+      parentSessionId,
+      task: "foreign task",
+      status: "completed",
+      output: "foreign output",
+    });
+    backgroundTasks.set(unselectedChildId, {
+      parentSessionId,
+      task: "unselected task",
+      status: "completed",
+      output: "unselected output",
+    });
+    backgroundTasks.set(runningChildId, {
+      parentSessionId,
+      task: "running task",
+      status: "running",
+      output: "partial output",
+    });
+    backgroundTasks.set(sharedChildId, {
+      parentSessionId,
+      task: "shared task",
+      status: "completed",
+      output: "shared output",
+    });
+
+    const result = await runtime.waitBackground({
+      sessionId: parentSessionId,
+      timeoutMs: 0,
+      subagentIds: [ownedChildId, foreignChildId, runningChildId, sharedChildId],
+    });
+
+    expect(result.subagents.map(({ id }) => id)).toEqual([
+      ownedChildId,
+      foreignChildId,
+      runningChildId,
+      sharedChildId,
+    ]);
+    expect(result.subagents[0]?.discoveries).toEqual([{ runId: "owned-run", ...ownedHit }]);
+    expect(result.subagents[1]?.discoveries).toBeUndefined();
+    expect(result.subagents[2]?.discoveries).toBeUndefined();
+    expect(result.subagents[3]?.discoveries).toEqual([
+      { runId: "shared-run", path: "src/shared.ts", symbol: "shared" },
+    ]);
+    expect(JSON.stringify(result.subagents[0]?.discoveries)).not.toContain("private query text");
+    expect(JSON.stringify(result.subagents[0]?.discoveries)).not.toContain("private source body");
+  });
+
+  it("deduplicates and bounds worktree discovery references while marking them provisional", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(parentSessionId, workspaceId, join(userData, "missing.jsonl"), "Parent");
+    const childSessionId = `child-${crypto.randomUUID()}`;
+    insertSubagentSession(childSessionId, parentSessionId, workspaceId);
+    updateAgentSessionWorktree(childSessionId, {
+      path: join(cwd, "child-worktree"),
+      branch: "task/child",
+      baseSha: "base",
+      integrationStatus: "ready",
+    });
+    const hits = Array.from({ length: 60 }, (_, index) => ({
+      path: `src/file-${index}.ts`,
+      symbol: `symbol-${index}`,
+    }));
+    recordAgentEvent({
+      type: "codegraph.discoveries",
+      sessionId: childSessionId,
+      runId: "worktree-run",
+      hits: [...hits, hits[0]],
+    } as never);
+    const runtime = new PiSdkRuntime();
+    const backgroundTasks = (
+      runtime as unknown as {
+        backgroundChildTasks: Map<
+          string,
+          { parentSessionId: string; task: string; status: "completed"; output: string }
+        >;
+      }
+    ).backgroundChildTasks;
+    backgroundTasks.set(childSessionId, {
+      parentSessionId,
+      task: "worktree task",
+      status: "completed",
+      output: "child report",
+    });
+
+    const result = await runtime.waitBackground({
+      sessionId: parentSessionId,
+      timeoutMs: 0,
+      subagentIds: [childSessionId],
+    });
+    const discoveries = result.subagents[0]?.discoveries ?? [];
+
+    expect(discoveries).toHaveLength(50);
+    expect(new Set(discoveries.map(({ path }) => path)).size).toBe(50);
+    expect(discoveries.every((reference) => reference.provisional === true)).toBe(true);
+    expect(discoveries[0]).toMatchObject({
+      runId: "worktree-run",
+      path: "src/file-0.ts",
+      symbol: "symbol-0",
+    });
+  });
+
+  it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    const plansRoot = join(userData, "plans");
+    const plan = writePlan(plansRoot, {
+      workspaceId,
+      sessionId,
+      title: "Spec",
+      overview: "Build from acceptance criteria.",
+      content: "# Spec plan",
+      todos: [
+        { id: "todo-pass", content: "Pass tests", acceptanceCriterionIds: ["ac-pass"] },
+        { id: "todo-fail", content: "Fail typecheck", acceptanceCriterionIds: ["ac-fail"] },
+        { id: "todo-skip", content: "Skip lint", acceptanceCriterionIds: ["ac-skip"] },
+        { id: "todo-block", content: "Require build", acceptanceCriterionIds: ["ac-block"] },
+        {
+          id: "todo-manual",
+          content: "Keep manual criterion pending",
+          acceptanceCriterionIds: ["ac-manual"],
+        },
+      ],
+      spec: {
+        requirements: [{ id: "req", text: "Implement and verify the behavior." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-pass",
+            requirementId: "req",
+            description: "Tests pass.",
+            todoIds: ["todo-pass"],
+            requiredCheckKinds: ["tests"],
+            status: "pending",
+          },
+          {
+            id: "ac-fail",
+            requirementId: "req",
+            description: "Typecheck passes.",
+            todoIds: ["todo-fail"],
+            requiredCheckKinds: ["typecheck"],
+            status: "pending",
+          },
+          {
+            id: "ac-skip",
+            requirementId: "req",
+            description: "Lint passes.",
+            todoIds: ["todo-skip"],
+            requiredCheckKinds: ["lint"],
+            status: "pending",
+          },
+          {
+            id: "ac-block",
+            requirementId: "req",
+            description: "Build passes.",
+            todoIds: ["todo-block"],
+            requiredCheckKinds: ["build"],
+            status: "pending",
+          },
+          {
+            id: "ac-manual",
+            requirementId: "req",
+            description: "Manual behavior is reviewed.",
+            todoIds: ["todo-manual"],
+            status: "pending",
+          },
+          {
+            id: "ac-unlinked",
+            requirementId: "req",
+            description: "Unlinked check stays pending.",
+            todoIds: [],
+            requiredCheckKinds: ["tests"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    const checkCalls = [
+      ["npx vitest run", false, { exitCode: 0 }],
+      ["tsc --noEmit", true, { exitCode: 1 }],
+      ["eslint .", false, { skipped: true }],
+    ] as const;
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        checkCalls.forEach(([command, isError, details], index) => {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: `spec-check-${index}`,
+            toolName: "terminal_run",
+            args: { command },
+          });
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: `spec-check-${index}`,
+            toolName: "terminal_run",
+            isError,
+            result: { details },
+          });
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Spec Build finished." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build the approved plan.",
+      sessionId,
+      planId: plan.id,
+    });
+
+    const updated = readPlanById(plansRoot, plan.id);
+    expect(updated?.spec?.acceptanceCriteria.map(({ id, status }) => [id, status])).toEqual([
+      ["ac-pass", "passed"],
+      ["ac-fail", "failed"],
+      ["ac-skip", "skipped"],
+      ["ac-block", "blocked"],
+      ["ac-manual", "pending"],
+      ["ac-unlinked", "pending"],
+    ]);
+    expect(updated?.spec?.evidence.map(({ criterionId }) => criterionId)).toEqual([
+      "ac-pass",
+      "ac-fail",
+      "ac-skip",
+      "ac-block",
+    ]);
+  });
+
   it("reverts a plan to not_built when the build turn fails", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -2931,6 +4655,72 @@ describe("PiSdkRuntime", () => {
 
     // A failed build turn re-opens the plan for building.
     expect(readPlanById(plansRoot, plan.id)?.buildStatus).toBe("not_built");
+  });
+
+  it.each([
+    "wrong mode",
+    "missing plan",
+    "foreign session",
+    "foreign workspace",
+  ])("rejects a plan build with %s before recording or emitting a message or creating a run", async (invalidCase) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const ownerSessionId =
+      invalidCase === "foreign session" ? `owner-${crypto.randomUUID()}` : sessionId;
+    const ownerWorkspaceId =
+      invalidCase === "foreign workspace" ? `foreign-${workspaceId}` : workspaceId;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Build session");
+    const plan =
+      invalidCase === "missing plan"
+        ? undefined
+        : writePlan(join(userData, "plans"), {
+            workspaceId: ownerWorkspaceId,
+            sessionId: ownerSessionId,
+            title: "Owned plan",
+            overview: "Plan belongs to its persisted owner.",
+            content: "# Plan",
+            todos: [{ content: "Step" }],
+          });
+    const planId = plan?.id ?? "missing-plan";
+    const window = createWindowStub();
+
+    await expect(
+      new PiSdkRuntime().prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Build this plan",
+        mode: invalidCase === "wrong mode" ? "plan" : "build",
+        sessionId,
+        planId,
+      }),
+    ).rejects.toThrow();
+
+    const messageCount = (
+      getDatabase()
+        .prepare(
+          "select count(*) as count from agent_events where session_id = ? and type = 'message.started'",
+        )
+        .get(sessionId) as { count: number }
+    ).count;
+    const runCount = (
+      getDatabase()
+        .prepare("select count(*) as count from agent_runs where session_id = ?")
+        .get(sessionId) as { count: number }
+    ).count;
+    const session = getAgentSession(sessionId);
+    const emittedTypes = (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, event]) => (event as { type?: string }).type,
+    );
+
+    expect(messageCount).toBe(0);
+    expect(runCount).toBe(0);
+    expect(emittedTypes).not.toContain("message.started");
+    expect(emittedTypes).not.toContain("run.started");
+    expect(emittedTypes).not.toContain("plan.updated");
+    expect(session?.status).toBe("idle");
+    if (plan) {
+      expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    }
   });
 
   it("keeps an aborted in-flight run cancelled instead of failed", async () => {

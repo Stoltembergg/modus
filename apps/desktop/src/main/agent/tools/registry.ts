@@ -6,6 +6,7 @@ import {
   type ToolCatalogEntry,
   type ToolProfileName,
 } from "../../../shared/tools";
+import { recognizeCheckInvocation } from "../harness/qa-evidence";
 
 /**
  * Runtime tool registry. Wraps the shared catalog with PI-SDK-dependent behavior:
@@ -63,6 +64,50 @@ function isMutatingShellCommand(command: string): boolean {
   );
 }
 
+function isUnresolvedPackageManagerCheckCommand(command: string): boolean {
+  const tokens = command.trim().split(/\s+/);
+  const packageManager = tokens[0]?.toLowerCase();
+  if (packageManager !== "npm" && packageManager !== "pnpm" && packageManager !== "yarn") {
+    return false;
+  }
+  let cursor = 1;
+  if (packageManager === "yarn" && tokens[cursor]?.toLowerCase() === "workspace") {
+    if (!tokens[cursor + 1]) return false;
+    cursor += 2;
+  } else if (packageManager !== "yarn") {
+    while (cursor < tokens.length) {
+      const option = tokens[cursor]?.toLowerCase();
+      const workspaceOption =
+        option === "--workspace" ||
+        option === "-w" ||
+        (packageManager === "pnpm" && (option === "--filter" || option === "-f"));
+      if (workspaceOption) {
+        if (!tokens[cursor + 1]) return false;
+        cursor += 2;
+        continue;
+      }
+      if (
+        option?.startsWith("--workspace=") ||
+        option?.startsWith("-w=") ||
+        (packageManager === "pnpm" && option?.startsWith("--filter=")) ||
+        (packageManager === "pnpm" && option?.startsWith("-f="))
+      ) {
+        cursor += 1;
+        continue;
+      }
+      break;
+    }
+  }
+  if (tokens[cursor]?.toLowerCase() === "run") cursor += 1;
+  const scriptName = tokens[cursor]?.replace(/[;&|]+$/, "").toLowerCase();
+  return ["test", "typecheck", "lint", "build"].includes(scriptName ?? "");
+}
+
+function isExpandedCheckCommand(command: string): boolean {
+  if (!/[$`*?[\]{}()~;&|<>]/.test(command)) return false;
+  return /^(?:npx\s+)?(?:vitest|jest|mocha|tsc|eslint|biome|vite)\b/i.test(command.trimStart());
+}
+
 /**
  * Risk verdict for a raw shell command string. Shared by the built-in `bash`
  * tool and the custom `terminal_run` tool so both gate dangerous commands the
@@ -71,6 +116,13 @@ function isMutatingShellCommand(command: string): boolean {
 export function classifyShellCommand(command: string): ToolClassification {
   if (isGitWriteCommand(command)) {
     return { action: "git.write", dangerous: true };
+  }
+  if (
+    recognizeCheckInvocation("bash", command) ||
+    isUnresolvedPackageManagerCheckCommand(command) ||
+    isExpandedCheckCommand(command)
+  ) {
+    return { action: "shell.execute", dangerous: true };
   }
   return { action: "shell.execute", dangerous: isMutatingShellCommand(command) };
 }
@@ -151,6 +203,12 @@ export class ToolRegistry {
         action: entry.permission.action ?? DEFAULT_ACTION,
         dangerous: entry.permission.danger !== "safe",
       };
+    }
+    if (event.toolName.startsWith("mcp_")) {
+      return { action: "mcp.call", dangerous: true };
+    }
+    if (event.toolName.startsWith("mcp_")) {
+      return { action: "mcp.call", dangerous: true };
     }
     // Unregistered tool: preserve the legacy name heuristic (permissive except delete/remove).
     if (/delete|remove/i.test(event.toolName)) {

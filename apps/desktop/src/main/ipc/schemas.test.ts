@@ -4,11 +4,53 @@ import {
   browserRecentSchema,
   diffCommitOrPushSchema,
   limitsCodexEnabledSchema,
+  mcpUpsertSchema,
   parseIpcInput,
   permissionDecideSchema,
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  const mcpInput = {
+    cwd: "repo",
+    name: "server",
+    transport: "stdio",
+    command: "run",
+    enabled: true,
+  };
+
+  it("accepts exact MCP allowlist tool names without trimming them", () => {
+    expect(
+      parseIpcInput(
+        mcpUpsertSchema,
+        {
+          ...mcpInput,
+          readOnlyToolAllowlist: [" exact name ", "mcp_search"],
+        },
+        "mcp:upsert",
+      ).readOnlyToolAllowlist,
+    ).toEqual([" exact name ", "mcp_search"]);
+  });
+
+  it("rejects empty, oversize, and duplicate MCP allowlist names", () => {
+    for (const names of [
+      ["  "],
+      ["x".repeat(257)],
+      Array.from({ length: 101 }, (_, i) => `tool${i}`),
+      ["same", "same"],
+    ]) {
+      expect(() =>
+        parseIpcInput(
+          mcpUpsertSchema,
+          {
+            ...mcpInput,
+            readOnlyToolAllowlist: names,
+          },
+          "mcp:upsert",
+        ),
+      ).toThrow("Invalid IPC payload");
+    }
+  });
+
   it("accepts a commit-and-push payload", () => {
     expect(
       parseIpcInput(

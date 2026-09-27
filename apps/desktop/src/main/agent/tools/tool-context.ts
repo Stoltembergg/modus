@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { BrowserWindow as BrowserWindowType } from "electron";
+import type { AgentMode } from "../../../shared/contracts";
 import type { ToolProfileName } from "../../../shared/tools";
 import type { EmitAgentEvent } from "../runtime";
 
@@ -16,6 +17,7 @@ export type AgentToolContext = {
   cwd: string;
   sessionId: string;
   profile?: ToolProfileName;
+  mode?: AgentMode;
   parentSessionId?: string;
   window?: BrowserWindowType;
   /** Persists + pushes an agent event (recordAgentEvent + webContents.send). */

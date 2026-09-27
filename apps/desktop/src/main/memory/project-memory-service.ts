@@ -11,14 +11,16 @@ import type {
   ProjectMemoryVerification,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { resolveMcpCitation } from "../agent/harness/mcp-citation-registry";
 import { getDatabase } from "../db/database";
+import { canonicalizeExternalReferenceUrl } from "./external-reference-url";
 
 export type ProjectMemoryProposalInput = {
   scope: "global" | "project";
   category: ProjectMemoryCategory;
   title: string;
   claim: string;
-  evidence: ProjectMemoryEvidence[];
+  evidence: Array<ProjectMemoryEvidence | { kind: "external_reference"; citationId: string }>;
   supersedesId?: string;
 };
 
@@ -126,7 +128,12 @@ function validateProposalContent(input: ProjectMemoryProposalInput): void {
   for (const item of input.evidence) {
     if (!item || typeof item !== "object")
       throw new Error("Project memory evidence metadata must be an object");
-    for (const value of Object.values(item)) {
+    const metadata =
+      item.kind === "external_reference" && "externalReference" in item
+        ? item.externalReference
+        : undefined;
+    const fields = metadata ? [metadata.url, metadata.title] : Object.values(item);
+    for (const value of fields) {
       if (typeof value !== "string") continue;
       if (value.length > PROJECT_MEMORY_LIMITS.evidenceStringChars) {
         throw new Error(
@@ -164,21 +171,41 @@ type EvidenceRow = {
   path: string | null;
   symbol: string | null;
   detached: number;
+  external_reference_json?: string | null;
 };
 
 function evidenceToDtos(evidence: EvidenceRow[]): ProjectMemoryEvidence[] {
-  return evidence.map((item) => ({
-    kind: item.kind,
-    ...(item.session_id ? { sessionId: item.session_id } : {}),
-    ...(item.run_id ? { runId: item.run_id } : {}),
-    ...(item.user_message_id ? { userMessageId: item.user_message_id } : {}),
-    ...(item.task_ref ? { taskRef: item.task_ref } : {}),
-    ...(item.commit_sha ? { commitSha: item.commit_sha } : {}),
-    ...(item.branch ? { branch: item.branch } : {}),
-    ...(item.path ? { path: item.path } : {}),
-    ...(item.symbol ? { symbol: item.symbol } : {}),
-    ...(item.detached ? { detached: true } : {}),
-  }));
+  return evidence.map((item) =>
+    item.kind === "external_reference"
+      ? {
+          kind: "external_reference" as const,
+          externalReference: JSON.parse(item.external_reference_json ?? "{}"),
+          ...(item.session_id ? { sessionId: item.session_id } : {}),
+          ...(item.run_id ? { runId: item.run_id } : {}),
+          ...(item.detached ? { detached: true } : {}),
+        }
+      : {
+          kind: item.kind,
+          ...(item.session_id ? { sessionId: item.session_id } : {}),
+          ...(item.run_id ? { runId: item.run_id } : {}),
+          ...(item.user_message_id ? { userMessageId: item.user_message_id } : {}),
+          ...(item.task_ref ? { taskRef: item.task_ref } : {}),
+          ...(item.commit_sha ? { commitSha: item.commit_sha } : {}),
+          ...(item.branch ? { branch: item.branch } : {}),
+          ...(item.path ? { path: item.path } : {}),
+          ...(item.symbol ? { symbol: item.symbol } : {}),
+          ...(item.detached ? { detached: true } : {}),
+        },
+  );
+}
+
+function canonicalExternalUrl(raw: string): string {
+  const canonical = canonicalizeExternalReferenceUrl(
+    raw,
+    PROJECT_MEMORY_LIMITS.evidenceStringChars,
+  );
+  if (!canonical) throw new Error("External reference URL is malformed, unsafe, or oversized");
+  return canonical;
 }
 
 function toRecord(row: RecordRow, evidenceOverride?: EvidenceRow[]): ProjectMemoryRecord {
@@ -218,11 +245,75 @@ function keyFor(input: ProjectMemoryProposalInput, workspaceId?: string): string
 }
 
 function normalizeEvidence(
-  evidence: ProjectMemoryEvidence[],
+  evidence: ProjectMemoryProposalInput["evidence"],
   context: ProjectMemoryContext,
   owningMessageId: string | null,
 ): ProjectMemoryEvidence[] {
   return evidence.map((item) => {
+    if (item.kind === "external_reference") {
+      if ("citationId" in item) {
+        const citation = resolveMcpCitation(context.sessionId, context.runId, item.citationId);
+        if (!citation) throw new Error("External citation ID was not resolved by the main process");
+        if (citation.sessionId !== context.sessionId || citation.runId !== context.runId) {
+          throw new Error("External citation provenance does not match the owning session and run");
+        }
+        const url = canonicalExternalUrl(citation.url);
+        const title = citation.title?.trim();
+        if (
+          title &&
+          (title.length > PROJECT_MEMORY_LIMITS.evidenceStringChars ||
+            containsSecretLikeContent(title))
+        ) {
+          throw new Error("External citation title is outside allowed metadata bounds");
+        }
+        if (
+          !citation.serverName.trim() ||
+          citation.serverName.length > PROJECT_MEMORY_LIMITS.evidenceStringChars
+        ) {
+          throw new Error("External citation source label is outside allowed metadata bounds");
+        }
+        if (
+          !Number.isFinite(Date.parse(citation.retrievedAt)) ||
+          citation.retrievedAt.length > PROJECT_MEMORY_LIMITS.evidenceStringChars
+        ) {
+          throw new Error("External citation retrieval time is invalid");
+        }
+        return {
+          kind: "external_reference",
+          sessionId: context.sessionId,
+          runId: context.runId,
+          externalReference: {
+            url,
+            ...(title ? { title } : {}),
+            sourceLabel: citation.serverName.trim(),
+            retrievedAt: citation.retrievedAt,
+            origin: "mcp_attested",
+          },
+        };
+      }
+      const external = item.externalReference;
+      if (!external || typeof external.url !== "string")
+        throw new Error("External reference URL is required");
+      const url = canonicalExternalUrl(external.url);
+      const title = external.title?.trim();
+      if (title && title.length > PROJECT_MEMORY_LIMITS.evidenceStringChars)
+        throw new Error("External reference title exceeds metadata bounds");
+      if (title && containsSecretLikeContent(title))
+        throw new Error("External reference metadata contains secret-like credential material");
+      return {
+        kind: "external_reference",
+        sessionId: item.sessionId ?? context.sessionId,
+        runId: item.runId ?? context.runId,
+        ...(item.detached ? { detached: true } : {}),
+        externalReference: {
+          url,
+          ...(title ? { title } : {}),
+          sourceLabel: "Agent-supplied",
+          retrievedAt: new Date().toISOString(),
+          origin: "agent_supplied_unverified",
+        },
+      };
+    }
     if (
       (item.sessionId && item.sessionId !== context.sessionId) ||
       (item.runId && item.runId !== context.runId)
@@ -294,10 +385,11 @@ function attachEvidenceToMemory(memoryId: string, evidence: ProjectMemoryEvidenc
   const db = getDatabase();
   const find = db.prepare(`select 1 from project_memory_evidence where memory_id = ? and kind = ?
     and session_id is ? and run_id is ? and user_message_id is ? and task_ref is ? and commit_sha is ?
-    and branch is ? and path is ? and symbol is ? and detached = ?`);
+    and branch is ? and path is ? and symbol is ? and detached = ?
+    and (kind != 'external_reference' or json_extract(external_reference_json, '$.url') = ?)`);
   const insert = db.prepare(`insert into project_memory_evidence
-    (id, memory_id, kind, session_id, run_id, user_message_id, task_ref, commit_sha, branch, path, symbol, detached)
-    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    (id, memory_id, kind, session_id, run_id, user_message_id, task_ref, commit_sha, branch, path, symbol, detached, external_reference_json)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const item of evidence) {
     const values = [
       item.kind,
@@ -310,8 +402,15 @@ function attachEvidenceToMemory(memoryId: string, evidence: ProjectMemoryEvidenc
       item.path ?? null,
       item.symbol ?? null,
       item.detached ? 1 : 0,
+      item.kind === "external_reference" ? (item.externalReference?.url ?? null) : null,
     ];
-    if (!find.get(memoryId, ...values)) insert.run(randomUUID(), memoryId, ...values);
+    if (!find.get(memoryId, ...values))
+      insert.run(
+        randomUUID(),
+        memoryId,
+        ...values.slice(0, 10),
+        item.kind === "external_reference" ? JSON.stringify(item.externalReference) : null,
+      );
   }
 }
 
@@ -384,7 +483,10 @@ export function proposeProjectMemory(
   if (context.userMessageId && context.userMessageId !== owner.user_message_id) {
     throw new Error("Proposal user message does not belong to the owning run");
   }
+  const containsExternal = input.evidence.some((item) => item.kind === "external_reference");
   if (input.scope === "global") {
+    if (containsExternal)
+      throw new Error("External-reference evidence cannot support global memories");
     if (input.category !== "preference" && input.category !== "convention")
       throw new Error("Global memories must be preferences or conventions");
     if (
@@ -428,7 +530,13 @@ export function proposeProjectMemory(
 
   const id = randomUUID();
   const now = new Date().toISOString();
-  const status: ProjectMemoryStatus = owner.subagent_worktree_path ? "provisional" : "candidate";
+  const externalOnly =
+    evidence.length > 0 && evidence.every((item) => item.kind === "external_reference");
+  const status: ProjectMemoryStatus = externalOnly
+    ? "needs_review"
+    : owner.subagent_worktree_path
+      ? "provisional"
+      : "candidate";
   db.exec("begin");
   try {
     if (input.supersedesId) {
@@ -462,8 +570,8 @@ export function proposeProjectMemory(
       dedupeKey,
     );
     const addEvidence = db.prepare(`insert into project_memory_evidence
-      (id, memory_id, kind, session_id, run_id, user_message_id, task_ref, commit_sha, branch, path, symbol, detached)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      (id, memory_id, kind, session_id, run_id, user_message_id, task_ref, commit_sha, branch, path, symbol, detached, external_reference_json)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     for (const item of evidence)
       addEvidence.run(
         randomUUID(),
@@ -478,6 +586,7 @@ export function proposeProjectMemory(
         item.path ?? null,
         item.symbol ?? null,
         item.detached ? 1 : 0,
+        item.kind === "external_reference" ? JSON.stringify(item.externalReference) : null,
       );
     addEvent(id, null, status, "agent", "Candidate proposed", `proposal:${dedupeKey}`);
     db.exec("commit");
@@ -506,7 +615,8 @@ export function finalizeProjectMemoryRun(input: {
     join agent_runs a on a.id = e.run_id and a.session_id = e.session_id
     join agent_sessions s on s.id = a.session_id
     where e.session_id = ? and e.run_id = ? and s.subagent_worktree_path is null
-      and r.status in ('candidate','needs_review')`)
+      and r.status in ('candidate','needs_review')
+      and exists (select 1 from project_memory_evidence local_e where local_e.memory_id = r.id and local_e.kind != 'external_reference')`)
     .all(input.sessionId, input.runId) as RecordRow[];
   db.exec("begin");
   try {

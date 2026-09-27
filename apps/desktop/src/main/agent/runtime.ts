@@ -4,6 +4,7 @@ import type {
   AgentMode,
   AgentRunInfo,
   AgentSessionInfo,
+  CodeGraphDiscoveryRef,
   ContextItem,
   ModelInfo,
   ProjectMemoryCategory,
@@ -116,6 +117,7 @@ export type BackgroundWaitResult = {
     status: "running" | "completed" | "error" | "missing";
     output?: string;
     memoryCandidates?: WaitMemoryCandidateSummary[];
+    discoveries?: Array<CodeGraphDiscoveryRef & { provisional?: true }>;
   }>;
 };
 

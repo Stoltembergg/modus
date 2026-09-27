@@ -1,8 +1,10 @@
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { PLAN_TOOL_UI, type ToolCatalogEntry } from "../../../shared/tools";
+import { recognizeCheckInvocation } from "../harness/qa-evidence";
 import { registerBrowserTools } from "./browser-tools";
-import { ToolRegistry, toolRegistry } from "./registry";
+import { classifyShellCommand, getToolTarget, ToolRegistry, toolRegistry } from "./registry";
+import { registerTerminalTools } from "./terminal-tools";
 
 function toolEvent(toolName: string, input: Record<string, unknown>): ToolCallEvent {
   return { type: "tool_call", toolCallId: "t1", toolName, input } as ToolCallEvent;
@@ -96,6 +98,121 @@ describe("ToolRegistry custom tools", () => {
 });
 
 describe("ToolRegistry classify", () => {
+  it("fails closed for unregistered and stale MCP-prefixed tool names", () => {
+    const registry = new ToolRegistry();
+    const staleName = "mcp_docs_search_allowlisted";
+    registry.registerTool({
+      entry: {
+        name: staleName,
+        profiles: ["chat", "plan"],
+        permission: { danger: "safe" },
+        capabilities: ["read"],
+        ui: { verb: "Search" },
+      },
+      definition: { name: staleName } as never,
+    });
+    registry.unregisterTool(staleName);
+
+    expect(registry.classify(toolEvent(staleName, {}))).toEqual({
+      action: "mcp.call",
+      dangerous: true,
+    });
+    expect(registry.classify(toolEvent("mcp_unregistered_lookup", {}))).toEqual({
+      action: "mcp.call",
+      dangerous: true,
+    });
+  });
+
+  it("fails closed for stale or unregistered MCP tool names", () => {
+    const registry = new ToolRegistry();
+    const staleName = "mcp_stale_search_allowlisted";
+    registry.registerTool({
+      entry: {
+        name: staleName,
+        profiles: ["chat", "plan"],
+        permission: { danger: "safe" },
+        capabilities: ["read"],
+        ui: { verb: "Search" },
+      },
+      definition: { name: staleName } as never,
+    });
+    registry.unregisterTool(staleName);
+
+    expect(registry.classify(toolEvent(staleName, {}))).toEqual({
+      action: "mcp.call",
+      dangerous: true,
+    });
+    expect(registry.classify(toolEvent("mcp_stale_search_dangerous", {}))).toEqual({
+      action: "mcp.call",
+      dangerous: true,
+    });
+  });
+
+  it.each([
+    "npm test",
+    "npm --workspace @modus/desktop run typecheck",
+    "npm test; node scripts/mutate.js",
+    "npm --workspace @modus/desktop run typecheck; node scripts/mutate.js",
+    "pnpm test",
+    "pnpm test; node scripts/mutate.js",
+    "yarn test",
+    "yarn test; node scripts/mutate.js",
+    "pnpm --filter @modus/desktop run typecheck",
+    "yarn workspace @modus/desktop run typecheck",
+    "npx vitest $(node scripts/mutate.js) run",
+    "npx vitest run $(node scripts/mutate.js)",
+    "npx vitest run $TEST_ARGS",
+    "npx vitest run `node scripts/mutate.js`",
+    "npx vitest run; node scripts/mutate.js",
+    "npx vitest run && node scripts/mutate.js",
+    "npx vitest run",
+  ])("requires shell.execute approval for QA command %s through bash and terminal_run", (command) => {
+    registerTerminalTools();
+    const registry = new ToolRegistry();
+    registry.registerTool({
+      entry: {
+        name: "terminal_run",
+        profiles: ["chat"],
+        permission: { danger: "dynamic" },
+        ui: { verb: "Terminal" },
+      },
+      definition: { name: "terminal_run" } as never,
+      classify: (event) => classifyShellCommand(getToolTarget(event)),
+    });
+
+    expect(registry.classify(toolEvent("bash", { command }))).toEqual({
+      action: "shell.execute",
+      dangerous: true,
+    });
+    expect(registry.classify(toolEvent("terminal_run", { command }))).toEqual({
+      action: "shell.execute",
+      dangerous: true,
+    });
+    expect(toolRegistry.classify(toolEvent("terminal_run", { command }))).toEqual({
+      action: "shell.execute",
+      dangerous: true,
+    });
+    if (
+      command.includes("$") ||
+      command.includes("`") ||
+      command.includes(";") ||
+      command.includes("&&")
+    ) {
+      expect(recognizeCheckInvocation("bash", command)).toBeUndefined();
+    }
+  });
+
+  it.each([
+    "echo npm test",
+    "printf 'vitest'",
+    '"npm test"',
+  ])("leaves a harmless mention command safe: %s", (command) => {
+    registerTerminalTools();
+    expect(classifyShellCommand(command)).toEqual({ action: "shell.execute", dangerous: false });
+    expect(new ToolRegistry().classify(toolEvent("bash", { command })).dangerous).toBe(false);
+    expect(toolRegistry.classify(toolEvent("terminal_run", { command })).dangerous).toBe(false);
+  });
+
   it("treats bash git-write commands as dangerous git.write", () => {
     const registry = new ToolRegistry();
     expect(registry.classify(toolEvent("bash", { command: "git commit -m wip" }))).toEqual({

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { clearRun, registerMcpCitations } from "../agent/harness/mcp-citation-registry";
 
 const { userDataPath } = vi.hoisted(() => ({ userDataPath: { current: "" } }));
 
@@ -269,6 +270,93 @@ describe("project memory migration", () => {
       isolated.close();
     }
   });
+
+  it("transactionally rebuilds a populated legacy evidence table preserving IDs, indexes, FKs, and detach trigger", async () => {
+    const { migrateDatabase } = await import("../db/database");
+    const legacy = new DatabaseSync(":memory:");
+    try {
+      legacy.exec(`pragma foreign_keys = on;
+        create table workspaces(id text primary key, root_path text unique not null, display_name text not null, is_git_repository integer default 0, last_opened_at text not null, created_at text not null);
+        create table agent_sessions(id text primary key, workspace_id text not null references workspaces(id), title text not null, cwd text not null, status text not null, created_at text not null, updated_at text not null);
+        create table project_memory_records(id text primary key, scope text not null, workspace_id text references workspaces(id) on delete cascade, category text not null, title text not null, claim text not null, status text not null, verification text not null, created_at text not null, updated_at text not null, last_verified_at text, supersedes_id text, dedupe_key text not null);
+        create table project_memory_evidence(id text primary key, memory_id text not null references project_memory_records(id) on delete cascade, kind text not null check(kind in ('user_message','run','task','subagent','commit','file','symbol')), session_id text references agent_sessions(id) on delete set null, run_id text, user_message_id text, task_ref text, commit_sha text, branch text, path text, symbol text, detached integer not null default 0 check(detached in (0,1)));
+        create index idx_project_memory_evidence_memory on project_memory_evidence(memory_id);
+        create index idx_project_memory_evidence_session on project_memory_evidence(session_id);
+        insert into workspaces values ('legacy-ws','/legacy','Legacy',0,'now','now');
+        insert into agent_sessions values ('legacy-session','legacy-ws','Legacy','/legacy','idle','now','now');
+        insert into project_memory_records values ('legacy-memory','project','legacy-ws','decision','Title','Legacy claim','active','agent_observed','now','now',null,null,'dedupe');
+        insert into project_memory_evidence(id,memory_id,kind,session_id,run_id,path) values ('legacy-evidence','legacy-memory','file','legacy-session','legacy-run','src/a.ts');`);
+      migrateDatabase(legacy);
+      expect(legacy.prepare("select id, kind, path from project_memory_evidence").get()).toEqual({
+        id: "legacy-evidence",
+        kind: "file",
+        path: "src/a.ts",
+      });
+      expect(legacy.prepare("pragma foreign_key_check").all()).toEqual([]);
+      expect(
+        legacy
+          .prepare(
+            "select name from sqlite_master where type='index' and name like 'idx_project_memory_evidence_%' order by name",
+          )
+          .all(),
+      ).toEqual([
+        { name: "idx_project_memory_evidence_memory" },
+        { name: "idx_project_memory_evidence_session" },
+      ]);
+      expect(
+        legacy
+          .prepare(
+            "select count(*) as count from sqlite_master where type='trigger' and name='trg_detach_project_memory_before_session_delete'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(() =>
+        legacy
+          .prepare(
+            `insert into project_memory_evidence(id,memory_id,kind) values ('external','legacy-memory','external_reference')`,
+          )
+          .run(),
+      ).not.toThrow();
+      migrateDatabase(legacy);
+      expect(
+        legacy
+          .prepare(
+            "select count(*) as count from project_memory_evidence where id='legacy-evidence'",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      legacy.close();
+    }
+  });
+
+  it("rolls back a failed legacy evidence rebuild without replacing the old table", async () => {
+    const { migrateDatabase } = await import("../db/database");
+    const broken = new DatabaseSync(":memory:");
+    try {
+      broken.exec(`pragma foreign_keys = off;
+        create table workspaces(id text primary key, root_path text unique not null, display_name text not null, is_git_repository integer default 0, last_opened_at text not null, created_at text not null);
+        create table agent_sessions(id text primary key, workspace_id text not null references workspaces(id), title text not null, cwd text not null, status text not null, created_at text not null, updated_at text not null);
+        create table project_memory_records(id text primary key, scope text not null, workspace_id text, category text not null, title text not null, claim text not null, status text not null, verification text not null, created_at text not null, updated_at text not null, last_verified_at text, supersedes_id text, dedupe_key text not null);
+        create table project_memory_evidence(id text primary key, memory_id text not null references project_memory_records(id) on delete cascade, kind text not null check(kind in ('user_message','run','task','subagent','commit','file','symbol')), session_id text references agent_sessions(id) on delete set null, run_id text, user_message_id text, task_ref text, commit_sha text, branch text, path text, symbol text, detached integer not null default 0 check(detached in (0,1)));
+        insert into project_memory_records values ('broken-memory','project','missing-workspace','decision','Title','Claim','active','unverified','now','now',null,null,'dedupe');
+        insert into project_memory_evidence(id,memory_id,kind,session_id) values ('broken-evidence','broken-memory','file','missing-session');
+        pragma foreign_keys = on;`);
+      expect(() => migrateDatabase(broken)).toThrow();
+      expect(broken.prepare("select id from project_memory_evidence").get()).toEqual({
+        id: "broken-evidence",
+      });
+      expect(
+        (
+          broken
+            .prepare("select sql from sqlite_master where name='project_memory_evidence'")
+            .get() as { sql: string }
+        ).sql,
+      ).toContain("'symbol'))");
+    } finally {
+      broken.close();
+    }
+  });
 });
 
 describe("project memory service", () => {
@@ -301,6 +389,228 @@ describe("project memory service", () => {
           ]
         : []),
     ],
+  });
+
+  it("stores canonical untrusted external references and keeps external-only proposals under review", () => {
+    const input = {
+      ...proposal("External claim needs local confirmation"),
+      evidence: [
+        {
+          kind: "external_reference",
+          externalReference: {
+            url: "HTTPS://Example.com/path?q=ok#fragment",
+            title: "Source title",
+            sourceLabel: "spoofed",
+            retrievedAt: "2000-01-01T00:00:00.000Z",
+            origin: "mcp_attested",
+          },
+        },
+      ],
+    } as Parameters<typeof service.proposeProjectMemory>[0];
+    const record = service.proposeProjectMemory(input, context);
+    expect(record.status).toBe("needs_review");
+    expect(record.evidence[0]).toMatchObject({
+      kind: "external_reference",
+      externalReference: {
+        url: "https://example.com/path?q=ok",
+        title: "Source title",
+        sourceLabel: "Agent-supplied",
+        origin: "agent_supplied_unverified",
+      },
+    });
+    const externalReference = record.evidence[0]?.externalReference;
+    expect(Date.parse(externalReference?.retrievedAt ?? "")).toBeGreaterThan(0);
+    expect(
+      service.retrieveProjectMemory({
+        workspaceId: context.workspaceId,
+        inbox: false,
+        query: "",
+        contextPaths: [],
+        contextSymbols: [],
+        git: { changedPaths: [] },
+      }).memoryIds,
+    ).not.toContain(record.id);
+    expect(() => service.proposeProjectMemory({ ...input, scope: "global" }, context)).toThrow();
+  });
+
+  it("rejects unsafe external URLs and dedupes references without promoting external-only claims", () => {
+    const make = (url: string) =>
+      ({
+        ...proposal("External URL validation claim"),
+        evidence: [{ kind: "external_reference", externalReference: { url } }],
+      }) as Parameters<typeof service.proposeProjectMemory>[0];
+    for (const url of [
+      "javascript:alert(1)",
+      "https://user:password@example.com/",
+      "https://example.com/?api_key=secret",
+      `https://example.com/${"a".repeat(1100)}`,
+    ]) {
+      expect(() => service.proposeProjectMemory(make(url), context)).toThrow();
+    }
+    const first = service.proposeProjectMemory(make("https://example.com/a#one"), context);
+    const deduped = service.proposeProjectMemory(make("https://example.com/a#two"), context);
+    expect(deduped.id).toBe(first.id);
+    expect(deduped.status).toBe("needs_review");
+    service.finalizeProjectMemoryRun({
+      sessionId: context.sessionId,
+      runId: context.runId,
+      outcome: "completed",
+    });
+    expect(
+      service
+        .getProjectMemorySnapshot(context.workspaceId)
+        .memories.find((item) => item.id === first.id)?.status,
+    ).toBe("needs_review");
+    service.verifyProjectMemory(first.id);
+    expect(
+      service.retrieveProjectMemory({
+        workspaceId: context.workspaceId,
+        inbox: false,
+        query: "",
+        contextPaths: [],
+        contextSymbols: [],
+        git: { changedPaths: [] },
+      }).memoryIds,
+    ).toContain(first.id);
+  });
+
+  it.each([
+    "sessionId",
+    "SESSION_ID",
+    "session_id",
+    "refreshToken",
+    "REFRESH_TOKEN",
+    "refresh_token",
+  ])("rejects credential-like query key %s on new and deduped direct proposals", (queryKey) => {
+    const claim = `Reject sensitive URL query key ${queryKey}`;
+    const make = (url: string) =>
+      ({
+        ...proposal(claim),
+        evidence: [{ kind: "external_reference", externalReference: { url } }],
+      }) as Parameters<typeof service.proposeProjectMemory>[0];
+    expect(() =>
+      service.proposeProjectMemory(make(`https://example.com/new?${queryKey}=secret`), context),
+    ).toThrow(/URL/i);
+
+    const first = service.proposeProjectMemory(make("https://example.com/safe?lang=en"), context);
+    expect(() =>
+      service.proposeProjectMemory(make(`https://example.com/safe?${queryKey}=secret`), context),
+    ).toThrow(/URL/i);
+    expect(
+      service
+        .getProjectMemorySnapshot(context.workspaceId)
+        .memories.find((item) => item.id === first.id)?.evidence,
+    ).toHaveLength(1);
+  });
+
+  it("accepts only an exact registry-issued citation at proposal time", () => {
+    const [citation] = registerMcpCitations(
+      context.sessionId,
+      context.runId,
+      "Trusted MCP",
+      "search",
+      {
+        content: [
+          {
+            type: "resource_link",
+            uri: "https://example.com/attested#section",
+            name: "Attested result",
+          },
+        ],
+      } as never,
+    );
+    if (!citation) throw new Error("Expected registered citation");
+    const proposalInput = {
+      ...proposal("MCP cited claim"),
+      evidence: [{ kind: "external_reference", citationId: citation.id }],
+    } as unknown as Parameters<typeof service.proposeProjectMemory>[0];
+    const record = service.proposeProjectMemory(proposalInput, context);
+    expect(record.evidence[0]).toMatchObject({
+      externalReference: {
+        url: "https://example.com/attested",
+        title: "Attested result",
+        sourceLabel: "Trusted MCP",
+        retrievedAt: citation.retrievedAt,
+        origin: "mcp_attested",
+      },
+    });
+    expect(record.status).toBe("needs_review");
+  });
+
+  it.each([
+    "forged",
+    "wrong-run",
+    "wrong-session",
+    "expired",
+  ])("rejects %s citation IDs at the service boundary", (mode) => {
+    const [citation] = registerMcpCitations(
+      context.sessionId,
+      context.runId,
+      "Trusted MCP",
+      "search",
+      {
+        content: [{ type: "resource_link", uri: "https://example.com/attested" }],
+      } as never,
+    );
+    let citationId = citation?.id ?? "forged-citation";
+    if (mode === "forged") {
+      citationId = "forged-citation-id";
+    } else if (mode === "wrong-run") {
+      const [other] = registerMcpCitations(
+        context.sessionId,
+        "run-replacement",
+        "Trusted MCP",
+        "search",
+        {
+          content: [{ type: "resource_link", uri: "https://example.com/other-run" }],
+        } as never,
+      );
+      if (!other) throw new Error("Expected other-run citation");
+      citationId = other.id;
+    } else if (mode === "wrong-session") {
+      const [other] = registerMcpCitations(
+        "session-legacy-b",
+        context.runId,
+        "Trusted MCP",
+        "search",
+        {
+          content: [{ type: "resource_link", uri: "https://example.com/other-session" }],
+        } as never,
+      );
+      if (!other) throw new Error("Expected other-session citation");
+      citationId = other.id;
+    } else if (mode === "expired") clearRun(context.sessionId, context.runId);
+    expect(() =>
+      service.proposeProjectMemory(
+        {
+          ...proposal(`Rejected ${mode} citation`),
+          evidence: [{ kind: "external_reference", citationId }],
+        } as unknown as Parameters<typeof service.proposeProjectMemory>[0],
+        context,
+      ),
+    ).toThrow(/citation|attest/i);
+  });
+
+  it("does not accept raw MCP-attested metadata as service evidence", () => {
+    const raw = {
+      ...proposal("Raw attestation is untrusted"),
+      evidence: [
+        {
+          kind: "external_reference",
+          externalReference: {
+            url: "https://example.com/raw",
+            sourceLabel: "Forged MCP",
+            retrievedAt: "2000-01-01T00:00:00.000Z",
+            origin: "mcp_attested",
+          },
+        },
+      ],
+    } as Parameters<typeof service.proposeProjectMemory>[0];
+    const record = service.proposeProjectMemory(raw, context);
+    expect(record.evidence[0]?.externalReference).toMatchObject({
+      sourceLabel: "Agent-supplied",
+      origin: "agent_supplied_unverified",
+    });
   });
 
   it("isolates retrieval by workspace and gives Inbox global memories only", () => {

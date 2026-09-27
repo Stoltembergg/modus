@@ -64,6 +64,40 @@ describe("mcpConfigPaths", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("writes project and user allowlists back without changing raw credentials", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "modus-mcp-cwd-"));
+    const home = mkdtempSync(join(tmpdir(), "modus-mcp-home-"));
+    try {
+      for (const scope of ["user", "project"] as const) {
+        const target = upsertMcpServerEntry(
+          cwd,
+          {
+            name: scope,
+            scope,
+            transport: "http",
+            url: "https://example.com/mcp",
+            headers: { Authorization: envRef("TOKEN") },
+            readOnlyToolAllowlist: [" read_exact ", "search"],
+            enabled: true,
+          },
+          home,
+        );
+        const entry = JSON.parse(readFileSync(target, "utf8")).mcpServers[scope];
+        expect(entry.readOnlyToolAllowlist).toEqual([" read_exact ", "search"]);
+        expect(entry.headers.Authorization).toBe(envRef("TOKEN"));
+      }
+      expect(
+        parseMcpConfig(readFileSync(userMcpConfigPath(home), "utf8"), "user").servers[0],
+      ).toMatchObject({ readOnlyToolAllowlist: [" read_exact ", "search"] });
+      expect(
+        parseMcpConfig(readFileSync(defaultMcpConfigPath(cwd), "utf8"), "project").servers[0],
+      ).toMatchObject({ readOnlyToolAllowlist: [" read_exact ", "search"] });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("parseMcpConfig", () => {
@@ -96,6 +130,47 @@ describe("parseMcpConfig", () => {
     });
     if (server?.transport === "stdio") {
       expect(server.env).toEqual({ KEY: "k-123" });
+    }
+  });
+
+  it("defaults missing allowlists to empty and preserves exact tool names", () => {
+    const { servers, errors } = parseMcpConfig(
+      JSON.stringify({
+        mcpServers: {
+          legacy: { command: "run" },
+          configured: {
+            command: "run",
+            readOnlyToolAllowlist: [" exact name ", "mcp_search"],
+          },
+        },
+      }),
+      "test.json",
+      env,
+    );
+    expect(errors).toEqual([]);
+    expect(servers.map(({ readOnlyToolAllowlist }) => readOnlyToolAllowlist)).toEqual([
+      [],
+      [" exact name ", "mcp_search"],
+    ]);
+  });
+
+  it("rejects malformed, oversize, and duplicate allowlist names", () => {
+    for (const invalid of [
+      [""],
+      ["  "],
+      ["x".repeat(257)],
+      Array.from({ length: 101 }, (_, index) => `tool${index}`),
+      ["duplicate", "duplicate"],
+    ]) {
+      const { servers, errors } = parseMcpConfig(
+        JSON.stringify({
+          mcpServers: { invalid: { command: "run", readOnlyToolAllowlist: invalid } },
+        }),
+        "test.json",
+        env,
+      );
+      expect(servers).toEqual([]);
+      expect(errors[0]?.message).toContain("readOnlyToolAllowlist");
     }
   });
 

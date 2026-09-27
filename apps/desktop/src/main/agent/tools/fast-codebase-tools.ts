@@ -1,3 +1,4 @@
+import { isAbsolute, relative, resolve } from "node:path";
 import {
   type AgentToolResult,
   type AgentToolUpdateCallback,
@@ -10,11 +11,74 @@ import {
   type FastCodebaseResult,
   runFastCodebase,
 } from "../../fast-codebase/fast-codebase-service";
+import { recordAgentEvent } from "../agent-event-store";
+import { getActiveAgentRun } from "../agent-run-store";
 import { toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
 
 function toResult(result: FastCodebaseResult): AgentToolResult<FastCodebaseResult["details"]> {
   return { content: [{ type: "text", text: result.text }], details: result.details };
+}
+
+function safeDiscoveryHits(
+  hits: FastCodebaseResult["hits"],
+  workspace: string,
+): FastCodebaseResult["hits"] {
+  if (!Array.isArray(hits)) return [];
+  const root = resolve(workspace);
+  const seen = new Set<string>();
+  const safe: FastCodebaseResult["hits"] = [];
+  for (const candidate of hits) {
+    if (!candidate || typeof candidate.path !== "string") continue;
+    const path = candidate.path.replace(/\\/g, "/");
+    if (
+      !path ||
+      path.includes("\0") ||
+      path.startsWith("/") ||
+      /^[a-zA-Z]:/.test(path) ||
+      isAbsolute(path) ||
+      path.split("/").some((segment) => !segment || segment === "." || segment === "..")
+    ) {
+      continue;
+    }
+    const absolute = resolve(root, path);
+    const relativePath = relative(root, absolute).replace(/\\/g, "/");
+    if (
+      !relativePath ||
+      relativePath.length > 512 ||
+      relativePath === ".." ||
+      relativePath.startsWith("../") ||
+      isAbsolute(relativePath)
+    ) {
+      continue;
+    }
+    const symbol =
+      typeof candidate.symbol === "string" && candidate.symbol.trim()
+        ? candidate.symbol.trim().slice(0, 256)
+        : undefined;
+    const kind =
+      typeof candidate.kind === "string" && candidate.kind.trim()
+        ? candidate.kind.trim().slice(0, 64)
+        : undefined;
+    const line =
+      typeof candidate.line === "number" &&
+      Number.isSafeInteger(candidate.line) &&
+      candidate.line > 0
+        ? candidate.line
+        : undefined;
+    const hit = {
+      path: relativePath,
+      ...(symbol ? { symbol } : {}),
+      ...(line !== undefined ? { line } : {}),
+      ...(kind ? { kind } : {}),
+    };
+    const key = JSON.stringify(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    safe.push(hit);
+    if (safe.length >= 50) break;
+  }
+  return safe;
 }
 
 const fastCodebaseParams = Type.Object({
@@ -94,6 +158,16 @@ const fastCodebaseTool: ToolDefinition<typeof fastCodebaseParams> = defineTool({
           });
         },
       });
+      const hits = safeDiscoveryHits(result.hits, context.cwd || ctx.cwd);
+      const activeRun = getActiveAgentRun(context.sessionId);
+      if (activeRun && hits.length > 0) {
+        recordAgentEvent({
+          type: "codegraph.discoveries",
+          sessionId: context.sessionId,
+          runId: activeRun.id,
+          hits,
+        });
+      }
       const final = toResult(result);
       update?.(final);
       return final;

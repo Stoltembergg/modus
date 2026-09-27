@@ -3,6 +3,7 @@ import { memo } from "react";
 import type { PlanRef } from "../../../../shared/contracts";
 import { EmptyState } from "../../components/ui/Panel";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
+import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
 
 /** Read-only Plan document shown in the Inspector. */
 export const PlanPanel = memo(function PlanPanel({ plan }: { plan: PlanRef | undefined }) {
@@ -32,6 +33,7 @@ export const PlanPanel = memo(function PlanPanel({ plan }: { plan: PlanRef | und
             {plan.title}
           </h1>
           <MarkdownMessage className="modus-plan-markdown" content={plan.content} />
+          {plan.spec ? <SpecAcceptanceCriteria spec={plan.spec} /> : null}
         </div>
       </div>
     </div>
