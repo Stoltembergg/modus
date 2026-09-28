@@ -348,7 +348,8 @@ export function ProviderCredentials({
   const storedBaseUrl = detail.baseUrl ?? "";
   const [baseUrl, setBaseUrl] = useState(storedBaseUrl);
   const baseUrlChanged = baseUrl.trim() !== storedBaseUrl;
-  const canSubmit = Boolean(keyValue.trim()) || baseUrlChanged;
+  const supportsBaseUrlOverride = detail.id !== "commandcode";
+  const canSubmit = Boolean(keyValue.trim()) || (supportsBaseUrlOverride && baseUrlChanged);
   const canDisconnect = detail.authSource === "stored" && Boolean(detail.authKind);
   const editing = detail.source === "builtin" && (!detail.configured || credentialEditorOpen);
   const isNativeProvider = detail.id === "commandcode" || detail.id === "antigravity";
@@ -448,7 +449,11 @@ export function ProviderCredentials({
       className="rounded-lg bg-chip-faint p-3"
       onSubmit={(event) => {
         event.preventDefault();
-        onConnect(keyValue, baseUrl.trim());
+        if (supportsBaseUrlOverride) {
+          onConnect(keyValue, baseUrl.trim());
+        } else {
+          onConnect(keyValue);
+        }
       }}
     >
       <div className="flex flex-wrap gap-2">
@@ -492,23 +497,25 @@ export function ProviderCredentials({
         ) : null}
       </div>
 
-      <label className="relative mt-2 block min-w-0">
-        <span className="sr-only">Custom base URL for {detail.name}</span>
-        <IconWorld
-          className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint"
-          size={15}
-          stroke={1.7}
-        />
-        <input
-          autoComplete="off"
-          className="h-9 w-full rounded-md border border-hairline bg-canvas pr-3 pl-9 font-mono text-sm text-fg outline-none placeholder:text-fg-faint transition-colors focus:border-hairline-strong"
-          onChange={(event) => setBaseUrl(event.target.value)}
-          placeholder="Custom base URL — official endpoint by default"
-          spellCheck={false}
-          type="url"
-          value={baseUrl}
-        />
-      </label>
+      {supportsBaseUrlOverride ? (
+        <label className="relative mt-2 block min-w-0">
+          <span className="sr-only">Custom base URL for {detail.name}</span>
+          <IconWorld
+            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-fg-faint"
+            size={15}
+            stroke={1.7}
+          />
+          <input
+            autoComplete="off"
+            className="h-9 w-full rounded-md border border-hairline bg-canvas pr-3 pl-9 font-mono text-sm text-fg outline-none placeholder:text-fg-faint transition-colors focus:border-hairline-strong"
+            onChange={(event) => setBaseUrl(event.target.value)}
+            placeholder="Custom base URL — official endpoint by default"
+            spellCheck={false}
+            type="url"
+            value={baseUrl}
+          />
+        </label>
+      ) : null}
     </form>
   );
 }
