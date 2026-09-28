@@ -151,7 +151,7 @@ import {
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
-import { readPlanById } from "../plan/plan-store";
+import { readPlanById, updatePlanContentById } from "../plan/plan-store";
 import { onManagedProcessChange } from "../process/managed-process-bus";
 import { killManagedProcess, listManagedProcesses } from "../process/managed-process-facade";
 import { getWorkspaceAgents, listRuleFiles, saveWorkspaceAgents } from "../rules/rules-service";
@@ -183,6 +183,7 @@ import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
+  agentApplyHyperPlanRevisionSchema,
   agentCreateSchema,
   agentCycleModelSchema,
   agentListSchema,
@@ -492,6 +493,49 @@ export function registerAppIpc({
       throw new Error("Spec plan does not belong to this session.");
     }
     return await runHyperPlanReview({ planContent: plan.content, spec: plan.spec });
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentApplyHyperPlanRevision, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      agentApplyHyperPlanRevisionSchema,
+      input,
+      IPC_CHANNELS.agentApplyHyperPlanRevision,
+    );
+    const session = getAgentSession(parsed.sessionId);
+    if (!session) throw new Error("Agent session not found.");
+    const plan = readPlanById(plansRoot(), parsed.planId);
+    if (
+      !plan?.spec ||
+      plan.id !== parsed.planId ||
+      plan.sessionId !== session.id ||
+      plan.workspaceId !== session.workspaceId
+    ) {
+      throw new Error("Spec plan does not belong to this session.");
+    }
+    if (plan.hash !== parsed.planHash) {
+      throw new Error("Plan changed since review; reload it before applying this revision.");
+    }
+    const senderWindow = getSenderWindow(event);
+    let updatedEvent: { type: "plan.updated"; sessionId: string; plan: typeof plan } | undefined;
+    const updated = updatePlanContentById(
+      plansRoot(),
+      plan.id,
+      parsed.planHash,
+      parsed.revisedContent,
+      (persistedPlan) => {
+        updatedEvent = { type: "plan.updated", sessionId: session.id, plan: persistedPlan };
+        recordAgentEvent(updatedEvent);
+      },
+    );
+    if (!updated) throw new Error("Spec plan not found.");
+    if (!updatedEvent) throw new Error("Plan update event was not persisted.");
+    try {
+      senderWindow.webContents.send(IPC_CHANNELS.agentEvent, updatedEvent);
+    } catch (error) {
+      console.error("Failed to deliver committed plan.updated event to sender window.", error);
+    }
+    return updated;
   });
 
   ipcMain.handle(IPC_CHANNELS.agentCompact, async (event, sessionId: string) => {

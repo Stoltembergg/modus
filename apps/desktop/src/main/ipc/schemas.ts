@@ -4,6 +4,7 @@ import { STARTUP_RENDERER_MILESTONES } from "../../shared/startup";
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = nonEmptyString.optional();
+const MAX_HYPERPLAN_REVISION_BYTES = 12 * 1024;
 const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 const optionalHeadersSchema = z.record(z.string(), z.string()).optional();
@@ -100,6 +101,23 @@ export const agentReviewPlanWithHyperPlanSchema = z
   .object({
     sessionId: nonEmptyString.max(128),
     planId: nonEmptyString.max(128),
+  })
+  .strict();
+
+export const agentApplyHyperPlanRevisionSchema = z
+  .object({
+    sessionId: nonEmptyString.max(128),
+    planId: nonEmptyString.max(128),
+    planHash: nonEmptyString.max(128),
+    revisedContent: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_HYPERPLAN_REVISION_BYTES)
+      .refine(
+        (content) => new TextEncoder().encode(content).byteLength <= MAX_HYPERPLAN_REVISION_BYTES,
+        `Revision content must be at most ${MAX_HYPERPLAN_REVISION_BYTES} UTF-8 bytes.`,
+      ),
   })
   .strict();
 

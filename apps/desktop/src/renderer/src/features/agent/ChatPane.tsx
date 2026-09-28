@@ -78,14 +78,41 @@ export function canSubmitPromptForSession(
 }
 
 export async function requestHyperPlanReview(
-  input: { sessionId: string; planId: string },
+  input: { sessionId: string; planId: string; planHash: string },
+  activeRequest: { current: Set<string> },
   review: (input: { sessionId: string; planId: string }) => Promise<HyperPlanSummary>,
-): Promise<{ status: "completed"; summary: HyperPlanSummary } | { status: "error" }> {
+): Promise<HyperPlanSummary | undefined> {
+  const token = `review:${input.planId}:${input.planHash}`;
+  if (activeRequest.current.has(token)) return undefined;
+  activeRequest.current.add(token);
   try {
-    return { status: "completed", summary: await review(input) };
-  } catch {
-    return { status: "error" };
+    return await review({ sessionId: input.sessionId, planId: input.planId });
+  } finally {
+    activeRequest.current.delete(token);
   }
+}
+
+type HyperPlanReviewState =
+  | { planId: string; planHash: string; originalPlan: PlanRef; status: "reviewing" }
+  | {
+      planId: string;
+      planHash: string;
+      originalPlan: PlanRef;
+      status: "completed" | "applying";
+      summary: HyperPlanSummary;
+    }
+  | {
+      planId: string;
+      planHash: string;
+      originalPlan: PlanRef;
+      status: "error";
+      error: string;
+    };
+
+function formatHyperPlanError(error: unknown): string {
+  const cause = error instanceof Error ? error.message : String(error);
+  const detail = cause.trim().slice(0, 240) || "Unknown review error";
+  return `Review failed: ${detail}. Try again.`;
 }
 
 type ChatPaneProps = {
@@ -418,13 +445,9 @@ export function ChatPane({
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
   const [dismissedPlanHash, setDismissedPlanHash] = useState<string | undefined>(undefined);
-  const [hyperPlanReview, setHyperPlanReview] = useState<{
-    planId: string;
-    planHash: string;
-    status: "loading" | "error" | "completed";
-    summary?: HyperPlanSummary;
-  }>();
-  const hyperPlanRequestId = useRef(0);
+  const [hyperPlanReview, setHyperPlanReview] = useState<HyperPlanReviewState>();
+  const hyperPlanRequests = useRef(new Set<string>());
+  const hyperPlanEpoch = useRef(0);
   const [previewSubagentId, setPreviewSubagentId] = useState<string | undefined>();
   const managedProcesses = useManagedProcesses({
     workspaceId: workspace?.id,
@@ -693,7 +716,8 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(false);
     setWorkingStats(undefined);
-    hyperPlanRequestId.current += 1;
+    hyperPlanEpoch.current += 1;
+    hyperPlanRequests.current.clear();
     setHyperPlanReview(undefined);
     refreshStats();
 
@@ -742,7 +766,8 @@ export function ChatPane({
 
     return () => {
       cancelled = true;
-      hyperPlanRequestId.current += 1;
+      hyperPlanEpoch.current += 1;
+      hyperPlanRequests.current.clear();
       const el = scrollContainerRef.current;
       if (el) {
         rememberSessionScroll(sessionId, el.scrollTop);
@@ -781,13 +806,72 @@ export function ChatPane({
 
   async function reviewPlanWithHyperPlan(plan: PlanRef): Promise<void> {
     if (!plan.spec) return;
-    const requestId = ++hyperPlanRequestId.current;
-    setHyperPlanReview({ planId: plan.id, planHash: plan.hash, status: "loading" });
-    const result = await requestHyperPlanReview({ sessionId, planId: plan.id }, (input) =>
-      window.modus.agent.reviewPlanWithHyperPlan(input),
-    );
-    if (requestId === hyperPlanRequestId.current) {
-      setHyperPlanReview({ planId: plan.id, planHash: plan.hash, ...result });
+    const token = `${plan.id}:${plan.hash}`;
+    if (hyperPlanRequests.current.has(`review:${token}`)) return;
+    const epoch = hyperPlanEpoch.current;
+    setHyperPlanReview({
+      planId: plan.id,
+      planHash: plan.hash,
+      originalPlan: plan,
+      status: "reviewing",
+    });
+    try {
+      const summary = await requestHyperPlanReview(
+        { sessionId, planId: plan.id, planHash: plan.hash },
+        { current: hyperPlanRequests.current },
+        (input) => window.modus.agent.reviewPlanWithHyperPlan(input),
+      );
+      if (summary && epoch === hyperPlanEpoch.current) {
+        setHyperPlanReview({
+          planId: plan.id,
+          planHash: plan.hash,
+          originalPlan: plan,
+          status: "completed",
+          summary,
+        });
+      }
+    } catch (error) {
+      if (epoch !== hyperPlanEpoch.current) return;
+      setHyperPlanReview({
+        planId: plan.id,
+        planHash: plan.hash,
+        originalPlan: plan,
+        status: "error",
+        error: formatHyperPlanError(error),
+      });
+    }
+  }
+
+  async function applyHyperPlanRevision(): Promise<void> {
+    if (visibleHyperPlanReview?.status !== "completed") return;
+    const { originalPlan, summary } = visibleHyperPlanReview;
+    const token = `apply:${originalPlan.id}:${originalPlan.hash}`;
+    if (hyperPlanRequests.current.has(token)) return;
+    const epoch = hyperPlanEpoch.current;
+    hyperPlanRequests.current.add(token);
+    setHyperPlanReview({ ...visibleHyperPlanReview, status: "applying" });
+    try {
+      const updatedPlan = await window.modus.agent.applyHyperPlanRevision({
+        sessionId,
+        planId: originalPlan.id,
+        planHash: originalPlan.hash,
+        revisedContent: summary.revisedContent,
+      });
+      if (epoch === hyperPlanEpoch.current) {
+        onPlanUpdated(updatedPlan);
+        setHyperPlanReview(undefined);
+      }
+    } catch (error) {
+      if (epoch !== hyperPlanEpoch.current) return;
+      setHyperPlanReview({
+        planId: originalPlan.id,
+        planHash: originalPlan.hash,
+        originalPlan,
+        status: "error",
+        error: formatHyperPlanError(error),
+      });
+    } finally {
+      hyperPlanRequests.current.delete(token);
     }
   }
   const pendingPermission = useMemo(
@@ -1139,9 +1223,15 @@ export function ChatPane({
                     onReviewWithHyperPlan={() => void reviewPlanWithHyperPlan(reviewPlan)}
                     plan={reviewPlan}
                     hyperPlanStatus={visibleHyperPlanReview?.status ?? "idle"}
-                    {...(visibleHyperPlanReview?.summary
+                    {...(visibleHyperPlanReview?.status === "completed" ||
+                    visibleHyperPlanReview?.status === "applying"
                       ? { hyperPlanSummary: visibleHyperPlanReview.summary }
                       : {})}
+                    {...(visibleHyperPlanReview?.status === "error"
+                      ? { hyperPlanError: visibleHyperPlanReview.error }
+                      : {})}
+                    onUseRevisedPlan={() => void applyHyperPlanRevision()}
+                    onKeepPreviousPlan={() => setHyperPlanReview(undefined)}
                     onContinuePlanning={() => {
                       setComposerMode("plan");
                       setDismissedPlanHash(reviewPlan.hash);

@@ -1,7 +1,15 @@
 /** Session-scoped Plan Mode persistence. */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import type {
   PlanAcceptanceCriterion,
@@ -15,11 +23,13 @@ import type {
 
 const PLAN_FILE = "plan.md";
 const META_FILE = "plan.json";
+const REVISION_IN_DOUBT_FILE = "hyperplan-revision-in-doubt";
 const MAX_STABLE_ID_LENGTH = 128;
 const MAX_ACCEPTANCE_CRITERIA = 100;
 const MAX_REQUIRED_CHECK_KINDS = 4;
 const MAX_CURRENT_RUN_EVIDENCE = MAX_ACCEPTANCE_CRITERIA * MAX_REQUIRED_CHECK_KINDS;
 const MAX_SPEC_EVIDENCE_HISTORY = MAX_CURRENT_RUN_EVIDENCE * 2;
+const revisionInDoubtDirs = new Set<string>();
 const REQUIRED_CHECK_KINDS = new Set(["tests", "typecheck", "lint", "build"]);
 const CHECK_LABELS: Record<"tests" | "typecheck" | "lint" | "build", string> = {
   tests: "Tests",
@@ -285,6 +295,93 @@ export function setPlanBuildStatusById(
   const next: PlanMeta = { ...meta, buildStatus, updatedAt: new Date().toISOString() };
   writeFileSync(join(dir, META_FILE), JSON.stringify(next, null, 2), "utf8");
   return { ...next, content: plan.content };
+}
+
+/** Replace only the Markdown body of the plan identified by its current content hash. */
+export function updatePlanContentById(
+  rootDir: string,
+  id: string,
+  expectedHash: string,
+  content: string,
+  afterPersist?: (updated: PlanRef) => void,
+): PlanRef | undefined {
+  const dir = resolvePlanDir(rootDir, id);
+  if (!dir) return undefined;
+  if (revisionInDoubtDirs.has(dir) || existsSync(join(dir, REVISION_IN_DOUBT_FILE))) {
+    throw new Error(
+      "Plan revision state is indeterminate; manual repair is required before updating.",
+    );
+  }
+  const plan = readPlanDir(dir);
+  if (!plan) return undefined;
+  if (plan.hash !== expectedHash || hashContent(plan.content) !== expectedHash) {
+    throw new Error("Plan changed since review; reload it before applying this revision.");
+  }
+
+  const revisedContent = content.trim();
+  if (!revisedContent) throw new Error("Revised plan content cannot be empty.");
+  const blocks: PlanBlock[] = [{ type: "markdown", content: revisedContent }];
+  const { content: _content, ...meta } = plan;
+  const next: PlanMeta = {
+    ...readMeta(dir),
+    ...meta,
+    hash: hashContent(revisedContent),
+    blocks,
+    updatedAt: new Date().toISOString(),
+  };
+  const metaPath = join(dir, META_FILE);
+  const oldBody = readFileSync(plan.path);
+  const oldMeta = readFileSync(metaPath);
+  const updated = { ...next, content: revisedContent };
+  try {
+    replaceFileContents(plan.path, Buffer.from(revisedContent, "utf8"));
+    replaceFileContents(metaPath, Buffer.from(JSON.stringify(next, null, 2), "utf8"));
+    afterPersist?.(updated);
+    return updated;
+  } catch (cause) {
+    let restorationFailure: unknown;
+    try {
+      replaceFileContents(plan.path, oldBody);
+    } catch (error) {
+      restorationFailure = error;
+    }
+    try {
+      replaceFileContents(metaPath, oldMeta);
+    } catch (error) {
+      restorationFailure ??= error;
+    }
+    if (restorationFailure) {
+      revisionInDoubtDirs.add(dir);
+      try {
+        writeFileSync(
+          join(dir, REVISION_IN_DOUBT_FILE),
+          `Manual repair required. Update failure: ${String(cause)}. Restoration failure: ${String(restorationFailure)}\n`,
+          "utf8",
+        );
+        revisionInDoubtDirs.delete(dir);
+      } catch (markerFailure) {
+        throw new Error(
+          `Plan revision state is indeterminate; restoration and marker creation failed: ${String(markerFailure)}`,
+          { cause },
+        );
+      }
+      throw new Error(
+        `Plan revision state is indeterminate; manual repair is required. ${String(restorationFailure)}`,
+        { cause },
+      );
+    }
+    throw cause;
+  }
+}
+
+function replaceFileContents(path: string, content: Buffer): void {
+  const temporaryPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  try {
+    writeFileSync(temporaryPath, content);
+    renameSync(temporaryPath, path);
+  } finally {
+    rmSync(temporaryPath, { force: true });
+  }
 }
 
 /** Attach current-run QA references and recompute every criterion with required check kinds. */

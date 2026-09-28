@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   loaderOptions: [] as Array<Record<string, unknown>>,
   promptTexts: [] as string[],
   rejectAbortSessionIndexes: [] as number[],
+  throwAbortSessionIndexes: [] as number[],
   hangAbortSessionIndexes: [] as number[],
   abortHandler: undefined as (() => void) | undefined,
   createSessionHandler: undefined as
@@ -51,14 +52,18 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
           }
         });
       }),
-      abort: vi.fn(async () => {
+      abort: vi.fn(() => {
         if (sessionIndex === 0) mocks.abortHandler?.();
+        if (mocks.throwAbortSessionIndexes.includes(sessionIndex)) {
+          throw new Error("synchronous isolated abort failure");
+        }
         if (mocks.hangAbortSessionIndexes.includes(sessionIndex)) {
-          await new Promise<void>(() => {});
+          return new Promise<void>(() => {});
         }
         if (mocks.rejectAbortSessionIndexes.includes(sessionIndex)) {
-          throw new Error("isolated abort failure");
+          return Promise.reject(new Error("isolated abort failure"));
         }
+        return Promise.resolve();
       }),
       dispose: vi.fn(),
     };
@@ -104,6 +109,7 @@ const spec: PlanSpec = {
 const criticOutput = (critic: string) =>
   JSON.stringify({ findings: [`Finding from ${critic}`], references: [`${critic}.md#section`] });
 const synthesisOutput = JSON.stringify({
+  revisedContent: "# Feature\nUse the reviewed approach.",
   agreements: ["The reviewers agree."],
   disagreements: [],
   risks: ["A bounded risk."],
@@ -132,12 +138,14 @@ const reviewInput = (overrides: Record<string, unknown> = {}) => ({
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
   mocks.sessions.length = 0;
   mocks.sessionOptions.length = 0;
   mocks.loaderOptions.length = 0;
   mocks.promptTexts.length = 0;
   mocks.rejectAbortSessionIndexes.length = 0;
+  mocks.throwAbortSessionIndexes.length = 0;
   mocks.hangAbortSessionIndexes.length = 0;
   mocks.abortHandler = undefined;
   mocks.createSessionHandler = undefined;
@@ -187,9 +195,11 @@ describe("runHyperPlanReview", () => {
     expect(mocks.promptTexts).toHaveLength(5);
     const synthesisInput = mocks.promptTexts.find((prompt) => prompt.includes("SYNTHESIS_INPUT:"));
     expect(synthesisInput).toContain("Finding from architecture");
-    expect(synthesisInput).not.toContain("Implement the described behavior");
+    expect(synthesisInput).toContain("Implement the described behavior");
+    expect(synthesisInput).toContain('"requirements":[{"id":"req-one"');
     expect(result.critiques.map((critique) => critique.critic)).toEqual(completionOrder);
     expect(result).toMatchObject({
+      revisedContent: "# Feature\nUse the reviewed approach.",
       agreements: ["Among completed critics: The reviewers agree."],
       risks: ["A bounded risk."],
     });
@@ -263,7 +273,7 @@ describe("runHyperPlanReview", () => {
     expect(JSON.stringify(result)).not.toContain("not json");
   });
 
-  it("times out a critic, aborts and disposes it, and never treats it as approval", async () => {
+  it("rejects a timed-out critic without starting synthesis", async () => {
     vi.useFakeTimers();
     let finishPrompt: (() => void) | undefined;
     mocks.promptHandler = async (prompt, emit) => {
@@ -277,14 +287,16 @@ describe("runHyperPlanReview", () => {
     };
     mocks.abortHandler = () => finishPrompt?.();
     const pending = runHyperPlanReview(reviewInput());
+    const rejected = expect(pending).rejects.toMatchObject({
+      reason: "critic_timeout",
+      message: expect.stringMatching(/timed out/i),
+    });
     await vi.advanceTimersByTimeAsync(60_001);
-    const result = await pending;
+    await rejected;
 
-    expect(result.critiques.find((critique) => critique.critic === "architecture")?.status).toBe(
-      "unavailable",
-    );
     expect(mocks.sessions[0]?.abort).toHaveBeenCalled();
     expect(mocks.sessions[0]?.dispose).toHaveBeenCalled();
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("SYNTHESIS_INPUT:"))).toBe(false);
   });
 
   it("maps a critic exception or failed cleanup to unavailable without rejecting the review", async () => {
@@ -304,45 +316,69 @@ describe("runHyperPlanReview", () => {
     expect(JSON.stringify(result)).not.toContain("private");
   });
 
-  it("caps critic and synthesis inputs and bounds all synthesized fields", async () => {
-    useSuccessfulPromptHandler();
-    const hugeSpec: PlanSpec = {
-      ...spec,
-      requirements: Array.from({ length: 100 }, (_, index) => ({
-        id: `req-${index}`,
-        text: "R".repeat(500),
-      })),
+  it("rejects total critic failure with the original cause and can retry", async () => {
+    mocks.promptHandler = async (prompt) => {
+      if (criticId(prompt)) throw new Error("429: temporary rate limit");
     };
 
-    const result = await runHyperPlanReview(
-      reviewInput({ planContent: "P".repeat(50_000), spec: hugeSpec }),
-    );
+    await expect(runHyperPlanReview(reviewInput())).rejects.toThrow("429: temporary rate limit");
+    expect(mocks.promptTexts).toHaveLength(4);
+
+    useSuccessfulPromptHandler();
+    await expect(runHyperPlanReview(reviewInput())).resolves.toMatchObject({
+      revisedContent: expect.any(String),
+    });
+  });
+
+  it("keeps the accepted full plan body in critic and synthesis prompts", async () => {
+    useSuccessfulPromptHandler();
+    const marker = "FINAL_PLAN_BODY_SENTINEL";
+    const planContent = `${"P".repeat(10_000)}${marker}`;
+
+    const result = await runHyperPlanReview(reviewInput({ planContent }));
 
     expect(
       mocks.promptTexts.every((prompt) => Buffer.byteLength(prompt, "utf8") <= 24 * 1024),
     ).toBe(true);
+    expect(
+      mocks.promptTexts
+        .filter((prompt) => criticId(prompt))
+        .every((prompt) => {
+          const serialized = prompt.split("SPEC_AND_PLAN_INPUT:\n")[1];
+          return serialized !== undefined && JSON.parse(serialized).planContent === planContent;
+        }),
+    ).toBe(true);
+    const synthesis = mocks.promptTexts.find((prompt) => prompt.includes("SYNTHESIS_INPUT:"));
+    const synthesisInput = synthesis?.slice((synthesis.lastIndexOf("\n") ?? -1) + 1);
+    expect(synthesisInput).toBeDefined();
+    expect(JSON.parse(synthesisInput ?? "{}").planContent).toBe(planContent);
     expect(result.agreements.every((text) => text.length <= 500)).toBe(true);
     expect(result.critiques.every((critique) => critique.findings.length <= 12)).toBe(true);
   });
 
-  it("preserves critic results when synthesis fails and discloses no exception text", async () => {
+  it("rejects a plan over 12 KiB before starting any critic prompt", async () => {
+    useSuccessfulPromptHandler();
+
+    await expect(
+      runHyperPlanReview(reviewInput({ planContent: "x".repeat(12 * 1024 + 1) })),
+    ).rejects.toThrow(/12 KiB/i);
+    expect(mocks.promptTexts).toHaveLength(0);
+  });
+
+  it("rejects with the synthesis failure cause when synthesis fails", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.promptHandler = async (prompt, emit) => {
       if (prompt.includes("SYNTHESIS_INPUT:")) throw new Error("sensitive synthesis failure");
       const critic = criticId(prompt);
       emit(criticOutput(critic ?? "unknown"));
     };
 
-    const result = await runHyperPlanReview(reviewInput());
-
-    expect(result.critiques).toHaveLength(4);
-    expect(result.critiques.every((critique) => critique.status === "completed")).toBe(true);
-    expect(result.openQuestions).toContain(
-      "HyperPlan synthesis unavailable (prompt_failure); no agreement was established.",
-    );
-    expect(JSON.stringify(result)).not.toContain("sensitive synthesis failure");
+    await expect(runHyperPlanReview(reviewInput())).rejects.toThrow("sensitive synthesis failure");
+    expect(log).toHaveBeenCalledWith("[HyperPlan] stage=synthesis reason=prompt_failure");
   });
 
-  it("treats malformed synthesis as unavailable while preserving the four critic results", async () => {
+  it("rejects malformed synthesis instead of returning a summary without a revision", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
     mocks.promptHandler = async (prompt, emit) => {
       if (prompt.includes("SYNTHESIS_INPUT:")) {
         emit("malformed synthesis payload");
@@ -352,17 +388,11 @@ describe("runHyperPlanReview", () => {
       emit(criticOutput(critic ?? "unknown"));
     };
 
-    const result = await runHyperPlanReview(reviewInput());
-
-    expect(result.critiques).toHaveLength(4);
-    expect(result.critiques.every((critique) => critique.status === "completed")).toBe(true);
-    expect(result.agreements).toEqual([]);
-    expect(result.openQuestions).toEqual([
-      "HyperPlan synthesis unavailable (invalid_synthesis_output); no agreement was established.",
-    ]);
+    await expect(runHyperPlanReview(reviewInput())).rejects.toThrow(/synthesis|JSON/i);
+    expect(log).toHaveBeenCalledWith("[HyperPlan] stage=synthesis reason=invalid_synthesis_output");
   });
 
-  it("skips synthesis when no critics completed, even if synthesis would claim agreement", async () => {
+  it("skips synthesis when no critics completed and rejects with a critic cause", async () => {
     mocks.promptHandler = async (prompt, emit) => {
       if (prompt.includes("SYNTHESIS_INPUT:")) {
         emit(synthesisOutput);
@@ -374,21 +404,13 @@ describe("runHyperPlanReview", () => {
       emit("malformed critic output");
     };
 
-    const result = await runHyperPlanReview(reviewInput());
+    await expect(runHyperPlanReview(reviewInput())).rejects.toThrow(
+      "private critic request failure",
+    );
 
     expect(mocks.promptTexts).toHaveLength(4);
     expect(mocks.sessions).toHaveLength(4);
     expect(mocks.promptTexts.every((prompt) => criticId(prompt) !== undefined)).toBe(true);
-    expect(result.critiques.every((critic) => critic.status === "unavailable")).toBe(true);
-    expect(result.agreements).toEqual([]);
-    expect(result.disagreements).toEqual([]);
-    expect(result.risks).toEqual([]);
-    expect(result.references).toEqual([]);
-    expect(result.openQuestions.join(" ")).toMatch(/no synthesis.*no approval/i);
-    expect(result.openQuestions).not.toContain(
-      expect.stringContaining("HyperPlan synthesis unavailable"),
-    );
-    expect(Buffer.byteLength(result.openQuestions[0] ?? "", "utf8")).toBeLessThanOrEqual(500);
   });
 
   it("synthesizes only completed critics and scopes agreements and disagreements", async () => {
@@ -397,6 +419,7 @@ describe("runHyperPlanReview", () => {
         emit(
           JSON.stringify({
             agreements: ["The design is sound."],
+            revisedContent: "# Feature\nUse the reviewed approach.",
             disagreements: ["The timeline differs."],
             risks: [],
             openQuestions: [],
@@ -426,6 +449,7 @@ describe("runHyperPlanReview", () => {
         emit(
           JSON.stringify({
             agreements: ["The design is sound."],
+            revisedContent: "# Feature\nUse the reviewed approach.",
             disagreements: ["The timeline differs."],
             risks: ["The migration needs a rollback."],
             openQuestions: ["Which deployment window is available?"],
@@ -448,44 +472,21 @@ describe("runHyperPlanReview", () => {
     expect(result.references).toEqual(["plan.md#deployment"]);
   });
 
-  it("caps persisted plan text before critic prompt serialization", async () => {
-    useSuccessfulPromptHandler();
-    const marker = "UNBOUNDED_PLAN_TAIL_SENTINEL";
-    const planContent = `${"P".repeat(40_000)}${marker}`;
-
-    const fromSpy = vi.spyOn(Buffer, "from");
-    try {
-      await runHyperPlanReview(reviewInput({ planContent }));
-      expect(fromSpy.mock.calls.some(([value]) => value === planContent)).toBe(false);
-    } finally {
-      fromSpy.mockRestore();
-    }
-
-    const criticPrompts = mocks.promptTexts.filter((prompt) => criticId(prompt));
-    expect(criticPrompts).toHaveLength(4);
-    expect(criticPrompts.every((prompt) => Buffer.byteLength(prompt, "utf8") <= 24 * 1024)).toBe(
-      true,
-    );
-    expect(
-      criticPrompts.every((prompt) => {
-        const serialized = prompt.split("SPEC_AND_PLAN_INPUT:\n")[1];
-        return (
-          serialized !== undefined &&
-          Buffer.byteLength(JSON.parse(serialized).planContent as string, "utf8") <= 12 * 1024
-        );
-      }),
-    ).toBe(true);
-    expect(criticPrompts.every((prompt) => !prompt.includes(marker))).toBe(true);
-    expect(criticPrompts.every((prompt) => !prompt.includes("P".repeat(40_000)))).toBe(true);
-  });
-
   it("returns only the bounded summary contract", async () => {
     useSuccessfulPromptHandler();
 
     const result = await runHyperPlanReview(reviewInput());
 
     expect(Object.keys(result).sort()).toEqual(
-      ["critiques", "agreements", "disagreements", "risks", "openQuestions", "references"].sort(),
+      [
+        "critiques",
+        "agreements",
+        "disagreements",
+        "risks",
+        "openQuestions",
+        "references",
+        "revisedContent",
+      ].sort(),
     );
     expect(
       result.critiques.every(
@@ -529,10 +530,10 @@ describe("runHyperPlanReview", () => {
       });
 
     const pending = runHyperPlanReview(reviewInput());
+    const timedOut = expect(pending).rejects.toThrow(/timed out/i);
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(60_001);
-    const result = await pending;
-    expect(result.critiques.every((critic) => critic.status === "unavailable")).toBe(true);
+    await timedOut;
     expect(mocks.promptTexts).toHaveLength(0);
 
     await expect(runHyperPlanReview(reviewInput())).rejects.toThrow("HyperPlan review busy");
@@ -555,12 +556,47 @@ describe("runHyperPlanReview", () => {
       emit(critic ? criticOutput(critic) : synthesisOutput);
     };
     const pending = runHyperPlanReview(reviewInput());
+    const timedOut = expect(pending).rejects.toThrow(/timed out/i);
     await vi.advanceTimersByTimeAsync(60_001);
     await vi.advanceTimersByTimeAsync(5_001);
-    const result = await pending;
-    expect(result.critiques.find((critic) => critic.critic === "architecture")?.status).toBe(
-      "unavailable",
-    );
+    await timedOut;
     await expect(runHyperPlanReview(reviewInput())).rejects.toThrow("HyperPlan review busy");
+  });
+
+  it("quarantines and rejects when abort throws synchronously for a pending critic", async () => {
+    vi.useFakeTimers();
+    let finishPrompt: (() => void) | undefined;
+    mocks.throwAbortSessionIndexes = [0];
+    mocks.promptHandler = async (prompt, emit) => {
+      const critic = criticId(prompt);
+      if (critic === "architecture") {
+        await new Promise<void>((resolve) => {
+          finishPrompt = resolve;
+        });
+      }
+      emit(critic ? criticOutput(critic) : synthesisOutput);
+    };
+
+    vi.resetModules();
+    const isolatedHarness = await import("./hyperplan");
+    const pending = isolatedHarness.runHyperPlanReview(reviewInput());
+    const settled = pending.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await vi.advanceTimersByTimeAsync(60_001);
+    const outcome = await settled;
+    finishPrompt?.();
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+
+    expect(outcome).toHaveProperty("error");
+    expect((outcome as { error?: { reason?: string } }).error?.reason).toBe("critic_quarantine");
+    expect(String((outcome as { error?: unknown }).error)).toMatch(
+      /synchronous isolated abort failure/i,
+    );
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("SYNTHESIS_INPUT:"))).toBe(false);
+    await expect(isolatedHarness.runHyperPlanReview(reviewInput())).rejects.toThrow(
+      "HyperPlan review busy",
+    );
   });
 });
