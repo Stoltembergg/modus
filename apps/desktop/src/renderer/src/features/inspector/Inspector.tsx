@@ -4,7 +4,6 @@ import {
   IconGitBranch,
   IconGridDots,
   IconLayoutList,
-  IconLayoutSidebarRight,
   IconShieldCheck,
   IconShieldX,
   IconTerminal2,
@@ -21,11 +20,10 @@ import type {
   PlanRef,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
-import { ChromeMoreMenu } from "../../components/ui/ChromeMoreMenu";
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { ModusLoadingFallback } from "../../components/ui/ModusLoadingMark";
 import { PanelHeader } from "../../components/ui/Panel";
-import { TOOLBAR_ICON, ToolbarButton } from "../../components/ui/ToolbarButton";
+import { TOOLBAR_ICON } from "../../components/ui/ToolbarButton";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
@@ -61,7 +59,6 @@ type InspectorProps = {
   onModelChange(model: string): void;
   onModelConfigChange(model: string, thinkingVariant: string): Promise<void> | void;
   onOpenReview(cwd?: string): void;
-  onOpenSettings(): void;
   onOpenSubagent(childSessionId: string): void;
   onPlanUpdated(plan: PlanRef): void;
   onOpenChange(open: boolean): void;
@@ -150,7 +147,6 @@ export function Inspector({
   onModelChange,
   onModelConfigChange,
   onOpenReview,
-  onOpenSettings,
   onOpenSubagent,
   onPlanUpdated,
   onOpenChange,
@@ -333,15 +329,6 @@ export function Inspector({
                     ))}
                     <Tabs.Indicator className="absolute top-1/2 left-0 z-0 h-6.5 w-(--active-tab-width) -translate-y-1/2 translate-x-(--active-tab-left) rounded-md bg-active transition-all duration-200 ease-out-quint" />
                   </Tabs.List>
-                  <div className="ml-1 flex shrink-0 items-center gap-0.5">
-                    <ChromeMoreMenu onOpenSettings={onOpenSettings} />
-                    <ToolbarButton label="Collapse right panel" onClick={() => onOpenChange(false)}>
-                      <IconLayoutSidebarRight
-                        size={TOOLBAR_ICON.size}
-                        stroke={TOOLBAR_ICON.stroke}
-                      />
-                    </ToolbarButton>
-                  </div>
                 </div>
 
                 <Tabs.Panel className={INSPECTOR_TAB_PANEL_CLASS} value="changes">
