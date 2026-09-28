@@ -48,6 +48,7 @@ import type {
   PermissionAction,
   PermissionDecision,
   PersonalizationState,
+  PlanRef,
   PreviewReadResult,
   ProjectMemoryScope,
   ProjectMemorySnapshot,
@@ -170,6 +171,12 @@ export type ModusApi = {
       sessionId: string;
       planId: string;
     }): Promise<HyperPlanSummary>;
+    applyHyperPlanRevision(input: {
+      sessionId: string;
+      planId: string;
+      planHash: string;
+      revisedContent: string;
+    }): Promise<PlanRef>;
     compact(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     /**

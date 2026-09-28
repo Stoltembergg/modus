@@ -43,6 +43,7 @@ const api: ModusApi = {
     releaseRuntime: (sessionId) => ipcRenderer.invoke("agent:release-runtime", sessionId),
     prompt: (input) => ipcRenderer.invoke("agent:prompt", input),
     reviewPlanWithHyperPlan: (input) => ipcRenderer.invoke("agent:review-plan-hyperplan", input),
+    applyHyperPlanRevision: (input) => ipcRenderer.invoke("agent:apply-hyperplan-revision", input),
     compact: (sessionId) => ipcRenderer.invoke("agent:compact", sessionId),
     abort: (sessionId) => ipcRenderer.invoke("agent:abort", sessionId),
     rollback: (input) => ipcRenderer.invoke("agent:rollback", input),

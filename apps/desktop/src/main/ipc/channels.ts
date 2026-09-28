@@ -22,6 +22,7 @@ export const IPC_CHANNELS = {
   agentReleaseRuntime: "agent:release-runtime",
   agentPrompt: "agent:prompt",
   agentReviewPlanWithHyperPlan: "agent:review-plan-hyperplan",
+  agentApplyHyperPlanRevision: "agent:apply-hyperplan-revision",
   agentCompact: "agent:compact",
   agentAbort: "agent:abort",
   agentRollback: "agent:rollback",

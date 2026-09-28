@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  agentApplyHyperPlanRevisionSchema,
   agentPromptSchema,
   browserRecentSchema,
   diffCommitOrPushSchema,
@@ -11,6 +12,36 @@ import {
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  it("accepts a bounded strict HyperPlan revision payload", () => {
+    const valid = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      planHash: "hash-1",
+      revisedContent: "# Revised",
+    };
+    expect(
+      parseIpcInput(agentApplyHyperPlanRevisionSchema, valid, "agent:apply-hyperplan-revision"),
+    ).toEqual(valid);
+    const atByteLimit = { ...valid, revisedContent: "x".repeat(12 * 1024) };
+    expect(
+      parseIpcInput(
+        agentApplyHyperPlanRevisionSchema,
+        atByteLimit,
+        "agent:apply-hyperplan-revision",
+      ),
+    ).toEqual(atByteLimit);
+    for (const input of [
+      { ...valid, extra: true },
+      { ...valid, revisedContent: "  " },
+      { ...valid, revisedContent: "x".repeat(12 * 1024 + 1) },
+      { ...valid, revisedContent: "é".repeat(8_000) },
+    ]) {
+      expect(() =>
+        parseIpcInput(agentApplyHyperPlanRevisionSchema, input, "agent:apply-hyperplan-revision"),
+      ).toThrow("Invalid IPC payload");
+    }
+  });
+
   const mcpInput = {
     cwd: "repo",
     name: "server",

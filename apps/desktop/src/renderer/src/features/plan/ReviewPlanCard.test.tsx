@@ -36,6 +36,7 @@ const plan: PlanRef = {
 };
 
 const summary = {
+  revisedContent: "# Revised release plan",
   critiques: [
     {
       critic: "architecture",
@@ -81,18 +82,31 @@ describe("ReviewPlanCard", () => {
     expect(markup).not.toContain("Review with HyperPlan");
   });
 
-  it("shows loading and a generic error without exposing raw error details", () => {
-    const loading = renderCard({ hyperPlanStatus: "loading" });
-    const error = renderCard({ hyperPlanStatus: "error" });
+  it("shows the animated reviewing state and disables duplicate review", () => {
+    const loading = renderCard({
+      hyperPlanStatus: "reviewing",
+      onReviewWithHyperPlan: vi.fn(),
+    });
 
-    expect(loading).toContain("Reviewing plan…");
-    expect(error).toContain("Review unavailable. Try again.");
-    expect(error).not.toContain("secret raw error");
+    expect(loading).toContain('role="status"');
+    expect(loading).toContain("Reviewing plan with HyperPlan");
+    expect(loading).toContain('alt="HyperPlan review in progress"');
+    expect(loading).toContain("disabled");
   });
 
-  it("shows critic statuses and structured summary fields without transcripts", () => {
-    const markup = renderCard({ hyperPlanStatus: "completed", hyperPlanSummary: summary });
+  it("shows the revised plan and explicit choices after a successful review", () => {
+    const markup = renderCard({
+      hyperPlanStatus: "completed",
+      hyperPlanSummary: summary,
+      onUseRevisedPlan: vi.fn(),
+      onKeepPreviousPlan: vi.fn(),
+    });
 
+    expect(markup).toContain("Revised plan preview");
+    expect(markup).toContain("# Revised release plan");
+    expect(markup).not.toContain("HyperPlan review in progress");
+    expect(markup).toContain("Usar plano revisado");
+    expect(markup).toContain("Manter plano anterior");
     expect(markup).toContain("Architecture");
     expect(markup).toContain("Unavailable");
     expect(markup).toContain("Keep release checks together.");
@@ -100,5 +114,16 @@ describe("ReviewPlanCard", () => {
     expect(markup).toContain("Who approves the release?");
     expect(markup).not.toContain("transcript");
     expect(markup).toContain("Yes, implement this plan");
+  });
+
+  it("shows the useful failure while leaving the original plan in place", () => {
+    const markup = renderCard({
+      hyperPlanStatus: "error",
+      hyperPlanError: "Review failed: 429 temporary rate limit. Try again.",
+    });
+
+    expect(markup).toContain("Review failed: 429 temporary rate limit. Try again.");
+    expect(markup).not.toContain("Revised plan preview");
+    expect(markup).toContain("# Release");
   });
 });

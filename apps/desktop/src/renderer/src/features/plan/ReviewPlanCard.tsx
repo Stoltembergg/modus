@@ -1,22 +1,32 @@
 import { IconArrowRight, IconLoader2, IconPencil, IconSparkles, IconX } from "@tabler/icons-react";
 import { useEffect } from "react";
 import type { HyperPlanSummary, PlanRef } from "../../../../shared/contracts";
+import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
+
+const hyperPlanModeGif = new URL("../../../../../../../docs/media/hp-mode.gif", import.meta.url)
+  .href;
 
 export function ReviewPlanCard({
   onBuildLocally,
   onContinuePlanning,
   onReviewWithHyperPlan,
+  onUseRevisedPlan,
+  onKeepPreviousPlan,
   plan,
   hyperPlanStatus = "idle",
   hyperPlanSummary,
+  hyperPlanError,
 }: {
   onBuildLocally: () => void;
   onContinuePlanning: () => void;
   onReviewWithHyperPlan?: () => void;
+  onUseRevisedPlan?: () => void;
+  onKeepPreviousPlan?: () => void;
   plan: PlanRef;
-  hyperPlanStatus?: "idle" | "loading" | "error" | "completed";
+  hyperPlanStatus?: "idle" | "reviewing" | "applying" | "error" | "completed";
   hyperPlanSummary?: HyperPlanSummary;
+  hyperPlanError?: string;
 }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
@@ -30,6 +40,8 @@ export function ReviewPlanCard({
   }, [onBuildLocally]);
 
   const canReviewWithHyperPlan = Boolean(plan.spec && onReviewWithHyperPlan);
+  const isReviewing = hyperPlanStatus === "reviewing";
+  const isApplying = hyperPlanStatus === "applying";
 
   return (
     <div className="rounded-xl border border-composer-border bg-elevated p-3 shadow-composer-edge">
@@ -49,23 +61,79 @@ export function ReviewPlanCard({
       {plan.spec ? (
         <div className="scroll-thin mt-2 max-h-[min(46vh,360px)] space-y-4 overflow-y-auto px-1 pb-1">
           <SpecAcceptanceCriteria spec={plan.spec} />
-          {hyperPlanStatus === "loading" ? (
-            <p aria-live="polite" className="flex items-center gap-2 text-xs text-fg-muted">
+          {isReviewing ? (
+            <div
+              aria-live="polite"
+              className="overflow-hidden rounded-lg border border-accent/20 bg-surface/70 p-2"
+              role="status"
+            >
+              <img
+                alt="HyperPlan review in progress"
+                className="mx-auto max-h-40 w-auto rounded-md object-contain"
+                src={hyperPlanModeGif}
+              />
+              <p className="mt-2 text-center text-xs text-fg-muted">
+                Reviewing plan with HyperPlan…
+              </p>
+            </div>
+          ) : null}
+          {hyperPlanStatus === "error" ? (
+            <section aria-label="Original plan" className="space-y-2" aria-live="polite">
+              <p className="text-xs text-danger">{hyperPlanError}</p>
+              <div className="rounded-lg border border-hairline bg-surface/50 p-3">
+                <h2 className="mb-2 font-medium text-fg text-xs">Original plan</h2>
+                <MarkdownMessage className="modus-plan-markdown" content={plan.content} />
+              </div>
+            </section>
+          ) : null}
+          {hyperPlanStatus === "completed" && hyperPlanSummary ? (
+            <>
+              <section aria-label="Revised plan preview" className="space-y-2">
+                <div>
+                  <h2 className="font-semibold text-fg text-sm">Revised plan preview</h2>
+                  <p className="mt-0.5 text-xs text-fg-muted">
+                    Nothing changes until you choose to use this revision.
+                  </p>
+                </div>
+                <div className="max-h-60 overflow-y-auto rounded-lg border border-accent/20 bg-surface/60 p-3">
+                  <MarkdownMessage
+                    className="modus-plan-markdown"
+                    content={hyperPlanSummary.revisedContent}
+                  />
+                </div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <button
+                    className="min-h-10 rounded-lg bg-accent px-3 py-2 font-medium text-accent-foreground text-sm transition-opacity hover:opacity-90"
+                    onClick={onUseRevisedPlan}
+                    type="button"
+                  >
+                    Usar plano revisado
+                  </button>
+                  <button
+                    className="min-h-10 rounded-lg border border-hairline px-3 py-2 font-medium text-fg-subtle text-sm transition-colors hover:bg-hover"
+                    onClick={onKeepPreviousPlan}
+                    type="button"
+                  >
+                    Manter plano anterior
+                  </button>
+                </div>
+              </section>
+              <HyperPlanResult summary={hyperPlanSummary} />
+            </>
+          ) : null}
+          {isApplying ? (
+            <p
+              aria-live="polite"
+              className="flex items-center gap-2 text-xs text-fg-muted"
+              role="status"
+            >
               <IconLoader2
                 aria-hidden
                 className="animate-spin motion-reduce:animate-none"
                 size={14}
               />
-              Reviewing plan…
+              Applying the revised plan…
             </p>
-          ) : null}
-          {hyperPlanStatus === "error" ? (
-            <p aria-live="polite" className="text-xs text-danger">
-              Review unavailable. Try again.
-            </p>
-          ) : null}
-          {hyperPlanStatus === "completed" && hyperPlanSummary ? (
-            <HyperPlanResult summary={hyperPlanSummary} />
           ) : null}
         </div>
       ) : null}
@@ -74,11 +142,11 @@ export function ReviewPlanCard({
         <button
           aria-describedby="hyperplan-description"
           className="mt-2 flex min-h-10 w-full items-center justify-center gap-2 rounded-lg border border-accent/25 px-3 py-2 font-medium text-accent text-sm transition-colors hover:bg-accent/10 disabled:cursor-wait disabled:opacity-60"
-          disabled={hyperPlanStatus === "loading"}
+          disabled={isReviewing || isApplying}
           onClick={onReviewWithHyperPlan}
           type="button"
         >
-          {hyperPlanStatus === "loading" ? (
+          {isReviewing || isApplying ? (
             <IconLoader2
               aria-hidden
               className="animate-spin motion-reduce:animate-none"
@@ -87,8 +155,10 @@ export function ReviewPlanCard({
           ) : (
             <IconSparkles aria-hidden size={15} />
           )}
-          {hyperPlanStatus === "loading"
-            ? "Reviewing plan…"
+          {isReviewing || isApplying
+            ? isApplying
+              ? "Applying revision…"
+              : "Reviewing plan…"
             : hyperPlanStatus === "completed"
               ? "Review again with HyperPlan"
               : hyperPlanStatus === "error"

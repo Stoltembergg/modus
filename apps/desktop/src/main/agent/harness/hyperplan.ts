@@ -47,14 +47,17 @@ const MAX_CRITIC_INPUT_BYTES = 24 * 1024;
 const MAX_CRITIC_PLAN_BYTES = 12 * 1024;
 const MAX_SYNTHESIS_INPUT_BYTES = 24 * 1024;
 const MAX_CRITIC_OUTPUT_BYTES = 6 * 1024;
-const MAX_SYNTHESIS_OUTPUT_BYTES = 8 * 1024;
+const MAX_SYNTHESIS_OUTPUT_BYTES = 20 * 1024;
 const MAX_SUMMARY_BYTES = 32 * 1024;
+const MAX_REVISED_CONTENT_BYTES = 12 * 1024;
 
 let reviewActive = false;
 let reviewQuarantined = false;
 let reviewReturned = false;
 let outstandingOperations = 0;
 let reviewTimedOut = false;
+let reviewQuarantineMessage: string | undefined;
+let timeoutCleanupPromises: Promise<void>[] = [];
 
 function maybeReleaseReview(): void {
   if (reviewReturned && outstandingOperations === 0 && !reviewQuarantined) {
@@ -72,6 +75,7 @@ const criticOutputSchema = z
 
 const synthesisOutputSchema = z
   .object({
+    revisedContent: z.string().trim().min(1).max(MAX_REVISED_CONTENT_BYTES),
     agreements: z.array(z.string().trim().min(1).max(500)).max(12),
     disagreements: z.array(z.string().trim().min(1).max(500)).max(12),
     risks: z.array(z.string().trim().min(1).max(500)).max(12),
@@ -93,7 +97,17 @@ type FailureReason =
   | "empty_synthesis_output"
   | "critic_timeout"
   | "critic_quarantine";
-type PromptResult = { output?: string; reason?: FailureReason };
+type PromptResult = { output?: string; reason?: FailureReason; message?: string };
+
+class HyperPlanReviewFailure extends Error {
+  constructor(
+    readonly reason: FailureReason,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HyperPlanReviewFailure";
+  }
+}
 
 function capUtf8(text: string, maxBytes: number): string {
   let bytes = 0;
@@ -148,36 +162,41 @@ function criticPrompt(
 ): string {
   const prefix = `CRITIC_ID: ${id}\n${instruction}\nReview only the bounded structured Spec and plan below. Do not invent evidence or mark criteria complete. Return ONLY JSON: {"findings":["..."],"references":["..."]}. Findings max 12, each <=500 characters; references max 20, each <=240 characters.\nSPEC_AND_PLAN_INPUT:\n`;
   const spec = boundedSpec(input.spec);
-  let planContent = input.planContent;
-  let prompt = `${prefix}${JSON.stringify({ planContent, spec })}`;
-  while (Buffer.byteLength(prompt, "utf8") > MAX_CRITIC_INPUT_BYTES && planContent.length > 0) {
-    const excess = Buffer.byteLength(prompt, "utf8") - MAX_CRITIC_INPUT_BYTES;
-    planContent = capUtf8(
-      planContent,
-      Math.max(0, Buffer.byteLength(planContent, "utf8") - excess - 8),
-    );
-    prompt = `${prefix}${JSON.stringify({ planContent, spec })}`;
-  }
+  const prompt = `${prefix}${JSON.stringify({ planContent: input.planContent, spec })}`;
   return Buffer.byteLength(prompt, "utf8") <= MAX_CRITIC_INPUT_BYTES ? prompt : "";
 }
 
-function synthesisPrompt(critiques: HyperPlanCriticResult[]): string {
+function synthesisPrompt(input: {
+  planContent: string;
+  spec: PlanSpec;
+  critiques: HyperPlanCriticResult[];
+}): string {
+  const critiques = input.critiques;
   const structured = critiques.map((critique) => ({
     critic: critique.critic,
     status: critique.status,
     findings: critique.findings.slice(0, 6).map((finding) => capUtf8(finding, 250)),
     references: critique.references.slice(0, 8).map((reference) => capUtf8(reference, 120)),
   }));
+  const source = {
+    planContent: input.planContent,
+    spec: boundedSpec(input.spec),
+    critiques: structured,
+  };
   const prefix =
-    "SYNTHESIS_INPUT: Synthesize only these capped structured critic results. Unavailable critics are not approvals. Do not infer agreement from missing results. Return ONLY JSON with agreements, disagreements, risks, openQuestions, references arrays (max 12 strings <=500 chars per text, max 20 references <=240 chars).\n";
-  let prompt = `${prefix}${JSON.stringify(structured)}`;
+    "SYNTHESIS_INPUT: Revise the supplied plan using its Spec and only these completed critic results. Preserve the plan's intent and do not invent evidence. Unavailable critics are not approvals. Return ONLY JSON with revisedContent (non-empty Markdown <=12 KiB), agreements, disagreements, risks, openQuestions, references arrays (max 12 strings <=500 chars per text, max 20 references <=240 chars).\n";
+  let prompt = `${prefix}${JSON.stringify(source)}`;
   while (Buffer.byteLength(prompt, "utf8") > MAX_SYNTHESIS_INPUT_BYTES) {
-    const last = structured.at(-1);
-    if (!last) return "";
-    if (last.findings.length > 0) last.findings.pop();
-    else if (last.references.length > 0) last.references.pop();
-    else structured.pop();
-    prompt = `${prefix}${JSON.stringify(structured)}`;
+    const lastWithFindings = [...source.critiques]
+      .reverse()
+      .find((critic) => critic.findings.length);
+    const lastWithReferences = [...source.critiques]
+      .reverse()
+      .find((critic) => critic.references.length);
+    if (lastWithFindings) lastWithFindings.findings.pop();
+    else if (lastWithReferences) lastWithReferences.references.pop();
+    else return "";
+    prompt = `${prefix}${JSON.stringify(source)}`;
   }
   return prompt;
 }
@@ -232,14 +251,14 @@ async function createIsolatedSession(): Promise<{
   }
 }
 
-async function settleAbort(abort: Promise<void>): Promise<boolean> {
+async function settleAbort(abort: Promise<void>): Promise<string | undefined> {
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<boolean>((resolve) => {
-    timer = setTimeout(() => resolve(false), CLEANUP_TIMEOUT_MS);
+  const timeout = new Promise<string>((resolve) => {
+    timer = setTimeout(() => resolve("Session cleanup timed out."), CLEANUP_TIMEOUT_MS);
   });
   const settled = abort.then(
-    () => true,
-    () => false,
+    () => undefined,
+    (error: unknown) => `Session abort failed: ${failureMessage(error)}`,
   );
   const result = await Promise.race([settled, timeout]);
   if (timer) clearTimeout(timer);
@@ -251,7 +270,12 @@ async function runBoundedPrompt(
   timeoutMs: number,
   maxOutputBytes: number,
 ): Promise<PromptResult> {
-  if (!prompt) return { reason: "prompt_failure" };
+  if (!prompt) {
+    return {
+      reason: "prompt_failure",
+      message: "The complete prompt exceeded its bounded input limit.",
+    };
+  }
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let taskSettled = false;
@@ -263,12 +287,16 @@ async function runBoundedPrompt(
       reviewTimedOut = true;
       const aborting = timeoutAbort();
       if (aborting) {
-        void settleAbort(aborting).then((settled) => {
-          if (!settled) reviewQuarantined = true;
+        const cleanup = settleAbort(aborting).then((settled) => {
+          if (settled) reviewQuarantined = true;
         });
+        timeoutCleanupPromises.push(cleanup);
       }
       timeoutCleanup();
-      resolve({ reason: "timeout" });
+      resolve({
+        reason: "timeout",
+        message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+      });
     }, timeoutMs);
   });
   outstandingOperations += 1;
@@ -280,14 +308,21 @@ async function runBoundedPrompt(
     let overflowed = false;
     let abortPromise: Promise<void> | undefined;
     let output = "";
-    let response: PromptResult = { reason: "session_setup_failure" };
+    let response: PromptResult = {
+      reason: "session_setup_failure",
+      message: "Session setup did not complete.",
+    };
     let cleanupSucceeded = true;
+    let cleanupFailure: string | undefined;
     const requestAbort = (): Promise<void> | undefined => {
       if (!session || abortPromise) return abortPromise;
       try {
         abortPromise = session.abort();
-      } catch {
+      } catch (error) {
         cleanupSucceeded = false;
+        cleanupFailure = `Session abort failed: ${failureMessage(error)}`;
+        reviewQuarantined = true;
+        reviewQuarantineMessage = cleanupFailure;
       }
       return abortPromise;
     };
@@ -298,17 +333,23 @@ async function runBoundedPrompt(
       timeoutCleaned = true;
       try {
         unsubscribe?.();
-      } catch {
+      } catch (error) {
+        cleanupFailure = `Session unsubscribe failed: ${failureMessage(error)}`;
+        cleanupSucceeded = false;
         reviewQuarantined = true;
       }
       try {
         session?.dispose();
-      } catch {
+      } catch (error) {
+        cleanupFailure = `Session disposal failed: ${failureMessage(error)}`;
+        cleanupSucceeded = false;
         reviewQuarantined = true;
       }
       try {
         if (tempDir) rmSync(tempDir, { recursive: true, force: true });
-      } catch {
+      } catch (error) {
+        cleanupFailure = `Session directory cleanup failed: ${failureMessage(error)}`;
+        cleanupSucceeded = false;
         reviewQuarantined = true;
       }
     };
@@ -317,7 +358,12 @@ async function runBoundedPrompt(
       session = created.session;
       tempDir = created.tempDir;
       sessionCreated = true;
-      if (timedOut) return { reason: "timeout" };
+      if (timedOut) {
+        return {
+          reason: "timeout",
+          message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+        };
+      }
       response = await new Promise<PromptResult>((resolve) => {
         unsubscribe = session?.subscribe((event) => {
           if (
@@ -344,21 +390,43 @@ async function runBoundedPrompt(
         });
         void session
           ?.prompt(prompt, { source: "rpc" })
-          .then(() => resolve(overflowed ? { reason: "output_limit" } : { output }))
-          .catch(() => resolve({ reason: "prompt_failure" }));
+          .then(() =>
+            resolve(
+              overflowed
+                ? {
+                    reason: "output_limit",
+                    message: `Prompt output exceeded ${maxOutputBytes} bytes.`,
+                  }
+                : { output },
+            ),
+          )
+          .catch((error: unknown) =>
+            resolve({
+              reason: "prompt_failure",
+              message: `Session prompt failed: ${failureMessage(error)}`,
+            }),
+          );
       });
-    } catch {
-      response = { reason: sessionCreated ? "prompt_failure" : "session_setup_failure" };
+    } catch (error) {
+      response = {
+        reason: sessionCreated ? "prompt_failure" : "session_setup_failure",
+        message: `${sessionCreated ? "Session prompt failed" : "Session setup failed"}: ${failureMessage(error)}`,
+      };
     } finally {
       try {
         unsubscribe?.();
-      } catch {
+      } catch (error) {
+        cleanupFailure = `Session unsubscribe failed: ${failureMessage(error)}`;
         cleanupSucceeded = false;
       }
       if (session) {
         requestAbort();
         if (abortPromise) {
-          cleanupSucceeded = (await settleAbort(abortPromise)) && cleanupSucceeded;
+          const cleanupError = await settleAbort(abortPromise);
+          if (cleanupError) {
+            cleanupFailure = cleanupFailure ?? cleanupError;
+            cleanupSucceeded = false;
+          }
         } else {
           cleanupSucceeded = false;
         }
@@ -376,10 +444,25 @@ async function runBoundedPrompt(
         }
       }
     }
-    if (!cleanupSucceeded) reviewQuarantined = true;
-    if (!cleanupSucceeded) return { reason: "cleanup_failure" };
-    if (timedOut) return { reason: "timeout" };
-    if (overflowed) return { reason: "output_limit" };
+    if (!cleanupSucceeded) {
+      reviewQuarantined = true;
+      return {
+        reason: "cleanup_failure",
+        message: cleanupFailure ?? "Session cleanup failed.",
+      };
+    }
+    if (timedOut) {
+      return {
+        reason: "timeout",
+        message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+      };
+    }
+    if (overflowed) {
+      return {
+        reason: "output_limit",
+        message: `Prompt output exceeded ${maxOutputBytes} bytes.`,
+      };
+    }
     return response;
   })();
   const trackedOperation = operation.finally(() => {
@@ -391,35 +474,82 @@ async function runBoundedPrompt(
   if (timeoutHandle) clearTimeout(timeoutHandle);
   if (timedOut) {
     // The worker remains counted until its in-flight model/session work and cleanup settle.
-    return { reason: "timeout" };
+    return {
+      reason: "timeout",
+      message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+    };
   }
-  if (!taskSettled) return { reason: "timeout" };
+  if (!taskSettled) {
+    return { reason: "timeout", message: "Session operation did not settle before its deadline." };
+  }
   return result;
 }
 
-function parseCritique(id: HyperPlanCriticId, raw: string | undefined): HyperPlanCriticResult {
-  if (!raw) return { critic: id, status: "unavailable", findings: [], references: [] };
+function failureMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const bounded = capUtf8(message.trim() || "Unknown failure.", 400);
+  return bounded.replace(/[\r\n\t]+/g, " ");
+}
+
+function parseCritique(
+  id: HyperPlanCriticId,
+  promptResult: PromptResult,
+): { result: HyperPlanCriticResult; failure?: { reason: FailureReason; message: string } } {
+  if (promptResult.reason) {
+    return {
+      result: { critic: id, status: "unavailable", findings: [], references: [] },
+      failure: {
+        reason: promptResult.reason,
+        message: promptResult.message ?? `Critic failed with ${promptResult.reason}.`,
+      },
+    };
+  }
+  if (!promptResult.output?.trim()) {
+    return {
+      result: { critic: id, status: "unavailable", findings: [], references: [] },
+      failure: { reason: "prompt_failure", message: "Critic returned no output." },
+    };
+  }
   try {
-    const result: CriticOutput = criticOutputSchema.parse(JSON.parse(raw));
-    return { critic: id, status: "completed", ...result };
+    const result: CriticOutput = criticOutputSchema.parse(JSON.parse(promptResult.output));
+    return { result: { critic: id, status: "completed", ...result } };
   } catch {
-    return { critic: id, status: "unavailable", findings: [], references: [] };
+    return {
+      result: { critic: id, status: "unavailable", findings: [], references: [] },
+      failure: {
+        reason: "prompt_failure",
+        message: "Critic returned invalid JSON or an invalid response.",
+      },
+    };
   }
 }
 
-function parseSynthesis(raw: string | undefined): SynthesisOutput | undefined {
-  if (!raw) return undefined;
-  try {
-    return synthesisOutputSchema.parse(JSON.parse(raw));
-  } catch {
-    return undefined;
+function parseSynthesis(promptResult: PromptResult): SynthesisOutput {
+  if (promptResult.reason) {
+    throw new HyperPlanReviewFailure(
+      promptResult.reason,
+      promptResult.message ?? `Synthesis failed with ${promptResult.reason}.`,
+    );
   }
-}
-
-function synthesisFailureReason(result: PromptResult): FailureReason {
-  if (result.reason) return result.reason;
-  if (!result.output?.trim()) return "empty_synthesis_output";
-  return parseSynthesis(result.output) ? "prompt_failure" : "invalid_synthesis_output";
+  if (!promptResult.output?.trim()) {
+    throw new HyperPlanReviewFailure("empty_synthesis_output", "Synthesis returned no output.");
+  }
+  try {
+    const result = synthesisOutputSchema.parse(JSON.parse(promptResult.output));
+    if (Buffer.byteLength(result.revisedContent, "utf8") > MAX_REVISED_CONTENT_BYTES) {
+      throw new HyperPlanReviewFailure(
+        "invalid_synthesis_output",
+        `Revised Markdown exceeds ${MAX_REVISED_CONTENT_BYTES} bytes.`,
+      );
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof HyperPlanReviewFailure) throw error;
+    throw new HyperPlanReviewFailure(
+      "invalid_synthesis_output",
+      "Synthesis returned invalid JSON or an invalid revised Markdown body.",
+    );
+  }
 }
 
 function logSynthesisFailure(reason: FailureReason): void {
@@ -434,6 +564,7 @@ function capSummary(summary: HyperPlanSummary): HyperPlanSummary {
       findings: critique.findings.slice(0, 12).map((item) => capUtf8(item, 500)),
       references: critique.references.slice(0, 20).map((item) => capUtf8(item, 240)),
     })),
+    revisedContent: capUtf8(summary.revisedContent, MAX_REVISED_CONTENT_BYTES),
     agreements: summary.agreements.slice(0, 12).map((item) => capUtf8(item, 500)),
     disagreements: summary.disagreements.slice(0, 12).map((item) => capUtf8(item, 500)),
     risks: summary.risks.slice(0, 12).map((item) => capUtf8(item, 500)),
@@ -461,97 +592,110 @@ export async function runHyperPlanReview(input: {
   planContent: string;
   spec: PlanSpec;
 }): Promise<HyperPlanSummary> {
+  if (Buffer.byteLength(input.planContent, "utf8") > MAX_CRITIC_PLAN_BYTES) {
+    throw new Error("Plan content exceeds the 12 KiB HyperPlan review limit.");
+  }
   if (reviewActive || reviewQuarantined) throw new Error("HyperPlan review busy");
   reviewActive = true;
   reviewReturned = false;
   reviewTimedOut = false;
+  timeoutCleanupPromises = [];
   const critiques: HyperPlanCriticResult[] = [];
-  const boundedInput = {
-    ...input,
-    planContent: capUtf8(input.planContent, MAX_CRITIC_PLAN_BYTES),
-  };
-  const criticRuns = CRITICS.map(async ({ id, prompt }) => {
-    let raw: string | undefined;
-    try {
-      raw = (
-        await runBoundedPrompt(
+  const criticFailures = new Map<HyperPlanCriticId, string>();
+  const criticFailureReasons = new Map<HyperPlanCriticId, FailureReason>();
+  const boundedInput = input;
+  try {
+    const criticRuns = CRITICS.map(async ({ id, prompt }) => {
+      let outcome: PromptResult;
+      try {
+        outcome = await runBoundedPrompt(
           criticPrompt(id, prompt, boundedInput),
           CRITIC_TIMEOUT_MS,
           MAX_CRITIC_OUTPUT_BYTES,
-        )
-      ).output;
-    } catch {
-      raw = undefined;
-    }
-    const result = parseCritique(id, raw);
-    critiques.push(result);
-  });
-  await Promise.all(criticRuns);
+        );
+      } catch (error) {
+        outcome = {
+          reason: "prompt_failure",
+          message: `Critic session failed: ${failureMessage(error)}`,
+        };
+      }
+      const { result, failure } = parseCritique(id, outcome);
+      critiques.push(result);
+      if (failure) {
+        criticFailures.set(id, failure.message);
+        criticFailureReasons.set(id, failure.reason);
+        console.warn(`[HyperPlan] stage=critic reason=${failure.reason} critic=${id}`);
+      }
+    });
+    await Promise.all(criticRuns);
+    if (reviewTimedOut) await Promise.all(timeoutCleanupPromises);
 
-  const completedCritiques = critiques.filter((critique) => critique.status === "completed");
-  let synthesis: SynthesisOutput | undefined;
-  let synthesisReason: FailureReason | undefined;
-  try {
-    if (completedCritiques.length === 0 || reviewTimedOut || reviewQuarantined) {
-      synthesisReason = reviewQuarantined
-        ? "critic_quarantine"
-        : reviewTimedOut
-          ? "critic_timeout"
-          : undefined;
-    } else {
-      const result = await runBoundedPrompt(
-        synthesisPrompt(completedCritiques),
+    const completedCritiques = critiques.filter((critique) => critique.status === "completed");
+    if (reviewTimedOut) {
+      console.warn("[HyperPlan] stage=critics reason=critic_timeout");
+    }
+    if (reviewQuarantined) {
+      console.warn("[HyperPlan] stage=critics reason=critic_quarantine");
+      throw new HyperPlanReviewFailure(
+        "critic_quarantine",
+        reviewQuarantineMessage ??
+          CRITICS.map(({ id }) => criticFailures.get(id)).find(Boolean) ??
+          "A HyperPlan critic timed out or failed cleanup; review is quarantined.",
+      );
+    }
+    if (reviewTimedOut) {
+      throw new HyperPlanReviewFailure(
+        "critic_timeout",
+        CRITICS.map(({ id }) => criticFailures.get(id)).find(Boolean) ??
+          "A HyperPlan critic timed out; review synthesis was skipped.",
+      );
+    }
+    if (completedCritiques.length === 0) {
+      const reason =
+        CRITICS.map(({ id }) => criticFailureReasons.get(id)).find(Boolean) ?? "prompt_failure";
+      throw new HyperPlanReviewFailure(
+        reason,
+        CRITICS.map(({ id }) => criticFailures.get(id)).find(Boolean) ??
+          "No critics completed with valid output.",
+      );
+    }
+
+    if (completedCritiques.length < 2) {
+      console.warn(
+        "[HyperPlan] stage=critics reason=prompt_failure insufficient_completed_critics",
+      );
+    }
+    let synthesis: SynthesisOutput;
+    try {
+      const synthesisResult = await runBoundedPrompt(
+        synthesisPrompt({ ...boundedInput, critiques: completedCritiques }),
         SYNTHESIS_TIMEOUT_MS,
         MAX_SYNTHESIS_OUTPUT_BYTES,
       );
-      synthesis = parseSynthesis(result.output);
-      if (!synthesis) synthesisReason = synthesisFailureReason(result);
+      synthesis = parseSynthesis(synthesisResult);
+    } catch (error) {
+      const reason = error instanceof HyperPlanReviewFailure ? error.reason : "prompt_failure";
+      logSynthesisFailure(reason);
+      throw error;
     }
-  } catch {
-    synthesis = undefined;
-    synthesisReason = "prompt_failure";
+    const summary: HyperPlanSummary = {
+      critiques,
+      ...synthesis,
+      agreements:
+        completedCritiques.length < 2
+          ? []
+          : synthesis.agreements.map((item) => capUtf8(`Among completed critics: ${item}`, 500)),
+      disagreements:
+        completedCritiques.length < 2
+          ? []
+          : synthesis.disagreements.map((item) => capUtf8(`Among completed critics: ${item}`, 500)),
+    };
+    return capSummary(summary);
+  } catch (error) {
+    if (error instanceof HyperPlanReviewFailure) throw error;
+    throw new HyperPlanReviewFailure("prompt_failure", failureMessage(error));
+  } finally {
+    reviewReturned = true;
+    maybeReleaseReview();
   }
-  if (!synthesis && completedCritiques.length > 0 && synthesisReason) {
-    logSynthesisFailure(synthesisReason);
-  }
-  const summary: HyperPlanSummary = synthesis
-    ? {
-        critiques,
-        ...synthesis,
-        agreements:
-          completedCritiques.length < 2
-            ? []
-            : synthesis.agreements.map((item) => capUtf8(`Among completed critics: ${item}`, 500)),
-        disagreements:
-          completedCritiques.length < 2
-            ? []
-            : synthesis.disagreements.map((item) =>
-                capUtf8(`Among completed critics: ${item}`, 500),
-              ),
-      }
-    : completedCritiques.length === 0
-      ? {
-          critiques,
-          agreements: [],
-          disagreements: [],
-          risks: [],
-          openQuestions: [
-            "No synthesis was performed because no critics completed; no approval was established.",
-          ],
-          references: [],
-        }
-      : {
-          critiques,
-          agreements: [],
-          disagreements: [],
-          risks: [],
-          openQuestions: [
-            `HyperPlan synthesis unavailable (${synthesisReason ?? "prompt_failure"}); no agreement was established.`,
-          ],
-          references: [],
-        };
-  const capped = capSummary(summary);
-  reviewReturned = true;
-  maybeReleaseReview();
-  return capped;
 }

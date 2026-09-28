@@ -5,10 +5,12 @@ const mocks = vi.hoisted(() => ({
   getAgentSession: vi.fn(),
   getAgentRuntime: vi.fn(),
   readPlanById: vi.fn(),
+  updatePlanContentById: vi.fn(),
+  recordAgentEvent: vi.fn(),
+  senderWindow: { isDestroyed: () => false, webContents: { send: vi.fn() } },
   runHyperPlanReview: vi.fn(),
   startProviderAuth: vi.fn(),
   restoreCheckpoint: vi.fn(),
-  recordAgentEvent: vi.fn(),
   fromWebContents: vi.fn(),
 }));
 
@@ -44,7 +46,10 @@ vi.mock("../agent/tools/plan-tools", () => ({
   registerPlanTools: vi.fn(),
 }));
 vi.mock("../agent/runtime-registry", () => ({ getAgentRuntime: mocks.getAgentRuntime }));
-vi.mock("../plan/plan-store", () => ({ readPlanById: mocks.readPlanById }));
+vi.mock("../plan/plan-store", () => ({
+  readPlanById: mocks.readPlanById,
+  updatePlanContentById: mocks.updatePlanContentById,
+}));
 vi.mock("../agent/harness/hyperplan", () => ({ runHyperPlanReview: mocks.runHyperPlanReview }));
 vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
@@ -68,6 +73,7 @@ const summary: HyperPlanSummary = {
   risks: [],
   openQuestions: [],
   references: [],
+  revisedContent: "# Revised",
 };
 
 const plan: PlanRef = {
@@ -108,10 +114,13 @@ describe("dedicated HyperPlan review IPC", () => {
     mocks.getAgentSession.mockReset();
     mocks.getAgentRuntime.mockReset();
     mocks.readPlanById.mockReset();
+    mocks.updatePlanContentById.mockReset();
+    mocks.recordAgentEvent.mockReset();
+    mocks.senderWindow.webContents.send.mockReset();
     mocks.runHyperPlanReview.mockReset().mockResolvedValue(summary);
     mocks.restoreCheckpoint.mockReset();
-    mocks.recordAgentEvent.mockReset();
     mocks.fromWebContents.mockReset();
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       workspaceId: "workspace-1",
@@ -138,6 +147,164 @@ describe("dedicated HyperPlan review IPC", () => {
       spec: plan.spec,
     });
     expect(mocks.getAgentRuntime).not.toHaveBeenCalled();
+  });
+
+  it("applies an explicitly accepted revision and records/broadcasts plan.updated", async () => {
+    const updatedPlan = { ...plan, content: "# Revised", hash: "new-hash" };
+    mocks.updatePlanContentById.mockImplementation((_root, _id, _hash, _content, afterPersist) => {
+      afterPersist?.(updatedPlan);
+      return updatedPlan;
+    });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+
+    const result = await handler(
+      trustedEvent as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+        planHash: "hash",
+        revisedContent: "# Revised",
+      } as never,
+    );
+
+    expect(mocks.updatePlanContentById).toHaveBeenCalledWith(
+      "C:/plans",
+      "plan-1",
+      "hash",
+      "# Revised",
+      expect.any(Function),
+    );
+    expect(result).toBe(updatedPlan);
+    const event = { type: "plan.updated", sessionId: "session-1", plan: updatedPlan };
+    expect(mocks.recordAgentEvent).toHaveBeenCalledWith(event);
+    expect(mocks.senderWindow.webContents.send).toHaveBeenCalledWith(
+      IPC_CHANNELS.agentEvent,
+      event,
+    );
+  });
+
+  it("does not deliver or resolve when event persistence fails before commit", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+    const updatedPlan = { ...plan, content: "# Revised", hash: "new-hash" };
+    mocks.updatePlanContentById.mockImplementation((_root, _id, _hash, _content, afterPersist) => {
+      afterPersist?.(updatedPlan);
+      return updatedPlan;
+    });
+    const failure = new Error("SQLite event write failed");
+    mocks.recordAgentEvent.mockImplementation(() => {
+      throw failure;
+    });
+
+    await expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          planHash: "hash",
+          revisedContent: "# Revised",
+        } as never,
+      ),
+    ).rejects.toBe(failure);
+    expect(mocks.senderWindow.webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("resolves the committed plan when sender delivery fails after event persistence", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+    const updatedPlan = { ...plan, content: "# Revised", hash: "new-hash" };
+    mocks.updatePlanContentById.mockImplementation((_root, _id, _hash, _content, afterPersist) => {
+      afterPersist?.(updatedPlan);
+      return updatedPlan;
+    });
+    mocks.senderWindow.webContents.send.mockImplementation(() => {
+      throw new Error("window gone");
+    });
+
+    await expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          planHash: "hash",
+          revisedContent: "# Revised",
+        } as never,
+      ),
+    ).resolves.toBe(updatedPlan);
+    expect(mocks.recordAgentEvent).toHaveBeenCalledWith({
+      type: "plan.updated",
+      sessionId: "session-1",
+      plan: updatedPlan,
+    });
+  });
+
+  it("returns application failures as rejected promises without losing their cause", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+    const cause = new Error("Plan store write failed");
+    mocks.updatePlanContentById.mockImplementation(() => {
+      throw cause;
+    });
+
+    let result: unknown;
+    expect(() => {
+      result = handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          planHash: "hash",
+          revisedContent: "# Revised",
+        } as never,
+      );
+    }).not.toThrow();
+    expect(result).toBeInstanceOf(Promise);
+    await expect(result).rejects.toBe(cause);
+  });
+
+  it("rejects stale or foreign plan revisions before persistence and event recording", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+    await expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          planHash: "stale",
+          revisedContent: "# Revised",
+        } as never,
+      ),
+    ).rejects.toThrow("Plan changed");
+    expect(mocks.updatePlanContentById).not.toHaveBeenCalled();
+    expect(mocks.recordAgentEvent).not.toHaveBeenCalled();
+  });
+
+  it("rejects an untrusted sender and a plan from another workspace", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentApplyHyperPlanRevision);
+    if (!handler) throw new Error("HyperPlan revision IPC handler was not registered.");
+    const payload = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      planHash: "hash",
+      revisedContent: "# Revised",
+    };
+    await expect(
+      handler(
+        {
+          sender: { mainFrame: { url: "file:///attacker.html" } },
+          senderFrame: { url: "file:///attacker.html" },
+        } as never,
+        payload as never,
+      ),
+    ).rejects.toThrow("Blocked IPC call from untrusted renderer frame.");
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", workspaceId: "another-workspace" });
+    await expect(handler(trustedEvent as never, payload as never)).rejects.toThrow();
+    expect(mocks.updatePlanContentById).not.toHaveBeenCalled();
+    expect(mocks.recordAgentEvent).not.toHaveBeenCalled();
   });
 
   it("rejects untrusted senders and malformed requests before reading session data", async () => {

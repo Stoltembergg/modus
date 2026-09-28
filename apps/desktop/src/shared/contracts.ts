@@ -1785,6 +1785,7 @@ export type HyperPlanCriticResult = {
 
 export type HyperPlanSummary = {
   critiques: HyperPlanCriticResult[];
+  revisedContent: string;
   agreements: string[];
   disagreements: string[];
   risks: string[];
