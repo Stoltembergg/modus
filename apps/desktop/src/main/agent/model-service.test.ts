@@ -88,7 +88,9 @@ describe("model-service custom provider config", () => {
     expect(state).not.toHaveProperty("access");
     expect(state).not.toHaveProperty("refresh");
     expect(state).not.toHaveProperty("credential");
-    expect(JSON.stringify(state)).not.toMatch(/access[_ -]?token|refresh[_ -]?token|authorization code/i);
+    expect(JSON.stringify(state)).not.toMatch(
+      /access[_ -]?token|refresh[_ -]?token|authorization code/i,
+    );
     cancelProviderAuth(state.id);
   });
 
@@ -98,12 +100,24 @@ describe("model-service custom provider config", () => {
     const register = registry.registerProvider.bind(registry);
     vi.spyOn(registry, "registerProvider").mockImplementation((provider, config) => {
       if (provider === "antigravity" && config.oauth) {
-        vi.spyOn(config.oauth, "login").mockImplementation(() => new Promise((resolve) => { resolveLogin = resolve; }));
+        vi.spyOn(config.oauth, "login").mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              resolveLogin = resolve;
+            }),
+        );
       }
       return register(provider, config);
     });
-    registry.authStorage.set("antigravity", { type: "oauth", access: "old", refresh: "old-refresh", expires: 1 });
-    const operation = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    registry.authStorage.set("antigravity", {
+      type: "oauth",
+      access: "old",
+      refresh: "old-refresh",
+      expires: 1,
+    });
+    const operation = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
     while (!resolveLogin) await Promise.resolve();
     await disconnectProvider("antigravity");
     resolveLogin({ access: "stale", refresh: "stale-refresh", expires: 2 });
@@ -121,21 +135,33 @@ describe("model-service custom provider config", () => {
     const register = registry.registerProvider.bind(registry);
     vi.spyOn(registry, "registerProvider").mockImplementation((provider, config) => {
       if (provider === "antigravity" && config.oauth) {
-        vi.spyOn(config.oauth, "login").mockImplementation(() => ++callCount === 1
-        ? new Promise((resolve) => { resolveOld = resolve; })
-        : Promise.resolve({ access: "new", refresh: "new-refresh", expires: 3 }));
+        vi.spyOn(config.oauth, "login").mockImplementation(() =>
+          ++callCount === 1
+            ? new Promise((resolve) => {
+                resolveOld = resolve;
+              })
+            : Promise.resolve({ access: "new", refresh: "new-refresh", expires: 3 }),
+        );
       }
       return register(provider, config);
     });
-    const first = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const first = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
     while (!resolveOld) await Promise.resolve();
     cancelProviderAuth(first.id);
-    const second = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const second = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
     await vi.waitFor(() => expect(getProviderAuthState(second.id).status).toBe("complete"));
     resolveOld({ access: "old", refresh: "old-refresh", expires: 2 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(registry.authStorage.get("antigravity")).toMatchObject({ type: "oauth", access: "new", refresh: "new-refresh" });
+    expect(registry.authStorage.get("antigravity")).toMatchObject({
+      type: "oauth",
+      access: "new",
+      refresh: "new-refresh",
+    });
     expect(getProviderDetail("antigravity")?.configured).toBe(true);
   });
 
@@ -148,7 +174,11 @@ describe("model-service custom provider config", () => {
       if (provider === "antigravity" && config.oauth) {
         vi.spyOn(config.oauth, "login").mockImplementation((callbacks) => {
           signal = callbacks.signal;
-          promptCompletion = callbacks.onPrompt({ message: "Consent", placeholder: "", allowEmpty: true });
+          promptCompletion = callbacks.onPrompt({
+            message: "Consent",
+            placeholder: "",
+            allowEmpty: true,
+          });
           return promptCompletion.then(() => ({
             access: "test-access",
             refresh: "test-refresh",
@@ -158,7 +188,9 @@ describe("model-service custom provider config", () => {
       }
       return register(provider, config);
     });
-    const state = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const state = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
 
     await shutdownProviderAuthOperations();
 
@@ -169,7 +201,9 @@ describe("model-service custom provider config", () => {
 
   it("registers Antigravity OAuth hooks with the persistent Pi model registry", () => {
     const registry = getModelRegistry();
-    const provider = registry.authStorage.getOAuthProviders().find(({ id }) => id === "antigravity");
+    const provider = registry.authStorage
+      .getOAuthProviders()
+      .find(({ id }) => id === "antigravity");
 
     expect(provider).toBeDefined();
     expect(provider?.usesCallbackServer).toBe(true);
@@ -193,14 +227,23 @@ describe("model-service custom provider config", () => {
 
   it("removes a rejected credential under the shared async file lock and preserves other providers", async () => {
     const registry = getModelRegistry();
-    const rejected = { type: "oauth" as const, access: "rejected-access", refresh: "rejected-refresh", expires: 10, projectId: "old-project" };
+    const rejected = {
+      type: "oauth" as const,
+      access: "rejected-access",
+      refresh: "rejected-refresh",
+      expires: 10,
+      projectId: "old-project",
+    };
     registry.authStorage.set("antigravity", rejected);
     registry.authStorage.set("other-provider", { type: "api_key", key: "other-key" });
 
     await removeRejectedAntigravityCredential(rejected, registry.authStorage);
 
     expect(registry.authStorage.get("antigravity")).toBeUndefined();
-    expect(registry.authStorage.get("other-provider")).toEqual({ type: "api_key", key: "other-key" });
+    expect(registry.authStorage.get("other-provider")).toEqual({
+      type: "api_key",
+      key: "other-key",
+    });
     const persisted = JSON.parse(await readFile(join(userData, "pi-agent", "auth.json"), "utf8"));
     expect(persisted).toEqual({ "other-provider": { type: "api_key", key: "other-key" } });
   });
@@ -208,7 +251,13 @@ describe("model-service custom provider config", () => {
   it("preserves a replacement credential when rejected cleanup finds a mismatch", async () => {
     const registry = getModelRegistry();
     const rejected = { access: "stale", refresh: "stale-refresh", expires: 10, projectId: "old" };
-    const replacement = { type: "oauth" as const, access: "new", refresh: "new-refresh", expires: 20, projectId: "new" };
+    const replacement = {
+      type: "oauth" as const,
+      access: "new",
+      refresh: "new-refresh",
+      expires: 20,
+      projectId: "new",
+    };
     registry.authStorage.set("antigravity", replacement);
 
     await removeRejectedAntigravityCredential(rejected, registry.authStorage);
@@ -631,11 +680,15 @@ describe("provider disconnection", () => {
       }
     }
     vi.stubGlobal("AbortController", FailingAbortController);
-    const state = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const state = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
 
     await expect(disconnectProvider("antigravity")).rejects.toThrow("abort failed");
     vi.unstubAllGlobals();
-    const recovered = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const recovered = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
     expect(recovered.status).toBe("pending");
     cancelProviderAuth(state.id);
     cancelProviderAuth(recovered.id);
@@ -643,28 +696,57 @@ describe("provider disconnection", () => {
 
   it("waits for Pi's OAuth refresh lock before removing Antigravity credentials", async () => {
     const registry = getModelRegistry();
-    registry.authStorage.set("antigravity", { type: "oauth", access: "expired-access", refresh: "refresh-for-lock", expires: 1, projectId: "project-lock" });
+    registry.authStorage.set("antigravity", {
+      type: "oauth",
+      access: "expired-access",
+      refresh: "refresh-for-lock",
+      expires: 1,
+      projectId: "project-lock",
+    });
     registry.authStorage.set("unrelated", { type: "api_key", key: "preserve-me" });
     let releaseRefresh!: (response: Response) => void;
     let refreshStarted!: () => void;
-    const started = new Promise<void>((resolve) => { refreshStarted = resolve; });
-    vi.stubGlobal("fetch", vi.fn(async () => await new Promise<Response>((resolve) => { releaseRefresh = resolve; })));
+    const started = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          await new Promise<Response>((resolve) => {
+            releaseRefresh = resolve;
+          }),
+      ),
+    );
     const oauth = registry.authStorage.getOAuthProviders().find(({ id }) => id === "antigravity")!;
     vi.spyOn(oauth, "refreshToken").mockImplementation(async () => {
       refreshStarted();
       const response = await fetch("https://oauth2.googleapis.com/token", { method: "POST" });
-      const payload = await response.json() as { access_token: string; expires_in: number };
-      return { access: payload.access_token, refresh: "refresh-for-lock", expires: Date.now() + payload.expires_in * 1000, projectId: "project-lock" };
+      const payload = (await response.json()) as { access_token: string; expires_in: number };
+      return {
+        access: payload.access_token,
+        refresh: "refresh-for-lock",
+        expires: Date.now() + payload.expires_in * 1000,
+        projectId: "project-lock",
+      };
     });
     const refresh = registry.authStorage.getApiKey("antigravity");
     await started;
 
     const disconnect = disconnectProvider("antigravity");
     let disconnected = false;
-    void disconnect.then(() => { disconnected = true; });
+    void disconnect.then(() => {
+      disconnected = true;
+    });
     expect(disconnected).toBe(false);
-    expect(() => startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true })).toThrow(/disconnect/i);
-    releaseRefresh(new Response(JSON.stringify({ access_token: "new-access", expires_in: 3600 }), { status: 200 }));
+    expect(() =>
+      startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true }),
+    ).toThrow(/disconnect/i);
+    releaseRefresh(
+      new Response(JSON.stringify({ access_token: "new-access", expires_in: 3600 }), {
+        status: 200,
+      }),
+    );
     await refresh.catch(() => undefined);
     await disconnect;
 
@@ -676,7 +758,9 @@ describe("provider disconnection", () => {
     expect(getProviderDetail("antigravity")?.authLabel).toBe("OAuth sign-in required");
 
     const login = vi.spyOn(oauth, "login").mockImplementation(() => new Promise(() => undefined));
-    const next = startProviderAuth("antigravity", async () => undefined, { riskAcknowledged: true });
+    const next = startProviderAuth("antigravity", async () => undefined, {
+      riskAcknowledged: true,
+    });
     expect(next.status).toBe("pending");
     cancelProviderAuth(next.id);
     login.mockRestore();
@@ -757,7 +841,11 @@ describe("runtime model catalog", () => {
     delete process.env.ANTIGRAVITY_OAUTH_CLIENT_ID;
     delete process.env.ANTIGRAVITY_OAUTH_CLIENT_SECRET;
     try {
-      expect(getModelRegistry().authStorage.getOAuthProviders().find(({ id }) => id === "antigravity")).toBeDefined();
+      expect(
+        getModelRegistry()
+          .authStorage.getOAuthProviders()
+          .find(({ id }) => id === "antigravity"),
+      ).toBeDefined();
     } finally {
       if (clientId === undefined) delete process.env.ANTIGRAVITY_OAUTH_CLIENT_ID;
       else process.env.ANTIGRAVITY_OAUTH_CLIENT_ID = clientId;
@@ -770,34 +858,88 @@ describe("runtime model catalog", () => {
     const registry = getModelRegistry();
     const detail = getProviderDetail("antigravity")!;
     const options = (id: string) => detail.models.find((model) => model.id === id)?.thinkingOptions;
-    expect(options("antigravity-gemini-3-pro")?.map(({ value, level }) => [value, level])).toEqual([["low", "low"], ["high", "high"]]);
-    expect(options("antigravity-gemini-3-flash")?.map(({ value }) => value)).toEqual(["minimal", "low", "medium", "high"]);
+    expect(options("antigravity-gemini-3-pro")?.map(({ value, level }) => [value, level])).toEqual([
+      ["low", "low"],
+      ["high", "high"],
+    ]);
+    expect(options("antigravity-gemini-3-flash")?.map(({ value }) => value)).toEqual([
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
     expect(options("antigravity-claude-sonnet-4-6")?.map(({ value }) => value)).toEqual(["off"]);
-    expect(options("antigravity-claude-opus-4-6-thinking")?.map(({ value, level }) => [value, level])).toEqual([["8192", "high"], ["32768", "high"]]);
-    expect(options("antigravity-gemini-3-pro")).not.toEqual(expect.arrayContaining([expect.objectContaining({ value: "off" })]));
+    expect(
+      options("antigravity-claude-opus-4-6-thinking")?.map(({ value, level }) => [value, level]),
+    ).toEqual([
+      ["8192", "high"],
+      ["32768", "high"],
+    ]);
+    expect(options("antigravity-gemini-3-pro")).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: "off" })]),
+    );
     const opus = registry.find("antigravity", "antigravity-claude-opus-4-6-thinking")!;
     expect(opus.thinkingLevelMap).toBeUndefined();
-    expect(resolveModelThinking(opus, "8192")).toMatchObject({ thinkingLevel: "high", variant: "8192", thinkingBudget: 8192 });
-    expect(resolveModelThinking(opus, "32768")).toMatchObject({ thinkingLevel: "high", variant: "32768", thinkingBudget: 32768 });
-    expect(resolveModelThinking(opus)).toMatchObject({ thinkingLevel: "high", variant: "32768", thinkingBudget: 32768 });
-    expect(updateModelConfig({ model: "antigravity/antigravity-claude-opus-4-6-thinking", thinkingVariant: "8192" }).thinkingVariant).toBe("8192");
-    expect(getProviderDetail("antigravity")?.models.find((model) => model.id === "antigravity-claude-opus-4-6-thinking")?.thinkingVariant).toBe("8192");
+    expect(resolveModelThinking(opus, "8192")).toMatchObject({
+      thinkingLevel: "high",
+      variant: "8192",
+      thinkingBudget: 8192,
+    });
+    expect(resolveModelThinking(opus, "32768")).toMatchObject({
+      thinkingLevel: "high",
+      variant: "32768",
+      thinkingBudget: 32768,
+    });
+    expect(resolveModelThinking(opus)).toMatchObject({
+      thinkingLevel: "high",
+      variant: "32768",
+      thinkingBudget: 32768,
+    });
+    expect(
+      updateModelConfig({
+        model: "antigravity/antigravity-claude-opus-4-6-thinking",
+        thinkingVariant: "8192",
+      }).thinkingVariant,
+    ).toBe("8192");
+    expect(
+      getProviderDetail("antigravity")?.models.find(
+        (model) => model.id === "antigravity-claude-opus-4-6-thinking",
+      )?.thinkingVariant,
+    ).toBe("8192");
     expect(resolveModelThinking(opus).thinkingBudget).toBe(8192);
   });
 
   it("shows provider-default options for Gemini CLI without adding manifest variants", () => {
     const registry = getModelRegistry();
-    registry.authStorage.set("antigravity", { type: "oauth", access: "test-access", refresh: "test-refresh", expires: Number.MAX_SAFE_INTEGER, projectId: "cli-project" });
+    registry.authStorage.set("antigravity", {
+      type: "oauth",
+      access: "test-access",
+      refresh: "test-refresh",
+      expires: Number.MAX_SAFE_INTEGER,
+      projectId: "cli-project",
+    });
     getModelSettings();
-    const ids = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"];
+    const ids = [
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-3-flash-preview",
+      "gemini-3-pro-preview",
+      "gemini-3.1-pro-preview",
+      "gemini-3.1-pro-preview-customtools",
+    ];
     for (const id of ids) {
       const model = registry.find("antigravity", id)!;
       expect(model.thinkingLevelMap).toBeUndefined();
       const config = getProviderDetail("antigravity")?.models.find((item) => item.id === id);
       expect(config?.thinkingOptions).toHaveLength(1);
       expect(config?.thinkingOptions?.[0]?.label).toMatch(/^Provider default/);
-      expect(config?.thinkingOptions?.[0]?.label).toContain(id.startsWith("gemini-3") ? "low" : "default");
-      expect(resolveModelThinking(model)).toMatchObject({ variant: "default", thinkingLevel: "off" });
+      expect(config?.thinkingOptions?.[0]?.label).toContain(
+        id.startsWith("gemini-3") ? "low" : "default",
+      );
+      expect(resolveModelThinking(model)).toMatchObject({
+        variant: "default",
+        thinkingLevel: "off",
+      });
       expect(resolveModelThinking(model)).not.toHaveProperty("thinkingBudget");
     }
   });
@@ -827,8 +969,16 @@ describe("runtime model catalog", () => {
     expect(getProviderDetail("antigravity")).toMatchObject({ modelCount: 11 });
 
     getModelSettings();
-    expect(getModelRegistry().getAll().filter(({ provider }) => provider === "commandcode")).toHaveLength(command.length);
-    expect(getModelRegistry().getAll().filter(({ provider }) => provider === "antigravity")).toHaveLength(antigravity.length);
+    expect(
+      getModelRegistry()
+        .getAll()
+        .filter(({ provider }) => provider === "commandcode"),
+    ).toHaveLength(command.length);
+    expect(
+      getModelRegistry()
+        .getAll()
+        .filter(({ provider }) => provider === "antigravity"),
+    ).toHaveLength(antigravity.length);
     return readFile(join(userData, "pi-agent", "model-catalog.json"), "utf8")
       .then((contents) => expect(contents).not.toContain("claude-haiku-4-5"))
       .catch(() => undefined);
@@ -846,16 +996,28 @@ describe("runtime model catalog", () => {
     getModelSettings();
     const model = registry.find("antigravity", "antigravity-gemini-3-pro");
     if (!model) throw new Error("expected an Antigravity model");
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response("", { status: 200 }),
+    );
     vi.stubGlobal("fetch", fetchMock);
-    const providerConfig = (registry as unknown as {
-      registeredProviders: Map<string, { streamSimple?: (model: Model<Api>, context: Context) => AsyncIterable<unknown> }>;
-    }).registeredProviders.get("antigravity");
+    const providerConfig = (
+      registry as unknown as {
+        registeredProviders: Map<
+          string,
+          { streamSimple?: (model: Model<Api>, context: Context) => AsyncIterable<unknown> }
+        >;
+      }
+    ).registeredProviders.get("antigravity");
     if (!providerConfig?.streamSimple) throw new Error("expected Antigravity stream registration");
     const invoke = async () => {
-      const events = providerConfig.streamSimple?.(model, { messages: [{ role: "user", content: "hello", timestamp: Date.now() }], tools: [] });
+      const events = providerConfig.streamSimple?.(model, {
+        messages: [{ role: "user", content: "hello", timestamp: Date.now() }],
+        tools: [],
+      });
       if (!events) throw new Error("expected Antigravity stream");
-      for await (const _event of events) { /* consume */ }
+      for await (const _event of events) {
+        /* consume */
+      }
     };
 
     await invoke();
@@ -879,9 +1041,15 @@ describe("runtime model catalog", () => {
   });
 
   it("rejects Command Code blank keys and exposes provider-specific connection methods", async () => {
-    await expect(configureProvider({ provider: "commandcode", apiKey: "   " })).rejects.toThrow(/key/i);
-    expect(listProviderConnectionMethods("commandcode")).toEqual([{ kind: "api-key", label: "API key" }]);
-    expect(listProviderConnectionMethods("antigravity")).toEqual([{ kind: "oauth", label: "Antigravity" }]);
+    await expect(configureProvider({ provider: "commandcode", apiKey: "   " })).rejects.toThrow(
+      /key/i,
+    );
+    expect(listProviderConnectionMethods("commandcode")).toEqual([
+      { kind: "api-key", label: "API key" },
+    ]);
+    expect(listProviderConnectionMethods("antigravity")).toEqual([
+      { kind: "oauth", label: "Antigravity" },
+    ]);
   });
 
   it("stores Command Code keys only in AuthStorage without remotely validating them", async () => {

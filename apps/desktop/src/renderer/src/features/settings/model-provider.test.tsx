@@ -596,9 +596,7 @@ describe("Antigravity risk acknowledgement interstitial", () => {
       }
       await user.click(riskDialogCancel);
       await waitFor(() =>
-        expect(
-          screen.queryByRole("checkbox", { name: "Acknowledge Antigravity risk" }),
-        ).toBeNull(),
+        expect(screen.queryByRole("checkbox", { name: "Acknowledge Antigravity risk" })).toBeNull(),
       );
       expect(startProviderAuth).not.toHaveBeenCalled();
 

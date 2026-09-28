@@ -318,22 +318,25 @@ describe("mac zip installer", () => {
   });
 
   // Windows chmod does not prevent rmSync from deleting the directory; retain this assertion on Unix.
-  it.skipIf(process.platform === "win32")("logs a backup it cannot remove on the next start at info", async () => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
-    const apps = join(root, "Applications");
-    mkdirSync(macBackupPath(bundlePath), { recursive: true });
-    chmodSync(apps, 0o555);
-    try {
-      logger.info.mockClear();
-      await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
-      expect(existsSync(macBackupPath(bundlePath))).toBe(true);
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining(`could not remove ${macBackupPath(bundlePath)}`),
-      );
-    } finally {
-      chmodSync(apps, 0o755);
-    }
-  });
+  it.skipIf(process.platform === "win32")(
+    "logs a backup it cannot remove on the next start at info",
+    async () => {
+      if (typeof process.getuid === "function" && process.getuid() === 0) return;
+      const apps = join(root, "Applications");
+      mkdirSync(macBackupPath(bundlePath), { recursive: true });
+      chmodSync(apps, 0o555);
+      try {
+        logger.info.mockClear();
+        await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
+        expect(existsSync(macBackupPath(bundlePath))).toBe(true);
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringContaining(`could not remove ${macBackupPath(bundlePath)}`),
+        );
+      } finally {
+        chmodSync(apps, 0o755);
+      }
+    },
+  );
 
   it("never swaps from the backup path or a renamed bundle: release page, no download", async () => {
     for (const odd of [

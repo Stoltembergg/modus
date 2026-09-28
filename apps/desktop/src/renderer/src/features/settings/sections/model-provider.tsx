@@ -34,8 +34,8 @@ import {
   providerMatchesQuery,
   SearchField,
 } from "../settings-provider-ui";
-import { UnofficialProviderRiskInterstitial } from "../UnofficialProviderNotice";
 import type { ModelConfigPatch } from "../settings-types";
+import { UnofficialProviderRiskInterstitial } from "../UnofficialProviderNotice";
 
 export function ModelProviderSettingsPanel({
   authOperation,
@@ -682,9 +682,7 @@ export function UnofficialProviderInterstitialDialog({
   // render pattern avoids any frame where the user could see the stale
   // checked state, because React discards the in-flight render and commits
   // the reset value before paint.
-  const [previousProviderId, setPreviousProviderId] = useState<string | undefined>(
-    provider?.id,
-  );
+  const [previousProviderId, setPreviousProviderId] = useState<string | undefined>(provider?.id);
   if (provider?.id !== previousProviderId) {
     setPreviousProviderId(provider?.id);
     setChecked(false);

@@ -1,13 +1,20 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthProviderInterface } from "@earendil-works/pi-ai/compat";
+import type {
+  OAuthCredentials,
+  OAuthLoginCallbacks,
+  OAuthProviderInterface,
+} from "@earendil-works/pi-ai/compat";
 import { antigravityModels } from "./antigravity-models";
 
 export const ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const AUTHORIZE_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const LOAD_CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist";
-const SCOPES = ["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email"];
+const SCOPES = [
+  "https://www.googleapis.com/auth/cloud-platform",
+  "https://www.googleapis.com/auth/userinfo.email",
+];
 
 export interface AntigravityCallbackServer {
   waitForCallback(signal: AbortSignal): Promise<URL>;
@@ -15,7 +22,10 @@ export interface AntigravityCallbackServer {
 }
 
 /** Bind an actual localhost-only callback listener for the fixed OAuth redirect. */
-export async function createLoopbackCallbackServer(options: { redirectUri: string; signal: AbortSignal }): Promise<AntigravityCallbackServer> {
+export async function createLoopbackCallbackServer(options: {
+  redirectUri: string;
+  signal: AbortSignal;
+}): Promise<AntigravityCallbackServer> {
   const redirect = new URL(options.redirectUri);
   if (redirect.hostname !== "localhost" || redirect.pathname !== "/oauth-callback") {
     throw new AntigravityOAuthError("Invalid Antigravity loopback redirect");
@@ -30,57 +40,87 @@ export async function createLoopbackCallbackServer(options: { redirectUri: strin
   // Avoid a transient unhandled rejection when cancellation precedes waitForCallback.
   void callback.catch(() => undefined);
   const servers: Server[] = [];
-  const receive = (request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => {
-      const url = new URL(request.url ?? "/", options.redirectUri);
-      if (request.method !== "GET" || url.pathname !== redirect.pathname) {
-        response.writeHead(404).end();
-        return;
-      }
-      response.writeHead(200, { "content-type": "text/html; charset=utf-8", connection: "close" });
-      response.end("Authorization received. You can close this window.");
-      if (!settled) {
-        settled = true;
-        resolveCallback(url);
-      }
-    };
-  const listenResults = await Promise.allSettled(["127.0.0.1", "::1"].map((host) => new Promise<void>((resolve, reject) => {
-    const server = createServer(receive);
-    servers.push(server);
-    server.once("error", reject);
-    server.listen(Number(redirect.port), host, () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  })));
-  const unsupportedFamily = (error: unknown) => typeof error === "object" && error !== null && "code" in error &&
+  const receive = (
+    request: import("node:http").IncomingMessage,
+    response: import("node:http").ServerResponse,
+  ) => {
+    const url = new URL(request.url ?? "/", options.redirectUri);
+    if (request.method !== "GET" || url.pathname !== redirect.pathname) {
+      response.writeHead(404).end();
+      return;
+    }
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8", connection: "close" });
+    response.end("Authorization received. You can close this window.");
+    if (!settled) {
+      settled = true;
+      resolveCallback(url);
+    }
+  };
+  const listenResults = await Promise.allSettled(
+    ["127.0.0.1", "::1"].map(
+      (host) =>
+        new Promise<void>((resolve, reject) => {
+          const server = createServer(receive);
+          servers.push(server);
+          server.once("error", reject);
+          server.listen(Number(redirect.port), host, () => {
+            server.removeListener("error", reject);
+            resolve();
+          });
+        }),
+    ),
+  );
+  const unsupportedFamily = (error: unknown) =>
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
     ["EAFNOSUPPORT", "EADDRNOTAVAIL", "ENODEV"].includes(String(error.code));
-  const failure = listenResults.find((result) => result.status === "rejected" && !unsupportedFamily(result.reason));
+  const failure = listenResults.find(
+    (result) => result.status === "rejected" && !unsupportedFamily(result.reason),
+  );
   const listeningCount = listenResults.filter((result) => result.status === "fulfilled").length;
   if (failure || listeningCount === 0) {
-    await Promise.all(servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))));
-    throw failure?.status === "rejected" ? failure.reason : new AntigravityOAuthError("No loopback callback interface is available");
+    await Promise.all(
+      servers.map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+    );
+    throw failure?.status === "rejected"
+      ? failure.reason
+      : new AntigravityOAuthError("No loopback callback interface is available");
   }
   let closePromise: Promise<void> | undefined;
-   const closeListeners = (): Promise<void> => {
+  const closeListeners = (): Promise<void> => {
     if (!closePromise) {
       // server.close() alone waits forever for keep-alive/stalled sockets.
       // This API is available on Node's public http.Server surface.
-      const closing = servers.map((server) => new Promise<void>((resolve, reject) => {
-        if (!server.listening) return resolve();
-        server.close((error) => error ? reject(error) : resolve());
-      }));
+      const closing = servers.map(
+        (server) =>
+          new Promise<void>((resolve, reject) => {
+            if (!server.listening) return resolve();
+            server.close((error) => (error ? reject(error) : resolve()));
+          }),
+      );
       for (const server of servers) server.closeAllConnections();
       closePromise = Promise.all(closing).then(() => undefined);
     }
     return closePromise;
   };
-  const closeOnAbort = () => { void closeListeners().catch(() => undefined); };
+  const closeOnAbort = () => {
+    void closeListeners().catch(() => undefined);
+  };
   options.signal.addEventListener("abort", closeOnAbort, { once: true });
   if (options.signal.aborted) closeOnAbort();
-  callback.then(() => { void closeListeners().catch(() => undefined); }, () => undefined);
+  callback.then(
+    () => {
+      void closeListeners().catch(() => undefined);
+    },
+    () => undefined,
+  );
   return {
     waitForCallback(signal) {
-      if (signal.aborted) return Promise.reject(new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled"));
+      if (signal.aborted)
+        return Promise.reject(
+          new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled"),
+        );
       return new Promise<URL>((resolve, reject) => {
         let done = false;
         const finish = (action: () => void) => {
@@ -89,9 +129,17 @@ export async function createLoopbackCallbackServer(options: { redirectUri: strin
           signal.removeEventListener("abort", onAbort);
           action();
         };
-        const onAbort = () => finish(() => reject(new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled")));
+        const onAbort = () =>
+          finish(() =>
+            reject(
+              new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled"),
+            ),
+          );
         signal.addEventListener("abort", onAbort, { once: true });
-        callback.then((value) => finish(() => resolve(value)), (error) => finish(() => reject(error)));
+        callback.then(
+          (value) => finish(() => resolve(value)),
+          (error) => finish(() => reject(error)),
+        );
       });
     },
     close() {
@@ -105,7 +153,10 @@ export interface AntigravityOAuthDependencies {
   clientId: string;
   fetch?: typeof globalThis.fetch;
   now?: () => number;
-  createLoopbackCallbackServer?: (options: { redirectUri: string; signal: AbortSignal }) => Promise<AntigravityCallbackServer> | AntigravityCallbackServer;
+  createLoopbackCallbackServer?: (options: {
+    redirectUri: string;
+    signal: AbortSignal;
+  }) => Promise<AntigravityCallbackServer> | AntigravityCallbackServer;
   openBrowser: (url: string) => Promise<void> | void;
   createRandom?: (size: number) => Uint8Array;
   timeoutMs?: number;
@@ -120,7 +171,11 @@ export type AntigravityOAuthStatus =
   | { status: "missing-project"; projectId: null };
 
 export class AntigravityOAuthError extends Error {
-  constructor(message: string, readonly code?: string, readonly permanent = false) {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly permanent = false,
+  ) {
     super(message);
     this.name = "AntigravityOAuthError";
   }
@@ -145,9 +200,15 @@ function base64Url(bytes: Uint8Array): string {
 }
 
 function oauthError(payload: unknown, status: number): AntigravityOAuthError {
-  const error = payload && typeof payload === "object" && "error" in payload ? String(payload.error) : "";
-  if (error === "invalid_grant") return new AntigravityOAuthError("Antigravity credentials were revoked", error, true);
-  return new AntigravityOAuthError(`Antigravity OAuth request failed (${status})`, error || undefined, false);
+  const error =
+    payload && typeof payload === "object" && "error" in payload ? String(payload.error) : "";
+  if (error === "invalid_grant")
+    return new AntigravityOAuthError("Antigravity credentials were revoked", error, true);
+  return new AntigravityOAuthError(
+    `Antigravity OAuth request failed (${status})`,
+    error || undefined,
+    false,
+  );
 }
 
 export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencies) {
@@ -175,14 +236,20 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
 
   const getStatus = (): AntigravityOAuthStatus => {
     if (!credentials) return { status: "disconnected" };
-    return projectId ? { status: "connected", projectId } : { status: "missing-project", projectId: null };
+    return projectId
+      ? { status: "connected", projectId }
+      : { status: "missing-project", projectId: null };
   };
 
   async function readJson(response: Response): Promise<Record<string, unknown>> {
     let payload: unknown;
-    try { payload = await response.json(); } catch { payload = {}; }
+    try {
+      payload = await response.json();
+    } catch {
+      payload = {};
+    }
     if (!response.ok) throw oauthError(payload, response.status);
-    return payload && typeof payload === "object" ? payload as Record<string, unknown> : {};
+    return payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   }
 
   async function oauthFetch(url: string, init: RequestInit): Promise<Response> {
@@ -196,15 +263,30 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     }
   }
 
-  async function exchange(form: URLSearchParams, signal?: AbortSignal, fallbackRefreshToken?: string): Promise<TokenSet> {
+  async function exchange(
+    form: URLSearchParams,
+    signal?: AbortSignal,
+    fallbackRefreshToken?: string,
+  ): Promise<TokenSet> {
     const response = await oauthFetch(TOKEN_ENDPOINT, {
-      method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: form, ...(signal ? { signal } : {}),
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+      ...(signal ? { signal } : {}),
     });
     const payload = await readJson(response);
     const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
-    const refreshToken = typeof payload.refresh_token === "string" ? payload.refresh_token : fallbackRefreshToken ?? credentials?.refreshToken ?? "";
-    if (!accessToken || !refreshToken) throw new AntigravityOAuthError("Antigravity token response was incomplete");
-    return { accessToken, refreshToken, expiresAt: now() + Number(payload.expires_in ?? 3600) * 1000 };
+    const refreshToken =
+      typeof payload.refresh_token === "string"
+        ? payload.refresh_token
+        : (fallbackRefreshToken ?? credentials?.refreshToken ?? "");
+    if (!accessToken || !refreshToken)
+      throw new AntigravityOAuthError("Antigravity token response was incomplete");
+    return {
+      accessToken,
+      refreshToken,
+      expiresAt: now() + Number(payload.expires_in ?? 3600) * 1000,
+    };
   }
 
   async function discoverProject(token: string, signal?: AbortSignal): Promise<string | null> {
@@ -217,16 +299,28 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     const payload = await readJson(response);
     const candidate = payload.cloudaicompanionProject;
     if (typeof candidate === "string" && candidate.trim()) return candidate;
-    if (candidate && typeof candidate === "object" && "id" in candidate && typeof candidate.id === "string" && candidate.id.trim()) return candidate.id;
+    if (
+      candidate &&
+      typeof candidate === "object" &&
+      "id" in candidate &&
+      typeof candidate.id === "string" &&
+      candidate.id.trim()
+    )
+      return candidate.id;
     return null;
   }
 
-  async function connectImpl(onAuth?: (info: { url: string; instructions?: string }) => void, externalSignal?: AbortSignal): Promise<AntigravityOAuthStatus> {
-    if (shuttingDown) throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
+  async function connectImpl(
+    onAuth?: (info: { url: string; instructions?: string }) => void,
+    externalSignal?: AbortSignal,
+  ): Promise<AntigravityOAuthStatus> {
+    if (shuttingDown)
+      throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
     if (!deps.clientId) {
       throw new AntigravityOAuthError("Antigravity OAuth client configuration is unavailable");
     }
-    if (externalSignal?.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+    if (externalSignal?.aborted)
+      throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
     const previousController = activeController;
     const previousServer = activeServer;
     activeServer = null;
@@ -245,10 +339,15 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     try {
       previousController?.abort();
       await closeServer(previousServer);
-      if (shuttingDown || controller.signal.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
-      server = await (deps.createLoopbackCallbackServer ?? createLoopbackCallbackServer)({ redirectUri: ANTIGRAVITY_REDIRECT_URI, signal: controller.signal });
+      if (shuttingDown || controller.signal.aborted)
+        throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+      server = await (deps.createLoopbackCallbackServer ?? createLoopbackCallbackServer)({
+        redirectUri: ANTIGRAVITY_REDIRECT_URI,
+        signal: controller.signal,
+      });
       activeServer = server;
-      if (shuttingDown || controller.signal.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+      if (shuttingDown || controller.signal.aborted)
+        throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
       const authUrl = new URL(AUTHORIZE_ENDPOINT);
       authUrl.search = new URLSearchParams({
         client_id: deps.clientId,
@@ -261,26 +360,46 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
         code_challenge: challenge,
         code_challenge_method: "S256",
       }).toString();
-      if (onAuth) onAuth({ url: authUrl.toString(), instructions: "Complete sign-in in your browser." });
+      if (onAuth)
+        onAuth({ url: authUrl.toString(), instructions: "Complete sign-in in your browser." });
       else await deps.openBrowser(authUrl.toString());
       const callback = await Promise.race([
         server.waitForCallback(controller.signal),
-        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new AntigravityOAuthError("Antigravity OAuth timed out", "timeout")); }, timeoutMs); }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            controller.abort();
+            reject(new AntigravityOAuthError("Antigravity OAuth timed out", "timeout"));
+          }, timeoutMs);
+        }),
       ]);
-      if (callback.origin !== "http://localhost:51121" || callback.pathname !== "/oauth-callback") throw new AntigravityOAuthError("Unexpected OAuth callback URL");
-      if (callback.searchParams.get("error")) throw new AntigravityOAuthError("Antigravity authorization was denied", callback.searchParams.get("error") ?? undefined);
-      if (callback.searchParams.get("state") !== state) throw new AntigravityOAuthError("Antigravity OAuth state mismatch", "state_mismatch");
+      if (callback.origin !== "http://localhost:51121" || callback.pathname !== "/oauth-callback")
+        throw new AntigravityOAuthError("Unexpected OAuth callback URL");
+      if (callback.searchParams.get("error"))
+        throw new AntigravityOAuthError(
+          "Antigravity authorization was denied",
+          callback.searchParams.get("error") ?? undefined,
+        );
+      if (callback.searchParams.get("state") !== state)
+        throw new AntigravityOAuthError("Antigravity OAuth state mismatch", "state_mismatch");
       const code = callback.searchParams.get("code");
-      if (!code) throw new AntigravityOAuthError("Antigravity callback did not include an authorization code");
-      const tokens = await exchange(new URLSearchParams({
-        client_id: deps.clientId,
-        code,
-        code_verifier: verifier,
-        grant_type: "authorization_code",
-        redirect_uri: ANTIGRAVITY_REDIRECT_URI,
-      }), controller.signal);
-      if (controller.signal.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
-      if (generation !== operationGeneration) throw new AntigravityOAuthError("Antigravity credentials changed during authorization");
+      if (!code)
+        throw new AntigravityOAuthError(
+          "Antigravity callback did not include an authorization code",
+        );
+      const tokens = await exchange(
+        new URLSearchParams({
+          client_id: deps.clientId,
+          code,
+          code_verifier: verifier,
+          grant_type: "authorization_code",
+          redirect_uri: ANTIGRAVITY_REDIRECT_URI,
+        }),
+        controller.signal,
+      );
+      if (controller.signal.aborted)
+        throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+      if (generation !== operationGeneration)
+        throw new AntigravityOAuthError("Antigravity credentials changed during authorization");
       try {
         projectId = await discoverProject(tokens.accessToken, controller.signal);
       } catch {
@@ -291,9 +410,12 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
         // A failed discovery is represented as missing-project, not failed OAuth.
         projectId = null;
       }
-      if (controller.signal.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
-      if (generation !== operationGeneration) throw new AntigravityOAuthError("Antigravity credentials changed during authorization");
-      if (controller.signal.aborted) throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+      if (controller.signal.aborted)
+        throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
+      if (generation !== operationGeneration)
+        throw new AntigravityOAuthError("Antigravity credentials changed during authorization");
+      if (controller.signal.aborted)
+        throw new AntigravityOAuthError("Antigravity authorization was cancelled", "cancelled");
       credentials = tokens;
       return getStatus();
     } finally {
@@ -305,26 +427,38 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     }
   }
 
-  function connect(onAuth?: (info: { url: string; instructions?: string }) => void, externalSignal?: AbortSignal): Promise<AntigravityOAuthStatus> {
+  function connect(
+    onAuth?: (info: { url: string; instructions?: string }) => void,
+    externalSignal?: AbortSignal,
+  ): Promise<AntigravityOAuthStatus> {
     const task = connectImpl(onAuth, externalSignal);
     connectTasks.add(task);
     void task.finally(() => connectTasks.delete(task)).catch(() => undefined);
     return task;
   }
 
-  async function refreshCurrent(previous: TokenSet, operationGeneration: number): Promise<TokenSet> {
-    const tokens = await exchange(new URLSearchParams({
-      client_id: deps.clientId,
-      refresh_token: previous.refreshToken,
-      grant_type: "refresh_token",
-    }), undefined, previous.refreshToken);
-    if (generation !== operationGeneration || credentials !== previous) throw new AntigravityOAuthError("Antigravity credentials changed during refresh");
+  async function refreshCurrent(
+    previous: TokenSet,
+    operationGeneration: number,
+  ): Promise<TokenSet> {
+    const tokens = await exchange(
+      new URLSearchParams({
+        client_id: deps.clientId,
+        refresh_token: previous.refreshToken,
+        grant_type: "refresh_token",
+      }),
+      undefined,
+      previous.refreshToken,
+    );
+    if (generation !== operationGeneration || credentials !== previous)
+      throw new AntigravityOAuthError("Antigravity credentials changed during refresh");
     credentials = tokens;
     return tokens;
   }
 
   async function refresh(): Promise<AntigravityOAuthStatus> {
-    if (shuttingDown) throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
+    if (shuttingDown)
+      throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
     if (!credentials) throw new AntigravityOAuthError("Antigravity is not connected");
     const operationGeneration = generation;
     const previous = credentials;
@@ -334,13 +468,21 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
 
   function piCredentials(): OAuthCredentials {
     if (!credentials) throw new AntigravityOAuthError("Antigravity is not connected");
-    return { access: credentials.accessToken, refresh: credentials.refreshToken, expires: credentials.expiresAt, ...(projectId ? { projectId } : {}) };
+    return {
+      access: credentials.accessToken,
+      refresh: credentials.refreshToken,
+      expires: credentials.expiresAt,
+      ...(projectId ? { projectId } : {}),
+    };
   }
 
   function scheduleRejectedCredentialCleanup(rejected: OAuthCredentials): void {
     if (!deps.removeRejectedCredential || (shuttingDown && refreshDrainExpired)) return;
     let task!: Promise<void>;
-    task = Promise.resolve().then(() => deps.removeRejectedCredential!(rejected)).catch(() => undefined).finally(() => cleanupTasks.delete(task));
+    task = Promise.resolve()
+      .then(() => deps.removeRejectedCredential!(rejected))
+      .catch(() => undefined)
+      .finally(() => cleanupTasks.delete(task));
     cleanupTasks.add(task);
   }
 
@@ -355,54 +497,75 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     name: "Antigravity",
     usesCallbackServer: true,
     async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-      if (shuttingDown) throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
+      if (shuttingDown)
+        throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
       callbacks.signal?.throwIfAborted();
       await connect(callbacks.onAuth, callbacks.signal);
       callbacks.signal?.throwIfAborted();
       return piCredentials();
     },
     async refreshToken(rejected: OAuthCredentials): Promise<OAuthCredentials> {
-      if (shuttingDown) throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
+      if (shuttingDown)
+        throw new AntigravityOAuthError("Antigravity authorization is shutting down", "cancelled");
       return trackRefresh(async () => {
-      const generationAtStart = generation;
-      const currentAtStart = credentials;
-      const supplied: TokenSet = {
-        accessToken: rejected.access,
-        refreshToken: rejected.refresh,
-        expiresAt: rejected.expires,
-      };
-      const suppliedProjectId = typeof rejected.projectId === "string" ? rejected.projectId : null;
-       const suppliedMatchesCurrent = currentAtStart !== null &&
-        currentAtStart.accessToken === supplied.accessToken &&
-        currentAtStart.refreshToken === supplied.refreshToken &&
-         currentAtStart.expiresAt === supplied.expiresAt &&
-         projectId === suppliedProjectId;
-       if (currentAtStart !== null && !suppliedMatchesCurrent) {
-         throw new AntigravityOAuthError("Antigravity credentials changed before refresh", "cancelled");
-       }
-       try {
-        const tokens = await exchange(new URLSearchParams({
-          client_id: deps.clientId,
-          refresh_token: supplied.refreshToken,
-          grant_type: "refresh_token",
-        }), undefined, supplied.refreshToken);
-        if (generation !== generationAtStart || credentials !== currentAtStart) {
-          throw new AntigravityOAuthError("Antigravity credentials changed during refresh", "cancelled");
+        const generationAtStart = generation;
+        const currentAtStart = credentials;
+        const supplied: TokenSet = {
+          accessToken: rejected.access,
+          refreshToken: rejected.refresh,
+          expiresAt: rejected.expires,
+        };
+        const suppliedProjectId =
+          typeof rejected.projectId === "string" ? rejected.projectId : null;
+        const suppliedMatchesCurrent =
+          currentAtStart !== null &&
+          currentAtStart.accessToken === supplied.accessToken &&
+          currentAtStart.refreshToken === supplied.refreshToken &&
+          currentAtStart.expiresAt === supplied.expiresAt &&
+          projectId === suppliedProjectId;
+        if (currentAtStart !== null && !suppliedMatchesCurrent) {
+          throw new AntigravityOAuthError(
+            "Antigravity credentials changed before refresh",
+            "cancelled",
+          );
         }
-        if (suppliedMatchesCurrent || currentAtStart === null) {
-          credentials = tokens;
-          projectId = suppliedProjectId;
+        try {
+          const tokens = await exchange(
+            new URLSearchParams({
+              client_id: deps.clientId,
+              refresh_token: supplied.refreshToken,
+              grant_type: "refresh_token",
+            }),
+            undefined,
+            supplied.refreshToken,
+          );
+          if (generation !== generationAtStart || credentials !== currentAtStart) {
+            throw new AntigravityOAuthError(
+              "Antigravity credentials changed during refresh",
+              "cancelled",
+            );
+          }
+          if (suppliedMatchesCurrent || currentAtStart === null) {
+            credentials = tokens;
+            projectId = suppliedProjectId;
+          }
+          return {
+            access: tokens.accessToken,
+            refresh: tokens.refreshToken,
+            expires: tokens.expiresAt,
+            ...(suppliedProjectId ? { projectId: suppliedProjectId } : {}),
+          };
+        } catch (error) {
+          if (error instanceof AntigravityOAuthError && error.code === "invalid_grant") {
+            scheduleRejectedCredentialCleanup(rejected);
+          }
+          throw error;
         }
-        return { access: tokens.accessToken, refresh: tokens.refreshToken, expires: tokens.expiresAt, ...(suppliedProjectId ? { projectId: suppliedProjectId } : {}) };
-      } catch (error) {
-        if (error instanceof AntigravityOAuthError && error.code === "invalid_grant") {
-          scheduleRejectedCredentialCleanup(rejected);
-        }
-        throw error;
-      }
       });
     },
-    getApiKey(value: OAuthCredentials): string { return value.access; },
+    getApiKey(value: OAuthCredentials): string {
+      return value.access;
+    },
   };
 
   async function cancel(): Promise<void> {
@@ -433,22 +596,28 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     shutdownTask = (async () => {
       while (connectTasks.size || refreshTasks.size || cleanupTasks.size || teardown) {
         const pending = [...connectTasks, ...refreshTasks, ...cleanupTasks, teardown];
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) {
-        refreshDrainExpired = true;
-        break;
-      }
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      // Attach rejection observers even if the deadline wins; late completions
-      // must never become unhandled while shutdown no longer waits for them.
-      const settled = Promise.allSettled(pending);
-      void settled.then(() => undefined);
-      await Promise.race([settled, new Promise<void>((resolve) => { timeout = setTimeout(resolve, remaining); })]);
-      if (timeout !== undefined) clearTimeout(timeout);
-      // A settled teardown remains in the set expression only until this loop
-      // exits; the fixed promise is harmless and all late failures are observed.
-      if (Date.now() >= deadline && (connectTasks.size || refreshTasks.size || cleanupTasks.size)) refreshDrainExpired = true;
-      if (!connectTasks.size && !refreshTasks.size && !cleanupTasks.size) break;
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) {
+          refreshDrainExpired = true;
+          break;
+        }
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        // Attach rejection observers even if the deadline wins; late completions
+        // must never become unhandled while shutdown no longer waits for them.
+        const settled = Promise.allSettled(pending);
+        void settled.then(() => undefined);
+        await Promise.race([
+          settled,
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, remaining);
+          }),
+        ]);
+        if (timeout !== undefined) clearTimeout(timeout);
+        // A settled teardown remains in the set expression only until this loop
+        // exits; the fixed promise is harmless and all late failures are observed.
+        if (Date.now() >= deadline && (connectTasks.size || refreshTasks.size || cleanupTasks.size))
+          refreshDrainExpired = true;
+        if (!connectTasks.size && !refreshTasks.size && !cleanupTasks.size) break;
       }
       activeProviders.delete(shutdown);
     })();
@@ -464,11 +633,18 @@ export function createAntigravityOAuthProvider(deps: AntigravityOAuthDependencie
     disconnect,
     shutdown,
     getStatus,
-    getCredentials: () => credentials ? { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt, projectId } : null,
+    getCredentials: () =>
+      credentials
+        ? { accessToken: credentials.accessToken, expiresAt: credentials.expiresAt, projectId }
+        : null,
     oauth,
-    getMissingProjectModelIds: () => projectId ? [] : antigravityModels
-      .filter((model) => model.quotaRoute === "gemini-cli")
-      .map(({ id }) => id),
-    getAvailableModels: () => antigravityModels.filter((model) => model.quotaRoute === "antigravity" || projectId !== null),
+    getMissingProjectModelIds: () =>
+      projectId
+        ? []
+        : antigravityModels
+            .filter((model) => model.quotaRoute === "gemini-cli")
+            .map(({ id }) => id),
+    getAvailableModels: () =>
+      antigravityModels.filter((model) => model.quotaRoute === "antigravity" || projectId !== null),
   };
 }

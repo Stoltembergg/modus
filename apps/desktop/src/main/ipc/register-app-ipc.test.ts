@@ -181,12 +181,22 @@ describe("provider auth start IPC", () => {
     const sender = { mainFrame: { url: "file:///app/index.html" } };
     registerTrustedSender(sender, "file:///app/index.html");
     mocks.handlers.clear();
-    mocks.startProviderAuth.mockReset().mockReturnValue({ id: "op", provider: "antigravity", status: "pending", message: "Preparing" });
+    mocks.startProviderAuth.mockReset().mockReturnValue({
+      id: "op",
+      provider: "antigravity",
+      status: "pending",
+      message: "Preparing",
+    });
     registerAppIpc();
     const handler = mocks.handlers.get(IPC_CHANNELS.modelProviderAuthStart);
 
-    await handler?.({ sender, senderFrame: sender.mainFrame } as never, { provider: "antigravity", riskAcknowledged: true } as never);
+    await handler?.(
+      { sender, senderFrame: sender.mainFrame } as never,
+      { provider: "antigravity", riskAcknowledged: true } as never,
+    );
 
-    expect(mocks.startProviderAuth).toHaveBeenCalledWith("antigravity", expect.any(Function), { riskAcknowledged: true });
+    expect(mocks.startProviderAuth).toHaveBeenCalledWith("antigravity", expect.any(Function), {
+      riskAcknowledged: true,
+    });
   });
 });

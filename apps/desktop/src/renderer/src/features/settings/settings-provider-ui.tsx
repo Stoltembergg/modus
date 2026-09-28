@@ -32,8 +32,8 @@ import { Field, parsePositiveInteger, SelectField, SwitchControl } from "./form-
 import { groupProviderModels, modelResultLabel } from "./modelListUtils";
 import { ProviderLogo } from "./ProviderLogo";
 import { ReadOnlyPill } from "./settings-layout";
-import { UnofficialProviderMark, UnofficialProviderNotice } from "./UnofficialProviderNotice";
 import type { ModelConfigPatch } from "./settings-types";
+import { UnofficialProviderMark, UnofficialProviderNotice } from "./UnofficialProviderNotice";
 
 export function ProviderGroup({ children, title }: { children: ReactNode; title: string }) {
   const items = Array.isArray(children) ? children.filter(Boolean) : children ? [children] : [];

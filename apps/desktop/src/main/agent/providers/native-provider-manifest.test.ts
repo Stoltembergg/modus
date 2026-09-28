@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { commandCodeExpectedMetadata } from "./commandcode-models.expected";
 import { antigravityExpectedMetadata } from "./antigravity-models.expected";
+import { commandCodeExpectedMetadata } from "./commandcode-models.expected";
 import {
+  antigravityModels,
   COMMANDCODE_PR_HEAD,
   commandCodeModels,
-  antigravityModels,
   mergeNativeProviderMetadata,
 } from "./native-provider-manifest";
 

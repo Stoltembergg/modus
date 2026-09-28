@@ -1,5 +1,9 @@
 import { app, BrowserWindow, type BrowserWindow as BrowserWindowType } from "electron";
-import { shutdownProviderAuthOperations, startRemoteModelCatalog, stopRemoteModelCatalog } from "./agent/model-service";
+import {
+  shutdownProviderAuthOperations,
+  startRemoteModelCatalog,
+  stopRemoteModelCatalog,
+} from "./agent/model-service";
 import { resolveBrowserLocale } from "./browser/browser-locale";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
@@ -100,8 +104,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (shutdownStarted) return;
     shutdownStarted = true;
-  // Close MCP transports on quit so stdio servers never outlive the app.
-  // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
+    // Close MCP transports on quit so stdio servers never outlive the app.
+    // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
     stopUpdateService();
     stopRemoteModelCatalog();
     shutdownTerminals();
