@@ -4,9 +4,10 @@ name: Release
 # GitHub release and upload installers + update metadata to it. Publishing the draft
 # is a manual step (see docs/releasing.md).
 #
-# Pull requests that touch the release pipeline run the exact same builds as a dry
-# run: all platforms, mac codesign verification and the mac metadata merge. Only the
-# update metadata is kept as Actions artifacts (7 days) for inspection; installers
+# Pull requests that touch the release pipeline run Linux packaging as a dry run.
+# macOS and Windows packaging are covered by their dedicated workflows, avoiding
+# duplicate builds. Tag runs still build every platform and merge mac metadata.
+# PR runs keep Linux update metadata as an Actions artifact (7 days); installers
 # are uploaded as artifacts on tag runs only (1 day, consumed by publish-assets).
 # Nothing touches GitHub Releases unless the ref is a v* tag: the two jobs that can
 # write are tag-only, and every step inside them that creates or uploads to a release
@@ -123,8 +124,8 @@ jobs:
   package-mac:
     name: package mac (${{ matrix.electron_arch }})
     needs: [prepare, draft-release]
-    # draft-release is skipped on PR dry runs; run anyway as long as nothing failed.
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
+    # PR packaging is covered by the dedicated Package macOS workflow.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
     runs-on: macos-14
     timeout-minutes: 75
     strategy:
@@ -266,7 +267,8 @@ jobs:
   package-win:
     name: package windows (x64)
     needs: [prepare, draft-release]
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
+    # PR packaging is covered by the dedicated Package Windows workflow.
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.prepare.result == 'success' && (needs.draft-release.result == 'success' || needs.draft-release.result == 'skipped') }}
     runs-on: windows-latest
     timeout-minutes: 75
     env:
@@ -413,7 +415,7 @@ jobs:
   merge-mac-metadata:
     name: merge mac update metadata
     needs: [prepare, package-mac]
-    if: ${{ !cancelled() && needs.package-mac.result == 'success' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') && !cancelled() && needs.package-mac.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -446,7 +448,6 @@ jobs:
             "mac-metadata/update-metadata-mac-x64/$MAC_METADATA"
           cat "merged/$MAC_METADATA"
 
-      # Kept on PR runs too so the merged file can be reviewed before anything ships.
       - name: Upload merged mac metadata
         uses: actions/upload-artifact@v4
         with:
