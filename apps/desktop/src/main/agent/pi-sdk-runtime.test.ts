@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "../../shared/contracts";
 
 let userData: string;
 let cwd: string;
@@ -145,7 +146,9 @@ const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
-const { recordAgentEvent } = await import("./agent-event-store");
+const { getLatestHarnessTaskState, listAgentEvents, recordAgentEvent } = await import(
+  "./agent-event-store"
+);
 const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
 const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
   "./agent-run-store"
@@ -153,6 +156,7 @@ const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } =
 const mcpCitations = await import("./harness/mcp-citation-registry");
 const projectMemory = await import("../memory/project-memory-service");
 const { writePlan, readPlanById } = await import("../plan/plan-store");
+const checkpointService = await import("./checkpoint-service");
 const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/tool-context");
 const { resolveQuestionRequest } = await import("../interaction/question-broker");
 const todoToolRuntime = await import("./tools/todo-tools");
@@ -328,6 +332,15 @@ async function initGitRepo(): Promise<void> {
   await writeFile(join(cwd, "tracked.txt"), "base\n");
   await execFileAsync("git", ["add", "tracked.txt"], { cwd, windowsHide: true });
   await execFileAsync("git", ["commit", "-m", "initial"], { cwd, windowsHide: true });
+}
+
+async function initGitRepoWithKnownEmptyScope(): Promise<void> {
+  await initGitRepo();
+  await execFileAsync("git", ["add", "package.json"], { cwd, windowsHide: true });
+  await execFileAsync("git", ["commit", "-m", "include package manifest"], {
+    cwd,
+    windowsHide: true,
+  });
 }
 
 beforeEach(async () => {
@@ -584,6 +597,7 @@ describe("PiSdkRuntime", () => {
   ] as const)("emits structured QA for a completed test tool call (error=%s)", async (isError, status) => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
         mocks.emitPiEvent({
@@ -631,6 +645,56 @@ describe("PiSdkRuntime", () => {
       },
     });
     expect(qaPayload).not.toContain("npm test");
+  });
+
+  it("does not accept scoped passing QA when the run change scope is unavailable", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "qa-scoped-call",
+          toolName: "terminal_run",
+          args: { command: "npm test", paths: ["src/changed.test.ts"] },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "qa-scoped-call",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Check completed" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
+
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    expect(JSON.parse(qaPayload)).toMatchObject({
+      result: {
+        required: true,
+        status: "unavailable",
+        evidence: [expect.objectContaining({ label: "Tests", status: "unavailable" })],
+      },
+    });
   });
 
   it("uses the shared continuation budget once when a requested QA check is missing", async () => {
@@ -687,7 +751,7 @@ describe("PiSdkRuntime", () => {
     });
     expect(qa).toHaveLength(1);
     expect(JSON.parse(qa[0]?.payload_json ?? "{}")).toMatchObject({
-      result: { required: true, status: "missing", reasonCode: "required_check_missing" },
+      result: { required: true, status: "unavailable", reasonCode: "required_check_unavailable" },
     });
   });
 
@@ -739,6 +803,30 @@ describe("PiSdkRuntime", () => {
           .get(sessionId) as { count: number }
       ).count,
     ).toBe(0);
+    const taskStateEvents = listAgentEvents(sessionId).filter(
+      ({ event }) => event.type === "harness.task_state",
+    );
+    const runStartedEvents = listAgentEvents(sessionId).filter(
+      ({ event }) => event.type === "run.started",
+    );
+    const firstStartedEvent = runStartedEvents[0]?.event;
+    expect(runStartedEvents).toHaveLength(1);
+    expect(taskStateEvents.length).toBeGreaterThan(0);
+    expect(
+      new Set(
+        taskStateEvents.map(({ event }) =>
+          event.type === "harness.task_state" ? event.runId : "",
+        ),
+      ).size,
+    ).toBe(1);
+    expect(
+      taskStateEvents.every(
+        ({ event }) =>
+          event.type === "harness.task_state" &&
+          firstStartedEvent?.type === "run.started" &&
+          event.runId === firstStartedEvent.runId,
+      ),
+    ).toBe(true);
     expect(
       JSON.parse(
         (
@@ -749,7 +837,7 @@ describe("PiSdkRuntime", () => {
             .get(sessionId) as { payload_json: string }
         ).payload_json,
       ),
-    ).toMatchObject({ result: { status: "missing", required: true } });
+    ).toMatchObject({ result: { status: "unavailable", required: true } });
   });
 
   it.each([
@@ -1315,6 +1403,18 @@ describe("PiSdkRuntime", () => {
     const questions = events.filter((event) => event.type === "question.requested");
     expect(questions).toHaveLength(1);
     expect(questions[0]?.payload_json).not.toContain("PRIVATE_INTENT_TEXT");
+    const run = getDatabase()
+      .prepare("select id from agent_runs where session_id = ? order by rowid desc limit 1")
+      .get(sessionId) as { id: string };
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toMatchObject({
+      phase: "terminal",
+      verificationStatus: "blocked",
+    });
+    expect(
+      getLatestHarnessTaskState(sessionId, run.id)?.criteria.every(
+        ({ status }) => status !== "verified",
+      ),
+    ).toBe(true);
   });
 
   it("uses a bounded clarification answer as the intent assumption", async () => {
@@ -2941,6 +3041,185 @@ describe("PiSdkRuntime", () => {
     expect(events.map((event) => event.type)).toContain("run.failed");
   });
 
+  it("persists a private-data-free Task State across a fresh simple run", async () => {
+    const sessionId = `task-state-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-session.jsonl"));
+    let runId = "";
+    const session = createMockPiSession({
+      prompt: () => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for Task State integration");
+        runId = run.id;
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { id: "assistant-message", role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Completed." },
+        });
+      },
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Fix a typo",
+      sessionId,
+      userMessageId: "message-1",
+    });
+
+    const state = getLatestHarnessTaskState(sessionId, runId);
+    expect(state).toMatchObject({
+      sessionId,
+      runId,
+      goalMessageId: "message-1",
+      phase: "terminal",
+      verificationStatus: "not_required",
+    });
+    expect(JSON.stringify(state)).not.toContain("Fix a typo");
+    const snapshots = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.task_state' order by rowid",
+        )
+        .all(sessionId) as Array<{ payload_json: string }>
+    )
+      .map(
+        ({ payload_json }) =>
+          JSON.parse(payload_json) as Extract<AgentEvent, { type: "harness.task_state" }>,
+      )
+      .filter((event) => event.runId === runId);
+    expect(snapshots).toHaveLength(4);
+    expect(snapshots.map(({ state }) => state.phase)).toEqual([
+      "preflight",
+      "executing",
+      "verifying",
+      "terminal",
+    ]);
+  });
+
+  it("rechecks QA after a restore during deferred turn-end capture", async () => {
+    const sessionId = `task-state-restore-race-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-session.jsonl"));
+    let runId = "";
+    let releaseTurnEnd!: (
+      value: Awaited<ReturnType<typeof checkpointService.createCheckpoint>>,
+    ) => void;
+    let notifyTurnEnd!: () => void;
+    const turnEndGate = new Promise<Awaited<ReturnType<typeof checkpointService.createCheckpoint>>>(
+      (resolve) => {
+        releaseTurnEnd = resolve;
+      },
+    );
+    const turnEndStarted = new Promise<void>((resolve) => {
+      notifyTurnEnd = resolve;
+    });
+    vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
+      files: [],
+      added: 0,
+      removed: 0,
+      fileCount: 0,
+      truncated: false,
+    });
+    vi.spyOn(checkpointService, "createCheckpoint").mockImplementation(async (checkpointInput) => {
+      const checkpoint = {
+        id: checkpointInput.kind === "turn-end" ? "turn-end-checkpoint" : "run-checkpoint",
+        sessionId: checkpointInput.sessionId,
+        cwd: checkpointInput.cwd,
+        commitHash: "abc123",
+        kind: checkpointInput.kind ?? "auto",
+        createdAt: new Date().toISOString(),
+        ...(checkpointInput.runId ? { runId: checkpointInput.runId } : {}),
+        ...(checkpointInput.userMessageId ? { userMessageId: checkpointInput.userMessageId } : {}),
+      } as const;
+      if (checkpointInput.kind === "turn-end") {
+        notifyTurnEnd();
+        return await turnEndGate;
+      }
+      return checkpoint;
+    });
+    const session = createMockPiSession({
+      prompt: () => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for restore-race test");
+        runId = run.id;
+        recordAgentEvent({
+          type: "tool.started",
+          sessionId,
+          runId,
+          toolCallId: "tests-before-restore",
+          toolName: "bash",
+          args: { command: "npm test" },
+        });
+        recordAgentEvent({
+          type: "tool.ended",
+          sessionId,
+          runId,
+          toolCallId: "tests-before-restore",
+          toolName: "bash",
+          isError: false,
+          exitCode: 0,
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { id: "assistant-message", role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Tests passed." },
+        });
+      },
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const prompt = new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+      userMessageId: "message-restore-race",
+    });
+    await turnEndStarted;
+    const startedRow = getDatabase()
+      .prepare(
+        "select rowid from agent_events where session_id = ? and type = 'run.started' order by rowid desc limit 1",
+      )
+      .get(sessionId) as { rowid: number };
+    const restoreEvent = {
+      type: "checkpoint.restored" as const,
+      sessionId,
+      checkpointId: "restore-during-capture",
+    };
+    expect(recordAgentEvent(restoreEvent)).toBeGreaterThan(startedRow.rowid);
+    releaseTurnEnd({
+      id: "turn-end-checkpoint",
+      sessionId,
+      cwd,
+      commitHash: "def456",
+      kind: "turn-end",
+      createdAt: new Date().toISOString(),
+    });
+    await prompt;
+
+    const rows = getDatabase()
+      .prepare("select type, payload_json from agent_events where session_id = ? order by rowid")
+      .all(sessionId) as Array<{ type: string; payload_json: string }>;
+    const outcomes = rows.flatMap(({ type, payload_json }) => {
+      const event = JSON.parse(payload_json) as {
+        type: string;
+        runId?: string;
+        result?: { status?: string };
+      };
+      if (type === "checkpoint.restored") return [type];
+      if (event.runId !== runId) return [];
+      if (type === "harness.qa") return [`harness.qa:${event.result?.status}`];
+      return type === "checkpoint.restored" || type === "run.completed" ? [type] : [];
+    });
+    expect(outcomes).toEqual([
+      "harness.qa:passed",
+      "checkpoint.restored",
+      "harness.qa:missing",
+      "run.completed",
+    ]);
+    expect(getLatestHarnessTaskState(sessionId, runId)?.verificationStatus).toBe("unknown");
+  });
+
   it("completes a run when PI emits assistant text", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -4253,6 +4532,7 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Reciprocal Spec");
+    await initGitRepoWithKnownEmptyScope();
     const plansRoot = join(userData, "plans");
     const plan = writePlan(plansRoot, {
       workspaceId,
@@ -4519,10 +4799,145 @@ describe("PiSdkRuntime", () => {
     });
   });
 
+  it.each([
+    ["all current-run checks pass", "all", "verified"],
+    ["partial current-run checks pass", "partial", "unknown"],
+    ["checks are missing", "missing", "unknown"],
+    ["a current-run check fails", "failed", "failed"],
+    ["only foreign-run checks pass", "foreign", "unknown"],
+    ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
+    ["the strict scope result is truncated", "scope-truncated", "unknown"],
+  ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
+    const sessionId = `task-state-spec-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    await initGitRepoWithKnownEmptyScope();
+    if (evidenceCase === "scope-unavailable") {
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue(undefined);
+    } else if (evidenceCase === "scope-truncated") {
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
+        files: [],
+        added: 0,
+        removed: 0,
+        fileCount: 0,
+        truncated: true,
+      });
+    }
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Spec",
+      overview: "Build and verify linked checks.",
+      content: "# Spec plan",
+      todos: [
+        {
+          id: "todo-verify",
+          content: "Verify implementation",
+          acceptanceCriterionIds: ["ac-verify"],
+        },
+      ],
+      spec: {
+        requirements: [{ id: "req-verify", text: "Complete the implementation." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-verify",
+            requirementId: "req-verify",
+            description: "Tests and typecheck pass.",
+            todoIds: ["todo-verify"],
+            requiredCheckKinds: ["tests", "typecheck"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    let runId = "";
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for Spec Build Task State");
+        runId = run.id;
+        if (evidenceCase === "foreign") {
+          for (const [index, command] of ["npm test", "tsc --noEmit"].entries()) {
+            recordAgentEvent({
+              type: "tool.started",
+              sessionId,
+              runId: "foreign-run",
+              toolCallId: `foreign-check-${index}`,
+              toolName: "terminal_run",
+              args: { command },
+            });
+            recordAgentEvent({
+              type: "tool.ended",
+              sessionId,
+              runId: "foreign-run",
+              toolCallId: `foreign-check-${index}`,
+              toolName: "terminal_run",
+              exitCode: 0,
+              isError: false,
+            });
+          }
+        }
+        const checks =
+          evidenceCase === "all" ||
+          evidenceCase === "failed" ||
+          evidenceCase === "scope-unavailable" ||
+          evidenceCase === "scope-truncated"
+            ? ["npm test", "tsc --noEmit"]
+            : evidenceCase === "partial"
+              ? ["npm test"]
+              : [];
+        checks.forEach((command, index) => {
+          const isError = evidenceCase === "failed" && index === 1;
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: `current-check-${index}`,
+            toolName: "terminal_run",
+            args: { command },
+          });
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: `current-check-${index}`,
+            toolName: "terminal_run",
+            isError,
+            result: { details: { exitCode: isError ? 1 : 0 } },
+          });
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Spec Build finished." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build this plan",
+      sessionId,
+      planId: plan.id,
+    });
+
+    const persistedState = getLatestHarnessTaskState(sessionId, runId);
+    expect(persistedState?.phase).toBe("terminal");
+    expect(persistedState?.verificationStatus).toBe(expectedVerification);
+    expect(persistedState?.criteria).toContainEqual(
+      expect.objectContaining({
+        source: "plan",
+        status: expectedVerification,
+        requiredCheckKinds: ["tests", "typecheck"],
+      }),
+    );
+  });
+
   it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    await initGitRepoWithKnownEmptyScope();
     const plansRoot = join(userData, "plans");
     const plan = writePlan(plansRoot, {
       workspaceId,

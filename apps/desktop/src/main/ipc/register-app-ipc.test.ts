@@ -7,11 +7,14 @@ const mocks = vi.hoisted(() => ({
   readPlanById: vi.fn(),
   runHyperPlanReview: vi.fn(),
   startProviderAuth: vi.fn(),
+  restoreCheckpoint: vi.fn(),
+  recordAgentEvent: vi.fn(),
+  fromWebContents: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
   app: { getPath: () => "C:/modus-user-data", getVersion: () => "test" },
-  BrowserWindow: { fromWebContents: vi.fn() },
+  BrowserWindow: { fromWebContents: mocks.fromWebContents },
   clipboard: { writeImage: vi.fn() },
   dialog: { showSaveDialog: vi.fn() },
   ipcMain: {
@@ -24,6 +27,17 @@ vi.mock("electron", () => ({
 
 vi.mock("../agent/agent-store", () => ({
   getAgentSession: mocks.getAgentSession,
+}));
+vi.mock("../agent/agent-event-store", () => ({
+  listAgentEvents: vi.fn(() => []),
+  recordAgentEvent: mocks.recordAgentEvent,
+  getWorkspaceHarnessInsightEvidence: vi.fn(() => ({ runs: [], events: [] })),
+}));
+vi.mock("../agent/checkpoint-service", () => ({
+  getLastTurnComparison: vi.fn(),
+  getSessionBaseCheckpoint: vi.fn(),
+  listCheckpoints: vi.fn(),
+  restoreCheckpoint: mocks.restoreCheckpoint,
 }));
 vi.mock("../agent/tools/plan-tools", () => ({
   plansRoot: () => "C:/plans",
@@ -95,6 +109,9 @@ describe("dedicated HyperPlan review IPC", () => {
     mocks.getAgentRuntime.mockReset();
     mocks.readPlanById.mockReset();
     mocks.runHyperPlanReview.mockReset().mockResolvedValue(summary);
+    mocks.restoreCheckpoint.mockReset();
+    mocks.recordAgentEvent.mockReset();
+    mocks.fromWebContents.mockReset();
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       workspaceId: "workspace-1",
@@ -144,6 +161,31 @@ describe("dedicated HyperPlan review IPC", () => {
       ),
     ).rejects.toThrow();
     expect(mocks.getAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("records and publishes the checkpoint restore event through the IPC handler", async () => {
+    const checkpoint = {
+      id: "checkpoint-1",
+      sessionId: "session-1",
+      cwd: "C:/workspace",
+      commitHash: "abc123",
+      kind: "auto" as const,
+      createdAt: "2026-09-27T00:00:00.000Z",
+    };
+    const send = vi.fn();
+    mocks.restoreCheckpoint.mockResolvedValue(checkpoint);
+    mocks.fromWebContents.mockReturnValue({ webContents: { send } });
+    const handler = mocks.handlers.get(IPC_CHANNELS.checkpointRestore);
+    if (!handler) throw new Error("Checkpoint restore IPC handler was not registered.");
+
+    await handler(trustedEvent as never, { checkpointId: checkpoint.id } as never);
+    const restoredEvent = {
+      type: "checkpoint.restored",
+      sessionId: checkpoint.sessionId,
+      checkpointId: checkpoint.id,
+    };
+    expect(mocks.recordAgentEvent).toHaveBeenCalledWith(restoredEvent);
+    expect(send).toHaveBeenCalledWith(IPC_CHANNELS.agentEvent, restoredEvent);
   });
 
   it.each([

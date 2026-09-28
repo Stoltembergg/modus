@@ -1,9 +1,27 @@
 import { randomUUID } from "node:crypto";
 import { foldAgentEvents } from "../../shared/agent-events";
-import type { AgentEvent, CodeGraphDiscoveryRef, TodoItem } from "../../shared/contracts";
+import type {
+  AgentEvent,
+  CodeGraphDiscoveryRef,
+  HarnessTaskCheckKind,
+  HarnessTaskCriterionState,
+  HarnessTaskEvidenceRef,
+  HarnessTaskState,
+  TodoItem,
+  VerificationEvidenceStatus,
+} from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { type RunQAEvent, recognizeCheckInvocation } from "./harness/qa-evidence";
+import {
+  MAX_TASK_STATE_CRITERIA,
+  MAX_TASK_STATE_EVENT_BYTES,
+  MAX_TASK_STATE_EVIDENCE,
+  MAX_TASK_STATE_EVIDENCE_PER_CRITERION,
+  MAX_TASK_STATE_REFS,
+  MAX_TASK_STATE_SCAN,
+  SAFE_TASK_STATE_ID,
+} from "./harness/task-state";
 
 type AgentEventRow = {
   id: string;
@@ -24,6 +42,48 @@ const MAX_CODEGRAPH_DISCOVERY_EVENTS = 200;
 const MAX_CODEGRAPH_DISCOVERY_REFS = 200;
 const MAX_HARNESS_INSIGHT_RUNS = 500;
 const MAX_HARNESS_INSIGHT_EVENTS = 5000;
+const TASK_STATE_CHECK_KINDS: HarnessTaskCheckKind[] = ["tests", "typecheck", "lint", "build"];
+const TASK_STATE_PHASES = [
+  "preflight",
+  "awaiting_user",
+  "planning",
+  "executing",
+  "verifying",
+  "terminal",
+] as const;
+const TASK_STATE_STATUSES = [
+  "not_required",
+  "pending",
+  "verified",
+  "user_confirmed",
+  "failed",
+  "unknown",
+  "blocked",
+] as const;
+const TASK_STATE_CRITERION_STATUSES = [
+  "pending",
+  "verified",
+  "failed",
+  "unknown",
+  "blocked",
+  "user_confirmed",
+] as const;
+const TASK_STATE_EVIDENCE_STATUSES: VerificationEvidenceStatus[] = [
+  "passed",
+  "failed",
+  "skipped",
+  "missing",
+  "unavailable",
+  "user_confirmed",
+];
+const TASK_STATE_ROLES = [
+  "explore",
+  "librarian",
+  "oracle",
+  "reviewer",
+  "debugger",
+  "ui-ux",
+] as const;
 
 function sqliteBoolean(value: unknown, jsonType: unknown): boolean | undefined {
   if (value === 1 && jsonType === "true") return true;
@@ -86,8 +146,8 @@ function safeToolPaths(args: Record<string, unknown>): string[] | undefined {
     .slice(0, 20);
 }
 
-export function recordAgentEvent(event: AgentEvent): void {
-  getDatabase()
+export function recordAgentEvent(event: AgentEvent): number {
+  const insertResult = getDatabase()
     .prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)
        values (?, ?, ?, ?, ?)`,
@@ -99,6 +159,318 @@ export function recordAgentEvent(event: AgentEvent): void {
       JSON.stringify(event),
       new Date().toISOString(),
     );
+  return Number(insertResult.lastInsertRowid);
+}
+
+type TaskStateScanRow = { event_rowid: number; payload_bytes: number; workspace_id: string };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function validStringArray(value: unknown, maximum: number): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximum &&
+    value.every((item) => typeof item === "string" && SAFE_TASK_STATE_ID.test(item))
+  );
+}
+
+function validTaskStateCriterion(value: unknown): value is HarnessTaskCriterionState {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "criterionId",
+      "source",
+      "status",
+      "evidenceEventIds",
+      "requiredCheckKinds",
+    ])
+  )
+    return false;
+  if (
+    typeof value.criterionId !== "string" ||
+    !SAFE_TASK_STATE_ID.test(value.criterionId) ||
+    (value.source !== "plan" && value.source !== "check") ||
+    typeof value.status !== "string" ||
+    !TASK_STATE_CRITERION_STATUSES.includes(
+      value.status as (typeof TASK_STATE_CRITERION_STATUSES)[number],
+    ) ||
+    !validStringArray(value.evidenceEventIds, MAX_TASK_STATE_EVIDENCE_PER_CRITERION)
+  )
+    return false;
+  return (
+    value.requiredCheckKinds === undefined ||
+    (Array.isArray(value.requiredCheckKinds) &&
+      value.requiredCheckKinds.length <= TASK_STATE_CHECK_KINDS.length &&
+      value.requiredCheckKinds.every((kind) =>
+        TASK_STATE_CHECK_KINDS.includes(kind as HarnessTaskCheckKind),
+      ))
+  );
+}
+
+function validTaskStateEvidence(value: unknown): value is HarnessTaskEvidenceRef {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, ["eventId", "kind", "status", "revision", "criterionId"])
+  )
+    return false;
+  return (
+    typeof value.eventId === "string" &&
+    SAFE_TASK_STATE_ID.test(value.eventId) &&
+    (value.kind === "check" || value.kind === "user_confirmation") &&
+    typeof value.status === "string" &&
+    TASK_STATE_EVIDENCE_STATUSES.includes(value.status as VerificationEvidenceStatus) &&
+    (value.revision === undefined ||
+      (typeof value.revision === "string" && SAFE_TASK_STATE_ID.test(value.revision))) &&
+    (value.criterionId === undefined ||
+      (typeof value.criterionId === "string" && SAFE_TASK_STATE_ID.test(value.criterionId)))
+  );
+}
+
+function validTaskStateClassification(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "taskType",
+      "complexity",
+      "risk",
+      "confidence",
+      "suggestedRole",
+      "reasons",
+    ])
+  ) {
+    return false;
+  }
+  const taskTypes = [...TASK_STATE_ROLES, "implementation", "unknown"];
+  return (
+    typeof value.taskType === "string" &&
+    taskTypes.includes(value.taskType) &&
+    (value.complexity === "simple" ||
+      value.complexity === "moderate" ||
+      value.complexity === "complex") &&
+    (value.risk === "low" || value.risk === "medium" || value.risk === "high") &&
+    (value.confidence === "low" || value.confidence === "high") &&
+    (value.suggestedRole === undefined ||
+      (typeof value.suggestedRole === "string" &&
+        TASK_STATE_ROLES.includes(value.suggestedRole as (typeof TASK_STATE_ROLES)[number]))) &&
+    Array.isArray(value.reasons) &&
+    value.reasons.length <= 32 &&
+    value.reasons.every((reason) => typeof reason === "string" && reason.length <= 128)
+  );
+}
+
+function validVerifiedTaskState(
+  criteria: HarnessTaskCriterionState[],
+  evidenceRefs: HarnessTaskEvidenceRef[],
+): boolean {
+  return (
+    criteria.length > 0 &&
+    criteria.every((criterion) => {
+      const requiredCheckKinds = criterion.requiredCheckKinds ?? [];
+      const evidenceEventIds = new Set(criterion.evidenceEventIds);
+      return (
+        criterion.status === "verified" &&
+        requiredCheckKinds.length > 0 &&
+        evidenceEventIds.size >= requiredCheckKinds.length &&
+        [...evidenceEventIds].every((eventId) =>
+          evidenceRefs.some(
+            (evidence) =>
+              evidence.eventId === eventId &&
+              evidence.kind === "check" &&
+              evidence.status === "passed",
+          ),
+        )
+      );
+    })
+  );
+}
+
+function reconstructTaskState(value: unknown): HarnessTaskState | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "version",
+      "sessionId",
+      "runId",
+      "workspaceId",
+      "goalMessageId",
+      "planId",
+      "planFingerprint",
+      "classification",
+      "phase",
+      "verificationStatus",
+      "criteria",
+      "constraintRefs",
+      "openQuestionRefs",
+      "todoIds",
+      "hypothesisRefs",
+      "evidenceRefs",
+      "revision",
+      "updatedAt",
+    ])
+  )
+    return undefined;
+  const state = value;
+  if (
+    state.version !== 1 ||
+    ![state.sessionId, state.runId, state.workspaceId, state.goalMessageId].every(
+      (id) => typeof id === "string" && SAFE_TASK_STATE_ID.test(id),
+    ) ||
+    (state.planId !== undefined &&
+      (typeof state.planId !== "string" || !SAFE_TASK_STATE_ID.test(state.planId))) ||
+    (state.planFingerprint !== undefined &&
+      (typeof state.planFingerprint !== "string" ||
+        !/^[a-f0-9]{64}$/.test(state.planFingerprint))) ||
+    !validTaskStateClassification(state.classification) ||
+    typeof state.phase !== "string" ||
+    !TASK_STATE_PHASES.includes(state.phase as (typeof TASK_STATE_PHASES)[number]) ||
+    typeof state.verificationStatus !== "string" ||
+    !TASK_STATE_STATUSES.includes(
+      state.verificationStatus as (typeof TASK_STATE_STATUSES)[number],
+    ) ||
+    !Array.isArray(state.criteria) ||
+    state.criteria.length > MAX_TASK_STATE_CRITERIA ||
+    !state.criteria.every(validTaskStateCriterion) ||
+    !validStringArray(state.constraintRefs, MAX_TASK_STATE_REFS) ||
+    !validStringArray(state.openQuestionRefs, MAX_TASK_STATE_REFS) ||
+    !validStringArray(state.todoIds, MAX_TASK_STATE_REFS) ||
+    !validStringArray(state.hypothesisRefs, MAX_TASK_STATE_REFS) ||
+    !Array.isArray(state.evidenceRefs) ||
+    state.evidenceRefs.length > MAX_TASK_STATE_EVIDENCE ||
+    !state.evidenceRefs.every(validTaskStateEvidence) ||
+    (state.verificationStatus === "verified" &&
+      !validVerifiedTaskState(
+        state.criteria as HarnessTaskCriterionState[],
+        state.evidenceRefs as HarnessTaskEvidenceRef[],
+      )) ||
+    (state.revision !== undefined &&
+      (typeof state.revision !== "string" || !SAFE_TASK_STATE_ID.test(state.revision))) ||
+    typeof state.updatedAt !== "string" ||
+    state.updatedAt.length > 64 ||
+    !Number.isFinite(Date.parse(state.updatedAt)) ||
+    new Date(state.updatedAt).toISOString() !== state.updatedAt
+  )
+    return undefined;
+
+  return {
+    version: 1,
+    sessionId: state.sessionId as string,
+    runId: state.runId as string,
+    workspaceId: state.workspaceId as string,
+    goalMessageId: state.goalMessageId as string,
+    ...(state.planId !== undefined ? { planId: state.planId as string } : {}),
+    ...(state.planFingerprint !== undefined
+      ? { planFingerprint: state.planFingerprint as string }
+      : {}),
+    classification: state.classification as HarnessTaskState["classification"],
+    phase: state.phase as HarnessTaskState["phase"],
+    verificationStatus: state.verificationStatus as HarnessTaskState["verificationStatus"],
+    criteria: state.criteria as HarnessTaskCriterionState[],
+    constraintRefs: state.constraintRefs as string[],
+    openQuestionRefs: state.openQuestionRefs as string[],
+    todoIds: state.todoIds as string[],
+    hypothesisRefs: state.hypothesisRefs as string[],
+    evidenceRefs: state.evidenceRefs as HarnessTaskEvidenceRef[],
+    ...(state.revision !== undefined ? { revision: state.revision as string } : {}),
+    updatedAt: state.updatedAt,
+  };
+}
+
+/** Returns the newest valid snapshot for exactly one run, failing closed on malformed newer data. */
+export function getLatestHarnessTaskState(
+  sessionId: string,
+  runId: string,
+): HarnessTaskState | undefined {
+  if (!SAFE_TASK_STATE_ID.test(sessionId) || !SAFE_TASK_STATE_ID.test(runId)) return undefined;
+  const db = getDatabase();
+  const candidates = db
+    .prepare(
+      `select e.rowid as event_rowid,
+            length(cast(e.payload_json as blob)) as payload_bytes,
+            s.workspace_id
+     from agent_events e
+     join agent_sessions s on s.id = e.session_id
+     where e.session_id = ? and e.type = 'harness.task_state'
+     order by e.rowid desc
+     limit ?`,
+    )
+    .all(sessionId, MAX_TASK_STATE_SCAN) as TaskStateScanRow[];
+
+  for (const candidate of candidates) {
+    if (candidate.workspace_id === CHATS_WORKSPACE_ID) return undefined;
+    if (
+      !Number.isSafeInteger(candidate.payload_bytes) ||
+      candidate.payload_bytes > MAX_TASK_STATE_EVENT_BYTES
+    ) {
+      return undefined;
+    }
+    const row = db
+      .prepare("select payload_json from agent_events where rowid = ?")
+      .get(candidate.event_rowid) as { payload_json: string } | undefined;
+    if (!row || typeof row.payload_json !== "string") return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(row.payload_json);
+    } catch {
+      return undefined;
+    }
+    if (
+      !isRecord(parsed) ||
+      !hasOnlyKeys(parsed, ["type", "sessionId", "runId", "state"]) ||
+      parsed.type !== "harness.task_state" ||
+      parsed.sessionId !== sessionId ||
+      typeof parsed.runId !== "string" ||
+      !SAFE_TASK_STATE_ID.test(parsed.runId) ||
+      !("state" in parsed)
+    ) {
+      return undefined;
+    }
+    const state = reconstructTaskState(parsed.state);
+    if (
+      !state ||
+      state.sessionId !== sessionId ||
+      state.runId !== parsed.runId ||
+      state.workspaceId !== candidate.workspace_id
+    ) {
+      return undefined;
+    }
+    if (parsed.runId !== runId) continue;
+    const ownedRun = db
+      .prepare("select 1 from agent_runs where id = ? and session_id = ? limit 1")
+      .get(runId, sessionId);
+    if (!ownedRun) return undefined;
+    return state;
+  }
+  return undefined;
+}
+
+/** Latest restore boundary strictly after the run's persisted start event. */
+export function getLatestCheckpointRestoreRowId(
+  sessionId: string,
+  runStartedRowId: number,
+): number | undefined {
+  if (
+    !SAFE_TASK_STATE_ID.test(sessionId) ||
+    !Number.isSafeInteger(runStartedRowId) ||
+    runStartedRowId <= 0
+  ) {
+    return undefined;
+  }
+  const row = getDatabase()
+    .prepare(
+      `select rowid
+     from agent_events
+     where session_id = ? and type = 'checkpoint.restored' and rowid > ?
+     order by rowid desc
+     limit 1`,
+    )
+    .get(sessionId, runStartedRowId) as { rowid: number } | undefined;
+  return row?.rowid;
 }
 
 /** Latest persisted to-do list of a session (rehydrates the todo tool store). */
@@ -141,7 +513,12 @@ export function getLatestTodoContinuationAttempt(sessionId: string, runId: strin
  * Return a bounded, redacted tool-call projection for one exact run. This query
  * never joins or reads agent_runs, so prompt/transcript text cannot enter QA.
  */
-export function getRunToolEvidence(sessionId: string, runId: string): RunQAEvent[] {
+export function getRunToolEvidence(
+  sessionId: string,
+  runId: string,
+  afterRowId?: number,
+): RunQAEvent[] {
+  if (afterRowId !== undefined && (!Number.isSafeInteger(afterRowId) || afterRowId <= 0)) return [];
   const session = getDatabase()
     .prepare("select cwd from agent_sessions where id = ?")
     .get(sessionId) as { cwd?: string } | undefined;
@@ -150,10 +527,11 @@ export function getRunToolEvidence(sessionId: string, runId: string): RunQAEvent
       `select id, payload_json from agent_events
        where session_id = ? and type in ('tool.started', 'tool.ended')
          and json_extract(payload_json, '$.runId') = ?
+         and (? is null or rowid > ?)
        order by rowid desc
        limit ?`,
     )
-    .all(sessionId, runId, MAX_RUN_TOOL_EVENTS)
+    .all(sessionId, runId, afterRowId ?? null, afterRowId ?? null, MAX_RUN_TOOL_EVENTS)
     .reverse() as Array<{ id: string; payload_json: string }>;
 
   const starts = new Map<

@@ -815,6 +815,39 @@ export async function getChangeStatsSince(cwd: string, base: string): Promise<Wo
   return summarizeStats(files);
 }
 
+/** Strict per-run scope summary; failed Git commands mean scope is unknown. */
+export async function getChangeStatsSinceStrict(
+  cwd: string,
+  base: string,
+): Promise<WorkingChangeStats | undefined> {
+  try {
+    const resolvedBase = (await runGit(cwd, ["rev-parse", "--verify", `${base}^{commit}`])).trim();
+    if (!resolvedBase) return undefined;
+
+    const tracked = parseNumstat(await runGit(cwd, ["diff", "--numstat", resolvedBase, "--"]));
+    const basePaths = new Set(
+      (await runGit(cwd, ["ls-tree", "-r", "--name-only", "-z", resolvedBase]))
+        .split("\0")
+        .filter(Boolean),
+    );
+    const untrackedNow = (await runGit(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]))
+      .split("\0")
+      .filter(Boolean);
+
+    const files: FileChangeStat[] = [...tracked];
+    for (const path of untrackedNow) {
+      if (basePaths.has(path)) continue;
+      const { lines, binary } = await countNewFileLines(cwd, path);
+      files.push({ path, added: lines, removed: 0, untracked: true, binary });
+    }
+
+    files.sort((a, b) => a.path.localeCompare(b.path));
+    return summarizeStats(files);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Working-tree change summary vs HEAD — the composer strip / apply review payload. */
 export async function getWorkingChangeStats(cwd: string): Promise<WorkingChangeStats> {
   return await getChangeStatsSince(cwd, "HEAD");

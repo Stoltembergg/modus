@@ -156,6 +156,69 @@ export type HarnessTaskClassification = {
   suggestedRole?: BuiltinAgentRole;
   reasons: string[];
 };
+export type HarnessTaskPhase =
+  | "preflight"
+  | "awaiting_user"
+  | "planning"
+  | "executing"
+  | "verifying"
+  | "terminal";
+export type HarnessTaskVerificationStatus =
+  | "not_required"
+  | "pending"
+  | "verified"
+  | "user_confirmed"
+  | "failed"
+  | "unknown"
+  | "blocked";
+export type HarnessTaskCheckKind = "tests" | "typecheck" | "lint" | "build";
+export type HarnessTaskCriterionState = {
+  criterionId: string;
+  source: "plan" | "check";
+  status: "pending" | "verified" | "failed" | "unknown" | "blocked" | "user_confirmed";
+  evidenceEventIds: string[];
+  requiredCheckKinds?: HarnessTaskCheckKind[];
+};
+export type HarnessTaskEvidenceRef = {
+  eventId: string;
+  kind: "check" | "user_confirmation";
+  status: VerificationEvidenceStatus;
+  revision?: string;
+  criterionId?: string;
+};
+export type HarnessTaskState = {
+  version: 1;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  goalMessageId: string;
+  planId?: string;
+  planFingerprint?: string;
+  classification: HarnessTaskClassification;
+  phase: HarnessTaskPhase;
+  verificationStatus: HarnessTaskVerificationStatus;
+  criteria: HarnessTaskCriterionState[];
+  constraintRefs: string[];
+  openQuestionRefs: string[];
+  todoIds: string[];
+  hypothesisRefs: string[];
+  evidenceRefs: HarnessTaskEvidenceRef[];
+  revision?: string;
+  updatedAt: string;
+};
+export type HarnessTaskStateSeed = {
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  goalMessageId: string;
+  classification: HarnessTaskClassification;
+  requiredChecks: HarnessTaskCheckKind[];
+  /** Source IDs are in-memory inputs only; the initializer emits opaque ordinal aliases. */
+  todoIds: string[];
+  /** Plan content/IDs are read in memory for projection only, never copied to Task State. */
+  plan?: Pick<PlanRef, "id" | "sessionId" | "workspaceId" | "spec" | "todos" | "hash">;
+  revision?: string;
+};
 export type HarnessRouteEvent = {
   type: "harness.route";
   sessionId: string;
@@ -449,6 +512,7 @@ export type HarnessInsightsResult = {
 
 export type AgentEvent =
   | HarnessRouteEvent
+  | { type: "harness.task_state"; sessionId: string; runId: string; state: HarnessTaskState }
   | { type: "agent.started"; sessionId: string }
   | { type: "agent.ended"; sessionId: string }
   | {

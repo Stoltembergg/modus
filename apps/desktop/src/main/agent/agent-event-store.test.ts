@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
 let userData: string;
@@ -14,11 +15,51 @@ vi.mock("electron", () => ({
 
 const { getDatabase } = await import("../db/database");
 const { createAgentRun } = await import("./agent-run-store");
-const { getLatestTodoContinuationAttempt, getRunToolEvidence, listAgentEvents, recordAgentEvent } =
-  await import("./agent-event-store");
+const {
+  getLatestCheckpointRestoreRowId,
+  getLatestHarnessTaskState,
+  getLatestTodoContinuationAttempt,
+  getRunToolEvidence,
+  listAgentEvents,
+  recordAgentEvent,
+} = await import("./agent-event-store");
 const { getSessionCodeGraphDiscoveries } = await import("./agent-event-store");
 const { getWorkspaceHarnessInsightEvidence } = await import("./agent-event-store");
 const { recognizeCheckInvocation } = await import("./harness/qa-evidence");
+const { summarizeRunQA } = await import("./harness/qa-evidence");
+
+const taskStateClassification: HarnessTaskClassification = {
+  taskType: "implementation",
+  complexity: "simple",
+  risk: "low",
+  confidence: "high",
+  reasons: [],
+};
+
+function taskStateFixture(
+  sessionId: string,
+  workspaceId: string,
+  runId: string,
+  updatedAt: string,
+): HarnessTaskState {
+  return {
+    version: 1,
+    sessionId,
+    runId,
+    workspaceId,
+    goalMessageId: "message-1",
+    classification: taskStateClassification,
+    phase: "executing",
+    verificationStatus: "not_required",
+    criteria: [],
+    constraintRefs: [],
+    openQuestionRefs: [],
+    todoIds: [],
+    hypothesisRefs: [],
+    evidenceRefs: [],
+    updatedAt,
+  };
+}
 
 function insertSession(sessionId: string): void {
   const now = new Date().toISOString();
@@ -61,6 +102,332 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await rm(userData, { recursive: true, force: true }).catch(() => undefined);
+});
+
+describe("getLatestHarnessTaskState", () => {
+  it("returns only the latest valid snapshot owned by the exact session and run", () => {
+    const sessionId = `state-${crypto.randomUUID()}`;
+    const siblingSessionId = `sibling-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    insertSessionInWorkspace(siblingSessionId, workspaceId);
+    const run = createAgentRun({ sessionId, prompt: "PRIVATE_PROMPT" });
+    const otherRun = createAgentRun({ sessionId, prompt: "OTHER_PRIVATE_PROMPT" });
+    const earlier = taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:00:00.000Z");
+    const latest = taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:01:00.000Z");
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: earlier });
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: latest });
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId: siblingSessionId,
+      runId: run.id,
+      state: taskStateFixture(siblingSessionId, workspaceId, run.id, "2026-09-27T00:02:00.000Z"),
+    });
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: otherRun.id,
+      state: taskStateFixture(sessionId, workspaceId, otherRun.id, "2026-09-27T00:03:00.000Z"),
+    });
+
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toEqual(latest);
+    expect(JSON.stringify(getLatestHarnessTaskState(sessionId, run.id))).not.toContain(
+      "PRIVATE_PROMPT",
+    );
+    expect(getLatestHarnessTaskState(siblingSessionId, run.id)).toBeUndefined();
+    expect(getLatestHarnessTaskState(sessionId, otherRun.id)).toEqual(
+      taskStateFixture(sessionId, workspaceId, otherRun.id, "2026-09-27T00:03:00.000Z"),
+    );
+  });
+
+  it("fails closed on malformed latest snapshots instead of returning an older pass", () => {
+    const cases = [
+      { suffix: "invalid-json", payload: () => "{" },
+      {
+        suffix: "missing-run-id",
+        payload: (sessionId: string, _runId: string, state: HarnessTaskState) =>
+          JSON.stringify({ type: "harness.task_state", sessionId, state }),
+      },
+      {
+        suffix: "unsafe-run-id",
+        payload: (sessionId: string, _runId: string, state: HarnessTaskState) =>
+          JSON.stringify({ type: "harness.task_state", sessionId, runId: "PRIVATE RUN", state }),
+      },
+      {
+        suffix: "wrong-session",
+        payload: (_sessionId: string, runId: string, state: HarnessTaskState) =>
+          JSON.stringify({ type: "harness.task_state", sessionId: "other-session", runId, state }),
+      },
+      {
+        suffix: "invalid-state",
+        payload: (sessionId: string, runId: string, state: HarnessTaskState) =>
+          JSON.stringify({
+            type: "harness.task_state",
+            sessionId,
+            runId,
+            state: { ...state, version: 9 },
+          }),
+      },
+      {
+        suffix: "unexpected-field",
+        payload: (sessionId: string, runId: string, state: HarnessTaskState) =>
+          JSON.stringify({
+            type: "harness.task_state",
+            sessionId,
+            runId,
+            state: { ...state, prompt: "PRIVATE_PROMPT" },
+          }),
+      },
+      {
+        suffix: "oversized",
+        payload: (sessionId: string, runId: string, state: HarnessTaskState) =>
+          JSON.stringify({ type: "harness.task_state", sessionId, runId, state }).padEnd(
+            262145,
+            " ",
+          ),
+      },
+    ] as const;
+
+    for (const invalid of cases) {
+      const sessionId = `malformed-${invalid.suffix}-${crypto.randomUUID()}`;
+      insertSession(sessionId);
+      const workspaceId = `workspace-${sessionId}`;
+      const run = createAgentRun({ sessionId, prompt: "PRIVATE_PROMPT" });
+      const earlier = taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:00:00.000Z");
+      recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: earlier });
+      const payload = invalid.payload(sessionId, run.id, earlier);
+      getDatabase()
+        .prepare(
+          "insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)",
+        )
+        .run(
+          `malformed-state-${invalid.suffix}-${crypto.randomUUID()}`,
+          sessionId,
+          "harness.task_state",
+          payload,
+          new Date().toISOString(),
+        );
+      expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+    }
+  });
+
+  it("rejects a verified snapshot without criteria and passing check evidence", () => {
+    const sessionId = `verified-empty-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    const run = createAgentRun({ sessionId, prompt: "Verify work" });
+    const state = {
+      ...taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:00:00.000Z"),
+      phase: "terminal" as const,
+      verificationStatus: "verified" as const,
+      criteria: [],
+      evidenceRefs: [],
+    };
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state });
+
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+
+    const verified = {
+      ...state,
+      criteria: [
+        {
+          criterionId: "check:tests",
+          source: "check" as const,
+          status: "verified" as const,
+          evidenceEventIds: ["passing-test-event"],
+          requiredCheckKinds: ["tests" as const],
+        },
+      ],
+      evidenceRefs: [
+        { eventId: "passing-test-event", kind: "check" as const, status: "passed" as const },
+      ],
+    };
+    const userConfirmedInsteadOfChecked = {
+      ...verified,
+      evidenceRefs: [
+        {
+          eventId: "passing-test-event",
+          kind: "user_confirmation" as const,
+          status: "user_confirmed" as const,
+        },
+      ],
+    };
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: run.id,
+      state: userConfirmedInsteadOfChecked,
+    });
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: verified });
+
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toEqual(verified);
+  });
+
+  it("fails closed when a newer envelope run disagrees with the state run", () => {
+    const sessionId = `run-mismatch-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    const requestedRun = createAgentRun({ sessionId, prompt: "Requested run" });
+    const envelopeRun = createAgentRun({ sessionId, prompt: "Envelope run" });
+    const older = taskStateFixture(
+      sessionId,
+      workspaceId,
+      requestedRun.id,
+      "2026-09-27T00:00:00.000Z",
+    );
+    const mismatched = taskStateFixture(
+      sessionId,
+      workspaceId,
+      requestedRun.id,
+      "2026-09-27T00:01:00.000Z",
+    );
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: requestedRun.id,
+      state: older,
+    });
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: envelopeRun.id,
+      state: mismatched,
+    });
+
+    expect(getLatestHarnessTaskState(sessionId, requestedRun.id)).toBeUndefined();
+  });
+
+  it("rejects a snapshot whose workspace does not match the owning session", () => {
+    const sessionId = `workspace-state-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    const run = createAgentRun({ sessionId, prompt: "PRIVATE_PROMPT" });
+    const state = taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:00:00.000Z");
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: run.id,
+      state: { ...state, workspaceId: "foreign-workspace" },
+    });
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+  });
+
+  it("rejects valid-looking Task State events for a Chats workspace session", () => {
+    const sessionId = `chats-task-state-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    const db = getDatabase();
+    const workspaceExists = db
+      .prepare("select 1 from workspaces where id = ?")
+      .get(CHATS_WORKSPACE_ID);
+    if (!workspaceExists) {
+      db.prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values (?, ?, ?, ?, ?, ?)`,
+      ).run(CHATS_WORKSPACE_ID, `root-${sessionId}`, "Chats", 0, now, now);
+    }
+    db.prepare(
+      `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(sessionId, CHATS_WORKSPACE_ID, "Chats task-state test", userData, "idle", now, now);
+    try {
+      const run = createAgentRun({ sessionId, prompt: "PRIVATE_PROMPT" });
+      const state = taskStateFixture(
+        sessionId,
+        CHATS_WORKSPACE_ID,
+        run.id,
+        "2026-09-27T00:00:00.000Z",
+      );
+      recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state });
+
+      expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+    } finally {
+      db.prepare("delete from agent_events where session_id = ?").run(sessionId);
+      db.prepare("delete from agent_runs where session_id = ?").run(sessionId);
+      db.prepare("delete from agent_sessions where id = ?").run(sessionId);
+      if (!workspaceExists) {
+        db.prepare("delete from workspaces where id = ?").run(CHATS_WORKSPACE_ID);
+      }
+    }
+  });
+
+  it("returns the durable SQLite rowid from recordAgentEvent", () => {
+    const sessionId = `rowid-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const rowId = recordAgentEvent({ type: "agent.started", sessionId });
+    expect(Number.isSafeInteger(rowId)).toBe(true);
+    expect(rowId).toBeGreaterThan(0);
+  });
+});
+
+describe("post-restore QA evidence", () => {
+  it("rejects a passing check from before restore and accepts a rerun afterward", () => {
+    const sessionId = `restore-state-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "Run tests" });
+    recordAgentEvent({
+      type: "checkpoint.restored",
+      sessionId,
+      checkpointId: "restore-before-run",
+    });
+    const runStartedRowId = recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: run.id,
+      userMessageId: "message-1",
+      delivery: "normal",
+    });
+    const recordPassingTests = (toolCallId: string) => {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId,
+        toolName: "bash",
+        args: { command: "npm test" },
+      });
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId,
+        toolName: "bash",
+        isError: false,
+        exitCode: 0,
+      });
+    };
+
+    recordPassingTests("before-restore");
+    const restoreRowId = recordAgentEvent({
+      type: "checkpoint.restored",
+      sessionId,
+      checkpointId: "checkpoint-1",
+    });
+    expect(getLatestCheckpointRestoreRowId(sessionId, runStartedRowId)).toBe(restoreRowId);
+    expect(restoreRowId).toBeGreaterThan(0);
+    expect(getRunToolEvidence(sessionId, run.id, restoreRowId)).toEqual([]);
+    expect(
+      summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events: getRunToolEvidence(sessionId, run.id, restoreRowId),
+      }).status,
+    ).toBe("missing");
+
+    recordPassingTests("after-restore");
+    expect(
+      summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events: getRunToolEvidence(sessionId, run.id, restoreRowId),
+      }).status,
+    ).toBe("passed");
+  });
 });
 
 describe("agent-event-store", () => {
