@@ -211,6 +211,94 @@ describe("getLatestHarnessTaskState", () => {
     }
   });
 
+  it("rejects a verified snapshot without criteria and passing check evidence", () => {
+    const sessionId = `verified-empty-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    const run = createAgentRun({ sessionId, prompt: "Verify work" });
+    const state = {
+      ...taskStateFixture(sessionId, workspaceId, run.id, "2026-09-27T00:00:00.000Z"),
+      phase: "terminal" as const,
+      verificationStatus: "verified" as const,
+      criteria: [],
+      evidenceRefs: [],
+    };
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state });
+
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+
+    const verified = {
+      ...state,
+      criteria: [
+        {
+          criterionId: "check:tests",
+          source: "check" as const,
+          status: "verified" as const,
+          evidenceEventIds: ["passing-test-event"],
+          requiredCheckKinds: ["tests" as const],
+        },
+      ],
+      evidenceRefs: [
+        { eventId: "passing-test-event", kind: "check" as const, status: "passed" as const },
+      ],
+    };
+    const userConfirmedInsteadOfChecked = {
+      ...verified,
+      evidenceRefs: [
+        {
+          eventId: "passing-test-event",
+          kind: "user_confirmation" as const,
+          status: "user_confirmed" as const,
+        },
+      ],
+    };
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: run.id,
+      state: userConfirmedInsteadOfChecked,
+    });
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
+
+    recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: verified });
+
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toEqual(verified);
+  });
+
+  it("fails closed when a newer envelope run disagrees with the state run", () => {
+    const sessionId = `run-mismatch-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const workspaceId = `workspace-${sessionId}`;
+    const requestedRun = createAgentRun({ sessionId, prompt: "Requested run" });
+    const envelopeRun = createAgentRun({ sessionId, prompt: "Envelope run" });
+    const older = taskStateFixture(
+      sessionId,
+      workspaceId,
+      requestedRun.id,
+      "2026-09-27T00:00:00.000Z",
+    );
+    const mismatched = taskStateFixture(
+      sessionId,
+      workspaceId,
+      requestedRun.id,
+      "2026-09-27T00:01:00.000Z",
+    );
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: requestedRun.id,
+      state: older,
+    });
+    recordAgentEvent({
+      type: "harness.task_state",
+      sessionId,
+      runId: envelopeRun.id,
+      state: mismatched,
+    });
+
+    expect(getLatestHarnessTaskState(sessionId, requestedRun.id)).toBeUndefined();
+  });
+
   it("rejects a snapshot whose workspace does not match the owning session", () => {
     const sessionId = `workspace-state-${crypto.randomUUID()}`;
     insertSession(sessionId);

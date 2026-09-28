@@ -594,61 +594,58 @@ describe("PiSdkRuntime", () => {
   it.each([
     [false, "passed"],
     [true, "failed"],
-  ] as const)(
-    "emits structured QA for a completed test tool call (error=%s)",
-    async (isError, status) => {
-      const sessionId = `session-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      await initGitRepoWithKnownEmptyScope();
-      const session = createMockPiSession({
-        prompt: vi.fn(async () => {
-          mocks.emitPiEvent({
-            type: "tool_execution_start",
-            toolCallId: "qa-terminal-call",
-            toolName: "terminal_run",
-            args: { command: "npm test" },
-          });
-          mocks.emitPiEvent({
-            type: "tool_execution_end",
-            toolCallId: "qa-terminal-call",
-            toolName: "terminal_run",
-            isError,
-            result: { details: { exitCode: isError ? 1 : 0 } },
-          });
-          mocks.emitPiEvent({
-            type: "message_update",
-            message: { role: "assistant" },
-            assistantMessageEvent: { type: "text_delta", delta: "Check completed" },
-          });
-        }),
-      });
-      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+  ] as const)("emits structured QA for a completed test tool call (error=%s)", async (isError, status) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "qa-terminal-call",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "qa-terminal-call",
+          toolName: "terminal_run",
+          isError,
+          result: { details: { exitCode: isError ? 1 : 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Check completed" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
 
-      await new PiSdkRuntime().prompt(createWindowStub(), {
-        context: [],
-        delivery: "normal",
-        message: "Run tests",
-        sessionId,
-      });
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests",
+      sessionId,
+    });
 
-      const qaPayload = (
-        getDatabase()
-          .prepare(
-            "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
-          )
-          .get(sessionId) as { payload_json: string }
-      ).payload_json;
-      expect(JSON.parse(qaPayload)).toMatchObject({
-        type: "harness.qa",
-        result: {
-          required: true,
-          status,
-          evidence: [expect.objectContaining({ label: "Tests", status })],
-        },
-      });
-      expect(qaPayload).not.toContain("npm test");
-    },
-  );
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    expect(JSON.parse(qaPayload)).toMatchObject({
+      type: "harness.qa",
+      result: {
+        required: true,
+        status,
+        evidence: [expect.objectContaining({ label: "Tests", status })],
+      },
+    });
+    expect(qaPayload).not.toContain("npm test");
+  });
 
   it("does not accept scoped passing QA when the run change scope is unavailable", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -1120,40 +1117,37 @@ describe("PiSdkRuntime", () => {
     ["Don't run tests, but run typecheck", "typecheck", "test"],
     ["Run tests and skip typecheck", "test", "typecheck"],
     ["Run tests and typecheck", "test, typecheck", "lint"],
-  ])(
-    "limits continuation QA guidance to the affirmative clause in %s",
-    async (message, allowed, prohibited) => {
-      const sessionId = `session-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      await writeFile(
-        join(cwd, "package.json"),
-        JSON.stringify({ scripts: { test: "vitest run", typecheck: "tsc --noEmit" } }),
-      );
-      const prompts: string[] = [];
-      const modelPrompt = vi.fn(async (prompt: string) => {
-        prompts.push(prompt);
-        mocks.emitPiEvent({
-          type: "message_update",
-          message: { role: "assistant" },
-          assistantMessageEvent: { type: "text_delta", delta: "No check result." },
-        });
+  ])("limits continuation QA guidance to the affirmative clause in %s", async (message, allowed, prohibited) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run", typecheck: "tsc --noEmit" } }),
+    );
+    const prompts: string[] = [];
+    const modelPrompt = vi.fn(async (prompt: string) => {
+      prompts.push(prompt);
+      mocks.emitPiEvent({
+        type: "message_update",
+        message: { role: "assistant" },
+        assistantMessageEvent: { type: "text_delta", delta: "No check result." },
       });
-      mocks.createAgentSession.mockImplementationOnce(async () => ({
-        session: createMockPiSession({ prompt: modelPrompt }),
-      }));
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt: modelPrompt }),
+    }));
 
-      await new PiSdkRuntime().prompt(createWindowStub(), {
-        context: [],
-        delivery: "normal",
-        message,
-        sessionId,
-      });
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message,
+      sessionId,
+    });
 
-      expect(modelPrompt).toHaveBeenCalledTimes(2);
-      expect(prompts[1]).toContain(`Eligible existing project check scripts: ${allowed}`);
-      expect(prompts[1]).not.toContain(prohibited);
-    },
-  );
+    expect(modelPrompt).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain(`Eligible existing project check scripts: ${allowed}`);
+    expect(prompts[1]).not.toContain(prohibited);
+  });
 
   it("marks a started check unavailable when its run is aborted before the tool ends", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -1471,53 +1465,54 @@ describe("PiSdkRuntime", () => {
     expect(prompts[0]).not.toContain("Use a conservative default and proceed.");
   });
 
-  it.each(["abort", "releaseRuntime", "dispose"] as const)(
-    "cancels a pending gate on %s and ignores a late confirmation",
-    async (cancellation) => {
-      const sessionId = `session-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      const modelPrompt = vi.fn(async () => undefined);
-      const session = createMockPiSession({ prompt: modelPrompt });
-      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-      let requestId: string | undefined;
-      let runId: string | undefined;
-      const window = createWindowStub();
-      (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
-        (_channel: string, event: { type?: string; request?: { id: string; runId?: string } }) => {
-          if (event.type === "question.requested" && event.request) {
-            requestId = event.request.id;
-            runId = event.request.runId;
-          }
-        },
-      );
-      const runtime = new PiSdkRuntime();
-      const pendingPrompt = runtime.prompt(window, {
-        context: [],
-        delivery: "normal",
-        message: "Delete production data",
-        sessionId,
-      });
-      await vi.waitFor(() => expect(requestId).toBeDefined());
+  it.each([
+    "abort",
+    "releaseRuntime",
+    "dispose",
+  ] as const)("cancels a pending gate on %s and ignores a late confirmation", async (cancellation) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const modelPrompt = vi.fn(async () => undefined);
+    const session = createMockPiSession({ prompt: modelPrompt });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    let requestId: string | undefined;
+    let runId: string | undefined;
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: { type?: string; request?: { id: string; runId?: string } }) => {
+        if (event.type === "question.requested" && event.request) {
+          requestId = event.request.id;
+          runId = event.request.runId;
+        }
+      },
+    );
+    const runtime = new PiSdkRuntime();
+    const pendingPrompt = runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Delete production data",
+      sessionId,
+    });
+    await vi.waitFor(() => expect(requestId).toBeDefined());
 
-      if (cancellation === "abort") await runtime.abort(sessionId);
-      else if (cancellation === "releaseRuntime") await runtime.releaseRuntime(sessionId);
-      else await runtime.dispose(sessionId);
-      resolveQuestionRequest(
-        requestId ?? "",
-        [{ questionId: "intent-confirmation", selected: ["Proceed"] }],
-        false,
-      );
-      await pendingPrompt;
+    if (cancellation === "abort") await runtime.abort(sessionId);
+    else if (cancellation === "releaseRuntime") await runtime.releaseRuntime(sessionId);
+    else await runtime.dispose(sessionId);
+    resolveQuestionRequest(
+      requestId ?? "",
+      [{ questionId: "intent-confirmation", selected: ["Proceed"] }],
+      false,
+    );
+    await pendingPrompt;
 
-      expect(modelPrompt).not.toHaveBeenCalled();
-      expect(getAgentRun(runId ?? "")?.status).toBe("cancelled");
-      const events = getDatabase()
-        .prepare("select type from agent_events where session_id = ?")
-        .all(sessionId) as Array<{ type: string }>;
-      expect(events.some((event) => event.type === "run.cancelled")).toBe(true);
-      expect(events.some((event) => event.type === "run.blocked")).toBe(false);
-    },
-  );
+    expect(modelPrompt).not.toHaveBeenCalled();
+    expect(getAgentRun(runId ?? "")?.status).toBe("cancelled");
+    const events = getDatabase()
+      .prepare("select type from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string }>;
+    expect(events.some((event) => event.type === "run.cancelled")).toBe(true);
+    expect(events.some((event) => event.type === "run.blocked")).toBe(false);
+  });
 
   it("rejects concurrent prompts during intent preflight before recording the second user turn", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -2523,47 +2518,48 @@ describe("PiSdkRuntime", () => {
     { aborted: true, willRetry: false, failed: false },
     { aborted: false, willRetry: true, failed: false },
     { aborted: false, willRetry: false, failed: true },
-  ])(
-    "does not finalize compaction aborted=$aborted willRetry=$willRetry failed=$failed",
-    async ({ aborted, willRetry, failed }) => {
-      const sessionId = `session-${crypto.randomUUID()}`;
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-      const recordCompaction = vi.spyOn(projectMemory, "recordProjectMemoryCompaction");
-      mocks.createAgentSession.mockImplementationOnce(async () => ({
-        session: createMockPiSession({
-          prompt: vi.fn(async () => {
-            mocks.emitPiEvent({ type: "compaction_start", reason: "overflow" });
-            mocks.emitPiEvent({
-              type: "compaction_end",
-              reason: "overflow",
-              aborted,
-              willRetry,
-              ...(failed ? { errorMessage: "compaction failed" } : {}),
-            });
-            mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
-            mocks.emitPiEvent({
-              type: "message_update",
-              message: { role: "assistant" },
-              assistantMessageEvent: {
-                type: "text_delta",
-                delta: "completed after overflow handling",
-              },
-            });
-            mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
-          }),
+  ])("does not finalize compaction aborted=$aborted willRetry=$willRetry failed=$failed", async ({
+    aborted,
+    willRetry,
+    failed,
+  }) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const recordCompaction = vi.spyOn(projectMemory, "recordProjectMemoryCompaction");
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          mocks.emitPiEvent({ type: "compaction_start", reason: "overflow" });
+          mocks.emitPiEvent({
+            type: "compaction_end",
+            reason: "overflow",
+            aborted,
+            willRetry,
+            ...(failed ? { errorMessage: "compaction failed" } : {}),
+          });
+          mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: {
+              type: "text_delta",
+              delta: "completed after overflow handling",
+            },
+          });
+          mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
         }),
-      }));
-      await new PiSdkRuntime().prompt(createWindowStub(), {
-        context: [],
-        delivery: "normal",
-        message: "handle compaction",
-        sessionId,
-        userMessageId: `user-${sessionId}`,
-      });
-      expect(recordCompaction).not.toHaveBeenCalled();
-      recordCompaction.mockRestore();
-    },
-  );
+      }),
+    }));
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "handle compaction",
+      sessionId,
+      userMessageId: `user-${sessionId}`,
+    });
+    expect(recordCompaction).not.toHaveBeenCalled();
+    recordCompaction.mockRestore();
+  });
 
   it("does not finalize a failed manual compaction event", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -4811,134 +4807,131 @@ describe("PiSdkRuntime", () => {
     ["only foreign-run checks pass", "foreign", "unknown"],
     ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
     ["the strict scope result is truncated", "scope-truncated", "unknown"],
-  ] as const)(
-    "persists Spec Build Task State correctly when %s",
-    async (_scenario, evidenceCase, expectedVerification) => {
-      const sessionId = `task-state-spec-${crypto.randomUUID()}`;
-      const workspaceId = `workspace-${crypto.randomUUID()}`;
-      insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
-      await initGitRepoWithKnownEmptyScope();
-      if (evidenceCase === "scope-unavailable") {
-        vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue(undefined);
-      } else if (evidenceCase === "scope-truncated") {
-        vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
-          files: [],
-          added: 0,
-          removed: 0,
-          fileCount: 0,
-          truncated: true,
-        });
-      }
-      const plan = writePlan(join(userData, "plans"), {
-        workspaceId,
-        sessionId,
-        title: "Spec",
-        overview: "Build and verify linked checks.",
-        content: "# Spec plan",
-        todos: [
+  ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
+    const sessionId = `task-state-spec-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    await initGitRepoWithKnownEmptyScope();
+    if (evidenceCase === "scope-unavailable") {
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue(undefined);
+    } else if (evidenceCase === "scope-truncated") {
+      vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockResolvedValue({
+        files: [],
+        added: 0,
+        removed: 0,
+        fileCount: 0,
+        truncated: true,
+      });
+    }
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Spec",
+      overview: "Build and verify linked checks.",
+      content: "# Spec plan",
+      todos: [
+        {
+          id: "todo-verify",
+          content: "Verify implementation",
+          acceptanceCriterionIds: ["ac-verify"],
+        },
+      ],
+      spec: {
+        requirements: [{ id: "req-verify", text: "Complete the implementation." }],
+        acceptanceCriteria: [
           {
-            id: "todo-verify",
-            content: "Verify implementation",
-            acceptanceCriterionIds: ["ac-verify"],
+            id: "ac-verify",
+            requirementId: "req-verify",
+            description: "Tests and typecheck pass.",
+            todoIds: ["todo-verify"],
+            requiredCheckKinds: ["tests", "typecheck"],
+            status: "pending",
           },
         ],
-        spec: {
-          requirements: [{ id: "req-verify", text: "Complete the implementation." }],
-          acceptanceCriteria: [
-            {
-              id: "ac-verify",
-              requirementId: "req-verify",
-              description: "Tests and typecheck pass.",
-              todoIds: ["todo-verify"],
-              requiredCheckKinds: ["tests", "typecheck"],
-              status: "pending",
-            },
-          ],
-          assumptions: [],
-          openQuestions: [],
-        },
-      });
-      let runId = "";
-      const session = createMockPiSession({
-        prompt: vi.fn(async () => {
-          const run = getActiveAgentRun(sessionId);
-          if (!run) throw new Error("expected active run for Spec Build Task State");
-          runId = run.id;
-          if (evidenceCase === "foreign") {
-            for (const [index, command] of ["npm test", "tsc --noEmit"].entries()) {
-              recordAgentEvent({
-                type: "tool.started",
-                sessionId,
-                runId: "foreign-run",
-                toolCallId: `foreign-check-${index}`,
-                toolName: "terminal_run",
-                args: { command },
-              });
-              recordAgentEvent({
-                type: "tool.ended",
-                sessionId,
-                runId: "foreign-run",
-                toolCallId: `foreign-check-${index}`,
-                toolName: "terminal_run",
-                exitCode: 0,
-                isError: false,
-              });
-            }
-          }
-          const checks =
-            evidenceCase === "all" ||
-            evidenceCase === "failed" ||
-            evidenceCase === "scope-unavailable" ||
-            evidenceCase === "scope-truncated"
-              ? ["npm test", "tsc --noEmit"]
-              : evidenceCase === "partial"
-                ? ["npm test"]
-                : [];
-          checks.forEach((command, index) => {
-            const isError = evidenceCase === "failed" && index === 1;
-            mocks.emitPiEvent({
-              type: "tool_execution_start",
-              toolCallId: `current-check-${index}`,
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    let runId = "";
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        const run = getActiveAgentRun(sessionId);
+        if (!run) throw new Error("expected active run for Spec Build Task State");
+        runId = run.id;
+        if (evidenceCase === "foreign") {
+          for (const [index, command] of ["npm test", "tsc --noEmit"].entries()) {
+            recordAgentEvent({
+              type: "tool.started",
+              sessionId,
+              runId: "foreign-run",
+              toolCallId: `foreign-check-${index}`,
               toolName: "terminal_run",
               args: { command },
             });
-            mocks.emitPiEvent({
-              type: "tool_execution_end",
-              toolCallId: `current-check-${index}`,
+            recordAgentEvent({
+              type: "tool.ended",
+              sessionId,
+              runId: "foreign-run",
+              toolCallId: `foreign-check-${index}`,
               toolName: "terminal_run",
-              isError,
-              result: { details: { exitCode: isError ? 1 : 0 } },
+              exitCode: 0,
+              isError: false,
             });
+          }
+        }
+        const checks =
+          evidenceCase === "all" ||
+          evidenceCase === "failed" ||
+          evidenceCase === "scope-unavailable" ||
+          evidenceCase === "scope-truncated"
+            ? ["npm test", "tsc --noEmit"]
+            : evidenceCase === "partial"
+              ? ["npm test"]
+              : [];
+        checks.forEach((command, index) => {
+          const isError = evidenceCase === "failed" && index === 1;
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: `current-check-${index}`,
+            toolName: "terminal_run",
+            args: { command },
           });
           mocks.emitPiEvent({
-            type: "message_update",
-            message: { role: "assistant" },
-            assistantMessageEvent: { type: "text_delta", delta: "Spec Build finished." },
+            type: "tool_execution_end",
+            toolCallId: `current-check-${index}`,
+            toolName: "terminal_run",
+            isError,
+            result: { details: { exitCode: isError ? 1 : 0 } },
           });
-        }),
-      });
-      mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "Spec Build finished." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
 
-      await new PiSdkRuntime().prompt(createWindowStub(), {
-        context: [],
-        delivery: "normal",
-        message: "Build this plan",
-        sessionId,
-        planId: plan.id,
-      });
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build this plan",
+      sessionId,
+      planId: plan.id,
+    });
 
-      const persistedState = getLatestHarnessTaskState(sessionId, runId);
-      expect(persistedState?.phase).toBe("terminal");
-      expect(persistedState?.verificationStatus).toBe(expectedVerification);
-      expect(persistedState?.criteria).toContainEqual(
-        expect.objectContaining({
-          source: "plan",
-          status: expectedVerification,
-          requiredCheckKinds: ["tests", "typecheck"],
-        }),
-      );
-    },
-  );
+    const persistedState = getLatestHarnessTaskState(sessionId, runId);
+    expect(persistedState?.phase).toBe("terminal");
+    expect(persistedState?.verificationStatus).toBe(expectedVerification);
+    expect(persistedState?.criteria).toContainEqual(
+      expect.objectContaining({
+        source: "plan",
+        status: expectedVerification,
+        requiredCheckKinds: ["tests", "typecheck"],
+      }),
+    );
+  });
 
   it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -5119,69 +5112,71 @@ describe("PiSdkRuntime", () => {
     expect(readPlanById(plansRoot, plan.id)?.buildStatus).toBe("not_built");
   });
 
-  it.each(["wrong mode", "missing plan", "foreign session", "foreign workspace"])(
-    "rejects a plan build with %s before recording or emitting a message or creating a run",
-    async (invalidCase) => {
-      const sessionId = `session-${crypto.randomUUID()}`;
-      const workspaceId = `workspace-${crypto.randomUUID()}`;
-      const ownerSessionId =
-        invalidCase === "foreign session" ? `owner-${crypto.randomUUID()}` : sessionId;
-      const ownerWorkspaceId =
-        invalidCase === "foreign workspace" ? `foreign-${workspaceId}` : workspaceId;
-      insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Build session");
-      const plan =
-        invalidCase === "missing plan"
-          ? undefined
-          : writePlan(join(userData, "plans"), {
-              workspaceId: ownerWorkspaceId,
-              sessionId: ownerSessionId,
-              title: "Owned plan",
-              overview: "Plan belongs to its persisted owner.",
-              content: "# Plan",
-              todos: [{ content: "Step" }],
-            });
-      const planId = plan?.id ?? "missing-plan";
-      const window = createWindowStub();
+  it.each([
+    "wrong mode",
+    "missing plan",
+    "foreign session",
+    "foreign workspace",
+  ])("rejects a plan build with %s before recording or emitting a message or creating a run", async (invalidCase) => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const ownerSessionId =
+      invalidCase === "foreign session" ? `owner-${crypto.randomUUID()}` : sessionId;
+    const ownerWorkspaceId =
+      invalidCase === "foreign workspace" ? `foreign-${workspaceId}` : workspaceId;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Build session");
+    const plan =
+      invalidCase === "missing plan"
+        ? undefined
+        : writePlan(join(userData, "plans"), {
+            workspaceId: ownerWorkspaceId,
+            sessionId: ownerSessionId,
+            title: "Owned plan",
+            overview: "Plan belongs to its persisted owner.",
+            content: "# Plan",
+            todos: [{ content: "Step" }],
+          });
+    const planId = plan?.id ?? "missing-plan";
+    const window = createWindowStub();
 
-      await expect(
-        new PiSdkRuntime().prompt(window, {
-          context: [],
-          delivery: "normal",
-          message: "Build this plan",
-          mode: invalidCase === "wrong mode" ? "plan" : "build",
-          sessionId,
-          planId,
-        }),
-      ).rejects.toThrow();
+    await expect(
+      new PiSdkRuntime().prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Build this plan",
+        mode: invalidCase === "wrong mode" ? "plan" : "build",
+        sessionId,
+        planId,
+      }),
+    ).rejects.toThrow();
 
-      const messageCount = (
-        getDatabase()
-          .prepare(
-            "select count(*) as count from agent_events where session_id = ? and type = 'message.started'",
-          )
-          .get(sessionId) as { count: number }
-      ).count;
-      const runCount = (
-        getDatabase()
-          .prepare("select count(*) as count from agent_runs where session_id = ?")
-          .get(sessionId) as { count: number }
-      ).count;
-      const session = getAgentSession(sessionId);
-      const emittedTypes = (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.map(
-        ([, event]) => (event as { type?: string }).type,
-      );
+    const messageCount = (
+      getDatabase()
+        .prepare(
+          "select count(*) as count from agent_events where session_id = ? and type = 'message.started'",
+        )
+        .get(sessionId) as { count: number }
+    ).count;
+    const runCount = (
+      getDatabase()
+        .prepare("select count(*) as count from agent_runs where session_id = ?")
+        .get(sessionId) as { count: number }
+    ).count;
+    const session = getAgentSession(sessionId);
+    const emittedTypes = (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, event]) => (event as { type?: string }).type,
+    );
 
-      expect(messageCount).toBe(0);
-      expect(runCount).toBe(0);
-      expect(emittedTypes).not.toContain("message.started");
-      expect(emittedTypes).not.toContain("run.started");
-      expect(emittedTypes).not.toContain("plan.updated");
-      expect(session?.status).toBe("idle");
-      if (plan) {
-        expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
-      }
-    },
-  );
+    expect(messageCount).toBe(0);
+    expect(runCount).toBe(0);
+    expect(emittedTypes).not.toContain("message.started");
+    expect(emittedTypes).not.toContain("run.started");
+    expect(emittedTypes).not.toContain("plan.updated");
+    expect(session?.status).toBe("idle");
+    if (plan) {
+      expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    }
+  });
 
   it("keeps an aborted in-flight run cancelled instead of failed", async () => {
     await initGitRepo();

@@ -264,6 +264,32 @@ function validTaskStateClassification(value: unknown): boolean {
   );
 }
 
+function validVerifiedTaskState(
+  criteria: HarnessTaskCriterionState[],
+  evidenceRefs: HarnessTaskEvidenceRef[],
+): boolean {
+  return (
+    criteria.length > 0 &&
+    criteria.every((criterion) => {
+      const requiredCheckKinds = criterion.requiredCheckKinds ?? [];
+      const evidenceEventIds = new Set(criterion.evidenceEventIds);
+      return (
+        criterion.status === "verified" &&
+        requiredCheckKinds.length > 0 &&
+        evidenceEventIds.size >= requiredCheckKinds.length &&
+        [...evidenceEventIds].every((eventId) =>
+          evidenceRefs.some(
+            (evidence) =>
+              evidence.eventId === eventId &&
+              evidence.kind === "check" &&
+              evidence.status === "passed",
+          ),
+        )
+      );
+    })
+  );
+}
+
 function reconstructTaskState(value: unknown): HarnessTaskState | undefined {
   if (
     !isRecord(value) ||
@@ -317,6 +343,11 @@ function reconstructTaskState(value: unknown): HarnessTaskState | undefined {
     !Array.isArray(state.evidenceRefs) ||
     state.evidenceRefs.length > MAX_TASK_STATE_EVIDENCE ||
     !state.evidenceRefs.every(validTaskStateEvidence) ||
+    (state.verificationStatus === "verified" &&
+      !validVerifiedTaskState(
+        state.criteria as HarnessTaskCriterionState[],
+        state.evidenceRefs as HarnessTaskEvidenceRef[],
+      )) ||
     (state.revision !== undefined &&
       (typeof state.revision !== "string" || !SAFE_TASK_STATE_ID.test(state.revision))) ||
     typeof state.updatedAt !== "string" ||
@@ -399,17 +430,16 @@ export function getLatestHarnessTaskState(
     ) {
       return undefined;
     }
-    if (parsed.runId !== runId) continue;
-
     const state = reconstructTaskState(parsed.state);
     if (
       !state ||
       state.sessionId !== sessionId ||
-      state.runId !== runId ||
+      state.runId !== parsed.runId ||
       state.workspaceId !== candidate.workspace_id
     ) {
       return undefined;
     }
+    if (parsed.runId !== runId) continue;
     const ownedRun = db
       .prepare("select 1 from agent_runs where id = ? and session_id = ? limit 1")
       .get(runId, sessionId);
