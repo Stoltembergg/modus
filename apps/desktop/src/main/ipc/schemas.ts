@@ -554,9 +554,15 @@ export const configureProviderSchema = z.object({
   enabledModelIds: z.array(nonEmptyString).optional(),
 });
 
-export const providerAuthStartSchema = z.object({
-  provider: nonEmptyString,
-});
+export const providerAuthStartSchema = z
+  .object({
+    provider: nonEmptyString,
+    riskAcknowledged: z.literal(true).optional(),
+  })
+  .refine((input) => input.provider !== "antigravity" || input.riskAcknowledged === true, {
+    message: "Antigravity sign-in requires risk acknowledgement.",
+    path: ["riskAcknowledged"],
+  });
 
 export const providerAuthOperationSchema = z.object({
   operationId: nonEmptyString,

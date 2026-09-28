@@ -50,6 +50,30 @@ describe("configuredModelLimits", () => {
     expect(row).not.toHaveProperty("maxTokens");
   });
 
+  it("never invents a cost, budget, or zero pricing for native providers", () => {
+    const commandCodeModel = model({
+      id: "commandcode",
+      provider: "commandcode",
+      providerName: undefined,
+    });
+    const antigravityModel = model({
+      id: "antigravity",
+      provider: "antigravity",
+      providerName: undefined,
+    });
+    const rows = configuredModelLimits([commandCodeModel, antigravityModel]);
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row).not.toHaveProperty("cost");
+      expect(row).not.toHaveProperty("budget");
+      expect(row).not.toHaveProperty("pricePerToken");
+      expect(row).not.toHaveProperty("balance");
+      expect(row).not.toHaveProperty("$0");
+      // Provider id remains authoritative when no display name exists.
+      expect(row.providerId).toBe(row.id);
+    }
+  });
+
   it("falls back to the provider id when no display name exists", () => {
     const [row] = configuredModelLimits([
       model({ id: "a", provider: "deepseek", providerName: undefined }),

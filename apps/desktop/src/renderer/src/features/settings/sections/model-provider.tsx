@@ -35,6 +35,7 @@ import {
   SearchField,
 } from "../settings-provider-ui";
 import type { ModelConfigPatch } from "../settings-types";
+import { UnofficialProviderRiskInterstitial } from "../UnofficialProviderNotice";
 
 export function ModelProviderSettingsPanel({
   authOperation,
@@ -651,6 +652,74 @@ function CustomProviderDialog({
         onComplete={onComplete}
         onError={onError}
       />
+    </ProviderConfigDialogShell>
+  );
+}
+
+/**
+ * Risk acknowledgement interstitial that lives inside the provider dialog
+ * shell. Unchecked by default; cancellation closes without invoking auth or
+ * persisting credentials. Confirm calls the parent, which forwards
+ * `riskAcknowledged: true` to preload.
+ */
+export function UnofficialProviderInterstitialDialog({
+  busy,
+  provider,
+  onCancel,
+  onConfirm,
+}: {
+  busy: boolean;
+  provider: ModelProviderInfo | undefined;
+  onCancel(): void;
+  onConfirm(): void;
+}) {
+  const [checked, setChecked] = useState(false);
+  // The dialog owner stays mounted across cancel/reopen, so the local
+  // `checked` state would otherwise survive a dismissal and re-expose a
+  // stale, enabled primary action. Reset synchronously during render
+  // whenever the provider identity changes (including the undefined →
+  // defined transition that represents a fresh open). The setState-during-
+  // render pattern avoids any frame where the user could see the stale
+  // checked state, because React discards the in-flight render and commits
+  // the reset value before paint.
+  const [previousProviderId, setPreviousProviderId] = useState<string | undefined>(provider?.id);
+  if (provider?.id !== previousProviderId) {
+    setPreviousProviderId(provider?.id);
+    setChecked(false);
+  }
+  if (!provider) {
+    return null;
+  }
+  // Reset the checkbox every time the dialog re-opens for a different provider
+  // so the user must always explicitly opt in.
+  return (
+    <ProviderConfigDialogShell
+      closeLabel="Cancel Antigravity sign-in"
+      description="Acknowledge the unofficial-endpoints risk before Antigravity OAuth begins."
+      open
+      title={`Acknowledge ${provider.name} risk`}
+      onClose={onCancel}
+    >
+      <div className="pt-5">
+        <div className="flex items-center gap-3">
+          <ProviderLogo framed={false} name={provider.name} provider={provider.id} size="lg" />
+          <div>
+            <h3 className="text-md font-normal text-fg">{provider.name}</h3>
+            <p className="mt-1 text-xs text-fg-faint">
+              Unofficial provider — acknowledgement required before OAuth.
+            </p>
+          </div>
+        </div>
+        <div className="mt-7">
+          <UnofficialProviderRiskInterstitial
+            busy={busy}
+            checked={checked}
+            onChange={setChecked}
+            onCancel={onCancel}
+            onConfirm={onConfirm}
+          />
+        </div>
+      </div>
     </ProviderConfigDialogShell>
   );
 }

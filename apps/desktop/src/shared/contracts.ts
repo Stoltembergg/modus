@@ -1292,6 +1292,7 @@ export type ModelProviderInfo = {
   enabledModelCount: number;
   baseUrl?: string;
   api?: string;
+  pricingAvailability?: "published" | "unknown";
   error?: string;
 };
 

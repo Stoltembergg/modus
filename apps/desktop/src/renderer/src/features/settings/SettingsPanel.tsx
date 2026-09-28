@@ -16,7 +16,10 @@ import { GeneralSettingsPanel } from "./sections/general";
 import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
 import { LimitsSettingsPanel } from "./sections/limits";
 import { McpSettingsPanel } from "./sections/mcp";
-import { ModelProviderSettingsPanel } from "./sections/model-provider";
+import {
+  ModelProviderSettingsPanel,
+  UnofficialProviderInterstitialDialog,
+} from "./sections/model-provider";
 import { PersonalizationSettingsPanel } from "./sections/personalization";
 import { ProjectMemorySettingsPanel } from "./sections/project-memory";
 import { RulesSettingsPanel } from "./sections/rules";
@@ -103,6 +106,12 @@ export function SettingsPanel({
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
   const [settingsQuery, setSettingsQuery] = useState("");
+  // Provider id awaiting risk acknowledgement before OAuth may begin. Anything
+  // other than "antigravity" should never land here in practice — it is the
+  // caller's job to gate the user path with the same rule.
+  const [riskInterstitialProvider, setRiskInterstitialProvider] = useState<
+    ModelProviderInfo | undefined
+  >();
 
   const providers = state?.providers ?? [];
   const connected = providers.filter(
@@ -370,11 +379,26 @@ export function SettingsPanel({
     }
   }
 
-  async function startProviderAuth(provider: ModelProviderInfo): Promise<void> {
+  async function startProviderAuth(
+    provider: ModelProviderInfo,
+    options: { riskAcknowledged?: true } = {},
+  ): Promise<void> {
+    // Renderer-side gate: Antigravity must complete the risk acknowledgement
+    // interstitial before the preload layer is invoked. The main process
+    // enforces the same rule independently.
+    if (provider.id === "antigravity" && options.riskAcknowledged !== true) {
+      setRiskInterstitialProvider(provider);
+      setConnectionProvider(undefined);
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
-      const operation = await window.modus.model.startProviderAuth({ provider: provider.id });
+      const operation = await window.modus.model.startProviderAuth({
+        provider: provider.id,
+        ...(options.riskAcknowledged ? { riskAcknowledged: true } : {}),
+      });
+      setRiskInterstitialProvider(undefined);
       setConnectionProvider(undefined);
       setAuthOperation(operation);
     } catch (err) {
@@ -382,6 +406,19 @@ export function SettingsPanel({
     } finally {
       setBusy(false);
     }
+  }
+
+  function acknowledgeRiskAndStartProviderAuth(): void {
+    const provider = riskInterstitialProvider;
+    if (!provider) {
+      return;
+    }
+    void startProviderAuth(provider, { riskAcknowledged: true });
+  }
+
+  function cancelRiskInterstitial(): void {
+    // Cancellation MUST NOT touch preload or persist any credential state.
+    setRiskInterstitialProvider(undefined);
   }
 
   async function respondProviderAuth(value: string | undefined): Promise<void> {
@@ -589,6 +626,13 @@ export function SettingsPanel({
           ) : null}
         </ContentTransition>
       </main>
+
+      <UnofficialProviderInterstitialDialog
+        busy={busy}
+        provider={riskInterstitialProvider}
+        onCancel={cancelRiskInterstitial}
+        onConfirm={acknowledgeRiskAndStartProviderAuth}
+      />
     </m.div>
   );
 }

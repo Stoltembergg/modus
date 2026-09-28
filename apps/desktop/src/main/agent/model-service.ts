@@ -7,7 +7,11 @@ import {
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai/compat";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
+import {
+  AuthStorage,
+  FileAuthStorageBackend,
+  ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 import { app } from "electron";
 import bundledCatalogJson from "../../../../../catalog/models.json";
 import type {
@@ -38,6 +42,17 @@ import {
   parseModelCatalog,
   startModelCatalogUpdates,
 } from "./model-catalog-service";
+import { createAntigravityStream } from "./providers/antigravity-adapter";
+import {
+  createAntigravityOAuthProvider,
+  shutdownAntigravityAuth,
+} from "./providers/antigravity-oauth";
+import { commandCodeStream } from "./providers/commandcode-adapter";
+import {
+  ANTIGRAVITY_API_ID,
+  COMMANDCODE_API_ID,
+  nativeProviderManifest,
+} from "./providers/native-provider-manifest";
 
 type ModelConfigRow = {
   id: string;
@@ -166,6 +181,145 @@ let catalogReasoningCapabilities = new Map<
   string,
   NonNullable<ModelCatalog["providers"][string][number]["reasoningCapability"]>
 >();
+let antigravityOAuth: ReturnType<typeof createAntigravityOAuthProvider> | undefined;
+let authBackend: FileAuthStorageBackend | undefined;
+const ANTIGRAVITY_OAUTH_CLIENT_ID =
+  "701876549278-jek55qatroadt29os41pqsn96seu154t.apps.googleusercontent.com";
+const antigravityDisconnecting = new Set<string>();
+
+function registerAntigravityOAuth(modelRegistry: ModelRegistry): void {
+  antigravityOAuth ??= createAntigravityOAuthProvider({
+    clientId: ANTIGRAVITY_OAUTH_CLIENT_ID,
+    openBrowser: () => undefined,
+    removeRejectedCredential: (rejected) =>
+      removeRejectedAntigravityCredential(rejected, modelRegistry.authStorage),
+  });
+  modelRegistry.registerProvider("antigravity", {
+    name: "Antigravity",
+    oauth: antigravityOAuth.oauth,
+  });
+}
+
+const nativeProviders = new Set<string>();
+
+function assertNoNativeProviderCollisions(
+  modelRegistry: ModelRegistry,
+  catalog: ModelCatalog,
+): void {
+  const catalogModels = new Map<string, Set<string>>(
+    Object.entries(catalog.providers).map(([provider, models]) => [
+      provider,
+      new Set(models.map(({ id }) => id)),
+    ]),
+  );
+  const bundled = ModelRegistry.inMemory(modelRegistry.authStorage).getAll();
+  const bundledIds = new Map<string, Set<string>>();
+  for (const model of bundled) {
+    const ids = bundledIds.get(model.provider) ?? new Set<string>();
+    ids.add(model.id);
+    bundledIds.set(model.provider, ids);
+  }
+  const entries = Object.entries(nativeProviderManifest.providers);
+  for (const [provider, manifest] of entries) {
+    const expectedApi = provider === "commandcode" ? COMMANDCODE_API_ID : ANTIGRAVITY_API_ID;
+    if (manifest.apiId !== expectedApi) throw new Error(`Unexpected native API ID for ${provider}`);
+    const collisionIds = new Set([
+      ...(catalogModels.get(provider) ?? []),
+      ...(bundledIds.get(provider) ?? []),
+    ]);
+    const collision = manifest.models.find(({ id }) => collisionIds.has(id));
+    if (catalog.providers[provider] || collision) {
+      throw new Error(
+        `Native provider collision: ${provider}${collision ? `/${collision.id}` : ""}`,
+      );
+    }
+  }
+}
+
+function registerNativeProviders(modelRegistry: ModelRegistry, catalog: ModelCatalog): void {
+  assertNoNativeProviderCollisions(modelRegistry, catalog);
+  const entries = Object.entries(nativeProviderManifest.providers);
+  const oauthCredential = modelRegistry.authStorage.get("antigravity");
+  const projectId =
+    oauthCredential?.type === "oauth" &&
+    typeof oauthCredential.projectId === "string" &&
+    oauthCredential.projectId.length > 0
+      ? oauthCredential.projectId
+      : null;
+  const antigravityStream = createAntigravityStream({
+    credentials: () => {
+      const credential = modelRegistry.authStorage.get("antigravity");
+      if (
+        credential?.type !== "oauth" ||
+        typeof credential.access !== "string" ||
+        credential.access.length === 0
+      ) {
+        return null;
+      }
+      const currentProjectId =
+        typeof credential.projectId === "string" && credential.projectId.length > 0
+          ? credential.projectId
+          : null;
+      return { accessToken: credential.access, projectId: currentProjectId };
+    },
+  });
+
+  const next = new Set<string>();
+  for (const [provider, manifest] of entries) {
+    const models = manifest.models
+      .filter(
+        (model) =>
+          provider !== "antigravity" || model.quotaRoute !== "gemini-cli" || projectId !== null,
+      )
+      .map(
+        (model): RegisteredModel => ({
+          id: model.id,
+          name: model.name,
+          api: manifest.apiId,
+          reasoning: model.reasoningSupported,
+          input: model.input,
+          contextWindow: model.contextWindow,
+          maxTokens: model.maxOutputTokens,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          ...(model.reasoningVariants &&
+          Object.values(model.reasoningVariants).every(
+            (value) => value.thinkingBudget === undefined,
+          )
+            ? {
+                thinkingLevelMap: Object.fromEntries(
+                  Object.entries(model.reasoningVariants).map(([level, value]) => [
+                    level,
+                    value.thinkingLevel ?? level,
+                  ]),
+                ) as RegisteredModel["thinkingLevelMap"],
+              }
+            : {}),
+        }),
+      );
+    const stream = provider === "commandcode" ? commandCodeStream : antigravityStream;
+    const oauth =
+      provider === "antigravity"
+        ? modelRegistry.authStorage.getOAuthProviders().find(({ id }) => id === provider)
+        : undefined;
+    modelRegistry.registerProvider(provider, {
+      api: manifest.apiId,
+      baseUrl:
+        provider === "commandcode"
+          ? "https://api.commandcode.com"
+          : "https://cloudcode-pa.googleapis.com",
+      ...(provider === "commandcode" ? { apiKey: "$MODUS_COMMANDCODE_API_KEY" } : {}),
+      ...(oauth ? { oauth } : {}),
+      streamSimple: stream,
+      models,
+    });
+    next.add(provider);
+  }
+  for (const provider of nativeProviders) {
+    if (!next.has(provider)) modelRegistry.unregisterProvider(provider);
+  }
+  nativeProviders.clear();
+  for (const provider of next) nativeProviders.add(provider);
+}
 
 type ProviderAuthOperation = {
   cancelled: boolean;
@@ -184,6 +338,41 @@ function agentDir(): string {
 
 function authPath(): string {
   return join(agentDir(), "auth.json");
+}
+
+/** Remove an invalid Antigravity credential only if it is still the rejected one. */
+export async function removeRejectedAntigravityCredential(
+  rejected: { access: string; refresh: string; expires: number; projectId?: string },
+  authStorage: AuthStorage,
+): Promise<void> {
+  authBackend ??= new FileAuthStorageBackend(authPath());
+  await authBackend.withLockAsync(async (content) => {
+    let current: Record<string, unknown>;
+    try {
+      const parsed: unknown = content ? JSON.parse(content) : {};
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        return { result: undefined };
+      current = parsed as Record<string, unknown>;
+    } catch {
+      return { result: undefined };
+    }
+    const credential = current.antigravity;
+    if (!credential || typeof credential !== "object") return { result: undefined };
+    const stored = credential as Record<string, unknown>;
+    if (
+      stored.type !== "oauth" ||
+      stored.access !== rejected.access ||
+      stored.refresh !== rejected.refresh ||
+      stored.expires !== rejected.expires ||
+      (typeof stored.projectId === "string" ? stored.projectId : undefined) !== rejected.projectId
+    ) {
+      return { result: undefined };
+    }
+    const next = { ...current };
+    delete next.antigravity;
+    return { result: undefined, next: JSON.stringify(next, null, 2) };
+  });
+  authStorage.reload();
 }
 
 function modelsPath(): string {
@@ -258,6 +447,7 @@ function catalogProviderConfigs(
 }
 
 function applyModelCatalog(modelRegistry: ModelRegistry, catalog: ModelCatalog): void {
+  assertNoNativeProviderCollisions(modelRegistry, catalog);
   const providers = catalogProviderConfigs(modelRegistry, catalog);
   const validationRegistry = ModelRegistry.inMemory(modelRegistry.authStorage);
   for (const [provider, config] of providers) validationRegistry.registerProvider(provider, config);
@@ -266,6 +456,7 @@ function applyModelCatalog(modelRegistry: ModelRegistry, catalog: ModelCatalog):
     if (!nextProviders.has(provider)) modelRegistry.unregisterProvider(provider);
   }
   for (const [provider, config] of providers) modelRegistry.registerProvider(provider, config);
+  registerNativeProviders(modelRegistry, catalog);
   catalogProviders = nextProviders;
   catalogReasoningCapabilities = new Map(
     Object.entries(catalog.providers).flatMap(([provider, models]) =>
@@ -308,8 +499,11 @@ export async function refreshRemoteModelCatalog(): Promise<ModelSettingsState> {
 export function getModelRegistry(): ModelRegistry {
   if (!registry) {
     migrateCustomProviderRuntimeConfig();
-    registry = ModelRegistry.create(AuthStorage.create(authPath()), modelsPath());
+    authBackend = new FileAuthStorageBackend(authPath());
+    registry = ModelRegistry.create(AuthStorage.fromStorage(authBackend), modelsPath());
   }
+
+  registerAntigravityOAuth(registry);
 
   return registry;
 }
@@ -582,6 +776,31 @@ function thinkingOptionsForModel(
   config: ModelConfigRow | undefined,
   levels = thinkingLevelsForModel(model, config),
 ): ThinkingOption[] {
+  const native = nativeProviderManifest.providers[
+    model?.provider as keyof typeof nativeProviderManifest.providers
+  ]?.models.find((item) => item.id === model?.id);
+  if (model?.provider === "antigravity" && native?.reasoningVariants) {
+    return Object.entries(native.reasoningVariants).map(([value, variant]) => ({
+      value: variant.thinkingBudget ? String(variant.thinkingBudget) : value,
+      label: variant.thinkingBudget
+        ? `${Number(variant.thinkingBudget).toLocaleString()} tokens`
+        : value,
+      level: variant.thinkingBudget ? "high" : ((variant.thinkingLevel ?? value) as ThinkingLevel),
+      ...(variant.thinkingLevel && variant.thinkingLevel !== value
+        ? { wireValue: variant.thinkingLevel }
+        : {}),
+    }));
+  }
+  if (model?.provider === "antigravity" && native?.quotaRoute === "gemini-cli") {
+    const isGemini3 = native.id.startsWith("gemini-3");
+    return [
+      {
+        value: "default",
+        label: `Provider default${isGemini3 ? " (low)" : ""}`,
+        level: isGemini3 ? "low" : "off",
+      },
+    ];
+  }
   const capability = catalogReasoningCapabilityForModel(model);
   if (capability?.type === "options") {
     return capability.options;
@@ -660,6 +879,23 @@ function thinkingLevelsForModel(
   model: Model<Api> | undefined,
   config: ModelConfigRow | undefined,
 ): ThinkingLevel[] {
+  const native = nativeProviderManifest.providers[
+    model?.provider as keyof typeof nativeProviderManifest.providers
+  ]?.models.find((item) => item.id === model?.id);
+  if (model?.provider === "antigravity" && native) {
+    if (!native.reasoningSupported) return ["off"];
+    if (native.reasoningVariants) {
+      return [
+        ...new Set(
+          Object.values(native.reasoningVariants).map((item) =>
+            item.thinkingBudget ? "high" : (item.thinkingLevel ?? "low"),
+          ),
+        ),
+      ] as ThinkingLevel[];
+    }
+    if (native.quotaRoute === "gemini-cli")
+      return native.id.startsWith("gemini-3") ? ["low"] : ["off"];
+  }
   const reasoning = Boolean(config?.reasoning || model?.reasoning || (!model && !config));
   if (!reasoning) {
     return ["off"];
@@ -697,6 +933,21 @@ function clampThinkingLevel(value: ThinkingLevel, levels: ThinkingLevel[]): Thin
 function thinkingStateForModel(model: Model<Api> | undefined, config: ModelConfigRow | undefined) {
   const levels = thinkingLevelsForModel(model, config);
   const budget = thinkingBudgetForModel(model);
+  if (
+    model?.provider === "antigravity" &&
+    nativeProviderManifest.providers.antigravity?.models.find((item) => item.id === model.id)
+      ?.reasoningVariants
+  ) {
+    const options = thinkingOptionsForModel(model, config, levels);
+    const selected = config?.thinking_variant
+      ? selectedThinkingOption(
+          config.thinking_variant,
+          clampThinkingLevel(config.thinking_level, levels),
+          options,
+        )
+      : options.at(-1)!;
+    return { levels, options, selected, budget: undefined };
+  }
   if (budget) {
     const selected =
       config?.thinking_level === "off"
@@ -838,6 +1089,19 @@ function listProvidersFromRegistry(modelRegistry: ModelRegistry): ModelProviderI
         : authKind === "api-key"
           ? "API key"
           : undefined);
+    const nativeAuthLabel =
+      provider === "commandcode"
+        ? authKind === "api-key"
+          ? "API key (not remotely validated)"
+          : "API key required"
+        : provider === "antigravity"
+          ? authKind === "oauth"
+            ? credential?.type === "oauth" && typeof credential.projectId === "string"
+              ? "OAuth"
+              : "OAuth (project discovery required)"
+            : "OAuth sign-in required"
+          : undefined;
+    const resolvedAuthLabel = nativeAuthLabel ?? authLabel;
     const configured =
       authStatus.configured || (row?.source === "custom" && configuredModels.length > 0);
     const enabledModelCount = configured
@@ -845,18 +1109,21 @@ function listProvidersFromRegistry(modelRegistry: ModelRegistry): ModelProviderI
           .length
       : 0;
     const loadError = modelRegistry.getError();
+    const native =
+      nativeProviderManifest.providers[provider as keyof typeof nativeProviderManifest.providers];
     const info: ModelProviderInfo = {
       id: provider,
       name: row?.display_name ?? modelRegistry.getProviderDisplayName(provider),
       source: row?.source ?? "builtin",
       configured,
-      modelCount: providerModels.length || configuredModels.length,
+      modelCount: native ? native.models.length : providerModels.length || configuredModels.length,
       enabledModelCount,
       ...(row?.base_url ? { baseUrl: row.base_url } : {}),
       ...(row?.api ? { api: row.api } : {}),
+      ...(native ? { pricingAvailability: "unknown" as const } : {}),
       ...(authStatus.source ? { authSource: authStatus.source } : {}),
       ...(authKind ? { authKind } : {}),
-      ...(authLabel ? { authLabel } : {}),
+      ...(resolvedAuthLabel ? { authLabel: resolvedAuthLabel } : {}),
       ...(loadError ? { error: loadError } : {}),
     };
     return info;
@@ -908,6 +1175,9 @@ export function listProviderConnectionMethods(provider: string): ProviderConnect
     return [];
   }
 
+  if (id === "commandcode") return [{ kind: "api-key", label: "API key" }];
+  if (id === "antigravity") return [{ kind: "oauth", label: "Antigravity" }];
+
   const oauth = modelRegistry.authStorage.getOAuthProviders().find((item) => item.id === id);
   return [
     { kind: "api-key", label: "API key" },
@@ -946,8 +1216,15 @@ function waitForProviderAuthInput(
 export function startProviderAuth(
   provider: string,
   openExternal: (url: string) => Promise<void>,
+  options: { riskAcknowledged?: true } = {},
 ): ProviderAuthOperationState {
   const id = provider.trim();
+  if (id === "antigravity" && options.riskAcknowledged !== true) {
+    throw new Error("Antigravity sign-in requires risk acknowledgement.");
+  }
+  if (id === "antigravity" && antigravityDisconnecting.has(id)) {
+    throw new Error("Antigravity disconnect is in progress.");
+  }
   const modelRegistry = refreshRegistry();
   if (!id || !modelRegistry.authStorage.getOAuthProviders().some((item) => item.id === id)) {
     throw new Error(`No native sign-in is available for ${provider}.`);
@@ -976,8 +1253,13 @@ export function startProviderAuth(
   };
   providerAuthOperations.set(operation.state.id, operation);
 
-  void modelRegistry.authStorage
-    .login(id, {
+  const oauthProvider = modelRegistry.authStorage
+    .getOAuthProviders()
+    .find((item) => item.id === id);
+  if (!oauthProvider) throw new Error(`No native sign-in is available for ${provider}.`);
+
+  void oauthProvider
+    .login({
       signal: operation.controller.signal,
       onAuth: (info) => {
         if (operation.cancelled) {
@@ -1058,10 +1340,17 @@ export function startProviderAuth(
         return operation.cancelled ? undefined : value;
       },
     })
-    .then(async () => {
-      if (operation.cancelled) {
+    .then(async (credentials) => {
+      // Pi AuthStorage.login() persists unconditionally after provider.login();
+      // invoke the registered hook directly and guard its sole storage write.
+      if (
+        providerAuthOperations.get(operation.state.id) !== operation ||
+        operation.cancelled ||
+        operation.controller.signal.aborted
+      ) {
         return;
       }
+      modelRegistry.authStorage.set(id, { type: "oauth", ...credentials });
       await configureProvider({ provider: id, baseUrl: "" });
       if (!operation.cancelled) {
         updateProviderAuthOperation(operation, { status: "complete", message: "Connected." });
@@ -1120,6 +1409,27 @@ export function cancelProviderAuth(operationId: string): void {
   providerAuthOperations.delete(operationId);
 }
 
+function invalidateProviderAuth(provider: string): void {
+  for (const [operationId, operation] of providerAuthOperations) {
+    if (operation.state.provider !== provider) continue;
+    operation.cancelled = true;
+    operation.controller.abort();
+    operation.respond?.(undefined);
+    operation.respond = undefined;
+    updateProviderAuthOperation(operation, { status: "cancelled", message: "Sign-in cancelled." });
+    providerAuthOperations.delete(operationId);
+  }
+}
+
+/** Cancel pending sign-ins, resolve outstanding prompts, and drain provider callback listeners. */
+export async function shutdownProviderAuthOperations(): Promise<void> {
+  for (const provider of new Set(
+    [...providerAuthOperations.values()].map(({ state }) => state.provider),
+  ))
+    invalidateProviderAuth(provider);
+  await shutdownAntigravityAuth();
+}
+
 /** The wire protocol of a built-in provider, read from its first bundled model. */
 function builtinProviderApi(provider: string, modelRegistry: ModelRegistry): string | undefined {
   return modelRegistry.getAll().find((model) => model.provider === provider)?.api;
@@ -1153,6 +1463,20 @@ export async function configureProvider(
   }
   const modelRegistry = refreshRegistry();
   const providerName = modelRegistry.getProviderDisplayName(provider);
+
+  if (provider === "commandcode") {
+    if (input.baseUrl !== undefined)
+      throw new Error("Command Code does not support a custom base URL.");
+    if (input.apiKey !== undefined) {
+      const key = input.apiKey.trim();
+      if (!key) throw new Error("Command Code API key cannot be blank.");
+      modelRegistry.authStorage.set(provider, { type: "api_key", key });
+    }
+    return getProviderDetail(provider)!;
+  }
+  if (provider === "antigravity" && input.apiKey !== undefined) {
+    throw new Error("Antigravity requires OAuth sign-in; API keys are not supported.");
+  }
 
   // Optional custom base URL for a built-in provider. Reuses pi's native
   // "override-only" provider entry in models.json (baseUrl/headers, no models):
@@ -1603,8 +1927,12 @@ function removeCustomModelsJson(provider: string): void {
   writeFileSync(path, `${JSON.stringify(data, null, 2)}\n`, "utf-8");
 }
 
-function clearProviderConnectionState(provider: string, modelRegistry: ModelRegistry): void {
-  modelRegistry.authStorage.remove(provider);
+function clearProviderConnectionState(
+  provider: string,
+  modelRegistry: ModelRegistry,
+  removeAuth = true,
+): void {
+  if (removeAuth) modelRegistry.authStorage.remove(provider);
   const db = getDatabase();
   db.prepare("delete from model_configs where provider_id = ?").run(provider);
 
@@ -1614,25 +1942,56 @@ function clearProviderConnectionState(provider: string, modelRegistry: ModelRegi
   }
 }
 
-export function disconnectProvider(provider: string): void {
+export async function disconnectProvider(provider: string): Promise<void> {
   const id = provider.trim();
-  const modelRegistry = refreshRegistry();
-  const authStatus = modelRegistry.getProviderAuthStatus(id);
-  if (authStatus.source !== "stored") {
-    throw new Error("This provider is managed outside Modus and cannot be disconnected here.");
+  if (id === "antigravity") {
+    if (antigravityDisconnecting.has(id))
+      throw new Error("Antigravity disconnect is already in progress.");
+    antigravityDisconnecting.add(id);
   }
-
-  const config = getProviderConfig(id);
-  if (!config && !modelRegistry.getAll().some((model) => model.provider === id)) {
-    throw new Error(`Unknown provider: ${provider}`);
+  try {
+    invalidateProviderAuth(id);
+    const modelRegistry = getModelRegistry();
+    const config = getProviderConfig(id);
+    if (!config && !modelRegistry.getAll().some((model) => model.provider === id)) {
+      throw new Error(`Unknown provider: ${provider}`);
+    }
+    if (id === "antigravity") {
+      const authStatus = modelRegistry.getProviderAuthStatus(id);
+      if (authStatus.source !== "stored") {
+        throw new Error("This provider is managed outside Modus and cannot be disconnected here.");
+      }
+      await antigravityOAuth?.disconnect();
+      authBackend ??= new FileAuthStorageBackend(authPath());
+      await authBackend.withLockAsync(async (content) => {
+        let current: Record<string, unknown> = {};
+        try {
+          const parsed: unknown = content ? JSON.parse(content) : {};
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+            current = parsed as Record<string, unknown>;
+        } catch {
+          /* Preserve valid unrelated data where possible; malformed content is replaced safely. */
+        }
+        const next = { ...current };
+        delete next.antigravity;
+        return { result: undefined, next: JSON.stringify(next, null, 2) };
+      });
+      modelRegistry.authStorage.reload();
+      clearProviderConnectionState(id, modelRegistry, false);
+    } else {
+      const authStatus = modelRegistry.getProviderAuthStatus(id);
+      if (authStatus.source !== "stored")
+        throw new Error("This provider is managed outside Modus and cannot be disconnected here.");
+      clearProviderConnectionState(id, modelRegistry);
+    }
+    if (config?.source !== "custom") {
+      getDatabase().prepare("delete from model_provider_configs where provider_id = ?").run(id);
+      setProviderRuntimeConfig(id, undefined);
+    }
+    refreshRegistry();
+  } finally {
+    if (id === "antigravity") antigravityDisconnecting.delete(id);
   }
-
-  clearProviderConnectionState(id, modelRegistry);
-  if (config?.source !== "custom") {
-    getDatabase().prepare("delete from model_provider_configs where provider_id = ?").run(id);
-    setProviderRuntimeConfig(id, undefined);
-  }
-  refreshRegistry();
 }
 
 /**
@@ -1813,6 +2172,28 @@ export function resolveModelThinking(
       ? (budgetThinkingOption(thinkingVariant, thinking.budget) ?? thinking.selected)
       : clampThinkingVariant(thinkingVariant, thinking.options)
     : thinking.selected;
+
+  const native =
+    model.provider === "antigravity"
+      ? nativeProviderManifest.providers.antigravity?.models.find((item) => item.id === model.id)
+      : undefined;
+  const nativeVariantEntry = Object.entries(native?.reasoningVariants ?? {}).find(
+    ([key, value]) =>
+      key === selected.value ||
+      (value.thinkingBudget !== undefined && String(value.thinkingBudget) === selected.value),
+  );
+  const nativeVariant = nativeVariantEntry?.[1];
+  if (nativeVariant?.thinkingBudget) {
+    return {
+      model,
+      thinkingLevel: "high",
+      variant: selected.value,
+      thinkingBudget: nativeVariant.thinkingBudget,
+    };
+  }
+  if (native?.quotaRoute === "gemini-cli" && selected.value === "default") {
+    return { model, thinkingLevel: "off", variant: "default" };
+  }
 
   if (thinking.budget && selected.level !== "off") {
     return {

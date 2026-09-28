@@ -1,5 +1,9 @@
 import { app, BrowserWindow, type BrowserWindow as BrowserWindowType } from "electron";
-import { startRemoteModelCatalog, stopRemoteModelCatalog } from "./agent/model-service";
+import {
+  shutdownProviderAuthOperations,
+  startRemoteModelCatalog,
+  stopRemoteModelCatalog,
+} from "./agent/model-service";
 import { resolveBrowserLocale } from "./browser/browser-locale";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
@@ -91,12 +95,23 @@ if (!app.requestSingleInstanceLock()) {
     }
   });
 
-  // Close MCP transports on quit so stdio servers never outlive the app.
-  // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
-  app.on("before-quit", () => {
+  // Electron does not await async event listeners: hold the first quit until
+  // auth callbacks and other owned resources have had a bounded drain.
+  let shutdownStarted = false;
+  let allowQuitAfterShutdown = false;
+  app.on("before-quit", (event) => {
+    if (allowQuitAfterShutdown) return;
+    event.preventDefault();
+    if (shutdownStarted) return;
+    shutdownStarted = true;
+    // Close MCP transports on quit so stdio servers never outlive the app.
+    // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
     stopUpdateService();
     stopRemoteModelCatalog();
     shutdownTerminals();
-    void disposeAllMcp();
+    void Promise.allSettled([shutdownProviderAuthOperations(), disposeAllMcp()]).then(() => {
+      allowQuitAfterShutdown = true;
+      app.quit();
+    });
   });
 }

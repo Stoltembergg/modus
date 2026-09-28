@@ -105,7 +105,8 @@ describe("mac zip installer", () => {
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "modus-mac-installer-"));
     workDir = join(root, "userData", "updater");
-    bundlePath = join(root, "Applications", "Modus.app");
+    // macInstallBlocker parses POSIX bundle paths even when these tests run on Windows.
+    bundlePath = join(root, "Applications", "Modus.app").replaceAll("\\", "/");
     mkdirSync(bundlePath, { recursive: true });
     plist = { CFBundleIdentifier: "dev.modus.desktop", CFBundleShortVersionString: "1.1.0" };
     codesignOk = true;
@@ -316,27 +317,31 @@ describe("mac zip installer", () => {
     expect(existsSync(join(attemptDir(1), "extracted", "Modus.app"))).toBe(true);
   });
 
-  it("logs a backup it cannot remove on the next start at info", async () => {
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
-    const apps = join(root, "Applications");
-    mkdirSync(macBackupPath(bundlePath), { recursive: true });
-    chmodSync(apps, 0o555);
-    try {
-      logger.info.mockClear();
-      await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
-      expect(existsSync(macBackupPath(bundlePath))).toBe(true);
-      expect(logger.info).toHaveBeenCalledWith(
-        expect.stringContaining(`could not remove ${macBackupPath(bundlePath)}`),
-      );
-    } finally {
-      chmodSync(apps, 0o755);
-    }
-  });
+  // Windows chmod does not prevent rmSync from deleting the directory; retain this assertion on Unix.
+  it.skipIf(process.platform === "win32")(
+    "logs a backup it cannot remove on the next start at info",
+    async () => {
+      if (typeof process.getuid === "function" && process.getuid() === 0) return;
+      const apps = join(root, "Applications");
+      mkdirSync(macBackupPath(bundlePath), { recursive: true });
+      chmodSync(apps, 0o555);
+      try {
+        logger.info.mockClear();
+        await cleanupMacUpdateArtifacts({ bundlePath, workDir, logger });
+        expect(existsSync(macBackupPath(bundlePath))).toBe(true);
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.stringContaining(`could not remove ${macBackupPath(bundlePath)}`),
+        );
+      } finally {
+        chmodSync(apps, 0o755);
+      }
+    },
+  );
 
   it("never swaps from the backup path or a renamed bundle: release page, no download", async () => {
     for (const odd of [
-      join(root, "Applications", ".Modus.app.update-backup"),
-      join(root, "Applications", "Modus 2.app"),
+      join(root, "Applications", ".Modus.app.update-backup").replaceAll("\\", "/"),
+      join(root, "Applications", "Modus 2.app").replaceAll("\\", "/"),
     ]) {
       mkdirSync(odd, { recursive: true });
       const { installer, deps } = makeInstaller({ bundlePath: odd });
