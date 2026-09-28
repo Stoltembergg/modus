@@ -531,6 +531,63 @@ describe("Antigravity risk acknowledgement interstitial", () => {
     }
   });
 
+  it("routes the single OAuth Antigravity detail CTA through the risk acknowledgement gate", async () => {
+    const user = userEvent.setup();
+    const startProviderAuth = vi.fn(async () => ({ id: "antigravity-single-auth" }));
+    const modelApi = {
+      connectionMethods: vi.fn(async () => [{ kind: "oauth", label: "Antigravity" }]),
+      providerDetail: vi.fn(async () => antigravityDetail(false)),
+      startProviderAuth,
+      providerAuthState: vi.fn(async () => ({
+        id: "antigravity-single-auth",
+        provider: "antigravity",
+        status: "pending",
+      })),
+      cancelProviderAuth: vi.fn(async () => undefined),
+    };
+    Object.defineProperty(window, "modus", {
+      configurable: true,
+      value: { model: modelApi },
+    });
+
+    const { unmount } = render(
+      <SettingsPanel
+        state={{ providers: [antigravityProvider()], models: [] }}
+        onClose={noop}
+        onRefresh={noop}
+        onRefreshCatalog={async () => undefined}
+      />,
+    );
+
+    try {
+      await user.click(screen.getByRole("button", { name: /Antigravity/ }));
+      await user.click(await screen.findByRole("button", { name: "Sign in with Antigravity" }));
+
+      const acknowledgement = await screen.findByRole("checkbox", {
+        name: "Acknowledge Antigravity risk",
+      });
+      const continueButton = screen.getByRole("button", {
+        name: "Start Antigravity OAuth with acknowledgement",
+      });
+      expect((acknowledgement as HTMLInputElement).checked).toBe(false);
+      expect((continueButton as HTMLButtonElement).disabled).toBe(true);
+      expect(startProviderAuth).not.toHaveBeenCalled();
+
+      await user.click(acknowledgement);
+      expect(startProviderAuth).not.toHaveBeenCalled();
+      await user.click(continueButton);
+      await waitFor(() =>
+        expect(startProviderAuth).toHaveBeenCalledWith({
+          provider: "antigravity",
+          riskAcknowledged: true,
+        }),
+      );
+    } finally {
+      unmount();
+      cleanup();
+    }
+  });
+
   it("resets the acknowledgement checkbox across cancel and reopen while the owner stays mounted", async () => {
     // Regression for R3: the previous fix returned `null` while the dialog
     // owner remained mounted, so the parent `checked` state survived
@@ -629,6 +686,50 @@ describe("Antigravity risk acknowledgement interstitial", () => {
         }),
       );
       expect(startProviderAuth).toHaveBeenCalledTimes(1);
+    } finally {
+      unmount();
+      cleanup();
+    }
+  });
+});
+
+describe("Command Code credential submission", () => {
+  it("does not render a custom base URL or submit a baseUrl argument", async () => {
+    const user = userEvent.setup();
+    const configureProvider = vi.fn(async () => undefined);
+    const modelApi = {
+      connectionMethods: vi.fn(async () => [{ kind: "api-key", label: "API key" }]),
+      providerDetail: vi.fn(async () => commandcodeDetail()),
+      configureProvider,
+    };
+    Object.defineProperty(window, "modus", {
+      configurable: true,
+      value: { model: modelApi },
+    });
+
+    const { unmount } = render(
+      <SettingsPanel
+        state={{ providers: [commandcodeProvider()], models: [] }}
+        onClose={noop}
+        onRefresh={noop}
+        onRefreshCatalog={async () => undefined}
+      />,
+    );
+
+    try {
+      await user.click(screen.getByRole("button", { name: /Command Code/ }));
+      const keyInput = await screen.findByLabelText("API key for Command Code");
+      expect(screen.queryByLabelText("Custom base URL for Command Code")).toBeNull();
+
+      await user.type(keyInput, "command-code-key");
+      await user.click(screen.getByRole("button", { name: "Connect" }));
+
+      await waitFor(() => expect(configureProvider).toHaveBeenCalledTimes(1));
+      expect(configureProvider).toHaveBeenCalledWith({
+        provider: "commandcode",
+        apiKey: "command-code-key",
+        enabledModelIds: [],
+      });
     } finally {
       unmount();
       cleanup();

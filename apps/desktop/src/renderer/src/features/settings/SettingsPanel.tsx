@@ -371,6 +371,10 @@ export function SettingsPanel({
         setConnectionProvider(provider);
         return;
       }
+      if (methods[0]?.kind === "oauth") {
+        void startProviderAuth(provider);
+        return;
+      }
       setCredentialEditorProvider(provider.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
