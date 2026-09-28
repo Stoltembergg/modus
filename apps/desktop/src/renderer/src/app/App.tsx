@@ -1174,10 +1174,6 @@ export function App() {
                             }
                             onOpenChange={setInspectorOpen}
                             onOpenReview={openReview}
-                            onOpenSettings={() => {
-                              setSettingsInitialSection(undefined);
-                              setSettingsOpen(true);
-                            }}
                             onOpenSubagent={openSubagent}
                             onPlanUpdated={rememberActivePlan}
                             onSelectSubagent={setSelectedSubagentId}
