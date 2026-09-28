@@ -337,7 +337,7 @@ describe("runHyperPlanReview", () => {
     expect(result.critiques).toHaveLength(4);
     expect(result.critiques.every((critique) => critique.status === "completed")).toBe(true);
     expect(result.openQuestions).toContain(
-      "HyperPlan synthesis unavailable; no agreement was established.",
+      "HyperPlan synthesis unavailable (prompt_failure); no agreement was established.",
     );
     expect(JSON.stringify(result)).not.toContain("sensitive synthesis failure");
   });
@@ -358,7 +358,7 @@ describe("runHyperPlanReview", () => {
     expect(result.critiques.every((critique) => critique.status === "completed")).toBe(true);
     expect(result.agreements).toEqual([]);
     expect(result.openQuestions).toEqual([
-      "HyperPlan synthesis unavailable; no agreement was established.",
+      "HyperPlan synthesis unavailable (invalid_synthesis_output); no agreement was established.",
     ]);
   });
 
@@ -385,6 +385,9 @@ describe("runHyperPlanReview", () => {
     expect(result.risks).toEqual([]);
     expect(result.references).toEqual([]);
     expect(result.openQuestions.join(" ")).toMatch(/no synthesis.*no approval/i);
+    expect(result.openQuestions).not.toContain(
+      expect.stringContaining("HyperPlan synthesis unavailable"),
+    );
     expect(Buffer.byteLength(result.openQuestions[0] ?? "", "utf8")).toBeLessThanOrEqual(500);
   });
 

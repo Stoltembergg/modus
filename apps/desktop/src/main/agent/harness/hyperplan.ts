@@ -83,6 +83,17 @@ const synthesisOutputSchema = z
 type CriticOutput = z.infer<typeof criticOutputSchema>;
 type SynthesisOutput = z.infer<typeof synthesisOutputSchema>;
 type IsolatedSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
+type FailureReason =
+  | "session_setup_failure"
+  | "prompt_failure"
+  | "timeout"
+  | "output_limit"
+  | "cleanup_failure"
+  | "invalid_synthesis_output"
+  | "empty_synthesis_output"
+  | "critic_timeout"
+  | "critic_quarantine";
+type PromptResult = { output?: string; reason?: FailureReason };
 
 function capUtf8(text: string, maxBytes: number): string {
   let bytes = 0;
@@ -239,14 +250,14 @@ async function runBoundedPrompt(
   prompt: string,
   timeoutMs: number,
   maxOutputBytes: number,
-): Promise<string | undefined> {
-  if (!prompt) return undefined;
+): Promise<PromptResult> {
+  if (!prompt) return { reason: "prompt_failure" };
   let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let taskSettled = false;
   let timeoutAbort = (): Promise<void> | undefined => undefined;
   let timeoutCleanup = (): void => {};
-  const timeout = new Promise<undefined>((resolve) => {
+  const timeout = new Promise<PromptResult>((resolve) => {
     timeoutHandle = setTimeout(() => {
       timedOut = true;
       reviewTimedOut = true;
@@ -257,18 +268,19 @@ async function runBoundedPrompt(
         });
       }
       timeoutCleanup();
-      resolve(undefined);
+      resolve({ reason: "timeout" });
     }, timeoutMs);
   });
   outstandingOperations += 1;
-  const operation = (async (): Promise<string | undefined> => {
+  const operation = (async (): Promise<PromptResult> => {
     let tempDir: string | undefined;
     let session: IsolatedSession | undefined;
+    let sessionCreated = false;
     let unsubscribe: (() => void) | undefined;
     let overflowed = false;
     let abortPromise: Promise<void> | undefined;
     let output = "";
-    let response: string | undefined;
+    let response: PromptResult = { reason: "session_setup_failure" };
     let cleanupSucceeded = true;
     const requestAbort = (): Promise<void> | undefined => {
       if (!session || abortPromise) return abortPromise;
@@ -304,8 +316,9 @@ async function runBoundedPrompt(
       const created = await createIsolatedSession();
       session = created.session;
       tempDir = created.tempDir;
-      if (timedOut) return undefined;
-      response = await new Promise<string | undefined>((resolve) => {
+      sessionCreated = true;
+      if (timedOut) return { reason: "timeout" };
+      response = await new Promise<PromptResult>((resolve) => {
         unsubscribe = session?.subscribe((event) => {
           if (
             typeof event === "object" &&
@@ -331,11 +344,11 @@ async function runBoundedPrompt(
         });
         void session
           ?.prompt(prompt, { source: "rpc" })
-          .then(() => resolve(overflowed ? undefined : output))
-          .catch(() => resolve(undefined));
+          .then(() => resolve(overflowed ? { reason: "output_limit" } : { output }))
+          .catch(() => resolve({ reason: "prompt_failure" }));
       });
     } catch {
-      response = undefined;
+      response = { reason: sessionCreated ? "prompt_failure" : "session_setup_failure" };
     } finally {
       try {
         unsubscribe?.();
@@ -364,7 +377,9 @@ async function runBoundedPrompt(
       }
     }
     if (!cleanupSucceeded) reviewQuarantined = true;
-    if (!cleanupSucceeded || timedOut || overflowed) return undefined;
+    if (!cleanupSucceeded) return { reason: "cleanup_failure" };
+    if (timedOut) return { reason: "timeout" };
+    if (overflowed) return { reason: "output_limit" };
     return response;
   })();
   const trackedOperation = operation.finally(() => {
@@ -376,9 +391,9 @@ async function runBoundedPrompt(
   if (timeoutHandle) clearTimeout(timeoutHandle);
   if (timedOut) {
     // The worker remains counted until its in-flight model/session work and cleanup settle.
-    return undefined;
+    return { reason: "timeout" };
   }
-  if (!taskSettled) return undefined;
+  if (!taskSettled) return { reason: "timeout" };
   return result;
 }
 
@@ -399,6 +414,16 @@ function parseSynthesis(raw: string | undefined): SynthesisOutput | undefined {
   } catch {
     return undefined;
   }
+}
+
+function synthesisFailureReason(result: PromptResult): FailureReason {
+  if (result.reason) return result.reason;
+  if (!result.output?.trim()) return "empty_synthesis_output";
+  return parseSynthesis(result.output) ? "prompt_failure" : "invalid_synthesis_output";
+}
+
+function logSynthesisFailure(reason: FailureReason): void {
+  console.warn(`[HyperPlan] stage=synthesis reason=${reason}`);
 }
 
 function capSummary(summary: HyperPlanSummary): HyperPlanSummary {
@@ -448,11 +473,13 @@ export async function runHyperPlanReview(input: {
   const criticRuns = CRITICS.map(async ({ id, prompt }) => {
     let raw: string | undefined;
     try {
-      raw = await runBoundedPrompt(
-        criticPrompt(id, prompt, boundedInput),
-        CRITIC_TIMEOUT_MS,
-        MAX_CRITIC_OUTPUT_BYTES,
-      );
+      raw = (
+        await runBoundedPrompt(
+          criticPrompt(id, prompt, boundedInput),
+          CRITIC_TIMEOUT_MS,
+          MAX_CRITIC_OUTPUT_BYTES,
+        )
+      ).output;
     } catch {
       raw = undefined;
     }
@@ -463,17 +490,29 @@ export async function runHyperPlanReview(input: {
 
   const completedCritiques = critiques.filter((critique) => critique.status === "completed");
   let synthesis: SynthesisOutput | undefined;
+  let synthesisReason: FailureReason | undefined;
   try {
-    if (completedCritiques.length === 0 || reviewTimedOut || reviewQuarantined) throw new Error();
-    synthesis = parseSynthesis(
-      await runBoundedPrompt(
+    if (completedCritiques.length === 0 || reviewTimedOut || reviewQuarantined) {
+      synthesisReason = reviewQuarantined
+        ? "critic_quarantine"
+        : reviewTimedOut
+          ? "critic_timeout"
+          : undefined;
+    } else {
+      const result = await runBoundedPrompt(
         synthesisPrompt(completedCritiques),
         SYNTHESIS_TIMEOUT_MS,
         MAX_SYNTHESIS_OUTPUT_BYTES,
-      ),
-    );
+      );
+      synthesis = parseSynthesis(result.output);
+      if (!synthesis) synthesisReason = synthesisFailureReason(result);
+    }
   } catch {
     synthesis = undefined;
+    synthesisReason = "prompt_failure";
+  }
+  if (!synthesis && completedCritiques.length > 0 && synthesisReason) {
+    logSynthesisFailure(synthesisReason);
   }
   const summary: HyperPlanSummary = synthesis
     ? {
@@ -506,7 +545,9 @@ export async function runHyperPlanReview(input: {
           agreements: [],
           disagreements: [],
           risks: [],
-          openQuestions: ["HyperPlan synthesis unavailable; no agreement was established."],
+          openQuestions: [
+            `HyperPlan synthesis unavailable (${synthesisReason ?? "prompt_failure"}); no agreement was established.`,
+          ],
           references: [],
         };
   const capped = capSummary(summary);

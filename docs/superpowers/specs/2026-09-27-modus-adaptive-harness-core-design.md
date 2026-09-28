@@ -1,6 +1,6 @@
 # Modus Adaptive Harness Core — Architecture Design
 
-**Status:** Proposed architecture; user review required before implementation planning.
+**Status:** Approved architecture; Phase 1 implementation plan pending user approval.
 
 ## Goal
 
@@ -95,7 +95,8 @@ Build a run-scoped projection over the existing `PlanSpec`, TODO state, `AgentRu
 - goals and constraints by existing message/criterion references, not copied prompt text;
 - open questions and bounded hypothesis/recovery identifiers;
 - criterion and TODO IDs, current action/stage, changed-scope revision, and evidence references;
-- verification state: `not_required`, `pending`, `verified`, `failed`, `unknown`, or `blocked`.
+- verification state: `not_required`, `pending`, `verified`, `user_confirmed`, `failed`, `unknown`, or
+  `blocked`.
 
 The task projection is not another TODO or plan store. Rehydrate it from the existing Plan/TODO/run
 authorities plus appended structured state events. Do not serialize full transcripts or tool payloads.

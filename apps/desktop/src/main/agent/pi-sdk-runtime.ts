@@ -19,6 +19,8 @@ import type {
   CodeGraphDiscoveryRef,
   ContextItem,
   ContextUsageInfo,
+  HarnessTaskCheckKind,
+  HarnessTaskState,
   ModelInfo,
   PlanBuildStatus,
   PlanEvidenceRef,
@@ -33,7 +35,7 @@ import { formatResolvedContext, resolveContext } from "../context/context-servic
 import {
   createSubagentWorktree,
   finishSubagentWorktree,
-  getChangeStatsSince,
+  getChangeStatsSinceStrict,
   getGitMemoryContext,
 } from "../git/git-service";
 import { resolveGlobalGuidancePrompt } from "../guidance/guidance-service";
@@ -63,6 +65,7 @@ import { RULES_MAX_TOTAL_BYTES, resolveAlwaysRulesPrompt } from "../rules/rules-
 import { resolveSkillsPrompt } from "../skills/skills-service";
 import { summarizeTerminals } from "../terminal/terminal-service";
 import {
+  getLatestCheckpointRestoreRowId,
   getLatestSessionTodos,
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
@@ -96,6 +99,12 @@ import {
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
+import { classifyHarnessTask } from "./harness/task-classifier";
+import {
+  createHarnessTaskState,
+  SAFE_TASK_STATE_ID,
+  transitionHarnessTaskState,
+} from "./harness/task-state";
 import { evaluateTodoContinuation } from "./harness/todo-continuation";
 import {
   cycleDefaultModel,
@@ -215,6 +224,11 @@ type RunOutputTracker = {
   tokenUsage: AgentRunTokenUsage;
   hasReportedUsage: boolean;
   hasQueuedInput: boolean;
+  taskState?: HarnessTaskState;
+  runStartedRowId?: number;
+  lastQaRestoreRowId?: number;
+  taskPlan?: PlanRef;
+  requiredChecks: HarnessTaskCheckKind[];
   responseModel?: AgentResponseModel;
 };
 
@@ -327,10 +341,10 @@ function requestsCheck(text: string, target: RegExp): boolean {
   return false;
 }
 
-function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): string[] {
+function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessTaskCheckKind[] {
   if ((input.mode ?? "build") !== "build") return [];
   const text = input.message;
-  const checks: string[] = [];
+  const checks: HarnessTaskCheckKind[] = [];
   if (requestsCheck(text, /\b(?:tests?|vitest|jest)\b/i)) {
     checks.push("tests");
   }
@@ -518,10 +532,21 @@ function summarizeHarnessQA(input: {
   sessionId: string;
   runId: string;
   changedPaths: string[];
+  changedScopeKnown: boolean;
   requiredChecks: string[];
   aborted?: boolean;
-}): ReturnType<typeof summarizeRunQA> {
-  const events: RunQAEvent[] = getRunToolEvidence(input.sessionId, input.runId).map((event) =>
+  runStartedRowId?: number;
+}): { result: ReturnType<typeof summarizeRunQA>; restoreRowId?: number } {
+  const runStartedRowId = input.runStartedRowId;
+  const hasValidRunStart = Number.isSafeInteger(runStartedRowId) && (runStartedRowId ?? 0) > 0;
+  const restoreRowId =
+    hasValidRunStart && runStartedRowId !== undefined
+      ? getLatestCheckpointRestoreRowId(input.sessionId, runStartedRowId)
+      : undefined;
+  const evidence = hasValidRunStart
+    ? getRunToolEvidence(input.sessionId, input.runId, restoreRowId)
+    : [];
+  const events: RunQAEvent[] = evidence.map((event) =>
     input.aborted && event.type === "tool.ended" ? { ...event, aborted: true } : event,
   );
   if (input.aborted) {
@@ -546,7 +571,20 @@ function summarizeHarnessQA(input: {
       });
     }
   }
-  return summarizeRunQA({ ...input, events });
+  const result = summarizeRunQA({ ...input, events });
+  if (!input.changedScopeKnown && result.required) {
+    result.status = "unavailable";
+    result.reasonCode = "required_check_unavailable";
+    result.evidence = result.evidence.map((item) =>
+      item.status === "passed" || item.status === "user_confirmed"
+        ? { ...item, status: "unavailable" }
+        : item,
+    );
+  }
+  return {
+    result,
+    ...(restoreRowId !== undefined ? { restoreRowId } : {}),
+  };
 }
 
 function setSessionThinkingBudget(session: AgentSession, budget: number | undefined): void {
@@ -728,6 +766,73 @@ export class PiSdkRuntime implements AgentRuntime {
     return plan;
   }
 
+  private emitTaskState(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+    state: HarnessTaskState,
+  ): void {
+    tracker.taskState = state;
+    runtimeSession.emit({
+      type: "harness.task_state",
+      sessionId: state.sessionId,
+      runId: state.runId,
+      state,
+    });
+  }
+
+  private observeTaskStateEvent(runtimeSession: SdkRuntimeSession, event: AgentEvent): void {
+    if (event.type === "harness.task_state") return;
+    const tracker = this.runOutputTrackers.get(event.sessionId);
+    const state = tracker?.taskState;
+    if (!tracker || !state || state.runId !== tracker.runId) return;
+    if ("runId" in event && typeof event.runId === "string" && event.runId !== tracker.runId)
+      return;
+
+    if (event.type === "plan.updated") {
+      try {
+        const currentPlan = readPlanById(plansRoot(), event.plan.id);
+        if (
+          !currentPlan ||
+          currentPlan.sessionId !== state.sessionId ||
+          currentPlan.workspaceId !== state.workspaceId
+        ) {
+          return;
+        }
+        const fingerprintFor = (plan: PlanRef): string | undefined =>
+          createHarnessTaskState({
+            sessionId: state.sessionId,
+            runId: state.runId,
+            workspaceId: state.workspaceId,
+            goalMessageId: state.goalMessageId,
+            classification: state.classification,
+            requiredChecks: [],
+            todoIds: [],
+            plan,
+          }).planFingerprint;
+        if (fingerprintFor(event.plan) !== fingerprintFor(currentPlan)) return;
+        tracker.taskPlan = currentPlan;
+      } catch {
+        return;
+      }
+    }
+
+    const next = transitionHarnessTaskState(state, event);
+    if (next !== state) this.emitTaskState(runtimeSession, tracker, next);
+  }
+
+  private setTaskStatePhase(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+    phase: HarnessTaskState["phase"],
+  ): void {
+    if (!tracker.taskState || tracker.taskState.phase === phase) return;
+    this.emitTaskState(runtimeSession, tracker, {
+      ...tracker.taskState,
+      phase,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
   private requireOwnedBuildPlan(input: PromptAgentInput): PlanRef | undefined {
     if (input.planId === undefined) return undefined;
     if ((input.mode ?? "build") !== "build") {
@@ -749,18 +854,27 @@ export class PiSdkRuntime implements AgentRuntime {
   private emitHarnessQA(
     runtimeSession: SdkRuntimeSession,
     input: PromptAgentInput,
-    runId: string,
+    tracker: RunOutputTracker,
     changedPaths: string[],
+    changedScopeKnown: boolean,
     aborted = false,
   ): void {
-    const plan = this.specBuildPlan(runtimeSession, input);
-    const result = summarizeHarnessQA({
+    const runId = tracker.runId;
+    const plan = tracker.taskPlan;
+    const summary = summarizeHarnessQA({
       sessionId: input.sessionId,
       runId,
       changedPaths,
-      requiredChecks: requiredChecksForRun(input, plan),
+      changedScopeKnown,
+      requiredChecks: tracker.requiredChecks,
       aborted,
+      ...(tracker.runStartedRowId !== undefined
+        ? { runStartedRowId: tracker.runStartedRowId }
+        : {}),
     });
+    if (summary.restoreRowId === undefined) delete tracker.lastQaRestoreRowId;
+    else tracker.lastQaRestoreRowId = summary.restoreRowId;
+    const result = summary.result;
     if (plan) {
       const evidence = planEvidenceFromQA(plan, result);
       if (evidence.length > 0) {
@@ -779,10 +893,16 @@ export class PiSdkRuntime implements AgentRuntime {
 
   private emitToWindow(window: BrowserWindowType): EmitAgentEvent {
     return (event) => {
-      recordAgentEvent(event);
+      const rowId = recordAgentEvent(event);
+      if (event.type === "run.started") {
+        const tracker = this.runOutputTrackers.get(event.sessionId);
+        if (tracker?.runId === event.runId) tracker.runStartedRowId = rowId;
+      }
       window.webContents.send(IPC_CHANNELS.agentEvent, event);
       maybeNotifyAgentEvent(window, event);
       this.emitSubagentUpdate(window, event);
+      const runtimeSession = this.sessions.get(event.sessionId);
+      if (runtimeSession) this.observeTaskStateEvent(runtimeSession, event);
     };
   }
 
@@ -1428,8 +1548,58 @@ export class PiSdkRuntime implements AgentRuntime {
       tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
       hasReportedUsage: false,
       hasQueuedInput: false,
+      requiredChecks: [],
     };
     this.runOutputTrackers.set(input.sessionId, outputTracker);
+
+    const taskPlan = this.specBuildPlan(runtimeSession, input);
+    const requiredChecks = requiredChecksForRun(input, taskPlan);
+    if (taskPlan) outputTracker.taskPlan = taskPlan;
+    outputTracker.requiredChecks = requiredChecks;
+    let initialTaskState: HarnessTaskState | undefined;
+    try {
+      const workspaceId = runtimeSession.info.workspaceId;
+      const goalMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
+      if (
+        [input.sessionId, run.id, workspaceId, goalMessageId].every((id) =>
+          SAFE_TASK_STATE_ID.test(id),
+        )
+      ) {
+        const classification = classifyHarnessTask({
+          text: input.message,
+          mode: input.mode ?? "build",
+          contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
+          changedPaths: [],
+        });
+        const seenTodoIds = new Set<string>();
+        const sessionTodoIds: string[] = [];
+        for (const todo of getLatestSessionTodos(input.sessionId) ?? []) {
+          if (sessionTodoIds.length >= 256) break;
+          if (
+            !todo ||
+            typeof todo !== "object" ||
+            typeof todo.id !== "string" ||
+            seenTodoIds.has(todo.id)
+          ) {
+            continue;
+          }
+          seenTodoIds.add(todo.id);
+          sessionTodoIds.push(todo.id);
+        }
+        initialTaskState = createHarnessTaskState({
+          sessionId: input.sessionId,
+          runId: run.id,
+          workspaceId,
+          goalMessageId,
+          classification,
+          requiredChecks,
+          todoIds: sessionTodoIds,
+          ...(taskPlan ? { plan: taskPlan } : {}),
+        });
+      }
+    } catch {
+      // Task State is a safe projection; invalid optional inputs must not fail the run.
+    }
 
     updateAgentSessionStatus(input.sessionId, "running");
     const userMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
@@ -1454,6 +1624,7 @@ export class PiSdkRuntime implements AgentRuntime {
       delivery,
     } as const;
     runtimeSession.emit(startedEvent);
+    if (initialTaskState) this.emitTaskState(runtimeSession, outputTracker, initialTaskState);
     // The turn is now streaming: publish the authoritative `busy` status that
     // the composer's lock + border follow. `idle` is published in `finally`,
     // and `retry` arrives (from the normalizer) if the runtime auto-retries.
@@ -1563,6 +1734,7 @@ export class PiSdkRuntime implements AgentRuntime {
     if (buildPlan) {
       this.transitionPlanBuild(runtimeSession, buildPlan.id, "building");
     }
+    this.setTaskStatePhase(runtimeSession, outputTracker, "executing");
     // Snapshot the working tree before the agent touches anything, so this
     // message gets a one-click restore point in the timeline. Never blocks
     // the run: failures (non-git cwd, git missing) degrade to "no checkpoint".
@@ -1601,6 +1773,7 @@ export class PiSdkRuntime implements AgentRuntime {
       });
     };
     let settledChangedPaths: string[] = [];
+    let settledChangedScopeKnown = false;
     try {
       const message = await this.composeTurnMessage(runtimeSession, input, { runId: run.id });
       console.info(
@@ -1621,8 +1794,6 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       let thresholdContinues = 0;
       let isFirstPrompt = true;
-      const specBuildPlan = this.specBuildPlan(runtimeSession, input);
-      const requiredChecks = requiredChecksForRun(input, specBuildPlan);
       const eligibleScripts = eligibleCheckScripts(runtimeSession.info.cwd, requiredChecks);
       let continuationAttempt = getLatestTodoContinuationAttempt(input.sessionId, run.id);
       let continuationStarted = continuationAttempt > 0;
@@ -1671,18 +1842,26 @@ export class PiSdkRuntime implements AgentRuntime {
           !continuationStarted
         ) {
           if (requiredChecks.length > 0 && runCheckpoint) {
-            const scopedChanges = await getChangeStatsSince(
+            const scopedChanges = await getChangeStatsSinceStrict(
               runtimeSession.info.cwd,
               runCheckpoint.commitHash,
             ).catch(() => undefined);
+            settledChangedScopeKnown = scopedChanges !== undefined && !scopedChanges.truncated;
             settledChangedPaths = scopedChanges?.files.map((file) => file.path) ?? [];
           }
-          const qa = summarizeHarnessQA({
+          const qaSummary = summarizeHarnessQA({
             sessionId: input.sessionId,
             runId: run.id,
             changedPaths: settledChangedPaths,
+            changedScopeKnown: settledChangedScopeKnown,
             requiredChecks,
+            ...(outputTracker.runStartedRowId !== undefined
+              ? { runStartedRowId: outputTracker.runStartedRowId }
+              : {}),
           });
+          if (qaSummary.restoreRowId === undefined) delete outputTracker.lastQaRestoreRowId;
+          else outputTracker.lastQaRestoreRowId = qaSummary.restoreRowId;
+          const qa = qaSummary.result;
           const todos = getLatestSessionTodos(input.sessionId) ?? [];
           const decision = evaluateTodoContinuation({
             todos,
@@ -1725,7 +1904,13 @@ export class PiSdkRuntime implements AgentRuntime {
         const turnError = lastAssistantTurnError(runtimeSession.session);
         if (turnError) {
           await captureTurnEnd();
-          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
+          this.emitHarnessQA(
+            runtimeSession,
+            input,
+            outputTracker,
+            settledChangedPaths,
+            settledChangedScopeKnown,
+          );
           updateAgentRunStatus(run.id, "failed", turnError);
           finalizeProjectMemoryRunBestEffort({
             sessionId: input.sessionId,
@@ -1747,19 +1932,39 @@ export class PiSdkRuntime implements AgentRuntime {
           // Per-turn change summary (Codex-style "N files changed" card):
           // diff the checkout against the pre-run snapshot. Never blocks or
           // fails the run; sessions without a checkpoint just omit it.
-          let changes: Awaited<ReturnType<typeof getChangeStatsSince>> | undefined;
+          let changes: Awaited<ReturnType<typeof getChangeStatsSinceStrict>> | undefined;
           if (runCheckpoint) {
-            changes = await getChangeStatsSince(
+            changes = await getChangeStatsSinceStrict(
               runtimeSession.info.cwd,
               runCheckpoint.commitHash,
             ).catch(() => undefined);
           }
+          settledChangedScopeKnown = changes !== undefined && !changes.truncated;
           settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
-          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
+          this.emitHarnessQA(
+            runtimeSession,
+            input,
+            outputTracker,
+            settledChangedPaths,
+            settledChangedScopeKnown,
+          );
           console.info(
             `[modus-timing] getChangeStatsSince +${Date.now() - outputTracker.startedAt}ms`,
           );
           await captureTurnEnd();
+          const latestRestoreRowId =
+            outputTracker.runStartedRowId !== undefined
+              ? getLatestCheckpointRestoreRowId(input.sessionId, outputTracker.runStartedRowId)
+              : undefined;
+          if (latestRestoreRowId !== outputTracker.lastQaRestoreRowId) {
+            this.emitHarnessQA(
+              runtimeSession,
+              input,
+              outputTracker,
+              settledChangedPaths,
+              settledChangedScopeKnown,
+            );
+          }
           updateAgentRunStatus(run.id, "completed");
           finalizeProjectMemoryRunBestEffort({
             sessionId: input.sessionId,
@@ -1781,7 +1986,13 @@ export class PiSdkRuntime implements AgentRuntime {
           const message =
             "The selected model finished without returning any assistant output. Check the custom provider URL, model id, API type, and reasoning compatibility settings.";
           await captureTurnEnd();
-          this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
+          this.emitHarnessQA(
+            runtimeSession,
+            input,
+            outputTracker,
+            settledChangedPaths,
+            settledChangedScopeKnown,
+          );
           updateAgentRunStatus(run.id, "failed", message);
           finalizeProjectMemoryRunBestEffort({
             sessionId: input.sessionId,
@@ -1816,12 +2027,27 @@ export class PiSdkRuntime implements AgentRuntime {
         return;
       }
       if (currentRun.status === "cancelled") {
-        this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths, true);
+        await captureTurnEnd();
+        this.emitHarnessQA(
+          runtimeSession,
+          input,
+          outputTracker,
+          settledChangedPaths,
+          settledChangedScopeKnown,
+          true,
+        );
         return;
       }
       if (this.cancellingRuns.has(run.id)) {
         await captureTurnEnd();
-        this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths, true);
+        this.emitHarnessQA(
+          runtimeSession,
+          input,
+          outputTracker,
+          settledChangedPaths,
+          settledChangedScopeKnown,
+          true,
+        );
         updateAgentRunStatus(run.id, "cancelled");
         finalizeProjectMemoryRunBestEffort({
           sessionId: input.sessionId,
@@ -1837,7 +2063,13 @@ export class PiSdkRuntime implements AgentRuntime {
         return;
       }
       await captureTurnEnd();
-      this.emitHarnessQA(runtimeSession, input, run.id, settledChangedPaths);
+      this.emitHarnessQA(
+        runtimeSession,
+        input,
+        outputTracker,
+        settledChangedPaths,
+        settledChangedScopeKnown,
+      );
       updateAgentRunStatus(
         run.id,
         "failed",

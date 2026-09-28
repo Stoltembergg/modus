@@ -19,6 +19,7 @@ import {
   discardUnstagedFile,
   finishSubagentWorktree,
   getChangeStatsSince,
+  getChangeStatsSinceStrict,
   getGitMemoryContext,
   getStatusSummary,
   getWorkingChangeStats,
@@ -203,12 +204,9 @@ describe("git-service", () => {
     }, 35);
     expect(await broken(repo)).toEqual({ changedPaths: [] });
 
-    const plain = await mkdtemp(join(tmpdir(), "modus-memory-not-repo-"));
-    try {
-      expect(await getGitMemoryContext(plain)).toEqual({ changedPaths: [] });
-    } finally {
-      await rm(plain, { recursive: true, force: true });
-    }
+    // A deadline aborts Git asynchronously. Use a stable non-repository cwd
+    // here rather than deleting a temp cwd while the child may still be exiting.
+    expect(await getGitMemoryContext(tmpdir())).toEqual({ changedPaths: [] });
   });
 
   it("does not mutate partial metadata if a timed-out runner completes later", async () => {
@@ -400,6 +398,25 @@ describe("git-service", () => {
     expect(stats.fileCount).toBe(2);
     expect(stats.added).toBe(3);
     expect(stats.removed).toBe(0);
+  });
+
+  it("returns defined empty strict stats for a valid no-change base", async () => {
+    const base = (await git(["rev-parse", "HEAD"])).trim();
+
+    await expect(getChangeStatsSinceStrict(repo, base)).resolves.toEqual({
+      files: [],
+      added: 0,
+      removed: 0,
+      fileCount: 0,
+      truncated: false,
+    });
+  });
+
+  it.each([
+    ["invalid base", () => repo, "missing-base"],
+    ["non-repository", () => join(tmpdir(), `modus-no-git-${randomUUID()}`), "HEAD"],
+  ] as const)("returns undefined for a strict diff with %s", async (_case, cwd, base) => {
+    await expect(getChangeStatsSinceStrict(cwd(), base)).resolves.toBeUndefined();
   });
 
   it("lists commit history newest-first with metadata", async () => {
