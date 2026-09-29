@@ -64,6 +64,8 @@ export const GROUP_STATUS_TEXT = {
   waitingForYou: "Waiting for you",
   failed: "Turn failed",
   aborted: "Turn stopped",
+  /** The user pressed Stop and it cleared the queue and/or cancelled a running turn. */
+  stoppedByYou: "Stopped by you",
   /** A member's turn ended to move into its worktree (then it is re-woken there). */
   worktreeReady: (branch: string) => `Worktree ready: \`${branch}\``,
   limit: {
@@ -462,16 +464,32 @@ export class GroupRuntime {
 
   /**
    * The user pressed Stop in the room: every live chain of the group ends
-   * (queued wakes drop, nothing else is woken) and the group's running member
-   * turns are aborted; they settle as "Turn stopped". Turns waiting at the
-   * intent gate stay with the user in the member's chat.
+   * (queued wakes drop, nothing else is woken), "Stopped by you" is posted and
+   * the group's running member turns are aborted; they settle as "Turn
+   * stopped". With nothing running or queued it does nothing (no line). Turns
+   * waiting at the intent gate stay with the user in the member's chat.
    */
   stopGroup(groupId: string): void {
+    const queued = [...this.queues.values()].flat().filter((wake) => wake.groupId === groupId);
+    const running = [...this.running.values()].filter((wake) => wake.groupId === groupId);
+    if (queued.length === 0 && running.length === 0) return; // Nothing to stop: no line.
     for (const chain of [...this.chains.values()]) {
       if (chain.groupId === groupId) this.endChain(chain, "stopped");
     }
-    for (const wake of [...this.running.values()]) {
-      if (wake.groupId !== groupId) continue;
+    try {
+      this.emitMessage(
+        appendGroupMessage({
+          createdAt: this.stamp(),
+          groupId,
+          authorKind: "system",
+          kind: "status",
+          body: GROUP_STATUS_TEXT.stoppedByYou,
+        }),
+      );
+    } catch (error) {
+      console.warn("[modus] group stop status failed:", error);
+    }
+    for (const wake of running) {
       this.runtime
         .abort(wake.sessionId)
         .catch((error) => console.warn("[modus] group stop abort failed:", error));

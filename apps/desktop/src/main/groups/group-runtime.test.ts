@@ -1225,9 +1225,10 @@ describe("stopGroup (room Stop button)", () => {
     expect(runtime.aborted).toEqual([alpha, beta]);
     await flush();
     const statuses = room(group.id).filter((m) => m.kind === "status");
-    expect(statuses.map((m) => [m.authorSessionId, m.body])).toEqual([
-      [alpha, "Turn stopped"],
-      [beta, "Turn stopped"],
+    expect(statuses.map((m) => [m.authorKind, m.authorSessionId, m.body])).toEqual([
+      ["system", undefined, "Stopped by you"],
+      ["agent", alpha, "Turn stopped"],
+      ["agent", beta, "Turn stopped"],
     ]);
     // No limit line for a stop, Gamma never starts and the group goes idle.
     expect(runtime.started).not.toContain(gamma);
@@ -1250,9 +1251,13 @@ describe("stopGroup (room Stop button)", () => {
     groups.postUserMessage({ groupId: group.id, body: "@Alpha go" });
     runtime.openGate(alpha);
     groups.postUserMessage({ groupId: other.group.id, body: "@Beta go" });
+    const before = room(group.id).length;
     groups.stopGroup(group.id);
     expect(runtime.aborted).toEqual([]);
     expect(runtime.pendingSessions()).toEqual([alpha, other.beta]);
+    // Nothing ran or waited in the queue: no "Stopped by you".
+    expect(room(group.id)).toHaveLength(before);
+    expect(room(other.group.id).some((m) => m.body === "Stopped by you")).toBe(false);
     expect(groups.isAwaitingUser(beta)).toBe(false);
     expect(groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds).toEqual([
       alpha,
@@ -1299,5 +1304,28 @@ describe("member states", () => {
     expect(events.filter((e) => e.type === "group.activity").at(-1)).toMatchObject({
       waitingSessionIds: [],
     });
+  });
+});
+
+describe("stopGroup posts Stopped by you only when it has an effect", () => {
+  it("clearing only the queue counts; a second Stop does nothing", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
+    // Alpha and Beta finish; their results would queue nobody, Gamma still waits in the queue.
+    runtime.streaming.add(gamma);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    runtime.take(beta).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.isGroupWorking(group.id)).toBe(true); // Gamma queued
+    groups.stopGroup(group.id);
+    expect(runtime.aborted).toEqual([]);
+    expect(room(group.id).filter((m) => m.body === "Stopped by you")).toHaveLength(1);
+    expect(groups.isGroupWorking(group.id)).toBe(false);
+    runtime.streaming.delete(gamma);
+    groups.stopGroup(group.id);
+    expect(room(group.id).filter((m) => m.body === "Stopped by you")).toHaveLength(1);
+    expect(runtime.started).not.toContain(gamma);
   });
 });
