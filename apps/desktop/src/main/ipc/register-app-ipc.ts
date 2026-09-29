@@ -136,11 +136,13 @@ import {
   unstageFile,
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
+import { getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentGroupMember,
   createAgentGroupWithMembers,
   deleteAgentGroup,
   listAgentGroupsWithMembers,
+  listGroupMessages,
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
@@ -218,6 +220,7 @@ import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerGroupIpcHandlers } from "./group-ipc";
+import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
@@ -1795,6 +1798,12 @@ export function registerAppIpc({
     removeAgentGroupMember,
     setAgentGroupLead,
     updateAgentGroupMembers,
+  });
+  // Resolved lazily: the GroupRuntime subscribes to the agent runtime on first use.
+  registerGroupRuntimeIpcHandlers(ipcMain, assertTrustedSender, {
+    postUserMessage: (input) => getGroupRuntime().postUserMessage(input),
+    listGroupMessages: (groupId, options) => listGroupMessages(groupId, options),
+    workingGroupIds: () => getGroupRuntime().workingGroupIds(),
   });
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {

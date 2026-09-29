@@ -78,6 +78,7 @@ import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { describeGroupError } from "../features/groups/groupErrors";
+import { useWorkingGroups } from "../features/groups/useWorkingGroups";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
 import {
@@ -131,6 +132,11 @@ export function App() {
   const [synchronizedWorkspaceId, setSynchronizedWorkspaceId] = useState<string | undefined>();
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
+  const workingGroupIds = useWorkingGroups();
+  const isGroupWorking = useCallback(
+    (group: AgentGroupWithMembers) => workingGroupIds.has(group.id),
+    [workingGroupIds],
+  );
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -1119,6 +1125,7 @@ export function App() {
                         width={sidebarWidth}
                         workspaces={workspaces}
                         groups={agentGroups}
+                        isGroupWorking={isGroupWorking}
                         activeWorkspaceId={
                           activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
                         }

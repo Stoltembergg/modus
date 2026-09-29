@@ -727,6 +727,8 @@ export function appendGroupMessage(input: {
    * chain, or to the message itself for a new user message.
    */
   chainId?: string;
+  /** Open a new chain rooted at this message (chainId = its own id); excludes `chainId`. */
+  startsChain?: boolean;
   kind?: GroupMessageKind;
   body: string;
   mentions?: string[];
@@ -783,9 +785,15 @@ export function appendGroupMessage(input: {
     }
   }
 
+  if (input.startsChain && input.chainId) {
+    throw new GroupStoreError("invalid-value", "A message cannot both start and join a chain.");
+  }
   const id = input.id ?? randomUUID();
-  const chainId =
-    input.chainId ?? replyChainId ?? (authorKind === "user" && !input.replyToMessageId ? id : null);
+  const chainId = input.startsChain
+    ? id
+    : (input.chainId ??
+      replyChainId ??
+      (authorKind === "user" && !input.replyToMessageId ? id : null));
   const createdAt = input.createdAt ?? new Date().toISOString();
   db.prepare(
     `insert into group_messages (${MESSAGE_COLUMNS})
@@ -807,6 +815,13 @@ export function appendGroupMessage(input: {
     .prepare(`select ${MESSAGE_COLUMNS} from group_messages where id = ?`)
     .get(id) as MessageRow;
   return toMessage(row);
+}
+
+export function getGroupMessage(messageId: string): GroupMessage | undefined {
+  const row = getDatabase()
+    .prepare(`select ${MESSAGE_COLUMNS} from group_messages where id = ?`)
+    .get(messageId) as MessageRow | undefined;
+  return row ? toMessage(row) : undefined;
 }
 
 /**

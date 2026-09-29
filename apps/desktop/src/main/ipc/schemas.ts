@@ -953,3 +953,28 @@ export const groupUpdateMembersSchema = z
 export const groupSetLeadSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
   .strict();
+
+/** A room message body; long enough for pasted logs, bounded for the prompt budget. */
+export const MAX_GROUP_MESSAGE_BODY = 20_000;
+
+export const groupPostMessageSchema = z
+  .object({
+    groupId: groupIdString,
+    body: z.string().trim().min(1).max(MAX_GROUP_MESSAGE_BODY),
+    mentions: z.array(groupSessionIdString).max(MAX_GROUP_MEMBERS).optional(),
+    replyToMessageId: groupIdString.optional(),
+  })
+  .strict();
+
+const groupMessageCursorSchema = z
+  .object({ createdAt: nonEmptyString.max(64), id: groupIdString })
+  .strict();
+
+export const groupListMessagesSchema = z
+  .object({
+    groupId: groupIdString,
+    before: groupMessageCursorSchema.optional(),
+    after: groupMessageCursorSchema.optional(),
+    limit: z.number().int().min(1).max(500).optional(),
+  })
+  .strict();

@@ -180,6 +180,40 @@ export type GroupMessage = {
 /** Message pagination cursor: the (createdAt, id) total order of group messages. */
 export type GroupMessageCursor = { createdAt: string; id: string };
 
+/** `group:post-message` payload: a user message into a group room. */
+export type PostGroupMessageInput = {
+  groupId: string;
+  body: string;
+  /** Mentioned member session ids (in addition to `@Title` mentions parsed from the body). */
+  mentions?: string[];
+  replyToMessageId?: string;
+};
+
+/** Why a group chain stopped waking members (it waits for the user). */
+export type GroupChainEndReason =
+  | "blocked"
+  | "max-hops"
+  | "max-agent-messages"
+  | "max-member-wakes"
+  | "input-token-budget"
+  | "context-too-large";
+
+/**
+ * `group:event` push (main → renderer) from the group runtime. `group.activity`
+ * carries the runtime state the sidebar's activity dot reads.
+ */
+export type GroupRuntimeEvent =
+  | { type: "group.message"; groupId: string; message: GroupMessage }
+  | {
+      type: "group.activity";
+      groupId: string;
+      /** Members with a group turn running now. */
+      runningSessionIds: string[];
+      /** Members woken and waiting for a slot (or for the window/update/streaming gate). */
+      queuedSessionIds: string[];
+    }
+  | { type: "group.chain-ended"; groupId: string; chainId: string; reason: GroupChainEndReason };
+
 export type GroupTaskStatus = "open" | "in_progress" | "in_review" | "done" | "cancelled";
 
 export type GroupTask = {
