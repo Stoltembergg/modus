@@ -9,6 +9,7 @@ import {
   type MentionSuggestion,
   mentionSuggestions,
 } from "./groupMentions";
+import { MemberName } from "./MemberName";
 
 /** Same rule as the main process: new group turns wait while an update restarts the app. */
 export function isUpdatePending(state: UpdateState | undefined): boolean {
@@ -136,12 +137,15 @@ export function GroupComposer({
                 role="option"
                 type="button"
               >
-                <span className="min-w-0 flex-1 truncate">{suggestion.title}</span>
-                {suggestion.duplicateTitle ? (
-                  <span className="shrink-0 font-mono text-2xs text-fg-faint">
-                    @{suggestion.insert}
-                  </span>
-                ) : null}
+                <span className="min-w-0 flex-1 truncate">
+                  <MemberName
+                    label={
+                      suggestion.suffix
+                        ? { title: suggestion.title, suffix: suggestion.suffix }
+                        : { title: suggestion.title }
+                    }
+                  />
+                </span>
               </button>
             ))}
           </div>

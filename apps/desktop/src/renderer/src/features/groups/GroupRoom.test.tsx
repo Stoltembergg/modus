@@ -195,11 +195,11 @@ describe("GroupRoom", () => {
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
     expect(within(memberRow as HTMLElement).getByText("P")).toBeTruthy();
-    // Same markdown renderer as the chat, mention as a chip (label = title).
+    // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });
     expect(memberRow?.textContent).not.toContain("**");
     expect(within(memberRow as HTMLElement).getByTestId("mention-chip").textContent).toBe(
-      "@Reviewer",
+      "@Reviewer · srev1",
     );
     expect(memberStatus?.textContent).toBe("Reviewer · srev1 · Waiting for you");
     expect(systemStatus?.textContent).toBe("Turn failed");
@@ -318,7 +318,7 @@ describe("GroupRoom", () => {
 
     await user.type(input, "and @Rev");
     const options = within(screen.getByTestId("mention-suggestions")).getAllByRole("option");
-    expect(options.map((o) => o.textContent)).toEqual(["Reviewer@s-rev-1", "Reviewer@s-rev-2"]);
+    expect(options.map((o) => o.textContent)).toEqual(["Reviewer · srev1", "Reviewer · srev2"]);
     await user.click(options[1] as HTMLElement);
     expect(input.value).toBe("hi @Planner and @s-rev-2 ");
 

@@ -1,3 +1,5 @@
+import { memberLabels, memberLabelText } from "./memberLabels";
+
 /** A group member as the room knows it (session id + chat title). */
 export type MentionMember = { sessionId: string; title: string };
 
@@ -20,6 +22,7 @@ type Handle = { handle: string; sessionIds: string[]; label: string };
  * longest handle first, not followed by a letter, digit, `_` or `-`.
  */
 function mentionHandles(members: readonly MentionMember[]): Handle[] {
+  const labels = memberLabels(members);
   const byTitle = new Map<string, Handle>();
   for (const member of members) {
     const title = member.title.trim();
@@ -34,9 +37,15 @@ function mentionHandles(members: readonly MentionMember[]): Handle[] {
     ...members.map((member) => ({
       handle: member.sessionId,
       sessionIds: [member.sessionId],
-      label: member.title.trim() || member.sessionId,
+      label: labelFor(labels, member),
     })),
   ].sort((a, b) => b.handle.length - a.handle.length);
+}
+
+/** One member's label text: the title, plus the short id when the title repeats. */
+function labelFor(labels: ReturnType<typeof memberLabels>, member: MentionMember): string {
+  const label = labels.get(member.sessionId);
+  return label ? memberLabelText(label) : member.title.trim() || member.sessionId;
 }
 
 /** Splits text into plain runs and `@mention` runs of group members. */
@@ -121,7 +130,13 @@ export type MentionSuggestion = {
   /** Inserted after `@`: the title, or the session id when the title is shared. */
   insert: string;
   duplicateTitle: boolean;
+  /** Short id shown after a shared title (same as everywhere else in the room). */
+  suffix?: string;
 };
+
+function suffixOf(duplicateTitle: boolean, suffix: string | undefined): { suffix?: string } {
+  return duplicateTitle && suffix ? { suffix } : {};
+}
 
 /** Members whose title contains the query (prefix matches first). */
 export function mentionSuggestions(
@@ -133,6 +148,7 @@ export function mentionSuggestions(
     const key = member.title.trim().toLocaleLowerCase();
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
+  const labels = memberLabels(members);
   const needle = query.toLocaleLowerCase();
   return members
     .map((member) => {
@@ -143,6 +159,7 @@ export function mentionSuggestions(
         title,
         insert: duplicateTitle ? member.sessionId : title,
         duplicateTitle,
+        ...suffixOf(duplicateTitle, labels.get(member.sessionId)?.suffix),
         rank: title.toLocaleLowerCase().indexOf(needle),
       };
     })

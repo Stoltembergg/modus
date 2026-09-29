@@ -22,14 +22,24 @@ describe("group mentions", () => {
       { kind: "text", text: " and " },
       { kind: "mention", text: "@Alpha", sessionIds: ["s-alpha"], label: "Alpha" },
       { kind: "text", text: ", then " },
-      { kind: "mention", text: "@s-rev-2", sessionIds: ["s-rev-2"], label: "reviewer" },
+      { kind: "mention", text: "@s-rev-2", sessionIds: ["s-rev-2"], label: "reviewer · srev2" },
       { kind: "text", text: "!" },
     ]);
     // A shared title mentions both; a longer word is no mention.
     expect(splitMentions("@Reviewer", MEMBERS)[0]).toMatchObject({
       sessionIds: ["s-rev-1", "s-rev-2"],
+      label: "Reviewer",
     });
     expect(splitMentions("@Alphabet", MEMBERS)).toEqual([{ kind: "text", text: "@Alphabet" }]);
+  });
+
+  it("labels a one-member mention of a repeated title with the short id, like everywhere else", () => {
+    // Unique title: no suffix. Repeated title via @id: suffix. Repeated title via @title: both, no suffix.
+    expect(splitMentions("@s-alpha", MEMBERS)[0]).toMatchObject({ label: "Alpha" });
+    expect(splitMentions("@s-rev-1", MEMBERS)[0]).toMatchObject({ label: "Reviewer · srev1" });
+    expect(linkMentionsInMarkdown("hi @s-rev-1", MEMBERS)).toBe(
+      `hi [@Reviewer · srev1](${mentionHref(["s-rev-1"])})`,
+    );
   });
 
   it("links mentions in markdown outside code only", () => {
@@ -54,8 +64,20 @@ describe("group mentions", () => {
       ["Alpha Two", "Alpha Two"],
     ]);
     expect(mentionSuggestions("rev", MEMBERS)).toEqual([
-      { sessionId: "s-rev-1", title: "Reviewer", insert: "s-rev-1", duplicateTitle: true },
-      { sessionId: "s-rev-2", title: "reviewer", insert: "s-rev-2", duplicateTitle: true },
+      {
+        sessionId: "s-rev-1",
+        title: "Reviewer",
+        insert: "s-rev-1",
+        duplicateTitle: true,
+        suffix: "srev1",
+      },
+      {
+        sessionId: "s-rev-2",
+        title: "reviewer",
+        insert: "s-rev-2",
+        duplicateTitle: true,
+        suffix: "srev2",
+      },
     ]);
     expect(mentionSuggestions("", MEMBERS)).toHaveLength(4);
   });
