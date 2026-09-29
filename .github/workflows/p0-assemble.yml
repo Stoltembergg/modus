@@ -1,0 +1,27 @@
+name: p0-assemble
+on:
+  push:
+    branches: [cursor/hyperplan-p0-failure-reason-model-12c1]
+    paths: [".p0-restore/TRIGGER"]
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/hyperplan-p0-failure-reason-model-12c1
+      - name: Assemble typecheck fix
+        run: node .p0-restore/assemble.mjs
+      - name: Commit restored sources
+        run: |
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "fix(hyperplan): type HyperPlan draft reservation ownerEpoch as symbol"
+          git push origin "HEAD:cursor/hyperplan-p0-failure-reason-model-12c1"
