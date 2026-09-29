@@ -399,6 +399,33 @@ function MentionText({ text, members }: { text: string; members: readonly Mentio
   );
 }
 
+/** Status bodies: only `inline code` spans are formatted (no full markdown). */
+export function StatusText({ text, members }: { text: string; members: readonly MentionMember[] }) {
+  return (
+    <>
+      {text.split(/`([^`\n]+)`/).map((part, index) =>
+        index % 2 === 1 ? (
+          <code
+            className="rounded-sm bg-elevated px-1 py-px font-mono text-[0.95em]"
+            // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional and static
+            key={index}
+          >
+            {part}
+          </code>
+        ) : (
+          // biome-ignore lint/suspicious/noArrayIndexKey: segments are positional and static
+          <MentionText key={index} members={members} text={part} />
+        ),
+      )}
+    </>
+  );
+}
+
+/** "Waiting for you" and its limit / budget variants (amber, like the waiting dot). */
+export function isWaitingStatus(body: string): boolean {
+  return body.startsWith("Waiting for you");
+}
+
 export function GroupMessageRow({
   message,
   members,
@@ -416,6 +443,7 @@ export function GroupMessageRow({
     ? (titles.get(message.authorSessionId) ?? message.authorSessionId)
     : undefined;
   if (message.kind === "status") {
+    const waiting = isWaitingStatus(message.body);
     return (
       <div
         className="text-center text-2xs text-fg-faint"
@@ -425,7 +453,12 @@ export function GroupMessageRow({
         {author && message.authorKind === "agent" ? (
           <span className="text-fg-subtle">{author} · </span>
         ) : null}
-        <MentionText members={members} text={message.body} />
+        <span
+          className={waiting ? "text-amber-400" : undefined}
+          data-waiting={waiting || undefined}
+        >
+          <StatusText members={members} text={message.body} />
+        </span>
       </div>
     );
   }

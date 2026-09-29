@@ -197,6 +197,39 @@ describe("GroupRoom", () => {
     // The lazy markdown renderer can take a few seconds to load under a full run.
   }, 30_000);
 
+  it("status lines format inline code only; Waiting for you lines are amber", async () => {
+    pages = [
+      [
+        message("1", {
+          authorKind: "agent",
+          authorSessionId: "s-lead",
+          kind: "status",
+          body: "Worktree ready: `modus/group/p1` **not bold**",
+        }),
+        message("2", {
+          authorKind: "agent",
+          authorSessionId: "s-rev-1",
+          kind: "status",
+          body: "Waiting for you",
+        }),
+        message("3", {
+          authorKind: "system",
+          kind: "status",
+          body: "Waiting for you: this chain reached its limit of 6 turns.",
+        }),
+        message("4", { authorKind: "system", kind: "status", body: "Turn failed" }),
+      ],
+    ];
+    renderRoom();
+    const rows = (await screen.findAllByTestId("group-message")) as HTMLElement[];
+    const code = within(rows[0] as HTMLElement).getByText("modus/group/p1");
+    expect(code.tagName).toBe("CODE");
+    // Only inline code: the rest stays literal text.
+    expect(rows[0]?.textContent).toBe("Planner · Worktree ready: modus/group/p1 **not bold**");
+    const amber = rows.map((row) => Boolean(row.querySelector(".text-amber-400")));
+    expect(amber).toEqual([false, true, true, false]);
+  });
+
   it("loads older pages on scroll to top and merges live events without duplicates", async () => {
     const newest = Array.from({ length: GROUP_MESSAGE_PAGE }, (_, i) => message(String(i + 100)));
     const older = Array.from({ length: 10 }, (_, i) => message(String(i + 10)));
