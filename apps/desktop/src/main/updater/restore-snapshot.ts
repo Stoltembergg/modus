@@ -3,12 +3,13 @@ import { join } from "node:path";
 import type { UpdateRestoreUiState } from "../../shared/contracts";
 import { MAX_RESTORE_UI_STATE_BYTES, updateSaveUiStateSchema } from "../ipc/schemas";
 import type { UpdateLogger } from "./update-controller";
+import { isNewerStableVersion } from "./update-policy";
 
 /**
  * UI state carried across an update restart. While a downloaded update is pending the
  * renderer pushes its state (debounced); main keeps the latest in memory and writes it
  * synchronously in `before-quit`. The next start takes the file once (read + delete) and
- * hands it to the renderer only when the version changed and it is fresh.
+ * hands it to the renderer only after an upgrade and while it is fresh.
  */
 export const RESTORE_SNAPSHOT_SCHEMA_VERSION = 1;
 export const RESTORE_SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60_000;
@@ -73,7 +74,7 @@ export function createRestoreSnapshotKeeper(deps: {
 
 /**
  * Reads and deletes the snapshot (once per start, before anything cleans the updater
- * dir). Returns the state only when it came from another version, is under 24 h old and
+ * dir). Returns the state only when it came from an older version, is under 24 h old and
  * matches the known schema; everything else is discarded silently (debug log only).
  */
 export function takeRestoreSnapshot(deps: {
@@ -107,8 +108,13 @@ export function takeRestoreSnapshot(deps: {
   }
   if (!parsed || typeof parsed !== "object") return discard("not an object");
   if (parsed.schemaVersion !== RESTORE_SNAPSHOT_SCHEMA_VERSION) return discard("unknown schema");
-  if (typeof parsed.fromVersion !== "string" || parsed.fromVersion === deps.currentVersion) {
-    return discard("same version");
+  // Upgrades only, with the updater's own comparison: same version, downgrade or a
+  // non-stable version on either side is discarded.
+  if (
+    typeof parsed.fromVersion !== "string" ||
+    !isNewerStableVersion(deps.currentVersion, parsed.fromVersion)
+  ) {
+    return discard("not an upgrade");
   }
   const createdAt = typeof parsed.createdAt === "string" ? Date.parse(parsed.createdAt) : NaN;
   const age = deps.now() - createdAt;

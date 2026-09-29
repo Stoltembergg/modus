@@ -135,6 +135,22 @@ describe("restore snapshot take at startup", () => {
     expect(take("1.3.0").state).toBeNull();
   });
 
+  it("restores on any semver upgrade (numeric, not string, comparison)", () => {
+    for (const [from, current] of [
+      ["1.2.0", "1.2.1"],
+      ["1.9.0", "1.10.0"],
+      ["0.9.9", "1.0.0"],
+    ]) {
+      writeFile(file({ fromVersion: from }));
+      expect(take(current).state).toEqual(UI_STATE);
+    }
+  });
+
+  it("discards when the running version is not stable", () => {
+    writeFile(file());
+    expect(take("1.3.0-beta.1").state).toBeNull();
+  });
+
   it("returns null when there is no file", () => {
     expect(take().state).toBeNull();
   });
@@ -143,6 +159,10 @@ describe("restore snapshot take at startup", () => {
     ["invalid JSON", "{not json"],
     ["a JSON null", "null"],
     ["the same version", file({ fromVersion: "1.3.0" })],
+    ["a downgrade", file({ fromVersion: "1.4.0" })],
+    ["a downgrade by patch", file({ fromVersion: "1.3.1" })],
+    ["a non-stable from version", file({ fromVersion: "1.2.0-beta.1" })],
+    ["a missing from version", file({ fromVersion: undefined })],
     ["an unknown schema", file({ schemaVersion: 2 })],
     ["a missing schema", file({ schemaVersion: undefined })],
     [
