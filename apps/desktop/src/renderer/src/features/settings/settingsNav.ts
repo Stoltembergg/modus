@@ -27,6 +27,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavEntry[] = [
   { id: "personalization", label: "Personalization", group: "interface" },
   { id: "project-memory", label: "Project memory", group: "workspace" },
   { id: "harness-insights", label: "Harness Insights", group: "workspace" },
+  { id: "failure-blacklist", label: "Failure blacklist", group: "workspace" },
   { id: "mcp", label: "MCP", group: "workspace" },
   { id: "skills", label: "Skills", group: "workspace" },
   { id: "subagents", label: "Subagents", group: "workspace" },
