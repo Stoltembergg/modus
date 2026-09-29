@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -6,10 +7,10 @@ import type { FailureBlacklistEntry } from "../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
 import { SettingsSidebar } from "./SettingsPanel";
 import {
-  FailureBlacklistSettingsPanel,
-  FailureBlacklistView,
   buildClearStrategyConfirmMessage,
   countEntriesForStrategy,
+  FailureBlacklistSettingsPanel,
+  FailureBlacklistView,
   failureBlacklistAvailable,
   formatBlacklistExpiryDate,
   formatBlacklistTtlRemaining,
@@ -146,9 +147,11 @@ describe("FailureBlacklistView", () => {
       />,
     );
 
-    expect(markup).toContain('Could not clear strategy "blind_retry". Try again.');
+    expect(markup).toContain("Could not clear strategy &quot;blind_retry&quot;. Try again.");
     expect(markup).toMatch(/Clear all[\s\S]*?disabled/);
-    expect(markup).toMatch(/Clear strategy \(2 entries\)[\s\S]*?disabled|disabled[\s\S]*?Clear strategy \(2 entries\)/);
+    expect(markup).toMatch(
+      /Clear strategy \(2 entries\)[\s\S]*?disabled|disabled[\s\S]*?Clear strategy \(2 entries\)/,
+    );
   });
 
   it("shows an empty state without clear-all when there are no entries", () => {
@@ -187,6 +190,7 @@ describe("FailureBlacklistSettingsPanel clear flows", () => {
   let root: Root;
   let listMock: ReturnType<typeof vi.fn>;
   let clearMock: ReturnType<typeof vi.fn>;
+  let confirmMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     container = document.createElement("div");
@@ -194,13 +198,18 @@ describe("FailureBlacklistSettingsPanel clear flows", () => {
     root = createRoot(container);
     listMock = vi.fn(async () => entries);
     clearMock = vi.fn(async () => ({ ok: true }));
+    confirmMock = vi.fn(() => true);
     vi.stubGlobal("modus", {
       harnessInsights: {
         listFailureBlacklist: listMock,
         clearFailureBlacklist: clearMock,
       },
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
+    Object.defineProperty(window, "confirm", {
+      configurable: true,
+      writable: true,
+      value: confirmMock,
+    });
   });
 
   afterEach(() => {
@@ -263,5 +272,33 @@ describe("FailureBlacklistSettingsPanel clear flows", () => {
       (button) => button.textContent === "Clear all",
     );
     expect(clearAllAfter?.disabled).toBe(false);
+  });
+
+  it("reloads the list after a successful clear-strategy and confirms scoped count", async () => {
+    await act(async () => {
+      root.render(<FailureBlacklistSettingsPanel workspaceId="workspace-1" />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(countEntriesForStrategy(entries, "blind_retry")).toBe(2);
+    const clearStrategy = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Clear strategy (2 entries)",
+    );
+    expect(clearStrategy).toBeTruthy();
+
+    await act(async () => {
+      clearStrategy?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(confirmMock).toHaveBeenCalledWith(buildClearStrategyConfirmMessage("blind_retry", 2));
+    expect(clearMock).toHaveBeenCalledWith({
+      workspaceId: "workspace-1",
+      strategyCode: "blind_retry",
+    });
+    expect(listMock).toHaveBeenCalledTimes(2);
   });
 });
