@@ -58,8 +58,8 @@ export type AgentEvent =
       /** Images the user attached to this message (user role only). */
       attachments?: PromptImageAttachment[];
       /**
-       * User only: context the prompt carried (file/element/browser/…),
-       * shown as removable-looking chips in the message bubble so the sent context
+       * User only: context the prompt carried (file/element/browser/…), shown
+       * as removable-looking chips in the message bubble so the sent context
        * stays visible after sending (Cursor parity).
        */
       contextChips?: MessageContextChip[];
@@ -314,3 +314,4 @@ export type DiffTotals = {
   removed: number;
   fileCount: number;
 };
+
