@@ -17,6 +17,11 @@ export type UpdateEvent =
   | { type: "install-started" }
   | { type: "failed"; retryable: boolean; action: UpdateAction; appliesOnQuit?: true }
   | { type: "dismissed" }
+  /**
+   * The installer's hand-off deadline passed (macOS: the swap script stopped waiting):
+   * the install no longer applies on quit, so it is a plain retryable failure.
+   */
+  | { type: "hand-off-expired" }
   /** Restored at startup from the mac install script's failure marker. */
   | { type: "previous-install-failed"; version: string; retryable: boolean; action: UpdateAction };
 
@@ -90,6 +95,15 @@ export function reduceUpdateState(state: UpdateState, event: UpdateEvent): Updat
         : state;
     case "dismissed":
       return state.status === "available" || state.status === "failed" ? IDLE : state;
+    case "hand-off-expired":
+      return state.status === "failed" && state.appliesOnQuit
+        ? {
+            status: "failed",
+            version: state.version,
+            retryable: state.retryable,
+            action: state.action,
+          }
+        : state;
   }
 }
 

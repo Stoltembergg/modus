@@ -1,4 +1,17 @@
 /**
+ * How long the swap script waits for the app to quit, counted from its spawn (the
+ * install hand-off): 10 minutes, since MCP servers, terminals and agents can make a quit
+ * slow. The single source of truth for that deadline: the script polls every
+ * MAC_INSTALL_TICK_MS for MAC_INSTALL_WAIT_TICKS ticks, and the update service stops
+ * promising "applied when Modus closes" at the same deadline (installer
+ * `handOffDeadlineMs`). Each tick also runs `kill -0` and `sleep`, so the script gives up
+ * at the earliest MAC_INSTALL_WAIT_MS after its spawn, never before.
+ */
+export const MAC_INSTALL_WAIT_MS = 10 * 60_000;
+export const MAC_INSTALL_TICK_MS = 100;
+export const MAC_INSTALL_WAIT_TICKS = MAC_INSTALL_WAIT_MS / MAC_INSTALL_TICK_MS;
+
+/**
  * Detached /bin/sh script that swaps the app bundle after Modus quits. Positional args:
  *   $1 PID to wait for, $2 current bundle, $3 staged new bundle, $4 backup path,
  *   $5 `open` binary, $6 `xattr` binary, $7 max wait in 1/10 s, $8 lock directory,
@@ -40,7 +53,7 @@ wait_for_app() {
   while kill -0 "$pid" 2>/dev/null; do
     ticks=$((ticks + 1))
     if [ "$ticks" -gt "$max_ticks" ]; then return 1; fi
-    sleep 0.1
+    sleep ${MAC_INSTALL_TICK_MS / 1000}
   done
 }
 # One install at a time: mkdir is atomic. Released on exit (stale locks are removed
@@ -99,13 +112,6 @@ export const MAC_INSTALL_EXIT_REASONS: Record<number, string> = {
   11: "install-in-progress",
   12: "lock-unavailable",
 };
-
-/**
- * The script waits up to 10 minutes for the app to quit (MCP servers, terminals and
- * agents can make a quit slow). The service's 60 s watchdog only reports a retryable
- * failure in the UI; it does not stop this script.
- */
-export const MAC_INSTALL_WAIT_TICKS = 6000;
 
 export function macInstallScriptArgs(input: {
   pid: number;

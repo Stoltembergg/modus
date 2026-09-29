@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateState } from "../../shared/contracts";
+import { previousInstallFailure } from "./mac-install-failure";
+import { MAC_INSTALL_WAIT_MS } from "./mac-install-script";
 import {
   createUpdateController,
+  INSTALL_WATCHDOG_MS,
   type PlatformInstaller,
   type UpdateCandidate,
   type UpdateSource,
@@ -55,6 +58,9 @@ function setup(options: { installer?: PlatformInstaller; check?: UpdateSource["c
         ...(options.installer.appliesOnQuit === undefined
           ? {}
           : { appliesOnQuit: options.installer.appliesOnQuit }),
+        ...(options.installer.handOffDeadlineMs === undefined
+          ? {}
+          : { handOffDeadlineMs: options.installer.handOffDeadlineMs }),
       }
     : {
         actionFor: vi.fn(async () => "install" as const),
@@ -459,5 +465,200 @@ describe("dismiss", () => {
     controller.dismiss();
     expect(controller.getState()).toEqual({ status: "waiting-for-agents", version: "1.1.0" });
     controller.stop();
+  });
+});
+
+describe("install hand-off deadline (macOS swap script)", () => {
+  /** Like the mac installer: applies on a late quit, until the script stops waiting. */
+  const macLike = (overrides: Partial<PlatformInstaller> = {}): PlatformInstaller => ({
+    actionFor: async () => "install",
+    download: async () => undefined,
+    install: async () => undefined,
+    appliesOnQuit: true,
+    handOffDeadlineMs: MAC_INSTALL_WAIT_MS,
+    ...overrides,
+  });
+  const APPLIES = {
+    status: "failed",
+    version: "1.1.0",
+    retryable: true,
+    action: "install",
+    appliesOnQuit: true,
+  } as const;
+  const PLAIN = { status: "failed", version: "1.1.0", retryable: true, action: "install" } as const;
+  const timedOut = (logger: { warn: { mock: { calls: unknown[][] } } }) =>
+    logger.warn.mock.calls.filter(([line]) => String(line).includes("hand-off timed out"));
+
+  it("drops the promise exactly at the deadline, measured from the hand-off", async () => {
+    // The hand-off (install() resolving, i.e. the script spawned) happens 5 s in.
+    const handOff = deferred<void>();
+    const { controller, logger } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: macLike({ install: () => handOff.promise }),
+    });
+    await controller.checkNow();
+    const installing = controller.install();
+    await vi.advanceTimersByTimeAsync(5_000);
+    handOff.resolve();
+    await installing;
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(controller.getState()).toEqual(APPLIES);
+    // Not before: still promised 1 ms before hand-off + deadline (not watchdog + deadline).
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS - INSTALL_WATCHDOG_MS - 1);
+    expect(controller.getState()).toEqual(APPLIES);
+    expect(timedOut(logger)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    // A plain retryable failure: the toast offers Try again again.
+    expect(controller.getState()).toEqual(PLAIN);
+    expect(timedOut(logger)).toHaveLength(1);
+    expect(String(timedOut(logger)[0]?.[0])).toContain("update 1.1.0 install hand-off timed out");
+    // Fires once.
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS * 2);
+    expect(controller.getState()).toEqual(PLAIN);
+    expect(timedOut(logger)).toHaveLength(1);
+  });
+
+  it("ends in the same state the next start restores from the script's marker", async () => {
+    const { controller } = setup({ check: async () => candidate("1.1.0"), installer: macLike() });
+    await controller.checkNow();
+    await controller.install();
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS);
+    // The script exits with 3 (app-did-not-quit) at that deadline; the next start shows it.
+    const restored = previousInstallFailure(
+      { code: 3, reason: "app-did-not-quit", version: "1.1.0" },
+      "1.0.0",
+    );
+    const next = setup({ check: async () => candidate("1.1.0") });
+    if (!restored) throw new Error("expected a failure");
+    next.controller.reportPreviousFailure(restored);
+    expect(next.controller.getState()).toEqual(controller.getState());
+    // And a single message there: the startup check keeps that failure.
+    await next.controller.checkNow();
+    expect(next.controller.getState()).toEqual(PLAIN);
+  });
+
+  it("is cleared by a retry: only the new hand-off's deadline counts", async () => {
+    const { controller, installer, logger } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: macLike(),
+    });
+    await controller.checkNow();
+    await controller.install();
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(controller.getState()).toEqual(APPLIES);
+    expect(vi.getTimerCount()).toBe(1); // the first hand-off's deadline
+    await vi.advanceTimersByTimeAsync(60_000); // second hand-off 120 s after the first
+    await controller.retry();
+    expect(installer.install).toHaveBeenCalledTimes(2);
+    // The retry cleared the first deadline: only the new watchdog and deadline remain.
+    expect(vi.getTimerCount()).toBe(2);
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(controller.getState()).toEqual(APPLIES);
+    // The first deadline passes: nothing happens.
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS - 120_000);
+    expect(controller.getState()).toEqual(APPLIES);
+    expect(timedOut(logger)).toEqual([]);
+    // The second one does.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(controller.getState()).toEqual(PLAIN);
+    expect(timedOut(logger)).toHaveLength(1);
+  });
+
+  it("never overwrites a newer state (dismiss, then a newer offer)", async () => {
+    let latest = "1.1.0";
+    const { controller, logger } = setup({
+      check: async () => candidate(latest),
+      installer: macLike(),
+    });
+    await controller.checkNow();
+    await controller.install();
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(vi.getTimerCount()).toBe(1); // the hand-off deadline
+    controller.dismiss();
+    expect(controller.getState()).toEqual({ status: "idle" });
+    // The newer state cleared it right away.
+    expect(vi.getTimerCount()).toBe(0);
+    latest = "1.2.0";
+    await controller.checkNow();
+    const offer = { status: "available", version: "1.2.0", action: "install" };
+    expect(controller.getState()).toEqual(offer);
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS);
+    expect(controller.getState()).toEqual(offer);
+    expect(timedOut(logger)).toEqual([]);
+  });
+
+  it("survives the hand-off's own quit (before-quit -> stop) and a later stop()", async () => {
+    let stopDuringInstall = () => {};
+    const { controller } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: macLike({
+        install: async () => {
+          stopDuringInstall(); // app.quit() emits before-quit synchronously -> stop()
+        },
+      }),
+    });
+    stopDuringInstall = () => controller.stop();
+    await controller.checkNow();
+    await controller.install();
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(controller.getState()).toEqual(APPLIES);
+    controller.stop();
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS - INSTALL_WATCHDOG_MS);
+    expect(controller.getState()).toEqual(PLAIN);
+  });
+
+  it("is a no-op when the watchdog never fires (the app quit and the install applied)", async () => {
+    const { controller, logger } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: macLike(),
+    });
+    await controller.checkNow();
+    await controller.install();
+    expect(controller.getState()).toEqual({ status: "installing", version: "1.1.0" });
+    // A deadline shorter than the watchdog would find the app still installing: no-op,
+    // and the later watchdog failure is then a plain one (nothing is promised anymore).
+    const short = setup({
+      check: async () => candidate("1.1.0"),
+      installer: macLike({ handOffDeadlineMs: INSTALL_WATCHDOG_MS / 2 }),
+    });
+    await short.controller.checkNow();
+    await short.controller.install();
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS / 2);
+    expect(short.controller.getState()).toEqual({ status: "installing", version: "1.1.0" });
+    expect(timedOut(short.logger)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS / 2);
+    expect(short.controller.getState()).toEqual(PLAIN);
+    expect(timedOut(logger)).toEqual([]);
+  });
+
+  it("is not scheduled on Windows (never flagged) or for AppImage (no deadline)", async () => {
+    const windows = setup({
+      check: async () => candidate("1.1.0"),
+      // Even a stray deadline is ignored without appliesOnQuit.
+      installer: macLike({ appliesOnQuit: false }),
+    });
+    const appImage = setup({
+      check: async () => candidate("1.1.0"),
+      installer: (() => {
+        const { handOffDeadlineMs: _none, ...appImageLike } = macLike();
+        return appImageLike;
+      })(),
+    });
+    for (const { controller } of [windows, appImage]) {
+      await controller.checkNow();
+      await controller.install();
+    }
+    const pending = vi.getTimerCount();
+    await vi.advanceTimersByTimeAsync(INSTALL_WATCHDOG_MS);
+    expect(windows.controller.getState()).toEqual(PLAIN);
+    expect(appImage.controller.getState()).toEqual(APPLIES);
+    // Only the two watchdogs were pending; nothing else fires, ever.
+    expect(pending).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(MAC_INSTALL_WAIT_MS * 6);
+    expect(windows.controller.getState()).toEqual(PLAIN);
+    expect(appImage.controller.getState()).toEqual(APPLIES);
+    expect(timedOut(windows.logger)).toEqual([]);
+    expect(timedOut(appImage.logger)).toEqual([]);
   });
 });

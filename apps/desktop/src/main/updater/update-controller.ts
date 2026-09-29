@@ -25,11 +25,18 @@ export type PlatformInstaller = {
   install(candidate: UpdateCandidate): Promise<void>;
   /**
    * Whether a handed-off install still completes if the app quits later than expected:
-   * the AppImage file is already replaced, and the macOS swap script waits up to 10
-   * minutes for the app to exit. Not NSIS: its silent installer gives up right away
-   * when it cannot close the app. Decided per platform by `appliesOnQuitFor`.
+   * the AppImage file is already replaced, and the macOS swap script waits for the app
+   * to exit (see `handOffDeadlineMs`). Not NSIS: its silent installer gives up right
+   * away when it cannot close the app. Decided per platform by `appliesOnQuitFor`.
    */
   appliesOnQuit?: boolean;
+  /**
+   * Only with `appliesOnQuit`: how long after the hand-off (install() resolving) the
+   * pending install still runs on quit. Past it the service drops "applied when Modus
+   * closes" for a plain retryable failure. Undefined means no deadline (AppImage: the
+   * file is already replaced, nothing is left waiting). macOS: MAC_INSTALL_WAIT_MS.
+   */
+  handOffDeadlineMs?: number;
 };
 
 export type AgentActivityProbe = {
@@ -109,11 +116,26 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
   let forceRestart: (() => Promise<void>) | null = null;
   let lastFailureLogAt: number | null = null;
   let suppressedFailures = 0;
+  /** Fires at the installer's hand-off deadline (see PlatformInstaller.handOffDeadlineMs). */
+  let handOff: { timer: unknown; version: string } | null = null;
+
+  const clearHandOff = () => {
+    if (handOff) deps.timers.clearTimeout(handOff.timer);
+    handOff = null;
+  };
+  /** The hand-off only matters while its install is pending or promised on quit. */
+  const handOffStillPending = (current: UpdateState) =>
+    handOff !== null &&
+    "version" in current &&
+    current.version === handOff.version &&
+    (current.status === "installing" || (current.status === "failed" && !!current.appliesOnQuit));
 
   const dispatch = (event: UpdateEvent) => {
     const next = reduceUpdateState(state, event);
     if (next === state) return;
     state = next;
+    // A new attempt, a dismiss or any other newer state supersedes the hand-off.
+    if (handOff && !handOffStillPending(state)) clearHandOff();
     for (const listener of listeners) {
       try {
         listener(state);
@@ -208,15 +230,40 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
       fail(error, "install");
       return;
     }
-    // install() hands off to the quit; if the app is somehow still alive later (e.g. a
-    // quit was vetoed), surface a retryable failure instead of "installing" forever. When
-    // the installer says the handed-off install still completes on quit, the notice says so.
+    // install() hands off to the quit. If the installer still completes the install on
+    // a late quit only until a deadline (macOS: the swap script stops waiting), keep
+    // that deadline, measured from the hand-off, so the notice never promises an
+    // install nobody will perform. Scheduled after install() returns, i.e. after the
+    // hand-off's own app.quit() -> before-quit -> stop().
+    clearHandOff();
+    const deadlineMs = deps.installer.appliesOnQuit ? deps.installer.handOffDeadlineMs : undefined;
+    if (deadlineMs !== undefined) {
+      const version = candidate.version;
+      handOff = {
+        version,
+        timer: deps.timers.setTimeout(() => {
+          const promised = handOffStillPending(state) && state.status === "failed";
+          handOff = null;
+          if (!promised) return;
+          deps.logger.warn(
+            `update ${version} install hand-off timed out: the app did not quit within ${deadlineMs / 1000} s, so the pending install will not run`,
+          );
+          dispatch({ type: "hand-off-expired" });
+        }, deadlineMs),
+      };
+    }
+    // If the app is somehow still alive later (e.g. a quit was vetoed), surface a
+    // retryable failure instead of "installing" forever. When the installer says the
+    // handed-off install still completes on quit (and its deadline has not passed), the
+    // notice says so.
     deps.timers.setTimeout(() => {
       if (state.status === "installing") {
+        const stillApplies =
+          deps.installer.appliesOnQuit && (deadlineMs === undefined || handOffStillPending(state));
         fail(
           new Error("the app did not quit to install the update"),
           "install",
-          deps.installer.appliesOnQuit ? { appliesOnQuit: true } : {},
+          stillApplies ? { appliesOnQuit: true } : {},
         );
       }
     }, installWatchdogMs);
@@ -320,6 +367,10 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
       scheduler.stop();
       if (agentPoll !== undefined) deps.timers.clearTimeout(agentPoll);
       agentPoll = undefined;
+      // The hand-off deadline is deliberately kept: the hand-off's own app.quit() runs
+      // before-quit -> stop(), and if that quit is vetoed the deadline is exactly what
+      // must still fire. On a completed quit the process exits and the timer with it;
+      // any other state change clears it (see dispatch).
     },
     getState: () => state,
     subscribe(listener) {

@@ -158,6 +158,11 @@ describe("createElectronUpdaterInstaller", () => {
   it("says a late quit still installs only when asked (AppImage, not NSIS)", () => {
     const fake = new FakeUpdater();
     expect(createElectronUpdaterInstaller(asLike(fake)).appliesOnQuit).toBe(false);
+    // Never a hand-off deadline: AppImage is already replaced, NSIS is never flagged.
+    expect(createElectronUpdaterInstaller(asLike(fake))).not.toHaveProperty("handOffDeadlineMs");
+    expect(
+      createElectronUpdaterInstaller(asLike(fake), { appliesOnQuit: true }),
+    ).not.toHaveProperty("handOffDeadlineMs");
     expect(
       createElectronUpdaterInstaller(asLike(fake), { appliesOnQuit: true }).appliesOnQuit,
     ).toBe(true);
