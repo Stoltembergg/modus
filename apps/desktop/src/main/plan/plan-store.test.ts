@@ -1,6 +1,13 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsFailures = vi.hoisted(() => ({
@@ -32,8 +39,10 @@ vi.mock("node:fs", async (importOriginal) => {
 import {
   applyPlanAcceptanceEvidenceById,
   deleteSessionPlan,
+  fingerprintPlanSource,
   hashContent,
   type PlanSpecWriteInput,
+  promotePlanRevision,
   readPlan,
   readPlanById,
   setPlanBuildStatusById,
@@ -938,5 +947,523 @@ describe("build status transitions", () => {
   it("returns undefined for a missing plan", () => {
     expect(setPlanBuildStatusById(root, "missing", "built")).toBeUndefined();
     expect(readPlanById(root, "missing")).toBeUndefined();
+  });
+});
+
+describe("HyperPlan revision promotion", () => {
+  const revision = {
+    title: "Revised",
+    overview: "A safer plan.",
+    content: "# Revised\n\nImplement carefully.",
+    todos: [{ id: "todo-new", content: "Implement", acceptanceCriterionIds: ["ac-new"] }],
+    spec: {
+      requirements: [{ id: "req-new", text: "Ship safely." }],
+      acceptanceCriteria: [
+        {
+          id: "ac-new",
+          requirementId: "req-new",
+          description: "Checks pass.",
+          todoIds: ["todo-new"],
+          requiredCheckKinds: ["tests" as const],
+        },
+      ],
+      assumptions: ["CI is available."],
+      openQuestions: ["Which release date?"],
+    },
+  };
+
+  it("fingerprints all source fields canonically while preserving array order", () => {
+    const plan = write({
+      todos: [
+        { id: "todo-a", content: "A" },
+        { id: "todo-b", content: "B" },
+      ],
+      spec: {
+        requirements: [
+          { id: "req-a", text: "A" },
+          { id: "req-b", text: "B" },
+        ],
+        acceptanceCriteria: [],
+        assumptions: ["a", "b"],
+        openQuestions: [],
+      },
+    });
+    const spec = plan.spec;
+    if (!spec) throw new Error("Expected the fixture plan to include a spec.");
+    const source = {
+      title: plan.title,
+      overview: plan.overview,
+      content: plan.content,
+      todos: plan.todos,
+      spec,
+    };
+    expect(fingerprintPlanSource(source)).toBe(
+      fingerprintPlanSource({ ...source, todos: [...source.todos] }),
+    );
+    expect(fingerprintPlanSource(source)).not.toBe(
+      fingerprintPlanSource({ ...source, title: "Other" }),
+    );
+    expect(fingerprintPlanSource(source)).not.toBe(
+      fingerprintPlanSource({ ...source, todos: [...source.todos].reverse() }),
+    );
+    expect(fingerprintPlanSource(source)).not.toBe(
+      fingerprintPlanSource({ ...source, spec: { ...source.spec, assumptions: ["b", "a"] } }),
+    );
+  });
+
+  it("treats missing legacy Spec evidence as equivalent to empty evidence", () => {
+    const plan = write({
+      spec: {
+        requirements: [{ id: "req-legacy", text: "Keep legacy plans readable." }],
+        acceptanceCriteria: [],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    if (!plan.spec) throw new Error("Expected the fixture plan to include a spec.");
+    const { evidence: _evidence, ...legacySpec } = plan.spec;
+    const legacySource = { ...plan, spec: legacySpec } as unknown as typeof plan;
+
+    expect(fingerprintPlanSource(legacySource)).toBe(
+      fingerprintPlanSource({ ...plan, spec: { ...plan.spec, evidence: [] } }),
+    );
+  });
+
+  it("promotes matching source coherently and resets all build/QA state", () => {
+    const original = write({
+      todos: [{ id: "old", content: "Old work" }],
+      spec: {
+        requirements: [{ id: "old-req", text: "Old" }],
+        acceptanceCriteria: [
+          {
+            id: "old-ac",
+            requirementId: "old-req",
+            description: "Old",
+            todoIds: [],
+            requiredCheckKinds: ["tests"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    applyPlanAcceptanceEvidenceById(root, original.id, [
+      {
+        id: "old-evidence",
+        criterionId: "old-ac",
+        kind: "check",
+        status: "passed",
+        label: "Tests",
+      },
+    ]);
+    setPlanBuildStatusById(root, original.id, "built");
+    const current = readPlanById(root, original.id);
+    if (!current) throw new Error("Expected the original plan to be readable.");
+    const promoted = promotePlanRevision(root, {
+      planId: original.id,
+      expectedFingerprint: fingerprintPlanSource(current),
+      revision,
+    });
+
+    expect(promoted.title).toBe(revision.title);
+    expect(promoted.todos).toEqual([{ ...revision.todos[0], status: "pending" }]);
+    expect(promoted.spec?.acceptanceCriteria).toEqual([
+      { ...revision.spec.acceptanceCriteria[0], status: "pending" },
+    ]);
+    expect(promoted.spec?.evidence).toEqual([]);
+    expect(promoted.buildStatus).toBe("not_built");
+    expect(promoted.hash).toBe(hashContent(revision.content.trim()));
+    expect(readFileSync(promoted.path, "utf8")).toBe(promoted.content);
+    expect(readPlanById(root, original.id)).toEqual(promoted);
+    expect(JSON.parse(readFileSync(join(root, original.id, "plan.json"), "utf8"))).toMatchObject({
+      title: promoted.title,
+      hash: promoted.hash,
+    });
+  });
+
+  it("rejects stale source without changing the plan", () => {
+    const plan = write();
+    const before = readPlanById(root, plan.id);
+    if (!before) throw new Error("Expected the plan to be readable before promotion.");
+    expect(() =>
+      promotePlanRevision(root, { planId: plan.id, expectedFingerprint: "stale", revision }),
+    ).toThrow(/changed/i);
+    expect(readPlanById(root, plan.id)).toEqual(before);
+  });
+
+  it("revalidates the source after staging detects a change before publication", () => {
+    const plan = write();
+    const current = readPlanById(root, plan.id);
+    if (!current) throw new Error("Expected the plan to be readable before promotion.");
+    const originalRename = fs.renameSync;
+    const markerRename = vi.spyOn(fs, "renameSync");
+    let changedDuringStaging = false;
+    markerRename.mockImplementation(((from: fs.PathLike, to: fs.PathLike, ...args: unknown[]) => {
+      const result = (originalRename as (...renameArgs: unknown[]) => void)(from, to, ...args);
+      if (String(to).endsWith(".plan-transaction.json") && !changedDuringStaging) {
+        changedDuringStaging = true;
+        fs.writeFileSync(plan.path, "# Changed during staging", "utf8");
+      }
+      return result;
+    }) as typeof fs.renameSync);
+    try {
+      expect(() =>
+        promotePlanRevision(root, {
+          planId: plan.id,
+          expectedFingerprint: fingerprintPlanSource(current),
+          revision,
+        }),
+      ).toThrow(/source changed/i);
+    } finally {
+      markerRename.mockRestore();
+    }
+    expect(readFileSync(plan.path, "utf8")).toBe("# Changed during staging");
+    expect(readPlanById(root, plan.id)?.title).toBe(plan.title);
+  });
+
+  it("rolls back both authoritative files after a publication failure", () => {
+    const plan = write();
+    const before = readPlanById(root, plan.id);
+    if (!before) throw new Error("Expected the plan to be readable before promotion.");
+    const originalMarkdown = readFileSync(before.path);
+    const originalMeta = readFileSync(join(root, plan.id, "plan.json"));
+    const originalRename = fs.renameSync;
+    const rename = vi.spyOn(fs, "renameSync");
+    rename.mockImplementation(((from: fs.PathLike, to: fs.PathLike, ...args: unknown[]) => {
+      if (String(to).endsWith("plan.json")) throw new Error("injected publication failure");
+      return (originalRename as (...args: unknown[]) => void)(from, to, ...args);
+    }) as typeof fs.renameSync);
+    try {
+      expect(() =>
+        promotePlanRevision(root, {
+          planId: plan.id,
+          expectedFingerprint: fingerprintPlanSource(before),
+          revision,
+        }),
+      ).toThrow("injected publication failure");
+    } finally {
+      rename.mockRestore();
+    }
+    expect(readFileSync(before.path)).toEqual(originalMarkdown);
+    expect(readFileSync(join(root, plan.id, "plan.json"))).toEqual(originalMeta);
+    expect(readPlanById(root, plan.id)).toEqual(before);
+    expect(readFileSync(before.path, "utf8")).toBe(before.content);
+    expect(readFileSync(join(root, plan.id, "plan.json"))).toEqual(originalMeta);
+  });
+
+  it("recovers the previous plan from an interrupted transaction marker", () => {
+    const plan = write();
+    const dir = join(root, plan.id);
+    const originalMarkdown = readFileSync(plan.path);
+    const originalMeta = readFileSync(join(dir, "plan.json"));
+    const suffix = "123e4567-e89b-12d3-a456-426614174000";
+    const transaction = {
+      state: "prepared",
+      backupMarkdown: `.plan.md.${suffix}.backup`,
+      backupMeta: `.plan.json.${suffix}.backup`,
+      stagedMarkdown: `.plan.md.${suffix}.stage`,
+      stagedMeta: `.plan.json.${suffix}.stage`,
+    };
+    writeFileSync(join(dir, transaction.backupMarkdown), originalMarkdown);
+    writeFileSync(join(dir, transaction.backupMeta), originalMeta);
+    // Replace both published files with a partial/new state and leave the recovery marker.
+    writeFileSync(plan.path, "# Interrupted", "utf8");
+    writeFileSync(
+      join(dir, "plan.json"),
+      JSON.stringify({ id: plan.id, sessionId: plan.id, path: plan.path, title: "Interrupted" }),
+      "utf8",
+    );
+    writeFileSync(join(dir, ".plan-transaction.json"), JSON.stringify(transaction), "utf8");
+
+    expect(readPlanById(root, plan.id)?.content).toBe(plan.content);
+    expect(readFileSync(plan.path)).toEqual(originalMarkdown);
+    expect(readFileSync(join(dir, "plan.json"))).toEqual(originalMeta);
+    expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(false);
+  });
+
+  it("keeps committed revision bytes and removes its recovery marker", () => {
+    const plan = write();
+    const current = readPlanById(root, plan.id);
+    if (!current) throw new Error("Expected the plan to be readable before promotion.");
+    promotePlanRevision(root, {
+      planId: plan.id,
+      expectedFingerprint: fingerprintPlanSource(current),
+      revision,
+    });
+    const dir = join(root, plan.id);
+    const revisionMarkdown = readFileSync(plan.path);
+    const revisionMeta = readFileSync(join(dir, "plan.json"));
+    const suffix = "123e4567-e89b-12d3-a456-426614174000";
+    const transaction = {
+      state: "committed",
+      backupMarkdown: `.plan.md.${suffix}.backup`,
+      backupMeta: `.plan.json.${suffix}.backup`,
+      stagedMarkdown: `.plan.md.${suffix}.stage`,
+      stagedMeta: `.plan.json.${suffix}.stage`,
+    };
+    writeFileSync(join(dir, transaction.backupMarkdown), "old markdown");
+    writeFileSync(join(dir, transaction.backupMeta), "old metadata");
+    writeFileSync(join(dir, transaction.stagedMarkdown), "staged markdown");
+    writeFileSync(join(dir, transaction.stagedMeta), "staged metadata");
+    writeFileSync(join(dir, ".plan-transaction.json"), JSON.stringify(transaction));
+
+    expect(readPlanById(root, plan.id)?.title).toBe(revision.title);
+    expect(readFileSync(plan.path)).toEqual(revisionMarkdown);
+    expect(readFileSync(join(dir, "plan.json"))).toEqual(revisionMeta);
+    expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(false);
+    expect(existsSync(join(dir, transaction.backupMarkdown))).toBe(false);
+  });
+
+  it.each([
+    "backupMarkdown",
+    "backupMeta",
+    "stagedMarkdown",
+    "stagedMeta",
+  ] as const)("recovers prepared state idempotently if cleanup fails removing %s", (failedArtifact) => {
+    const plan = write();
+    const dir = join(root, plan.id);
+    const originalMarkdown = readFileSync(plan.path);
+    const originalMeta = readFileSync(join(dir, "plan.json"));
+    const suffix = "123e4567-e89b-12d3-a456-426614174000";
+    const transaction = {
+      state: "prepared",
+      backupMarkdown: `.plan.md.${suffix}.backup`,
+      backupMeta: `.plan.json.${suffix}.backup`,
+      stagedMarkdown: `.plan.md.${suffix}.stage`,
+      stagedMeta: `.plan.json.${suffix}.stage`,
+    };
+    for (const key of ["backupMarkdown", "backupMeta", "stagedMarkdown", "stagedMeta"] as const) {
+      writeFileSync(join(dir, transaction[key]), "transaction artifact");
+    }
+    writeFileSync(join(dir, transaction.backupMarkdown), originalMarkdown);
+    writeFileSync(join(dir, transaction.backupMeta), originalMeta);
+    writeFileSync(plan.path, "interrupted markdown");
+    writeFileSync(join(dir, "plan.json"), "interrupted metadata");
+    writeFileSync(join(dir, ".plan-transaction.json"), JSON.stringify(transaction));
+
+    const originalUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, "unlinkSync");
+    unlink.mockImplementation(((path: fs.PathLike) => {
+      if (String(path) === join(dir, transaction[failedArtifact])) {
+        throw new Error("injected artifact cleanup failure");
+      }
+      return originalUnlink(path);
+    }) as typeof fs.unlinkSync);
+    try {
+      expect(() => readPlanById(root, plan.id)).toThrow("injected artifact cleanup failure");
+    } finally {
+      unlink.mockRestore();
+    }
+
+    expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(false);
+    expect(readFileSync(plan.path)).toEqual(originalMarkdown);
+    expect(readFileSync(join(dir, "plan.json"))).toEqual(originalMeta);
+    expect(readPlanById(root, plan.id)?.content).toBe(plan.content);
+  });
+
+  it.each([
+    "backupMarkdown",
+    "backupMeta",
+    "stagedMarkdown",
+    "stagedMeta",
+  ] as const)("keeps committed state idempotent if cleanup fails removing %s", (failedArtifact) => {
+    const plan = write();
+    const current = readPlanById(root, plan.id);
+    if (!current) throw new Error("Expected the plan to be readable before promotion.");
+    promotePlanRevision(root, {
+      planId: plan.id,
+      expectedFingerprint: fingerprintPlanSource(current),
+      revision,
+    });
+    const dir = join(root, plan.id);
+    const revisionMarkdown = readFileSync(plan.path);
+    const revisionMeta = readFileSync(join(dir, "plan.json"));
+    const suffix = "123e4567-e89b-12d3-a456-426614174000";
+    const transaction = {
+      state: "committed",
+      backupMarkdown: `.plan.md.${suffix}.backup`,
+      backupMeta: `.plan.json.${suffix}.backup`,
+      stagedMarkdown: `.plan.md.${suffix}.stage`,
+      stagedMeta: `.plan.json.${suffix}.stage`,
+    };
+    for (const key of ["backupMarkdown", "backupMeta", "stagedMarkdown", "stagedMeta"] as const) {
+      writeFileSync(join(dir, transaction[key]), "transaction artifact");
+    }
+    writeFileSync(join(dir, ".plan-transaction.json"), JSON.stringify(transaction));
+
+    const originalUnlink = fs.unlinkSync;
+    const unlink = vi.spyOn(fs, "unlinkSync");
+    unlink.mockImplementation(((path: fs.PathLike) => {
+      if (String(path) === join(dir, transaction[failedArtifact])) {
+        throw new Error("injected artifact cleanup failure");
+      }
+      return originalUnlink(path);
+    }) as typeof fs.unlinkSync);
+    try {
+      expect(() => readPlanById(root, plan.id)).toThrow("injected artifact cleanup failure");
+    } finally {
+      unlink.mockRestore();
+    }
+
+    expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(false);
+    expect(readFileSync(plan.path)).toEqual(revisionMarkdown);
+    expect(readFileSync(join(dir, "plan.json"))).toEqual(revisionMeta);
+    expect(readPlanById(root, plan.id)?.title).toBe(revision.title);
+  });
+
+  it.each([
+    "{truncated",
+    JSON.stringify({
+      backupMarkdown: "../../outside",
+      backupMeta: "plan.json.backup",
+      stagedMarkdown: "plan.md.stage",
+      stagedMeta: "plan.json.stage",
+    }),
+  ])("preserves files and refuses malformed or unsafe recovery markers", (marker) => {
+    const plan = write();
+    const dir = join(root, plan.id);
+    const originalMarkdown = readFileSync(plan.path);
+    const originalMeta = readFileSync(join(dir, "plan.json"));
+    writeFileSync(join(dir, ".plan-transaction.json"), marker);
+
+    expect(() => readPlanById(root, plan.id)).toThrow(/transaction/i);
+    expect(readFileSync(plan.path)).toEqual(originalMarkdown);
+    expect(readFileSync(join(dir, "plan.json"))).toEqual(originalMeta);
+    expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(true);
+  });
+
+  it("rejects symlinked transaction artifacts without modifying the external target", () => {
+    const plan = write();
+    const dir = join(root, plan.id);
+    const outside = join(root, "outside.txt");
+    writeFileSync(outside, "external bytes");
+    const link = join(dir, ".plan.md.123e4567-e89b-12d3-a456-426614174000.backup");
+    const originalLstat = fs.lstatSync;
+    const lstat = vi.spyOn(fs, "lstatSync");
+    lstat.mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+      if (String(path) === link) {
+        return { isSymbolicLink: () => true, isFile: () => false } as fs.Stats;
+      }
+      return (originalLstat as (...args: unknown[]) => fs.Stats)(path, ...args);
+    }) as typeof fs.lstatSync);
+    writeFileSync(
+      join(dir, ".plan-transaction.json"),
+      JSON.stringify({
+        state: "prepared",
+        backupMarkdown: ".plan.md.123e4567-e89b-12d3-a456-426614174000.backup",
+        backupMeta: ".plan.json.123e4567-e89b-12d3-a456-426614174000.backup",
+        stagedMarkdown: ".plan.md.123e4567-e89b-12d3-a456-426614174000.stage",
+        stagedMeta: ".plan.json.123e4567-e89b-12d3-a456-426614174000.stage",
+      }),
+    );
+
+    try {
+      expect(() => readPlanById(root, plan.id)).toThrow(/symlink/i);
+      expect(readFileSync(outside, "utf8")).toBe("external bytes");
+      expect(existsSync(join(dir, ".plan-transaction.json"))).toBe(true);
+    } finally {
+      lstat.mockRestore();
+    }
+  });
+
+  it("rejects a symlinked plan directory without touching its external files", () => {
+    const plan = write();
+    const planPath = join(root, plan.id);
+    const externalDir = join(root, "external-plan");
+    mkdirSync(externalDir);
+    const externalMarker = join(externalDir, ".plan-transaction.json");
+    writeFileSync(externalMarker, "external marker bytes");
+    writeFileSync(join(externalDir, "plan.md"), "external plan bytes");
+    writeFileSync(
+      join(externalDir, "plan.json"),
+      JSON.stringify({ ...plan, path: join(externalDir, "plan.md") }),
+    );
+    const originalLstat = fs.lstatSync;
+    let realSymlinkSupported = true;
+    try {
+      rmSync(planPath, { recursive: true, force: true });
+      fs.symlinkSync(externalDir, planPath, "junction");
+    } catch {
+      realSymlinkSupported = false;
+      // Fallback exercises the same directory-component rejection where Windows policy or
+      // runner permissions prevent creating a real directory symlink/junction.
+      const lstat = vi.spyOn(fs, "lstatSync");
+      lstat.mockImplementation(((path: fs.PathLike, ...args: unknown[]) => {
+        if (String(path) === planPath) {
+          return { isSymbolicLink: () => true, isDirectory: () => false } as fs.Stats;
+        }
+        return (originalLstat as (...statArgs: unknown[]) => fs.Stats)(path, ...args);
+      }) as typeof fs.lstatSync);
+      const originalExists = fs.existsSync;
+      const exists = vi.spyOn(fs, "existsSync");
+      exists.mockImplementation((path: fs.PathLike) =>
+        String(path) === join(planPath, "plan.json") ? true : originalExists(path),
+      );
+      try {
+        expect(() => readPlanById(root, plan.id)).toThrow(/symlink/i);
+      } finally {
+        exists.mockRestore();
+        lstat.mockRestore();
+      }
+    }
+
+    if (realSymlinkSupported) {
+      expect(() => readPlanById(root, plan.id)).toThrow(/symlink/i);
+    }
+    expect(readFileSync(externalMarker, "utf8")).toBe("external marker bytes");
+  });
+
+  it("rejects a traversal marker without touching the external file it names", () => {
+    const plan = write();
+    const external = join(tmpdir(), `${basename(root)}-outside.txt`);
+    writeFileSync(external, "external bytes");
+    writeFileSync(
+      join(root, plan.id, ".plan-transaction.json"),
+      JSON.stringify({
+        state: "prepared",
+        backupMarkdown: `../../${basename(external)}`,
+        backupMeta: ".plan.json.123e4567-e89b-12d3-a456-426614174000.backup",
+        stagedMarkdown: ".plan.md.123e4567-e89b-12d3-a456-426614174000.stage",
+        stagedMeta: ".plan.json.123e4567-e89b-12d3-a456-426614174000.stage",
+      }),
+    );
+
+    try {
+      expect(() => readPlanById(root, plan.id)).toThrow(/artifact names/i);
+      expect(readFileSync(external, "utf8")).toBe("external bytes");
+    } finally {
+      rmSync(external, { force: true });
+    }
+  });
+
+  it.each([
+    1, 2, 3,
+  ])("keeps a committed revision successful when cleanup unlink %i fails", (failAt) => {
+    const plan = write();
+    const current = readPlanById(root, plan.id);
+    if (!current) throw new Error("Expected the plan to be readable before promotion.");
+    const originalUnlink = fs.unlinkSync;
+    let calls = 0;
+    const remove = vi.spyOn(fs, "unlinkSync");
+    remove.mockImplementation(((...args: Parameters<typeof fs.unlinkSync>) => {
+      calls += 1;
+      if (calls === failAt) throw new Error("injected cleanup failure");
+      return originalUnlink(...args);
+    }) as typeof fs.unlinkSync);
+    let promoted: ReturnType<typeof promotePlanRevision> | undefined;
+    try {
+      promoted = promotePlanRevision(root, {
+        planId: plan.id,
+        expectedFingerprint: fingerprintPlanSource(current),
+        revision,
+      });
+    } finally {
+      remove.mockRestore();
+    }
+
+    expect(promoted?.title).toBe(revision.title);
+    expect(calls).toBeGreaterThanOrEqual(failAt);
+    expect(readPlanById(root, plan.id)?.title).toBe(revision.title);
   });
 });

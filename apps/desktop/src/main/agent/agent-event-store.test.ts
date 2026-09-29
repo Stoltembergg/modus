@@ -359,6 +359,76 @@ describe("getLatestHarnessTaskState", () => {
     expect(Number.isSafeInteger(rowId)).toBe(true);
     expect(rowId).toBeGreaterThan(0);
   });
+
+  it("deduplicates matching idempotent events and rejects key reuse for a different payload", () => {
+    const sessionId = `idempotent-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const event = { type: "runtime.error", sessionId, message: "publish once" } as const;
+    const options = { idempotencyKey: "hyperplan-selection-1" };
+
+    const firstRowId = recordAgentEvent(event, options);
+    const retryRowId = recordAgentEvent(event, options);
+    const rowCount = getDatabase()
+      .prepare("select count(*) as count from agent_events where session_id = ? and type = ?")
+      .get(sessionId, event.type) as { count: number };
+
+    expect(retryRowId).toBe(firstRowId);
+    expect(rowCount.count).toBe(1);
+    expect(() => recordAgentEvent({ ...event, message: "different payload" }, options)).toThrow(
+      /idempotency key.*different event/i,
+    );
+  });
+
+  it("keeps original-build idempotency unique across a process-style restart", async () => {
+    const sessionId = `epoch-restart-${crypto.randomUUID()}`;
+    const ownerId = 73;
+    const requestId = "same-request";
+    insertSession(sessionId);
+
+    const firstStore = await import("./harness/hyperplan-draft-store");
+    const firstEpoch = firstStore.registerHyperPlanDraftOwner(ownerId);
+    const firstIdentity = firstStore.getHyperPlanOwnerEpochIdentity(firstEpoch);
+    if (!firstIdentity) throw new Error("First owner epoch has no durable identity.");
+    const firstKey = `original:${ownerId}:${firstIdentity}:${requestId}`;
+    const original = {
+      type: "message.started",
+      sessionId,
+      messageId: firstKey,
+      role: "user",
+    } as const;
+    const firstRowId = recordAgentEvent(original, { idempotencyKey: firstKey });
+    expect(recordAgentEvent(original, { idempotencyKey: firstKey })).toBe(firstRowId);
+
+    // Reload only the in-memory draft store to model Electron restarting while retaining SQLite.
+    await vi.resetModules();
+    const restartedStore = await import("./harness/hyperplan-draft-store");
+    const secondEpoch = restartedStore.registerHyperPlanDraftOwner(ownerId);
+    const secondIdentity = restartedStore.getHyperPlanOwnerEpochIdentity(secondEpoch);
+    if (!secondIdentity) throw new Error("Restarted owner epoch has no durable identity.");
+    const secondKey = `original:${ownerId}:${secondIdentity}:${requestId}`;
+    const replacement = {
+      type: "message.started",
+      sessionId,
+      messageId: secondKey,
+      role: "user",
+    } as const;
+
+    expect(secondKey).not.toBe(firstKey);
+    const secondRowId = recordAgentEvent(replacement, {
+      idempotencyKey: secondKey,
+    });
+    expect(secondRowId).not.toBe(firstRowId);
+    const rows = getDatabase()
+      .prepare("select id, payload_json from agent_events where session_id = ? order by rowid")
+      .all(sessionId) as Array<{ id: string; payload_json: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.id).not.toBe(rows[1]?.id);
+    expect(rows.map(({ payload_json }) => JSON.parse(payload_json).messageId)).toEqual([
+      firstKey,
+      secondKey,
+    ]);
+    expect(recordAgentEvent(replacement, { idempotencyKey: secondKey })).toBe(secondRowId);
+  });
 });
 
 describe("post-restore QA evidence", () => {

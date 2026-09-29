@@ -7,7 +7,7 @@ import type {
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
-  HyperPlanSummary,
+  HyperPlanRevision,
   ModelInfo,
   PermissionDecision,
   PermissionRequest,
@@ -77,42 +77,261 @@ export function canSubmitPromptForSession(
   return Boolean(modelId) && (Boolean(workspace) || sessionWorkspaceId === CHATS_WORKSPACE_ID);
 }
 
-export async function requestHyperPlanReview(
-  input: { sessionId: string; planId: string; planHash: string },
-  activeRequest: { current: Set<string> },
-  review: (input: { sessionId: string; planId: string }) => Promise<HyperPlanSummary>,
-): Promise<HyperPlanSummary | undefined> {
-  const token = `review:${input.planId}:${input.planHash}`;
-  if (activeRequest.current.has(token)) return undefined;
-  activeRequest.current.add(token);
-  try {
-    return await review({ sessionId: input.sessionId, planId: input.planId });
-  } finally {
-    activeRequest.current.delete(token);
-  }
+type HyperPlanPreview = { draftId: string; revision: HyperPlanRevision };
+type HyperPlanChoice = "revision" | "original";
+type HyperPlanAgentApi = Pick<
+  Window["modus"]["agent"],
+  "createHyperPlanDraft" | "resolveHyperPlanDraft" | "startPlanBuild" | "startOriginalPlanBuild"
+>;
+
+type HyperPlanOperationError = Error & { stage: "choice" | "start" | "pending" };
+
+/** Keeps idempotency identities and selection tokens private to this renderer instance. */
+export function createHyperPlanOperations(
+  api: HyperPlanAgentApi,
+  createRequestId: () => string = () => crypto.randomUUID(),
+) {
+  const choices = new Map<
+    string,
+    {
+      choiceRequestId: string;
+      startRequestId: string;
+      selectionId?: string;
+      running: boolean;
+      done: boolean;
+    }
+  >();
+  const originals = new Map<
+    string,
+    {
+      requestId: string;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+      running: boolean;
+      done: boolean;
+    }
+  >();
+
+  return {
+    review(input: { sessionId: string; planId: string }) {
+      return api.createHyperPlanDraft(input);
+    },
+    async choose(preview: HyperPlanPreview, choice: HyperPlanChoice) {
+      const key = `${preview.draftId}:${choice}`;
+      let operation = choices.get(key);
+      if (!operation) {
+        operation = {
+          choiceRequestId: createRequestId(),
+          startRequestId: createRequestId(),
+          running: false,
+          done: false,
+        };
+        choices.set(key, operation);
+      }
+      if (operation.running) throw operationError("pending");
+      if (operation.done) return;
+      operation.running = true;
+      try {
+        if (!operation.selectionId) {
+          try {
+            const selection = await api.resolveHyperPlanDraft({
+              draftId: preview.draftId,
+              choice,
+              requestId: operation.choiceRequestId,
+            });
+            operation.selectionId = selection.selectionId;
+          } catch {
+            throw operationError("choice");
+          }
+        }
+        try {
+          await api.startPlanBuild({
+            selectionId: operation.selectionId,
+            requestId: operation.startRequestId,
+          });
+          operation.done = true;
+        } catch {
+          throw operationError("start");
+        }
+      } finally {
+        operation.running = false;
+      }
+    },
+    async buildOriginal(input: {
+      sessionId: string;
+      planId: string;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+    }) {
+      const key = `${input.sessionId}:${input.planId}`;
+      let operation = originals.get(key);
+      if (!operation) {
+        operation = {
+          requestId: createRequestId(),
+          sourceSnapshot: input.sourceSnapshot,
+          running: false,
+          done: false,
+        };
+        originals.set(key, operation);
+      }
+      if (operation.running) throw operationError("pending");
+      if (operation.done) return;
+      operation.running = true;
+      try {
+        try {
+          await api.startOriginalPlanBuild({
+            sessionId: input.sessionId,
+            planId: input.planId,
+            sourceSnapshot: operation.sourceSnapshot,
+            requestId: operation.requestId,
+          });
+          operation.done = true;
+        } catch {
+          throw operationError("start");
+        }
+      } finally {
+        operation.running = false;
+      }
+    },
+    reset() {
+      choices.clear();
+      originals.clear();
+    },
+  };
 }
 
+function operationError(stage: HyperPlanOperationError["stage"]): HyperPlanOperationError {
+  return Object.assign(new Error("HyperPlan operation failed"), { stage });
+}
+
+type HyperPlanSourceSnapshot = ReturnType<typeof hyperPlanSourceProjection>;
+
 type HyperPlanReviewState =
-  | { planId: string; planHash: string; originalPlan: PlanRef; status: "reviewing" }
+  | { planId: string; planHash: string; sourceSnapshot: HyperPlanSourceSnapshot; status: "loading" }
   | {
       planId: string;
       planHash: string;
-      originalPlan: PlanRef;
-      status: "completed" | "applying";
-      summary: HyperPlanSummary;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+      status: "ready";
+      preview: HyperPlanPreview;
     }
   | {
       planId: string;
       planHash: string;
-      originalPlan: PlanRef;
-      status: "error";
-      error: string;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+      status: "review-error";
+      originalStart?: "pending" | "error";
+    }
+  | {
+      planId: string;
+      planHash: string;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+      status: "choosing" | "choice-error" | "start-error";
+      preview: HyperPlanPreview;
+      choice: HyperPlanChoice;
     };
 
-function formatHyperPlanError(error: unknown): string {
-  const cause = error instanceof Error ? error.message : String(error);
-  const detail = cause.trim().slice(0, 240) || "Unknown review error";
-  return `Review failed: ${detail}. Try again.`;
+export function reconcileHyperPlanReview(
+  review: HyperPlanReviewState | undefined,
+  latestPlan: PlanRef | undefined,
+): { review: HyperPlanReviewState | undefined; invalidate: boolean } {
+  if (!latestPlan || !review) {
+    return { review, invalidate: false };
+  }
+
+  if (review.planId !== latestPlan.id) return { review: undefined, invalidate: true };
+
+  const latestSource = hyperPlanSourceProjection(latestPlan);
+  if (JSON.stringify(review.sourceSnapshot) === JSON.stringify(latestSource)) {
+    return {
+      review:
+        review.planHash === latestPlan.hash ? review : { ...review, planHash: latestPlan.hash },
+      invalidate: false,
+    };
+  }
+
+  // Accept only the exact source projection written when promoting the
+  // currently selected revision after a possibly-uncertain revision choice.
+  if (
+    (review.status === "choosing" ||
+      review.status === "choice-error" ||
+      review.status === "start-error") &&
+    review.choice === "revision" &&
+    matchesPromotedHyperPlanRevision(latestPlan, review.preview.revision)
+  ) {
+    return {
+      review: { ...review, planHash: latestPlan.hash, sourceSnapshot: latestSource },
+      invalidate: false,
+    };
+  }
+
+  return { review: undefined, invalidate: true };
+}
+
+export function hyperPlanSourceProjection(plan: PlanRef) {
+  return {
+    title: plan.title,
+    overview: plan.overview,
+    content: plan.content,
+    todos: plan.todos.map(({ id, content, acceptanceCriterionIds }) => ({
+      id,
+      content,
+      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
+    })),
+    spec: plan.spec && {
+      requirements: plan.spec.requirements,
+      acceptanceCriteria: plan.spec.acceptanceCriteria,
+      assumptions: plan.spec.assumptions,
+      openQuestions: plan.spec.openQuestions,
+      evidence: plan.spec.evidence ?? [],
+    },
+  };
+}
+
+function matchesPromotedHyperPlanRevision(plan: PlanRef, revision: HyperPlanRevision): boolean {
+  if (!plan.spec) return false;
+  if (
+    plan.content !== revision.content.trim() ||
+    plan.todos.some((todo) => todo.status !== "pending") ||
+    plan.spec.acceptanceCriteria.some((criterion) => criterion.status !== "pending") ||
+    plan.spec.evidence === undefined ||
+    plan.spec.evidence.length !== 0
+  )
+    return false;
+
+  const revisionSource = {
+    title: revision.title,
+    overview: revision.overview,
+    content: revision.content.trim(),
+    todos: revision.todos.map(({ id, content, acceptanceCriterionIds }) => ({
+      id,
+      content,
+      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
+    })),
+    spec: {
+      requirements: revision.spec.requirements,
+      acceptanceCriteria: revision.spec.acceptanceCriteria,
+      assumptions: revision.spec.assumptions,
+      openQuestions: revision.spec.openQuestions,
+    },
+  };
+  const planSource = {
+    title: plan.title,
+    overview: plan.overview,
+    content: plan.content,
+    todos: plan.todos.map(({ id, content, acceptanceCriterionIds }) => ({
+      id,
+      content,
+      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
+    })),
+    spec: {
+      requirements: plan.spec.requirements,
+      acceptanceCriteria: plan.spec.acceptanceCriteria.map(
+        ({ status: _status, ...criterion }) => criterion,
+      ),
+      assumptions: plan.spec.assumptions,
+      openQuestions: plan.spec.openQuestions,
+    },
+  };
+  return JSON.stringify(planSource) === JSON.stringify(revisionSource);
 }
 
 type ChatPaneProps = {
@@ -446,8 +665,8 @@ export function ChatPane({
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
   const [dismissedPlanHash, setDismissedPlanHash] = useState<string | undefined>(undefined);
   const [hyperPlanReview, setHyperPlanReview] = useState<HyperPlanReviewState>();
-  const hyperPlanRequests = useRef(new Set<string>());
-  const hyperPlanEpoch = useRef(0);
+  const hyperPlanRequestId = useRef(0);
+  const hyperPlanOperations = useRef(createHyperPlanOperations(window.modus.agent));
   const [previewSubagentId, setPreviewSubagentId] = useState<string | undefined>();
   const managedProcesses = useManagedProcesses({
     workspaceId: workspace?.id,
@@ -642,6 +861,27 @@ export function ChatPane({
     }
   }, [latestPlan, onPlanUpdated]);
 
+  useEffect(() => {
+    const reconciliation = reconcileHyperPlanReview(hyperPlanReview, latestPlan);
+    if (!reconciliation.invalidate) {
+      if (reconciliation.review !== hyperPlanReview) {
+        setHyperPlanReview(reconciliation.review);
+      }
+      return;
+    }
+    hyperPlanRequestId.current += 1;
+    hyperPlanOperations.current.reset();
+    setHyperPlanReview(reconciliation.review);
+  }, [latestPlan, hyperPlanReview]);
+
+  useEffect(
+    () => () => {
+      hyperPlanRequestId.current += 1;
+      hyperPlanOperations.current.reset();
+    },
+    [],
+  );
+
   /**
    * Build Locally: the user's explicit authorization to execute the approved
    * plan. Sends a CONCISE build message — the plan title, its to-dos, and a
@@ -716,8 +956,8 @@ export function ChatPane({
     setPendingPrompt(false);
     setAborting(false);
     setWorkingStats(undefined);
-    hyperPlanEpoch.current += 1;
-    hyperPlanRequests.current.clear();
+    hyperPlanRequestId.current += 1;
+    hyperPlanOperations.current.reset();
     setHyperPlanReview(undefined);
     refreshStats();
 
@@ -766,8 +1006,8 @@ export function ChatPane({
 
     return () => {
       cancelled = true;
-      hyperPlanEpoch.current += 1;
-      hyperPlanRequests.current.clear();
+      hyperPlanRequestId.current += 1;
+      hyperPlanOperations.current.reset();
       const el = scrollContainerRef.current;
       if (el) {
         rememberSessionScroll(sessionId, el.scrollTop);
@@ -806,72 +1046,86 @@ export function ChatPane({
 
   async function reviewPlanWithHyperPlan(plan: PlanRef): Promise<void> {
     if (!plan.spec) return;
-    const token = `${plan.id}:${plan.hash}`;
-    if (hyperPlanRequests.current.has(`review:${token}`)) return;
-    const epoch = hyperPlanEpoch.current;
-    setHyperPlanReview({
-      planId: plan.id,
-      planHash: plan.hash,
-      originalPlan: plan,
-      status: "reviewing",
-    });
+    const requestId = ++hyperPlanRequestId.current;
+    setPromptError(undefined);
+    const sourceSnapshot = hyperPlanSourceProjection(plan);
+    setHyperPlanReview({ planId: plan.id, planHash: plan.hash, sourceSnapshot, status: "loading" });
     try {
-      const summary = await requestHyperPlanReview(
-        { sessionId, planId: plan.id, planHash: plan.hash },
-        { current: hyperPlanRequests.current },
-        (input) => window.modus.agent.reviewPlanWithHyperPlan(input),
-      );
-      if (summary && epoch === hyperPlanEpoch.current) {
+      const preview = await hyperPlanOperations.current.review({ sessionId, planId: plan.id });
+      if (requestId === hyperPlanRequestId.current) {
         setHyperPlanReview({
           planId: plan.id,
           planHash: plan.hash,
-          originalPlan: plan,
-          status: "completed",
-          summary,
+          sourceSnapshot,
+          status: "ready",
+          preview,
         });
       }
-    } catch (error) {
-      if (epoch !== hyperPlanEpoch.current) return;
-      setHyperPlanReview({
-        planId: plan.id,
-        planHash: plan.hash,
-        originalPlan: plan,
-        status: "error",
-        error: formatHyperPlanError(error),
-      });
+    } catch {
+      if (requestId === hyperPlanRequestId.current) {
+        setHyperPlanReview({
+          planId: plan.id,
+          planHash: plan.hash,
+          sourceSnapshot,
+          status: "review-error",
+        });
+        setPromptError("HyperPlan review is unavailable. Try again or build the original plan.");
+      }
     }
   }
 
-  async function applyHyperPlanRevision(): Promise<void> {
-    if (visibleHyperPlanReview?.status !== "completed") return;
-    const { originalPlan, summary } = visibleHyperPlanReview;
-    const token = `apply:${originalPlan.id}:${originalPlan.hash}`;
-    if (hyperPlanRequests.current.has(token)) return;
-    const epoch = hyperPlanEpoch.current;
-    hyperPlanRequests.current.add(token);
-    setHyperPlanReview({ ...visibleHyperPlanReview, status: "applying" });
+  async function chooseHyperPlan(choice: HyperPlanChoice): Promise<void> {
+    const review = visibleHyperPlanReview;
+    if (
+      !review ||
+      review.status === "loading" ||
+      review.status === "choosing" ||
+      (review.status === "review-error" && review.originalStart === "pending")
+    )
+      return;
+    const requestId = hyperPlanRequestId.current;
+    setPromptError(undefined);
+    const isOriginalAfterReviewError = review.status === "review-error" && choice === "original";
+    if (isOriginalAfterReviewError) {
+      setHyperPlanReview({ ...review, originalStart: "pending" });
+    } else if ("preview" in review) {
+      setHyperPlanReview({ ...review, status: "choosing", choice });
+    } else {
+      return;
+    }
     try {
-      const updatedPlan = await window.modus.agent.applyHyperPlanRevision({
-        sessionId,
-        planId: originalPlan.id,
-        planHash: originalPlan.hash,
-        revisedContent: summary.revisedContent,
-      });
-      if (epoch === hyperPlanEpoch.current) {
-        onPlanUpdated(updatedPlan);
+      if ("preview" in review) {
+        await hyperPlanOperations.current.choose(review.preview, choice);
+      } else if (isOriginalAfterReviewError) {
+        await hyperPlanOperations.current.buildOriginal({
+          sessionId,
+          planId: review.planId,
+          sourceSnapshot: review.sourceSnapshot,
+        });
+      } else {
+        return;
+      }
+      if (requestId === hyperPlanRequestId.current) {
         setHyperPlanReview(undefined);
+        onSessionsChanged();
       }
     } catch (error) {
-      if (epoch !== hyperPlanEpoch.current) return;
-      setHyperPlanReview({
-        planId: originalPlan.id,
-        planHash: originalPlan.hash,
-        originalPlan,
-        status: "error",
-        error: formatHyperPlanError(error),
+      if (requestId !== hyperPlanRequestId.current) return;
+      const stage = (error as Partial<HyperPlanOperationError>).stage;
+      if (stage === "pending") return;
+      setHyperPlanReview((current) => {
+        if (!current || current.planId !== review.planId) return current;
+        return isOriginalAfterReviewError
+          ? { ...current, originalStart: "error" }
+          : "preview" in current
+            ? {
+                ...current,
+                status: stage === "choice" ? "choice-error" : "start-error",
+                choice,
+              }
+            : current;
       });
-    } finally {
-      hyperPlanRequests.current.delete(token);
+      setPromptError("We couldn’t start that plan. Retry the same choice to continue.");
     }
   }
   const pendingPermission = useMemo(
@@ -1221,17 +1475,32 @@ export function ChatPane({
                   <ReviewPlanCard
                     onBuildLocally={() => buildPlanLocally(reviewPlan)}
                     onReviewWithHyperPlan={() => void reviewPlanWithHyperPlan(reviewPlan)}
+                    onChoosePlan={(choice) => void chooseHyperPlan(choice)}
                     plan={reviewPlan}
-                    hyperPlanStatus={visibleHyperPlanReview?.status ?? "idle"}
-                    {...(visibleHyperPlanReview?.status === "completed" ||
-                    visibleHyperPlanReview?.status === "applying"
-                      ? { hyperPlanSummary: visibleHyperPlanReview.summary }
+                    {...(visibleHyperPlanReview
+                      ? {
+                          hyperPlanState:
+                            visibleHyperPlanReview.status === "loading"
+                              ? { status: "loading" as const }
+                              : visibleHyperPlanReview.status === "review-error"
+                                ? {
+                                    status: "review-error" as const,
+                                    ...(visibleHyperPlanReview.originalStart
+                                      ? { originalStart: visibleHyperPlanReview.originalStart }
+                                      : {}),
+                                  }
+                                : visibleHyperPlanReview.status === "ready"
+                                  ? {
+                                      status: "ready" as const,
+                                      preview: visibleHyperPlanReview.preview,
+                                    }
+                                  : {
+                                      status: visibleHyperPlanReview.status,
+                                      preview: visibleHyperPlanReview.preview,
+                                      choice: visibleHyperPlanReview.choice,
+                                    },
+                        }
                       : {})}
-                    {...(visibleHyperPlanReview?.status === "error"
-                      ? { hyperPlanError: visibleHyperPlanReview.error }
-                      : {})}
-                    onUseRevisedPlan={() => void applyHyperPlanRevision()}
-                    onKeepPreviousPlan={() => setHyperPlanReview(undefined)}
                     onContinuePlanning={() => {
                       setComposerMode("plan");
                       setDismissedPlanHash(reviewPlan.hash);

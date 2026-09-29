@@ -12,6 +12,8 @@ import { z } from "zod";
 import type {
   HyperPlanCriticId,
   HyperPlanCriticResult,
+  HyperPlanReviewInput,
+  HyperPlanRevision,
   HyperPlanSummary,
   PlanSpec,
 } from "../../../shared/contracts";
@@ -40,8 +42,10 @@ const CRITICS: Array<{ id: HyperPlanCriticId; prompt: string }> = [
   },
 ];
 
-const CRITIC_TIMEOUT_MS = 60_000;
+const SESSION_SETUP_TIMEOUT_MS = 60_000;
+const CRITIC_TIMEOUT_MS = 5 * 60_000;
 const SYNTHESIS_TIMEOUT_MS = 45_000;
+const REVISION_TIMEOUT_MS = 5 * 60_000;
 const CLEANUP_TIMEOUT_MS = 5_000;
 const MAX_CRITIC_INPUT_BYTES = 24 * 1024;
 const MAX_CRITIC_PLAN_BYTES = 12 * 1024;
@@ -50,6 +54,8 @@ const MAX_CRITIC_OUTPUT_BYTES = 6 * 1024;
 const MAX_SYNTHESIS_OUTPUT_BYTES = 20 * 1024;
 const MAX_SUMMARY_BYTES = 32 * 1024;
 const MAX_REVISED_CONTENT_BYTES = 12 * 1024;
+const MAX_REVISION_INPUT_BYTES = 256 * 1024;
+const MAX_REVISION_OUTPUT_BYTES = 128 * 1024;
 
 let reviewActive = false;
 let reviewQuarantined = false;
@@ -86,6 +92,60 @@ const synthesisOutputSchema = z
 
 type CriticOutput = z.infer<typeof criticOutputSchema>;
 type SynthesisOutput = z.infer<typeof synthesisOutputSchema>;
+const revisionOutputSchema = z
+  .object({
+    title: z.string().trim().min(1).max(500),
+    overview: z.string().trim().min(1).max(2_000),
+    content: z.string().trim().min(1).max(100_000),
+    todos: z
+      .array(
+        z
+          .object({
+            id: z.string().trim().min(1).max(120),
+            content: z.string().trim().min(1).max(2_000),
+            acceptanceCriterionIds: z.array(z.string().trim().min(1).max(120)).max(100).optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(100),
+    spec: z
+      .object({
+        requirements: z
+          .array(
+            z
+              .object({
+                id: z.string().trim().min(1).max(120),
+                text: z.string().trim().min(1).max(2_000),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+        acceptanceCriteria: z
+          .array(
+            z
+              .object({
+                id: z.string().trim().min(1).max(120),
+                requirementId: z.string().trim().min(1).max(120),
+                description: z.string().trim().min(1).max(2_000),
+                todoIds: z.array(z.string().trim().min(1).max(120)).max(100),
+                requiredCheckKinds: z
+                  .array(z.enum(["tests", "typecheck", "lint", "build"]))
+                  .max(4)
+                  .optional(),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(100),
+        assumptions: z.array(z.string().trim().min(1).max(2_000)).max(100),
+        openQuestions: z.array(z.string().trim().min(1).max(2_000)).max(100),
+      })
+      .strict(),
+  })
+  .strict();
+type RevisionOutput = z.infer<typeof revisionOutputSchema>;
 type IsolatedSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 type FailureReason =
   | "session_setup_failure"
@@ -201,6 +261,76 @@ function synthesisPrompt(input: {
   return prompt;
 }
 
+function revisionPrompt(input: HyperPlanReviewInput, synthesis: SynthesisOutput): string {
+  const source = JSON.stringify({
+    title: input.title,
+    overview: input.overview,
+    content: input.content,
+    todos: input.todos,
+    spec: input.spec,
+  });
+  const feedback = JSON.stringify(synthesis);
+  const prefix =
+    "REVISION_INPUT: Rewrite this plan as a complete actionable plan, preserving valid requirements and addressing bounded review feedback. Return ONLY strict JSON with title, overview, content, todos [{id,content,acceptanceCriterionIds}], and spec {requirements [{id,text}], acceptanceCriteria [{id,requirementId,description,todoIds,requiredCheckKinds?}], assumptions, openQuestions}. Do not include todo/criterion status or evidence. IDs must be unique and every link must target an included ID.\nSYNTHESIS_FEEDBACK:\n";
+  const suffix = "\nSOURCE_PLAN:\n";
+  const prompt = `${prefix}${feedback}${suffix}${source}`;
+  return Buffer.byteLength(prompt, "utf8") <= MAX_REVISION_INPUT_BYTES ? prompt : "";
+}
+
+function parseRevision(raw: string | undefined): HyperPlanRevision | undefined {
+  if (!raw) return undefined;
+  try {
+    if (Buffer.byteLength(raw, "utf8") > MAX_REVISION_OUTPUT_BYTES) return undefined;
+    const revision: RevisionOutput = revisionOutputSchema.parse(JSON.parse(raw));
+    const unique = (ids: string[]): boolean => new Set(ids).size === ids.length;
+    const todoIds = revision.todos.map((todo) => todo.id);
+    const requirementIds = revision.spec.requirements.map((requirement) => requirement.id);
+    const criterionIds = revision.spec.acceptanceCriteria.map((criterion) => criterion.id);
+    if (!unique(todoIds) || !unique(requirementIds) || !unique(criterionIds)) return undefined;
+    const todoIdSet = new Set(todoIds);
+    const requirementIdSet = new Set(requirementIds);
+    const criterionIdSet = new Set(criterionIds);
+    if (
+      revision.todos.some((todo) =>
+        (todo.acceptanceCriterionIds ?? []).some((id) => !criterionIdSet.has(id)),
+      ) ||
+      revision.spec.acceptanceCriteria.some(
+        (criterion) =>
+          !requirementIdSet.has(criterion.requirementId) ||
+          criterion.todoIds.some((id) => !todoIdSet.has(id)),
+      )
+    ) {
+      return undefined;
+    }
+    return {
+      title: revision.title,
+      overview: revision.overview,
+      content: revision.content,
+      todos: revision.todos.map(({ id, content, acceptanceCriterionIds }) => ({
+        id,
+        content,
+        ...(acceptanceCriterionIds ? { acceptanceCriterionIds } : {}),
+      })),
+      spec: {
+        requirements: revision.spec.requirements,
+        acceptanceCriteria: revision.spec.acceptanceCriteria.map(
+          ({ id, requirementId, description, todoIds, requiredCheckKinds }) => ({
+            id,
+            requirementId,
+            description,
+            todoIds,
+            ...(requiredCheckKinds ? { requiredCheckKinds } : {}),
+          }),
+        ),
+        assumptions: revision.spec.assumptions,
+        openQuestions: revision.spec.openQuestions,
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 async function createIsolatedSession(): Promise<{
   session: IsolatedSession;
   tempDir: string;
@@ -281,24 +411,29 @@ async function runBoundedPrompt(
   let taskSettled = false;
   let timeoutAbort = (): Promise<void> | undefined => undefined;
   let timeoutCleanup = (): void => {};
-  const timeout = new Promise<PromptResult>((resolve) => {
-    timeoutHandle = setTimeout(() => {
-      timedOut = true;
-      reviewTimedOut = true;
-      const aborting = timeoutAbort();
-      if (aborting) {
-        const cleanup = settleAbort(aborting).then((settled) => {
-          if (settled) reviewQuarantined = true;
-        });
-        timeoutCleanupPromises.push(cleanup);
-      }
-      timeoutCleanup();
-      resolve({
-        reason: "timeout",
-        message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
+  let resolveTimeout: ((result: PromptResult) => void) | undefined;
+  const onTimeout = (): void => {
+    if (timedOut) return;
+    timedOut = true;
+    reviewTimedOut = true;
+    const aborting = timeoutAbort();
+    if (aborting) {
+      const cleanup = settleAbort(aborting).then((settled) => {
+        if (settled) reviewQuarantined = true;
       });
-    }, timeoutMs);
+      timeoutCleanupPromises.push(cleanup);
+    }
+    timeoutCleanup();
+    resolveTimeout?.({ reason: "timeout" });
+  };
+  const timeout = new Promise<PromptResult>((resolve) => {
+    resolveTimeout = resolve;
   });
+  const armTimeout = (durationMs: number): void => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    timeoutHandle = setTimeout(onTimeout, durationMs);
+  };
+  armTimeout(SESSION_SETUP_TIMEOUT_MS);
   outstandingOperations += 1;
   const operation = (async (): Promise<PromptResult> => {
     let tempDir: string | undefined;
@@ -358,12 +493,8 @@ async function runBoundedPrompt(
       session = created.session;
       tempDir = created.tempDir;
       sessionCreated = true;
-      if (timedOut) {
-        return {
-          reason: "timeout",
-          message: `Prompt timed out after ${Math.round(timeoutMs / 1000)} seconds.`,
-        };
-      }
+      if (timedOut) return { reason: "timeout" };
+      armTimeout(timeoutMs);
       response = await new Promise<PromptResult>((resolve) => {
         unsubscribe = session?.subscribe((event) => {
           if (
@@ -588,13 +719,13 @@ function capSummary(summary: HyperPlanSummary): HyperPlanSummary {
   return result;
 }
 
-export async function runHyperPlanReview(input: {
-  planContent: string;
-  spec: PlanSpec;
-}): Promise<HyperPlanSummary> {
-  if (Buffer.byteLength(input.planContent, "utf8") > MAX_CRITIC_PLAN_BYTES) {
-    throw new Error("Plan content exceeds the 12 KiB HyperPlan review limit.");
-  }
+async function runHyperPlanPipeline(
+  input: {
+    planContent: string;
+    spec: PlanSpec;
+  },
+  retainAdmission = false,
+): Promise<{ summary: HyperPlanSummary; synthesis?: SynthesisOutput }> {
   if (reviewActive || reviewQuarantined) throw new Error("HyperPlan review busy");
   reviewActive = true;
   reviewReturned = false;
@@ -604,6 +735,7 @@ export async function runHyperPlanReview(input: {
   const criticFailures = new Map<HyperPlanCriticId, string>();
   const criticFailureReasons = new Map<HyperPlanCriticId, FailureReason>();
   const boundedInput = input;
+  let pipelineCompleted = false;
   try {
     const criticRuns = CRITICS.map(async ({ id, prompt }) => {
       let outcome: PromptResult;
@@ -690,12 +822,95 @@ export async function runHyperPlanReview(input: {
           ? []
           : synthesis.disagreements.map((item) => capUtf8(`Among completed critics: ${item}`, 500)),
     };
-    return capSummary(summary);
+    const capped = capSummary(summary);
+    pipelineCompleted = true;
+    return { summary: capped, ...(synthesis ? { synthesis } : {}) };
   } catch (error) {
     if (error instanceof HyperPlanReviewFailure) throw error;
     throw new HyperPlanReviewFailure("prompt_failure", failureMessage(error));
   } finally {
-    reviewReturned = true;
-    maybeReleaseReview();
+    if (!retainAdmission || !pipelineCompleted) {
+      reviewReturned = true;
+      maybeReleaseReview();
+    }
+  }
+}
+
+export async function runHyperPlanReview(input: {
+  planContent: string;
+  spec: PlanSpec;
+}): Promise<HyperPlanSummary> {
+  if (Buffer.byteLength(input.planContent, "utf8") > MAX_CRITIC_PLAN_BYTES) {
+    throw new Error("Plan content exceeds the 12 KiB HyperPlan review limit.");
+  }
+  try {
+    return (await runHyperPlanPipeline(input)).summary;
+  } catch (error) {
+    if (
+      error instanceof HyperPlanReviewFailure &&
+      error.reason === "critic_timeout" &&
+      !reviewQuarantined
+    ) {
+      return capSummary({
+        revisedContent: "",
+        critiques: CRITICS.map(({ id }) => ({
+          critic: id,
+          status: "unavailable" as const,
+          findings: [],
+          references: [],
+        })),
+        agreements: [],
+        disagreements: [],
+        risks: [],
+        openQuestions: ["HyperPlan review timed out; no approval was established."],
+        references: [],
+      });
+    }
+    throw error;
+  }
+}
+
+export async function runHyperPlanRevision(
+  input: HyperPlanReviewInput,
+): Promise<HyperPlanRevision> {
+  const initialPrompt = revisionPrompt(input, {
+    revisedContent: "",
+    agreements: [],
+    disagreements: [],
+    risks: [],
+    openQuestions: [],
+    references: [],
+  });
+  if (!initialPrompt) throw new Error("HyperPlan revision input exceeds its size budget");
+
+  let admissionAcquired = false;
+  try {
+    const { summary, synthesis } = await runHyperPlanPipeline(
+      { planContent: input.content, spec: input.spec },
+      true,
+    );
+    admissionAcquired = true;
+    if (!synthesis || !summary.critiques.some((critique) => critique.status === "completed")) {
+      throw new Error("HyperPlan revision unavailable: review did not complete");
+    }
+    const prompt = revisionPrompt(input, synthesis);
+    if (!prompt) throw new Error("HyperPlan revision input exceeds its size budget");
+    const result = await runBoundedPrompt(prompt, REVISION_TIMEOUT_MS, MAX_REVISION_OUTPUT_BYTES);
+    const revision = parseRevision(result.output);
+    if (!revision) throw new Error("HyperPlan revision unavailable: invalid revision output");
+    return revision;
+  } catch (error) {
+    if (error instanceof HyperPlanReviewFailure) {
+      throw new HyperPlanReviewFailure(
+        error.reason,
+        `HyperPlan revision unavailable: ${error.message}`,
+      );
+    }
+    throw error;
+  } finally {
+    if (admissionAcquired) {
+      reviewReturned = true;
+      maybeReleaseReview();
+    }
   }
 }

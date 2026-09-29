@@ -1,5 +1,8 @@
+// @vitest-environment happy-dom
+import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HyperPlanSummary, PlanRef } from "../../../../shared/contracts";
 import { ReviewPlanCard } from "./ReviewPlanCard";
 
@@ -60,6 +63,38 @@ const summary = {
   references: ["apps/desktop/src/main/release.ts"],
 } satisfies HyperPlanSummary;
 
+const draft = {
+  draftId: "draft-1",
+  revision: {
+    title: "Revised release readiness",
+    overview: "A safer release plan.",
+    content: "# Revised release plan\n\nRun the checks before publishing.",
+    todos: [
+      {
+        id: "todo-revised",
+        content: "Run revised checks",
+        acceptanceCriterionIds: ["criterion-revised"],
+      },
+    ],
+    spec: {
+      requirements: [{ id: "requirement-revised", text: "Verify release artifacts" }],
+      acceptanceCriteria: [
+        {
+          id: "criterion-revised",
+          requirementId: "requirement-revised",
+          description: "Every release artifact is verified",
+          todoIds: ["todo-revised"],
+          requiredCheckKinds: ["tests" as const],
+        },
+      ],
+      assumptions: ["The release candidate is already available."],
+      openQuestions: ["Which team owns the final sign-off?"],
+    },
+  },
+};
+
+afterEach(cleanup);
+
 function renderCard(props: Partial<Parameters<typeof ReviewPlanCard>[0]> = {}) {
   return renderToStaticMarkup(
     <ReviewPlanCard onBuildLocally={vi.fn()} onContinuePlanning={vi.fn()} plan={plan} {...props} />,
@@ -116,14 +151,122 @@ describe("ReviewPlanCard", () => {
     expect(markup).toContain("Yes, implement this plan");
   });
 
-  it("shows the useful failure while leaving the original plan in place", () => {
-    const markup = renderCard({
-      hyperPlanStatus: "error",
-      hyperPlanError: "Review failed: 429 temporary rate limit. Try again.",
-    });
+  it("shows only the centered thinking treatment while review is loading", () => {
+    const markup = renderCard({ hyperPlanState: { status: "loading" } });
 
-    expect(markup).toContain("Review failed: 429 temporary rate limit. Try again.");
-    expect(markup).not.toContain("Revised plan preview");
-    expect(markup).toContain("# Release");
+    expect(markup).toContain('data-testid="hyperplan-gif"');
+    expect(markup).toContain("Thinking");
+    expect(markup).not.toContain("Implement this plan?");
+    expect(markup).not.toContain("Acceptance criteria");
+    expect(markup).not.toContain("Yes, implement this plan");
+    expect(markup).not.toContain("Prepare the release safely.");
+  });
+
+  it("shows only the revised plan and dispatches the exact selected choice", async () => {
+    const user = userEvent.setup();
+    const onChoosePlan = vi.fn();
+    const { container } = render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={onChoosePlan}
+        hyperPlanState={{ status: "ready", preview: draft }}
+        plan={plan}
+        hyperPlanSummary={summary}
+      />,
+    );
+
+    expect(container.textContent).toContain("Revised release readiness");
+    expect(container.textContent).toContain("Run the checks before publishing.");
+    expect(container.textContent).toContain("Run revised checks");
+    expect(container.textContent).toContain("Verify release artifacts");
+    expect(container.textContent).toContain("Every release artifact is verified");
+    expect(container.textContent).toContain("The release candidate is already available.");
+    expect(container.textContent).toContain("Which team owns the final sign-off?");
+    expect(container.textContent).not.toContain("Prepare the release safely.");
+    expect(container.textContent).not.toContain("All release checks pass");
+    expect(container.textContent).not.toContain("Keep release checks together.");
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Accept revised plan and build" }));
+    expect(onChoosePlan).toHaveBeenLastCalledWith("revision");
+
+    cleanup();
+    render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={onChoosePlan}
+        hyperPlanState={{ status: "ready", preview: draft }}
+        plan={plan}
+      />,
+    );
+    const originalUser = userEvent.setup();
+    await originalUser.click(screen.getByRole("button", { name: "Build the original plan" }));
+    expect(onChoosePlan).toHaveBeenLastCalledWith("original");
+  });
+
+  it("blocks repeated choices while a choice is being resolved", async () => {
+    const user = userEvent.setup();
+    const onChoosePlan = vi.fn();
+    render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={onChoosePlan}
+        hyperPlanState={{ status: "ready", preview: draft }}
+        plan={plan}
+      />,
+    );
+
+    const accept = screen.getByRole("button", { name: "Accept revised plan and build" });
+    await user.dblClick(accept);
+    expect(onChoosePlan).toHaveBeenCalledTimes(1);
+    expect(onChoosePlan).toHaveBeenCalledWith("revision");
+  });
+
+  it("only retries the same choice after an uncertain choice result", async () => {
+    const user = userEvent.setup();
+    const onChoosePlan = vi.fn();
+    render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={onChoosePlan}
+        hyperPlanState={{ status: "choice-error", preview: draft, choice: "revision" }}
+        plan={plan}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Build the original plan" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Retry revised plan choice" }));
+    expect(onChoosePlan).toHaveBeenCalledOnce();
+    expect(onChoosePlan).toHaveBeenCalledWith("revision");
+  });
+
+  it("retries a failed explicit original start without offering another review", async () => {
+    const user = userEvent.setup();
+    const onChoosePlan = vi.fn();
+    const onReviewWithHyperPlan = vi.fn();
+    render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={onChoosePlan}
+        onReviewWithHyperPlan={onReviewWithHyperPlan}
+        hyperPlanState={{ status: "review-error", originalStart: "error" }}
+        plan={plan}
+      />,
+    );
+
+    expect(
+      (screen.getByRole("button", { name: "Try review again" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Retry original plan build" }));
+    expect(onChoosePlan).toHaveBeenCalledExactlyOnceWith("original");
+    expect(onReviewWithHyperPlan).not.toHaveBeenCalled();
   });
 });

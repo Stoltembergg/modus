@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { foldAgentEvents } from "../../shared/agent-events";
 import type {
   AgentEvent,
@@ -146,7 +146,35 @@ function safeToolPaths(args: Record<string, unknown>): string[] | undefined {
     .slice(0, 20);
 }
 
-export function recordAgentEvent(event: AgentEvent): number {
+export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?: string }): number {
+  if (options?.idempotencyKey !== undefined) {
+    if (!options.idempotencyKey.trim()) {
+      throw new Error("Agent event idempotency key cannot be empty.");
+    }
+    const id = `event:${createHash("sha256").update(options.idempotencyKey).digest("hex")}`;
+    const payload = JSON.stringify(event);
+    const db = getDatabase();
+    db.prepare(
+      `insert into agent_events (id, session_id, type, payload_json, created_at)
+       values (?, ?, ?, ?, ?)
+       on conflict(id) do nothing`,
+    ).run(id, event.sessionId, event.type, payload, new Date().toISOString());
+    const existing = db
+      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .get(id) as
+      | { rowid: number; session_id: string; type: string; payload_json: string }
+      | undefined;
+    if (!existing) throw new Error("Idempotent agent event could not be read after insertion.");
+    if (
+      existing.session_id !== event.sessionId ||
+      existing.type !== event.type ||
+      existing.payload_json !== payload
+    ) {
+      throw new Error("Agent event idempotency key was reused for a different event.");
+    }
+    return Number(existing.rowid);
+  }
+
   const insertResult = getDatabase()
     .prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)

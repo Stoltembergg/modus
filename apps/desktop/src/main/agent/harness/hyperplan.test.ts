@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PlanSpec } from "../../../shared/contracts";
+import type { HyperPlanReviewInput, PlanSpec } from "../../../shared/contracts";
 
 const mocks = vi.hoisted(() => ({
   sessions: [] as Array<{
@@ -87,7 +87,7 @@ vi.mock("../model-service", () => ({
   getModelRegistry: () => ({ authStorage: {}, modelRegistry: {} }),
 }));
 
-import { runHyperPlanReview } from "./hyperplan";
+import { runHyperPlanReview, runHyperPlanRevision } from "./hyperplan";
 
 const spec: PlanSpec = {
   requirements: [{ id: "req-one", text: "The requirement." }],
@@ -116,6 +116,26 @@ const synthesisOutput = JSON.stringify({
   openQuestions: ["A question remains."],
   references: ["plan.md#acceptance"],
 });
+const revisionOutput = JSON.stringify({
+  title: "Release readiness",
+  overview: "Prepare the release safely.",
+  content: "# Revised",
+  todos: [{ id: "todo-one", content: "Run checks", acceptanceCriterionIds: ["ac-one"] }],
+  spec: {
+    requirements: [{ id: "req-one", text: "The requirement." }],
+    acceptanceCriteria: [
+      {
+        id: "ac-one",
+        requirementId: "req-one",
+        description: "The observable behavior.",
+        todoIds: ["todo-one"],
+        requiredCheckKinds: ["tests"],
+      },
+    ],
+    assumptions: ["A documented assumption."],
+    openQuestions: ["An unresolved question."],
+  },
+});
 
 function criticId(prompt: string): string | undefined {
   return /CRITIC_ID: (architecture|risk|simplicity|failure)/.exec(prompt)?.[1];
@@ -126,13 +146,31 @@ function useSuccessfulPromptHandler(): void {
     emit(
       prompt.includes("SYNTHESIS_INPUT:")
         ? synthesisOutput
-        : criticOutput(criticId(prompt) ?? "unknown"),
+        : prompt.includes("REVISION_INPUT:")
+          ? revisionOutput
+          : criticOutput(criticId(prompt) ?? "unknown"),
     );
   };
 }
 
 const reviewInput = (overrides: Record<string, unknown> = {}) => ({
   planContent: "# Feature\nImplement the described behavior.",
+  spec,
+  ...overrides,
+});
+
+const revisionInput = (overrides: Partial<HyperPlanReviewInput> = {}): HyperPlanReviewInput => ({
+  title: "Original title",
+  overview: "Original overview",
+  content: "# Original\nFULL_PLAN_END_SENTINEL",
+  todos: [
+    {
+      id: "todo-one",
+      content: "Implement",
+      status: "completed",
+      acceptanceCriterionIds: ["ac-one"],
+    },
+  ],
   spec,
   ...overrides,
 });
@@ -287,16 +325,41 @@ describe("runHyperPlanReview", () => {
     };
     mocks.abortHandler = () => finishPrompt?.();
     const pending = runHyperPlanReview(reviewInput());
-    const rejected = expect(pending).rejects.toMatchObject({
-      reason: "critic_timeout",
-      message: expect.stringMatching(/timed out/i),
-    });
-    await vi.advanceTimersByTimeAsync(60_001);
-    await rejected;
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+    await pending;
 
     expect(mocks.sessions[0]?.abort).toHaveBeenCalled();
     expect(mocks.sessions[0]?.dispose).toHaveBeenCalled();
     expect(mocks.promptTexts.some((prompt) => prompt.includes("SYNTHESIS_INPUT:"))).toBe(false);
+  });
+
+  it("allows a critic prompt to take longer than one minute", async () => {
+    vi.useFakeTimers();
+    let finishPrompt: (() => void) | undefined;
+    let settled = false;
+    mocks.promptHandler = async (prompt, emit) => {
+      const critic = criticId(prompt);
+      if (critic === "architecture") {
+        await new Promise<void>((resolve) => {
+          finishPrompt = resolve;
+        });
+      }
+      emit(critic ? criticOutput(critic) : synthesisOutput);
+    };
+
+    const pending = runHyperPlanReview(reviewInput());
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(60_001);
+    const settledAfterOneMinute = settled;
+    finishPrompt?.();
+    const result = await pending;
+
+    expect(settledAfterOneMinute).toBe(false);
+    expect(result.critiques.find((critique) => critique.critic === "architecture")?.status).toBe(
+      "completed",
+    );
   });
 
   it("maps a critic exception or failed cleanup to unavailable without rejecting the review", async () => {
@@ -530,7 +593,9 @@ describe("runHyperPlanReview", () => {
       });
 
     const pending = runHyperPlanReview(reviewInput());
-    const timedOut = expect(pending).rejects.toThrow(/timed out/i);
+    const timedOut = expect(pending).resolves.toMatchObject({
+      openQuestions: ["HyperPlan review timed out; no approval was established."],
+    });
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(60_001);
     await timedOut;
@@ -546,7 +611,206 @@ describe("runHyperPlanReview", () => {
     useSuccessfulPromptHandler();
     await runHyperPlanReview(reviewInput());
   });
+});
 
+describe("runHyperPlanRevision", () => {
+  it("allows complete revision generation to continue beyond the synthesis timeout", async () => {
+    vi.useFakeTimers();
+    let settled = false;
+    let finishRevision: (() => void) | undefined;
+    mocks.promptHandler = async (prompt, emit) => {
+      if (prompt.includes("REVISION_INPUT:")) {
+        await new Promise<void>((resolve) => {
+          finishRevision = resolve;
+        });
+        emit(revisionOutput);
+        return;
+      }
+      emit(
+        prompt.includes("SYNTHESIS_INPUT:")
+          ? synthesisOutput
+          : criticOutput(criticId(prompt) ?? "unknown"),
+      );
+    };
+
+    const pending = runHyperPlanRevision(revisionInput());
+    void pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(45_001);
+    const settledAfterSynthesisTimeout = settled;
+
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("REVISION_INPUT:"))).toBe(true);
+    expect(settledAfterSynthesisTimeout).toBe(false);
+    finishRevision?.();
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(pending).resolves.toMatchObject({ title: "Release readiness" });
+  });
+
+  it("generates a complete validated revision from the entire source plan", async () => {
+    useSuccessfulPromptHandler();
+
+    const result = await runHyperPlanRevision(revisionInput());
+    const revisionPrompt = mocks.promptTexts.find((prompt) => prompt.includes("REVISION_INPUT:"));
+
+    expect(result).toEqual({
+      title: "Release readiness",
+      overview: "Prepare the release safely.",
+      content: "# Revised",
+      todos: [{ id: "todo-one", content: "Run checks", acceptanceCriterionIds: ["ac-one"] }],
+      spec: {
+        requirements: [{ id: "req-one", text: "The requirement." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-one",
+            requirementId: "req-one",
+            description: "The observable behavior.",
+            todoIds: ["todo-one"],
+            requiredCheckKinds: ["tests"],
+          },
+        ],
+        assumptions: ["A documented assumption."],
+        openQuestions: ["An unresolved question."],
+      },
+    });
+    expect(revisionPrompt).toContain("SOURCE_PLAN:");
+    expect(revisionPrompt).toContain("Original title");
+    expect(revisionPrompt).toContain("Original overview");
+    expect(revisionPrompt).toContain("FULL_PLAN_END_SENTINEL");
+    expect(revisionPrompt).toContain('"content":"Implement"');
+    expect(revisionPrompt).toContain('"status":"completed"');
+    expect(revisionPrompt).toContain('"spec"');
+    expect(mocks.promptTexts.filter((prompt) => prompt.includes("REVISION_INPUT:"))).toHaveLength(
+      1,
+    );
+    expect(mocks.sessionOptions).toHaveLength(6);
+    expect(mocks.sessionOptions.every((options) => options.noTools === "all")).toBe(true);
+  });
+
+  it("does not produce a revision when no critic completes", async () => {
+    mocks.promptHandler = async (prompt, emit) => {
+      if (criticId(prompt)) throw new Error("critic unavailable");
+      emit(prompt.includes("SYNTHESIS_INPUT:") ? synthesisOutput : revisionOutput);
+    };
+
+    await expect(runHyperPlanRevision(revisionInput())).rejects.toThrow(/unavailable/i);
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("SYNTHESIS_INPUT:"))).toBe(false);
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("REVISION_INPUT:"))).toBe(false);
+  });
+
+  it("does not produce a revision when synthesis output is invalid", async () => {
+    mocks.promptHandler = async (prompt, emit) => {
+      if (prompt.includes("SYNTHESIS_INPUT:")) emit("invalid synthesis");
+      else emit(criticOutput(criticId(prompt) ?? "unknown"));
+    };
+
+    await expect(runHyperPlanRevision(revisionInput())).rejects.toThrow(/unavailable/i);
+    expect(mocks.promptTexts.some((prompt) => prompt.includes("REVISION_INPUT:"))).toBe(false);
+  });
+
+  it("rejects a source beyond the revision budget without truncating it", async () => {
+    useSuccessfulPromptHandler();
+    const tooLarge = revisionInput({ content: `FULL_PLAN_END_SENTINEL${"x".repeat(256 * 1024)}` });
+
+    await expect(runHyperPlanRevision(tooLarge)).rejects.toThrow(/too large|budget/i);
+    expect(mocks.promptTexts).toHaveLength(0);
+  });
+
+  it("rejects invalid links, duplicate IDs, and model-supplied evidence", async () => {
+    const invalidRevision = JSON.stringify({
+      ...JSON.parse(revisionOutput),
+      todos: [
+        { id: "todo-one", content: "One", acceptanceCriterionIds: ["missing"] },
+        { id: "todo-one", content: "Duplicate", acceptanceCriterionIds: [] },
+      ],
+      spec: { ...JSON.parse(revisionOutput).spec, evidence: [] },
+    });
+    mocks.promptHandler = async (prompt, emit) => {
+      emit(
+        prompt.includes("SYNTHESIS_INPUT:")
+          ? synthesisOutput
+          : prompt.includes("REVISION_INPUT:")
+            ? invalidRevision
+            : criticOutput(criticId(prompt) ?? "unknown"),
+      );
+    };
+
+    await expect(runHyperPlanRevision(revisionInput())).rejects.toThrow(/unavailable/i);
+  });
+
+  it.each([
+    [
+      "todos",
+      {
+        todos: [],
+        spec: {
+          ...JSON.parse(revisionOutput).spec,
+          acceptanceCriteria: [
+            { ...JSON.parse(revisionOutput).spec.acceptanceCriteria[0], todoIds: [] },
+          ],
+        },
+      },
+    ],
+    [
+      "requirements",
+      {
+        todos: [{ ...JSON.parse(revisionOutput).todos[0], acceptanceCriterionIds: [] }],
+        spec: { ...JSON.parse(revisionOutput).spec, requirements: [], acceptanceCriteria: [] },
+      },
+    ],
+    [
+      "acceptance criteria",
+      {
+        todos: [{ ...JSON.parse(revisionOutput).todos[0], acceptanceCriterionIds: [] }],
+        spec: { ...JSON.parse(revisionOutput).spec, acceptanceCriteria: [] },
+      },
+    ],
+  ])("rejects a revision with no %s", async (_name, overrides) => {
+    const invalidRevision = JSON.stringify({ ...JSON.parse(revisionOutput), ...overrides });
+    mocks.promptHandler = async (prompt, emit) => {
+      emit(
+        prompt.includes("SYNTHESIS_INPUT:")
+          ? synthesisOutput
+          : prompt.includes("REVISION_INPUT:")
+            ? invalidRevision
+            : criticOutput(criticId(prompt) ?? "unknown"),
+      );
+    };
+
+    await expect(runHyperPlanRevision(revisionInput())).rejects.toThrow(/unavailable/i);
+  });
+
+  it("rejects revision JSON above the output byte budget when each field is valid", async () => {
+    const validRevision = JSON.parse(revisionOutput);
+    const assumptions = Array.from({ length: 100 }, () => "a".repeat(2_000));
+    const oversizedRevision = JSON.stringify({
+      ...validRevision,
+      spec: { ...validRevision.spec, assumptions },
+    });
+    expect(assumptions).toHaveLength(100);
+    expect(assumptions.every((assumption) => assumption.length === 2_000)).toBe(true);
+    expect(Buffer.byteLength(oversizedRevision, "utf8")).toBeGreaterThan(128 * 1024);
+    mocks.promptHandler = async (prompt, emit) => {
+      emit(
+        prompt.includes("SYNTHESIS_INPUT:")
+          ? synthesisOutput
+          : prompt.includes("REVISION_INPUT:")
+            ? oversizedRevision
+            : criticOutput(criticId(prompt) ?? "unknown"),
+      );
+    };
+
+    await expect(runHyperPlanRevision(revisionInput())).rejects.toThrow(/unavailable/i);
+  });
+});
+
+describe("review quarantine", () => {
   it("quarantines review admission when abort never settles", async () => {
     vi.useFakeTimers();
     mocks.hangAbortSessionIndexes = [0];
@@ -557,7 +821,7 @@ describe("runHyperPlanReview", () => {
     };
     const pending = runHyperPlanReview(reviewInput());
     const timedOut = expect(pending).rejects.toThrow(/timed out/i);
-    await vi.advanceTimersByTimeAsync(60_001);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
     await vi.advanceTimersByTimeAsync(5_001);
     await timedOut;
     await expect(runHyperPlanReview(reviewInput())).rejects.toThrow("HyperPlan review busy");
@@ -584,7 +848,9 @@ describe("runHyperPlanReview", () => {
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    await vi.advanceTimersByTimeAsync(60_001);
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 12; index += 1) await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
     const outcome = await settled;
     finishPrompt?.();
     for (let index = 0; index < 12; index += 1) await Promise.resolve();

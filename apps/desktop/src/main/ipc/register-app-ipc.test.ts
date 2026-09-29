@@ -9,6 +9,13 @@ const mocks = vi.hoisted(() => ({
   recordAgentEvent: vi.fn(),
   senderWindow: { isDestroyed: () => false, webContents: { send: vi.fn() } },
   runHyperPlanReview: vi.fn(),
+  runHyperPlanRevision: vi.fn(),
+  fingerprintPlanSource: vi.fn(),
+  promotePlanRevision: vi.fn(),
+  publishPlanUpdated: vi.fn(),
+  startPlanBuild: vi.fn(),
+  startOriginalPlanBuild: vi.fn(),
+  assertHyperPlanSessionAvailable: vi.fn(),
   startProviderAuth: vi.fn(),
   restoreCheckpoint: vi.fn(),
   fromWebContents: vi.fn(),
@@ -47,16 +54,29 @@ vi.mock("../agent/tools/plan-tools", () => ({
 }));
 vi.mock("../agent/runtime-registry", () => ({ getAgentRuntime: mocks.getAgentRuntime }));
 vi.mock("../plan/plan-store", () => ({
+  fingerprintPlanSource: mocks.fingerprintPlanSource,
+  promotePlanRevision: mocks.promotePlanRevision,
   readPlanById: mocks.readPlanById,
   updatePlanContentById: mocks.updatePlanContentById,
 }));
-vi.mock("../agent/harness/hyperplan", () => ({ runHyperPlanReview: mocks.runHyperPlanReview }));
+vi.mock("../agent/harness/hyperplan", () => ({
+  runHyperPlanReview: mocks.runHyperPlanReview,
+  runHyperPlanRevision: mocks.runHyperPlanRevision,
+}));
 vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
   startProviderAuth: mocks.startProviderAuth,
 }));
 
-import type { HyperPlanSummary, PlanRef } from "../../shared/contracts";
+import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../shared/contracts";
+import {
+  clearHyperPlanDraftsForOwner,
+  clearHyperPlanDraftsForSession,
+  invalidateHyperPlanDraftOwner,
+  isHyperPlanSessionReserved,
+  registerHyperPlanDraftOwner,
+  reserveHyperPlanSession,
+} from "../agent/harness/hyperplan-draft-store";
 import { IPC_CHANNELS } from "./channels";
 import { registerAppIpc } from "./register-app-ipc";
 import { registerTrustedSender } from "./trusted-sender";
@@ -99,6 +119,26 @@ const plan: PlanRef = {
   },
 };
 
+function planSnapshot(source: PlanRef = plan) {
+  return {
+    title: source.title,
+    overview: source.overview,
+    content: source.content,
+    todos: source.todos.map(({ id, content, acceptanceCriterionIds }) => ({
+      id,
+      content,
+      acceptanceCriterionIds: acceptanceCriterionIds ?? [],
+    })),
+    spec: source.spec && {
+      requirements: source.spec.requirements,
+      acceptanceCriteria: source.spec.acceptanceCriteria,
+      assumptions: source.spec.assumptions,
+      openQuestions: source.spec.openQuestions,
+      evidence: source.spec.evidence,
+    },
+  };
+}
+
 function registeredHandler(): (...args: never[]) => unknown {
   const handler = mocks.handlers.get(IPC_CHANNELS.agentReviewPlanWithHyperPlan);
   if (!handler) throw new Error("HyperPlan IPC handler was not registered.");
@@ -110,6 +150,11 @@ describe("dedicated HyperPlan review IPC", () => {
   const trustedEvent = { sender, senderFrame: sender.mainFrame };
 
   beforeEach(() => {
+    clearHyperPlanDraftsForSession("session-1");
+    clearHyperPlanDraftsForOwner(4);
+    clearHyperPlanDraftsForOwner(5);
+    registerHyperPlanDraftOwner(4);
+    registerHyperPlanDraftOwner(5);
     mocks.handlers.clear();
     mocks.getAgentSession.mockReset();
     mocks.getAgentRuntime.mockReset();
@@ -118,6 +163,39 @@ describe("dedicated HyperPlan review IPC", () => {
     mocks.recordAgentEvent.mockReset();
     mocks.senderWindow.webContents.send.mockReset();
     mocks.runHyperPlanReview.mockReset().mockResolvedValue(summary);
+    mocks.runHyperPlanRevision.mockReset().mockResolvedValue({
+      title: "Revised plan",
+      overview: "Safe revision.",
+      content: "# Revised",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    mocks.fingerprintPlanSource
+      .mockReset()
+      .mockImplementation((candidate: PlanRef) => `${candidate.title}:${candidate.content}`);
+    mocks.promotePlanRevision
+      .mockReset()
+      .mockImplementation((_root, { revision }: { revision: unknown }) => ({
+        ...plan,
+        ...(revision as object),
+        title: "Revised plan",
+        content: "# Revised",
+        hash: "revised-hash",
+      }));
+    mocks.publishPlanUpdated.mockReset();
+    mocks.startPlanBuild.mockReset().mockResolvedValue({
+      sessionId: "session-1",
+      planId: "plan-1",
+      planFingerprint: "Spec plan:#Plan\nBounded plan content.",
+      runId: "run-1",
+    });
+    mocks.startOriginalPlanBuild.mockReset().mockResolvedValue({
+      sessionId: "session-1",
+      planId: "plan-1",
+      planFingerprint: "Spec plan:#Plan\nBounded plan content.",
+      runId: "run-original",
+    });
+    mocks.assertHyperPlanSessionAvailable.mockReset();
     mocks.restoreCheckpoint.mockReset();
     mocks.fromWebContents.mockReset();
     mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
@@ -127,6 +205,13 @@ describe("dedicated HyperPlan review IPC", () => {
       cwd: "C:/workspace",
     });
     mocks.readPlanById.mockReturnValue(plan);
+    mocks.getAgentRuntime.mockReturnValue({
+      assertHyperPlanSessionAvailable: mocks.assertHyperPlanSessionAvailable,
+      publishPlanUpdated: mocks.publishPlanUpdated,
+      startPlanBuild: mocks.startPlanBuild,
+      startOriginalPlanBuild: mocks.startOriginalPlanBuild,
+      listRuns: vi.fn(() => []),
+    });
     registerTrustedSender(sender, "file:///app/index.html");
     registerAppIpc();
   });
@@ -382,6 +467,526 @@ describe("dedicated HyperPlan review IPC", () => {
       ),
     ).rejects.toThrow();
     expect(mocks.runHyperPlanReview).not.toHaveBeenCalled();
+  });
+
+  it("generates a main-owned preview only for an owned source and rejects extra request fields", async () => {
+    const createDraftChannel = IPC_CHANNELS.agentCreateHyperPlanDraft;
+    const handler = mocks.handlers.get(createDraftChannel);
+    if (!handler) throw new Error("HyperPlan draft IPC handler was not registered.");
+    const senderWithId = { ...sender, id: 4 };
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+
+    const preview = await handler(
+      event as never,
+      { sessionId: "session-1", planId: "plan-1" } as never,
+    );
+    expect(preview).toMatchObject({
+      draftId: expect.any(String),
+      revision: { title: "Revised plan" },
+    });
+    expect(mocks.runHyperPlanRevision).toHaveBeenCalledWith({
+      title: plan.title,
+      overview: plan.overview,
+      content: plan.content,
+      todos: plan.todos,
+      spec: plan.spec,
+    });
+    await expect(
+      handler(
+        event as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          workspaceId: "renderer-chosen",
+        } as never,
+      ),
+    ).rejects.toThrow();
+    expect(mocks.runHyperPlanRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it("discards a generation if the authoritative source changes while review is in flight", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    if (!handler) throw new Error("HyperPlan draft IPC handler was not registered.");
+    mocks.runHyperPlanRevision.mockImplementationOnce(async () => {
+      mocks.readPlanById.mockReturnValue({ ...plan, title: "Changed while reviewing" });
+      return {
+        title: "Should be discarded",
+        overview: "Stale",
+        content: "# Stale",
+        todos: [],
+        spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+      };
+    });
+
+    await expect(
+      handler(
+        { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+        { sessionId: "session-1", planId: "plan-1" } as never,
+      ),
+    ).rejects.toThrow(/changed during/i);
+    expect(mocks.assertHyperPlanSessionAvailable).toHaveBeenCalledWith("session-1");
+  });
+
+  it("rejects a generation that finishes after its session was deleted", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    if (!handler) throw new Error("HyperPlan draft handler was not registered.");
+    mocks.getAgentSession.mockReturnValueOnce({
+      id: "session-1",
+      workspaceId: "workspace-1",
+      cwd: "C:/workspace",
+    });
+    mocks.getAgentSession.mockReturnValueOnce(undefined);
+
+    let finishRevision!: (revision: HyperPlanRevision) => void;
+    mocks.runHyperPlanRevision.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRevision = resolve;
+        }),
+    );
+    const pending = handler(
+      { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+      { sessionId: "session-1", planId: "plan-1" } as never,
+    );
+    finishRevision({
+      title: "Orphaned revision",
+      overview: "Deleted session",
+      content: "# Orphaned",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+
+    await expect(pending).rejects.toThrow(/changed during/i);
+  });
+
+  it("rejects an old generation after owner-ID reuse without releasing the new owner's reservation", async () => {
+    const ownerId = 4;
+    const senderWithId = { ...sender, id: ownerId };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    if (!handler) throw new Error("HyperPlan draft handler was not registered.");
+
+    let finishRevision!: (revision: HyperPlanRevision) => void;
+    mocks.runHyperPlanRevision.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRevision = resolve;
+        }),
+    );
+    const oldEpoch = registerHyperPlanDraftOwner(ownerId);
+    const oldAttempt = handler(
+      { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+      { sessionId: "session-1", planId: "plan-1" } as never,
+    );
+
+    expect(invalidateHyperPlanDraftOwner(ownerId, oldEpoch)).toBe(true);
+    const newEpoch = registerHyperPlanDraftOwner(ownerId);
+    expect(isHyperPlanSessionReserved("session-1")).toBe(false);
+    const newAttempt = (await handler(
+      { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+      { sessionId: "session-1", planId: "plan-1" } as never,
+    )) as { draftId: string };
+    expect(newAttempt.draftId).toEqual(expect.any(String));
+
+    expect(isHyperPlanSessionReserved("session-1")).toBe(false);
+    expect(reserveHyperPlanSession({ sessionId: "session-1", ownerId, ownerEpoch: newEpoch })).toBe(
+      true,
+    );
+    finishRevision({
+      title: "Old revision",
+      overview: "Old",
+      content: "# Old",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    await expect(oldAttempt).rejects.toThrow(/owner|incarnation|invalid/i);
+    expect(isHyperPlanSessionReserved("session-1")).toBe(true);
+    expect(invalidateHyperPlanDraftOwner(ownerId, newEpoch)).toBe(true);
+  });
+
+  it("starts a fresh original build after owner epoch changes with the same request ID", async () => {
+    const ownerId = 4;
+    const senderWithId = { ...sender, id: ownerId };
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    mocks.fromWebContents.mockReturnValue({});
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentStartOriginalPlanBuild);
+    if (!handler) throw new Error("HyperPlan original start handler was not registered.");
+    const input = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      requestId: "reused",
+      sourceSnapshot: planSnapshot(),
+    };
+
+    const epochA = registerHyperPlanDraftOwner(ownerId);
+    await handler(event as never, input as never);
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledTimes(1);
+    const firstKey = mocks.startOriginalPlanBuild.mock.calls[0]?.[1].idempotencyKey;
+    expect(firstKey).toMatch(new RegExp(`^original:${ownerId}:[0-9a-f-]{36}:reused$`, "i"));
+    await handler(event as never, input as never);
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledTimes(1);
+
+    expect(invalidateHyperPlanDraftOwner(ownerId, epochA)).toBe(true);
+    registerHyperPlanDraftOwner(ownerId);
+    await handler(event as never, input as never);
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledTimes(2);
+    const secondKey = mocks.startOriginalPlanBuild.mock.calls[1]?.[1].idempotencyKey;
+    expect(secondKey).toMatch(new RegExp(`^original:${ownerId}:[0-9a-f-]{36}:reused$`, "i"));
+    expect(firstKey).not.toBe(secondKey);
+  });
+
+  it("does not let a replacement IPC owner use an old draft, choice replay, or selection", async () => {
+    const ownerId = 4;
+    const senderWithId = { ...sender, id: ownerId };
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    const start = mocks.handlers.get(IPC_CHANNELS.agentStartPlanBuild);
+    if (!create || !choose || !start) throw new Error("HyperPlan handlers were not registered.");
+    const epochA = registerHyperPlanDraftOwner(ownerId);
+    const preview = (await create(
+      event as never,
+      { sessionId: "session-1", planId: "plan-1" } as never,
+    )) as { draftId: string };
+    const request = { draftId: preview.draftId, choice: "original", requestId: "reuse-choice" };
+    const selection = (await choose(event as never, request as never)) as { selectionId: string };
+    registerHyperPlanDraftOwner(ownerId);
+
+    expect(() => choose(event as never, request as never)).toThrow(/draft|owner/i);
+    await expect(
+      start(
+        event as never,
+        { selectionId: selection.selectionId, requestId: "reuse-start" } as never,
+      ),
+    ).rejects.toThrow(/selection/i);
+    expect(isHyperPlanSessionReserved("session-1")).toBe(true);
+    expect(invalidateHyperPlanDraftOwner(ownerId, epochA)).toBe(false);
+    expect(isHyperPlanSessionReserved("session-1")).toBe(false);
+  });
+
+  it("rejects a HyperPlan start when the sender has no active owner epoch", async () => {
+    const ownerId = 4;
+    const senderWithId = { ...sender, id: ownerId };
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentStartOriginalPlanBuild);
+    if (!handler) throw new Error("HyperPlan original start handler was not registered.");
+    const epoch = registerHyperPlanDraftOwner(ownerId);
+    invalidateHyperPlanDraftOwner(ownerId, epoch);
+
+    await expect(
+      handler(
+        event as never,
+        {
+          sessionId: "session-1",
+          planId: "plan-1",
+          requestId: "no-owner",
+          sourceSnapshot: planSnapshot(),
+        } as never,
+      ),
+    ).rejects.toThrow(/owner incarnation/i);
+    expect(mocks.startOriginalPlanBuild).not.toHaveBeenCalled();
+  });
+
+  it("rejects a busy owner session and a wrong draft owner before any promotion", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    const otherSender = { ...sender, id: 5 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    registerTrustedSender(otherSender, "file:///app/index.html");
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    if (!create || !choose) throw new Error("HyperPlan draft/choice handlers were not registered.");
+    const ownerEvent = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const otherEvent = { sender: otherSender, senderFrame: sender.mainFrame };
+    const preview = (await create(
+      ownerEvent as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+
+    expect(() =>
+      choose(
+        otherEvent as never,
+        {
+          draftId: preview.draftId,
+          choice: "revision",
+          requestId: "foreign-owner",
+        } as never,
+      ),
+    ).toThrow(/owner/i);
+    mocks.assertHyperPlanSessionAvailable.mockImplementationOnce(() => {
+      throw new Error("Session has an active run.");
+    });
+    expect(() =>
+      choose(
+        ownerEvent as never,
+        {
+          draftId: preview.draftId,
+          choice: "revision",
+          requestId: "busy-choice",
+        } as never,
+      ),
+    ).toThrow(/active run/i);
+    expect(mocks.promotePlanRevision).not.toHaveBeenCalled();
+  });
+
+  it("promotes and publishes a revision before returning the main-owned selection", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.fromWebContents.mockReturnValue({ webContents: { send: vi.fn() } });
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    if (!create || !choose) throw new Error("HyperPlan draft/choice handlers were not registered.");
+    const preview = (await create(
+      event as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+    const order: string[] = [];
+    mocks.promotePlanRevision.mockImplementation(() => {
+      order.push("promote");
+      return { ...plan, title: "Revised plan", content: "# Revised", hash: "revised-hash" };
+    });
+    mocks.publishPlanUpdated.mockImplementation(() => order.push("publish"));
+
+    const selection = await choose(
+      event as never,
+      {
+        draftId: preview.draftId,
+        choice: "revision",
+        requestId: "choice-1",
+      } as never,
+    );
+
+    expect(order).toEqual(["promote", "publish"]);
+    expect(selection).toMatchObject({
+      selectionId: expect.any(String),
+      plan: { title: "Revised plan" },
+      planFingerprint: "Revised plan:# Revised",
+    });
+    expect(mocks.promotePlanRevision).toHaveBeenCalledWith("C:/plans", {
+      planId: plan.id,
+      expectedFingerprint: "Spec plan:# Plan\nBounded plan content.",
+      revision: expect.objectContaining({ title: "Revised plan" }),
+    });
+  });
+
+  it("keeps original choice write-free and reconciles identical requests only", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    if (!create || !choose) throw new Error("HyperPlan draft/choice handlers were not registered.");
+    const preview = (await create(
+      event as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+    const request = { draftId: preview.draftId, choice: "original", requestId: "original-1" };
+    const selected = await choose(event as never, request as never);
+    expect(selected).toMatchObject({ plan: { content: plan.content } });
+    expect(mocks.promotePlanRevision).not.toHaveBeenCalled();
+    expect(mocks.publishPlanUpdated).not.toHaveBeenCalled();
+    expect(await choose(event as never, request as never)).toEqual(selected);
+    expect(() => choose(event as never, { ...request, choice: "revision" } as never)).toThrow(
+      /conflict/i,
+    );
+    expect(() => choose(event as never, { ...request, plan: { ...plan } } as never)).toThrow();
+    mocks.readPlanById.mockReturnValue({ ...plan, title: "Changed after selection" });
+    expect(() => choose(event as never, request as never)).toThrow(/changed after/i);
+  });
+
+  it("retries publication for the same promoted choice without promoting twice", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.fromWebContents.mockReturnValue({ webContents: { send: vi.fn() } });
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    if (!create || !choose) throw new Error("HyperPlan draft/choice handlers were not registered.");
+    const preview = (await create(
+      event as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+    mocks.publishPlanUpdated.mockImplementationOnce(() => {
+      throw new Error("injected event persistence failure");
+    });
+    const request = {
+      draftId: preview.draftId,
+      choice: "revision",
+      requestId: "publish-retry",
+    };
+
+    expect(() => choose(event as never, request as never)).toThrow(/event persistence/i);
+    mocks.readPlanById.mockReturnValue({
+      ...plan,
+      title: "Revised plan",
+      content: "# Revised",
+      hash: "revised-hash",
+    });
+    const selection = choose(event as never, request as never);
+
+    expect(mocks.promotePlanRevision).toHaveBeenCalledTimes(1);
+    expect(mocks.publishPlanUpdated).toHaveBeenCalledTimes(2);
+    expect(selection).toMatchObject({ selectionId: expect.any(String) });
+    const firstSelectionId = mocks.publishPlanUpdated.mock.calls[0]?.[3];
+    expect(firstSelectionId).toBe((selection as { selectionId: string }).selectionId);
+    expect(mocks.publishPlanUpdated.mock.calls[1]?.[3]).toBe(firstSelectionId);
+  });
+
+  it("starts only the main-owned selection using its selection and request IDs", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.fromWebContents.mockReturnValue({ webContents: { send: vi.fn() } });
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    const start = mocks.handlers.get("agent:start-plan-build");
+    if (!create || !choose || !start) throw new Error("HyperPlan build start handlers missing.");
+    const preview = (await create(
+      event as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+    const selection = (await choose(
+      event as never,
+      {
+        draftId: preview.draftId,
+        choice: "original",
+        requestId: "choice-start",
+      } as never,
+    )) as { selectionId: string };
+
+    const request = { selectionId: selection.selectionId, requestId: "start-request" };
+    const firstStart = await start(event as never, request as never);
+    const replay = await start(event as never, request as never);
+
+    expect(mocks.startPlanBuild).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        sessionId: "session-1",
+        planId: "plan-1",
+        selectionId: selection.selectionId,
+      }),
+    );
+    expect(mocks.startPlanBuild.mock.calls[0]?.[1]).not.toHaveProperty("plan");
+    expect(mocks.startPlanBuild).toHaveBeenCalledTimes(1);
+    expect(replay).toEqual(firstStart);
+  });
+
+  it("rejects a start when the authoritative selected plan fingerprint has changed", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    const event = { sender: senderWithId, senderFrame: sender.mainFrame };
+    const create = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    const choose = mocks.handlers.get(IPC_CHANNELS.agentResolveHyperPlanDraftChoice);
+    const start = mocks.handlers.get("agent:start-plan-build");
+    if (!create || !choose || !start) throw new Error("HyperPlan build start handlers missing.");
+    const preview = (await create(
+      event as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+      } as never,
+    )) as { draftId: string };
+    const selection = (await choose(
+      event as never,
+      {
+        draftId: preview.draftId,
+        choice: "original",
+        requestId: "choice-stale-start",
+      } as never,
+    )) as { selectionId: string };
+    mocks.readPlanById.mockReturnValue({ ...plan, title: "Changed after choice" });
+
+    await expect(
+      start(
+        event as never,
+        {
+          selectionId: selection.selectionId,
+          requestId: "stale-build-start",
+        } as never,
+      ),
+    ).rejects.toThrow(/fingerprint changed/i);
+    expect(mocks.startPlanBuild).not.toHaveBeenCalled();
+  });
+
+  it("supports explicit original-plan start using only authoritative IDs", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.fromWebContents.mockReturnValue({ webContents: { send: vi.fn() } });
+    const startOriginal = mocks.handlers.get("agent:start-original-plan-build");
+    if (!startOriginal) throw new Error("Original-plan build start handler missing.");
+
+    await startOriginal(
+      { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+      {
+        sessionId: "session-1",
+        planId: "plan-1",
+        requestId: "original-start",
+        sourceSnapshot: planSnapshot(),
+      } as never,
+    );
+
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ sessionId: "session-1", planId: "plan-1" }),
+    );
+    expect(mocks.startOriginalPlanBuild.mock.calls[0]?.[1]).not.toHaveProperty("plan");
+  });
+
+  it("rejects snapshot mismatch before runtime start and binds retries to the exact snapshot", async () => {
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.fromWebContents.mockReturnValue({ webContents: { send: vi.fn() } });
+    const startOriginal = mocks.handlers.get("agent:start-original-plan-build");
+    if (!startOriginal) throw new Error("Original-plan build start handler missing.");
+    const snapshot = planSnapshot();
+    const call = (sourceSnapshot: typeof snapshot, requestId = "bound-start") =>
+      startOriginal(
+        { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+        { sessionId: "session-1", planId: "plan-1", requestId, sourceSnapshot } as never,
+      );
+    mocks.fingerprintPlanSource.mockImplementation((candidate: PlanRef) =>
+      JSON.stringify(planSnapshot(candidate)),
+    );
+
+    await expect(call({ ...snapshot, overview: "Different metadata" })).rejects.toThrow(
+      /fingerprint changed/i,
+    );
+    await expect(
+      call({ ...snapshot, content: "Different markdown" }, "content-mismatch"),
+    ).rejects.toThrow(/fingerprint changed/i);
+    expect(mocks.startOriginalPlanBuild).not.toHaveBeenCalled();
+
+    await call(snapshot);
+    await call(snapshot);
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledOnce();
+    expect(mocks.startOriginalPlanBuild.mock.calls[0]?.[1].planFingerprint).toBe(
+      JSON.stringify(snapshot),
+    );
+    await expect(call({ ...snapshot, content: "Different content" })).rejects.toThrow(/conflict/i);
+    expect(mocks.startOriginalPlanBuild).toHaveBeenCalledOnce();
   });
 });
 

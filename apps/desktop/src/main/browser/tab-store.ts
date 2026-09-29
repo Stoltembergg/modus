@@ -46,6 +46,8 @@ export type BrowserTab = {
   dialogs: DialogController;
   snapshots: SnapshotStore;
   visual: AgentVisualizer;
+  /** Agent sessions currently holding the visual browser-control lease. */
+  agentControlOwners: Set<string>;
   /** User-driven "Design Mode" overlay (point-and-select → chat context). */
   design: DesignModeController;
   consoleMessages: BrowserConsoleMessage[];
@@ -125,9 +127,14 @@ export function resolveTab(target: TabTarget = {}): BrowserTab {
     if (!tab) {
       throw new Error(`Browser tab not found: ${target.tabId}`);
     }
+    if (target.workspaceId !== undefined && target.workspaceId !== tab.workspaceId) {
+      throw new Error(
+        `Browser tab ${target.tabId} does not belong to workspace ${target.workspaceId}.`,
+      );
+    }
     return tab;
   }
-  if (target.workspaceId) {
+  if (target.workspaceId !== undefined) {
     const activeId = activeTabByWorkspace.get(target.workspaceId);
     const tab = activeId ? tabs.get(activeId) : undefined;
     if (!tab) {
@@ -340,6 +347,7 @@ export function createTab(
     dialogs: new DialogController(),
     snapshots: new SnapshotStore(),
     visual: new AgentVisualizer(view.webContents),
+    agentControlOwners: new Set(),
     // Self-referential init: the capture/onSelect closures need `tab`, which is
     // fully constructed by the time a selection fires. Assigned right below.
     design: undefined as unknown as DesignModeController,
@@ -423,6 +431,7 @@ export function selectTab(window: BrowserWindowType | undefined, tabId: string):
 export function closeTab(tabId: string): void {
   const tab = resolveTab({ tabId });
 
+  tab.agentControlOwners.clear();
   detachView(tab);
   tabs.delete(tabId);
   const nextIds = tabIdsForWorkspace(tab.workspaceId).filter((id) => id !== tabId);

@@ -1793,6 +1793,34 @@ export type HyperPlanSummary = {
   references: string[];
 };
 
+/** A validated, non-persisted full-plan proposal produced by HyperPlan. */
+export type HyperPlanRevision = {
+  title: string;
+  overview: string;
+  content: string;
+  todos: Array<Pick<PlanTodo, "id" | "content" | "acceptanceCriterionIds">>;
+  spec: {
+    requirements: PlanRequirement[];
+    acceptanceCriteria: Array<Omit<PlanAcceptanceCriterion, "status">>;
+    assumptions: string[];
+    openQuestions: string[];
+  };
+};
+
+/** Complete plan source supplied to the isolated review/revision harness. */
+export type HyperPlanReviewInput = Pick<PlanRef, "title" | "overview" | "content" | "todos"> & {
+  spec: PlanSpec;
+};
+
+/** Exact source projection captured by the renderer before starting a fallback build. */
+export type HyperPlanSourceSnapshot = Pick<PlanRef, "title" | "overview" | "content"> & {
+  todos: Array<Pick<PlanTodo, "id" | "content" | "acceptanceCriterionIds">>;
+  spec: Pick<
+    PlanSpec,
+    "requirements" | "acceptanceCriteria" | "assumptions" | "openQuestions" | "evidence"
+  >;
+};
+
 /**
  * Build lifecycle of a plan, driven authoritatively by the build turn's run
  * lifecycle (run.started → building, run.completed → built, failure/cancel/

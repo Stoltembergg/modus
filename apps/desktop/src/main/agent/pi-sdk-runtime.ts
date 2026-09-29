@@ -28,6 +28,7 @@ import type {
   QuestionResponse,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
@@ -54,6 +55,7 @@ import { maybeNotifyAgentEvent } from "../notifications/agent-notifications";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
 import {
   applyPlanAcceptanceEvidenceById,
+  fingerprintPlanSource,
   hashContent,
   isPlanCriterionLinkedToTodos,
   readPlanById,
@@ -91,6 +93,11 @@ import {
   updateAgentSessionWorktree,
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
+import {
+  isHyperPlanSessionReserved,
+  ownsHyperPlanStartReservation,
+  releaseHyperPlanRunReservation,
+} from "./harness/hyperplan-draft-store";
 import { evaluateIntentGate } from "./harness/intent-gate";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import {
@@ -126,6 +133,8 @@ import type {
   BackgroundWaitResult,
   CreateAgentRuntimeInput,
   EmitAgentEvent,
+  HyperPlanBuildStart,
+  HyperPlanBuildStartInput,
   PromptAgentInput,
   WaitMemoryCandidateSummary,
 } from "./runtime";
@@ -230,6 +239,11 @@ type RunOutputTracker = {
   taskPlan?: PlanRef;
   requiredChecks: HarnessTaskCheckKind[];
   responseModel?: AgentResponseModel;
+};
+
+type ExclusiveStartHooks = {
+  input: HyperPlanBuildStartInput;
+  onStarted: (runId: string) => void;
 };
 
 export function removeRunOutputTrackerIfOwned<T>(
@@ -739,7 +753,7 @@ export class PiSdkRuntime implements AgentRuntime {
       updateAgentSessionStatus(sessionId, "idle");
       runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
       if (runtimeSession.info.workspaceId) {
-        releaseAgentBrowserControl(runtimeSession.info.workspaceId);
+        releaseAgentBrowserControl(runtimeSession.info.workspaceId, sessionId);
       }
     }
   }
@@ -748,6 +762,235 @@ export class PiSdkRuntime implements AgentRuntime {
     if (reservation && this.preflightReservations.get(sessionId) === reservation) {
       this.preflightReservations.delete(sessionId);
     }
+  }
+
+  private settleExclusiveStartFailure(input: {
+    window: BrowserWindowType;
+    runtimeSession: SdkRuntimeSession;
+    sessionId: string;
+    runId: string;
+    outputTracker?: RunOutputTracker;
+    planId: string | undefined;
+    request: HyperPlanBuildStartInput;
+    preflightReservation: symbol | undefined;
+    error: unknown;
+    preserveStartedDeliveryForRetry?: boolean;
+  }): void {
+    const message = input.error instanceof Error ? input.error.message : String(input.error);
+    let preserveStartedRun = false;
+    try {
+      if (
+        input.preserveStartedDeliveryForRetry &&
+        input.outputTracker?.runStartedRowId !== undefined
+      ) {
+        preserveStartedRun = true;
+        this.releasePromptPreflight(input.sessionId, input.preflightReservation);
+        return;
+      }
+      const run = getAgentRun(input.runId);
+      if (run?.status !== "running") return;
+      const cancelled = this.cancellingRuns.has(input.runId);
+      updateAgentRunStatus(input.runId, cancelled ? "cancelled" : "failed", message);
+      if (input.planId) {
+        try {
+          this.transitionPlanBuild(input.runtimeSession, input.planId, "not_built");
+        } catch {
+          // Preserve settlement and cleanup even if the plan projection fails.
+        }
+      }
+      finalizeProjectMemoryRunBestEffort({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        outcome: cancelled ? "cancelled" : "failed",
+      });
+      updateAgentSessionStatus(input.sessionId, cancelled ? "idle" : "error");
+      const terminal = cancelled
+        ? { type: "run.cancelled" as const, sessionId: input.sessionId, runId: input.runId }
+        : {
+            type: "run.failed" as const,
+            sessionId: input.sessionId,
+            runId: input.runId,
+            message,
+          };
+      try {
+        this.emitToWindow(input.window)(terminal, {
+          idempotencyKey: `hyperplan:${input.request.idempotencyKey}:terminal:${input.runId}`,
+        });
+      } catch {
+        // The durable event insert may have succeeded before delivery failed.
+      }
+      if (!cancelled) {
+        try {
+          this.emitToWindow(input.window)(
+            { type: "runtime.error", sessionId: input.sessionId, message },
+            { idempotencyKey: `hyperplan:${input.request.idempotencyKey}:runtime-error` },
+          );
+        } catch {
+          // Best effort only; never replace the original run failure.
+        }
+      }
+    } catch {
+      // Settlement is best effort but must never create an unhandled rejection.
+    } finally {
+      if (!preserveStartedRun) {
+        clearMcpCitationRun(input.sessionId, input.runId);
+        if (input.outputTracker) {
+          removeRunOutputTrackerIfOwned(
+            this.runOutputTrackers,
+            input.sessionId,
+            input.outputTracker,
+          );
+        }
+        this.releasePromptPreflight(input.sessionId, input.preflightReservation);
+        releaseHyperPlanRunReservation({ sessionId: input.sessionId, runId: input.runId });
+        if (input.runtimeSession.info.workspaceId) {
+          try {
+            releaseAgentBrowserControl(input.runtimeSession.info.workspaceId, input.sessionId);
+          } catch {
+            // Browser control cleanup must not prevent terminal idle publication.
+          }
+        }
+        try {
+          updateAgentSessionStatus(input.sessionId, "idle");
+        } catch {
+          // The terminal state is authoritative even if its projection cannot be updated.
+        }
+        try {
+          this.emitToWindow(input.window)({
+            type: "session.status",
+            sessionId: input.sessionId,
+            status: { type: "idle" },
+          });
+        } catch {
+          // Idle delivery is best effort and must not replace the original failure.
+        }
+      }
+    }
+  }
+
+  /** Synchronous busy guard used before a HyperPlan review or promotion reserves a session. */
+  assertHyperPlanSessionAvailable(sessionId: string): void {
+    const runtimeSession = this.sessions.get(sessionId);
+    if (
+      isHyperPlanSessionReserved(sessionId) ||
+      this.preflightReservations.has(sessionId) ||
+      this.runOutputTrackers.has(sessionId) ||
+      this.pendingIntentGates.has(sessionId) ||
+      getActiveAgentRun(sessionId) ||
+      getAgentSession(sessionId)?.status === "running" ||
+      runtimeSession?.session.isStreaming ||
+      runtimeSession?.session.isCompacting
+    ) {
+      throw new Error("HyperPlan choice is unavailable while this session is busy or reserved.");
+    }
+  }
+
+  startPlanBuild(
+    window: BrowserWindowType,
+    input: HyperPlanBuildStartInput,
+  ): Promise<HyperPlanBuildStart> {
+    return Promise.resolve().then(() => this.startHyperPlanBuild(window, input));
+  }
+
+  startOriginalPlanBuild(
+    window: BrowserWindowType,
+    input: HyperPlanBuildStartInput,
+  ): Promise<HyperPlanBuildStart> {
+    return Promise.resolve().then(() => this.startHyperPlanBuild(window, input));
+  }
+
+  private startHyperPlanBuild(
+    window: BrowserWindowType,
+    input: HyperPlanBuildStartInput,
+  ): Promise<HyperPlanBuildStart> {
+    const validate = (): PlanRef => {
+      const session = getAgentSession(input.sessionId);
+      const plan = readPlanById(plansRoot(), input.planId);
+      if (
+        !session ||
+        !plan ||
+        plan.sessionId !== session.id ||
+        plan.workspaceId !== session.workspaceId ||
+        fingerprintPlanSource(plan) !== input.planFingerprint
+      )
+        throw new Error("The selected plan is missing or its fingerprint changed.");
+      if (
+        !ownsHyperPlanStartReservation({
+          ownerId: input.ownerId,
+          ...(input.ownerEpoch ? { ownerEpoch: input.ownerEpoch } : {}),
+          requestId: input.requestId,
+          sessionId: input.sessionId,
+          ...(input.existingRunId ? { runId: input.existingRunId } : {}),
+        })
+      )
+        throw new Error("The HyperPlan start reservation is no longer owned by this request.");
+      const currentRun = getActiveAgentRun(input.sessionId);
+      const runtimeSession = this.sessions.get(input.sessionId);
+      const isRetryRun =
+        input.existingRunId !== undefined && currentRun?.id === input.existingRunId;
+      if (
+        (currentRun && !isRetryRun) ||
+        this.preflightReservations.has(input.sessionId) ||
+        this.pendingIntentGates.has(input.sessionId) ||
+        (runtimeSession?.session.isStreaming && !isRetryRun) ||
+        (runtimeSession?.session.isCompacting && !isRetryRun) ||
+        (this.runOutputTrackers.has(input.sessionId) && !isRetryRun) ||
+        (plan.buildStatus === "building" && !isRetryRun) ||
+        (getAgentSession(input.sessionId)?.status === "running" && !isRetryRun)
+      )
+        throw new Error("The HyperPlan build cannot start while this session is busy.");
+      return plan;
+    };
+    const plan = validate();
+    let resolveStarted!: (value: HyperPlanBuildStart) => void;
+    let rejectStarted!: (error: unknown) => void;
+    let settled = false;
+    const started = new Promise<HyperPlanBuildStart>((resolve, reject) => {
+      resolveStarted = resolve;
+      rejectStarted = reject;
+    });
+    const promptInput: PromptAgentInput = {
+      sessionId: input.sessionId,
+      message: buildPlanMessage(plan),
+      context: [],
+      delivery: "normal",
+      userMessageId: `hyperplan:${input.idempotencyKey}`,
+      mode: "build",
+      planId: input.planId,
+    };
+    void this.executePrompt(window, promptInput, {
+      input,
+      onStarted: (runId) => {
+        settled = true;
+        resolveStarted({
+          sessionId: input.sessionId,
+          planId: input.planId,
+          planFingerprint: input.planFingerprint,
+          runId,
+        });
+      },
+    }).catch((error: unknown) => {
+      if (!settled) rejectStarted(error);
+      else console.error("[modus] HyperPlan build turn failed:", error);
+    });
+    return started;
+  }
+
+  /** Persist and fan out a non-run plan update through the ordinary runtime event path. */
+  publishPlanUpdated(
+    window: BrowserWindowType,
+    sessionId: string,
+    plan: PlanRef,
+    idempotencyKey?: string,
+  ): void {
+    const session = getAgentSession(sessionId);
+    if (!session || plan.sessionId !== sessionId || plan.workspaceId !== session.workspaceId) {
+      throw new Error("Cannot publish a plan update for a foreign session.");
+    }
+    this.emitToWindow(window)(
+      { type: "plan.updated", sessionId, plan },
+      idempotencyKey === undefined ? undefined : { idempotencyKey },
+    );
   }
 
   private specBuildPlan(
@@ -891,9 +1134,18 @@ export class PiSdkRuntime implements AgentRuntime {
     runtimeSession.emit({ type: "harness.qa", sessionId: input.sessionId, runId, result });
   }
 
-  private emitToWindow(window: BrowserWindowType): EmitAgentEvent {
-    return (event) => {
-      const rowId = recordAgentEvent(event);
+  private emitToWindow(
+    window: BrowserWindowType,
+  ): (event: AgentEvent, options?: { idempotencyKey?: string }) => void {
+    return (event, options) => {
+      const rowId = recordAgentEvent(event, options);
+      if (
+        event.type === "run.completed" ||
+        event.type === "run.failed" ||
+        event.type === "run.blocked" ||
+        event.type === "run.cancelled"
+      )
+        releaseHyperPlanRunReservation({ sessionId: event.sessionId, runId: event.runId });
       if (event.type === "run.started") {
         const tracker = this.runOutputTrackers.get(event.sessionId);
         if (tracker?.runId === event.runId) tracker.runStartedRowId = rowId;
@@ -1409,6 +1661,28 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   async prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<void> {
+    return this.executePrompt(window, input);
+  }
+
+  private async executePrompt(
+    window: BrowserWindowType,
+    input: PromptAgentInput,
+    exclusiveStart?: ExclusiveStartHooks,
+  ): Promise<void> {
+    const startInput = exclusiveStart?.input;
+    if (
+      isHyperPlanSessionReserved(input.sessionId) &&
+      (!startInput ||
+        !ownsHyperPlanStartReservation({
+          ownerId: startInput.ownerId,
+          ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
+          requestId: startInput.requestId,
+          sessionId: input.sessionId,
+          ...(startInput.existingRunId ? { runId: startInput.existingRunId } : {}),
+        }))
+    ) {
+      throw new Error("A HyperPlan choice is pending for this session.");
+    }
     const delivery = input.delivery ?? "normal";
     const buildPlan = this.requireOwnedBuildPlan(input);
     if (this.preflightReservations.has(input.sessionId)) {
@@ -1427,29 +1701,75 @@ export class PiSdkRuntime implements AgentRuntime {
     const releasePreflight = (): void =>
       this.releasePromptPreflight(input.sessionId, preflightReservation);
     const emit = this.emitToWindow(window);
+    const emitForStart: EmitAgentEvent = (event) => {
+      if (!startInput) {
+        emit(event);
+        return;
+      }
+      const identity =
+        "messageId" in event
+          ? event.messageId
+          : "runId" in event
+            ? event.runId
+            : event.type === "session.status"
+              ? event.status.type
+              : "operation";
+      emit(event, {
+        idempotencyKey: `hyperplan:${startInput.idempotencyKey}:${event.type}:${identity}`,
+      });
+    };
     let earlyUserMessageId: string | undefined;
     const failEarlyPrompt = (error: unknown): Error => {
-      releasePreflight();
       const message = error instanceof Error ? error.message : String(error);
-      if (earlyUserMessageId !== undefined) {
-        updateAgentSessionStatus(input.sessionId, "error");
-        emit({ type: "runtime.error", sessionId: input.sessionId, message });
-        emit({ type: "session.status", sessionId: input.sessionId, status: { type: "idle" } });
+      try {
+        if (earlyUserMessageId !== undefined) {
+          try {
+            updateAgentSessionStatus(input.sessionId, "error");
+          } catch {
+            // Preserve the original pre-run failure.
+          }
+          try {
+            emitForStart({ type: "runtime.error", sessionId: input.sessionId, message });
+          } catch {
+            // Delivery cleanup is best effort; the original error wins.
+          }
+          try {
+            emitForStart({
+              type: "session.status",
+              sessionId: input.sessionId,
+              status: { type: "idle" },
+            });
+          } catch {
+            // Delivery cleanup is best effort; the original error wins.
+          }
+        }
+      } finally {
+        releasePreflight();
       }
       return error instanceof Error ? error : new Error(message);
     };
-    if (delivery === "normal") {
-      earlyUserMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
-      this.emitUserMessage(
-        emit,
-        input,
-        earlyUserMessageId,
-        buildPlan
-          ? { planId: buildPlan.id, title: buildPlan.title, todoCount: buildPlan.todos.length }
-          : undefined,
-      );
-      updateAgentSessionStatus(input.sessionId, "running");
-      emit({ type: "session.status", sessionId: input.sessionId, status: { type: "busy" } });
+    try {
+      if (delivery === "normal" && !startInput?.existingRunId) {
+        earlyUserMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
+        this.emitUserMessage(
+          emitForStart,
+          input,
+          earlyUserMessageId,
+          buildPlan
+            ? { planId: buildPlan.id, title: buildPlan.title, todoCount: buildPlan.todos.length }
+            : undefined,
+        );
+        if (!startInput) {
+          updateAgentSessionStatus(input.sessionId, "running");
+          emitForStart({
+            type: "session.status",
+            sessionId: input.sessionId,
+            status: { type: "busy" },
+          });
+        }
+      }
+    } catch (error) {
+      throw failEarlyPrompt(error);
     }
 
     let runtimeSession: SdkRuntimeSession | undefined;
@@ -1462,11 +1782,50 @@ export class PiSdkRuntime implements AgentRuntime {
       throw failEarlyPrompt(`Agent session not running: ${input.sessionId}`);
     }
 
+    if (startInput) {
+      try {
+        const latestSession = getAgentSession(input.sessionId);
+        const latestPlan = readPlanById(plansRoot(), input.planId ?? "");
+        if (
+          !latestSession ||
+          !latestPlan ||
+          latestPlan.sessionId !== latestSession.id ||
+          latestPlan.workspaceId !== latestSession.workspaceId ||
+          fingerprintPlanSource(latestPlan) !== startInput.planFingerprint ||
+          (latestPlan.buildStatus === "building" && !startInput.existingRunId)
+        )
+          throw new Error("The selected plan fingerprint changed while preparing the build.");
+        const active = getActiveAgentRun(input.sessionId);
+        if (
+          !ownsHyperPlanStartReservation({
+            ownerId: startInput.ownerId,
+            ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
+            requestId: startInput.requestId,
+            sessionId: input.sessionId,
+            ...(startInput.existingRunId ? { runId: startInput.existingRunId } : {}),
+          }) ||
+          (active && active.id !== startInput.existingRunId) ||
+          (runtimeSession.session.isStreaming && active?.id !== startInput.existingRunId) ||
+          runtimeSession.session.isCompacting ||
+          (latestSession.status === "running" && active?.id !== startInput.existingRunId) ||
+          (this.preflightReservations.has(input.sessionId) &&
+            this.preflightReservations.get(input.sessionId) !== preflightReservation)
+        )
+          throw new Error("The HyperPlan session became busy while preparing the build.");
+      } catch (error) {
+        throw failEarlyPrompt(error);
+      }
+    }
+
     // Activity sort key: bump only on real user turns — never on open/ensure/status.
-    runtimeSession.info = {
-      ...runtimeSession.info,
-      updatedAt: touchAgentSession(input.sessionId),
-    };
+    try {
+      runtimeSession.info = {
+        ...runtimeSession.info,
+        updatedAt: touchAgentSession(input.sessionId),
+      };
+    } catch (error) {
+      throw failEarlyPrompt(error);
+    }
 
     const profile = profileForMode(input.mode);
     runtimeSession.profile = profile;
@@ -1495,17 +1854,50 @@ export class PiSdkRuntime implements AgentRuntime {
       throw failEarlyPrompt(error);
     }
 
+    if (startInput) {
+      try {
+        const currentPlan = readPlanById(plansRoot(), input.planId ?? "");
+        const activeRun = getActiveAgentRun(input.sessionId);
+        if (
+          !currentPlan ||
+          fingerprintPlanSource(currentPlan) !== startInput.planFingerprint ||
+          currentPlan.sessionId !== input.sessionId ||
+          currentPlan.workspaceId !== runtimeSession.info.workspaceId ||
+          (currentPlan.buildStatus === "building" && !startInput.existingRunId) ||
+          !ownsHyperPlanStartReservation({
+            ownerId: startInput.ownerId,
+            ...(startInput.ownerEpoch ? { ownerEpoch: startInput.ownerEpoch } : {}),
+            requestId: startInput.requestId,
+            sessionId: input.sessionId,
+            ...(startInput.existingRunId ? { runId: startInput.existingRunId } : {}),
+          }) ||
+          (activeRun && activeRun.id !== startInput.existingRunId) ||
+          (this.runOutputTrackers.has(input.sessionId) &&
+            activeRun?.id !== startInput.existingRunId) ||
+          (runtimeSession.session.isStreaming && activeRun?.id !== startInput.existingRunId) ||
+          runtimeSession.session.isCompacting ||
+          (getAgentSession(input.sessionId)?.status === "running" &&
+            activeRun?.id !== startInput.existingRunId) ||
+          this.pendingIntentGates.has(input.sessionId)
+        )
+          throw new Error("The plan or session changed while preparing the HyperPlan build.");
+      } catch (error) {
+        throw failEarlyPrompt(error);
+      }
+    }
+
     // Authoritative turn boundary: if a turn is already streaming, this message
     // JOINS it — pi queues it (steer/followUp) and resolves prompt() the moment
     // it is enqueued. A queued message is NOT a new run; wrapping it in a run
     // lifecycle would emit a phantom run.started→run.completed/failed that
     // settles the composer while the real turn is still streaming. We trust
     // pi's own `isStreaming`, never a guess from the delivery label.
-    if (delivery !== "normal" && runtimeSession.session.isStreaming) {
+    if (!startInput && delivery !== "normal" && runtimeSession.session.isStreaming) {
       await this.enqueueTurnMessage(runtimeSession, input, delivery, toolContext);
       return;
     }
     if (
+      !startInput &&
       delivery === "normal" &&
       runtimeSession.session.isStreaming &&
       this.runOutputTrackers.has(input.sessionId)
@@ -1525,7 +1917,15 @@ export class PiSdkRuntime implements AgentRuntime {
       const updated = updateAgentSessionTitle(input.sessionId, title);
       if (updated) {
         runtimeSession.info = updated;
-        runtimeSession.emitVolatile({ type: "session.updated", sessionId: input.sessionId, title });
+        try {
+          runtimeSession.emitVolatile({
+            type: "session.updated",
+            sessionId: input.sessionId,
+            title,
+          });
+        } catch (error) {
+          throw failEarlyPrompt(error);
+        }
       }
     }
     const runInput: Parameters<typeof createAgentRun>[0] = {
@@ -1540,223 +1940,212 @@ export class PiSdkRuntime implements AgentRuntime {
     // no live turn to join), so the anchor is always meaningful.
     runInput.piLeafBefore = runtimeSession.session.sessionManager.getLeafId() ?? PI_ROOT_LEAF;
     clearTodoSessionCache(input.sessionId);
-    const run = createAgentRun(runInput);
-    const outputTracker: RunOutputTracker = {
-      runId: run.id,
-      hasVisibleOutput: false,
-      startedAt: Date.now(),
-      tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
-      hasReportedUsage: false,
-      hasQueuedInput: false,
-      requiredChecks: [],
-    };
-    this.runOutputTrackers.set(input.sessionId, outputTracker);
-
-    const taskPlan = this.specBuildPlan(runtimeSession, input);
-    const requiredChecks = requiredChecksForRun(input, taskPlan);
-    if (taskPlan) outputTracker.taskPlan = taskPlan;
-    outputTracker.requiredChecks = requiredChecks;
-    let initialTaskState: HarnessTaskState | undefined;
+    let run: ReturnType<typeof getAgentRun>;
     try {
-      const workspaceId = runtimeSession.info.workspaceId;
-      const goalMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
-      if (
-        [input.sessionId, run.id, workspaceId, goalMessageId].every((id) =>
-          SAFE_TASK_STATE_ID.test(id),
-        )
-      ) {
-        const classification = classifyHarnessTask({
-          text: input.message,
-          mode: input.mode ?? "build",
-          contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
-          changedPaths: [],
-        });
-        const seenTodoIds = new Set<string>();
-        const sessionTodoIds: string[] = [];
-        for (const todo of getLatestSessionTodos(input.sessionId) ?? []) {
-          if (sessionTodoIds.length >= 256) break;
-          if (
-            !todo ||
-            typeof todo !== "object" ||
-            typeof todo.id !== "string" ||
-            seenTodoIds.has(todo.id)
-          ) {
-            continue;
-          }
-          seenTodoIds.add(todo.id);
-          sessionTodoIds.push(todo.id);
-        }
-        initialTaskState = createHarnessTaskState({
-          sessionId: input.sessionId,
-          runId: run.id,
-          workspaceId,
-          goalMessageId,
-          classification,
-          requiredChecks,
-          todoIds: sessionTodoIds,
-          ...(taskPlan ? { plan: taskPlan } : {}),
-        });
-      }
-    } catch {
-      // Task State is a safe projection; invalid optional inputs must not fail the run.
+      run = startInput?.existingRunId
+        ? getAgentRun(startInput.existingRunId)
+        : createAgentRun(runInput);
+    } catch (error) {
+      throw failEarlyPrompt(error);
     }
-
-    updateAgentSessionStatus(input.sessionId, "running");
+    if (!run || run.sessionId !== input.sessionId) {
+      throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
+    }
     const userMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
-    // A "Build this plan" turn carries planId: tag the user message so the
-    // timeline renders a compact Build card, and bind the plan's build status to
-    // this run's authoritative lifecycle (building now → built/not_built later).
-    if (earlyUserMessageId === undefined) {
-      this.emitUserMessage(
-        runtimeSession.emit,
-        input,
-        userMessageId,
-        buildPlan
-          ? { planId: buildPlan.id, title: buildPlan.title, todoCount: buildPlan.todos.length }
-          : undefined,
-      );
-    }
-    const startedEvent = {
-      type: "run.started",
-      sessionId: input.sessionId,
-      runId: run.id,
-      userMessageId,
-      delivery,
-    } as const;
-    runtimeSession.emit(startedEvent);
-    if (initialTaskState) this.emitTaskState(runtimeSession, outputTracker, initialTaskState);
-    // The turn is now streaming: publish the authoritative `busy` status that
-    // the composer's lock + border follow. `idle` is published in `finally`,
-    // and `retry` arrives (from the normalizer) if the runtime auto-retries.
-    if (earlyUserMessageId === undefined) {
-      runtimeSession.emit({
-        type: "session.status",
-        sessionId: input.sessionId,
-        status: { type: "busy" },
-      });
-    }
-    const intentGate = runtimeSession.info.parentSessionId
-      ? ({ action: "proceed" } as const)
-      : evaluateIntentGate({
-          text: input.message,
-          mode: input.mode ?? "build",
-          contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
-          changedPaths: [],
-        });
-    let intentAssumption: string | undefined;
-    if (intentGate.action === "clarify" || intentGate.action === "confirm") {
-      const pendingGate = { runId: run.id, controller: new AbortController() };
-      this.pendingIntentGates.set(input.sessionId, pendingGate);
-      try {
-        const response: QuestionResponse = await requestQuestions({
-          sessionId: input.sessionId,
-          runId: run.id,
-          questions: [intentGate.question],
-          emit: runtimeSession.emit,
-          signal: pendingGate.controller.signal,
-        });
-        const gateStillOwnsRun =
-          this.pendingIntentGates.get(input.sessionId) === pendingGate &&
-          (!preflightReservation ||
-            this.preflightReservations.get(input.sessionId) === preflightReservation) &&
-          !pendingGate.controller.signal.aborted &&
-          getActiveAgentRun(input.sessionId)?.id === run.id &&
-          getAgentRun(run.id)?.status === "running";
-        if (!gateStillOwnsRun) {
-          this.settleCancelledIntentRun(
-            runtimeSession,
-            input.sessionId,
-            run.id,
-            outputTracker,
-            preflightReservation,
-          );
-          return;
-        }
+    let outputTracker!: RunOutputTracker;
+    let requiredChecks: ReturnType<typeof requiredChecksForRun> = [];
+    let runStartedEmitted = false;
+    let startedEmitThrew = false;
+    try {
+      if (startInput && !startInput.existingRunId) startInput.onRunCreated(run.id);
+      outputTracker = {
+        runId: run.id,
+        hasVisibleOutput: false,
+        startedAt: Date.now(),
+        tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
+        hasReportedUsage: false,
+        hasQueuedInput: false,
+        requiredChecks: [],
+      };
+      this.runOutputTrackers.set(input.sessionId, outputTracker);
 
-        const answer = response.answers.find(
-          (candidate) => candidate.questionId === intentGate.question.id,
-        );
-        const selectedAnswers = answer?.selected ?? [];
-        const customAnswer = answer?.custom?.trim().slice(0, INTENT_ASSUMPTION_MAX_CHARS);
-        const shouldBlock =
-          intentGate.action === "confirm"
-            ? response.skipped ||
-              !selectedAnswers.includes("Proceed") ||
-              selectedAnswers.includes("Cancel")
-            : !response.skipped &&
-              (selectedAnswers.includes("Cancel this turn") ||
-                (!customAnswer && !selectedAnswers.includes("Use a conservative default")));
-        if (shouldBlock) {
-          const ownsActiveSession =
-            this.runOutputTrackers.get(input.sessionId) === outputTracker &&
-            getActiveAgentRun(input.sessionId)?.id === run.id;
-          updateAgentRunStatus(run.id, "blocked");
-          runtimeSession.emit({
-            type: "run.blocked",
+      const taskPlan = this.specBuildPlan(runtimeSession, input);
+      requiredChecks = requiredChecksForRun(input, taskPlan);
+      if (taskPlan) outputTracker.taskPlan = taskPlan;
+      outputTracker.requiredChecks = requiredChecks;
+      let initialTaskState: HarnessTaskState | undefined;
+      try {
+        const workspaceId = runtimeSession.info.workspaceId;
+        const goalMessageId = userMessageId;
+        if (
+          [input.sessionId, run.id, workspaceId, goalMessageId].every((id) =>
+            SAFE_TASK_STATE_ID.test(id),
+          )
+        ) {
+          const classification = classifyHarnessTask({
+            text: input.message,
+            mode: input.mode ?? "build",
+            contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
+            changedPaths: [],
+          });
+          const seenTodoIds = new Set<string>();
+          const sessionTodoIds: string[] = [];
+          for (const todo of getLatestSessionTodos(input.sessionId) ?? []) {
+            if (sessionTodoIds.length >= 256) break;
+            if (
+              !todo ||
+              typeof todo !== "object" ||
+              typeof todo.id !== "string" ||
+              seenTodoIds.has(todo.id)
+            ) {
+              continue;
+            }
+            seenTodoIds.add(todo.id);
+            sessionTodoIds.push(todo.id);
+          }
+          initialTaskState = createHarnessTaskState({
             sessionId: input.sessionId,
             runId: run.id,
-            requestId: response.requestId,
-            reason: "The intent gate did not receive the required confirmation.",
+            workspaceId,
+            goalMessageId,
+            classification,
+            requiredChecks,
+            todoIds: sessionTodoIds,
+            ...(taskPlan ? { plan: taskPlan } : {}),
           });
-          removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
+        }
+      } catch {
+        // Task State is a safe projection; invalid optional inputs must not fail the run.
+      }
+
+      // A "Build this plan" turn carries planId: tag the user message so the
+      // timeline renders a compact Build card, and bind the plan's build status to
+      // this run's authoritative lifecycle (building now → built/not_built later).
+      updateAgentSessionStatus(input.sessionId, "running");
+      if (earlyUserMessageId === undefined && !startInput?.existingRunId) {
+        this.emitUserMessage(
+          emitForStart,
+          input,
+          userMessageId,
+          buildPlan
+            ? { planId: buildPlan.id, title: buildPlan.title, todoCount: buildPlan.todos.length }
+            : undefined,
+        );
+      }
+      const startedEvent = {
+        type: "run.started",
+        sessionId: input.sessionId,
+        runId: run.id,
+        userMessageId,
+        delivery,
+      } as const;
+      if (startInput) {
+        try {
+          emit(startedEvent, { idempotencyKey: run.id });
+        } catch (error) {
+          startedEmitThrew = true;
+          throw error;
+        }
+      } else {
+        runtimeSession.emit(startedEvent);
+      }
+      runStartedEmitted = true;
+      exclusiveStart?.onStarted(run.id);
+      if (initialTaskState) this.emitTaskState(runtimeSession, outputTracker, initialTaskState);
+      // Publish busy after run.started for exclusive start too: the start API is
+      // not acknowledged until this setup phase has completed successfully.
+      if (earlyUserMessageId === undefined || startInput) {
+        emitForStart({
+          type: "session.status",
+          sessionId: input.sessionId,
+          status: { type: "busy" },
+        });
+      }
+    } catch (error) {
+      if (startInput) {
+        this.settleExclusiveStartFailure({
+          window,
+          runtimeSession,
+          sessionId: input.sessionId,
+          runId: run.id,
+          ...(outputTracker ? { outputTracker } : {}),
+          planId: buildPlan?.id,
+          request: startInput,
+          preflightReservation,
+          error,
+          preserveStartedDeliveryForRetry:
+            startedEmitThrew && outputTracker.runStartedRowId !== undefined,
+        });
+      } else {
+        const message = error instanceof Error ? error.message : String(error);
+        const started = runStartedEmitted || outputTracker?.runStartedRowId !== undefined;
+        const cancelled =
+          this.cancellingRuns.has(run.id) || getAgentRun(run.id)?.status === "cancelled";
+        try {
+          if (getAgentRun(run.id)?.status === "running") {
+            updateAgentRunStatus(run.id, cancelled ? "cancelled" : "failed", message);
+            finalizeProjectMemoryRunBestEffort({
+              sessionId: input.sessionId,
+              runId: run.id,
+              outcome: cancelled ? "cancelled" : "failed",
+            });
+          }
+        } catch {
+          // Preserve cleanup even if durable settlement fails.
+        } finally {
+          if (buildPlan) {
+            try {
+              this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
+            } catch {
+              // Plan projection must not prevent run cleanup.
+            }
+          }
+          try {
+            updateAgentSessionStatus(input.sessionId, cancelled ? "idle" : "error");
+          } catch {
+            // Session projection must not prevent delivery cleanup.
+          }
+          if (started) {
+            try {
+              emitForStart(
+                cancelled
+                  ? { type: "run.cancelled", sessionId: input.sessionId, runId: run.id }
+                  : { type: "run.failed", sessionId: input.sessionId, runId: run.id, message },
+              );
+            } catch {
+              // Continue to runtime.error and idle even if terminal delivery fails.
+            }
+          }
+          if (!cancelled) {
+            try {
+              emitForStart({ type: "runtime.error", sessionId: input.sessionId, message });
+            } catch {
+              // Runtime error delivery is best effort.
+            }
+          }
+          clearMcpCitationRun(input.sessionId, run.id);
+          if (outputTracker) {
+            removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
+          }
           releasePreflight();
-          if (ownsActiveSession) {
-            updateAgentSessionStatus(input.sessionId, "idle");
-            runtimeSession.emit({
+          releaseHyperPlanRunReservation({ sessionId: input.sessionId, runId: run.id });
+          if (runtimeSession.info.workspaceId) {
+            releaseAgentBrowserControl(runtimeSession.info.workspaceId, input.sessionId);
+          }
+          try {
+            emitForStart({
               type: "session.status",
               sessionId: input.sessionId,
               status: { type: "idle" },
             });
-            if (runtimeSession.info.workspaceId) {
-              releaseAgentBrowserControl(runtimeSession.info.workspaceId);
-            }
-          }
-          return;
-        }
-        if (intentGate.action === "clarify") {
-          if (response.skipped) {
-            intentAssumption = intentGate.default;
-          } else if (customAnswer) {
-            intentAssumption = customAnswer;
-          } else {
-            intentAssumption = intentGate.default;
+          } catch {
+            // Idle delivery is best effort even when setup failed before a user message.
           }
         }
-      } catch (error) {
-        releasePreflight();
-        throw error;
-      } finally {
-        if (this.pendingIntentGates.get(input.sessionId) === pendingGate) {
-          this.pendingIntentGates.delete(input.sessionId);
-        }
       }
+      throw error;
     }
-    if (buildPlan) {
-      this.transitionPlanBuild(runtimeSession, buildPlan.id, "building");
-    }
-    this.setTaskStatePhase(runtimeSession, outputTracker, "executing");
-    // Snapshot the working tree before the agent touches anything, so this
-    // message gets a one-click restore point in the timeline. Never blocks
-    // the run: failures (non-git cwd, git missing) degrade to "no checkpoint".
-    let runCheckpoint: Awaited<ReturnType<typeof createCheckpoint>>;
-    try {
-      runCheckpoint = await createCheckpoint({
-        sessionId: input.sessionId,
-        cwd: runtimeSession.info.cwd,
-        runId: run.id,
-        userMessageId,
-      });
-      console.info(`[modus-timing] createCheckpoint +${Date.now() - outputTracker.startedAt}ms`);
-      if (runCheckpoint) {
-        runtimeSession.emit({
-          type: "checkpoint.created",
-          sessionId: input.sessionId,
-          checkpoint: runCheckpoint,
-        });
-      }
-    } catch (error) {
-      console.warn("[modus] checkpoint failed:", error);
-    }
+    let runCheckpoint: Awaited<ReturnType<typeof createCheckpoint>> | undefined;
     let turnEndAttempted = false;
     const captureTurnEnd = async (): Promise<void> => {
       if (!runCheckpoint || turnEndAttempted || !getAgentRun(run.id)) return;
@@ -1775,6 +2164,128 @@ export class PiSdkRuntime implements AgentRuntime {
     let settledChangedPaths: string[] = [];
     let settledChangedScopeKnown = false;
     try {
+      const intentGate =
+        startInput || runtimeSession.info.parentSessionId
+          ? ({ action: "proceed" } as const)
+          : evaluateIntentGate({
+              text: input.message,
+              mode: input.mode ?? "build",
+              contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
+              changedPaths: [],
+            });
+      let intentAssumption: string | undefined;
+      if (intentGate.action === "clarify" || intentGate.action === "confirm") {
+        const pendingGate = { runId: run.id, controller: new AbortController() };
+        this.pendingIntentGates.set(input.sessionId, pendingGate);
+        try {
+          const response: QuestionResponse = await requestQuestions({
+            sessionId: input.sessionId,
+            runId: run.id,
+            questions: [intentGate.question],
+            emit: runtimeSession.emit,
+            signal: pendingGate.controller.signal,
+          });
+          const gateStillOwnsRun =
+            this.pendingIntentGates.get(input.sessionId) === pendingGate &&
+            (!preflightReservation ||
+              this.preflightReservations.get(input.sessionId) === preflightReservation) &&
+            !pendingGate.controller.signal.aborted &&
+            getActiveAgentRun(input.sessionId)?.id === run.id &&
+            getAgentRun(run.id)?.status === "running";
+          if (!gateStillOwnsRun) {
+            this.settleCancelledIntentRun(
+              runtimeSession,
+              input.sessionId,
+              run.id,
+              outputTracker,
+              preflightReservation,
+            );
+            return;
+          }
+
+          const answer = response.answers.find(
+            (candidate) => candidate.questionId === intentGate.question.id,
+          );
+          const selectedAnswers = answer?.selected ?? [];
+          const customAnswer = answer?.custom?.trim().slice(0, INTENT_ASSUMPTION_MAX_CHARS);
+          const shouldBlock =
+            intentGate.action === "confirm"
+              ? response.skipped ||
+                !selectedAnswers.includes("Proceed") ||
+                selectedAnswers.includes("Cancel")
+              : !response.skipped &&
+                (selectedAnswers.includes("Cancel this turn") ||
+                  (!customAnswer && !selectedAnswers.includes("Use a conservative default")));
+          if (shouldBlock) {
+            const ownsActiveSession =
+              this.runOutputTrackers.get(input.sessionId) === outputTracker &&
+              getActiveAgentRun(input.sessionId)?.id === run.id;
+            updateAgentRunStatus(run.id, "blocked");
+            emitForStart({
+              type: "run.blocked",
+              sessionId: input.sessionId,
+              runId: run.id,
+              requestId: response.requestId,
+              reason: "The intent gate did not receive the required confirmation.",
+            });
+            removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
+            releasePreflight();
+            if (ownsActiveSession) {
+              updateAgentSessionStatus(input.sessionId, "idle");
+              emitForStart({
+                type: "session.status",
+                sessionId: input.sessionId,
+                status: { type: "idle" },
+              });
+              if (runtimeSession.info.workspaceId) {
+                releaseAgentBrowserControl(runtimeSession.info.workspaceId, input.sessionId);
+              }
+            }
+            return;
+          }
+          if (intentGate.action === "clarify") {
+            if (response.skipped) {
+              intentAssumption = intentGate.default;
+            } else if (customAnswer) {
+              intentAssumption = customAnswer;
+            } else {
+              intentAssumption = intentGate.default;
+            }
+          }
+        } catch (error) {
+          releasePreflight();
+          throw error;
+        } finally {
+          if (this.pendingIntentGates.get(input.sessionId) === pendingGate) {
+            this.pendingIntentGates.delete(input.sessionId);
+          }
+        }
+      }
+      if (buildPlan) {
+        this.transitionPlanBuild(runtimeSession, buildPlan.id, "building");
+      }
+      this.setTaskStatePhase(runtimeSession, outputTracker, "executing");
+      // Snapshot the working tree before the agent touches anything, so this
+      // message gets a one-click restore point in the timeline. Never blocks
+      // the run: failures (non-git cwd, git missing) degrade to "no checkpoint".
+      try {
+        runCheckpoint = await createCheckpoint({
+          sessionId: input.sessionId,
+          cwd: runtimeSession.info.cwd,
+          runId: run.id,
+          userMessageId,
+        });
+        console.info(`[modus-timing] createCheckpoint +${Date.now() - outputTracker.startedAt}ms`);
+        if (runCheckpoint) {
+          runtimeSession.emit({
+            type: "checkpoint.created",
+            sessionId: input.sessionId,
+            checkpoint: runCheckpoint,
+          });
+        }
+      } catch (error) {
+        console.warn("[modus] checkpoint failed:", error);
+      }
       const message = await this.composeTurnMessage(runtimeSession, input, { runId: run.id });
       console.info(
         `[modus-timing] composeTurnMessage done +${Date.now() - outputTracker.startedAt}ms`,
@@ -1881,7 +2392,7 @@ export class PiSdkRuntime implements AgentRuntime {
           if (todoNeedsContinuation || qaNeedsContinuation) {
             continuationAttempt = 1;
             continuationStarted = true;
-            runtimeSession.emit({
+            emitForStart({
               type: "harness.continuation",
               sessionId: input.sessionId,
               runId: run.id,
@@ -1918,7 +2429,7 @@ export class PiSdkRuntime implements AgentRuntime {
             outcome: "failed",
           });
           updateAgentSessionStatus(input.sessionId, "error");
-          runtimeSession.emit({
+          emitForStart({
             type: "run.failed",
             sessionId: input.sessionId,
             runId: run.id,
@@ -1971,7 +2482,7 @@ export class PiSdkRuntime implements AgentRuntime {
             runId: run.id,
             outcome: "completed",
           });
-          runtimeSession.emit({
+          emitForStart({
             type: "run.completed",
             sessionId: input.sessionId,
             runId: run.id,
@@ -2000,20 +2511,34 @@ export class PiSdkRuntime implements AgentRuntime {
             outcome: "failed",
           });
           updateAgentSessionStatus(input.sessionId, "error");
-          runtimeSession.emit({
+          emitForStart({
             type: "run.failed",
             sessionId: input.sessionId,
             runId: run.id,
             message,
             ...this.runResponseMetadata(outputTracker),
           });
-          runtimeSession.emit({ type: "runtime.error", sessionId: input.sessionId, message });
+          emitForStart({ type: "runtime.error", sessionId: input.sessionId, message });
           if (buildPlan) {
             this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
           }
         }
       }
     } catch (error) {
+      if (startInput) {
+        this.settleExclusiveStartFailure({
+          window,
+          runtimeSession,
+          sessionId: input.sessionId,
+          runId: run.id,
+          outputTracker,
+          planId: buildPlan?.id,
+          request: startInput,
+          preflightReservation,
+          error,
+        });
+        return;
+      }
       // The build turn ended without completing (manual stop, disconnect, or a
       // real failure) → the plan reverts to not_built so it can be built again.
       if (buildPlan) {
@@ -2054,7 +2579,7 @@ export class PiSdkRuntime implements AgentRuntime {
           runId: run.id,
           outcome: "cancelled",
         });
-        runtimeSession.emit({
+        emitForStart({
           type: "run.cancelled",
           sessionId: input.sessionId,
           runId: run.id,
@@ -2081,14 +2606,14 @@ export class PiSdkRuntime implements AgentRuntime {
         outcome: "failed",
       });
       updateAgentSessionStatus(input.sessionId, "error");
-      runtimeSession.emit({
+      emitForStart({
         type: "run.failed",
         sessionId: input.sessionId,
         runId: run.id,
         message: error instanceof Error ? error.message : String(error),
         ...this.runResponseMetadata(outputTracker),
       });
-      runtimeSession.emit({
+      emitForStart({
         type: "runtime.error",
         sessionId: input.sessionId,
         message: error instanceof Error ? error.message : String(error),
@@ -2109,13 +2634,13 @@ export class PiSdkRuntime implements AgentRuntime {
       // The turn is over (completed/failed/cancelled all funnel through here):
       // publish the authoritative `idle` status so the composer unlocks, and
       // dim the in-app browser's "AI in control" glow + cursor.
-      runtimeSession.emit({
+      emitForStart({
         type: "session.status",
         sessionId: input.sessionId,
         status: { type: "idle" },
       });
       if (session?.workspaceId) {
-        releaseAgentBrowserControl(session.workspaceId);
+        releaseAgentBrowserControl(session.workspaceId, input.sessionId);
       }
     }
   }
@@ -2143,30 +2668,57 @@ export class PiSdkRuntime implements AgentRuntime {
   }
 
   async compact(window: BrowserWindowType, sessionId: string): Promise<void> {
-    const runtimeSession = await this.getOrResume(window, sessionId);
-    if (!runtimeSession) {
-      throw new Error(`Agent session not found: ${sessionId}`);
+    const existing = this.sessions.get(sessionId);
+    if (
+      isHyperPlanSessionReserved(sessionId) ||
+      this.preflightReservations.has(sessionId) ||
+      this.runOutputTrackers.has(sessionId) ||
+      this.pendingIntentGates.has(sessionId) ||
+      getActiveAgentRun(sessionId) ||
+      getAgentSession(sessionId)?.status === "running" ||
+      existing?.session.isStreaming ||
+      existing?.session.isCompacting
+    ) {
+      throw new Error("Context can only be compacted while the session is idle and unreserved.");
     }
-    if (!runtimeSession.session.isIdle) {
-      throw new Error("Context can only be compacted while Modus is idle.");
-    }
-
-    updateAgentSessionStatus(sessionId, "running");
-    runtimeSession.emit({ type: "session.status", sessionId, status: { type: "busy" } });
-    runtimeSession.lastCompactionEnd = undefined;
+    const reservation = Symbol(`compact:${sessionId}`);
+    this.preflightReservations.set(sessionId, reservation);
     try {
-      await runtimeSession.session.compact();
-      const compaction = lastCompactionEnd(runtimeSession);
-      this.finalizeProjectMemoryCompactionBestEffort({
-        sessionId,
-        reason: compaction?.reason ?? "manual",
-        aborted: compaction?.aborted ?? false,
-        willRetry: compaction?.willRetry ?? false,
-        failed: compaction?.failed ?? false,
-      });
+      const runtimeSession = await this.getOrResume(window, sessionId);
+      if (!runtimeSession) throw new Error(`Agent session not found: ${sessionId}`);
+      if (
+        this.preflightReservations.get(sessionId) !== reservation ||
+        isHyperPlanSessionReserved(sessionId) ||
+        getActiveAgentRun(sessionId) ||
+        this.runOutputTrackers.has(sessionId) ||
+        this.pendingIntentGates.has(sessionId) ||
+        getAgentSession(sessionId)?.status === "running" ||
+        runtimeSession.session.isStreaming ||
+        runtimeSession.session.isCompacting ||
+        !runtimeSession.session.isIdle
+      ) {
+        throw new Error("Context can only be compacted while Modus is idle and unreserved.");
+      }
+
+      updateAgentSessionStatus(sessionId, "running");
+      runtimeSession.emit({ type: "session.status", sessionId, status: { type: "busy" } });
+      runtimeSession.lastCompactionEnd = undefined;
+      try {
+        await runtimeSession.session.compact();
+        const compaction = lastCompactionEnd(runtimeSession);
+        this.finalizeProjectMemoryCompactionBestEffort({
+          sessionId,
+          reason: compaction?.reason ?? "manual",
+          aborted: compaction?.aborted ?? false,
+          willRetry: compaction?.willRetry ?? false,
+          failed: compaction?.failed ?? false,
+        });
+      } finally {
+        updateAgentSessionStatus(sessionId, "idle");
+        runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
+      }
     } finally {
-      updateAgentSessionStatus(sessionId, "idle");
-      runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
+      this.releasePromptPreflight(sessionId, reservation);
     }
   }
 
