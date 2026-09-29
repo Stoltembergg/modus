@@ -30,7 +30,7 @@ import {
   type UpdateLogger,
 } from "./update-controller";
 import { errorMessage } from "./update-errors";
-import { isArm64Mac, releasePageUrl, resolveUpdatePolicy } from "./update-policy";
+import { appliesOnQuitFor, isArm64Mac, releasePageUrl, resolveUpdatePolicy } from "./update-policy";
 import type { UpdateTimers } from "./update-scheduler";
 import { IDLE } from "./update-state-machine";
 
@@ -221,9 +221,8 @@ export async function startUpdateService(): Promise<void> {
       logger: updaterLogger,
     });
   } else {
-    // AppImage replaces the file at install; NSIS gives up if it cannot close the app.
     installer = createElectronUpdaterInstaller(updater, {
-      appliesOnQuit: policy.platform === "linux",
+      appliesOnQuit: appliesOnQuitFor(policy.platform),
     });
   }
 

@@ -27,7 +27,7 @@ export type PlatformInstaller = {
    * Whether a handed-off install still completes if the app quits later than expected:
    * the AppImage file is already replaced, and the macOS swap script waits up to 10
    * minutes for the app to exit. Not NSIS: its silent installer gives up right away
-   * when it cannot close the app.
+   * when it cannot close the app. Decided per platform by `appliesOnQuitFor`.
    */
   appliesOnQuit?: boolean;
 };
