@@ -126,7 +126,11 @@ import {
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
-import { planSafeDispatch } from "./harness/safe-dispatch";
+import {
+  isSafeReadonlySpecialistRole,
+  planSafeDispatch,
+  type SafeDispatchPlan,
+} from "./harness/safe-dispatch";
 import { classifyHarnessTask } from "./harness/task-classifier";
 import {
   createHarnessTaskState,
@@ -265,6 +269,12 @@ type RunOutputTracker = {
   lastQaStatus?: AutoQAStatus;
   adaptiveRetrievalDigest?: string;
   forceVerifyGate?: boolean;
+  /** Child/MCP safe dispatch deferred until Intent Gate proceeds. */
+  pendingAdaptiveSpawn?: Extract<
+    SafeDispatchPlan,
+    { kind: "spawn_readonly_specialist" | "mcp_preflight" }
+  >;
+  adaptiveSpecialistSpawned?: boolean;
 };
 
 /** Active mode: allowlisted safe actions may auto-dispatch; others stay hints. */
@@ -1145,6 +1155,14 @@ export class PiSdkRuntime implements AgentRuntime {
           // Local retrieval is best-effort; decision still stands.
         }
       }
+      // Child/MCP spawn is deferred until Intent Gate proceeds (pre_prompt) or
+      // flushed immediately at post_qa/post_failure (gate already cleared).
+      if (
+        (dispatch.kind === "spawn_readonly_specialist" || dispatch.kind === "mcp_preflight") &&
+        !tracker.adaptiveSpecialistSpawned
+      ) {
+        tracker.pendingAdaptiveSpawn = dispatch;
+      }
       runtimeSession.emit({
         type: "harness.decision",
         sessionId: input.sessionId,
@@ -1156,6 +1174,87 @@ export class PiSdkRuntime implements AgentRuntime {
     } catch (error) {
       console.warn("[modus] adaptive controller failed:", error);
       return undefined;
+    }
+  }
+
+  /**
+   * Apply deferred Gap-1 safe child/MCP dispatch after Intent Gate proceeds.
+   * Spawns only builtin read-only specialists; MCP goes through librarian + ToolRegistry.
+   */
+  private async flushPendingAdaptiveSpawn(
+    window: BrowserWindowType,
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+    taskLabel: string,
+  ): Promise<void> {
+    const pending = tracker.pendingAdaptiveSpawn;
+    delete tracker.pendingAdaptiveSpawn;
+    if (!pending || tracker.adaptiveSpecialistSpawned) return;
+    if (runtimeSession.info.parentSessionId) return;
+    const role = pending.specialistRole;
+    if (!isSafeReadonlySpecialistRole(role)) return;
+    const configured = resolveAvailableSubagent(runtimeSession.info.cwd, role);
+    if (!configured?.readOnly) {
+      console.warn(`[modus] adaptive spawn refused: ${role} is not read-only`);
+      return;
+    }
+    const busyChildren = listSubagentSessions(runtimeSession.info.id).filter((session) =>
+      isSubagentBusy(session.status),
+    ).length;
+    const maxChildren = Math.min(
+      MAX_SUBAGENTS_PER_SESSION,
+      tracker.lastAdaptiveDecision?.policy.maxParallelChildren ?? 1,
+    );
+    if (busyChildren >= maxChildren) {
+      console.warn("[modus] adaptive spawn skipped: child concurrency cap");
+      return;
+    }
+    const prompt =
+      pending.kind === "mcp_preflight"
+        ? [
+            "Adaptive MCP preflight (read-only).",
+            "Research only using web tools and explicitly allowlisted read-only MCP search tools.",
+            "Never call non-allowlisted MCP tools, write/edit files, or run shell/process.",
+            `Context: ${taskLabel.slice(0, 500)}`,
+            "Return concise findings with citations.",
+          ].join("\n")
+        : [
+            `Adaptive read-only ${role} specialist dispatch.`,
+            "Do not modify files or run destructive commands.",
+            `Context: ${taskLabel.slice(0, 500)}`,
+            "Return concise evidence-backed findings with file references.",
+          ].join("\n");
+    try {
+      const routeEvent = {
+        type: "harness.route" as const,
+        sessionId: runtimeSession.info.id,
+        runId: tracker.runId,
+        taskType: tracker.taskState?.classification.taskType ?? "unknown",
+        selectedRole: role,
+        reasonCodes: [
+          pending.reasonCode,
+          pending.kind === "mcp_preflight" ? "adaptive_mcp_preflight" : "adaptive_readonly_spawn",
+        ],
+      };
+      runtimeSession.emit(routeEvent);
+      await this.runSubagent(window, {
+        parentSessionId: runtimeSession.info.id,
+        task: `adaptive:${role}`,
+        prompt,
+        subagentType: configured.name,
+        subagent: {
+          name: configured.name,
+          body: configured.body,
+          model: configured.model ?? "inherit",
+          readOnly: true,
+          ...(configured.tools ? { tools: configured.tools } : {}),
+          ...(configured.disallowedTools ? { disallowedTools: configured.disallowedTools } : {}),
+          isolation: "shared",
+        },
+      });
+      tracker.adaptiveSpecialistSpawned = true;
+    } catch (error) {
+      console.warn("[modus] adaptive safe spawn failed:", error);
     }
   }
 
@@ -2533,6 +2632,8 @@ export class PiSdkRuntime implements AgentRuntime {
         this.transitionPlanBuild(runtimeSession, buildPlan.id, "building");
       }
       this.setTaskStatePhase(runtimeSession, outputTracker, "executing");
+      // Gap 1: Intent Gate has cleared — flush deferred read-only specialist / MCP preflight.
+      await this.flushPendingAdaptiveSpawn(window, runtimeSession, outputTracker, input.message);
       // Snapshot the working tree before the agent touches anything, so this
       // message gets a one-click restore point in the timeline. Never blocks
       // the run: failures (non-git cwd, git missing) degrade to "no checkpoint".
@@ -2672,6 +2773,13 @@ export class PiSdkRuntime implements AgentRuntime {
             qaStatus: qa.status,
             remainingContinuationBudget: continuationAttempt < 1 ? 1 : 0,
           });
+          // post_qa/post_failure: Intent Gate already cleared for this turn.
+          await this.flushPendingAdaptiveSpawn(
+            window,
+            runtimeSession,
+            outputTracker,
+            input.message,
+          );
           const todos = getLatestSessionTodos(input.sessionId) ?? [];
           const decision = evaluateTodoContinuation({
             todos,
@@ -2706,7 +2814,9 @@ export class PiSdkRuntime implements AgentRuntime {
               midDecision &&
               (midDecision.action === "avoid_retry" ||
                 midDecision.action === "replan" ||
-                midDecision.action === "suggest_oracle")
+                midDecision.action === "suggest_oracle" ||
+                midDecision.action === "spawn_readonly_specialist" ||
+                midDecision.action === "mcp_preflight")
             ) {
               const retryHint = formatAdaptiveDecisionHint(midDecision);
               if (retryHint) {

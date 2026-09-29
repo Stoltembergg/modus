@@ -102,6 +102,16 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       };
     }
     if (complex || snapshot.impact?.blastRadius === "cross_module") {
+      if (mode === "active") {
+        return {
+          ...base,
+          action: "spawn_readonly_specialist",
+          specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
+          reasonCodes: ["verification_failed", "high_risk_or_blast", "safe_readonly_spawn"],
+          confidence: "medium",
+          expectedUncertaintyReduction: 12,
+        };
+      }
       return {
         ...base,
         action: "suggest_oracle",
@@ -133,6 +143,35 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     };
   }
 
+  const uncertain =
+    snapshot.impact?.confidence === "unknown" ||
+    snapshot.impact?.unknownReasons.includes("no_typed_paths") === true ||
+    unresolved > 0;
+
+  // Gap 1: explicit read-only research roles beat HyperPlan suggestion in active mode.
+  if (mode === "active" && uncertain && complex) {
+    if (snapshot.classification.suggestedRole === "librarian") {
+      return {
+        ...base,
+        action: "mcp_preflight",
+        specialistRole: "librarian",
+        reasonCodes: ["uncertainty_high", "mcp_preflight_librarian"],
+        confidence: "medium",
+        expectedUncertaintyReduction: 11,
+      };
+    }
+    if (snapshot.classification.suggestedRole === "explore") {
+      return {
+        ...base,
+        action: "spawn_readonly_specialist",
+        specialistRole: "explore",
+        reasonCodes: ["uncertainty_high", "safe_readonly_spawn", "explore_preflight"],
+        confidence: "medium",
+        expectedUncertaintyReduction: 11,
+      };
+    }
+  }
+
   if (
     policy.suggestHyperPlan &&
     snapshot.mode !== "plan" &&
@@ -147,12 +186,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     };
   }
 
-  if (
-    (snapshot.impact?.confidence === "unknown" ||
-      snapshot.impact?.unknownReasons.includes("no_typed_paths") ||
-      unresolved > 0) &&
-    complex
-  ) {
+  if (uncertain && complex) {
     return {
       ...base,
       action: "retrieve_local",
@@ -166,6 +200,16 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     snapshot.classification.suggestedRole === "oracle" ||
     (complex && snapshot.classification.confidence === "low")
   ) {
+    if (mode === "active") {
+      return {
+        ...base,
+        action: "spawn_readonly_specialist",
+        specialistRole: policy.suggestedRole ?? "oracle",
+        reasonCodes: ["architecture_or_low_confidence", "safe_readonly_spawn"],
+        confidence: "medium",
+        expectedUncertaintyReduction: 10,
+      };
+    }
     return {
       ...base,
       action: "suggest_oracle",
@@ -192,6 +236,10 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
       return "Adaptive policy: complex/high-blast scope detected. Consider Plan Mode or HyperPlan review; continue only if the user already chose otherwise.";
     case "suggest_oracle":
       return "Adaptive policy: high uncertainty or failed verification. Prefer read-only Oracle/reviewer advice before repeating the same edit strategy.";
+    case "spawn_readonly_specialist":
+      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before repeating edits.`;
+    case "mcp_preflight":
+      return "Adaptive policy: a read-only librarian MCP preflight was auto-dispatched. Allowlisted MCP tools run only through ToolRegistry + the permission broker; do not call non-allowlisted MCP tools.";
     case "verify":
       return "Adaptive policy: verification evidence is still required before treating this task as done. Use only the eligible required check scripts already named for this turn.";
     case "avoid_retry":
