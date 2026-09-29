@@ -11,8 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRestoreUiState } from "../../shared/contracts";
+import { MAX_RESTORE_UI_STATE_BYTES } from "../../shared/update-restore";
+import { updateSaveUiStateSchema } from "../ipc/schemas";
 import {
   createRestoreSnapshotKeeper,
+  MAX_RESTORE_SNAPSHOT_FILE_BYTES,
   RESTORE_SNAPSHOT_MAX_AGE_MS,
   RESTORE_SNAPSHOT_SCHEMA_VERSION,
   restoreSnapshotPath,
@@ -183,12 +186,46 @@ describe("restore snapshot take at startup", () => {
     ["an invalid state", file({ state: { ...UI_STATE, activeSessionId: 42 } })],
     ["an extra state field", file({ state: { ...UI_STATE, attachments: [] } })],
     ["an oversized file", file({ padding: "x".repeat(600 * 1024) })],
+    [
+      "a file just over the file cap",
+      file({ padding: "x".repeat(MAX_RESTORE_SNAPSHOT_FILE_BYTES) }),
+    ],
   ])("discards %s silently and deletes the file", (_label, content) => {
     const path = writeFile(content);
     const { state, log } = take("1.3.0");
     expect(state).toBeNull();
     expect(existsSync(path)).toBe(false);
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("restores a state of exactly the IPC byte cap written through the real path", () => {
+    // Measured like the IPC cap: UTF-8 bytes of JSON.stringify(state).
+    const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+    const drafts: UpdateRestoreUiState["drafts"] = {};
+    for (let i = 0; i < 7; i += 1) drafts[`s-${i}`] = { text: "x".repeat(74_000), mode: "build" };
+    const base = { ...UI_STATE, drafts };
+    const missing = MAX_RESTORE_UI_STATE_BYTES - size(base);
+    expect(missing).toBeGreaterThan(0);
+    drafts["s-6"] = { text: "x".repeat(74_000 + missing), mode: "build" };
+    const state = { ...UI_STATE, drafts };
+    expect(size(state)).toBe(MAX_RESTORE_UI_STATE_BYTES);
+
+    // Passes the IPC check at the cap; one byte more does not.
+    const accepted = updateSaveUiStateSchema.safeParse(state);
+    expect(accepted.success).toBe(true);
+    const over = {
+      ...state,
+      drafts: { ...drafts, "s-0": { text: "x".repeat(74_001), mode: "build" } },
+    };
+    expect(updateSaveUiStateSchema.safeParse(over).success).toBe(false);
+
+    const k = keeper(true);
+    k.remember(accepted.success ? accepted.data : null);
+    expect(k.writeOnQuit()).toBe(true);
+    const fileBytes = statSync(restoreSnapshotPath(workDir)).size;
+    expect(fileBytes).toBeGreaterThan(MAX_RESTORE_UI_STATE_BYTES);
+    expect(fileBytes).toBeLessThanOrEqual(MAX_RESTORE_SNAPSHOT_FILE_BYTES);
+    expect(take("1.3.0").state).toEqual(state);
   });
 
   it("keeps a snapshot just under 24 h old", () => {

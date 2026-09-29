@@ -22,6 +22,13 @@ export type RestoreSnapshotFile = {
   state: UpdateRestoreUiState;
 };
 
+/**
+ * Cap for the whole file on disk: the state (capped at MAX_RESTORE_UI_STATE_BYTES by the
+ * schema after parse) plus the envelope (schemaVersion, fromVersion, createdAt, keys),
+ * so a state right at the IPC cap still restores.
+ */
+export const MAX_RESTORE_SNAPSHOT_FILE_BYTES = MAX_RESTORE_UI_STATE_BYTES + 4 * 1024;
+
 export function restoreSnapshotPath(workDir: string): string {
   return join(workDir, "restore-snapshot.json");
 }
@@ -100,7 +107,7 @@ export function takeRestoreSnapshot(deps: {
     deps.logger.debug(`discarding the UI restore snapshot: ${reason}`);
     return null;
   };
-  if (Buffer.byteLength(raw, "utf8") > MAX_RESTORE_UI_STATE_BYTES) return discard("too large");
+  if (Buffer.byteLength(raw, "utf8") > MAX_RESTORE_SNAPSHOT_FILE_BYTES) return discard("too large");
   let parsed: Partial<RestoreSnapshotFile> | null;
   try {
     parsed = JSON.parse(raw) as Partial<RestoreSnapshotFile> | null;
