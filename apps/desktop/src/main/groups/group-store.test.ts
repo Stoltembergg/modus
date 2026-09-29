@@ -22,6 +22,7 @@ const {
   addAgentGroupMember,
   addGroupDecision,
   appendGroupMessage,
+  getGroupMessage,
   createAgentGroup,
   createAgentGroupWithMembers,
   createGroupTask,
@@ -490,6 +491,53 @@ describe("messages", () => {
       () => appendGroupMessage({ groupId: group.id, authorKind: "user", body: "  " }),
       "invalid-value",
     );
+  });
+});
+
+describe("message chains (startsChain) and lookup", () => {
+  it("startsChain opens a new chain even for a reply; replies otherwise inherit", () => {
+    const { a, group } = projectGroupFixture();
+    const opener = appendGroupMessage({ groupId: group.id, authorKind: "user", body: "first" });
+    const inherited = appendGroupMessage({
+      groupId: group.id,
+      authorKind: "agent",
+      authorSessionId: a,
+      replyToMessageId: opener.id,
+      body: "on it",
+    });
+    expect(inherited.chainId).toBe(opener.id);
+    const restart = appendGroupMessage({
+      groupId: group.id,
+      authorKind: "user",
+      replyToMessageId: inherited.id,
+      startsChain: true,
+      body: "new request",
+    });
+    expect(restart.chainId).toBe(restart.id);
+    expect(restart.replyToMessageId).toBe(inherited.id);
+    expectStoreError(
+      () =>
+        appendGroupMessage({
+          groupId: group.id,
+          authorKind: "user",
+          startsChain: true,
+          chainId: opener.id,
+          body: "x",
+        }),
+      "invalid-value",
+    );
+  });
+
+  it("getGroupMessage returns a message by id or undefined", () => {
+    const { a, group } = projectGroupFixture();
+    const message = appendGroupMessage({
+      groupId: group.id,
+      authorKind: "user",
+      body: "@a hi",
+      mentions: [a],
+    });
+    expect(getGroupMessage(message.id)).toEqual(message);
+    expect(getGroupMessage("missing")).toBeUndefined();
   });
 });
 

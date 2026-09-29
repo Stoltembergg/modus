@@ -38,6 +38,9 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  GroupMessage,
+  GroupMessageCursor,
+  GroupRuntimeEvent,
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
@@ -55,6 +58,7 @@ import type {
   PermissionDecision,
   PersonalizationState,
   PlanRef,
+  PostGroupMessageInput,
   PreviewReadResult,
   ProjectMemoryScope,
   ProjectMemorySnapshot,
@@ -171,6 +175,21 @@ export type ModusApi = {
      * nothing, if any added member is refused); returns the refreshed list.
      */
     updateMembers(input: UpdateAgentGroupMembersInput): Promise<AgentGroupWithMembers[]>;
+    /**
+     * Post a user message to the room; it opens a new chain and wakes the
+     * mentioned members (or the lead when nobody is mentioned).
+     */
+    postMessage(input: PostGroupMessageInput): Promise<GroupMessage>;
+    /** A page of room messages in (created_at, id) order. */
+    listMessages(input: {
+      groupId: string;
+      before?: GroupMessageCursor;
+      after?: GroupMessageCursor;
+      limit?: number;
+    }): Promise<GroupMessage[]>;
+    /** Groups with a member turn running or queued right now. */
+    workingGroupIds(): Promise<string[]>;
+    onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

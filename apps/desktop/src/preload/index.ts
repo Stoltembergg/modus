@@ -5,6 +5,7 @@ import type {
   BrowserEvent,
   FilesChangeEvent,
   GitChangeEvent,
+  GroupRuntimeEvent,
   HarnessInsightsQuery,
   TerminalEvent,
   UpdateRestoreUiState,
@@ -40,6 +41,14 @@ const api: ModusApi = {
     removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
     setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
     updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
+    postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
+    listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
+    workingGroupIds: () => ipcRenderer.invoke("group:working"),
+    onEvent: (callback) => {
+      const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);
+      ipcRenderer.on("group:event", listener);
+      return () => ipcRenderer.removeListener("group:event", listener);
+    },
   },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),

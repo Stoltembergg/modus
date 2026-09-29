@@ -63,9 +63,8 @@ export function removeProjectGroupsWarning(count: number): string {
 }
 
 /**
- * Selector for the Groups row activity dot: true while any member is working.
- * Always false until the group runtime lands (PR 3); keep the signature so the
- * sidebar only needs a real implementation wired in, not new props.
+ * Default for the Groups row activity dot when no runtime state is passed
+ * (tests, stories). The app passes the real selector from useWorkingGroups.
  */
 export function isGroupWorkingStub(_group: AgentGroupWithMembers): boolean {
   return false;
