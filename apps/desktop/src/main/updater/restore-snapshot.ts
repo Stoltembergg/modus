@@ -26,8 +26,8 @@ export function restoreSnapshotPath(workDir: string): string {
 }
 
 export type RestoreSnapshotKeeper = {
-  /** Keeps only the latest state (already validated at the IPC boundary). */
-  remember(state: UpdateRestoreUiState): void;
+  /** Keeps only the latest state (validated at the IPC boundary); null clears it. */
+  remember(state: UpdateRestoreUiState | null): void;
   /** Synchronous: runs in `before-quit`. Writes only while an update is pending. */
   writeOnQuit(): boolean;
 };

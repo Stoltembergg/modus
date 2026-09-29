@@ -104,6 +104,14 @@ describe("restore snapshot write on quit", () => {
     expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
   });
 
+  it("writes nothing once the kept state was cleared", () => {
+    const k = keeper(true);
+    k.remember(UI_STATE);
+    k.remember(null);
+    expect(k.writeOnQuit()).toBe(false);
+    expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
+  });
+
   it("writes nothing when the renderer never pushed a state", () => {
     expect(keeper(true).writeOnQuit()).toBe(false);
     expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);

@@ -10,8 +10,11 @@ export type UpdateIpcService = {
   restartNow(): Promise<void>;
   dismiss(): void;
   openReleasePage(): Promise<void>;
-  /** Latest UI state while an update is pending (kept in memory, written on quit). */
-  saveUiState(state: UpdateRestoreUiState): void;
+  /**
+   * Latest UI state while an update is pending (kept in memory, written on quit). null
+   * clears it: a push that fails validation must not leave an older state to restore.
+   */
+  saveUiState(state: UpdateRestoreUiState | null): void;
   /** The snapshot taken at startup, once; null afterwards or when none applies. */
   takeRestoredUiState(): UpdateRestoreUiState | null;
 };
@@ -52,8 +55,13 @@ export function registerUpdateIpcHandlers(
   handle(IPC_CHANNELS.updateTakeRestoredUiState, () => service.takeRestoredUiState());
   ipcMain.handle(IPC_CHANNELS.updateSaveUiState, (event, input) => {
     assertTrustedSender(event);
-    service.saveUiState(
-      parseIpcInput(updateSaveUiStateSchema, input, IPC_CHANNELS.updateSaveUiState),
-    );
+    let state: UpdateRestoreUiState;
+    try {
+      state = parseIpcInput(updateSaveUiStateSchema, input, IPC_CHANNELS.updateSaveUiState);
+    } catch (error) {
+      service.saveUiState(null);
+      throw error;
+    }
+    service.saveUiState(state);
   });
 }
