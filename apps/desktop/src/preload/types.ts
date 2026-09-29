@@ -22,7 +22,7 @@ import type {
   ContextKind,
   ContextSuggestion,
   CreateAgentGroupInput,
-  CreateAgentInput,
+  CreateGroupAgentInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -160,20 +160,26 @@ export type ModusApi = {
     /** Every Agent Group with its members (sidebar Groups section). */
     list(): Promise<AgentGroupWithMembers[]>;
     /**
-     * Create a group with its (existing) member sessions and lead in one
-     * all-or-nothing step; rejects if any member is refused.
+     * Create a group in a Project with 2..10 NEW agents (one group per agent)
+     * and its lead, in one all-or-nothing step.
      */
     create(input: CreateAgentGroupInput): Promise<AgentGroupWithMembers>;
     /** Rename a group; returns the refreshed group list. */
     rename(input: { id: string; name: string }): Promise<AgentGroupWithMembers[]>;
-    /** Delete a group (its member chats are kept); returns the refreshed group list. */
+    /** Delete a group with its agents, their chats and all group messages; returns the list. */
     remove(id: string): Promise<AgentGroupWithMembers[]>;
+    /** Add an ungrouped (legacy) agent; new agents join with `agents.create({ groupId })`. */
     addMember(input: {
       groupId: string;
-      sessionId: string;
+      agentId: string;
       role?: string;
     }): Promise<AgentGroupWithMembers[]>;
-    /** Remove a member (the chat is kept); returns the refreshed group list. */
+    /** Move the group (and its room sessions) to another Project; never to none. */
+    setWorkspace(input: {
+      groupId: string;
+      workspaceId: string | null;
+    }): Promise<AgentGroupWithMembers[]>;
+    /** Remove a member = delete its agent (refused at 2: `group-min-members`); returns the list. */
     removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
     /** Set or clear (null) the lead; the lead must be a member. */
     setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
@@ -212,17 +218,21 @@ export type ModusApi = {
     deleteDecision(decisionId: string): Promise<GroupDecision>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
-  /** Agents (agents model): unique names; groups meet them as members. */
+  /** Agents (agents model): each belongs to one group, names unique in it. */
   agents: {
     /** Every agent, archived included, by name. */
     list(): Promise<AgentInfo[]>;
-    /** Create an agent; rejects `agent-name-taken` for a taken name (case-insensitive). */
-    create(input: CreateAgentInput): Promise<AgentInfo>;
+    /**
+     * Create an agent in its (only) group; rejects `agent-name-taken` (per group),
+     * `group-max-members`, and without a template `agent-model-required` /
+     * `agent-model-unavailable`.
+     */
+    create(input: CreateGroupAgentInput): Promise<AgentInfo>;
     /** Change the given fields (null clears model / default Project); returns the refreshed list. */
     update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
     /** Archive / restore (group membership is kept); returns the refreshed list. */
     setArchived(input: { id: string; archived: boolean }): Promise<AgentInfo[]>;
-    /** Delete the agent (it leaves its groups; the chats are kept); returns the refreshed list. */
+    /** Delete the agent = remove the member (refused at 2: `group-min-members`); returns the list. */
     remove(id: string): Promise<AgentInfo[]>;
   };
   file: {

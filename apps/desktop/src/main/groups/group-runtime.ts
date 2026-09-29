@@ -10,6 +10,11 @@ import type {
   PostGroupMessageInput,
   UpdateState,
 } from "../../shared/contracts";
+import {
+  GROUP_BLOCKED_TEXT,
+  groupBlockedErrorCode,
+  groupBlockedReason,
+} from "../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { getAgentSession } from "../agent/agent-store";
 import type {
@@ -18,8 +23,10 @@ import type {
   PromptTurnResult,
   TurnSettledEvent,
 } from "../agent/runtime";
+import { getAgent } from "../agents/agents-store";
 import {
   appendGroupMessage,
+  GroupStoreError,
   getAgentGroup,
   getAgentGroupForSession,
   getGroupMessage,
@@ -79,6 +86,7 @@ export const GROUP_STATUS_TEXT = {
   stoppedByYou: "Stopped by you",
   /** A member's turn ended to move into its worktree (then it is re-woken there). */
   worktreeReady: (branch: string) => `Worktree ready: \`${branch}\``,
+  archived: (name: string) => `${name} is archived`,
   limit: {
     "max-hops": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxHops} turns.`,
     "max-agent-messages": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxAgentMessages} agent messages.`,
@@ -157,6 +165,12 @@ type Wake = {
   chainId: string;
   triggerMessageId: string;
   prompt: string;
+  /**
+   * Rebuilds the prompt when the turn actually starts, so the roster (and the
+   * persona) reflect the membership at that moment, not when it was queued.
+   * Undefined result → the queued `prompt` is used.
+   */
+  compose?: () => string | undefined;
   /** The turn opened the intent gate: its chain ended and it no longer holds a slot. */
   gated?: boolean;
   /** group_start_worktree moved the member's cwd during this turn: re-wake it there. */
@@ -171,13 +185,59 @@ export function estimateGroupTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-type MemberRef = { sessionId: string; title: string };
+/** A member as the room sees it: session id (the key) → its agent's name and role. */
+type MemberRef = {
+  sessionId: string;
+  /** The agent's CURRENT display name: `@Name` mentions follow a rename. */
+  title: string;
+  /** Role in this group, else the agent's role (title). */
+  role?: string;
+  /** Short description of the agent (agentDescription). */
+  description?: string;
+  archived?: boolean;
+};
 
+/** Max length of a roster description. */
+export const GROUP_ROSTER_DESCRIPTION_MAX_CHARS = 120;
+
+/**
+ * A short description of an agent for the roster: the first non-empty line of
+ * its instructions, whitespace collapsed, cut at 120 characters. (The agents
+ * table has no description column yet; A3/A4 may add one.)
+ */
+export function agentDescription(instructions: string | undefined): string | undefined {
+  const line = (instructions ?? "")
+    .split("\n")
+    .map((text) => text.replace(/\s+/g, " ").trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  return line.length > GROUP_ROSTER_DESCRIPTION_MAX_CHARS
+    ? `${line.slice(0, GROUP_ROSTER_DESCRIPTION_MAX_CHARS - 1).trimEnd()}…`
+    : line;
+}
+
+/** The room's CURRENT membership, read fresh on every call (never cached). */
 function membersOf(groupId: string): MemberRef[] {
-  return listAgentGroupMembers(groupId).map((member) => ({
-    sessionId: member.sessionId,
-    title: getAgentSession(member.sessionId)?.title ?? member.sessionId,
-  }));
+  return listAgentGroupMembers(groupId).map((member) => {
+    const role = member.role?.trim() || member.agentRole?.trim();
+    const description = agentDescription(getAgent(member.agentId)?.instructions);
+    return {
+      sessionId: member.sessionId,
+      title: member.name,
+      ...(role ? { role } : {}),
+      ...(description ? { description } : {}),
+      ...(member.archived ? { archived: true } : {}),
+    };
+  });
+}
+
+/** The member's agent persona (its `instructions`), for the top of its wake prompt. */
+function instructionsOf(groupId: string, sessionId: string): string | undefined {
+  const agentId = listAgentGroupMembers(groupId).find(
+    (member) => member.sessionId === sessionId,
+  )?.agentId;
+  const instructions = agentId ? getAgent(agentId)?.instructions.trim() : undefined;
+  return instructions || undefined;
 }
 
 function escapeRegExp(text: string): string {
@@ -348,21 +408,30 @@ export function composeGroupWakePrompt(input: {
   decisions?: readonly GroupDecision[];
   /** Coordinator mode: the Lead's "Group snapshot" (composeGroupSnapshotSection), Lead only. */
   snapshot?: string;
+  /** The woken member's agent persona; first in the prompt when set. */
+  instructions?: string;
   maxContextTokens: number;
 }): string | undefined {
   const titles = new Map(input.members.map((member) => [member.sessionId, member.title]));
   const self = titles.get(input.sessionId) ?? input.sessionId;
-  const roster = input.members
-    .map(
-      (member) =>
-        `@${member.title}${member.sessionId === input.group.leadSessionId ? " (lead)" : ""}${
-          member.sessionId === input.sessionId ? " (you)" : ""
-        }`,
-    )
-    .join(", ");
+  // Roster, rebuilt from the current membership on every wake: name, role, who
+  // leads, archived, a short description, and "(you)".
+  const roster = input.members.map((member) => {
+    const tags = [
+      member.sessionId === input.group.leadSessionId ? " (lead)" : "",
+      member.sessionId === input.sessionId ? " (you)" : "",
+      member.archived ? " (archived)" : "",
+    ].join("");
+    const about = member.description ? `: ${member.description}` : "";
+    return `- @${member.title}${member.role ? ` [${member.role}]` : ""}${tags}${about}`;
+  });
+  const persona = input.instructions?.trim()
+    ? `<agent_instructions>\n${escapeText(input.instructions.trim())}\n</agent_instructions>`
+    : "";
   const header = [
     `<group_room name="${escapeText(input.group.name)}">`,
-    `You are @${escapeText(self)}, a member of this group. Members: ${escapeText(roster)}.`,
+    `You are @${escapeText(self)}, a member of this group. Members right now:`,
+    ...roster.map((line) => escapeText(line)),
     "Reply with what the group should read. To hand work to a member, mention them as @Name; only mentioned members are woken.",
   ].join("\n");
   const triggerBlock = `<group_message from="${escapeText(authorLabel(input.trigger, titles))}">\n${escapeText(input.trigger.body)}\n</group_message>`;
@@ -370,7 +439,7 @@ export function composeGroupWakePrompt(input: {
   const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
   const snapshot = input.snapshot ?? "";
   let used = estimateGroupTokens(
-    [header, snapshot, decisions, triggerBlock, footer].filter(Boolean).join("\n"),
+    [persona, header, snapshot, decisions, triggerBlock, footer].filter(Boolean).join("\n"),
   );
   if (used > input.maxContextTokens) return undefined;
   const lines: string[] = [];
@@ -385,7 +454,9 @@ export function composeGroupWakePrompt(input: {
   }
   const history =
     lines.length > 0 ? `<recent_messages>\n${lines.join("\n")}\n</recent_messages>` : "";
-  return [header, snapshot, decisions, history, triggerBlock, footer].filter(Boolean).join("\n");
+  return [persona, header, snapshot, decisions, history, triggerBlock, footer]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export class GroupRuntime {
@@ -426,6 +497,12 @@ export class GroupRuntime {
 
   /** A user message into the room: always opens a new chain (counters reset). */
   postUserMessage(input: PostGroupMessageInput): GroupMessage {
+    const group = getAgentGroup(input.groupId);
+    const blocked = group ? groupBlockedReason(group, listAgentGroupMembers(group.id)) : null;
+    if (blocked) {
+      // Read-only until a folder is chosen / a member is added: nothing is posted or woken.
+      throw new GroupStoreError(groupBlockedErrorCode(blocked), GROUP_BLOCKED_TEXT[blocked]);
+    }
     const members = membersOf(input.groupId);
     const memberIds = new Set(members.map((member) => member.sessionId));
     const mentioned = new Set([
@@ -791,9 +868,17 @@ export class GroupRuntime {
     if (chain.ended) return;
     const group = getAgentGroup(chain.groupId);
     if (!group) return;
-    const targets = this.wakeTargets(group, message, explicitTargets, allowSelf);
-    if (targets.length === 0) return;
     const members = membersOf(group.id);
+    // A blocked group (no folder, or fewer than 2 members) is read-only: nobody is woken.
+    if (groupBlockedReason(group, members)) return;
+    const wanted = this.wakeTargets(group, message, explicitTargets, allowSelf);
+    // An archived agent stays a member but is never woken: say so instead.
+    const archived = wanted.filter(
+      (id) => members.find((member) => member.sessionId === id)?.archived,
+    );
+    for (const id of archived) this.postArchived(chain, members, id);
+    const targets = wanted.filter((id) => !archived.includes(id));
+    if (targets.length === 0) return;
     const history = listGroupMessages(group.id, {
       before: { createdAt: message.createdAt, id: message.id },
       limit: 100,
@@ -815,18 +900,23 @@ export class GroupRuntime {
         this.endChain(chain, "max-member-wakes");
         break;
       }
-      const prompt = composeGroupWakePrompt({
-        group,
-        members,
-        sessionId,
-        trigger: message,
-        history,
-        decisions,
-        ...(coordinating && sessionId === leadSessionId
-          ? { snapshot: this.snapshotFor(group.id, leadSessionId, members) }
-          : {}),
-        maxContextTokens: this.limits.maxEstimatedContextTokensPerWake,
-      });
+      const compose = (current: AgentGroupInfo, roster: readonly MemberRef[]) => {
+        const instructions = instructionsOf(current.id, sessionId);
+        return composeGroupWakePrompt({
+          group: current,
+          members: roster,
+          sessionId,
+          ...(instructions ? { instructions } : {}),
+          trigger: message,
+          history,
+          decisions,
+          ...(coordinating && sessionId === leadSessionId
+            ? { snapshot: this.snapshotFor(current.id, leadSessionId, roster) }
+            : {}),
+          maxContextTokens: this.limits.maxEstimatedContextTokensPerWake,
+        });
+      };
+      const prompt = compose(group, members);
       if (prompt === undefined) {
         this.endChain(chain, "context-too-large");
         break;
@@ -848,10 +938,33 @@ export class GroupRuntime {
         chainId: chain.chainId,
         triggerMessageId: message.id,
         prompt,
+        compose: () => {
+          const current = getAgentGroup(group.id);
+          return current ? compose(current, membersOf(current.id)) : undefined;
+        },
       });
     }
     this.emitActivity(group.id);
     this.pump();
+  }
+
+  /** "<name> is archived": a status line in place of the wake (wakes nobody). */
+  private postArchived(chain: ChainState, members: readonly MemberRef[], sessionId: string): void {
+    const name = members.find((member) => member.sessionId === sessionId)?.title ?? sessionId;
+    try {
+      this.emitMessage(
+        appendGroupMessage({
+          createdAt: this.stamp(),
+          groupId: chain.groupId,
+          authorKind: "system",
+          kind: "status",
+          body: GROUP_STATUS_TEXT.archived(name),
+          chainId: chain.chainId,
+        }),
+      );
+    } catch (error) {
+      console.warn("[modus] group archived status failed:", error);
+    }
   }
 
   /**
@@ -964,7 +1077,7 @@ export class GroupRuntime {
     try {
       turn = this.runtime.prompt(window, {
         sessionId: wake.sessionId,
-        message: wake.prompt,
+        message: this.freshPrompt(wake),
         context: [],
         delivery: "normal",
       });
@@ -975,6 +1088,16 @@ export class GroupRuntime {
       .catch((): PromptTurnResult => ({ outcome: "failed" }))
       .then((result) => this.finishTurn(wake, result))
       .catch((error) => console.warn("[modus] group turn settle failed:", error));
+  }
+
+  /** The wake prompt rebuilt at start (current roster); the queued one on failure. */
+  private freshPrompt(wake: Wake): string {
+    try {
+      return wake.compose?.() ?? wake.prompt;
+    } catch (error) {
+      console.warn("[modus] group wake prompt rebuild failed:", error);
+      return wake.prompt;
+    }
   }
 
   private finishTurn(wake: Wake, result: PromptTurnResult): void {

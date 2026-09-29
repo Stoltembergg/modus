@@ -10,8 +10,12 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
+const { createAgent, createAgentInGroup, createGroupWithNewAgents, setAgentArchived, updateAgent } =
+  await import("../agents/agents-store");
 const {
+  createAgentGroupWithAgents,
   createAgentGroupWithMembers,
+  removeAgentFromGroup,
   listGroupMessages,
   createMemberGroupTask,
   recordGroupDecision,
@@ -385,9 +389,13 @@ describe("wake rules", () => {
       leadSessionId: one,
     });
     const { runtime, groups } = setup();
+    // In a room, members are agents with unique names: "Tester" and "tester 2".
     const message = groups.postUserMessage({ groupId: group.id, body: "@Tester run it" });
-    expect(message.mentions).toEqual([one, two]);
-    expect(runtime.pendingSessions()).toEqual([one, two]);
+    expect(message.mentions).toEqual([one]);
+    expect(runtime.pendingSessions()).toEqual([one]);
+    expect(
+      groups.postUserMessage({ groupId: group.id, body: "@tester 2 you too" }).mentions,
+    ).toEqual([two]);
   });
 });
 
@@ -560,7 +568,7 @@ describe("chain limits", () => {
       maxContextTokens: 8_000,
     });
     expect(prompt).toContain("You are @Beta");
-    expect(prompt).toContain("@Alpha (lead), @Beta (you)");
+    expect(prompt).toContain("Members right now:\n- @Alpha (lead)\n- @Beta (you)\n");
     expect(prompt).toContain("[user] start");
     expect(prompt).toContain('<group_message from="@Alpha">\n@Beta &lt;check&gt;');
   });
@@ -1659,5 +1667,235 @@ describe("stopGroup posts Stopped by you only when it has an effect", () => {
     groups.stopGroup(group.id);
     expect(room(group.id).filter((m) => m.body === "Stopped by you")).toHaveLength(1);
     expect(runtime.started).not.toContain(gamma);
+  });
+});
+
+/* ── agents model (A2): roster, persona, archived members, folder required ── */
+
+describe("agents in the room", () => {
+  function agentsRoom() {
+    const ws = insertWorkspace();
+    const lead = createAgent({
+      name: uid("Plan"),
+      role: "Lead",
+      instructions: "Split the work into tasks.",
+    });
+    const builder = createAgent({ name: uid("Build"), role: "Builder" });
+    const group = createAgentGroupWithAgents({
+      name: "Agents room",
+      workspaceId: ws,
+      members: [{ agentId: lead.id }, { agentId: builder.id }],
+      leadAgentId: lead.id,
+    });
+    const [leadMember, builderMember] = group.members;
+    if (!leadMember || !builderMember) throw new Error("members missing");
+    return {
+      ws,
+      group,
+      lead,
+      builder,
+      leadSession: leadMember.sessionId,
+      builderSession: builderMember.sessionId,
+    };
+  }
+
+  it("the wake prompt starts with the agent's instructions and lists names with roles", async () => {
+    const { group, lead, builder, leadSession } = agentsRoom();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "Plan the release" });
+    const prompt = runtime.take(leadSession).input.message;
+    expect(
+      prompt.startsWith("<agent_instructions>\nSplit the work into tasks.\n</agent_instructions>"),
+    ).toBe(true);
+    expect(prompt).toContain(
+      [
+        `You are @${lead.name}, a member of this group. Members right now:`,
+        `- @${lead.name} [Lead] (lead) (you): Split the work into tasks.`,
+        `- @${builder.name} [Builder]`,
+      ].join("\n"),
+    );
+  });
+
+  it("mentions match the agent name; an agent without instructions has no persona block", async () => {
+    const { group, builder, builderSession } = agentsRoom();
+    const { runtime, groups } = setup();
+    const message = groups.postUserMessage({ groupId: group.id, body: `@${builder.name} go` });
+    expect(message.mentions).toEqual([builderSession]);
+    expect(runtime.take(builderSession).input.message).not.toContain("<agent_instructions>");
+  });
+
+  it("an archived agent stays a member but is never woken: the room says it is archived", async () => {
+    const { group, builder, builderSession, leadSession } = agentsRoom();
+    setAgentArchived(builder.id, true);
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: `@${builder.name} go` });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorKind: "system",
+      kind: "status",
+      body: `${builder.name} is archived`,
+    });
+    // An explicit target (a task tool wake) is refused the same way.
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: leadSession,
+      targetSessionId: builderSession,
+      body: "Review requested",
+    });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).at(-1)?.body).toBe(`${builder.name} is archived`);
+    // Restored: woken again.
+    setAgentArchived(builder.id, false);
+    groups.postUserMessage({ groupId: group.id, body: `@${builder.name} go` });
+    expect(runtime.pendingSessions()).toEqual([builderSession]);
+  });
+
+  it.each([
+    ["no workspace", null],
+    ["the Chats inbox", "modus-inbox-chats"],
+  ])("a group with %s is read-only: posting throws group-project-required and wakes nobody", async (_label, workspaceId) => {
+    const { group, leadSession, builderSession } = agentsRoom();
+    getDatabase()
+      .prepare("update agent_groups set workspace_id = ? where id = ?")
+      .run(workspaceId, group.id);
+    const { runtime, groups } = setup();
+    const before = room(group.id).length;
+    expect(() => groups.postUserMessage({ groupId: group.id, body: "hello" })).toThrow(
+      expect.objectContaining({ code: "group-project-required" }),
+    );
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: leadSession,
+      targetSessionId: builderSession,
+      body: "Changes requested",
+    });
+    expect(runtime.pendingSessions()).toEqual([]);
+    // The history stays readable (the task status line itself is still recorded).
+    expect(room(group.id).length).toBe(before + 1);
+  });
+
+  /* Dynamic discovery: the roster and mentions follow the CURRENT membership. */
+
+  function liveRoom(count = 2) {
+    const group = createGroupWithNewAgents({
+      name: "Live room",
+      workspaceId: insertWorkspace(),
+      members: Array.from({ length: count }, (_, index) => ({
+        name: index === 0 ? "Ana" : `Bo ${index}`,
+        role: index === 0 ? "Planner" : "Builder",
+        modelId: "openai/gpt-5",
+      })),
+      leadName: "Ana",
+    });
+    const ana = group.members[0]?.sessionId ?? "";
+    return { group, ana };
+  }
+
+  function rosterOf(prompt: string): string[] {
+    const lines = prompt.split("\n");
+    const start = lines.findIndex((line) => line.endsWith("Members right now:"));
+    const out: string[] = [];
+    for (const line of lines.slice(start + 1)) {
+      if (!line.startsWith("- @")) break;
+      out.push(line);
+    }
+    return out;
+  }
+
+  it("an added agent is in the next wake's roster; the join line is context, not a wake", async () => {
+    const { group, ana } = liveRoom();
+    const { runtime, groups } = setup();
+    createAgentInGroup({
+      groupId: group.id,
+      name: "Cy",
+      role: "Reviewer",
+      instructions: "Reviews every diff.\nBe strict.",
+      modelId: "openai/gpt-5",
+    });
+    // The join line itself wakes nobody.
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).at(-1)).toMatchObject({ kind: "status", body: "Cy joined as Reviewer" });
+    groups.postUserMessage({ groupId: group.id, body: "@Ana plan it" });
+    const prompt = runtime.take(ana).input.message;
+    expect(rosterOf(prompt)).toEqual([
+      "- @Ana [Planner] (lead) (you)",
+      "- @Bo 1 [Builder]",
+      "- @Cy [Reviewer]: Reviews every diff.",
+    ]);
+    expect(prompt).toContain("[system status] Cy joined as Reviewer");
+  });
+
+  it("a removed agent leaves the roster; others read 'X left the group' next wake", async () => {
+    const { group, ana } = liveRoom(3);
+    const { runtime, groups } = setup();
+    removeAgentFromGroup(group.id, group.members[2]?.sessionId ?? "");
+    expect(runtime.pendingSessions()).toEqual([]);
+    // An archived member stays in the roster, flagged.
+    setAgentArchived(group.members[1]?.agentId ?? "", true);
+    groups.postUserMessage({ groupId: group.id, body: "@Ana go" });
+    const prompt = runtime.take(ana).input.message;
+    expect(rosterOf(prompt)).toEqual([
+      "- @Ana [Planner] (lead) (you)",
+      "- @Bo 1 [Builder] (archived)",
+    ]);
+    expect(prompt).toContain("[system status] Bo 2 left the group");
+  });
+
+  it("the roster is rebuilt when a queued wake starts, not when it was queued", async () => {
+    const { group, ana } = liveRoom(2);
+    const bo = group.members[1]?.sessionId ?? "";
+    const { runtime, groups } = setup();
+    runtime.streaming.add(ana);
+    groups.postUserMessage({ groupId: group.id, body: "@Ana later" });
+    expect(runtime.pendingSessions()).toEqual([]);
+    createAgentInGroup({ groupId: group.id, name: "Dee", modelId: "openai/gpt-5" });
+    runtime.streaming.delete(ana);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await flush();
+    expect(rosterOf(runtime.take(ana).input.message)).toContain("- @Dee");
+    expect(bo).toBeTruthy();
+  });
+
+  it("mentions use the agent's current name: after a rename @New wakes it, @Old does not", async () => {
+    const { group } = liveRoom(2);
+    const bo = group.members[1];
+    const { runtime, groups } = setup();
+    updateAgent(bo?.agentId ?? "", { name: "Bruno" });
+    expect(groups.postUserMessage({ groupId: group.id, body: "@Bo 1 hello" }).mentions).toEqual([]);
+    const message = groups.postUserMessage({ groupId: group.id, body: "@bruno hello" });
+    expect(message.mentions).toEqual([bo?.sessionId]);
+    // (The first message had no mention, so it went to the lead.)
+    expect(runtime.pendingSessions()).toContain(bo?.sessionId);
+  });
+
+  it("a legacy group with 1 member is blocked (min-members) until an agent joins", async () => {
+    const ws = insertWorkspace();
+    const only = insertSession(ws, "Solo");
+    const group = createAgentGroupWithMembers({
+      name: "Legacy",
+      workspaceId: ws,
+      members: [{ sessionId: only }],
+    });
+    const { runtime, groups } = setup();
+    expect(() => groups.postUserMessage({ groupId: group.id, body: "@Solo hi" })).toThrow(
+      expect.objectContaining({ code: "group-min-members" }),
+    );
+    expect(runtime.pendingSessions()).toEqual([]);
+    createAgentInGroup({ groupId: group.id, name: "Helper", modelId: "openai/gpt-5" });
+    groups.postUserMessage({ groupId: group.id, body: "@Solo hi" });
+    expect(runtime.pendingSessions()).toEqual([only]);
+  });
+
+  it("a legacy group with 11 members works normally", async () => {
+    const ws = insertWorkspace();
+    const sessions = Array.from({ length: 11 }, (_, index) => insertSession(ws, `M${index + 1}`));
+    const group = createAgentGroupWithMembers({
+      name: "Big legacy",
+      workspaceId: ws,
+      members: sessions.map((sessionId) => ({ sessionId })),
+    });
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@M11 hi" });
+    expect(runtime.pendingSessions()).toEqual([sessions[10]]);
   });
 });

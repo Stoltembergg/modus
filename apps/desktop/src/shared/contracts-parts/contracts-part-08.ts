@@ -16,11 +16,18 @@ export type AgentGroupInfo = {
 
 export type AgentGroupMember = {
   groupId: string;
+  /** The pair's hidden room session (kind 'group_member'): the runtime's member key. */
   sessionId: string;
-  /** Free-form role label, e.g. research / plan / implement / review / verify. */
+  /** Free-form per-group role label, e.g. research / plan / implement / review / verify. */
   role?: string;
-  /** The agent this member is (agents model); absent for rows not linked yet. */
-  agentId?: string;
+  /** The agent this member is (agents model). */
+  agentId: string;
+  /** The agent's name: what the room, mentions and the sidebar show. */
+  name: string;
+  /** The agent's role label ("" when unset). */
+  agentRole: string;
+  /** The agent is archived: still a member, never woken. */
+  archived?: true;
   joinedAt: string;
 };
 
@@ -54,9 +61,11 @@ export const AGENT_AVATAR_COLORS = [
 ] as const;
 export type AgentAvatarColor = (typeof AGENT_AVATAR_COLORS)[number];
 
-/** An agent: unique name (case-insensitive), persona and defaults. */
+/** An agent: belongs to ONE group, name unique in it (case-insensitive), persona and defaults. */
 export type AgentInfo = {
   id: string;
+  /** Its group (A2). Absent only for legacy agents that had no membership. */
+  groupId?: string;
   name: string;
   /** Short label, e.g. "Reviewer"; "" when unset. */
   role: string;
@@ -86,29 +95,40 @@ export type CreateAgentInput = {
   avatarColor?: AgentAvatarColor;
 };
 
+/**
+ * An agent created inside a group (`agents:create`, and each entry of
+ * `group:create`). Without `templateId` a `modelId` of a configured provider is
+ * required (`agent-model-required` / `agent-model-unavailable`).
+ */
+export type NewGroupAgentInput = CreateAgentInput & { templateId?: string };
+
+/** `agents:create` payload: the agent joins `groupId` (its only group). */
+export type CreateGroupAgentInput = NewGroupAgentInput & { groupId: string };
+
 /** `agents:update` payload: only the given fields change; null clears model / Project. */
 export type UpdateAgentInput = Partial<CreateAgentInput>;
 
 /** A group plus its member rows (what the sidebar and `group:*` IPC return). */
 export type AgentGroupWithMembers = AgentGroupInfo & { members: AgentGroupMember[] };
 
-/** `group:update-members` payload: the target member list and lead (all or nothing). */
+/** `group:update-members` payload: the target agents and lead agent (all or nothing). */
 export type UpdateAgentGroupMembersInput = {
   groupId: string;
-  members: Array<{ sessionId: string; role?: string }>;
+  members: Array<{ agentId: string; role?: string }>;
   /** Must be one of `members`, or null for no lead. */
-  leadSessionId: string | null;
+  leadAgentId: string | null;
 };
 
-/** `group:create` payload: the group, its existing member sessions and lead, all at once. */
+/** `group:create` payload: the group, its agents and lead agent, all at once. */
 export type CreateAgentGroupInput = {
   name: string;
-  /** Owning Project id; omit/null for a group with no Project (members from the Chats inbox). */
-  workspaceId?: string | null;
+  /** Owning Project id: required (null / the Chats inbox fail with `group-project-required`). */
+  workspaceId: string | null;
   mode?: AgentGroupMode;
-  members: Array<{ sessionId: string; role?: string }>;
-  /** Must be one of `members`. */
-  leadSessionId?: string | null;
+  /** 2..10 NEW agents, created in the group (an agent belongs to one group). */
+  members: NewGroupAgentInput[];
+  /** The lead, by one of the members' names (case-insensitive). */
+  leadName?: string | null;
 };
 
 export type GroupMessageAuthorKind = "user" | "agent" | "system";

@@ -25,6 +25,7 @@ export const IPC_CHANNELS = {
   groupListDecisions: "group:list-decisions",
   groupDeleteDecision: "group:delete-decision",
   groupSetMode: "group:set-mode",
+  groupSetWorkspace: "group:set-workspace",
   // Agents entity (agents model). `agent:*` is taken by the session channels.
   agentsList: "agents:list",
   agentsCreate: "agents:create",

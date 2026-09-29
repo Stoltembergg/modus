@@ -1315,7 +1315,7 @@ describe("decisions", () => {
 });
 
 describe("deletion semantics", () => {
-  it("deleting a group removes its rows but keeps sessions, history and listings", () => {
+  it("deleting a group removes its rows, agents and room sessions and returns them to tear down", () => {
     const { workspaceId, a, b, group } = projectGroupFixture();
     insertEvent(a);
     insertEvent(a);
@@ -1324,7 +1324,7 @@ describe("deletion semantics", () => {
     createGroupTask({ groupId: group.id, title: "Task", ownerSessionId: b });
     recordGroupDecision({ groupId: group.id, text: "Decision" });
 
-    deleteAgentGroup(group.id);
+    expect(deleteAgentGroup(group.id).sort()).toEqual([a, b].sort());
 
     for (const table of [
       "agent_group_members",
@@ -1334,14 +1334,17 @@ describe("deletion semantics", () => {
     ]) {
       expect(countRows(table, "group_id", group.id)).toBe(0);
     }
-    expect(getAgentSession(a)?.workspaceId).toBe(workspaceId);
-    expect(getAgentSession(b)?.workspaceId).toBe(workspaceId);
-    expect(countRows("agent_events", "session_id", a)).toBe(2);
-    expect(countRows("agent_runs", "session_id", b)).toBe(1);
-    const listed = listAgentSessions()
-      .filter((session) => session.workspaceId === workspaceId)
-      .map((session) => session.id);
-    expect(listed).toEqual(expect.arrayContaining([a, b]));
+    // One group per agent (A2): the group takes its agents and their hidden
+    // room sessions with it, in the same transaction (the caller then stops
+    // their runtime). Nothing is left orphaned.
+    expect(getAgentSession(a)).toBeUndefined();
+    expect(getAgentSession(b)).toBeUndefined();
+    expect(countRows("agents", "group_id", group.id)).toBe(0);
+    expect(countRows("agent_events", "session_id", a)).toBe(0);
+    expect(countRows("agent_runs", "session_id", b)).toBe(0);
+    expect(workspaceId).toBeTruthy();
+    const listed = listAgentSessions().map((session) => session.id);
+    expect(listed).not.toContain(a);
     expect(listAgentGroupMemberSessionIds()).not.toContain(a);
     expect(getAgentGroupForSession(a)).toBeUndefined();
   });

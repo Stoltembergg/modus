@@ -62,6 +62,9 @@ const GROUP: AgentGroupWithMembers = {
   members: SESSIONS.map((s) => ({
     groupId: "g-1",
     sessionId: s.id,
+    agentId: `agent-${s.id}`,
+    name: s.title,
+    agentRole: "",
     joinedAt: "2026-01-01T00:00:00.000Z",
   })),
   createdAt: "2026-01-01T00:00:00.000Z",
@@ -153,22 +156,22 @@ function renderRoom(
   onOpenMember = vi.fn(),
   roomGroup: AgentGroupWithMembers = GROUP,
   onSetMode = vi.fn(),
+  onChooseFolder = vi.fn(),
 ) {
   const view = render(
     <GroupRoom
       group={roomGroup}
-      memberSessionIds={new Set(SESSIONS.map((s) => s.id))}
       memberStates={memberStates}
       onDelete={vi.fn()}
       onOpenMember={onOpenMember}
       onRename={vi.fn()}
       onSetMode={onSetMode}
+      onChooseFolder={onChooseFolder}
       onUpdateMembers={vi.fn(async () => undefined)}
-      sessions={SESSIONS}
       workspaces={WORKSPACES}
     />,
   );
-  return { ...view, onOpenMember, onSetMode };
+  return { ...view, onOpenMember, onSetMode, onChooseFolder };
 }
 
 const emit = (event: GroupRuntimeEvent) =>
@@ -307,7 +310,7 @@ describe("GroupRoom", () => {
     expect(within(chips[0] as HTMLElement).getByTitle("Agent running")).toBeTruthy();
     expect(within(chips[1] as HTMLElement).queryByTitle(/running|Waiting/)).toBeNull();
     await user.click(chips[1] as HTMLElement);
-    expect(onOpenMember).toHaveBeenCalledWith(SESSIONS[1]);
+    expect(onOpenMember).toHaveBeenCalledWith("s-rev-1");
   });
 
   it("shows Stop only while a member runs, and stops the group", async () => {
@@ -317,13 +320,11 @@ describe("GroupRoom", () => {
     view.rerender(
       <GroupRoom
         group={GROUP}
-        memberSessionIds={new Set()}
         memberStates={states({ runningSessionIds: ["s-lead"] })}
         onDelete={vi.fn()}
         onOpenMember={vi.fn()}
         onRename={vi.fn()}
         onUpdateMembers={vi.fn(async () => undefined)}
-        sessions={SESSIONS}
         workspaces={WORKSPACES}
       />,
     );
@@ -640,5 +641,38 @@ describe("GroupRoom coordinator mode", () => {
     expect(toggle.textContent).toContain("Needs a Lead");
     await user.click(toggle);
     expect(onSetMode).not.toHaveBeenCalled();
+  });
+});
+
+describe("GroupRoom blocked groups", () => {
+  it.each([
+    ["no workspace", undefined],
+    ["the Chats inbox", "modus-inbox-chats"],
+  ])("a group with %s shows 'Choose a folder to continue this group' instead of the composer", async (_label, workspaceId) => {
+    const user = userEvent.setup();
+    const { workspaceId: _drop, ...rest } = GROUP;
+    const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
+    const { onChooseFolder } = renderRoom(states(), vi.fn(), roomGroup);
+    const banner = await screen.findByTestId("group-blocked-banner");
+    expect(banner.textContent).toContain("Choose a folder to continue this group");
+    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+    await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
+    expect(onChooseFolder).toHaveBeenCalledTimes(1);
+    expect(group.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("a group left with one agent shows 'Add a member to continue' and opens Manage members", async () => {
+    const user = userEvent.setup();
+    renderRoom(states(), vi.fn(), { ...GROUP, members: GROUP.members.slice(0, 1) });
+    const banner = await screen.findByTestId("group-blocked-banner");
+    expect(banner.textContent).toContain("Add a member to continue");
+    await user.click(within(banner).getByRole("button", { name: "Add agent" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+  });
+
+  it("a working group (Project and 2+ agents) has the composer and no banner", async () => {
+    renderRoom();
+    await screen.findByTestId("group-room");
+    expect(screen.queryByTestId("group-blocked-banner")).toBeNull();
   });
 });

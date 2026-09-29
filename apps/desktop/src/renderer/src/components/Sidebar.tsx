@@ -36,10 +36,10 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
-import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+import type { GroupDialogModel, GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import {
-  countProjectGroups,
-  groupMemberSessionIds,
+  isListedChat,
+  projectGroupNames,
   removeProjectGroupsWarning,
 } from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
@@ -106,6 +106,9 @@ type SidebarProps = {
   canCreateSession: boolean;
   /** Agent Groups (with members). Member chats show only under their group. */
   groups?: readonly AgentGroupWithMembers[];
+  /** Models for new agents in the group dialogs. */
+  groupModels?: readonly GroupDialogModel[];
+  defaultGroupModelId?: string | undefined;
   /** Project preselected in the create-group dialog (usually the active one). */
   activeWorkspaceId?: string | null;
   /** Group-row activity dot selector; defaults to an always-false stub until PR 3. */
@@ -126,6 +129,7 @@ type SidebarProps = {
 };
 
 const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
+const NO_MODELS: readonly GroupDialogModel[] = [];
 
 export function Sidebar({
   workspaces,
@@ -156,6 +160,8 @@ export function Sidebar({
   canCreateSession,
   onRenameSession,
   groups = NO_GROUPS,
+  groupModels = NO_MODELS,
+  defaultGroupModelId,
   activeWorkspaceId = null,
   isGroupWorking,
   isGroupWaiting,
@@ -176,15 +182,8 @@ export function Sidebar({
     () => new Set(workspaces.map((workspace) => workspace.id)),
     [workspaces],
   );
-  // Group members are listed only under their group (Groups section).
-  const memberSessionIds = useMemo(() => groupMemberSessionIds(groups), [groups]);
-  const ungroupedSessions = useMemo(
-    () =>
-      memberSessionIds.size === 0
-        ? agentSessions
-        : agentSessions.filter((session) => !memberSessionIds.has(session.id)),
-    [agentSessions, memberSessionIds],
-  );
+  // Hidden group room sessions (kind "group_member") are never listed as chats.
+  const ungroupedSessions = useMemo(() => agentSessions.filter(isListedChat), [agentSessions]);
   const sessionsByWorkspace = groupSessionsByWorkspace(ungroupedSessions);
   // Split inbox: pinned first, then unpinned
   const pinnedSessions = useMemo(
@@ -381,6 +380,8 @@ export function Sidebar({
                   }}
                   sessions={agentSessions}
                   workspaces={workspaces}
+                  models={groupModels}
+                  defaultModelId={defaultGroupModelId}
                   {...(isGroupWorking ? { isGroupWorking } : {})}
                   {...(isGroupWaiting ? { isGroupWaiting } : {})}
                   {...(onSelectGroup ? { onSelectGroup, activeGroupId } : {})}
@@ -447,7 +448,7 @@ export function Sidebar({
                       onArchiveChats={() => onArchiveProjectChats(workspace.id)}
                       onDeleteChats={() => onDeleteProjectChats(workspace.id)}
                       onRemove={() => onRemoveProject(workspace.id)}
-                      groupCount={countProjectGroups(groups, workspace.id)}
+                      groupNames={projectGroupNames(groups, workspace.id)}
                       scrollContainerRef={scrollContainerRef}
                     />
                   </m.div>
@@ -558,7 +559,7 @@ function WorkspaceItem({
   onArchiveChats,
   onDeleteChats,
   onRemove,
-  groupCount,
+  groupNames,
   scrollContainerRef,
 }: {
   workspace: WorkspaceInfo;
@@ -583,7 +584,8 @@ function WorkspaceItem({
   onDeleteChats(): void;
   onRemove(): void;
   /** Groups this Project owns; "Remove" confirms first when there are any. */
-  groupCount: number;
+  /** Groups the Project owns (deleted with it): for the remove confirmation. */
+  groupNames: readonly string[];
   scrollContainerRef: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -636,7 +638,7 @@ function WorkspaceItem({
         onArchiveChats={onArchiveChats}
         onDeleteChats={onDeleteChats}
         onRemove={onRemove}
-        groupCount={groupCount}
+        groupNames={groupNames}
         title={workspace.rootPath}
       >
         {workspace.displayName}
@@ -918,7 +920,7 @@ function ProjectRow({
   onArchiveChats,
   onDeleteChats,
   onRemove,
-  groupCount,
+  groupNames,
   title,
 }: {
   children: ReactNode;
@@ -936,7 +938,8 @@ function ProjectRow({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
-  groupCount: number;
+  /** Groups the Project owns (deleted with it): for the remove confirmation. */
+  groupNames: readonly string[];
   title?: string;
 }) {
   const FolderIcon = expanded ? IconFolderOpen : IconFolder;
@@ -955,7 +958,7 @@ function ProjectRow({
 
   return (
     <ProjectActions
-      groupCount={groupCount}
+      groupNames={groupNames}
       onArchiveChats={onArchiveChats}
       onDeleteChats={onDeleteChats}
       onPin={onPin}
@@ -1135,7 +1138,7 @@ function ProjectActions({
   onArchiveChats,
   onDeleteChats,
   onRemove,
-  groupCount,
+  groupNames,
   children,
 }: {
   pinned: boolean;
@@ -1147,7 +1150,8 @@ function ProjectActions({
   onDeleteChats(): void;
   onRemove(): void;
   /** Groups the Project owns: with any, "Remove" asks for a second click first. */
-  groupCount: number;
+  /** Groups the Project owns (deleted with it): for the remove confirmation. */
+  groupNames: readonly string[];
   children(open: boolean, trigger: ReactNode): ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -1231,12 +1235,12 @@ function ProjectActions({
               {confirmDeleteChats ? "Confirm delete chats" : "Delete chats"}
             </ProjectMenuItem>
             <ProjectMenuItem
-              closeOnClick={groupCount === 0 || confirmRemove}
+              closeOnClick={groupNames.length === 0 || confirmRemove}
               danger
               icon={<IconX size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
               onClick={() => {
                 // No groups: unchanged, removes right away. With groups: warn first.
-                if (groupCount > 0 && !confirmRemove) {
+                if (groupNames.length > 0 && !confirmRemove) {
                   setConfirmRemove(true);
                   return;
                 }
@@ -1244,7 +1248,7 @@ function ProjectActions({
                 onRemove();
               }}
             >
-              {confirmRemove ? removeProjectGroupsWarning(groupCount) : "Remove"}
+              {confirmRemove ? removeProjectGroupsWarning(groupNames) : "Remove"}
             </ProjectMenuItem>
           </Menu.Popup>
         </Menu.Positioner>

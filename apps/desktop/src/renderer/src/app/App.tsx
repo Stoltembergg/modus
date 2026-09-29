@@ -79,7 +79,6 @@ import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { GroupRoom } from "../features/groups/GroupRoom";
 import { describeGroupError } from "../features/groups/groupErrors";
-import { groupMemberSessionIds } from "../features/groups/groupSidebarModel";
 import {
   groupActivityState,
   isGroupRunning,
@@ -152,7 +151,6 @@ export function App() {
   const activeGroup = activeGroupId
     ? agentGroups.find((group) => group.id === activeGroupId)
     : undefined;
-  const allGroupMemberIds = useMemo(() => groupMemberSessionIds(agentGroups), [agentGroups]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -841,8 +839,49 @@ export function App() {
 
   async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
     // Errors propagate so the "Manage members" dialog can show them and stay open.
-    setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
+    // One agent per group: adding creates the agent in the group, removing deletes
+    // it. Adds go first so a 2-member group can swap an agent. Not atomic: a
+    // failure leaves the steps already done (the list is refreshed either way).
+    try {
+      for (const agent of change.add) await window.modus.agents.create({ ...agent, groupId });
+      for (const sessionId of change.removeSessionIds) {
+        await window.modus.group.removeMember({ groupId, sessionId });
+      }
+      const group = (await window.modus.group.list()).find(
+        (item: AgentGroupWithMembers) => item.id === groupId,
+      );
+      if (group && (group.leadSessionId ?? null) !== change.leadSessionId) {
+        await window.modus.group.setLead({ groupId, sessionId: change.leadSessionId });
+      }
+    } finally {
+      await refreshGroups();
+    }
   }
+
+  /** A member chip in the room: open its hidden room session (e.g. "Waiting for you"). */
+  async function openGroupMember(sessionId: string): Promise<void> {
+    const sessions = await window.modus.agent.list({ includeSessionId: sessionId });
+    const session = sessions.find((item: AgentSessionInfo) => item.id === sessionId);
+    if (session) selectSession(session);
+  }
+
+  /** "Choose folder" on a group without a Project: pick a folder, then move the group there. */
+  async function chooseGroupFolder(groupId: string): Promise<void> {
+    const workspace = await window.modus.workspace.open();
+    if (!workspace) return;
+    setWorkspaces(await window.modus.workspace.list());
+    await runGroupAction(() =>
+      window.modus.group.setWorkspace({ groupId, workspaceId: workspace.id }),
+    );
+  }
+
+  const groupModels = useMemo(
+    () =>
+      models
+        .filter((item) => item.available && item.enabled)
+        .map((item) => ({ id: item.id, name: item.name })),
+    [models],
+  );
 
   async function runGroupAction(action: () => Promise<AgentGroupWithMembers[]>): Promise<void> {
     try {
@@ -1161,6 +1200,8 @@ export function App() {
                         width={sidebarWidth}
                         workspaces={workspaces}
                         groups={agentGroups}
+                        groupModels={groupModels}
+                        defaultGroupModelId={model || undefined}
                         isGroupWorking={isGroupWorking}
                         isGroupWaiting={isGroupWaiting}
                         activeGroupId={activeGroup?.id}
@@ -1270,17 +1311,19 @@ export function App() {
                               transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
                             >
                               <GroupRoom
+                                defaultModelId={model || undefined}
                                 group={activeGroup}
                                 key={activeGroup.id}
-                                memberSessionIds={allGroupMemberIds}
                                 memberStates={groupMemberStates}
+                                models={groupModels}
+                                onChooseFolder={() => void chooseGroupFolder(activeGroup.id)}
                                 onDelete={() => {
                                   const id = activeGroup.id;
                                   setActiveGroupId(undefined);
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
                                 onOpenFile={openWorkspaceFile}
-                                onOpenMember={selectSession}
+                                onOpenMember={(sessionId) => void openGroupMember(sessionId)}
                                 onRename={(name) =>
                                   void runGroupAction(() =>
                                     window.modus.group.rename({ id: activeGroup.id, name }),
@@ -1294,7 +1337,6 @@ export function App() {
                                 onUpdateMembers={(change) =>
                                   updateGroupMembers(activeGroup.id, change)
                                 }
-                                sessions={rootSessions}
                                 workspaces={workspaces}
                               />
                             </m.div>

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { app } from "electron";
-import { listAgentGroupMemberSessionIds } from "../groups/group-store";
+import { listWorkspaceGroupMemberSessionIds } from "../groups/group-store";
 import { denyPendingQuestionRequestsForSession } from "../interaction/question-broker";
 import { finalizeProjectMemoryRun } from "../memory/project-memory-service";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
@@ -76,15 +76,13 @@ export async function setAgentSessionArchivedTree(
 }
 
 /**
- * Soft-archive visible root sessions in a workspace, except group members
- * (they live under their group, not in the Project list). Returns the count
- * changed, which matches what the Projects section shows.
+ * Soft-archive a workspace's root chats. Hidden group room sessions are never
+ * listed, so they are untouched. Returns the count changed, which matches
+ * what the Projects section shows.
  */
 export async function archiveWorkspaceSessions(workspaceId: string): Promise<number> {
-  const members = new Set(listAgentGroupMemberSessionIds());
   const sessions = listAgentSessions().filter(
-    (session) =>
-      session.workspaceId === workspaceId && !session.parentSessionId && !members.has(session.id),
+    (session) => session.workspaceId === workspaceId && !session.parentSessionId,
   );
   for (const session of sessions) {
     await setAgentSessionArchivedTree(session.id, true);
@@ -93,23 +91,25 @@ export async function archiveWorkspaceSessions(workspaceId: string): Promise<num
 }
 
 /**
- * Permanently delete a workspace's root sessions (live and archived). Group
- * members are skipped unless `includeGroupMembers` is set, which only
- * "Remove project" does (it takes everything). Returns the count removed.
+ * Permanently delete a workspace's root chats (live and archived). Hidden
+ * group room sessions are only torn down with `includeGroupMembers`, which
+ * only "Remove project" sets (its groups are deleted with it; agents stay).
+ * Returns the count of chats removed.
  */
 export async function deleteWorkspaceSessions(
   workspaceId: string,
   options: { includeGroupMembers?: boolean } = {},
 ): Promise<number> {
-  const members = options.includeGroupMembers
-    ? new Set<string>()
-    : new Set(listAgentGroupMemberSessionIds());
   const sessions = [...listAgentSessions(), ...listArchivedAgentSessions(workspaceId)].filter(
-    (session) =>
-      session.workspaceId === workspaceId && !session.parentSessionId && !members.has(session.id),
+    (session) => session.workspaceId === workspaceId && !session.parentSessionId,
   );
   for (const session of sessions) {
     await deleteAgentSessionTree(session.id);
+  }
+  if (options.includeGroupMembers) {
+    for (const sessionId of listWorkspaceGroupMemberSessionIds(workspaceId)) {
+      await deleteAgentSessionTree(sessionId);
+    }
   }
   return sessions.length;
 }

@@ -39,6 +39,7 @@ const api: ModusApi = {
     remove: (id) => ipcRenderer.invoke("group:delete", { id }),
     addMember: (input) => ipcRenderer.invoke("group:add-member", input),
     removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
+    setWorkspace: (input) => ipcRenderer.invoke("group:set-workspace", input),
     setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
     setMode: (input) => ipcRenderer.invoke("group:set-mode", input),
     updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),

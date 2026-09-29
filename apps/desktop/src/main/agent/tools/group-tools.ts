@@ -5,6 +5,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import type { GroupMessage, GroupTask, GroupTaskStatus } from "../../../shared/contracts";
+import {
+  GROUP_BLOCKED_TEXT,
+  groupBlockedErrorCode,
+  groupBlockedReason,
+} from "../../../shared/group-blocked";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
 import type { ToolProfileName } from "../../../shared/tools";
 import {
@@ -23,6 +28,7 @@ import {
   claimGroupTask,
   createMemberGroupTask,
   fillMemberTaskBranches,
+  getAgentGroup,
   getAgentGroupForSession,
   getGroupMessage,
   listAgentGroupMembers,
@@ -137,7 +143,10 @@ class ToolInputError extends Error {
       | "ambiguous-member"
       | "no-git-project"
       | "branch-checked-out"
-      | "call-alone",
+      | "call-alone"
+      | "member-archived"
+      | "group-project-required"
+      | "group-min-members",
     message: string,
   ) {
     super(message);
@@ -155,7 +164,10 @@ function errorText(error: unknown): string {
 
 type Roster = {
   groupId: string;
+  /** Session id → its agent's name (names are unique across agents). */
   titles: Map<string, string>;
+  /** Members whose agent is archived (still members, never woken or assigned). */
+  archived: Set<string>;
   handles: Map<string, string>;
   /** Normalized titles shared by several members → their session ids. */
   ambiguous: Map<string, string[]>;
@@ -164,10 +176,11 @@ type Roster = {
 function roster(groupId: string): Roster {
   const titles = new Map<string, string>();
   const handles = new Map<string, string>();
+  const archived = new Set<string>();
   for (const member of listAgentGroupMembers(groupId)) {
-    const title = getAgentSession(member.sessionId)?.title ?? member.sessionId;
-    titles.set(member.sessionId, title);
+    titles.set(member.sessionId, member.name);
     handles.set(member.sessionId.toLowerCase(), member.sessionId);
+    if (member.archived) archived.add(member.sessionId);
   }
   // Titles resolve only when unique (case-insensitive); ids always resolve.
   const byTitle = new Map<string, string[]>();
@@ -180,7 +193,7 @@ function roster(groupId: string): Roster {
     if (ids.length === 1 && ids[0]) handles.set(key, ids[0]);
     else if (!handles.has(key)) ambiguous.set(key, ids);
   }
-  return { groupId, titles, handles, ambiguous };
+  return { groupId, titles, archived, handles, ambiguous };
 }
 
 /** A member by session id or unique title (with or without a leading @). */
@@ -300,6 +313,14 @@ export function runGroupTool<N extends SyncGroupToolName>(
   try {
     const groupId = requireCallerGroup(caller);
     const members = roster(groupId);
+    const blocked =
+      name === "group_assign_task"
+        ? groupBlockedReason(getAgentGroup(groupId) ?? {}, members.titles.size)
+        : null;
+    if (blocked) {
+      // A blocked group is read-only: no assign (and so no wake).
+      throw new ToolInputError(groupBlockedErrorCode(blocked), GROUP_BLOCKED_TEXT[blocked]);
+    }
     const actor = caller.sessionId;
     switch (name) {
       case "group_read_messages":
@@ -390,6 +411,12 @@ export function runGroupTool<N extends SyncGroupToolName>(
       case "group_assign_task": {
         const input = params as GroupToolParams["group_assign_task"];
         const assignee = resolveMember(members, input.memberId);
+        if (members.archived.has(assignee)) {
+          throw new ToolInputError(
+            "member-archived",
+            `${label(members, assignee)} is archived and cannot take tasks.`,
+          );
+        }
         const branch = memberWorktreeBranch(groupId, assignee);
         const { task, previousOwnerSessionId } = assignGroupTask(
           groupId,

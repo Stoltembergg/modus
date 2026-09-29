@@ -906,7 +906,11 @@ const agentFields = {
 
 export const agentsCreateSchema = z
   .object({
+    /** The agent's only group (required, A2). */
+    groupId: agentIdString,
     name: agentFields.name,
+    /** From a template: exempt from the model rule (the app default model applies). */
+    templateId: z.string().min(1).max(128).optional(),
     role: agentFields.role.optional(),
     instructions: agentFields.instructions.optional(),
     modelId: agentFields.modelId.optional(),
@@ -943,19 +947,28 @@ export const MAX_GROUP_MEMBERS = 32;
 export const groupCreateSchema = z
   .object({
     name: groupNameString,
-    workspaceId: groupIdString.nullable().optional(),
+    // Required, but null / the Chats inbox parse so they fail as group-project-required.
+    workspaceId: groupIdString.nullable(),
     mode: z.enum(["free", "coordinator"]).optional(),
+    // NEW agents, created in the group (one group per agent). The 2..10 rule is
+    // groupMemberCountError; this bound only caps the payload.
     members: z
       .array(
         z
           .object({
-            sessionId: groupSessionIdString,
-            role: z.string().trim().max(40).optional(),
+            name: agentFields.name,
+            role: agentFields.role.optional(),
+            instructions: agentFields.instructions.optional(),
+            modelId: agentFields.modelId.optional(),
+            defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
+            avatarFace: agentFields.avatarFace.optional(),
+            avatarColor: agentFields.avatarColor.optional(),
+            templateId: z.string().min(1).max(128).optional(),
           })
           .strict(),
       )
       .max(MAX_GROUP_MEMBERS),
-    leadSessionId: groupSessionIdString.nullable().optional(),
+    leadName: agentFields.name.nullable().optional(),
   })
   .strict();
 
@@ -975,9 +988,13 @@ export const groupDeleteDecisionSchema = z.object({ decisionId: nonEmptyString.m
 export const groupMemberSchema = z
   .object({
     groupId: groupIdString,
-    sessionId: groupSessionIdString,
+    agentId: groupIdString,
     role: z.string().trim().max(40).optional(),
   })
+  .strict();
+
+export const groupSetWorkspaceSchema = z
+  .object({ groupId: groupIdString, workspaceId: groupIdString.nullable() })
   .strict();
 
 export const groupRemoveMemberSchema = z
@@ -991,13 +1008,13 @@ export const groupUpdateMembersSchema = z
       .array(
         z
           .object({
-            sessionId: groupSessionIdString,
+            agentId: groupIdString,
             role: z.string().trim().max(40).optional(),
           })
           .strict(),
       )
       .max(MAX_GROUP_MEMBERS),
-    leadSessionId: groupSessionIdString.nullable(),
+    leadAgentId: groupIdString.nullable(),
   })
   .strict();
 

@@ -1,65 +1,33 @@
 import type { AgentGroupWithMembers, AgentSessionInfo } from "../../../../shared/contracts";
-import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
-
-/** Every session id that belongs to some group; the sidebar hides these from other sections. */
-export function groupMemberSessionIds(groups: readonly AgentGroupWithMembers[]): Set<string> {
-  const ids = new Set<string>();
-  for (const group of groups) {
-    for (const member of group.members) ids.add(member.sessionId);
-  }
-  return ids;
-}
 
 /**
- * Sessions the create-group dialog may offer for a group owned by
- * `workspaceId` (null = no Project). Mirrors the store's rules so the dialog
- * never lists a session the store would refuse: same workspace (the Chats
- * inbox when there is no Project), not already in a group, not a subagent,
- * not archived.
+ * Hidden group room sessions (kind "group_member") never show in Pinned /
+ * Projects / Chats. The main process leaves them out of listings; this also
+ * drops one passed in with `includeSessionId` (opened from a room).
  */
-export function eligibleGroupSessions(
-  sessions: readonly AgentSessionInfo[],
-  workspaceId: string | null,
-  memberSessionIds: ReadonlySet<string>,
-): AgentSessionInfo[] {
-  const expectedWorkspaceId = workspaceId ?? CHATS_WORKSPACE_ID;
-  return sessions.filter(
-    (session) =>
-      session.workspaceId === expectedWorkspaceId &&
-      !memberSessionIds.has(session.id) &&
-      !session.parentSessionId &&
-      !session.archivedAt,
-  );
+export function isListedChat(session: AgentSessionInfo): boolean {
+  return session.kind !== "group_member";
 }
 
-/**
- * Sessions the "Manage members" dialog offers for `group`: the eligible ones
- * for its Project plus its current members (which are "in a group" only
- * because they are in this one).
- */
-export function manageableGroupSessions(
-  sessions: readonly AgentSessionInfo[],
-  group: AgentGroupWithMembers,
-  memberSessionIds: ReadonlySet<string>,
-): AgentSessionInfo[] {
-  const own = new Set(group.members.map((member) => member.sessionId));
-  const others = new Set([...memberSessionIds].filter((id) => !own.has(id)));
-  return eligibleGroupSessions(sessions, group.workspaceId ?? null, others);
-}
-
-/** How many groups a Project owns (they are deleted with it by "Remove project"). */
-export function countProjectGroups(
+/** The names of the groups a Project owns (they are deleted with it by "Remove project"). */
+export function projectGroupNames(
   groups: readonly AgentGroupWithMembers[],
   workspaceId: string,
-): number {
-  return groups.filter((group) => group.workspaceId === workspaceId).length;
+): string[] {
+  return groups.filter((group) => group.workspaceId === workspaceId).map((group) => group.name);
 }
 
-/** Remove-project confirmation when the Project owns groups (`count` >= 1). */
-export function removeProjectGroupsWarning(count: number): string {
-  return count === 1
-    ? "1 group and its member chats will be deleted"
-    : `${count} groups and their member chats will be deleted`;
+/** Remove-project confirmation when the Project owns groups (at least one name). */
+export function removeProjectGroupsWarning(names: readonly string[]): string {
+  const count = names.length;
+  const groups = count === 1 ? "1 group" : `${count} groups`;
+  return `This also deletes ${groups} with their agents, chats and messages: ${names.join(", ")}`;
+}
+
+/** Delete-group confirmation: an agent belongs to one group, so it goes with it. */
+export function groupDeleteConfirmLabel(agentCount: number): string {
+  const agents = agentCount === 1 ? "1 agent" : `${agentCount} agents`;
+  return `This deletes its ${agents}, their chats and all group messages`;
 }
 
 /**

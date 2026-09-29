@@ -12,6 +12,7 @@ const { getDatabase, migrateDatabase } = await import("../db/database");
 const { getAgentSession } = await import("../agent/agent-store");
 const {
   appendGroupMessage,
+  listGroupMessages,
   createAgentGroupWithMembers,
   createGroupTask,
   getAgentGroup,
@@ -217,14 +218,15 @@ describe("agents store", () => {
     expect(getAgent(agent.id)?.defaultWorkspaceId).toBeUndefined();
   });
 
-  it("deleting an agent removes it from its groups (lead cleared, tasks released) and keeps the session", () => {
+  it("deleting an agent IS removing the member: lead cleared, tasks released, room session gone", () => {
     const workspaceId = insertWorkspace();
     const jennie = insertSession(workspaceId, "Jennie");
     const bob = insertSession(workspaceId, "Bob");
+    const cara = insertSession(workspaceId, "Cara");
     const group = createAgentGroupWithMembers({
       name: "Room",
       workspaceId,
-      members: [{ sessionId: jennie }, { sessionId: bob }],
+      members: [{ sessionId: jennie }, { sessionId: bob }, { sessionId: cara }],
       leadSessionId: jennie,
     });
     const agent = createAgent({ name: uid("Jennie") });
@@ -247,14 +249,24 @@ describe("agents store", () => {
     deleteAgent(agent.id);
 
     expect(getAgent(agent.id)).toBeUndefined();
-    expect(listAgentGroupMembers(group.id).map((member) => member.sessionId)).toEqual([bob]);
+    expect(listAgentGroupMembers(group.id).map((member) => member.sessionId)).toEqual([bob, cara]);
     expect(getAgentGroup(group.id)?.leadSessionId).toBeUndefined();
     expect(listGroupTasks(group.id).find((item) => item.id === task.id)).toMatchObject({
       status: "open",
     });
     expect(listGroupTasks(group.id)[0]?.ownerSessionId).toBeUndefined();
-    expect(getAgentSession(jennie)).toBeDefined();
+    // One group per agent: its hidden room session goes with it; the room says so.
+    expect(getAgentSession(jennie)).toBeUndefined();
+    expect(listGroupMessages(group.id, { limit: 10 }).at(-1)).toMatchObject({
+      authorKind: "system",
+      kind: "status",
+      body: `${agent.name} left the group`,
+    });
     expectAgentError(() => deleteAgent(agent.id), "agent-not-found");
+    // Two left: deleting another agent is refused (same rule as removing a member).
+    const bobAgent = listAgentGroupMembers(group.id)[0]?.agentId ?? "";
+    expectAgentError(() => deleteAgent(bobAgent), "group-min-members");
+    expect(getAgent(bobAgent)).toBeDefined();
   });
 });
 
@@ -340,19 +352,18 @@ describe("migration: group members become agents", () => {
     }
   });
 
-  it("exposes the member's agent id", () => {
+  it("an existing session joining a group gets an agent named after it and turns group_member", () => {
     const workspaceId = insertWorkspace();
-    const session = insertSession(workspaceId, "Linked");
+    const title = uid("Linked");
+    const session = insertSession(workspaceId, title);
     const group = createAgentGroupWithMembers({
       name: "Linked room",
       workspaceId,
       members: [{ sessionId: session }],
     });
-    expect(listAgentGroupMembers(group.id)[0]?.agentId).toBeUndefined();
-    const agent = createAgent({ name: uid("Linked") });
-    getDatabase()
-      .prepare("update agent_group_members set agent_id = ? where session_id = ?")
-      .run(agent.id, session);
-    expect(listAgentGroupMembers(group.id)[0]?.agentId).toBe(agent.id);
+    const member = listAgentGroupMembers(group.id)[0];
+    expect(member).toMatchObject({ sessionId: session, name: title, agentRole: "" });
+    expect(getAgent(member?.agentId ?? "")?.name).toBe(title);
+    expect(getAgentSession(session)?.kind).toBe("group_member");
   });
 });

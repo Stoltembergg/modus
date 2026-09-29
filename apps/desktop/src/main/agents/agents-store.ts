@@ -5,22 +5,36 @@ import {
   AGENT_AVATAR_FACES,
   type AgentAvatarColor,
   type AgentAvatarFace,
+  type AgentGroupMember,
+  type AgentGroupMode,
+  type AgentGroupWithMembers,
   type AgentInfo,
   type CreateAgentInput,
+  type CreateGroupAgentInput,
+  type NewGroupAgentInput,
   type UpdateAgentInput,
 } from "../../shared/contracts";
 import { getDatabase, uniqueAgentName } from "../db/database";
-import { detachSessionFromGroupRows, GroupStoreError } from "../groups/group-store";
+import {
+  GroupStoreError,
+  getAgentGroupWithMembers,
+  insertGroupWithProject,
+  joinGroupRows,
+  removeAgentFromGroupRows,
+  setGroupLeadRow,
+  withGroupTransaction,
+} from "../groups/group-store";
 
 /*
- * Agents (agents model, A1): independent entities with a unique name
- * (case-insensitive), a persona and defaults. Plain function module like
+ * Agents (agents model): each belongs to ONE group (A2, `group_id`), with a
+ * name unique in that group (case-insensitive), a persona and defaults. Plain function module like
  * group-store; errors are GroupStoreError so the group IPC error wire format
  * (and the renderer's messages) apply unchanged.
  */
 
 type AgentRow = {
   id: string;
+  group_id: string | null;
   name: string;
   role: string;
   instructions: string;
@@ -34,12 +48,13 @@ type AgentRow = {
   archived_at: string | null;
 };
 
-const AGENT_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
+const AGENT_COLUMNS = `id, group_id, name, role, instructions, model_id, default_workspace_id,
   avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
 
 function toAgent(row: AgentRow): AgentInfo {
   return {
     id: row.id,
+    ...(row.group_id !== null ? { groupId: row.group_id } : {}),
     name: row.name,
     role: row.role,
     instructions: row.instructions,
@@ -64,15 +79,15 @@ function requireAgentRow(agentId: string): AgentRow {
   return row;
 }
 
-/** Trimmed, non-empty name that no OTHER agent has (case-insensitive). */
-function requireFreeName(name: string, selfId?: string): string {
+/** Trimmed, non-empty name that no OTHER agent of the same group has (case-insensitive). */
+function requireFreeName(name: string, groupId: string | null, selfId?: string): string {
   const trimmed = typeof name === "string" ? name.trim() : "";
   if (!trimmed) {
     throw new GroupStoreError("invalid-value", "Agent name must not be empty.");
   }
-  const owner = getDatabase().prepare("select id from agents where name = ?").get(trimmed) as
-    | { id: string }
-    | undefined;
+  const owner = getDatabase()
+    .prepare("select id from agents where name = ? and group_id is ?")
+    .get(trimmed, groupId) as { id: string } | undefined;
   if (owner && owner.id !== selfId) {
     throw new GroupStoreError("agent-name-taken", `Another agent is already named "${trimmed}".`);
   }
@@ -111,15 +126,26 @@ export function getAgent(agentId: string): AgentInfo | undefined {
   return row ? toAgent(row) : undefined;
 }
 
-export function createAgent(input: CreateAgentInput & { templateId?: string }): AgentInfo {
+/**
+ * Inserts an agent row. `groupId` is only the column: joining the group (the
+ * membership and its room session) is createAgentInGroup. Without a group the
+ * row is a legacy-style ungrouped agent (store level only; IPC requires one).
+ */
+export function createAgent(
+  input: CreateAgentInput & { templateId?: string; groupId?: string },
+): AgentInfo {
   const id = randomUUID();
   const now = new Date().toISOString();
   const avatar = agentAvatarForId(id);
+  const groupId = input.groupId ?? null;
   getDatabase()
-    .prepare(`insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`)
+    .prepare(
+      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`,
+    )
     .run(
       id,
-      requireFreeName(input.name),
+      groupId,
+      requireFreeName(input.name, groupId),
       (input.role ?? "").trim(),
       input.instructions ?? "",
       input.modelId?.trim() || null,
@@ -134,28 +160,101 @@ export function createAgent(input: CreateAgentInput & { templateId?: string }): 
 }
 
 /**
- * Picking a template: creates an editable copy (name, role, instructions and
- * avatar copied, `template_id` set, app-default model). A taken name gets the
- * next free suffix ("Planner 2"); `overrides.name` is used as given.
+ * The fields of a new agent: a template fills name (next free in the group),
+ * role, instructions and avatar; explicit fields win.
  */
-export function createAgentFromTemplate(
-  templateId: string,
-  overrides: { name?: string; defaultWorkspaceId?: string | null } = {},
-): AgentInfo {
+function newAgentFields(
+  input: NewGroupAgentInput,
+  groupId: string | undefined,
+): CreateAgentInput & { templateId?: string; groupId?: string } {
+  const { templateId, ...fields } = input;
+  const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
+  if (templateId === undefined) return base;
   const template = getAgentTemplate(templateId);
   if (!template) {
     throw new GroupStoreError("invalid-value", `Unknown agent template: ${templateId}`);
   }
-  return createAgent({
-    name: overrides.name ?? uniqueAgentName(getDatabase(), template.name),
+  return {
     role: template.role,
     instructions: template.instructions,
     avatarFace: template.avatarFace,
     avatarColor: template.avatarColor,
+    ...base,
+    name: fields.name?.trim()
+      ? fields.name
+      : uniqueAgentName(getDatabase(), template.name, groupId),
     templateId: template.id,
-    ...(overrides.defaultWorkspaceId !== undefined
-      ? { defaultWorkspaceId: overrides.defaultWorkspaceId }
-      : {}),
+  };
+}
+
+/**
+ * Picking a template: creates an editable copy (name, role, instructions and
+ * avatar copied, `template_id` set, app-default model). A taken name gets the
+ * next free suffix in the group ("Planner 2"); `overrides.name` is used as given.
+ */
+export function createAgentFromTemplate(
+  templateId: string,
+  overrides: { name?: string; defaultWorkspaceId?: string | null; groupId?: string } = {},
+): AgentInfo {
+  return createAgent(
+    newAgentFields(
+      {
+        templateId,
+        name: overrides.name ?? "",
+        ...(overrides.defaultWorkspaceId !== undefined
+          ? { defaultWorkspaceId: overrides.defaultWorkspaceId }
+          : {}),
+      },
+      overrides.groupId,
+    ),
+  );
+}
+
+/**
+ * `agents:create`: a new agent that joins `groupId` (its only group) in ONE
+ * transaction: the 10-member cap, the group's Project, a fresh hidden room
+ * session and a "X joined as <role>" line. Allowed in a group blocked with a
+ * single member (it is the way out).
+ */
+export function createAgentInGroup(input: CreateGroupAgentInput): AgentInfo {
+  const { groupId, ...fields } = input;
+  return withGroupTransaction(() => {
+    getAgentGroupWithMembers(groupId);
+    const agent = createAgent(newAgentFields(fields, groupId));
+    joinGroupRows(groupId, agent.id);
+    return toAgent(requireAgentRow(agent.id));
+  });
+}
+
+/**
+ * `group:create`: the group in its Project (required) with 2..10 NEW agents
+ * (each with its hidden room session) and the lead by name, in ONE
+ * transaction.
+ */
+export function createGroupWithNewAgents(input: {
+  name: string;
+  workspaceId: string | null | undefined;
+  mode?: AgentGroupMode;
+  members: NewGroupAgentInput[];
+  leadName?: string | null;
+}): AgentGroupWithMembers {
+  return withGroupTransaction(() => {
+    const groupId = insertGroupWithProject(input, input.members.length);
+    let leadSessionId: string | null = null;
+    const lead = input.leadName?.trim().toLocaleLowerCase();
+    for (const member of input.members) {
+      const agent = createAgent(newAgentFields(member, groupId));
+      const row: AgentGroupMember = joinGroupRows(groupId, agent.id, undefined, {
+        event: false,
+        cap: false,
+      });
+      if (lead && agent.name.toLocaleLowerCase() === lead) leadSessionId = row.sessionId;
+    }
+    if (lead && leadSessionId === null) {
+      throw new GroupStoreError("not-a-member", `The lead "${input.leadName}" must be a member.`);
+    }
+    if (leadSessionId !== null) setGroupLeadRow(groupId, leadSessionId);
+    return getAgentGroupWithMembers(groupId);
   });
 }
 
@@ -170,7 +269,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
        where id = ?`,
     )
     .run(
-      input.name !== undefined ? requireFreeName(input.name, agentId) : row.name,
+      input.name !== undefined ? requireFreeName(input.name, row.group_id, agentId) : row.name,
       input.role !== undefined ? input.role.trim() : row.role,
       input.instructions !== undefined ? input.instructions : row.instructions,
       input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id,
@@ -187,7 +286,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
 
 /**
  * Archive / restore. Membership is untouched: an archived agent stays in its
- * groups (the room's no-wake / "is archived" behaviour is A2).
+ * groups but is never woken (the room posts "<name> is archived").
  */
 export function setAgentArchived(agentId: string, archived: boolean): AgentInfo {
   requireAgentRow(agentId);
@@ -198,23 +297,23 @@ export function setAgentArchived(agentId: string, archived: boolean): AgentInfo 
 }
 
 /**
- * Deletes the agent and, in the same transaction, takes it out of every group
- * through the member-removal path (lead cleared, open tasks released
- * owner-first). The member session is kept: until A2 it is still a normal chat.
+ * Deletes the agent. For a group agent this IS removing the member (one
+ * operation): refused with `group-min-members` when only 2 are left, otherwise
+ * the member-removal rules (lead cleared, open tasks released owner-first), its
+ * hidden room session deleted and "X left the group" posted, in one
+ * transaction. Returns the room session ids: the caller stops their runtime.
  */
-export function deleteAgent(agentId: string): void {
-  requireAgentRow(agentId);
-  const db = getDatabase();
-  db.exec("begin");
-  try {
-    const sessions = db
-      .prepare("select session_id from agent_group_members where agent_id = ?")
-      .all(agentId) as Array<{ session_id: string }>;
-    for (const { session_id } of sessions) detachSessionFromGroupRows(session_id);
-    db.prepare("delete from agents where id = ?").run(agentId);
-    db.exec("commit");
-  } catch (error) {
-    db.exec("rollback");
-    throw error;
+export function deleteAgent(agentId: string): string[] {
+  const row = requireAgentRow(agentId);
+  const membership = getDatabase()
+    .prepare("select group_id, session_id from agent_group_members where agent_id = ?")
+    .get(agentId) as { group_id: string; session_id: string } | undefined;
+  if (membership) {
+    return withGroupTransaction(() => {
+      removeAgentFromGroupRows(membership.group_id, membership.session_id);
+      return [membership.session_id];
+    });
   }
+  getDatabase().prepare("delete from agents where id = ?").run(row.id);
+  return [];
 }
