@@ -13,7 +13,7 @@ import {
   IconUser,
   IconUsers,
 } from "@tabler/icons-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { cn } from "../../../lib/cn";
 import type { SettingsSectionId } from "../settings-types";
 import { filterSettingsNav, groupSettingsNav, SETTINGS_NAV_ITEMS } from "../settingsNav";
@@ -46,6 +46,7 @@ export function SettingsSidebar({
   onSectionChange(section: SettingsSectionId): void;
 }) {
   const visibleItems = filterSettingsNav(SETTINGS_NAV_ITEMS, query);
+  const version = useAppVersion();
 
   return (
     <aside className="flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
@@ -97,10 +98,29 @@ export function SettingsSidebar({
 
       <div className="border-hairline-soft border-t px-2 pt-3 text-xs text-fg-faint">
         <div>Modus Desktop</div>
-        <div className="mt-1">v0.1.0</div>
+        <div className="mt-1">{version ? `v${version}` : "Modus"}</div>
       </div>
     </aside>
   );
+}
+
+/** The running app's version (main's app.getVersion()); undefined without the bridge. */
+function useAppVersion(): string | undefined {
+  const [version, setVersion] = useState<string>();
+  useEffect(() => {
+    const request = window.modus?.app?.version;
+    if (!request) return;
+    let active = true;
+    request()
+      .then((value: string) => {
+        if (active && value) setVersion(value);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+  return version;
 }
 
 function SettingsNavGroup({ children, title }: { children: ReactNode; title: string }) {

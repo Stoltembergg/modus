@@ -1014,3 +1014,21 @@ describe("provider auth start IPC", () => {
     });
   });
 });
+
+describe("app version IPC", () => {
+  it("returns app.getVersion() to a trusted renderer and rejects others", async () => {
+    const sender = { mainFrame: { url: "file:///app/index.html" } };
+    registerTrustedSender(sender, "file:///app/index.html");
+    mocks.handlers.clear();
+    registerAppIpc();
+    const handler = mocks.handlers.get(IPC_CHANNELS.appVersion);
+
+    expect(await handler?.({ sender, senderFrame: sender.mainFrame } as never)).toBe("test");
+    expect(() =>
+      handler?.({
+        sender: { mainFrame: { url: "file:///attacker.html" } },
+        senderFrame: { url: "file:///attacker.html" },
+      } as never),
+    ).toThrow("Blocked IPC call from untrusted renderer frame.");
+  });
+});
