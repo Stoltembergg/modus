@@ -735,6 +735,7 @@ type PromptProbe = { runId?: string; joined?: boolean };
 export class PiSdkRuntime implements AgentRuntime {
   private sessions = new Map<string, SdkRuntimeSession>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
+  private questionPendingListeners = new Set<(sessionId: string) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
   private cancellingRuns = new Set<string>();
@@ -2050,6 +2051,23 @@ export class PiSdkRuntime implements AgentRuntime {
     };
   }
 
+  onQuestionPending(listener: (sessionId: string) => void): () => void {
+    this.questionPendingListeners.add(listener);
+    return () => {
+      this.questionPendingListeners.delete(listener);
+    };
+  }
+
+  private notifyQuestionPending(sessionId: string): void {
+    for (const listener of this.questionPendingListeners) {
+      try {
+        listener(sessionId);
+      } catch (error) {
+        console.warn("[modus] question-pending listener failed:", error);
+      }
+    }
+  }
+
   /**
    * The additive `prompt()` result, read from the run's durable status. A
    * prompt that only joined an already-streaming turn has no run of its own:
@@ -2634,13 +2652,16 @@ export class PiSdkRuntime implements AgentRuntime {
         const pendingGate = { runId: run.id, controller: new AbortController() };
         this.pendingIntentGates.set(input.sessionId, pendingGate);
         try {
-          const response: QuestionResponse = await requestQuestions({
+          const questions = requestQuestions({
             sessionId: input.sessionId,
             runId: run.id,
             questions: [intentGate.question],
             emit: runtimeSession.emit,
             signal: pendingGate.controller.signal,
           });
+          // After the request is registered, so a listener sees the question open.
+          this.notifyQuestionPending(input.sessionId);
+          const response: QuestionResponse = await questions;
           const gateStillOwnsRun =
             this.pendingIntentGates.get(input.sessionId) === pendingGate &&
             (!preflightReservation ||

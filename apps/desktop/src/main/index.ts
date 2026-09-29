@@ -5,6 +5,7 @@ import {
   stopRemoteModelCatalog,
 } from "./agent/model-service";
 import { resolveBrowserLocale } from "./browser/browser-locale";
+import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
 import { disposeAllMcp } from "./mcp/mcp-service";
@@ -118,6 +119,8 @@ if (!app.requestSingleInstanceLock()) {
     stopUpdateService();
     stopRemoteModelCatalog();
     shutdownTerminals();
+    // Stop the group queue's retry timer and its agent-runtime subscriptions.
+    disposeGroupRuntime();
     void Promise.allSettled([shutdownProviderAuthOperations(), disposeAllMcp()]).then(() => {
       allowQuitAfterShutdown = true;
       app.quit();

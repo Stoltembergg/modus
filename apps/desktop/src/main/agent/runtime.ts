@@ -102,6 +102,11 @@ export type AgentRuntime = {
   isSessionStreaming(sessionId: string): boolean;
   /** Observe every settled run-backed turn; returns an unsubscribe function. */
   onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void;
+  /**
+   * Observe the intent gate opening its question on a session (the turn stays
+   * pending inside `prompt()` until the user answers); returns an unsubscribe.
+   */
+  onQuestionPending(listener: (sessionId: string) => void): () => void;
   startPlanBuild(
     window: BrowserWindowType,
     input: HyperPlanBuildStartInput,

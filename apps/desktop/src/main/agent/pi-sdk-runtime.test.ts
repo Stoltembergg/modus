@@ -2435,7 +2435,10 @@ describe("PiSdkRuntime", () => {
       },
     );
 
-    const result = await new PiSdkRuntime().prompt(window, {
+    const runtime = new PiSdkRuntime();
+    const questionPending: string[] = [];
+    runtime.onQuestionPending((id) => questionPending.push(id));
+    const result = await runtime.prompt(window, {
       context: [],
       delivery: "normal",
       message: "Delete the production database PRIVATE_INTENT_TEXT",
@@ -2443,6 +2446,8 @@ describe("PiSdkRuntime", () => {
     });
 
     expect(result).toEqual({ outcome: "blocked" });
+    // The gate question opened once, while prompt() was still pending.
+    expect(questionPending).toEqual([sessionId]);
     expect(modelPrompt).not.toHaveBeenCalled();
     const events = getDatabase()
       .prepare("select type, payload_json from agent_events where session_id = ? order by rowid")
@@ -4398,6 +4403,8 @@ describe("PiSdkRuntime", () => {
     const window = createWindowStub();
     const settled: unknown[] = [];
     runtime.onTurnSettled((event) => settled.push(event));
+    const questionPending = vi.fn();
+    runtime.onQuestionPending(questionPending);
 
     const result = await runtime.prompt(window, {
       context: [],
@@ -4408,6 +4415,7 @@ describe("PiSdkRuntime", () => {
     });
     expect(result).toEqual({ outcome: "ok", finalText: "hello" });
     expect(settled).toEqual([{ sessionId, origin: "prompt", result }]);
+    expect(questionPending).not.toHaveBeenCalled();
     expect(runtime.isSessionStreaming(sessionId)).toBe(false);
 
     const run = getDatabase()

@@ -14,15 +14,19 @@ const { createAgentGroupWithMembers, listGroupMessages, removeAgentGroupMember }
   "./group-store"
 );
 const {
+  ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
+  ESTIMATED_INPUT_TOKENS_PER_CHAIN,
   GROUP_CHAIN_LIMITS,
   GROUP_MAX_CONCURRENT_TURNS,
   GROUP_STATUS_TEXT,
   GroupRuntime,
   composeGroupWakePrompt,
   estimateGroupTokens,
+  isUpdatePendingState,
   parseGroupMentions,
 } = await import("./group-runtime");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
+type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
 
 /* ── fixtures ─────────────────────────────────────────────────────────── */
@@ -88,6 +92,24 @@ class FakeAgentRuntime {
   }
   isSessionStreaming(sessionId: string): boolean {
     return this.streaming.has(sessionId);
+  }
+  settledListeners = new Set<(event: TurnSettledEvent) => void>();
+  questionListeners = new Set<(sessionId: string) => void>();
+  onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void {
+    this.settledListeners.add(listener);
+    return () => this.settledListeners.delete(listener);
+  }
+  onQuestionPending(listener: (sessionId: string) => void): () => void {
+    this.questionListeners.add(listener);
+    return () => this.questionListeners.delete(listener);
+  }
+  /** A turn settled that the group did not start (e.g. a HyperPlan build). */
+  settle(event: TurnSettledEvent): void {
+    for (const listener of this.settledListeners) listener(event);
+  }
+  /** The intent gate opens its question on a session (its prompt stays pending). */
+  openGate(sessionId: string): void {
+    for (const listener of this.questionListeners) listener(sessionId);
   }
   /** The oldest unsettled call for a session. */
   take(sessionId: string): Call {
@@ -156,11 +178,17 @@ describe("group runtime constants", () => {
       maxHops: 6,
       maxAgentMessages: 20,
       maxWakesPerMember: 3,
-      maxInputTokens: 150_000,
-      maxContextTokensPerWake: 8_000,
+      maxEstimatedInputTokens: 150_000,
+      maxEstimatedContextTokensPerWake: 8_000,
     });
+    expect(ESTIMATED_INPUT_TOKENS_PER_CHAIN).toBe(150_000);
+    expect(ESTIMATED_CONTEXT_TOKENS_PER_WAKE).toBe(8_000);
     expect(GROUP_MAX_CONCURRENT_TURNS).toBe(2);
     expect(GROUP_STATUS_TEXT.waitingForYou).toBe("Waiting for you");
+    expect(GROUP_STATUS_TEXT.limit["input-token-budget"]).toContain("estimated 150k-token budget");
+    expect(GROUP_STATUS_TEXT.limit["context-too-large"]).toContain("estimated 8k-token");
+    // chars / 4
+    expect(estimateGroupTokens("x".repeat(401))).toBe(101);
   });
 });
 
@@ -220,7 +248,7 @@ describe("turn outcomes (fake runtime contract)", () => {
     expect(room(group.id).at(-1)).toMatchObject({ kind: "status", body: "Turn stopped" });
   });
 
-  it('blocked posts "Waiting for you" on behalf of the member and ends the chain', async () => {
+  it('blocked (HyperPlan choice pending) posts "Waiting for you" as the member and ends the chain', async () => {
     const { group, alpha } = squad();
     const { runtime, groups, events } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
@@ -317,6 +345,30 @@ describe("wake rules", () => {
     expect(parseGroupMentions("mail dev@Devx", members)).toEqual([]);
     expect(parseGroupMentions("@b by id", members)).toEqual(["b"]);
   });
+
+  it("@Title wakes every member sharing that title (case-insensitive)", async () => {
+    const members = [
+      { sessionId: "a", title: "Reviewer" },
+      { sessionId: "b", title: "reviewer" },
+      { sessionId: "c", title: "Reviewer Bot" },
+    ];
+    expect(parseGroupMentions("@REVIEWER please", members)).toEqual(["a", "b"]);
+    expect(parseGroupMentions("@Reviewer Bot and @reviewer", members)).toEqual(["a", "b", "c"]);
+
+    const ws = insertWorkspace();
+    const one = insertSession(ws, "Tester");
+    const two = insertSession(ws, "tester");
+    const group = createAgentGroupWithMembers({
+      name: "Twins",
+      workspaceId: ws,
+      members: [{ sessionId: one }, { sessionId: two }],
+      leadSessionId: one,
+    });
+    const { runtime, groups } = setup();
+    const message = groups.postUserMessage({ groupId: group.id, body: "@Tester run it" });
+    expect(message.mentions).toEqual([one, two]);
+    expect(runtime.pendingSessions()).toEqual([one, two]);
+  });
 });
 
 /* ── chain ids, persistence ──────────────────────────────────────────── */
@@ -401,7 +453,7 @@ describe("chain limits", () => {
 
   it("stops when the input-token budget would be exceeded", async () => {
     const { group, alpha } = squad();
-    const ctx = setup({ limits: { maxInputTokens: 10 } });
+    const ctx = setup({ limits: { maxEstimatedInputTokens: 10 } });
     const user = ctx.groups.postUserMessage({ groupId: group.id, body: "hi" });
     expect(ctx.runtime.pendingSessions()).not.toContain(alpha);
     expect(ctx.groups.chainSnapshot(user.id).ended).toBe("input-token-budget");
@@ -418,12 +470,35 @@ describe("chain limits", () => {
     const prompts = ctx.runtime.calls.map((call) => call.input.message);
     for (const prompt of prompts) {
       expect(estimateGroupTokens(prompt)).toBeLessThanOrEqual(
-        GROUP_CHAIN_LIMITS.maxContextTokensPerWake,
+        GROUP_CHAIN_LIMITS.maxEstimatedContextTokensPerWake,
       );
     }
     const huge = ctx.groups.postUserMessage({ groupId: group.id, body: "y".repeat(40_000) });
     expect(ctx.runtime.pendingSessions().filter((id) => id === alpha)).toHaveLength(0);
     expect(ctx.groups.chainSnapshot(huge.id).ended).toBe("context-too-large");
+  });
+
+  it("a limit drops the chain's queued wakes; a running turn posts but wakes nobody", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups } = setup({ limits: { maxHops: 4 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
+    // Hops 1-3 admitted; Alpha and Beta run, Gamma is queued.
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta then @Gamma" });
+    await flush();
+    // Beta's 2nd wake is hop 4 (queued behind its running turn); Gamma's would be hop 5.
+    const snapshot = groups.chainSnapshot(user.id);
+    expect(snapshot).toMatchObject({ hops: 4, ended: "max-hops" });
+    // Gamma's first wake and Beta's second were both queued: discarded.
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.isGroupWorking(group.id)).toBe(true);
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Alpha @Gamma look" });
+    await flush();
+    expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, chainId: user.id });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.started).toEqual([alpha, beta]);
+    expect(runtime.started).not.toContain(gamma);
+    expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 
   it("composes the wake prompt with roster, history and the trigger", () => {
@@ -471,9 +546,97 @@ describe("chain limits", () => {
   });
 });
 
-/* ── blocked: ends the chain; the in-flight turn wakes nobody; unblocking opens a new chain ── */
+/* ── intent gate: the question opens inside prompt(); the slot is released ── */
 
-describe("blocked member", () => {
+describe("intent gate on a group turn", () => {
+  it("frees the slot, posts Waiting for you and ends the chain (queued wakes drop)", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups, events } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    // A second chain queues Gamma behind the two running turns.
+    const other = groups.postUserMessage({ groupId: group.id, body: "@Gamma also" });
+    groups.postUserMessage({ groupId: group.id, body: "@Beta later" });
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+
+    runtime.openGate(alpha);
+    expect(room(group.id).find((m) => m.kind === "status")).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: alpha,
+      body: "Waiting for you",
+      chainId: user.id,
+    });
+    expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
+    expect(events).toContainEqual({
+      type: "group.chain-ended",
+      groupId: group.id,
+      chainId: user.id,
+      reason: "blocked",
+    });
+    // Alpha's prompt is still pending, but its slot went to Gamma (other chain).
+    expect(runtime.pendingSessions()).toEqual([alpha, beta, gamma]);
+    expect(groups.chainSnapshot(other.id).ended).toBeUndefined();
+    expect(events.filter((e) => e.type === "group.activity").at(-1)).toMatchObject({
+      runningSessionIds: [beta, gamma],
+    });
+    // Beta's in-flight turn in the ended chain posts but wakes nobody.
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Gamma verify" });
+    await flush();
+    expect(room(group.id).find((m) => m.body === "Done, @Gamma verify")?.chainId).toBe(user.id);
+    // Only the other chain's "@Beta later" wake starts; nothing from the ended chain.
+    expect(runtime.pendingSessions()).toEqual([alpha, gamma, beta]);
+    expect(groups.isAwaitingUser(alpha)).toBe(false);
+  });
+
+  it("Proceed: the turn ends ok and posts its result, waking nobody", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    runtime.openGate(alpha);
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Deleted. @Beta please verify" });
+    await flush();
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorSessionId: alpha,
+      kind: "message",
+      body: "Deleted. @Beta please verify",
+      chainId: user.id,
+    });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.isAwaitingUser(alpha)).toBe(false);
+    expect(groups.liveChainIds()).toEqual([]);
+    // The user opens a new chain from the room.
+    groups.postUserMessage({ groupId: group.id, body: "@Beta verify" });
+    expect(runtime.pendingSessions()).toHaveLength(1);
+  });
+
+  it('refusal (Cancel / skip → blocked) posts "Turn stopped", with nobody awaiting', async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    runtime.openGate(alpha);
+    runtime.take(alpha).resolve({ outcome: "blocked" });
+    await flush();
+    expect(room(group.id).map((m) => [m.kind, m.body])).toEqual([
+      ["message", "delete prod"],
+      ["status", "Waiting for you"],
+      ["status", "Turn stopped"],
+    ]);
+    expect(room(group.id).at(-1)?.chainId).toBe(user.id);
+    expect(groups.isAwaitingUser(alpha)).toBe(false);
+    expect(runtime.pendingSessions()).toEqual([]);
+  });
+
+  it("ignores gate questions on sessions without a group turn", () => {
+    const { group, beta } = squad();
+    const { runtime, groups } = setup();
+    runtime.openGate(beta);
+    expect(room(group.id)).toHaveLength(0);
+    expect(groups.isAwaitingUser(beta)).toBe(false);
+  });
+});
+
+/* ── HyperPlan: a turn ending with a plan choice pending is blocked; plan-build unblocks ── */
+
+describe("HyperPlan-blocked member", () => {
   it("ends the chain: another member's in-flight reply posts but wakes nobody; queued wakes drop", async () => {
     const { group, alpha, beta, gamma } = squad();
     const { runtime, groups } = setup();
@@ -483,6 +646,7 @@ describe("blocked member", () => {
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
     expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
+    expect(groups.isAwaitingUser(alpha)).toBe(true);
     // Gamma's queued wake was dropped: it never starts.
     expect(runtime.pendingSessions()).toEqual([beta]);
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Gamma please verify" });
@@ -497,18 +661,18 @@ describe("blocked member", () => {
     expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 
-  it("unblocking opens a new chain with reset counters; the result follows the wake rules", async () => {
+  it("a successful plan-build opens a new chain with reset counters; the result follows the wake rules", async () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
-    const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    const user = groups.postUserMessage({ groupId: group.id, body: "plan the migration" });
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
 
-    // The user answers the gate in Alpha's own chat: a turn the group did not start.
-    groups.handleTurnSettled({
+    // The user picks the plan build in Alpha's chat: a turn the group did not start.
+    runtime.settle({
       sessionId: alpha,
-      origin: "prompt",
-      result: { outcome: "ok", finalText: "Confirmed and done. @Beta please verify" },
+      origin: "plan-build",
+      result: { outcome: "ok", finalText: "Built. @Beta please verify" },
     });
     const root = room(group.id).at(-1);
     expect(root).toMatchObject({ authorSessionId: alpha, kind: "message" });
@@ -528,23 +692,81 @@ describe("blocked member", () => {
     expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, chainId: root?.id });
   });
 
+  it("only an ok plan-build unblocks: failed, aborted and plain prompts do not", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "plan it" });
+    runtime.take(alpha).resolve({ outcome: "blocked" });
+    await flush();
+    const before = room(group.id).length;
+    for (const event of [
+      { sessionId: alpha, origin: "plan-build", result: { outcome: "failed" } },
+      { sessionId: alpha, origin: "plan-build", result: { outcome: "aborted" } },
+      { sessionId: alpha, origin: "prompt", result: { outcome: "ok", finalText: "hi" } },
+    ] satisfies TurnSettledEvent[]) {
+      runtime.settle(event);
+    }
+    expect(room(group.id)).toHaveLength(before);
+    expect(groups.isAwaitingUser(alpha)).toBe(true);
+    expect(groups.liveChainIds()).toEqual([]);
+  });
+
   it("ignores settled turns of members that are not waiting, and the group's own turns", async () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
-    groups.handleTurnSettled({
+    runtime.settle({
       sessionId: beta,
-      origin: "prompt",
+      origin: "plan-build",
       result: { outcome: "ok", finalText: "x" },
     });
     groups.postUserMessage({ groupId: group.id, body: "go" });
-    groups.handleTurnSettled({
+    runtime.settle({
       sessionId: alpha,
-      origin: "prompt",
+      origin: "plan-build",
       result: { outcome: "ok", finalText: "x" },
     });
     expect(room(group.id)).toHaveLength(1);
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
+  });
+});
+
+/* ── chain bookkeeping ───────────────────────────────────────────────── */
+
+describe("chain cleanup", () => {
+  it("drops a chain once it has no queued or running wake (ended or finished)", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const first = groups.postUserMessage({ groupId: group.id, body: "go" });
+    expect(groups.liveChainIds()).toEqual([first.id]);
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta you" });
+    await flush();
+    // Still live: Beta's wake runs in it.
+    expect(groups.liveChainIds()).toEqual([first.id]);
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Done." });
+    await flush();
+    expect(groups.liveChainIds()).toEqual([]);
+    // Counters stay readable for a while after retirement.
+    expect(groups.chainSnapshot(first.id).hops).toBe(2);
+
+    // An ended chain with a running turn stays until that turn settles.
+    const second = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    runtime.take(alpha).resolve({ outcome: "blocked" });
+    await flush();
+    expect(groups.liveChainIds()).toEqual([second.id]);
+    runtime.take(beta).resolve({ outcome: "ok" });
+    await flush();
+    expect(groups.liveChainIds()).toEqual([]);
+
+    // A message that wakes nobody (a reply to the lead, no mention) never keeps a chain.
+    const leadStatus = room(group.id).findLast((m) => m.authorSessionId === alpha);
+    groups.postUserMessage({
+      groupId: group.id,
+      body: "ok",
+      replyToMessageId: leadStatus?.id ?? "",
+    });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.liveChainIds()).toEqual([]);
   });
 });
 
@@ -596,6 +818,45 @@ describe("queue", () => {
     state.updatePending = false;
     groups.kick();
     expect(runtime.pendingSessions()).toEqual([alpha]);
+  });
+
+  it("only waiting-for-agents and installing hold the queue; ready does not", () => {
+    expect(isUpdatePendingState({ status: "waiting-for-agents", version: "2.0.0" })).toBe(true);
+    expect(isUpdatePendingState({ status: "installing", version: "2.0.0" })).toBe(true);
+    expect(isUpdatePendingState({ status: "ready", version: "2.0.0" })).toBe(false);
+    expect(isUpdatePendingState({ status: "idle" })).toBe(false);
+  });
+
+  it("arms the retry timer only while wakes are queued, and clears it on dispose", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups, state } = setup({ window: false });
+    expect(groups.hasPendingRetry()).toBe(false);
+    groups.postUserMessage({ groupId: group.id, body: "go" });
+    expect(groups.hasPendingRetry()).toBe(true);
+    state.window = true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // Drained by the retry: the queue is empty, so no new timer.
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(groups.hasPendingRetry()).toBe(false);
+
+    state.window = false;
+    groups.postUserMessage({ groupId: group.id, body: "@Beta also" });
+    expect(groups.hasPendingRetry()).toBe(true);
+    groups.dispose();
+    expect(groups.hasPendingRetry()).toBe(false);
+  });
+
+  it("clears the retry timer when an ended chain empties the queue", () => {
+    const { group, alpha, gamma } = squad();
+    const { runtime, groups } = setup();
+    runtime.streaming.add(gamma);
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha @Gamma go" });
+    // Gamma waits for its own stream to end; the retry timer is armed.
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(groups.hasPendingRetry()).toBe(true);
+    runtime.openGate(alpha);
+    expect(groups.hasPendingRetry()).toBe(false);
+    expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 
   it("drops the reply of a member removed while its turn ran", async () => {

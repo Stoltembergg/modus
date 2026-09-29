@@ -1,14 +1,9 @@
 import { BrowserWindow } from "electron";
-import type { GroupRuntimeEvent, UpdateState } from "../../shared/contracts";
+import type { GroupRuntimeEvent } from "../../shared/contracts";
 import { getAgentRuntime } from "../agent/runtime-registry";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { getUpdateService } from "../updater/update-service";
-import { GroupRuntime } from "./group-runtime";
-
-/** An update is about to restart the app: new group turns wait until it is gone. */
-export function isUpdatePendingState(state: UpdateState): boolean {
-  return state.status === "waiting-for-agents" || state.status === "installing";
-}
+import { GroupRuntime, isUpdatePendingState } from "./group-runtime";
 
 export function emitGroupRuntimeEvent(event: GroupRuntimeEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -20,7 +15,7 @@ export function emitGroupRuntimeEvent(event: GroupRuntimeEvent): void {
 
 let groupRuntime: GroupRuntime | undefined;
 
-/** The app's single GroupRuntime, bound to the agent runtime's settled turns. */
+/** The app's single GroupRuntime (it subscribes to the agent runtime itself). */
 export function getGroupRuntime(): GroupRuntime {
   if (groupRuntime) return groupRuntime;
   const runtime = getAgentRuntime();
@@ -32,7 +27,12 @@ export function getGroupRuntime(): GroupRuntime {
       emit: emitGroupRuntimeEvent,
     },
   });
-  runtime.onTurnSettled((event) => instance.handleTurnSettled(event));
   groupRuntime = instance;
   return instance;
+}
+
+/** App quit: clears the retry timer and the runtime subscriptions (no-op if never created). */
+export function disposeGroupRuntime(): void {
+  groupRuntime?.dispose();
+  groupRuntime = undefined;
 }
