@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentGroupWithMembers,
   AgentSessionInfo,
+  GroupDecision,
   GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
@@ -12,6 +13,12 @@ import type {
   UpdateState,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
+import { formatClock } from "../../lib/formatClock";
+import {
+  DECISIONS_EMPTY_TEXT,
+  DELETE_DECISION_CONFIRM_LABEL,
+  FORMER_MEMBER_TEXT,
+} from "./GroupDecisions";
 import { GROUP_ROOM_EMPTY_TEXT, GroupRoom } from "./GroupRoom";
 import { CANCEL_TASK_CONFIRM_LABEL } from "./GroupTaskPanel";
 import { GROUP_MESSAGE_PAGE } from "./useGroupMessages";
@@ -79,6 +86,7 @@ let updateListeners: Array<(state: UpdateState) => void>;
 let pages: GroupMessage[][];
 let updateState: UpdateState;
 let tasks: GroupTask[];
+let decisions: GroupDecision[];
 const group = {
   listMessages: vi.fn(async (_input: unknown) => pages.shift() ?? []),
   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
@@ -89,6 +97,12 @@ const group = {
   cancelTask: vi.fn(async (taskId: string) => {
     const task = tasks.find((item) => item.id === taskId) as GroupTask;
     return { ...task, status: "cancelled" as const };
+  }),
+  listDecisions: vi.fn(async (_groupId: string) => decisions),
+  deleteDecision: vi.fn(async (decisionId: string) => {
+    const decision = decisions.find((item) => item.id === decisionId) as GroupDecision;
+    decisions = decisions.filter((item) => item.id !== decisionId);
+    return decision;
   }),
   onEvent: vi.fn((listener: (event: GroupRuntimeEvent) => void) => {
     listeners.push(listener);
@@ -111,6 +125,7 @@ beforeEach(() => {
   pages = [];
   updateState = { status: "idle" };
   tasks = [];
+  decisions = [];
   for (const fn of [...Object.values(group), ...Object.values(update)]) fn.mockClear();
   Object.assign(window, { modus: { group, update } });
 });
@@ -133,21 +148,27 @@ function states(entry?: Partial<GroupMemberStates>): GroupMemberStatesById {
   ]);
 }
 
-function renderRoom(memberStates: GroupMemberStatesById = states(), onOpenMember = vi.fn()) {
+function renderRoom(
+  memberStates: GroupMemberStatesById = states(),
+  onOpenMember = vi.fn(),
+  roomGroup: AgentGroupWithMembers = GROUP,
+  onSetMode = vi.fn(),
+) {
   const view = render(
     <GroupRoom
-      group={GROUP}
+      group={roomGroup}
       memberSessionIds={new Set(SESSIONS.map((s) => s.id))}
       memberStates={memberStates}
       onDelete={vi.fn()}
       onOpenMember={onOpenMember}
       onRename={vi.fn()}
+      onSetMode={onSetMode}
       onUpdateMembers={vi.fn(async () => undefined)}
       sessions={SESSIONS}
       workspaces={WORKSPACES}
     />,
   );
-  return { ...view, onOpenMember };
+  return { ...view, onOpenMember, onSetMode };
 }
 
 const emit = (event: GroupRuntimeEvent) =>
@@ -427,5 +448,197 @@ describe("GroupRoom", () => {
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("0"));
     const section = screen.getByTestId("task-section");
     expect(section.dataset.status).toBe("cancelled");
+  });
+});
+
+describe("GroupRoom decisions", () => {
+  const decision = (id: string, text: string, extra: Partial<GroupDecision> = {}) => ({
+    id,
+    groupId: "g-1",
+    text,
+    createdAt: `2026-01-0${id}T10:00:00.000Z`,
+    ...extra,
+  });
+
+  async function openPanel(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: /^Tasks/ }));
+    return screen.getByTestId("group-task-panel");
+  }
+
+  it("shows Decisions (newest first) with a counter above the tasks; the header stays Tasks N", async () => {
+    const user = userEvent.setup();
+    decisions = [
+      decision("3", "Ship on Fridays", { authorSessionId: "s-rev-1" }),
+      decision("2", "Use SQLite", { authorSessionId: "s-lead" }),
+      decision("1", "Keep the API stable"),
+      decision("0", "Pin deps", { authorSessionId: "s-gone" }),
+    ];
+    tasks = [
+      {
+        id: "t-1",
+        groupId: "g-1",
+        title: "Parser",
+        status: "open",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    renderRoom();
+    await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("1"));
+    // Decisions load only with the panel.
+    expect(group.listDecisions).not.toHaveBeenCalled();
+    const panel = await openPanel(user);
+    expect(screen.getByRole("button", { name: "Tasks (1 active)" }).textContent).toBe("Tasks1");
+    await vi.waitFor(() =>
+      expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
+    );
+    expect(group.listDecisions).toHaveBeenCalledWith("g-1");
+    // The section comes first, above the tasks.
+    const section = within(panel).getByTestId("decision-section");
+    expect(panel.firstElementChild).toBe(section);
+    expect(
+      section.compareDocumentPosition(within(panel).getByTestId("task-section")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    const cards = within(section).getAllByTestId("group-decision");
+    expect(cards.map((card) => card.firstElementChild?.textContent)).toEqual([
+      "Ship on Fridays",
+      "Use SQLite",
+      "Keep the API stable",
+      "Pin deps",
+    ]);
+    const authors = within(section).getAllByTestId("decision-author");
+    // A repeated title keeps its short id suffix; no author (session deleted) or an
+    // author no longer in the group is a former member, faded, never "You".
+    expect(authors.map((author) => author.textContent)).toEqual([
+      "Reviewer · srev1",
+      "Planner",
+      FORMER_MEMBER_TEXT,
+      FORMER_MEMBER_TEXT,
+    ]);
+    for (const author of authors.slice(2)) {
+      expect(author.querySelector(".text-fg-faint")?.textContent).toBe(FORMER_MEMBER_TEXT);
+    }
+    expect(within(authors[0] as HTMLElement).getByTestId("member-id-suffix")).toBeTruthy();
+    const time = cards[1]?.querySelector("time");
+    expect(time?.getAttribute("datetime")).toBe("2026-01-02T10:00:00.000Z");
+    expect(time?.textContent).toBe(formatClock(Date.parse("2026-01-02T10:00:00.000Z")));
+
+    // Collapsible (starts open).
+    const toggle = within(section).getByRole("button", { name: /Decisions/ });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    await user.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(within(section).queryAllByTestId("group-decision")).toHaveLength(0);
+    expect(within(section).getByTestId("decision-count").textContent).toBe("4");
+    await user.click(toggle);
+    expect(within(section).getAllByTestId("group-decision")).toHaveLength(4);
+  });
+
+  it(`shows "${DECISIONS_EMPTY_TEXT}" when the group has none`, async () => {
+    const user = userEvent.setup();
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalled());
+    const section = within(panel).getByTestId("decision-section");
+    expect(within(section).getByText(DECISIONS_EMPTY_TEXT)).toBeTruthy();
+    expect(within(section).getByTestId("decision-count").textContent).toBe("0");
+  });
+
+  it('"Delete" needs two clicks, removes the decision and posts nothing', async () => {
+    const user = userEvent.setup();
+    decisions = [decision("2", "Use SQLite", { authorSessionId: "s-lead" }), decision("1", "Old")];
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(within(panel).getAllByTestId("group-decision")).toHaveLength(2));
+    const [first] = within(panel).getAllByTestId("group-decision");
+    await user.click(within(first as HTMLElement).getByRole("button", { name: "Delete" }));
+    expect(group.deleteDecision).not.toHaveBeenCalled();
+    await user.click(
+      within(first as HTMLElement).getByRole("button", { name: DELETE_DECISION_CONFIRM_LABEL }),
+    );
+    expect(group.deleteDecision).toHaveBeenCalledWith("2");
+    await vi.waitFor(() =>
+      expect(within(panel).getByTestId("decision-count").textContent).toBe("1"),
+    );
+    expect(within(panel).queryByText("Use SQLite")).toBeNull();
+    expect(within(panel).getByText("Old")).toBeTruthy();
+    expect(group.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("a failed delete shows the error and keeps the decision", async () => {
+    const user = userEvent.setup();
+    decisions = [decision("1", "Use SQLite")];
+    group.deleteDecision.mockImplementationOnce(async () => {
+      throw new Error("[group-error:decision-not-found] Group decision not found: 1");
+    });
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
+    await user.click(within(panel).getByRole("button", { name: "Delete" }));
+    await user.click(within(panel).getByRole("button", { name: DELETE_DECISION_CONFIRM_LABEL }));
+    expect(await within(panel).findByText("That decision no longer exists.")).toBeTruthy();
+    expect(within(panel).getByText("Use SQLite")).toBeTruthy();
+    expect(within(panel).getByRole("button", { name: "Delete" })).toBeTruthy();
+  });
+
+  it("reloads on group.message and group.activity of this group only", async () => {
+    const user = userEvent.setup();
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
+    decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
+    await emit({ type: "group.message", groupId: "g-1", message: message("9") });
+    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
+    decisions = [decision("2", "Ship weekly"), ...decisions];
+    await emit({ type: "group.activity", groupId: "g-2" } as GroupRuntimeEvent);
+    expect(group.listDecisions).toHaveBeenCalledTimes(2);
+    await emit({ type: "group.activity", groupId: "g-1" } as GroupRuntimeEvent);
+    await vi.waitFor(() =>
+      expect(within(panel).getByTestId("decision-count").textContent).toBe("2"),
+    );
+  });
+});
+
+describe("GroupRoom coordinator mode", () => {
+  async function openMenu(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "Group actions" }));
+    return screen.findByRole("menuitemcheckbox", { name: /Coordinator mode/ });
+  }
+
+  it("the menu toggle turns it on; no Coordinator badge while it is off", async () => {
+    const user = userEvent.setup();
+    const { onSetMode } = renderRoom();
+    expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.getAttribute("aria-disabled")).not.toBe("true");
+    await user.click(toggle);
+    expect(onSetMode).toHaveBeenCalledWith("coordinator");
+  });
+
+  it("with the mode on and a Lead: the Coordinator badge next to the Project badge; the toggle turns it off", async () => {
+    const user = userEvent.setup();
+    const { onSetMode } = renderRoom(states(), vi.fn(), { ...GROUP, mode: "coordinator" });
+    const badge = screen.getByTestId("group-coordinator-badge");
+    expect(badge.textContent).toBe("Coordinator");
+    expect(screen.getByTestId("group-project-badge").nextElementSibling).toBe(badge);
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await user.click(toggle);
+    expect(onSetMode).toHaveBeenCalledWith("free");
+  });
+
+  it("without a Lead the stored flag is ignored: no badge, toggle off and disabled", async () => {
+    const user = userEvent.setup();
+    const { leadSessionId: _lead, ...leaderless } = GROUP;
+    const { onSetMode } = renderRoom(states(), vi.fn(), { ...leaderless, mode: "coordinator" });
+    expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.textContent).toContain("Needs a Lead");
+    await user.click(toggle);
+    expect(onSetMode).not.toHaveBeenCalled();
   });
 });

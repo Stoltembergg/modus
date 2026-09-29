@@ -1,9 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { app } from "electron";
+import { agentAvatarForId } from "../../shared/agent-templates";
+import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES } from "../../shared/contracts";
 
 let database: DatabaseSync | undefined;
+
+/** `'a','b'` for a CHECK (... in (...)) over a list of known literals. */
+function sqlList(values: readonly string[]): string {
+  return values.map((value) => `'${value}'`).join(",");
+}
 
 function hasColumn(db: DatabaseSync, table: string, column: string): boolean {
   const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
@@ -189,6 +197,14 @@ export function migrateDatabase(db: DatabaseSync): void {
   addColumn(db, "agent_sessions", "subagent_conflict_files_json", "text");
   addColumn(db, "agent_sessions", "pinned_at", "text");
   addColumn(db, "agent_sessions", "archived_at", "text");
+  // Agents model: an agent's hidden per-group room session is 'group_member'.
+  // Every session listing only lists 'chat'.
+  addColumn(
+    db,
+    "agent_sessions",
+    "kind",
+    "text not null default 'chat' check (kind in ('chat','group_member'))",
+  );
   db.exec(`
     create index if not exists idx_agent_sessions_parent
       on agent_sessions(parent_session_id);
@@ -463,14 +479,120 @@ export function migrateDatabase(db: DatabaseSync): void {
       id text primary key,
       group_id text not null references agent_groups(id) on delete cascade,
       text text not null,
+      author_session_id text references agent_sessions(id) on delete set null,
       source_message_id text references group_messages(id) on delete set null,
-      created_by_session_id text references agent_sessions(id) on delete set null,
-      created_at text not null,
-      superseded_by_id text references group_decisions(id) on delete set null
+      created_at text not null
     );
-    create index if not exists idx_group_decisions_group_created
-      on group_decisions(group_id, created_at);
   `);
+  migrateLegacyGroupDecisions(db);
+  db.exec(`create index if not exists idx_group_decisions_group_created
+    on group_decisions(group_id, created_at);`);
+
+  // Agents model (A1): an agent is its own entity (unique name, persona,
+  // defaults). Group members point at one through agent_group_members.agent_id;
+  // the room runtime stays keyed by the member's session_id.
+  db.exec(`
+    create table if not exists agents (
+      id text primary key,
+      name text not null collate nocase unique,
+      role text not null default '',
+      instructions text not null default '',
+      model_id text,
+      default_workspace_id text references workspaces(id) on delete set null,
+      avatar_face text not null check (avatar_face in (${sqlList(AGENT_AVATAR_FACES)})),
+      avatar_color text not null check (avatar_color in (${sqlList(AGENT_AVATAR_COLORS)})),
+      template_id text,
+      created_at text not null,
+      updated_at text not null,
+      archived_at text
+    );
+  `);
+  migrateGroupMembersToAgents(db);
+}
+
+/** Next free agent name: "Jennie", then "Jennie 2", "Jennie 3" (case-insensitive). */
+export function uniqueAgentName(db: DatabaseSync, base: string): string {
+  const taken = db.prepare("select 1 from agents where name = ?");
+  let name = base;
+  for (let suffix = 2; taken.get(name) !== undefined; suffix += 1) {
+    name = `${base} ${suffix}`;
+  }
+  return name;
+}
+
+/**
+ * One-shot (runs when agent_group_members gains agent_id): every current
+ * member becomes an agent named after its session title (deduped, "Agent"
+ * when blank) with empty role/instructions and a face/color derived from its id. The member keeps its session, so
+ * the room history is preserved.
+ */
+function migrateGroupMembersToAgents(db: DatabaseSync): void {
+  if (hasColumn(db, "agent_group_members", "agent_id")) return;
+  db.exec("begin");
+  try {
+    addColumn(
+      db,
+      "agent_group_members",
+      "agent_id",
+      "text references agents(id) on delete set null",
+    );
+    const members = db
+      .prepare(
+        `select m.group_id, m.session_id, trim(coalesce(s.title, '')) as title
+         from agent_group_members m join agent_sessions s on s.id = m.session_id
+         order by m.joined_at, m.rowid`,
+      )
+      .all() as Array<{ group_id: string; session_id: string; title: string }>;
+    const insertAgent = db.prepare(
+      `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?)`,
+    );
+    const link = db.prepare(
+      "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
+    );
+    const now = new Date().toISOString();
+    for (const member of members) {
+      const id = randomUUID();
+      const { avatarFace, avatarColor } = agentAvatarForId(id);
+      const name = uniqueAgentName(db, member.title || "Agent");
+      insertAgent.run(id, name, avatarFace, avatarColor, now, now);
+      link.run(id, member.group_id, member.session_id);
+    }
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
+}
+
+/**
+ * PR 6: group_decisions briefly had created_by_session_id / superseded_by_id
+ * (never written by the app). Rebuild it in the shared-context shape, keeping
+ * only active rows; the author carries over.
+ */
+function migrateLegacyGroupDecisions(db: DatabaseSync): void {
+  if (!hasColumn(db, "group_decisions", "superseded_by_id")) return;
+  db.exec("begin");
+  try {
+    db.exec(`create table group_decisions_replacement (
+        id text primary key,
+        group_id text not null references agent_groups(id) on delete cascade,
+        text text not null,
+        author_session_id text references agent_sessions(id) on delete set null,
+        source_message_id text references group_messages(id) on delete set null,
+        created_at text not null
+      );
+      insert into group_decisions_replacement
+        (id, group_id, text, author_session_id, source_message_id, created_at)
+        select id, group_id, text, created_by_session_id, source_message_id, created_at
+        from group_decisions where superseded_by_id is null;
+      drop table group_decisions;
+      alter table group_decisions_replacement rename to group_decisions;`);
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
 }
 
 export function getDatabase(): DatabaseSync {

@@ -40,6 +40,7 @@ const api: ModusApi = {
     addMember: (input) => ipcRenderer.invoke("group:add-member", input),
     removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
     setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
+    setMode: (input) => ipcRenderer.invoke("group:set-mode", input),
     updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
     postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
     listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
@@ -47,12 +48,21 @@ const api: ModusApi = {
     memberStates: () => ipcRenderer.invoke("group:member-states"),
     listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
     cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
+    listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
+    deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
     onEvent: (callback) => {
       const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);
       ipcRenderer.on("group:event", listener);
       return () => ipcRenderer.removeListener("group:event", listener);
     },
+  },
+  agents: {
+    list: () => ipcRenderer.invoke("agents:list"),
+    create: (input) => ipcRenderer.invoke("agents:create", input),
+    update: (input) => ipcRenderer.invoke("agents:update", input),
+    setArchived: (input) => ipcRenderer.invoke("agents:archive", input),
+    remove: (id) => ipcRenderer.invoke("agents:delete", { id }),
   },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),

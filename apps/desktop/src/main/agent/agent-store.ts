@@ -317,7 +317,7 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
     .prepare(
       `select ${SESSION_COLUMNS}
        from agent_sessions
-       where archived_at is null
+       where archived_at is null and kind = 'chat'
        order by pinned_at is null, pinned_at desc, updated_at desc`,
     )
     .all() as AgentSessionRow[];
@@ -327,9 +327,11 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
     options.includeSessionId &&
     !sessions.some((session) => session.id === options.includeSessionId)
   ) {
-    const included = getAgentSession(options.includeSessionId);
+    const included = getDatabase()
+      .prepare(`select ${SESSION_COLUMNS} from agent_sessions where id = ? and kind = 'chat'`)
+      .get(options.includeSessionId) as AgentSessionRow | undefined;
     if (included) {
-      sessions.push(included);
+      sessions.push(toSession(included));
     }
   }
   return sessions;
@@ -341,6 +343,7 @@ export function listArchivedAgentSessions(workspaceId: string): AgentSessionInfo
       `select ${SESSION_COLUMNS}
        from agent_sessions
        where workspace_id = ? and parent_session_id is null and archived_at is not null
+         and kind = 'chat'
        order by archived_at desc`,
     )
     .all(workspaceId) as AgentSessionRow[];
@@ -353,7 +356,7 @@ export function listSubagentSessions(parentSessionId: string): AgentSessionInfo[
     .prepare(
       `select ${SESSION_COLUMNS}
        from agent_sessions
-       where parent_session_id = ?
+       where parent_session_id = ? and kind = 'chat'
        order by created_at asc, rowid asc`,
     )
     .all(parentSessionId) as AgentSessionRow[];

@@ -18,12 +18,15 @@ const {
   deleteAgentGroup,
   listGroupTasks,
   removeAgentGroupMember,
+  setAgentGroupLead,
+  setAgentGroupMode,
   updateAgentGroupMembers,
 } = await import("../../groups/group-store");
 const { getAgentSession, setAgentSessionArchived } = await import("../agent-store");
 const {
   registerGroupTools,
   runGroupTool,
+  setGroupTaskWakeSink,
   setGroupWorktreeReadySink,
   startMemberWorktree: startWorktree,
 } = await import("./group-tools");
@@ -472,5 +475,49 @@ describe("group_start_worktree must be called alone", () => {
     expect(refused.text).toMatch(/^\[group-error:call-alone\] /);
     expect(refused.text).toContain("call group_start_worktree alone in its own message");
     await untouched(input, taskId);
+  });
+});
+
+describe("group_assign_task reassignment keeps the task's branch (coordinator mode)", () => {
+  it("the old owner's branch survives the reassignment and the new owner's group_start_worktree", async () => {
+    const { group, alpha, beta, a } = await squad();
+    setAgentGroupLead(group.id, alpha);
+    setAgentGroupMode(group.id, "coordinator");
+    const bodies: string[] = [];
+    setGroupTaskWakeSink((wake) => bodies.push(wake.body));
+    try {
+      await startMemberWorktree(a);
+      const alphaBranch = getAgentSession(alpha)?.subagentWorktree?.branch ?? "";
+      expect(alphaBranch).not.toBe("");
+      const worked = taskIdFrom(runGroupTool("group_create_task", a, { title: "Worked" }));
+      const bare = taskIdFrom(runGroupTool("group_create_task", a, { title: "Bare" }));
+      runGroupTool("group_claim_task", a, { id: worked });
+      // A bare in_progress task: claimed by Beta before any worktree.
+      runGroupTool("group_claim_task", { sessionId: beta, groupId: group.id }, { id: bare });
+      const branchOf = (id: string) =>
+        listGroupTasks(group.id).find((task) => task.id === id)?.branch;
+      expect(branchOf(worked)).toBe(alphaBranch);
+
+      runGroupTool("group_assign_task", a, { taskId: worked, memberId: "Beta" });
+      // 1. Unchanged right after the reassignment; 3. the line names it.
+      expect(branchOf(worked)).toBe(alphaBranch);
+      expect(bodies.at(-1)).toBe(
+        `Reassigned: "Worked" (task ${worked}): @Alpha → @Beta (branch: \`${alphaBranch}\`)`,
+      );
+
+      // 2. The new owner's worktree fills only null branches.
+      await startMemberWorktree({ sessionId: beta, groupId: group.id });
+      const betaBranch = getAgentSession(beta)?.subagentWorktree?.branch ?? "";
+      expect(betaBranch).not.toBe("");
+      expect(betaBranch).not.toBe(alphaBranch);
+      expect(branchOf(worked)).toBe(alphaBranch);
+      expect(branchOf(bare)).toBe(betaBranch);
+
+      // Reassigning back keeps the recorded branch too.
+      runGroupTool("group_assign_task", a, { taskId: worked, memberId: "Alpha" });
+      expect(branchOf(worked)).toBe(alphaBranch);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
   });
 });

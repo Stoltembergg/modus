@@ -51,7 +51,7 @@ function emptySubagentForm(scope: ConfigScope = "workspace", projectCwd = ""): S
 function formFromSubagent(subagent: SubagentDetail): SubagentFormState {
   return {
     path: subagent.path,
-    scope: subagent.scope,
+    scope: subagent.scope === "builtin" ? "user" : subagent.scope,
     projectCwd: "",
     name: subagent.name,
     description: subagent.description,
@@ -90,6 +90,10 @@ export function SubagentsSettingsPanel({
   const selectedProject =
     projectTabs.find((project) => project.rootPath === selectedProjectCwd) ?? projectTabs[0];
   const effectiveProjectCwd = selectedProject?.rootPath ?? selectedProjectCwd;
+  const builtinSubagents = useMemo(
+    () => subagents.filter((subagent) => subagent.scope === "builtin"),
+    [subagents],
+  );
   const visibleSubagents = useMemo(
     () =>
       subagents.filter((subagent) =>
@@ -130,7 +134,7 @@ export function SubagentsSettingsPanel({
   }, [effectiveProjectCwd]);
 
   async function editSubagent(subagent: SubagentInfo): Promise<void> {
-    if (!effectiveProjectCwd) return;
+    if (!effectiveProjectCwd || !subagent.editable) return;
     setError(undefined);
     try {
       const detail = await window.modus.subagents.get({
@@ -200,6 +204,9 @@ export function SubagentsSettingsPanel({
   }
 
   function scopeBadge(subagent: SubagentInfo): string {
+    if (subagent.scope === "builtin") {
+      return "builtin";
+    }
     return subagent.scope === "user" ? `home · ${subagent.source}` : `project · ${subagent.source}`;
   }
 
@@ -242,7 +249,7 @@ export function SubagentsSettingsPanel({
             </button>
           </>
         }
-        description="Create specialized agents for focused work in parallel. Definitions are Markdown files in your agents folder."
+        description="Built-in specialists ship with Modus. Create Markdown agents for custom home or project work."
         title="Subagents"
       />
 
@@ -445,6 +452,41 @@ export function SubagentsSettingsPanel({
         ) : null}
       </CollapsibleMotion>
 
+      {effectiveProjectCwd && (loading || builtinSubagents.length > 0) ? (
+        <SettingsSection title="Modus defaults">
+          {loading && builtinSubagents.length === 0 ? (
+            <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
+              <ShinyText>Discovering subagents…</ShinyText>
+            </div>
+          ) : (
+            <SettingsList>
+              {builtinSubagents.map((subagent) => (
+                <div
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-hairline-soft border-b px-4 py-3 last:border-b-0"
+                  key={subagent.path}
+                >
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm text-fg">/{subagent.name}</span>
+                      <ReadOnlyPill>{subagent.model || "inherit"}</ReadOnlyPill>
+                      {subagent.readOnly ? <ReadOnlyPill>readonly</ReadOnlyPill> : null}
+                      <span className="rounded-full bg-chip-faint px-1.5 py-px text-2xs text-fg-faint">
+                        {scopeBadge(subagent)}
+                      </span>
+                    </div>
+                    {subagent.description ? (
+                      <div className="mt-1 truncate text-xs text-fg-muted">
+                        {subagent.description}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </SettingsList>
+          )}
+        </SettingsSection>
+      ) : null}
+
       <SettingsSection
         title={
           activeScope === "workspace"
@@ -458,13 +500,13 @@ export function SubagentsSettingsPanel({
               Open a workspace to discover and create subagents.
             </p>
           </div>
-        ) : loading && visibleSubagents.length === 0 ? (
+        ) : loading && visibleSubagents.length === 0 && builtinSubagents.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
             <ShinyText>Discovering subagents…</ShinyText>
           </div>
         ) : visibleSubagents.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-10 text-center">
-            <div className="text-sm text-fg-muted">No Subagents Yet</div>
+            <div className="text-sm text-fg-muted">No custom subagents yet</div>
             <div className="mt-1 text-xs text-fg-faint">
               {activeScope === "workspace"
                 ? "Create project agents for this workspace."
@@ -508,16 +550,18 @@ export function SubagentsSettingsPanel({
                   ) : null}
                 </button>
                 <div className="flex items-center gap-1">
-                  <Tooltip content="Edit subagent" side="bottom" sideOffset={6}>
-                    <button
-                      aria-label={`Edit ${subagent.name}`}
-                      className="flex size-7 items-center justify-center rounded-md text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg group-hover/subagent:opacity-100"
-                      onClick={() => void editSubagent(subagent)}
-                      type="button"
-                    >
-                      <IconEdit size={14} stroke={1.8} />
-                    </button>
-                  </Tooltip>
+                  {subagent.editable ? (
+                    <Tooltip content="Edit subagent" side="bottom" sideOffset={6}>
+                      <button
+                        aria-label={`Edit ${subagent.name}`}
+                        className="flex size-7 items-center justify-center rounded-md text-fg-faint opacity-0 transition-all hover:bg-hover hover:text-fg group-hover/subagent:opacity-100"
+                        onClick={() => void editSubagent(subagent)}
+                        type="button"
+                      >
+                        <IconEdit size={14} stroke={1.8} />
+                      </button>
+                    </Tooltip>
+                  ) : null}
                   {subagent.deletable ? (
                     <Tooltip content="Delete subagent" side="bottom" sideOffset={6}>
                       <button

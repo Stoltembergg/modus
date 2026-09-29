@@ -14,6 +14,7 @@ import type {
   GroupTaskStatus,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import type { GroupErrorCode } from "../../shared/group-errors";
 import { getDatabase } from "../db/database";
 
@@ -72,6 +73,7 @@ type MemberRow = {
   group_id: string;
   session_id: string;
   role: string | null;
+  agent_id: string | null;
   joined_at: string;
 };
 
@@ -107,20 +109,18 @@ type DecisionRow = {
   id: string;
   group_id: string;
   text: string;
+  author_session_id: string | null;
   source_message_id: string | null;
-  created_by_session_id: string | null;
-  superseded_by_id: string | null;
   created_at: string;
 };
 
 const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at, updated_at";
-const MEMBER_COLUMNS = "group_id, session_id, role, joined_at";
+const MEMBER_COLUMNS = "group_id, session_id, role, agent_id, joined_at";
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, created_at`;
 const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
   created_by_session_id, reviewer_session_id, branch, created_at, updated_at`;
-const DECISION_COLUMNS =
-  "id, group_id, text, source_message_id, created_by_session_id, superseded_by_id, created_at";
+const DECISION_COLUMNS = "id, group_id, text, author_session_id, source_message_id, created_at";
 
 function toGroup(row: GroupRow): AgentGroupInfo {
   return {
@@ -139,6 +139,7 @@ function toMember(row: MemberRow): AgentGroupMember {
     groupId: row.group_id,
     sessionId: row.session_id,
     ...(row.role !== null ? { role: row.role } : {}),
+    ...(row.agent_id !== null ? { agentId: row.agent_id } : {}),
     joinedAt: row.joined_at,
   };
 }
@@ -193,11 +194,8 @@ function toDecision(row: DecisionRow): GroupDecision {
     id: row.id,
     groupId: row.group_id,
     text: row.text,
+    ...(row.author_session_id !== null ? { authorSessionId: row.author_session_id } : {}),
     ...(row.source_message_id !== null ? { sourceMessageId: row.source_message_id } : {}),
-    ...(row.created_by_session_id !== null
-      ? { createdBySessionId: row.created_by_session_id }
-      : {}),
-    ...(row.superseded_by_id !== null ? { supersededById: row.superseded_by_id } : {}),
     createdAt: row.created_at,
   };
 }
@@ -1169,6 +1167,65 @@ export function claimGroupTask(
 }
 
 /**
+ * Coordinator mode (PR 7): the Lead hands a task to a member (itself included).
+ * `open` → `in_progress` with the assignee; `in_progress` with another owner is
+ * a reassignment (returns the previous owner; the branch is kept on purpose, as
+ * the record of where the earlier work is); in_review / done / cancelled
+ * (and the current owner again) are invalid-transition. Only while the mode is
+ * in effect (coordinator-off) and only by the Lead (not-coordinator).
+ */
+export function assignGroupTask(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+  assigneeSessionId: string,
+  options: { branch?: string } = {},
+): { task: GroupTask; previousOwnerSessionId?: string } {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const group = toGroup(requireGroupRow(groupId));
+    if (!isCoordinatorModeActive(group)) {
+      throw new GroupStoreError(
+        "coordinator-off",
+        `Coordinator mode is not in effect in group ${groupId} (it needs the mode on and a Lead).`,
+      );
+    }
+    if (group.leadSessionId !== actorSessionId) {
+      throw new GroupStoreError("not-coordinator", "Only the group's Lead assigns tasks.");
+    }
+    requireMember(groupId, assigneeSessionId, "assignee");
+    const task = requireTaskInGroup(taskId, groupId);
+    const status = effectiveTaskStatus(task);
+    const reviewer = task.reviewerSessionId === assigneeSessionId ? { reviewer: null } : {};
+    if (status === INITIAL_TASK_STATUS) {
+      return {
+        task: writeTaskTransition(taskId, {
+          status: IN_PROGRESS_TASK_STATUS,
+          owner: assigneeSessionId,
+          ...reviewer,
+          ...(options.branch ? { branch: options.branch } : {}),
+        }),
+      };
+    }
+    if (
+      status !== IN_PROGRESS_TASK_STATUS ||
+      !task.ownerSessionId ||
+      task.ownerSessionId === assigneeSessionId
+    ) {
+      throw invalidTransition(task, "assign");
+    }
+    return {
+      task: writeTaskTransition(taskId, {
+        status: IN_PROGRESS_TASK_STATUS,
+        owner: assigneeSessionId,
+        ...reviewer,
+      }),
+      previousOwnerSessionId: task.ownerSessionId,
+    };
+  });
+}
+
+/**
  * Sets `branch` on the member's `in_progress` tasks that have none (never
  * overwrites). Returns the updated tasks.
  */
@@ -1269,44 +1326,12 @@ export function reviewGroupTask(
   });
 }
 
-/* ── Decisions ─────────────────────────────────────────────────────────── */
+/* ── Decisions (PR 6: shared context) ─────────────────────────────────── */
 
-function insertDecision(input: {
-  groupId: string;
-  text: string;
-  sourceMessageId?: string;
-  createdBySessionId?: string;
-}): string {
-  const db = getDatabase();
-  const text = requireText(input.text, "decision text");
-  if (input.sourceMessageId) {
-    const source = db
-      .prepare("select group_id from group_messages where id = ?")
-      .get(input.sourceMessageId) as { group_id: string } | undefined;
-    if (!source || source.group_id !== input.groupId) {
-      throw new GroupStoreError(
-        "message-not-found",
-        `Source message ${input.sourceMessageId} is not a message in group ${input.groupId}.`,
-      );
-    }
-  }
-  if (input.createdBySessionId) {
-    requireMember(input.groupId, input.createdBySessionId, "decision author");
-  }
-  const id = randomUUID();
-  db.prepare(
-    `insert into group_decisions (${DECISION_COLUMNS})
-     values (?, ?, ?, ?, ?, null, ?)`,
-  ).run(
-    id,
-    input.groupId,
-    text,
-    input.sourceMessageId ?? null,
-    input.createdBySessionId ?? null,
-    new Date().toISOString(),
-  );
-  return id;
-}
+/** Most decisions a group keeps; the next record fails with limit-reached. */
+export const GROUP_DECISION_LIMIT = 100;
+/** Longest decision text (after trim). */
+export const GROUP_DECISION_MAX_CHARS = 500;
 
 function requireDecision(decisionId: string): GroupDecision {
   const row = getDatabase()
@@ -1318,47 +1343,82 @@ function requireDecision(decisionId: string): GroupDecision {
   return toDecision(row);
 }
 
-export function addGroupDecision(input: {
+/**
+ * Records a decision (a member's group_record_decision; no authorSessionId = the
+ * user). Text is trimmed and must be 1-500 characters (invalid-text); a group
+ * holds at most 100 (limit-reached).
+ */
+export function recordGroupDecision(input: {
   groupId: string;
   text: string;
+  authorSessionId?: string;
   sourceMessageId?: string;
-  createdBySessionId?: string;
 }): GroupDecision {
-  requireGroupRow(input.groupId);
-  return requireDecision(insertDecision(input));
-}
-
-/**
- * Records a replacement decision and marks the old one as superseded by it,
- * atomically. Returns the new (active) decision.
- */
-export function supersedeGroupDecision(
-  decisionId: string,
-  replacement: { text: string; sourceMessageId?: string; createdBySessionId?: string },
-): GroupDecision {
   const db = getDatabase();
-  const previous = requireDecision(decisionId);
-  if (previous.supersededById) {
+  const text = typeof input.text === "string" ? input.text.trim() : "";
+  if (text.length === 0 || text.length > GROUP_DECISION_MAX_CHARS) {
     throw new GroupStoreError(
-      "invalid-value",
-      `Decision ${decisionId} is already superseded by ${previous.supersededById}.`,
+      "invalid-text",
+      `Decision text must be 1-${GROUP_DECISION_MAX_CHARS} characters after trimming (got ${text.length}).`,
     );
   }
-  const newId = inTransaction(db, () => {
-    const id = insertDecision({ groupId: previous.groupId, ...replacement });
-    db.prepare("update group_decisions set superseded_by_id = ? where id = ?").run(id, decisionId);
-    return id;
+  const id = inTransaction(db, () => {
+    requireGroupRow(input.groupId);
+    if (input.authorSessionId) {
+      requireMember(input.groupId, input.authorSessionId, "decision author");
+    }
+    if (input.sourceMessageId) {
+      const source = db
+        .prepare("select group_id from group_messages where id = ?")
+        .get(input.sourceMessageId) as { group_id: string } | undefined;
+      if (!source || source.group_id !== input.groupId) {
+        throw new GroupStoreError(
+          "message-not-found",
+          `Source message ${input.sourceMessageId} is not a message in group ${input.groupId}.`,
+        );
+      }
+    }
+    const count = db
+      .prepare("select count(*) as n from group_decisions where group_id = ?")
+      .get(input.groupId) as { n: number };
+    if (Number(count.n) >= GROUP_DECISION_LIMIT) {
+      throw new GroupStoreError(
+        "limit-reached",
+        `Group ${input.groupId} already has ${GROUP_DECISION_LIMIT} decisions; the user must delete one first.`,
+      );
+    }
+    const decisionId = randomUUID();
+    db.prepare(
+      `insert into group_decisions (${DECISION_COLUMNS})
+       values (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      decisionId,
+      input.groupId,
+      text,
+      input.authorSessionId ?? null,
+      input.sourceMessageId ?? null,
+      new Date().toISOString(),
+    );
+    return decisionId;
   });
-  return requireDecision(newId);
+  return requireDecision(id);
 }
 
-export function listActiveGroupDecisions(groupId: string): GroupDecision[] {
+/** A group's decisions, newest first. */
+export function listGroupDecisions(groupId: string): GroupDecision[] {
   const rows = getDatabase()
     .prepare(
       `select ${DECISION_COLUMNS} from group_decisions
-       where group_id = ? and superseded_by_id is null
-       order by created_at, rowid`,
+       where group_id = ?
+       order by created_at desc, rowid desc`,
     )
     .all(groupId) as DecisionRow[];
   return rows.map(toDecision);
+}
+
+/** The user's "Delete" (physical); returns the removed decision. */
+export function deleteGroupDecision(decisionId: string): GroupDecision {
+  const decision = requireDecision(decisionId);
+  getDatabase().prepare("delete from group_decisions where id = ?").run(decisionId);
+  return decision;
 }

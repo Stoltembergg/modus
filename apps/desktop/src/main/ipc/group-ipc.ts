@@ -1,6 +1,8 @@
 import type {
+  AgentGroupMode,
   AgentGroupWithMembers,
   CreateAgentGroupInput,
+  GroupDecision,
   GroupTask,
   UpdateAgentGroupMembersInput,
 } from "../../shared/contracts";
@@ -9,12 +11,15 @@ import { IPC_CHANNELS } from "./channels";
 import {
   groupCancelTaskSchema,
   groupCreateSchema,
+  groupDeleteDecisionSchema,
   groupIdInputSchema,
+  groupListDecisionsSchema,
   groupListTasksSchema,
   groupMemberSchema,
   groupRemoveMemberSchema,
   groupRenameSchema,
   groupSetLeadSchema,
+  groupSetModeSchema,
   groupUpdateMembersSchema,
   parseIpcInput,
 } from "./schemas";
@@ -29,6 +34,8 @@ export type GroupIpcService = {
   addAgentGroupMember(input: { groupId: string; sessionId: string; role?: string }): unknown;
   removeAgentGroupMember(groupId: string, sessionId: string): void;
   setAgentGroupLead(groupId: string, sessionId: string | null): unknown;
+  /** The room menu's "Coordinator mode" toggle (PR 7). */
+  setAgentGroupMode(groupId: string, mode: AgentGroupMode): unknown;
   updateAgentGroupMembers(
     groupId: string,
     input: Omit<UpdateAgentGroupMembersInput, "groupId">,
@@ -36,6 +43,10 @@ export type GroupIpcService = {
   listGroupTasks(groupId: string): GroupTask[];
   /** The room's "Cancel task" (the only path to `cancelled`). */
   cancelGroupTask(taskId: string): GroupTask;
+  /** The side panel's "Decisions" (newest first). */
+  listGroupDecisions(groupId: string): GroupDecision[];
+  /** The side panel's "Delete" (physical; posts nothing). Only the user deletes decisions. */
+  deleteGroupDecision(decisionId: string): GroupDecision;
 };
 
 /**
@@ -163,10 +174,35 @@ export function registerGroupIpcHandlers(
     return service.cancelGroupTask(parsed.taskId);
   });
 
+  // The side panel's decisions (PR 6). User only: members have no delete tool, and the
+  // strict schema refuses a payload that names a (member) session.
+  ipc.handle(IPC_CHANNELS.groupListDecisions, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupListDecisionsSchema, input, IPC_CHANNELS.groupListDecisions);
+    return service.listGroupDecisions(parsed.groupId);
+  });
+
+  ipc.handle(IPC_CHANNELS.groupDeleteDecision, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      groupDeleteDecisionSchema,
+      input,
+      IPC_CHANNELS.groupDeleteDecision,
+    );
+    return service.deleteGroupDecision(parsed.decisionId);
+  });
+
   ipc.handle(IPC_CHANNELS.groupSetLead, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupSetLeadSchema, input, IPC_CHANNELS.groupSetLead);
     service.setAgentGroupLead(parsed.groupId, parsed.sessionId);
+    return list();
+  });
+
+  ipc.handle(IPC_CHANNELS.groupSetMode, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupSetModeSchema, input, IPC_CHANNELS.groupSetMode);
+    service.setAgentGroupMode(parsed.groupId, parsed.mode);
     return list();
   });
 }

@@ -17,7 +17,11 @@ import type {
   UpdateSubagentInput,
 } from "../../shared/contracts";
 import { normalizeSkillName, parseFrontmatter } from "../skills/skills-config";
-import { BUILTIN_SUBAGENTS, type BuiltinSubagentRole } from "./builtin-subagents";
+import {
+  BUILTIN_SUBAGENTS,
+  type BuiltinSubagentProfile,
+  type BuiltinSubagentRole,
+} from "./builtin-subagents";
 import { listModels } from "./model-service";
 
 const USER_AGENT_FAMILIES = [".codex", ".claude", ".cursor", ".modus"] as const;
@@ -242,7 +246,29 @@ export function deleteSubagent(cwd: string, path: string): SubagentInfo[] {
 }
 
 export function listSubagents(cwd: string, home: string = homedir()): SubagentInfo[] {
-  return loadSubagentsForSettings(cwd, home).map(toSubagentInfo);
+  const markdown = loadSubagentsForSettings(cwd, home).map(toSubagentInfo);
+  const overriddenNames = new Set(markdown.map((agent) => agent.name));
+  const builtins = BUILTIN_SUBAGENTS.filter((profile) => !overriddenNames.has(profile.name)).map(
+    toBuiltinSubagentInfo,
+  );
+  return [...builtins, ...markdown];
+}
+
+function toBuiltinSubagentInfo(profile: BuiltinSubagentProfile): SubagentInfo {
+  return {
+    name: profile.name,
+    description: profile.description,
+    scope: "builtin",
+    source: "builtin",
+    path: `builtin:${profile.name}`,
+    model: profile.model,
+    readOnly: profile.readOnly,
+    tools: profile.tools,
+    disallowedTools: profile.disallowedTools,
+    isolation: profile.isolation,
+    editable: false,
+    deletable: false,
+  };
 }
 
 function composerModelsForPrompt(): Array<{ id: string; name: string }> {

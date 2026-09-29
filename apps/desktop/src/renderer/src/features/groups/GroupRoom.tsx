@@ -2,11 +2,13 @@ import { Menu } from "@base-ui/react/menu";
 import { IconCrown, IconDots, IconLayoutSidebarRight, IconPlayerStop } from "@tabler/icons-react";
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
+  AgentGroupMode,
   AgentGroupWithMembers,
   AgentSessionInfo,
   GroupMessage,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
+import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
@@ -14,6 +16,7 @@ import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import { CreateGroupDialog, type GroupMembersChange } from "./CreateGroupDialog";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
+import { GroupDecisionsSection } from "./GroupDecisions";
 import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
 import { MemberName } from "./MemberName";
@@ -57,6 +60,8 @@ export type GroupRoomProps = {
   memberStates: GroupMemberStatesById;
   onOpenMember(session: AgentSessionInfo): void;
   onRename(name: string): void;
+  /** The menu's "Coordinator mode" toggle (PR 7). */
+  onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onUpdateMembers(change: GroupMembersChange): Promise<void>;
   onDelete(): void;
   onOpenFile?: ((path: string) => void) | undefined;
@@ -71,6 +76,7 @@ export function GroupRoom({
   memberStates,
   onOpenMember,
   onRename,
+  onSetMode,
   onUpdateMembers,
   onDelete,
   onOpenFile,
@@ -112,6 +118,7 @@ export function GroupRoom({
             if (session) onOpenMember(session);
           }}
           onRename={onRename}
+          onSetMode={onSetMode}
           onStop={() => {
             window.modus.group
               .stop(group.id)
@@ -153,7 +160,14 @@ export function GroupRoom({
           updatePending={updatePending}
         />
       </div>
-      {tasksOpen ? <GroupTaskPanel labels={labels} onCancelled={replace} tasks={tasks} /> : null}
+      {tasksOpen ? (
+        <GroupTaskPanel
+          labels={labels}
+          onCancelled={replace}
+          tasks={tasks}
+          top={<GroupDecisionsSection groupId={group.id} labels={labels} />}
+        />
+      ) : null}
       {managing ? (
         <CreateGroupDialog
           group={group}
@@ -182,6 +196,7 @@ function RoomHeader({
   onOpenMember,
   onStop,
   onRename,
+  onSetMode,
   onManageMembers,
   onDelete,
 }: {
@@ -194,10 +209,13 @@ function RoomHeader({
   onOpenMember(sessionId: string): void;
   onStop(): void;
   onRename(name: string): void;
+  onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onManageMembers(): void;
   onDelete(): void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  // Without a Lead the stored mode is ignored: no badge, toggle off and disabled.
+  const coordinating = isCoordinatorModeActive(group);
   const labels = useMemo(() => memberLabels(members), [members]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -223,6 +241,15 @@ function RoomHeader({
         >
           {projectName ?? "No project"}
         </span>
+        {coordinating ? (
+          <span
+            className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
+            data-testid="group-coordinator-badge"
+            title="The Lead coordinates: messages with no mention go to the Lead"
+          >
+            Coordinator
+          </span>
+        ) : null}
         <span className="flex-1" />
         {running ? (
           <button
@@ -254,6 +281,15 @@ function RoomHeader({
               <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
                 <GroupMenuItems
                   confirmDelete={confirmDelete}
+                  coordinator={
+                    onSetMode
+                      ? {
+                          checked: coordinating,
+                          disabled: !group.leadSessionId,
+                          onToggle: () => onSetMode(coordinating ? "free" : "coordinator"),
+                        }
+                      : undefined
+                  }
                   onConfirmDelete={setConfirmDelete}
                   onDelete={onDelete}
                   onManageMembers={onManageMembers}

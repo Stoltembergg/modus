@@ -1,6 +1,7 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import {
+  IconCheck,
   IconCrown,
   IconCrownOff,
   IconDots,
@@ -397,12 +398,15 @@ export function GroupMenuItems({
   onStartRename,
   onManageMembers,
   onDelete,
+  coordinator,
 }: {
   confirmDelete: boolean;
   onConfirmDelete(next: boolean): void;
   onStartRename(): void;
   onManageMembers(): void;
   onDelete(): void;
+  /** The room's "Coordinator mode" toggle (PR 7); disabled while the group has no Lead. */
+  coordinator?: { checked: boolean; disabled: boolean; onToggle(): void } | undefined;
 }) {
   return (
     <>
@@ -418,6 +422,23 @@ export function GroupMenuItems({
       >
         Manage members
       </GroupMenuItem>
+      {coordinator ? (
+        <Menu.CheckboxItem
+          checked={coordinator.checked}
+          className="flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-fg text-sm outline-none select-none data-disabled:text-fg-faint data-highlighted:bg-hover"
+          disabled={coordinator.disabled}
+          onCheckedChange={() => coordinator.onToggle()}
+          title={coordinator.disabled ? "Set a Lead first: the Lead coordinates" : undefined}
+        >
+          <span className="flex size-4 shrink-0 items-center justify-center">
+            {coordinator.checked ? <IconCheck size={SB_ACTION} stroke={SB_ACTION_STROKE} /> : null}
+          </span>
+          Coordinator mode
+          {coordinator.disabled ? (
+            <span className="ml-auto text-2xs text-fg-faint">Needs a Lead</span>
+          ) : null}
+        </Menu.CheckboxItem>
+      ) : null}
       <div className="my-1 h-px bg-hairline" />
       <GroupMenuItem
         closeOnClick={confirmDelete}

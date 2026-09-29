@@ -1,6 +1,6 @@
 /** Gap 4 contracts split part 7/7 — do not edit by hand */
 import type { AgentMode } from "./contracts-part-04";
-import type { ConfigScope, SkillScope } from "./contracts-part-06";
+import type { ConfigScope, SkillScope, SubagentScope } from "./contracts-part-06";
 
 export type SkillSelection = {
   name: string;
@@ -44,8 +44,12 @@ export type CreateSkillInput = {
 export type SubagentInfo = {
   name: string;
   description: string;
-  scope: ConfigScope;
+  scope: SubagentScope;
   source: string;
+  /**
+   * Absolute Markdown path for user/workspace agents, or a synthetic
+   * `builtin:<name>` id for Modus defaults (not a real file).
+   */
   path: string;
   model: string;
   readOnly: boolean;

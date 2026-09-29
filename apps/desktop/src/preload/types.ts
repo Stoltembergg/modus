@@ -1,7 +1,9 @@
 import type {
   AddDocInput,
   AgentEvent,
+  AgentGroupMode,
   AgentGroupWithMembers,
+  AgentInfo,
   AgentMode,
   AgentReviewDepth,
   AgentReviewResult,
@@ -20,6 +22,7 @@ import type {
   ContextKind,
   ContextSuggestion,
   CreateAgentGroupInput,
+  CreateAgentInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -38,6 +41,7 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  GroupDecision,
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
@@ -85,6 +89,7 @@ import type {
   TestCustomProviderResult,
   ThinkingLevel,
   UpdateAgentGroupMembersInput,
+  UpdateAgentInput,
   UpdateModelConfigInput,
   UpdateRestoreUiState,
   UpdateState,
@@ -172,6 +177,8 @@ export type ModusApi = {
     removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
     /** Set or clear (null) the lead; the lead must be a member. */
     setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
+    /** Coordinator mode on/off (kept but ignored while the group has no Lead). */
+    setMode(input: { groupId: string; mode: AgentGroupMode }): Promise<AgentGroupWithMembers[]>;
     /**
      * Replace the members and lead in one all-or-nothing step (rejects, writing
      * nothing, if any added member is refused); returns the refreshed list.
@@ -199,7 +206,24 @@ export type ModusApi = {
     listTasks(groupId: string): Promise<GroupTask[]>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
+    /** The group's decisions (newest first) for the side panel's "Decisions". */
+    listDecisions(groupId: string): Promise<GroupDecision[]>;
+    /** "Delete" a decision (physical; posts nothing in the room). */
+    deleteDecision(decisionId: string): Promise<GroupDecision>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
+  };
+  /** Agents (agents model): unique names; groups meet them as members. */
+  agents: {
+    /** Every agent, archived included, by name. */
+    list(): Promise<AgentInfo[]>;
+    /** Create an agent; rejects `agent-name-taken` for a taken name (case-insensitive). */
+    create(input: CreateAgentInput): Promise<AgentInfo>;
+    /** Change the given fields (null clears model / default Project); returns the refreshed list. */
+    update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
+    /** Archive / restore (group membership is kept); returns the refreshed list. */
+    setArchived(input: { id: string; archived: boolean }): Promise<AgentInfo[]>;
+    /** Delete the agent (it leaves its groups; the chats are kept); returns the refreshed list. */
+    remove(id: string): Promise<AgentInfo[]>;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

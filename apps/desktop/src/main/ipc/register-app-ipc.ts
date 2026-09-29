@@ -67,6 +67,13 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
+import {
+  createAgent,
+  deleteAgent,
+  listAgents,
+  setAgentArchived,
+  updateAgent,
+} from "../agents/agents-store";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -119,12 +126,15 @@ import {
   cancelGroupTask,
   createAgentGroupWithMembers,
   deleteAgentGroup,
+  deleteGroupDecision,
   listAgentGroupsWithMembers,
+  listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
+  setAgentGroupMode,
   updateAgentGroupMembers,
 } from "../groups/group-store";
 import {
@@ -191,6 +201,7 @@ import {
 } from "../workspace/workspace-service";
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
+import { registerAgentsIpcHandlers } from "./agents-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerGroupIpcHandlers } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
@@ -1356,6 +1367,13 @@ export function registerAppIpc({
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
 
+  registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
+    listAgents,
+    createAgent,
+    updateAgent,
+    setAgentArchived,
+    deleteAgent,
+  });
   registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
     listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
     createAgentGroupWithMembers,
@@ -1364,9 +1382,12 @@ export function registerAppIpc({
     addAgentGroupMember,
     removeAgentGroupMember,
     setAgentGroupLead,
+    setAgentGroupMode,
     updateAgentGroupMembers,
     listGroupTasks: (groupId) => listGroupTasks(groupId),
     cancelGroupTask,
+    listGroupDecisions: (groupId) => listGroupDecisions(groupId),
+    deleteGroupDecision,
   });
   // Member task tools (review / changes) wake members through the GroupRuntime.
   setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ContextItem } from "../../shared/contracts";
+import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES, type ContextItem } from "../../shared/contracts";
 import { STARTUP_RENDERER_MILESTONES } from "../../shared/startup";
 import {
   MAX_RESTORE_DRAFT_CHARS,
@@ -894,6 +894,48 @@ export function parseIpcInput<T>(schema: z.ZodType<T>, value: unknown, channel: 
   return result.data;
 }
 
+/* ── Agents (agents:*) ─────────────────────────────────────────────────── */
+
+const agentIdString = nonEmptyString.max(128);
+const agentFields = {
+  name: z.string().trim().min(1).max(80),
+  role: z.string().max(80),
+  instructions: z.string().max(20_000),
+  modelId: z.string().max(256).nullable(),
+  defaultWorkspaceId: z.string().min(1).max(128).nullable(),
+  avatarFace: z.enum(AGENT_AVATAR_FACES),
+  avatarColor: z.enum(AGENT_AVATAR_COLORS),
+};
+
+export const agentsCreateSchema = z
+  .object({
+    name: agentFields.name,
+    role: agentFields.role.optional(),
+    instructions: agentFields.instructions.optional(),
+    modelId: agentFields.modelId.optional(),
+    defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
+    avatarFace: agentFields.avatarFace.optional(),
+    avatarColor: agentFields.avatarColor.optional(),
+  })
+  .strict();
+
+export const agentsUpdateSchema = z
+  .object({
+    id: agentIdString,
+    name: agentFields.name.optional(),
+    role: agentFields.role.optional(),
+    instructions: agentFields.instructions.optional(),
+    modelId: agentFields.modelId.optional(),
+    defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
+    avatarFace: agentFields.avatarFace.optional(),
+    avatarColor: agentFields.avatarColor.optional(),
+  })
+  .strict();
+
+export const agentsArchiveSchema = z.object({ id: agentIdString, archived: z.boolean() }).strict();
+
+export const agentsIdSchema = z.object({ id: agentIdString }).strict();
+
 /* ── Agent Groups (group:*) ─────────────────────────────────────────────── */
 
 const groupIdString = nonEmptyString.max(128);
@@ -928,6 +970,11 @@ export const groupListTasksSchema = z.object({ groupId: groupIdString }).strict(
 
 export const groupCancelTaskSchema = z.object({ taskId: nonEmptyString.max(128) }).strict();
 
+export const groupListDecisionsSchema = z.object({ groupId: groupIdString }).strict();
+
+/** Strict: the user deletes; a payload naming a session (a member acting) is refused. */
+export const groupDeleteDecisionSchema = z.object({ decisionId: nonEmptyString.max(128) }).strict();
+
 export const groupMemberSchema = z
   .object({
     groupId: groupIdString,
@@ -959,6 +1006,10 @@ export const groupUpdateMembersSchema = z
 
 export const groupSetLeadSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
+  .strict();
+
+export const groupSetModeSchema = z
+  .object({ groupId: groupIdString, mode: z.enum(["free", "coordinator"]) })
   .strict();
 
 /** A room message body; long enough for pasted logs, bounded for the prompt budget. */

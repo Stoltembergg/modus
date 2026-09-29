@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 
 let userData: string;
 
@@ -20,33 +21,37 @@ const { ensureChatsWorkspace, removeWorkspace } = await import("../workspace/wor
 const {
   GroupStoreError,
   addAgentGroupMember,
-  addGroupDecision,
   appendGroupMessage,
+  assignGroupTask,
   cancelGroupTask,
   claimGroupTask,
   createMemberGroupTask,
   getGroupMessage,
   releaseGroupTask,
   requestGroupTaskReview,
+  recordGroupDecision,
   reviewGroupTask,
   createAgentGroup,
   createAgentGroupWithMembers,
   createGroupTask,
+  deleteGroupDecision,
+  fillMemberTaskBranches,
+  GROUP_DECISION_LIMIT,
+  GROUP_DECISION_MAX_CHARS,
   deleteAgentGroup,
   getAgentGroup,
   getAgentGroupForSession,
-  listActiveGroupDecisions,
   listAgentGroupMembers,
   listAgentGroupMemberSessionIds,
   listAgentGroups,
   listAgentGroupsWithMembers,
+  listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
   setAgentGroupMode,
-  supersedeGroupDecision,
   updateAgentGroupMembers,
   updateGroupTask,
 } = await import("./group-store");
@@ -1036,26 +1041,276 @@ describe("member task transitions", () => {
   });
 });
 
-describe("decisions", () => {
-  it("adds, supersedes and lists only active decisions", () => {
-    const { a, group } = projectGroupFixture();
-    const source = appendGroupMessage({
+describe("coordinator mode (PR 7)", () => {
+  /** Squad (lead a) with a third member c and a stranger from the same Project. */
+  function coordinated() {
+    const fixture = projectGroupFixture();
+    const c = insertSession(fixture.workspaceId);
+    addAgentGroupMember({ groupId: fixture.group.id, sessionId: c });
+    setAgentGroupLead(fixture.group.id, fixture.a);
+    setAgentGroupMode(fixture.group.id, "coordinator");
+    const stranger = insertSession(fixture.workspaceId);
+    return { ...fixture, c, stranger };
+  }
+
+  it("persists the flag; without a Lead it is kept but inactive, and a new Lead coordinates", () => {
+    const { a, b, group } = coordinated();
+    expect(getAgentGroup(group.id)?.mode).toBe("coordinator");
+    expect(listAgentGroupsWithMembers().find((item) => item.id === group.id)?.mode).toBe(
+      "coordinator",
+    );
+    expect(isCoordinatorModeActive(getAgentGroup(group.id) ?? group)).toBe(true);
+    setAgentGroupLead(group.id, null);
+    const leaderless = getAgentGroup(group.id);
+    expect(leaderless?.mode).toBe("coordinator");
+    expect(isCoordinatorModeActive(leaderless ?? group)).toBe(false);
+    setAgentGroupLead(group.id, b);
+    expect(isCoordinatorModeActive(getAgentGroup(group.id) ?? group)).toBe(true);
+    expect(isCoordinatorModeActive({ mode: "free", leadSessionId: a })).toBe(false);
+    setAgentGroupMode(group.id, "free");
+    expect(getAgentGroup(group.id)?.mode).toBe("free");
+  });
+
+  it("assign: an open task goes in_progress with the assignee (branch filled, reviewer cleared)", () => {
+    const { a, b, c, group } = coordinated();
+    const task = createMemberGroupTask({
       groupId: group.id,
-      authorKind: "user",
-      body: "Use SQLite",
+      actorSessionId: c,
+      title: "Parser",
+      reviewerSessionId: b,
     });
-    const first = addGroupDecision({
+    const result = assignGroupTask(group.id, task.id, a, b, { branch: "modus/group/b" });
+    expect(result.previousOwnerSessionId).toBeUndefined();
+    expect(result.task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: b,
+      branch: "modus/group/b",
+    });
+    // The assignee was the suggested reviewer: cleared, like a claim.
+    expect(result.task.reviewerSessionId).toBeUndefined();
+    // The Lead may assign to itself.
+    const own = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "Own" });
+    expect(assignGroupTask(group.id, own.id, a, a).task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: a,
+    });
+  });
+
+  it("assign: an in_progress task with another owner is reassigned; its branch never changes", () => {
+    const { a, b, c, group } = coordinated();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    claimGroupTask(group.id, task.id, b, { branch: "modus/group/b" });
+    // The old owner's branch stays: the record of where the earlier work is.
+    const moved = assignGroupTask(group.id, task.id, a, c, { branch: "modus/group/c" });
+    expect(moved.previousOwnerSessionId).toBe(b);
+    expect(moved.task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: c,
+      branch: "modus/group/b",
+    });
+    // The new owner's worktree only fills null branches: this one is kept.
+    expect(fillMemberTaskBranches(group.id, c, "modus/group/c")).toEqual([]);
+    expect(listGroupTasks(group.id).find((item) => item.id === task.id)?.branch).toBe(
+      "modus/group/b",
+    );
+    // No branch stays no branch on reassignment.
+    const bare = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "Bare" });
+    claimGroupTask(group.id, bare.id, b);
+    expect(assignGroupTask(group.id, bare.id, a, c, { branch: "modus/group/c" }).task.branch).toBe(
+      undefined,
+    );
+    const back = assignGroupTask(group.id, task.id, a, b);
+    expect(back.task).toMatchObject({ ownerSessionId: b, branch: "modus/group/b" });
+    // Already the owner: nothing to reassign.
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "invalid-transition");
+  });
+
+  it("assign: in_review, done and cancelled are invalid-transition", () => {
+    const { a, b, c, group } = coordinated();
+    const review = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "R" });
+    claimGroupTask(group.id, review.id, b);
+    requestGroupTaskReview(group.id, review.id, b, c);
+    const done = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "D" });
+    claimGroupTask(group.id, done.id, b);
+    requestGroupTaskReview(group.id, done.id, b, c);
+    reviewGroupTask(group.id, done.id, c, "approve");
+    const cancelled = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "C" });
+    cancelGroupTask(cancelled.id);
+    for (const task of [review, done, cancelled]) {
+      expectStoreError(() => assignGroupTask(group.id, task.id, a, c), "invalid-transition");
+    }
+  });
+
+  it("assign: coordinator-off, not-coordinator, not-a-member and task-not-found", () => {
+    const { a, b, group, stranger } = coordinated();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    expectStoreError(() => assignGroupTask(group.id, task.id, b, a), "not-coordinator");
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, stranger), "not-a-member");
+    expectStoreError(() => assignGroupTask(group.id, "missing", a, b), "task-not-found");
+    const other = createAgentGroup({ name: "Other" });
+    const foreign = createGroupTask({ groupId: other.id, title: "Foreign" });
+    expectStoreError(() => assignGroupTask(group.id, foreign.id, a, b), "task-not-found");
+    setAgentGroupLead(group.id, null);
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "coordinator-off");
+    setAgentGroupLead(group.id, a);
+    setAgentGroupMode(group.id, "free");
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "coordinator-off");
+    expect(listGroupTasks(group.id).find((item) => item.id === task.id)?.status).toBe("open");
+  });
+});
+
+describe("decisions", () => {
+  it("records trimmed decisions and lists them newest first", () => {
+    const { a, group } = projectGroupFixture();
+    const source = appendGroupMessage({ groupId: group.id, authorKind: "user", body: "SQLite?" });
+    const first = recordGroupDecision({
+      groupId: group.id,
+      text: "  Use SQLite  ",
+      authorSessionId: a,
+      sourceMessageId: source.id,
+    });
+    expect(first).toMatchObject({
       groupId: group.id,
       text: "Use SQLite",
+      authorSessionId: a,
       sourceMessageId: source.id,
-      createdBySessionId: a,
     });
-    const other = addGroupDecision({ groupId: group.id, text: "Ship weekly" });
+    const second = recordGroupDecision({ groupId: group.id, text: "Ship weekly" });
+    expect(second.authorSessionId).toBeUndefined();
+    expect(second.sourceMessageId).toBeUndefined();
+    expect(listGroupDecisions(group.id).map((d) => d.id)).toEqual([second.id, first.id]);
+    expect(listGroupDecisions(createAgentGroup({ name: "Empty" }).id)).toEqual([]);
+  });
 
-    const replacement = supersedeGroupDecision(first.id, { text: "Use SQLite with WAL" });
-    expect(listActiveGroupDecisions(group.id).map((d) => d.id)).toEqual([other.id, replacement.id]);
-    expectStoreError(() => supersedeGroupDecision(first.id, { text: "again" }), "invalid-value");
-    expectStoreError(() => supersedeGroupDecision("missing", { text: "x" }), "decision-not-found");
+  it("rejects empty or over-long text with invalid-text", () => {
+    const { a, group } = projectGroupFixture();
+    for (const text of ["", "   ", "x".repeat(GROUP_DECISION_MAX_CHARS + 1)]) {
+      expectStoreError(
+        () => recordGroupDecision({ groupId: group.id, text, authorSessionId: a }),
+        "invalid-text",
+      );
+    }
+    const padded = ` ${"y".repeat(GROUP_DECISION_MAX_CHARS)} `;
+    expect(recordGroupDecision({ groupId: group.id, text: padded }).text).toHaveLength(
+      GROUP_DECISION_MAX_CHARS,
+    );
+  });
+
+  it("checks the group, the author's membership and the source message", () => {
+    const { group } = projectGroupFixture();
+    const outsider = insertSession(insertWorkspace());
+    expectStoreError(
+      () => recordGroupDecision({ groupId: "missing", text: "x" }),
+      "group-not-found",
+    );
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "x", authorSessionId: outsider }),
+      "not-a-member",
+    );
+    const other = createAgentGroup({ name: "Other" });
+    const foreign = appendGroupMessage({ groupId: other.id, authorKind: "user", body: "hi" });
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "x", sourceMessageId: foreign.id }),
+      "message-not-found",
+    );
+    expect(listGroupDecisions(group.id)).toEqual([]);
+  });
+
+  it(`allows at most ${GROUP_DECISION_LIMIT} decisions per group (limit-reached)`, () => {
+    const { a, group } = projectGroupFixture();
+    for (let index = 0; index < GROUP_DECISION_LIMIT; index += 1) {
+      recordGroupDecision({ groupId: group.id, text: `D${index}`, authorSessionId: a });
+    }
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "one more", authorSessionId: a }),
+      "limit-reached",
+    );
+    expect(listGroupDecisions(group.id)).toHaveLength(GROUP_DECISION_LIMIT);
+    // Other groups have their own limit; deleting frees a slot.
+    const other = createAgentGroup({ name: "Other" });
+    expect(recordGroupDecision({ groupId: other.id, text: "fine" }).text).toBe("fine");
+    const [newest] = listGroupDecisions(group.id);
+    deleteGroupDecision(newest?.id ?? "");
+    expect(recordGroupDecision({ groupId: group.id, text: "again" }).text).toBe("again");
+  });
+
+  it("deletes a decision physically", () => {
+    const { group } = projectGroupFixture();
+    const keep = recordGroupDecision({ groupId: group.id, text: "Keep" });
+    const drop = recordGroupDecision({ groupId: group.id, text: "Drop" });
+    expect(deleteGroupDecision(drop.id)).toMatchObject({ id: drop.id, text: "Drop" });
+    expect(listGroupDecisions(group.id).map((d) => d.id)).toEqual([keep.id]);
+    expect(countRows("group_decisions", "id", drop.id)).toBe(0);
+    expectStoreError(() => deleteGroupDecision(drop.id), "decision-not-found");
+  });
+
+  it("migrates the legacy group_decisions shape (active rows kept, author carried over)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "modus-group-decisions-migrate-"));
+    const db = new DatabaseSync(join(dir, "modus.sqlite"));
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(db);
+      const now = new Date().toISOString();
+      db.exec(`drop table group_decisions;
+        create table group_decisions (
+          id text primary key,
+          group_id text not null references agent_groups(id) on delete cascade,
+          text text not null,
+          source_message_id text references group_messages(id) on delete set null,
+          created_by_session_id text references agent_sessions(id) on delete set null,
+          created_at text not null,
+          superseded_by_id text references group_decisions(id) on delete set null
+        );
+        create index idx_group_decisions_group_created on group_decisions(group_id, created_at);`);
+      db.prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values ('w', 'root-w', 'repo', 1, ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+         values ('s', 'w', 'Chat', 'root-w', 'idle', ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `insert into agent_groups (id, name, workspace_id, mode, created_at, updated_at)
+         values ('g', 'G', 'w', 'free', ?, ?)`,
+      ).run(now, now);
+      const insert = db.prepare(
+        `insert into group_decisions (id, group_id, text, created_by_session_id, created_at, superseded_by_id)
+         values (?, 'g', ?, ?, ?, ?)`,
+      );
+      insert.run("new", "Use WAL", "s", now, null);
+      insert.run("old", "Use SQLite", "s", now, "new");
+      insert.run("user", "Ship weekly", null, now, null);
+
+      migrateDatabase(db);
+      migrateDatabase(db);
+
+      const columns = (
+        db.prepare("PRAGMA table_info(group_decisions)").all() as Array<{ name: string }>
+      ).map((column) => column.name);
+      expect(columns).toEqual([
+        "id",
+        "group_id",
+        "text",
+        "author_session_id",
+        "source_message_id",
+        "created_at",
+      ]);
+      const rows = db
+        .prepare("select id, text, author_session_id from group_decisions order by id")
+        .all();
+      expect(rows).toEqual([
+        { id: "new", text: "Use WAL", author_session_id: "s" },
+        { id: "user", text: "Ship weekly", author_session_id: null },
+      ]);
+      const indexes = (
+        db.prepare("PRAGMA index_list(group_decisions)").all() as Array<{ name: string }>
+      ).map((index) => index.name);
+      expect(indexes).toContain("idx_group_decisions_group_created");
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1067,7 +1322,7 @@ describe("deletion semantics", () => {
     insertRun(b);
     appendGroupMessage({ groupId: group.id, authorKind: "agent", authorSessionId: a, body: "hi" });
     createGroupTask({ groupId: group.id, title: "Task", ownerSessionId: b });
-    addGroupDecision({ groupId: group.id, text: "Decision" });
+    recordGroupDecision({ groupId: group.id, text: "Decision" });
 
     deleteAgentGroup(group.id);
 
@@ -1122,7 +1377,7 @@ describe("deletion semantics", () => {
       createdBySessionId: a,
       reviewerSessionId: a,
     });
-    const decision = addGroupDecision({ groupId: group.id, text: "D", createdBySessionId: a });
+    const decision = recordGroupDecision({ groupId: group.id, text: "D", authorSessionId: a });
 
     deleteAgentSession(a);
 
@@ -1139,9 +1394,9 @@ describe("deletion semantics", () => {
     expect(storedTask?.ownerSessionId).toBeUndefined();
     expect(storedTask?.createdBySessionId).toBeUndefined();
     expect(storedTask?.reviewerSessionId).toBeUndefined();
-    const [storedDecision] = listActiveGroupDecisions(group.id);
+    const [storedDecision] = listGroupDecisions(group.id);
     expect(storedDecision?.id).toBe(decision.id);
-    expect(storedDecision?.createdBySessionId).toBeUndefined();
+    expect(storedDecision?.authorSessionId).toBeUndefined();
 
     // The group keeps working after the deletion.
     expect(
