@@ -2,9 +2,13 @@ import type {
   AdaptiveDecision,
   AdaptiveDecisionSnapshot,
   AdaptiveVerificationLevel,
+  ChangeStrategyPlan,
 } from "../../../shared/contracts";
+import { selectChangeStrategy } from "./change-strategy";
 import { selectExecutionPolicy } from "./execution-policy";
 import { listAvoidedStrategyCodes } from "./failure-intelligence";
+import { mergePolicyEffects } from "./policy-dsl";
+import { loadPromotedPolicies } from "./promoted-policy-store";
 
 function unresolvedCriteria(snapshot: AdaptiveDecisionSnapshot): number {
   if (snapshot.unresolvedCriterionCount > 0) return snapshot.unresolvedCriterionCount;
@@ -25,33 +29,92 @@ function budgetFor(level: AdaptiveVerificationLevel, complex: boolean): number {
   return 400;
 }
 
+function withChangeStrategy(
+  decision: AdaptiveDecision,
+  changeStrategy: ChangeStrategyPlan,
+): AdaptiveDecision {
+  return { ...decision, changeStrategy };
+}
+
+/** Gap 5: optional runtime hooks so Oracle bridge can augment without editing pi-sdk-runtime. */
+export type AdaptiveSnapshotAugmenter = (
+  snapshot: AdaptiveDecisionSnapshot,
+) => AdaptiveDecisionSnapshot;
+export type AdaptiveHintAugmenter = (
+  hint: string | undefined,
+  decision: AdaptiveDecision,
+) => string | undefined;
+
+let snapshotAugmenter: AdaptiveSnapshotAugmenter | undefined;
+let hintAugmenter: AdaptiveHintAugmenter | undefined;
+
+export function setAdaptiveSnapshotAugmenter(
+  augmenter: AdaptiveSnapshotAugmenter | undefined,
+): void {
+  snapshotAugmenter = augmenter;
+}
+
+export function setAdaptiveHintAugmenter(augmenter: AdaptiveHintAugmenter | undefined): void {
+  hintAugmenter = augmenter;
+}
+
 /**
- * Pure Meta Controller. Returns one next action with reason codes.
+ * Meta Controller. Returns one next action with reason codes.
  * Does not execute tools or bypass permissions — runtime adapters interpret.
+ * Loads promoted policies from storage when the snapshot omits them (Gap 4).
  */
 export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision {
+  if (snapshotAugmenter) {
+    snapshot = snapshotAugmenter(snapshot);
+  }
+  // Gap 4: hydrate promoted policies when the adapter omitted them (pi-sdk parity).
+  // Fail-closed if storage/Electron is unavailable (unit tests, early boot).
+  if (snapshot.promotedPolicies === undefined) {
+    try {
+      const loaded = loadPromotedPolicies(snapshot.workspaceId);
+      if (loaded.length > 0) {
+        snapshot = { ...snapshot, promotedPolicies: loaded };
+      }
+    } catch {
+      // leave promotedPolicies undefined → treated as []
+    }
+  }
   const unresolved = unresolvedCriteria(snapshot);
   const openQuestions = Math.max(
     snapshot.openQuestionCount,
     snapshot.taskState?.openQuestionRefs.length ?? 0,
   );
+  const promoted = mergePolicyEffects(snapshot.promotedPolicies ?? []);
+  const failureAvoided = listAvoidedStrategyCodes(
+    snapshot.failureAttempts,
+    snapshot.impact?.revision,
+  );
+  const avoided = [...new Set([...failureAvoided, ...promoted.avoidStrategyCodes])].slice(0, 24);
   const policy = selectExecutionPolicy({
     classification: snapshot.classification,
     ...(snapshot.impact ? { impact: snapshot.impact } : {}),
     unresolvedCriterionCount: unresolved,
     openQuestionCount: openQuestions,
-    avoidedStrategyCodes: listAvoidedStrategyCodes(
-      snapshot.failureAttempts,
-      snapshot.impact?.revision,
-    ),
+    avoidedStrategyCodes: avoided,
     enabledModelIds: snapshot.enabledModelIds,
+    ...(promoted.effects.length > 0 ? { promotedEffects: promoted.effects } : {}),
   });
-  const avoided = listAvoidedStrategyCodes(snapshot.failureAttempts, snapshot.impact?.revision);
   const verification = snapshot.taskState?.verificationStatus;
   const qa = snapshot.qaStatus;
   const mode = snapshot.decisionMode;
   const complex =
     snapshot.classification.complexity === "complex" || snapshot.classification.risk === "high";
+  const oracleConsulted = snapshot.oracleConsulted === true;
+  const qaFailed = qa === "failed" || verification === "failed";
+  const changeStrategy = selectChangeStrategy({
+    avoided,
+    qaFailed,
+    oracleConsulted,
+    openQuestionCount: openQuestions,
+    preferReplanOnQaFail: promoted.preferReplanOnQaFail,
+    preferRetrieveLocal: promoted.preferRetrieveLocal,
+    ...(promoted.effects.length > 0 ? { promotedEffects: promoted.effects } : {}),
+  });
 
   const base = {
     version: 1 as const,
@@ -60,13 +123,18 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     avoidStrategyCodes: avoided,
     verificationLevel: policy.verificationLevel,
     budgetTokens: budgetFor(policy.verificationLevel, complex),
+    changeStrategy,
   };
 
   if (openQuestions > 0 && snapshot.taskState?.phase === "awaiting_user") {
     return {
       ...base,
       action: "ask_user",
-      reasonCodes: ["open_questions", "awaiting_user_phase"],
+      reasonCodes: [
+        "open_questions",
+        "awaiting_user_phase",
+        ...changeStrategy.reasonCodes.filter((code) => code.startsWith("change_strategy_")),
+      ].slice(0, 8),
       confidence: "high",
       expectedUncertaintyReduction: 20,
     };
@@ -91,42 +159,180 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     }
   }
 
-  if (qa === "failed" || verification === "failed") {
-    if (avoided.includes("same_edit_retry") || avoided.includes("blind_retry")) {
-      return {
-        ...base,
-        action: "avoid_retry",
-        reasonCodes: ["duplicate_failed_strategy", "failure_intelligence_block"],
-        confidence: "high",
-        expectedUncertaintyReduction: 8,
-      };
-    }
-    if (complex || snapshot.impact?.blastRadius === "cross_module") {
-      if (mode === "active") {
-        return {
+  if (qaFailed) {
+    // Gap 5: after Oracle findings, prefer a different strategy — never re-spawn Oracle.
+    if (oracleConsulted) {
+      if (changeStrategy.recommended === "ask_clarification") {
+        return withChangeStrategy(
+          {
+            ...base,
+            action: "ask_user",
+            reasonCodes: [
+              "change_strategy_ask_clarification",
+              "oracle_findings_present",
+              ...changeStrategy.reasonCodes,
+            ].slice(0, 8),
+            confidence: "high",
+            expectedUncertaintyReduction: 16,
+          },
+          changeStrategy,
+        );
+      }
+      if (changeStrategy.recommended === "retrieve_then_edit") {
+        return withChangeStrategy(
+          {
+            ...base,
+            action: "retrieve_local",
+            reasonCodes: [
+              "change_strategy_retrieve_then_edit",
+              "oracle_findings_present",
+              ...changeStrategy.reasonCodes,
+            ].slice(0, 8),
+            confidence: "medium",
+            expectedUncertaintyReduction: 12,
+          },
+          changeStrategy,
+        );
+      }
+      return withChangeStrategy(
+        {
           ...base,
-          action: "spawn_readonly_specialist",
-          specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
-          reasonCodes: ["verification_failed", "high_risk_or_blast", "safe_readonly_spawn"],
+          action: "replan",
+          reasonCodes: [
+            "change_strategy_replan_scope",
+            "oracle_findings_present",
+            "verification_failed",
+            ...changeStrategy.reasonCodes,
+          ].slice(0, 8),
           confidence: "medium",
           expectedUncertaintyReduction: 12,
-        };
-      }
-      return {
-        ...base,
-        action: "suggest_oracle",
-        reasonCodes: ["verification_failed", "high_risk_or_blast"],
-        confidence: "medium",
-        expectedUncertaintyReduction: 12,
-      };
+        },
+        changeStrategy,
+      );
     }
-    return {
-      ...base,
-      action: "replan",
-      reasonCodes: ["verification_failed", "replan_after_failure"],
-      confidence: "medium",
-      expectedUncertaintyReduction: 10,
-    };
+
+    const needsOracle =
+      complex ||
+      snapshot.impact?.blastRadius === "cross_module" ||
+      snapshot.classification.suggestedRole === "oracle" ||
+      snapshot.classification.suggestedRole === "debugger";
+    const strategyAvoided = avoided.includes("same_edit_retry") || avoided.includes("blind_retry");
+
+    // Gap 5: when a failed strategy is avoided but Oracle has not been consulted,
+    // prefer Gap 1 spawn / advisory suggest_oracle over locking avoid_retry.
+    if (strategyAvoided && needsOracle) {
+      if (mode === "active") {
+        return withChangeStrategy(
+          {
+            ...base,
+            action: "spawn_readonly_specialist",
+            specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
+            reasonCodes: [
+              "verification_failed",
+              "high_risk_or_blast",
+              "safe_readonly_spawn",
+              "change_strategy_await_oracle",
+            ],
+            confidence: "medium",
+            expectedUncertaintyReduction: 12,
+          },
+          changeStrategy,
+        );
+      }
+      return withChangeStrategy(
+        {
+          ...base,
+          action: "suggest_oracle",
+          reasonCodes: [
+            "verification_failed",
+            "high_risk_or_blast",
+            "change_strategy_await_oracle",
+          ],
+          confidence: "medium",
+          expectedUncertaintyReduction: 12,
+        },
+        changeStrategy,
+      );
+    }
+
+    // Soft blacklist / promoted avoid still blocks blind retries when Oracle is not needed.
+    if (strategyAvoided) {
+      return withChangeStrategy(
+        {
+          ...base,
+          action: "avoid_retry",
+          reasonCodes: [
+            "duplicate_failed_strategy",
+            "failure_intelligence_block",
+            "change_strategy_replan_scope",
+            ...promoted.reasonCodes.filter((code) => code.includes("avoid")),
+          ].slice(0, 8),
+          confidence: "high",
+          expectedUncertaintyReduction: 8,
+        },
+        {
+          ...changeStrategy,
+          recommended:
+            changeStrategy.recommended === "none" ? "replan_scope" : changeStrategy.recommended,
+          reasonCodes: [...changeStrategy.reasonCodes, "change_strategy_replan_scope"].slice(0, 8),
+        },
+      );
+    }
+
+    // Gap 4: promoted prefer_replan when avoid codes did not fire (Oracle may still be pending).
+    if (promoted.preferReplanOnQaFail) {
+      return withChangeStrategy(
+        {
+          ...base,
+          action: "replan",
+          reasonCodes: [
+            "verification_failed",
+            "replan_after_failure",
+            "promoted_policy_prefer_replan_on_qa_fail",
+            ...changeStrategy.reasonCodes,
+          ].slice(0, 8),
+          confidence: "medium",
+          expectedUncertaintyReduction: 10,
+        },
+        changeStrategy,
+      );
+    }
+
+    if (needsOracle) {
+      if (mode === "active") {
+        return withChangeStrategy(
+          {
+            ...base,
+            action: "spawn_readonly_specialist",
+            specialistRole: policy.suggestedRole === "debugger" ? "debugger" : "oracle",
+            reasonCodes: ["verification_failed", "high_risk_or_blast", "safe_readonly_spawn"],
+            confidence: "medium",
+            expectedUncertaintyReduction: 12,
+          },
+          changeStrategy,
+        );
+      }
+      return withChangeStrategy(
+        {
+          ...base,
+          action: "suggest_oracle",
+          reasonCodes: ["verification_failed", "high_risk_or_blast"],
+          confidence: "medium",
+          expectedUncertaintyReduction: 12,
+        },
+        changeStrategy,
+      );
+    }
+    return withChangeStrategy(
+      {
+        ...base,
+        action: "replan",
+        reasonCodes: ["verification_failed", "replan_after_failure"],
+        confidence: "medium",
+        expectedUncertaintyReduction: 10,
+      },
+      changeStrategy,
+    );
   }
 
   if (
@@ -137,7 +343,11 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     return {
       ...base,
       action: "verify",
-      reasonCodes: ["evidence_required", `verification_${policy.verificationLevel}`],
+      reasonCodes: [
+        "evidence_required",
+        `verification_${policy.verificationLevel}`,
+        ...promoted.reasonCodes.filter((code) => code.includes("verification")),
+      ].slice(0, 8),
       confidence: "high",
       expectedUncertaintyReduction: 14,
     };
@@ -147,6 +357,21 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     snapshot.impact?.confidence === "unknown" ||
     snapshot.impact?.unknownReasons.includes("no_typed_paths") === true ||
     unresolved > 0;
+
+  // Promoted context-pressure bias: prefer local retrieve before plan/spawn (still allowlisted).
+  if (promoted.preferRetrieveLocal && uncertain) {
+    return {
+      ...base,
+      action: "retrieve_local",
+      reasonCodes: [
+        "uncertainty_high",
+        "local_preflight_candidate",
+        "promoted_policy_prefer_retrieve_local",
+      ],
+      confidence: "medium",
+      expectedUncertaintyReduction: 11,
+    };
+  }
 
   // Gap 1: explicit read-only research roles beat HyperPlan suggestion in active mode.
   if (mode === "active" && uncertain && complex) {
@@ -231,26 +456,48 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
 /** Bounded advisory hint injected into the turn message (never system policy). */
 export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string | undefined {
   if (decision.mode === "shadow") return undefined;
+  const recommended = decision.changeStrategy?.recommended;
+  const strategySuffix =
+    recommended && recommended !== "none"
+      ? ` Recommended change strategy: ${recommended.replace(/_/g, " ")}.`
+      : "";
+  let hint: string | undefined;
   switch (decision.action) {
     case "suggest_plan":
-      return "Adaptive policy: complex/high-blast scope detected. Consider Plan Mode or HyperPlan review; continue only if the user already chose otherwise.";
+      hint =
+        "Adaptive policy: complex/high-blast scope detected. Consider Plan Mode or HyperPlan review; continue only if the user already chose otherwise.";
+      break;
     case "suggest_oracle":
-      return "Adaptive policy: high uncertainty or failed verification. Prefer read-only Oracle/reviewer advice before repeating the same edit strategy.";
+      hint =
+        "Adaptive policy: high uncertainty or failed verification. Prefer read-only Oracle/reviewer advice before repeating the same edit strategy.";
+      break;
     case "spawn_readonly_specialist":
-      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before repeating edits.`;
+      hint = `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before continuing edits.`;
+      break;
     case "mcp_preflight":
-      return "Adaptive policy: a read-only librarian MCP preflight was auto-dispatched. Allowlisted MCP tools run only through ToolRegistry + the permission broker; do not call non-allowlisted MCP tools.";
+      hint =
+        "Adaptive policy: a read-only librarian MCP preflight was auto-dispatched. Allowlisted MCP tools run only through ToolRegistry + the permission broker; do not call non-allowlisted MCP tools.";
+      break;
     case "verify":
-      return "Adaptive policy: verification evidence is still required before treating this task as done. Use only the eligible required check scripts already named for this turn.";
+      hint =
+        "Adaptive policy: verification evidence is still required before treating this task as done. Use only the eligible required check scripts already named for this turn.";
+      break;
     case "avoid_retry":
-      return "Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.";
+      hint = `Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.${strategySuffix}`;
+      break;
     case "replan":
-      return "Adaptive policy: last verification failed. Replan with a different strategy and record what was ruled out.";
+      hint = `Adaptive policy: last verification failed. Replan with a different strategy and record what was ruled out.${strategySuffix}`;
+      break;
     case "retrieve_local":
-      return "Adaptive policy: prefer bounded local CodeGraph/git/memory retrieval that reduces named uncertainties before broad file reads.";
+      hint =
+        "Adaptive policy: prefer bounded local CodeGraph/git/memory retrieval that reduces named uncertainties before broad file reads.";
+      break;
     case "ask_user":
-      return "Adaptive policy: open questions remain. Ask a focused clarifying question before continuing consequential work.";
+      hint =
+        "Adaptive policy: open questions remain. Ask a focused clarifying question before continuing consequential work.";
+      break;
     default:
-      return undefined;
+      hint = undefined;
   }
+  return hintAugmenter ? hintAugmenter(hint, decision) : hint;
 }

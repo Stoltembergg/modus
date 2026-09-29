@@ -53,6 +53,16 @@ describe("safe-dispatch", () => {
     expect(planSafeDispatch(decision("execute", "active")).kind).toBe("hint_only");
     expect(planSafeDispatch(decision("suggest_oracle", "active")).kind).toBe("hint_only");
     expect(planSafeDispatch(decision("avoid_retry", "active")).kind).toBe("hint_only");
+    expect(planSafeDispatch(decision("replan", "active")).kind).toBe("hint_only");
+    expect(planSafeDispatch(decision("ask_user", "active")).kind).toBe("hint_only");
+    expect(isSafeAutoDispatchAction("replan")).toBe(false);
+    expect(isSafeAutoDispatchAction("ask_user")).toBe(false);
+  });
+
+  it("keeps suggest_oracle hint_only (Gap 5 must not expand allowlist)", () => {
+    expect(isSafeAutoDispatchAction("suggest_oracle")).toBe(false);
+    expect(planSafeDispatch(decision("suggest_oracle", "active")).kind).toBe("hint_only");
+    expect(planSafeDispatch(decision("suggest_oracle", "advisory")).kind).toBe("hint_only");
   });
 
   it("schedules safe local retrieve and verify in advisory/active", () => {
