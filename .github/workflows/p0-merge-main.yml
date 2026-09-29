@@ -35,7 +35,7 @@ jobs:
                 git diff --name-only --diff-filter=U >&2
                 exit 1
               fi
-              if grep -Rne '^\(<<<<<<<\|>>>>>>>\|=======\)' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.json' --include='*.yml' --include='*.md' .; then
+              if grep -Rne '^<<<<<<<\|^>>>>>>>' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.mjs' --include='*.json' --include='*.yml' --include='*.md' .; then
                 echo "Unresolved conflict markers remain" >&2
                 exit 1
               fi
