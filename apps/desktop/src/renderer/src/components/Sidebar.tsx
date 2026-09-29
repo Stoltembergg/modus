@@ -1204,6 +1204,8 @@ function ProjectActions({
             </ProjectMenuItem>
             <div className="my-1 h-px bg-hairline" />
             <ProjectMenuItem
+              // Stay open on the first click so the confirm step is reachable.
+              closeOnClick={confirmDeleteChats}
               danger
               icon={<IconTrash size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
               onClick={() => {
