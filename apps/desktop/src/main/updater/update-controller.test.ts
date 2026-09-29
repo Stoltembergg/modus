@@ -6,6 +6,7 @@ import {
   type UpdateCandidate,
   type UpdateSource,
 } from "./update-controller";
+import { RELEASES_URL } from "./update-policy";
 import { UPDATE_CHECK_INTERVAL_MS, UPDATE_INITIAL_DELAY_MS } from "./update-scheduler";
 
 /** Deb-style installer: updates are only offered as the release page. */
@@ -19,7 +20,7 @@ const pageOnlyInstaller: PlatformInstaller = {
   },
 };
 
-const ASSET = "https://github.com/stoltembergg-png/modus/releases/download";
+const ASSET = `${RELEASES_URL}/download`;
 
 function candidate(version: string): UpdateCandidate {
   return {
@@ -297,9 +298,7 @@ describe("install flow", () => {
       action: "download-page",
     });
     await controller.retry();
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/stoltembergg-png/modus/releases/tag/v1.1.0",
-    );
+    expect(openExternal).toHaveBeenCalledWith(`${RELEASES_URL}/tag/v1.1.0`);
     expect(installer.download).toHaveBeenCalledTimes(1);
   });
 
@@ -325,9 +324,7 @@ describe("install flow", () => {
     });
     await controller.install();
     expect(installer.download).not.toHaveBeenCalled();
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/stoltembergg-png/modus/releases/tag/v1.1.0",
-    );
+    expect(openExternal).toHaveBeenCalledWith(`${RELEASES_URL}/tag/v1.1.0`);
     await controller.openReleasePage();
     expect(openExternal).toHaveBeenCalledTimes(2);
   });

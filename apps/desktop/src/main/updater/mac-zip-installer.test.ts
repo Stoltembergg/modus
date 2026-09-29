@@ -20,10 +20,11 @@ import {
 } from "./mac-zip-installer";
 import { createUpdateController, type UpdateCandidate } from "./update-controller";
 import { UpdateInstallError } from "./update-errors";
+import { RELEASES_URL } from "./update-policy";
 
 const ZIP = Buffer.from("PK fake zip bytes for the update ".repeat(64));
 const SHA512 = createHash("sha512").update(ZIP).digest("base64");
-const BASE = "https://github.com/stoltembergg-png/modus/releases/download/v1.1.0";
+const BASE = `${RELEASES_URL}/download/v1.1.0`;
 
 function candidate(
   overrides: Partial<{ sha512: string; size: number; url: string }> = {},
@@ -366,9 +367,7 @@ describe("mac zip installer", () => {
         action: "download-page",
       });
       await controller.install();
-      expect(openExternal).toHaveBeenCalledWith(
-        "https://github.com/stoltembergg-png/modus/releases/tag/v1.1.0",
-      );
+      expect(openExternal).toHaveBeenCalledWith(`${RELEASES_URL}/tag/v1.1.0`);
       expect(deps.httpGet).not.toHaveBeenCalled();
       expect(deps.spawnDetached).not.toHaveBeenCalled();
       await expect(installer.install(candidate())).rejects.toThrow("not downloaded");

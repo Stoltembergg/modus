@@ -19,7 +19,7 @@ describe("update policy repository", () => {
     ).toBe(true);
     expect(
       policy.isAllowedReleaseAssetUrl(
-        "https://github.com/stoltembergg-png/modus/releases/download/v1.2.3/Modus.zip",
+        "https://github.com/Stoltembergg/modus/releases/download/v1.2.3/Modus.zip",
       ),
     ).toBe(false);
   });

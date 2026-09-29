@@ -7,6 +7,7 @@ import {
   type ElectronUpdaterLike,
   toReleaseFiles,
 } from "./electron-updater-source";
+import { RELEASES_URL } from "./update-policy";
 
 type CheckResult = Awaited<ReturnType<ElectronUpdaterLike["checkForUpdates"]>>;
 
@@ -86,7 +87,7 @@ describe("createElectronUpdaterSource", () => {
       version: "1.1.0",
       files: [
         {
-          url: "https://github.com/stoltembergg-png/modus/releases/download/v1.1.0/Modus-1.1.0-win-x64-setup.exe",
+          url: `${RELEASES_URL}/download/v1.1.0/Modus-1.1.0-win-x64-setup.exe`,
           sha512: "abc",
           size: 10,
         },
@@ -123,7 +124,7 @@ describe("createElectronUpdaterSource", () => {
         { url: "../x.exe", sha512: "a" },
         { url: "https://github.com/other/modus/releases/download/v1.1.0/x.exe", sha512: "a" },
         {
-          url: "https://github.com/stoltembergg-png/modus/releases/download/v1.0.0/x.exe",
+          url: `${RELEASES_URL}/download/v1.0.0/x.exe`,
           sha512: "a",
         },
       ]),
@@ -136,7 +137,7 @@ describe("createElectronUpdaterInstaller", () => {
     version: "1.1.0",
     files: [
       {
-        url: "https://github.com/stoltembergg-png/modus/releases/download/v1.1.0/Modus.AppImage",
+        url: `${RELEASES_URL}/download/v1.1.0/Modus.AppImage`,
         sha512: "abc",
         size: 10,
       },

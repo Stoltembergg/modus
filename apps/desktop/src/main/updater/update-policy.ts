@@ -79,9 +79,19 @@ export function releaseAssetUrl(version: string, fileName: string): string {
   return `${RELEASES_URL}/download/v${version}/${fileName}`;
 }
 
+/** GitHub owner/repository names are case-insensitive ("Stoltembergg" == "stoltembergg"). */
+function sameGitHubName(actual: string, expected: string): boolean {
+  return actual.toLowerCase() === expected.toLowerCase();
+}
+
 /**
  * Only `https://github.com/<RELEASE_REPO>/releases/download/v<X.Y.Z>/<file>`
  * (optionally for one specific version) is accepted as an update download.
+ *
+ * GitHub owner and repository names are case-insensitive, so only those two segments
+ * are compared ignoring case (a URL carrying GitHub's canonical casing still passes).
+ * Everything else, including `releases/download`, the tag and the file name, must
+ * match exactly.
  */
 export function isAllowedReleaseAssetUrl(rawUrl: string, version?: string): boolean {
   let url: URL;
@@ -92,11 +102,13 @@ export function isAllowedReleaseAssetUrl(rawUrl: string, version?: string): bool
   }
   if (url.protocol !== "https:" || url.hostname !== "github.com") return false;
   if (url.port || url.username || url.password || url.search || url.hash) return false;
-  const prefix = `/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/releases/download/`;
-  if (!url.pathname.startsWith(prefix)) return false;
-  const rest = url.pathname.slice(prefix.length).split("/");
-  if (rest.length !== 2) return false;
-  const [tag = "", fileName = ""] = rest;
+  const segments = url.pathname.split("/");
+  if (segments.length !== 7) return false;
+  const [leading, owner = "", repo = "", releases, download, tag = "", fileName = ""] = segments;
+  if (leading !== "" || releases !== "releases" || download !== "download") return false;
+  if (!sameGitHubName(owner, RELEASE_REPO.owner) || !sameGitHubName(repo, RELEASE_REPO.repo)) {
+    return false;
+  }
   if (!tag.startsWith("v") || !parseStableVersion(tag.slice(1))) return false;
   if (version !== undefined && tag !== `v${version}`) return false;
   return ASSET_FILE_NAME.test(fileName) && !fileName.includes("..");

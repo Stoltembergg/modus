@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_CATALOG_URL,
   forceModelCatalogRefresh,
   parseModelCatalog,
   startModelCatalogUpdates,
@@ -44,6 +45,7 @@ afterEach(() => {
   stopUpdates?.();
   stopUpdates = undefined;
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("model catalog", () => {
@@ -116,6 +118,24 @@ describe("model catalog", () => {
       min: 128,
       max: 32_768,
     });
+  });
+
+  it("fetches the default catalog from the renamed owner's repository", async () => {
+    // The catalog sets every model's baseUrl: the old owner (stoltembergg-png) can now
+    // be registered by anyone, so it must never be the source again.
+    expect(DEFAULT_CATALOG_URL).toBe(
+      "https://raw.githubusercontent.com/Stoltembergg/modus/automation/model-catalog/catalog/models.json",
+    );
+    const directory = await mkdtemp(join(tmpdir(), "modus-model-catalog-"));
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(catalog), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubEnv("MODUS_MODEL_CATALOG_URL", undefined);
+    try {
+      await updateModelCatalog(options(join(directory, "models.json")), true);
+      expect(fetchMock).toHaveBeenCalledWith(DEFAULT_CATALOG_URL, expect.anything());
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("atomically caches a validated remote catalog", async () => {

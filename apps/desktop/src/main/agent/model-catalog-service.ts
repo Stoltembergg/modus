@@ -2,9 +2,15 @@ import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } 
 import { dirname } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import { RELEASE_REPO } from "../../shared/release-repo";
 
-const DEFAULT_CATALOG_URL =
-  "https://raw.githubusercontent.com/stoltembergg-png/modus/automation/model-catalog/catalog/models.json";
+/**
+ * Published by .github/workflows/model-catalog.yml to the automation/model-catalog branch
+ * of the release repository. The catalog sets each model's baseUrl, so it must only come
+ * from the repository we own.
+ */
+export const DEFAULT_CATALOG_URL = `https://raw.githubusercontent.com/${RELEASE_REPO.owner}/${RELEASE_REPO.repo}/automation/model-catalog/catalog/models.json`;
+
 const CATALOG_TTL_MS = 5 * 60_000;
 const REFRESH_INTERVAL_MS = 60 * 60_000;
 const FETCH_TIMEOUT_MS = 10_000;
