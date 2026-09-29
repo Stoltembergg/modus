@@ -3,6 +3,7 @@ import type {
   AgentEvent,
   AgentGroupMode,
   AgentGroupWithMembers,
+  AgentInfo,
   AgentMode,
   AgentReviewDepth,
   AgentReviewResult,
@@ -21,6 +22,7 @@ import type {
   ContextKind,
   ContextSuggestion,
   CreateAgentGroupInput,
+  CreateAgentInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -87,6 +89,7 @@ import type {
   TestCustomProviderResult,
   ThinkingLevel,
   UpdateAgentGroupMembersInput,
+  UpdateAgentInput,
   UpdateModelConfigInput,
   UpdateRestoreUiState,
   UpdateState,
@@ -208,6 +211,19 @@ export type ModusApi = {
     /** "Delete" a decision (physical; posts nothing in the room). */
     deleteDecision(decisionId: string): Promise<GroupDecision>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
+  };
+  /** Agents (agents model): unique names; groups meet them as members. */
+  agents: {
+    /** Every agent, archived included, by name. */
+    list(): Promise<AgentInfo[]>;
+    /** Create an agent; rejects `agent-name-taken` for a taken name (case-insensitive). */
+    create(input: CreateAgentInput): Promise<AgentInfo>;
+    /** Change the given fields (null clears model / default Project); returns the refreshed list. */
+    update(input: UpdateAgentInput & { id: string }): Promise<AgentInfo[]>;
+    /** Archive / restore (group membership is kept); returns the refreshed list. */
+    setArchived(input: { id: string; archived: boolean }): Promise<AgentInfo[]>;
+    /** Delete the agent (it leaves its groups; the chats are kept); returns the refreshed list. */
+    remove(id: string): Promise<AgentInfo[]>;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

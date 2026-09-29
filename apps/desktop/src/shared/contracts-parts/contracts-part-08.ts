@@ -19,8 +19,75 @@ export type AgentGroupMember = {
   sessionId: string;
   /** Free-form role label, e.g. research / plan / implement / review / verify. */
   role?: string;
+  /** The agent this member is (agents model); absent for rows not linked yet. */
+  agentId?: string;
   joinedAt: string;
 };
+
+/* ── Agents (independent entities that meet in groups) ──────────────────── */
+
+/** The 8 avatar faces (the SVG `AgentAvatar` draws them; A3). */
+export const AGENT_AVATAR_FACES = [
+  "happy",
+  "curious",
+  "sleepy",
+  "wink",
+  "focused",
+  "cheeky",
+  "calm",
+  "bright",
+] as const;
+export type AgentAvatarFace = (typeof AGENT_AVATAR_FACES)[number];
+
+/** The 10 avatar colors (theme palette names; the renderer maps them to tokens). */
+export const AGENT_AVATAR_COLORS = [
+  "red",
+  "orange",
+  "amber",
+  "lime",
+  "green",
+  "teal",
+  "sky",
+  "blue",
+  "violet",
+  "pink",
+] as const;
+export type AgentAvatarColor = (typeof AGENT_AVATAR_COLORS)[number];
+
+/** An agent: unique name (case-insensitive), persona and defaults. */
+export type AgentInfo = {
+  id: string;
+  name: string;
+  /** Short label, e.g. "Reviewer"; "" when unset. */
+  role: string;
+  /** The persona (long); "" when unset. */
+  instructions: string;
+  modelId?: string;
+  /** Default Project for the agent's 1:1 chat. */
+  defaultWorkspaceId?: string;
+  avatarFace: AgentAvatarFace;
+  avatarColor: AgentAvatarColor;
+  /** The template this agent was copied from (shared/agent-templates.ts), if any. */
+  templateId?: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
+
+/** `agents:create` payload. */
+export type CreateAgentInput = {
+  name: string;
+  role?: string;
+  instructions?: string;
+  modelId?: string | null;
+  defaultWorkspaceId?: string | null;
+  /** Default: derived from the agent id (see agentAvatarForId). */
+  avatarFace?: AgentAvatarFace;
+  avatarColor?: AgentAvatarColor;
+};
+
+/** `agents:update` payload: only the given fields change; null clears model / Project. */
+export type UpdateAgentInput = Partial<CreateAgentInput>;
 
 /** A group plus its member rows (what the sidebar and `group:*` IPC return). */
 export type AgentGroupWithMembers = AgentGroupInfo & { members: AgentGroupMember[] };
