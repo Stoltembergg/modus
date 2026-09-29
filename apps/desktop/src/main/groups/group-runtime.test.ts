@@ -731,6 +731,45 @@ describe("HyperPlan-blocked member", () => {
   });
 });
 
+/* ── dispose: runtime subscriptions are released ─────────────────────── */
+
+describe("dispose", () => {
+  it("unsubscribes: a later ok plan-build or gate question does nothing", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups, events } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    // Alpha ends with a HyperPlan choice pending; Beta's group turn keeps running.
+    runtime.take(alpha).resolve({ outcome: "blocked" });
+    await flush();
+    expect(groups.isAwaitingUser(alpha)).toBe(true);
+    expect(runtime.settledListeners.size).toBe(1);
+    expect(runtime.questionListeners.size).toBe(1);
+
+    groups.dispose();
+    expect(runtime.settledListeners.size).toBe(0);
+    expect(runtime.questionListeners.size).toBe(0);
+
+    const roomBefore = room(group.id);
+    const eventCount = events.length;
+    const snapshotBefore = groups.chainSnapshot(user.id);
+    runtime.settle({
+      sessionId: alpha,
+      origin: "plan-build",
+      result: { outcome: "ok", finalText: "Built. @Beta please verify" },
+    });
+    runtime.openGate(beta);
+    await flush();
+
+    expect(room(group.id)).toEqual(roomBefore);
+    expect(events).toHaveLength(eventCount);
+    expect(groups.isAwaitingUser(alpha)).toBe(true);
+    expect(groups.chainSnapshot(user.id)).toEqual(snapshotBefore);
+    expect(groups.liveChainIds()).toEqual([user.id]);
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.started).toEqual([alpha, beta]);
+  });
+});
+
 /* ── chain bookkeeping ───────────────────────────────────────────────── */
 
 describe("chain cleanup", () => {
