@@ -140,10 +140,12 @@ import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
 import { getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentGroupMember,
+  cancelGroupTask,
   createAgentGroupWithMembers,
   deleteAgentGroup,
   listAgentGroupsWithMembers,
   listGroupMessages,
+  listGroupTasks,
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
@@ -1799,6 +1801,8 @@ export function registerAppIpc({
     removeAgentGroupMember,
     setAgentGroupLead,
     updateAgentGroupMembers,
+    listGroupTasks: (groupId) => listGroupTasks(groupId),
+    cancelGroupTask,
   });
   // Member task tools (review / changes) wake members through the GroupRuntime.
   setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));

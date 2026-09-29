@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentGroupWithMembers } from "../../shared/contracts";
+import type { AgentGroupWithMembers, GroupTask } from "../../shared/contracts";
 import type { GroupIpcService } from "./group-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
@@ -23,6 +23,8 @@ const GROUP_CHANNELS = [
   "group:remove-member",
   "group:set-lead",
   "group:update-members",
+  "group:list-tasks",
+  "group:cancel-task",
 ];
 
 const GROUP: AgentGroupWithMembers = {
@@ -30,6 +32,15 @@ const GROUP: AgentGroupWithMembers = {
   name: "Crew",
   mode: "free",
   members: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
+const TASK: GroupTask = {
+  id: "t-1",
+  groupId: "g-1",
+  title: "Parser",
+  status: "open",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -48,6 +59,8 @@ function mockService() {
     updateAgentGroupMembers: vi.fn(
       (_groupId: string, _input: unknown): AgentGroupWithMembers => GROUP,
     ),
+    listGroupTasks: vi.fn((_groupId: string): GroupTask[] => [TASK]),
+    cancelGroupTask: vi.fn((_taskId: string): GroupTask => ({ ...TASK, status: "cancelled" })),
   } satisfies GroupIpcService;
 }
 
@@ -139,6 +152,12 @@ describe("group IPC", () => {
         members: [{ sessionId: "s-1" }, { sessionId: "s-4", role: "verify" }],
         leadSessionId: "s-4",
       });
+      expect(handlers.get("group:list-tasks")?.(trusted, { groupId: "g-1" })).toEqual([TASK]);
+      expect(service.listGroupTasks).toHaveBeenCalledWith("g-1");
+      expect(handlers.get("group:cancel-task")?.(trusted, { taskId: "t-1" })).toMatchObject({
+        status: "cancelled",
+      });
+      expect(service.cancelGroupTask).toHaveBeenCalledWith("t-1");
     } finally {
       unregister();
     }
@@ -178,6 +197,10 @@ describe("group IPC", () => {
       expect(call("group:update-members", { groupId: "g-1", members: [] })).toThrow(
         /Invalid IPC payload/,
       );
+      expect(call("group:list-tasks", { groupId: "" })).toThrow(/Invalid IPC payload/);
+      expect(call("group:cancel-task", { taskId: "t-1", status: "done" })).toThrow(
+        /Invalid IPC payload/,
+      );
       for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
     } finally {
       unregister();
@@ -196,6 +219,8 @@ describe("group IPC", () => {
       removeAgentGroupMember: store.removeAgentGroupMember,
       setAgentGroupLead: store.setAgentGroupLead,
       updateAgentGroupMembers: store.updateAgentGroupMembers,
+      listGroupTasks: (groupId) => store.listGroupTasks(groupId),
+      cancelGroupTask: store.cancelGroupTask,
     });
     const db = getDatabase();
     const now = new Date().toISOString();

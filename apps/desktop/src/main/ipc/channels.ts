@@ -20,6 +20,8 @@ export const IPC_CHANNELS = {
   groupRemoveMember: "group:remove-member",
   groupSetLead: "group:set-lead",
   groupUpdateMembers: "group:update-members",
+  groupListTasks: "group:list-tasks",
+  groupCancelTask: "group:cancel-task",
   groupPostMessage: "group:post-message",
   groupListMessages: "group:list-messages",
   groupWorking: "group:working",

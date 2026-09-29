@@ -22,6 +22,7 @@ const {
   addAgentGroupMember,
   addGroupDecision,
   appendGroupMessage,
+  cancelGroupTask,
   claimGroupTask,
   createMemberGroupTask,
   getGroupMessage,
@@ -768,6 +769,46 @@ describe("tasks", () => {
 });
 
 /* ── member task transitions (PR 4a) ─────────────────────────────────── */
+
+describe("cancelGroupTask (the room's Cancel task)", () => {
+  it("cancels open, in progress and in review tasks; refuses done; cancelled stays", () => {
+    const { a, b, group } = projectGroupFixture();
+    const open = createGroupTask({ groupId: group.id, title: "Open" });
+    const working = createGroupTask({
+      groupId: group.id,
+      title: "Working",
+      status: "in_progress",
+      ownerSessionId: a,
+    });
+    const review = createGroupTask({
+      groupId: group.id,
+      title: "Review",
+      status: "in_review",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+      branch: "feat/x",
+    });
+    const done = createGroupTask({ groupId: group.id, title: "Done", status: "done" });
+    for (const task of [open, working, review]) {
+      expect(cancelGroupTask(task.id).status).toBe("cancelled");
+    }
+    // Owner, reviewer and branch stay as history.
+    expect(listGroupTasks(group.id).find((t) => t.id === review.id)).toMatchObject({
+      status: "cancelled",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+      branch: "feat/x",
+    });
+    expect(() => cancelGroupTask(done.id)).toThrow(
+      expect.objectContaining({ code: "invalid-transition" }),
+    );
+    const again = cancelGroupTask(open.id);
+    expect(again.status).toBe("cancelled");
+    expect(() => cancelGroupTask("missing")).toThrow(
+      expect.objectContaining({ code: "task-not-found" }),
+    );
+  });
+});
 
 describe("member task transitions", () => {
   /** Squad with a third member c and a stranger from the same Project. */

@@ -42,6 +42,7 @@ import type {
   GroupMessage,
   GroupMessageCursor,
   GroupRuntimeEvent,
+  GroupTask,
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
@@ -194,6 +195,10 @@ export type ModusApi = {
     memberStates(): Promise<GroupMemberStates[]>;
     /** Stop the room: end its chains and abort running member turns ("Turn stopped"). */
     stop(groupId: string): Promise<void>;
+    /** The group's tasks (created order) for the room's task panel. */
+    listTasks(groupId: string): Promise<GroupTask[]>;
+    /** "Cancel task": the only path to `cancelled` (a done task is refused). */
+    cancelTask(taskId: string): Promise<GroupTask>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   file: {

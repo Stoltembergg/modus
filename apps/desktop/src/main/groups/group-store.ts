@@ -1036,6 +1036,21 @@ export function listGroupTasks(
   return rows.map(toTask);
 }
 
+/**
+ * The user cancels a task from the room's task panel: the only path to
+ * `cancelled` (member tools never reach it). Open, in progress and in review
+ * tasks cancel; a done task is refused (`invalid-transition`); an already
+ * cancelled one is returned unchanged.
+ */
+export function cancelGroupTask(taskId: string): GroupTask {
+  const task = requireTask(taskId);
+  if (task.status === "cancelled") return task;
+  if (task.status === "done") {
+    throw new GroupStoreError("invalid-transition", `Cannot cancel task ${task.id}: it is done.`);
+  }
+  return updateGroupTask(taskId, { status: "cancelled" });
+}
+
 /* ── Member task transitions (the rules the member tools rely on) ───────── */
 /*
  * open ──claim──▶ in_progress ──request review──▶ in_review ──approve──▶ done
