@@ -6,6 +6,7 @@ import type {
 import { selectExecutionPolicy } from "./execution-policy";
 import { listAvoidedStrategyCodes } from "./failure-intelligence";
 import { mergePolicyEffects } from "./policy-dsl";
+import { loadPromotedPolicies } from "./promoted-policy-store";
 
 function unresolvedCriteria(snapshot: AdaptiveDecisionSnapshot): number {
   if (snapshot.unresolvedCriterionCount > 0) return snapshot.unresolvedCriterionCount;
@@ -27,10 +28,18 @@ function budgetFor(level: AdaptiveVerificationLevel, complex: boolean): number {
 }
 
 /**
- * Pure Meta Controller. Returns one next action with reason codes.
+ * Meta Controller. Returns one next action with reason codes.
  * Does not execute tools or bypass permissions — runtime adapters interpret.
+ * Loads promoted policies from storage when the snapshot omits them (Gap 4).
  */
 export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision {
+  // Gap 4: hydrate promoted policies when the adapter omitted them (pi-sdk parity).
+  if (snapshot.promotedPolicies === undefined) {
+    const loaded = loadPromotedPolicies(snapshot.workspaceId);
+    if (loaded.length > 0) {
+      snapshot = { ...snapshot, promotedPolicies: loaded };
+    }
+  }
   const unresolved = unresolvedCriteria(snapshot);
   const openQuestions = Math.max(
     snapshot.openQuestionCount,
@@ -277,7 +286,7 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
     case "suggest_oracle":
       return "Adaptive policy: high uncertainty or failed verification. Prefer read-only Oracle/reviewer advice before repeating the same edit strategy.";
     case "spawn_readonly_specialist":
-      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before repeating edits.`;
+      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before continuing edits.`;
     case "mcp_preflight":
       return "Adaptive policy: a read-only librarian MCP preflight was auto-dispatched. Allowlisted MCP tools run only through ToolRegistry + the permission broker; do not call non-allowlisted MCP tools.";
     case "verify":
