@@ -1,3 +1,4 @@
+/** Gap 4 contracts split part 7/7 — do not edit by hand */
 import type { AgentMode } from "./contracts-part-04";
 import type { ConfigScope, SkillScope } from "./contracts-part-06";
 
