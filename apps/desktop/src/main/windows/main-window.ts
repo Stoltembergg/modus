@@ -7,6 +7,10 @@ import {
   screen,
   shell,
 } from "electron";
+import {
+  invalidateHyperPlanDraftOwner,
+  registerHyperPlanDraftOwner,
+} from "../agent/harness/hyperplan-draft-store";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isTrustedRendererUrl, registerTrustedSender } from "../ipc/trusted-sender";
 import type { StartupTimeline } from "../startup/startup-timeline";
@@ -95,6 +99,7 @@ export function createMainWindow({
       webSecurity: true,
     },
   });
+  const ownerEpoch = registerHyperPlanDraftOwner(window.webContents.id);
   startupTimeline.mark("main.window-created");
 
   // 把 maximize/unmaximize 状态推送给 renderer，用于切换 max/restore 按钮图标
@@ -127,6 +132,19 @@ export function createMainWindow({
   );
   const unregisterTrustedSender = registerTrustedSender(window.webContents, rendererUrl);
   window.once("closed", unregisterTrustedSender);
+
+  let ownerDraftsCleared = false;
+  const clearOwnerDrafts = (): void => {
+    if (ownerDraftsCleared) return;
+    ownerDraftsCleared = true;
+    try {
+      invalidateHyperPlanDraftOwner(window.webContents.id, ownerEpoch);
+    } catch {
+      console.warn("[modus] HyperPlan owner draft cleanup failed.");
+    }
+  };
+  window.once("closed", clearOwnerDrafts);
+  window.webContents.once("destroyed", clearOwnerDrafts);
 
   window.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(rendererUrl, url)) {

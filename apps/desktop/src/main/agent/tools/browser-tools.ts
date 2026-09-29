@@ -91,11 +91,11 @@ const tabsTool = defineTool({
     }
 
     if (params.action === "close") {
-      closeBrowserTab(params.viewId);
+      closeBrowserTab(params.viewId, context.workspaceId);
       return toResult(`Closed browser tab ${params.viewId}.`, { viewId: params.viewId });
     }
 
-    const tab = selectBrowserTab(context.window, params.viewId);
+    const tab = selectBrowserTab(context.window, params.viewId, context.workspaceId);
     return toResult(`Selected browser tab ${tab.id} (${tab.url}).`, { tab });
   },
 });
@@ -126,8 +126,9 @@ const cdpTool = defineTool({
   ],
   parameters: cdpParams,
   execute: async (_toolCallId, params: Static<typeof cdpParams>, signal, _onUpdate, ctx) => {
+    const context = resolveAgentToolContext(ctx.cwd);
     const target = targetFor(ctx.cwd, params.viewId);
-    engageAgentBrowser(target);
+    engageAgentBrowser(target, context.sessionId);
     const result = await sendBrowserCdp(
       target,
       params.method,
@@ -147,8 +148,9 @@ const eventsTool = defineTool({
   promptSnippet: "browser_events(viewId?) — drain recent CDP events.",
   parameters: Type.Object(browserTargetParams),
   execute: async (_toolCallId, params: { viewId?: string }, _signal, _onUpdate, ctx) => {
+    const context = resolveAgentToolContext(ctx.cwd);
     const target = targetFor(ctx.cwd, params.viewId);
-    engageAgentBrowser(target);
+    engageAgentBrowser(target, context.sessionId);
     const events = drainBrowserEvents(target);
     return toResult(events.length ? JSON.stringify(events, null, 2) : "No browser events.", {
       events,
@@ -184,8 +186,9 @@ const snapshotTool = defineTool({
     _onUpdate,
     ctx,
   ) => {
+    const context = resolveAgentToolContext(ctx.cwd);
     const target = targetFor(ctx.cwd, params.viewId);
-    engageAgentBrowser(target);
+    engageAgentBrowser(target, context.sessionId);
     const snapshot = await takeBrowserSnapshot({
       target,
       ...(params.maxLines !== undefined ? { maxLines: params.maxLines } : {}),
@@ -216,8 +219,9 @@ const screenshotTool = defineTool({
     _onUpdate,
     ctx,
   ) => {
+    const context = resolveAgentToolContext(ctx.cwd);
     const target = targetFor(ctx.cwd, params.viewId);
-    engageAgentBrowser(target);
+    engageAgentBrowser(target, context.sessionId);
     const shot = await takeBrowserScreenshot({
       target,
       ...(params.fullPage !== undefined ? { fullPage: params.fullPage } : {}),

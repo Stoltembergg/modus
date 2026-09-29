@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentApplyHyperPlanRevisionSchema,
   agentPromptSchema,
+  agentStartOriginalPlanBuildSchema,
   browserRecentSchema,
   diffCommitOrPushSchema,
   limitsCodexEnabledSchema,
@@ -12,6 +13,173 @@ import {
 } from "./schemas";
 
 describe("IPC schemas", () => {
+  it("requires a bounded strict source snapshot for original-plan builds", () => {
+    const snapshot = {
+      title: "Plan",
+      overview: "Overview",
+      content: "# Plan",
+      todos: [{ id: "todo-1", content: "Task", acceptanceCriterionIds: ["criterion-1"] }],
+      spec: {
+        requirements: [{ id: "req-1", text: "Requirement" }],
+        acceptanceCriteria: [
+          {
+            id: "criterion-1",
+            requirementId: "req-1",
+            description: "Pass",
+            todoIds: ["todo-1"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+        evidence: [],
+      },
+    };
+    const input = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      requestId: "request-1",
+      sourceSnapshot: snapshot,
+    };
+    expect(
+      parseIpcInput(agentStartOriginalPlanBuildSchema, input, "agent:start-original-plan-build"),
+    ).toEqual(input);
+    expect(() =>
+      parseIpcInput(
+        agentStartOriginalPlanBuildSchema,
+        { ...input, sourceSnapshot: { ...snapshot, content: "x".repeat(64 * 1024 + 1) } },
+        "agent:start-original-plan-build",
+      ),
+    ).toThrow("Invalid IPC payload");
+    expect(() =>
+      parseIpcInput(
+        agentStartOriginalPlanBuildSchema,
+        {
+          ...input,
+          sourceSnapshot: {
+            ...snapshot,
+            todos: Array.from({ length: 101 }, (_, i) => ({
+              id: String(i),
+              content: "Task",
+              acceptanceCriterionIds: [] as string[],
+            })),
+          },
+        },
+        "agent:start-original-plan-build",
+      ),
+    ).toThrow("Invalid IPC payload");
+  });
+
+  it("round-trips original-plan source strings and stable IDs without normalization", () => {
+    const input = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      requestId: "request-1",
+      sourceSnapshot: {
+        title: "T".repeat(201),
+        overview: "O".repeat(12 * 1024 + 1),
+        content: "# Plan",
+        todos: [
+          {
+            id: " todo-1 ",
+            content: "C".repeat(12 * 1024 + 1),
+            acceptanceCriterionIds: [" criterion-1 "],
+          },
+        ],
+        spec: {
+          requirements: [{ id: " req-1 ", text: "Requirement" }],
+          acceptanceCriteria: [
+            {
+              id: " criterion-1 ",
+              requirementId: " req-1 ",
+              description: "Pass",
+              todoIds: [" todo-1 "],
+              status: "pending",
+            },
+          ],
+          assumptions: [],
+          openQuestions: [],
+          evidence: [
+            {
+              id: " evidence-1 ",
+              kind: "test",
+              status: "passed",
+              runId: " run-1 ",
+              eventId: " event-1 ",
+              revision: " revision-1 ",
+              paths: [],
+              label: "Test",
+              criterionId: " criterion-1 ",
+            },
+          ],
+        },
+      },
+    };
+
+    expect(
+      parseIpcInput(agentStartOriginalPlanBuildSchema, input, "agent:start-original-plan-build"),
+    ).toEqual(input);
+  });
+
+  it("rejects unsafe source snapshot sizes and whitespace-only or oversized IDs", () => {
+    const input = {
+      sessionId: "session-1",
+      planId: "plan-1",
+      requestId: "request-1",
+      sourceSnapshot: {
+        title: "Plan",
+        overview: "Overview",
+        content: "# Plan",
+        todos: [{ id: "todo-1", content: "Task", acceptanceCriterionIds: ["criterion-1"] }],
+        spec: {
+          requirements: [{ id: "req-1", text: "Requirement" }],
+          acceptanceCriteria: [
+            {
+              id: "criterion-1",
+              requirementId: "req-1",
+              description: "Pass",
+              todoIds: ["todo-1"],
+              status: "pending",
+            },
+          ],
+          assumptions: [] as string[],
+          openQuestions: [] as string[],
+          evidence: [],
+        },
+      },
+    };
+    const reject = (sourceSnapshot: typeof input.sourceSnapshot) =>
+      expect(() =>
+        parseIpcInput(
+          agentStartOriginalPlanBuildSchema,
+          { ...input, sourceSnapshot },
+          "agent:start-original-plan-build",
+        ),
+      ).toThrow("Invalid IPC payload");
+
+    reject({ ...input.sourceSnapshot, title: "X".repeat(1024 * 1024) });
+    reject({ ...input.sourceSnapshot, content: "" });
+    reject({
+      ...input.sourceSnapshot,
+      todos: [{ id: " \t ", content: "Task", acceptanceCriterionIds: ["criterion-1"] }],
+    });
+    reject({
+      ...input.sourceSnapshot,
+      todos: [{ id: "x".repeat(129), content: "Task", acceptanceCriterionIds: ["criterion-1"] }],
+    });
+    reject({
+      ...input.sourceSnapshot,
+      spec: { ...input.sourceSnapshot.spec, assumptions: ["A".repeat(501)] },
+    });
+    reject({
+      ...input.sourceSnapshot,
+      spec: {
+        ...input.sourceSnapshot.spec,
+        openQuestions: Array.from({ length: 21 }, () => "Question"),
+      },
+    });
+  });
+
   it("accepts a bounded strict HyperPlan revision payload", () => {
     const valid = {
       sessionId: "session-1",

@@ -1,7 +1,8 @@
 /** Session-scoped Plan Mode persistence. */
 
-import { createHash } from "node:crypto";
-import {
+import { createHash, randomUUID } from "node:crypto";
+import fs, {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -10,8 +11,10 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import type {
+  HyperPlanRevision,
+  HyperPlanSourceSnapshot,
   PlanAcceptanceCriterion,
   PlanBlock,
   PlanBuildStatus,
@@ -23,6 +26,7 @@ import type {
 
 const PLAN_FILE = "plan.md";
 const META_FILE = "plan.json";
+const TRANSACTION_FILE = ".plan-transaction.json";
 const REVISION_IN_DOUBT_FILE = "hyperplan-revision-in-doubt";
 const MAX_STABLE_ID_LENGTH = 128;
 const MAX_ACCEPTANCE_CRITERIA = 100;
@@ -72,6 +76,236 @@ function sanitizeSegment(value: string): string {
 }
 
 type PlanMeta = Omit<PlanRef, "content">;
+
+type PlanTransaction = {
+  state: "prepared" | "committed";
+  backupMarkdown: string;
+  backupMeta: string;
+  stagedMarkdown: string;
+  stagedMeta: string;
+};
+
+function transactionNames(suffix: string): PlanTransaction {
+  return {
+    state: "prepared",
+    backupMarkdown: `.plan.md.${suffix}.backup`,
+    backupMeta: `.plan.json.${suffix}.backup`,
+    stagedMarkdown: `.plan.md.${suffix}.stage`,
+    stagedMeta: `.plan.json.${suffix}.stage`,
+  };
+}
+
+function assertRegularOrMissing(path: string, optional = false): void {
+  try {
+    const stat = fs.lstatSync(path);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Unsafe plan transaction path (symlink or non-file): ${path}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT" && optional) return;
+    throw error;
+  }
+}
+
+function validateTransaction(value: unknown): PlanTransaction {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid plan transaction marker; recovery was not attempted.");
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record).sort();
+  if (keys.join(",") !== "backupMarkdown,backupMeta,stagedMarkdown,stagedMeta,state") {
+    throw new Error("Invalid plan transaction marker; recovery was not attempted.");
+  }
+  if (record.state !== "prepared" && record.state !== "committed") {
+    throw new Error("Invalid plan transaction state; recovery was not attempted.");
+  }
+  const names = [
+    record.backupMarkdown,
+    record.backupMeta,
+    record.stagedMarkdown,
+    record.stagedMeta,
+  ];
+  const suffixes = names.map((name) =>
+    typeof name === "string"
+      ? name.match(
+          /^\.plan\.(?:md|json)\.([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.(?:backup|stage)$/,
+        )?.[1]
+      : undefined,
+  );
+  if (
+    suffixes.some((suffix) => !suffix) ||
+    new Set(suffixes).size !== 1 ||
+    record.backupMarkdown !== `.plan.md.${suffixes[0]}.backup` ||
+    record.backupMeta !== `.plan.json.${suffixes[0]}.backup` ||
+    record.stagedMarkdown !== `.plan.md.${suffixes[0]}.stage` ||
+    record.stagedMeta !== `.plan.json.${suffixes[0]}.stage`
+  ) {
+    throw new Error("Invalid plan transaction artifact names; recovery was not attempted.");
+  }
+  return record as PlanTransaction;
+}
+
+function atomicWriteMarker(dir: string, transaction: PlanTransaction, suffix: string): void {
+  const markerPath = join(dir, TRANSACTION_FILE);
+  const temporaryMarker = join(dir, `.plan-transaction.${suffix}.tmp`);
+  assertRegularOrMissing(markerPath, true);
+  assertRegularOrMissing(temporaryMarker, true);
+  writeFileSync(temporaryMarker, JSON.stringify(transaction), { encoding: "utf8", flag: "wx" });
+  fs.renameSync(temporaryMarker, markerPath);
+}
+
+function removeRegularFile(path: string): void {
+  assertRegularOrMissing(path, true);
+  if (existsSync(path)) fs.unlinkSync(path);
+}
+
+function cleanupTransaction(dir: string, transaction: PlanTransaction, suffix: string): void {
+  // The marker is the sole instruction to recovery. Remove it atomically before deleting
+  // any backup that a prepared transaction might still need.
+  removeRegularFile(join(dir, TRANSACTION_FILE));
+  for (const name of [
+    transaction.backupMarkdown,
+    transaction.backupMeta,
+    transaction.stagedMarkdown,
+    transaction.stagedMeta,
+    `.plan.md.${suffix}.restore`,
+    `.plan.json.${suffix}.restore`,
+    `.plan-transaction.${suffix}.tmp`,
+  ]) {
+    removeRegularFile(join(dir, name));
+  }
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Fingerprint every authoritative source field, independent of object key order. */
+export function fingerprintPlanSource(
+  plan:
+    | Pick<PlanRef, "title" | "overview" | "content" | "todos" | "spec">
+    | HyperPlanSourceSnapshot,
+): string {
+  const source = {
+    title: plan.title,
+    overview: plan.overview,
+    content: plan.content,
+    todos: plan.todos.map((todo) => ({
+      id: todo.id,
+      content: todo.content,
+      acceptanceCriterionIds: todo.acceptanceCriterionIds ?? [],
+    })),
+    spec: plan.spec
+      ? {
+          requirements: plan.spec.requirements,
+          acceptanceCriteria: plan.spec.acceptanceCriteria,
+          assumptions: plan.spec.assumptions,
+          openQuestions: plan.spec.openQuestions,
+          evidence: plan.spec.evidence ?? [],
+        }
+      : null,
+  };
+  return createHash("sha256").update(stableSerialize(source), "utf8").digest("hex");
+}
+
+function assertRecoveryDirectoryWithinRoot(rootDir: string, dir: string): boolean {
+  const rootPath = resolve(rootDir);
+  const targetPath = resolve(dir);
+  const lexicalRelative = relative(rootPath, targetPath);
+  if (
+    !lexicalRelative ||
+    lexicalRelative === ".." ||
+    lexicalRelative.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalRelative)
+  ) {
+    throw new Error("Unsafe plan recovery directory; target must be below its root.");
+  }
+
+  let cursor = rootPath;
+  try {
+    for (const component of lexicalRelative.split(sep)) {
+      cursor = join(cursor, component);
+      const stat = fs.lstatSync(cursor);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Unsafe plan recovery directory (symlink): ${cursor}`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Unsafe plan recovery directory (not a directory): ${cursor}`);
+      }
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+
+  const canonicalRoot = fs.realpathSync(rootDir);
+  const canonicalTarget = fs.realpathSync(dir);
+  const canonicalRelative = relative(canonicalRoot, canonicalTarget);
+  if (
+    !canonicalRelative ||
+    canonicalRelative === ".." ||
+    canonicalRelative.startsWith(`..${sep}`) ||
+    isAbsolute(canonicalRelative)
+  ) {
+    throw new Error("Unsafe plan recovery directory; canonical target is outside its root.");
+  }
+  return true;
+}
+
+function recoverPlanTransaction(dir: string, rootDir: string): void {
+  if (!assertRecoveryDirectoryWithinRoot(rootDir, dir)) return;
+  const markerPath = join(dir, TRANSACTION_FILE);
+  if (!existsSync(markerPath)) return;
+  assertRegularOrMissing(markerPath);
+  let transaction: PlanTransaction;
+  try {
+    transaction = validateTransaction(JSON.parse(readFileSync(markerPath, "utf8")));
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error("Malformed plan transaction marker; files were left untouched.", {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  const suffix = transaction.backupMarkdown.match(/^\.plan\.md\.([0-9a-f-]+)\.backup$/)?.[1];
+  if (!suffix)
+    throw new Error("Invalid plan transaction artifact suffix; recovery was not attempted.");
+  const markdownPath = join(dir, PLAN_FILE);
+  const metaPath = join(dir, META_FILE);
+  const backupMarkdown = join(dir, transaction.backupMarkdown);
+  const backupMeta = join(dir, transaction.backupMeta);
+  const stageMarkdown = join(dir, transaction.stagedMarkdown);
+  const stageMeta = join(dir, transaction.stagedMeta);
+  for (const path of [markdownPath, metaPath]) {
+    assertRegularOrMissing(path);
+  }
+  assertRegularOrMissing(backupMarkdown, transaction.state === "committed");
+  assertRegularOrMissing(backupMeta, transaction.state === "committed");
+  assertRegularOrMissing(stageMarkdown, true);
+  assertRegularOrMissing(stageMeta, true);
+  if (transaction.state === "prepared") {
+    const restoreMarkdown = join(dir, `.plan.md.${suffix}.restore`);
+    const restoreMeta = join(dir, `.plan.json.${suffix}.restore`);
+    assertRegularOrMissing(restoreMarkdown, true);
+    assertRegularOrMissing(restoreMeta, true);
+    fs.rmSync(restoreMarkdown, { force: true });
+    fs.rmSync(restoreMeta, { force: true });
+    copyFileSync(backupMarkdown, restoreMarkdown, fs.constants.COPYFILE_EXCL);
+    copyFileSync(backupMeta, restoreMeta, fs.constants.COPYFILE_EXCL);
+    fs.renameSync(restoreMarkdown, markdownPath);
+    fs.renameSync(restoreMeta, metaPath);
+  }
+  cleanupTransaction(dir, transaction, suffix);
+}
 
 /** Historical plan.json may still store visual blocks; project them to Markdown. */
 type LegacyPlanBlock =
@@ -195,7 +429,8 @@ function readMeta(dir: string): Partial<PlanMeta> | undefined {
   }
 }
 
-function readPlanDir(dir: string): PlanRef | undefined {
+function readPlanDir(dir: string, rootDir: string): PlanRef | undefined {
+  recoverPlanTransaction(dir, rootDir);
   const raw = readMeta(dir);
   const path = typeof raw?.path === "string" ? raw.path : join(dir, PLAN_FILE);
   if (!raw || !existsSync(path)) return undefined;
@@ -219,9 +454,27 @@ function readPlanDir(dir: string): PlanRef | undefined {
   };
 }
 
+/** Read the source fingerprint without invoking recovery; used at the synchronous publish boundary. */
+function fingerprintPlanFiles(dir: string): string | undefined {
+  const raw = readMeta(dir);
+  if (!raw) return undefined;
+  const path = typeof raw.path === "string" ? raw.path : join(dir, PLAN_FILE);
+  if (!existsSync(path)) return undefined;
+  const content = readFileSync(path, "utf8");
+  return fingerprintPlanSource({
+    title: raw.title ?? "Plan",
+    overview: raw.overview ?? "",
+    content,
+    todos: raw.todos ?? [],
+    ...(raw.spec ? { spec: raw.spec } : {}),
+  });
+}
+
 function resolvePlanDir(rootDir: string, id: string): string | undefined {
   const current = planDir(rootDir, id);
-  if (existsSync(join(current, META_FILE))) return current;
+  if (assertRecoveryDirectoryWithinRoot(rootDir, current) && existsSync(join(current, META_FILE))) {
+    return current;
+  }
 
   // Historical plans used `<workspaceId>/<slug>` and ids shaped as
   // `${workspaceId}:${slug}`. Keep them readable without preserving that layout
@@ -229,7 +482,9 @@ function resolvePlanDir(rootDir: string, id: string): string | undefined {
   const separator = id.indexOf(":");
   if (separator < 0) return undefined;
   const legacy = join(rootDir, sanitizeSegment(id.slice(0, separator)), id.slice(separator + 1));
-  return existsSync(join(legacy, META_FILE)) ? legacy : undefined;
+  return assertRecoveryDirectoryWithinRoot(rootDir, legacy) && existsSync(join(legacy, META_FILE))
+    ? legacy
+    : undefined;
 }
 
 export function writePlan(
@@ -282,6 +537,138 @@ export function writePlan(
   return { ...meta, content };
 }
 
+/**
+ * Atomically promote a validated HyperPlan revision, rolling back interrupted writes on read.
+ * Revalidation assumes synchronous, single-process writers; it detects in-operation changes but
+ * does not provide locking or protection against concurrent external-process writers.
+ */
+export function promotePlanRevision(
+  rootDir: string,
+  input: { planId: string; expectedFingerprint: string; revision: HyperPlanRevision },
+): PlanRef {
+  const current = readPlanById(rootDir, input.planId);
+  if (!current) throw new Error(`Plan ${input.planId} was not found.`);
+  if (fingerprintPlanSource(current) !== input.expectedFingerprint) {
+    throw new Error("Plan source changed since the revision was generated.");
+  }
+  const dir = resolvePlanDir(rootDir, input.planId);
+  if (!dir) throw new Error(`Plan ${input.planId} was not found.`);
+
+  const content = input.revision.content.trim();
+  const todos = buildTodos(input.revision.todos);
+  assertStableIds(
+    "Todo",
+    todos.map((todo) => todo.id),
+  );
+  const spec: PlanSpec = {
+    ...input.revision.spec,
+    acceptanceCriteria: input.revision.spec.acceptanceCriteria.map((criterion) => ({
+      ...criterion,
+      status: "pending",
+    })),
+    evidence: [],
+  };
+  validateSpec(spec, todos);
+
+  const path = join(dir, PLAN_FILE);
+  const now = new Date().toISOString();
+  const meta: PlanMeta = {
+    id: current.id,
+    title: input.revision.title,
+    overview: input.revision.overview,
+    path,
+    hash: hashContent(content),
+    workspaceId: current.workspaceId,
+    sessionId: current.sessionId,
+    blocks: [{ type: "markdown", content }],
+    todos,
+    spec,
+    buildStatus: "not_built",
+    createdAt: current.createdAt,
+    updatedAt: now,
+  };
+  const suffix = randomUUID();
+  const transaction = transactionNames(suffix);
+  const metaPath = join(dir, META_FILE);
+  let markerWritten = false;
+  let publicationStarted = false;
+  try {
+    for (const target of [path, metaPath]) assertRegularOrMissing(target);
+    for (const artifact of [
+      transaction.backupMarkdown,
+      transaction.backupMeta,
+      transaction.stagedMarkdown,
+      transaction.stagedMeta,
+    ]) {
+      assertRegularOrMissing(join(dir, artifact), true);
+    }
+    copyFileSync(path, join(dir, transaction.backupMarkdown), fs.constants.COPYFILE_EXCL);
+    copyFileSync(metaPath, join(dir, transaction.backupMeta), fs.constants.COPYFILE_EXCL);
+    writeFileSync(join(dir, transaction.stagedMarkdown), content, { encoding: "utf8", flag: "wx" });
+    writeFileSync(join(dir, transaction.stagedMeta), JSON.stringify(meta, null, 2), {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    atomicWriteMarker(dir, transaction, suffix);
+    markerWritten = true;
+
+    // Writers in this process are synchronous; re-read authoritative bytes immediately before
+    // publication so an in-operation source change is rejected. This is not cross-process locking.
+    if (fingerprintPlanFiles(dir) !== input.expectedFingerprint) {
+      throw new Error("Plan source changed since the revision was generated.");
+    }
+
+    publicationStarted = true;
+    fs.renameSync(join(dir, transaction.stagedMarkdown), path);
+    fs.renameSync(join(dir, transaction.stagedMeta), metaPath);
+    atomicWriteMarker(dir, { ...transaction, state: "committed" }, suffix);
+    // Commit point is the atomic prepared->committed marker rename. Cleanup is recoverable and
+    // must not turn a committed promotion into an ambiguous reported failure.
+    try {
+      cleanupTransaction(dir, { ...transaction, state: "committed" }, suffix);
+    } catch {
+      // The committed marker remains whenever cleanup is incomplete; reads finish cleanup.
+    }
+  } catch (error) {
+    let rollbackError: unknown;
+    try {
+      if (publicationStarted) {
+        assertRegularOrMissing(join(dir, transaction.backupMarkdown));
+        assertRegularOrMissing(join(dir, transaction.backupMeta));
+        assertRegularOrMissing(path);
+        assertRegularOrMissing(metaPath);
+        copyFileSync(join(dir, transaction.backupMarkdown), path);
+        copyFileSync(join(dir, transaction.backupMeta), metaPath);
+      }
+      if (markerWritten) cleanupTransaction(dir, transaction, suffix);
+      else {
+        for (const artifact of [
+          transaction.backupMarkdown,
+          transaction.backupMeta,
+          transaction.stagedMarkdown,
+          transaction.stagedMeta,
+        ]) {
+          const artifactPath = join(dir, artifact);
+          assertRegularOrMissing(artifactPath, true);
+          fs.rmSync(artifactPath, { force: true });
+        }
+      }
+    } catch (failure) {
+      rollbackError = failure;
+    }
+    if (rollbackError) {
+      throw new Error(
+        "Plan revision failed and rollback could not be completed; recovery artifacts were preserved.",
+        {
+          cause: rollbackError,
+        },
+      );
+    }
+    throw error;
+  }
+  return { ...meta, content };
+}
+
 export function setPlanBuildStatusById(
   rootDir: string,
   id: string,
@@ -289,7 +676,7 @@ export function setPlanBuildStatusById(
 ): PlanRef | undefined {
   const dir = resolvePlanDir(rootDir, id);
   if (!dir) return undefined;
-  const plan = readPlanDir(dir);
+  const plan = readPlanDir(dir, rootDir);
   if (!plan) return undefined;
   const { content: _content, ...meta } = plan;
   const next: PlanMeta = { ...meta, buildStatus, updatedAt: new Date().toISOString() };
@@ -312,7 +699,7 @@ export function updatePlanContentById(
       "Plan revision state is indeterminate; manual repair is required before updating.",
     );
   }
-  const plan = readPlanDir(dir);
+  const plan = readPlanDir(dir, rootDir);
   if (!plan) return undefined;
   if (plan.hash !== expectedHash || hashContent(plan.content) !== expectedHash) {
     throw new Error("Plan changed since review; reload it before applying this revision.");
@@ -392,7 +779,7 @@ export function applyPlanAcceptanceEvidenceById(
 ): PlanRef | undefined {
   const dir = resolvePlanDir(rootDir, id);
   if (!dir) return undefined;
-  const plan = readPlanDir(dir);
+  const plan = readPlanDir(dir, rootDir);
   if (!plan?.spec) return plan;
   if (evidence.length > MAX_CURRENT_RUN_EVIDENCE) {
     throw new Error(
@@ -460,12 +847,12 @@ export function applyPlanAcceptanceEvidenceById(
 }
 
 export function readPlan(rootDir: string, sessionId: string): PlanRef | undefined {
-  return readPlanDir(planDir(rootDir, sessionId));
+  return readPlanDir(planDir(rootDir, sessionId), rootDir);
 }
 
 export function readPlanById(rootDir: string, id: string): PlanRef | undefined {
   const dir = resolvePlanDir(rootDir, id);
-  return dir ? readPlanDir(dir) : undefined;
+  return dir ? readPlanDir(dir, rootDir) : undefined;
 }
 
 export function deleteSessionPlan(rootDir: string, sessionId: string): void {

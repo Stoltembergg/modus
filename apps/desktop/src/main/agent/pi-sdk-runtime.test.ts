@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent } from "../../shared/contracts";
+import type { AgentEvent, PlanRef } from "../../shared/contracts";
 
 let userData: string;
 let cwd: string;
@@ -155,11 +155,12 @@ const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } =
 );
 const mcpCitations = await import("./harness/mcp-citation-registry");
 const projectMemory = await import("../memory/project-memory-service");
-const { writePlan, readPlanById } = await import("../plan/plan-store");
+const { writePlan, readPlanById, fingerprintPlanSource } = await import("../plan/plan-store");
 const checkpointService = await import("./checkpoint-service");
 const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/tool-context");
 const { resolveQuestionRequest } = await import("../interaction/question-broker");
 const todoToolRuntime = await import("./tools/todo-tools");
+const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
@@ -372,6 +373,1051 @@ afterAll(async () => {
 });
 
 describe("PiSdkRuntime", () => {
+  it.each([
+    "selected",
+    "original",
+  ] as const)("starts a fresh %s HyperPlan build without clarifying an ambiguous plan title", async (api) => {
+    const sessionId = `hyperplan-intent-${api}-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Which target is unclear?",
+      overview: "The approved plan should start immediately.",
+      content: "# Which target is unclear?",
+      todos: [
+        { id: "first", content: "Implement selected feature" },
+        { id: "second", content: "Validate acceptance criteria" },
+      ],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const piSession = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session: piSession }));
+    const operation = {
+      ownerId: 601,
+      requestId: `intent-${api}`,
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    } as const;
+    const started = await hyperPlanDraftStore.runHyperPlanStartOperation({
+      ...operation,
+      start: (stored, onRunCreated) => {
+        const startInput = {
+          ...operation,
+          idempotencyKey: `intent-${api}`,
+          ...(stored.runId ? { existingRunId: stored.runId } : {}),
+          onRunCreated,
+        };
+        return api === "selected"
+          ? runtime.startPlanBuild(window, startInput)
+          : runtime.startOriginalPlanBuild(window, startInput);
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("building"),
+    );
+    await vi.waitFor(() => expect(piSession.prompt).toHaveBeenCalledTimes(1));
+    const sentMessage = String((piSession.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(sentMessage).toContain(plan.path);
+    expect(sentMessage).toMatch(/single\s+source of truth/);
+    expect(sentMessage).toContain("implement it end-to-end");
+    expect(sentMessage).toContain("1. Implement selected feature");
+    expect(sentMessage).toContain("2. Validate acceptance criteria");
+    expect(started.runId).toBeTruthy();
+    expect(
+      (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([, event]) => (event as AgentEvent).type === "question.requested",
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects an old epoch before it can start through a replacement reservation", async () => {
+    const ownerId = 501;
+    const sessionId = `hyperplan-aba-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "ABA plan",
+      overview: "ABA guard",
+      content: "# ABA plan",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const runtime = new PiSdkRuntime();
+    const oldEpoch = hyperPlanDraftStore.registerHyperPlanDraftOwner(ownerId);
+    const fingerprint = fingerprintPlanSource(plan);
+    const oldAttempt = hyperPlanDraftStore.runHyperPlanStartOperation({
+      ownerId,
+      ownerEpoch: oldEpoch,
+      requestId: "same-request",
+      kind: "original",
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprint,
+      start: (operation, onRunCreated) =>
+        runtime.startOriginalPlanBuild(createWindowStub(), {
+          ownerId,
+          ownerEpoch: oldEpoch,
+          requestId: "same-request",
+          sessionId,
+          planId: plan.id,
+          planFingerprint: fingerprint,
+          idempotencyKey: "old-epoch-key",
+          ...(operation.runId ? { existingRunId: operation.runId } : {}),
+          onRunCreated,
+        }),
+    });
+    expect(hyperPlanDraftStore.invalidateHyperPlanDraftOwner(ownerId, oldEpoch)).toBe(true);
+
+    const newEpoch = hyperPlanDraftStore.registerHyperPlanDraftOwner(ownerId);
+    let finishNew!: (result: {
+      sessionId: string;
+      planId: string;
+      planFingerprint: string;
+      runId: string;
+    }) => void;
+    const newAttempt = hyperPlanDraftStore.runHyperPlanStartOperation({
+      ownerId,
+      ownerEpoch: newEpoch,
+      requestId: "same-request",
+      kind: "original",
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprint,
+      start: () =>
+        new Promise((resolve) => {
+          finishNew = resolve;
+        }),
+    });
+    await expect(oldAttempt).rejects.toThrow(/reservation/i);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(
+      hyperPlanDraftStore.ownsHyperPlanStartReservation({
+        ownerId,
+        ownerEpoch: newEpoch,
+        requestId: "same-request",
+        sessionId,
+      }),
+    ).toBe(true);
+    expect(
+      hyperPlanDraftStore.ownsHyperPlanStartReservation({
+        ownerId,
+        ownerEpoch: oldEpoch,
+        requestId: "same-request",
+        sessionId,
+      }),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.invalidateHyperPlanDraftOwner(ownerId, newEpoch)).toBe(true);
+    finishNew({ sessionId, planId: plan.id, planFingerprint: fingerprint, runId: "never-created" });
+    await expect(newAttempt).resolves.toMatchObject({ runId: "never-created" });
+  });
+
+  it("rejects a HyperPlan start when the selected plan fingerprint is stale", async () => {
+    const sessionId = `hyperplan-stale-start-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime() as InstanceType<typeof PiSdkRuntime> & {
+      startPlanBuild: (
+        window: BrowserWindowType,
+        input: {
+          sessionId: string;
+          planId: string;
+          planFingerprint: string;
+          requestId: string;
+        },
+      ) => Promise<{ runId: string }>;
+    };
+
+    await expect(
+      runtime.startPlanBuild(createWindowStub(), {
+        sessionId,
+        planId: "missing-plan",
+        planFingerprint: "stale-fingerprint",
+        requestId: "stale-start",
+      }),
+    ).rejects.toThrow(/plan|fingerprint|missing/i);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+
+  it("starts one fresh HyperPlan run and replays the same run.started after send failure", async () => {
+    const sessionId = `hyperplan-start-replay-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plansRoot = join(userData, "plans");
+    const plan = writePlan(plansRoot, {
+      workspaceId,
+      sessionId,
+      title: "Exclusive plan",
+      overview: "Start exclusively.",
+      content: "# Exclusive plan",
+      todos: [],
+      spec: {
+        requirements: [],
+        acceptanceCriteria: [],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    let resolvePiPrompt!: () => void;
+    let signalPiPrompt!: () => void;
+    const piPromptGate = new Promise<void>((resolve) => {
+      resolvePiPrompt = resolve;
+    });
+    const piPromptCalled = new Promise<void>((resolve) => {
+      signalPiPrompt = resolve;
+    });
+    const piSession = createMockPiSession({
+      prompt: () => {
+        signalPiPrompt();
+        return piPromptGate;
+      },
+    });
+    let resolveCreateSession!: () => void;
+    let signalCreateSession!: () => void;
+    const createSessionGate = new Promise<void>((resolve) => {
+      resolveCreateSession = resolve;
+    });
+    const createSessionCalled = new Promise<void>((resolve) => {
+      signalCreateSession = resolve;
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => {
+      signalCreateSession();
+      await createSessionGate;
+      return { session: piSession };
+    });
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    let throwStartedOnce = true;
+    send.mockImplementation((_channel: string, event: AgentEvent) => {
+      if (event.type === "run.started" && throwStartedOnce) {
+        throwStartedOnce = false;
+        throw new Error("renderer delivery failed");
+      }
+    });
+    const runtime = new PiSdkRuntime();
+    const operation = {
+      ownerId: 42,
+      requestId: "start-replay-request",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const invoke = (existingRunId?: string) =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(window, {
+            ...operation,
+            idempotencyKey: "stable-hyperplan-event",
+            ...((existingRunId ?? stored.runId)
+              ? { existingRunId: existingRunId ?? stored.runId }
+              : {}),
+            onRunCreated,
+          }),
+      });
+
+    const firstStart = invoke();
+    await createSessionCalled;
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(true);
+    await expect(
+      runtime.prompt(window, {
+        sessionId,
+        message: "Must not become a follow-up.",
+        context: [],
+      }),
+    ).rejects.toThrow(/HyperPlan choice is pending/i);
+    expect(() =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        requestId: "competing-start-request",
+        start: async () => ({
+          sessionId,
+          planId: plan.id,
+          planFingerprint: fingerprintPlanSource(plan),
+          runId: "should-not-start",
+        }),
+      }),
+    ).toThrow(/reserved/i);
+    resolveCreateSession();
+    await expect(firstStart).rejects.toThrow(/delivery failed/i);
+    const persistedBeforeReplay = getDatabase()
+      .prepare("select id from agent_events where session_id = ? and type = 'run.started'")
+      .get(sessionId) as { id: string } | undefined;
+    expect(persistedBeforeReplay).toBeDefined();
+    const started = await invoke();
+    expect(started).toMatchObject({ sessionId, planId: plan.id });
+    expect(getAgentRun(started.runId)?.userMessageId).toBe("hyperplan:stable-hyperplan-event");
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(true);
+    expect(getActiveAgentRun(sessionId)?.id).toBe(started.runId);
+    expect(
+      send.mock.calls.some(
+        ([, event]) =>
+          (event as AgentEvent).type === "session.status" &&
+          (event as AgentEvent & { status: { type: string } }).status.type === "idle",
+      ),
+    ).toBe(false);
+    await piPromptCalled;
+    resolvePiPrompt();
+    await vi.waitFor(() =>
+      expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false),
+    );
+    const rows = getDatabase()
+      .prepare(
+        "select id, payload_json from agent_events where session_id = ? and type = 'run.started'",
+      )
+      .all(sessionId) as Array<{ id: string; payload_json: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.id).toBe(persistedBeforeReplay?.id);
+    expect(JSON.parse(rows[0]?.payload_json ?? "{}")).toMatchObject({
+      type: "run.started",
+      runId: started.runId,
+    });
+    expect(
+      send.mock.calls.filter(([, event]) => (event as AgentEvent).type === "run.started"),
+    ).toHaveLength(2);
+    await vi.waitFor(() => expect(piSession.prompt).toHaveBeenCalledTimes(1));
+    expect(piSession.prompt).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        streamingBehavior: "followUp",
+      }),
+    );
+  });
+
+  it("releases pre-run reservations and deduplicates a persisted message.started on retry", async () => {
+    const sessionId = `hyperplan-message-retry-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Message retry plan",
+      overview: "Retry before run creation.",
+      content: "# Message retry plan",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    let failOnce = true;
+    send.mockImplementation((_channel: string, event: AgentEvent) => {
+      if (event.type === "message.started" && failOnce) {
+        failOnce = false;
+        throw new Error("message delivery failed after persistence");
+      }
+    });
+    const runtime = new PiSdkRuntime();
+    const operation = {
+      ownerId: 51,
+      requestId: "message-retry-request",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const invoke = () =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (_stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(window, {
+            ...operation,
+            idempotencyKey: "message-retry-operation",
+            onRunCreated,
+          }),
+      });
+
+    await expect(invoke()).rejects.toThrow(/message delivery failed/i);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    const before = getDatabase()
+      .prepare("select id from agent_events where session_id = ? and type = 'message.started'")
+      .all(sessionId) as Array<{ id: string }>;
+    expect(before).toHaveLength(1);
+
+    const started = await invoke();
+    expect(started.runId).toBeTruthy();
+    const after = getDatabase()
+      .prepare("select id from agent_events where session_id = ? and type = 'message.started'")
+      .all(sessionId) as Array<{ id: string }>;
+    expect(after).toHaveLength(1);
+    expect(after[0]?.id).toBe(before[0]?.id);
+  });
+
+  it("settles the same run when a post-acknowledgement busy send throws", async () => {
+    const sessionId = `hyperplan-post-start-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Post-start failure plan",
+      overview: "Fail after run.started.",
+      content: "# Post-start failure plan",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    let startedSeen = false;
+    send.mockImplementation((_channel: string, event: AgentEvent) => {
+      if (event.type === "run.started") startedSeen = true;
+      if (event.type === "session.status" && event.status.type === "busy" && startedSeen) {
+        throw new Error("post-start busy status delivery failed");
+      }
+    });
+    const runtime = new PiSdkRuntime();
+    const operation = {
+      ownerId: 52,
+      requestId: "post-start-failure-request",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const invoke = () =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(window, {
+            ...operation,
+            idempotencyKey: "post-start-failure-operation",
+            ...(stored.runId ? { existingRunId: stored.runId } : {}),
+            onRunCreated,
+          }),
+      });
+
+    const started = await invoke();
+    await vi.waitFor(() => expect(getAgentRun(started.runId)?.status).toBe("failed"));
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(getAgentSession(sessionId)?.status).toBe("idle");
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect((await invoke()).runId).toBe(started.runId);
+    expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([started.runId]);
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.failed'")
+        .all(sessionId),
+    ).toHaveLength(1);
+  });
+
+  it("settles a created HyperPlan run when reading its spec fails before run.started", async () => {
+    const sessionId = `hyperplan-spec-read-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Spec read failure",
+      overview: "Fail during post-create setup.",
+      content: "# Spec read failure",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const runtime = new PiSdkRuntime();
+    const originalCreate = createAgentRun;
+    let createdRunId: string | undefined;
+    const createSpy = vi.spyOn(await import("./agent-run-store"), "createAgentRun");
+    createSpy.mockImplementation((input) => {
+      const run = originalCreate(input);
+      createdRunId = run.id;
+      return run;
+    });
+    const originalRead = readPlanById;
+    const readSpy = vi.spyOn(await import("../plan/plan-store"), "readPlanById");
+    readSpy.mockImplementation((root, id) => {
+      if (createdRunId) throw new Error("plan spec read failed");
+      return originalRead(root, id);
+    });
+    const operation = {
+      ownerId: 55,
+      requestId: "spec-read-failure-request",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+
+    await expect(
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (_stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(createWindowStub(), {
+            ...operation,
+            idempotencyKey: "spec-read-failure-operation",
+            onRunCreated,
+          }),
+      }),
+    ).rejects.toThrow("plan spec read failed");
+
+    expect(createdRunId).toBeDefined();
+    const failedRun = createdRunId ? getAgentRun(createdRunId) : undefined;
+    expect(failedRun?.status).toBe("failed");
+    readSpy.mockRestore();
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(getAgentSession(sessionId)?.status).toBe("idle");
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([createdRunId]);
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.failed'")
+        .all(sessionId),
+    ).toHaveLength(1);
+    expect(
+      getDatabase()
+        .prepare("select id from agent_events where session_id = ? and type = 'run.started'")
+        .all(sessionId),
+    ).toHaveLength(0);
+  });
+
+  it("settles a legacy run when post-create setup fails before run.started without a phantom failure event", async () => {
+    const sessionId = `legacy-post-create-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const window = createWindowStub();
+    const runtime = new PiSdkRuntime();
+    const setupSpy = vi
+      .spyOn(runtime as unknown as { specBuildPlan: () => unknown }, "specBuildPlan")
+      .mockImplementation(() => {
+        throw new Error("legacy setup failed");
+      });
+
+    await expect(
+      runtime.prompt(window, { sessionId, message: "Legacy prompt", context: [] }),
+    ).rejects.toThrow("legacy setup failed");
+
+    setupSpy.mockRestore();
+    const runs = await runtime.listRuns(sessionId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(getAgentSession(sessionId)?.status).toBe("error");
+    const types = (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, event]) => (event as AgentEvent).type,
+    );
+    expect(types).toContain("runtime.error");
+    expect(types).toContain("session.status");
+    expect(types).not.toContain("run.failed");
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+  });
+
+  it("settles a legacy run when run.started persists but its delivery throws", async () => {
+    const sessionId = `legacy-started-delivery-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const window = createWindowStub();
+    (window.webContents.send as ReturnType<typeof vi.fn>).mockImplementation(
+      (_channel: string, event: AgentEvent) => {
+        if (event.type === "run.started") throw new Error("started delivery failed");
+      },
+    );
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.prompt(window, { sessionId, message: "Legacy prompt", context: [] }),
+    ).rejects.toThrow("started delivery failed");
+
+    const runs = await runtime.listRuns(sessionId);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe("failed");
+    expect(getAgentSession(sessionId)?.status).toBe("error");
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.started'")
+        .all(sessionId),
+    ).toHaveLength(1);
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.failed'")
+        .all(sessionId),
+    ).toHaveLength(1);
+    expect(
+      (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([, event]) =>
+          (event as AgentEvent).type === "session.status" && event.status.type === "idle",
+      ),
+    ).toBe(true);
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+
+  it("settles a replayed HyperPlan run when setup fails before this attempt emits run.started", async () => {
+    const sessionId = `hyperplan-replay-setup-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Replay setup failure",
+      overview: "Fail setup on replay.",
+      content: "# Replay setup failure",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    let throwStarted = true;
+    send.mockImplementation((_channel: string, event: AgentEvent) => {
+      if (event.type === "run.started" && throwStarted) {
+        throwStarted = false;
+        throw new Error("started delivery failed");
+      }
+    });
+    const runtime = new PiSdkRuntime();
+    let setupCalls = 0;
+    vi.spyOn(
+      runtime as unknown as { specBuildPlan: () => unknown },
+      "specBuildPlan",
+    ).mockImplementation(() => {
+      setupCalls += 1;
+      if (setupCalls === 2) throw new Error("replay setup failed");
+      return undefined;
+    });
+    const operation = {
+      ownerId: 56,
+      requestId: "replay-setup-failure",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const invoke = () =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(window, {
+            ...operation,
+            idempotencyKey: "replay-setup-failure",
+            ...(stored.runId ? { existingRunId: stored.runId } : {}),
+            onRunCreated,
+          }),
+      });
+
+    await expect(invoke()).rejects.toThrow("started delivery failed");
+    const originalRunId = (await runtime.listRuns(sessionId))[0]?.id;
+    expect(originalRunId).toBeDefined();
+    await expect(invoke()).rejects.toThrow("replay setup failed");
+
+    expect((await runtime.listRuns(sessionId)).map(({ id }) => id)).toEqual([originalRunId]);
+    expect(getAgentRun(originalRunId ?? "")?.status).toBe("failed");
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.started'")
+        .all(sessionId),
+    ).toHaveLength(1);
+    expect(
+      getDatabase()
+        .prepare("select type from agent_events where session_id = ? and type = 'run.failed'")
+        .all(sessionId),
+    ).toHaveLength(1);
+  });
+
+  it("settles and releases a HyperPlan run when building status delivery fails", async () => {
+    const sessionId = `hyperplan-building-send-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Building delivery failure",
+      overview: "Fail after run start.",
+      content: "# Building delivery failure",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    send.mockImplementation((_channel: string, event: AgentEvent) => {
+      if (event.type === "plan.updated" && event.plan.buildStatus === "building") {
+        throw new Error("building status delivery failed");
+      }
+      if (event.type === "run.failed") throw new Error("terminal delivery failed");
+    });
+    const runtime = new PiSdkRuntime();
+    const operation = {
+      ownerId: 53,
+      requestId: "building-send-failure",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const started = await hyperPlanDraftStore.runHyperPlanStartOperation({
+      ...operation,
+      start: (_stored, onRunCreated) =>
+        runtime.startOriginalPlanBuild(window, {
+          ...operation,
+          idempotencyKey: "building-send-failure",
+          onRunCreated,
+        }),
+    });
+
+    await vi.waitFor(() => expect(getAgentRun(started.runId)?.status).toBe("failed"));
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(getAgentSession(sessionId)?.status).toBe("idle");
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    expect(
+      (runtime as unknown as { runOutputTrackers: Map<string, unknown> }).runOutputTrackers.has(
+        sessionId,
+      ),
+    ).toBe(false);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    expect((await runtime.listRuns(sessionId)).map((run) => run.id)).toEqual([started.runId]);
+    const events = send.mock.calls.map(([, event]) => event as AgentEvent);
+    const terminalIndex = events.findIndex((event) => event.type === "run.failed");
+    const runtimeErrorIndex = events.findIndex((event) => event.type === "runtime.error");
+    const idleIndex = events.findIndex(
+      (event) => event.type === "session.status" && event.status.type === "idle",
+    );
+    expect(terminalIndex).toBeGreaterThanOrEqual(0);
+    expect(runtimeErrorIndex).toBeGreaterThan(terminalIndex);
+    expect(idleIndex).toBeGreaterThan(runtimeErrorIndex);
+  });
+
+  it.each([
+    1, 2,
+  ])("cleans up preflight and HyperPlan reservations when executePrompt plan read %i throws", async (readPoint) => {
+    const sessionId = `hyperplan-preflight-read-${readPoint}-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Preflight read failure",
+      overview: "Fail while preparing the build.",
+      content: "# Preflight read failure",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const runtime = new PiSdkRuntime();
+    const originalRead = readPlanById;
+    const readSpy = vi.spyOn(await import("../plan/plan-store"), "readPlanById");
+    let readsDuringPreflight = 0;
+    let injected = false;
+    readSpy.mockImplementation((root, id) => {
+      const hasReservation = (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId);
+      if (hasReservation) {
+        readsDuringPreflight += 1;
+        if (readsDuringPreflight === readPoint) {
+          injected = true;
+          throw new Error(`plan preflight read ${readPoint} failed`);
+        }
+      }
+      return originalRead(root, id);
+    });
+    const operation = {
+      ownerId: 57 + readPoint,
+      requestId: `preflight-read-${readPoint}`,
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const invoke = () =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (_stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(createWindowStub(), {
+            ...operation,
+            idempotencyKey: `preflight-read-${readPoint}`,
+            onRunCreated,
+          }),
+      });
+
+    await expect(invoke()).rejects.toThrow(`plan preflight read ${readPoint} failed`);
+    expect(injected).toBe(true);
+    expect(await runtime.listRuns(sessionId)).toHaveLength(0);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+
+    readSpy.mockRestore();
+    const retry = await invoke();
+    expect(retry.runId).toBeTruthy();
+    expect(getAgentRun(retry.runId)?.sessionId).toBe(sessionId);
+  });
+
+  it("releases only its preflight reservation when run creation fails and allows retry", async () => {
+    const sessionId = `hyperplan-run-create-failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Run creation failure",
+      overview: "Retry before run creation.",
+      content: "# Run creation failure",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    const runtime = new PiSdkRuntime();
+    const operation = {
+      ownerId: 54,
+      requestId: "run-create-failure",
+      kind: "original" as const,
+      sessionId,
+      planId: plan.id,
+      planFingerprint: fingerprintPlanSource(plan),
+    };
+    const runStore = await import("./agent-run-store");
+    const createSpy = vi.spyOn(runStore, "createAgentRun").mockImplementationOnce(() => {
+      throw new Error("run database unavailable");
+    });
+    const invoke = () =>
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ...operation,
+        start: (_stored, onRunCreated) =>
+          runtime.startOriginalPlanBuild(createWindowStub(), {
+            ...operation,
+            idempotencyKey: "run-create-failure",
+            onRunCreated,
+          }),
+      });
+
+    await expect(invoke()).rejects.toThrow(/run database unavailable/i);
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(await runtime.listRuns(sessionId)).toHaveLength(0);
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+    createSpy.mockRestore();
+    const retry = await invoke();
+    expect(getAgentRun(retry.runId)).toMatchObject({ id: retry.runId, sessionId });
+    await vi.waitFor(() =>
+      expect(
+        (
+          runtime as unknown as { preflightReservations: Map<string, symbol> }
+        ).preflightReservations.has(sessionId),
+      ).toBe(false),
+    );
+  });
+
+  it("rejects a HyperPlan build start when an authoritative run is already active", async () => {
+    const sessionId = `hyperplan-busy-start-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Busy plan",
+      overview: "Busy guard.",
+      content: "# Busy plan",
+      todos: [],
+      spec: {
+        requirements: [],
+        acceptanceCriteria: [],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    const activeRun = createAgentRun({ sessionId, prompt: "Existing work" });
+    const runtime = new PiSdkRuntime();
+    await expect(
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ownerId: 43,
+        requestId: "busy-start",
+        kind: "original",
+        sessionId,
+        planId: plan.id,
+        planFingerprint: fingerprintPlanSource(plan),
+        start: (_operation, onRunCreated) =>
+          runtime.startOriginalPlanBuild(createWindowStub(), {
+            ownerId: 43,
+            requestId: "busy-start",
+            sessionId,
+            planId: plan.id,
+            planFingerprint: fingerprintPlanSource(plan),
+            idempotencyKey: "busy-start",
+            onRunCreated,
+          }),
+      }),
+    ).rejects.toThrow(/busy/i);
+    expect(getActiveAgentRun(sessionId)?.id).toBe(activeRun.id);
+    expect(hyperPlanDraftStore.isHyperPlanSessionReserved(sessionId)).toBe(false);
+  });
+
+  it("publishes a promoted plan through the persisted runtime event path", () => {
+    const sessionId = `hyperplan-event-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const window = createWindowStub();
+    const runtime = new PiSdkRuntime();
+    const plan: PlanRef = {
+      id: "plan-1",
+      sessionId,
+      workspaceId,
+      title: "Promoted",
+      overview: "Published by runtime.",
+      path: join(userData, "plan.md"),
+      hash: "hash",
+      blocks: [{ type: "markdown", content: "# Promoted" }],
+      content: "# Promoted",
+      todos: [],
+      buildStatus: "not_built",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+
+    runtime.publishPlanUpdated(window, sessionId, plan);
+
+    expect(listAgentEvents(sessionId).at(-1)?.event).toEqual({
+      type: "plan.updated",
+      sessionId,
+      plan,
+    });
+    expect(window.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      expect.any(String),
+      { type: "plan.updated", sessionId, plan },
+    );
+  });
+
+  it("persists at most one plan update across a failed delivery and keyed retry", () => {
+    const sessionId = `hyperplan-delivery-retry-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const window = createWindowStub();
+    const send = window.webContents.send as ReturnType<typeof vi.fn>;
+    send.mockImplementationOnce(() => {
+      throw new Error("renderer delivery failed");
+    });
+    const runtime = new PiSdkRuntime();
+    const plan: PlanRef = {
+      id: "plan-1",
+      sessionId,
+      workspaceId,
+      title: "Promoted",
+      overview: "Published by runtime.",
+      path: join(userData, "plan.md"),
+      hash: "hash",
+      blocks: [{ type: "markdown", content: "# Promoted" }],
+      content: "# Promoted",
+      todos: [],
+      buildStatus: "not_built",
+      createdAt: "created",
+      updatedAt: "updated",
+    };
+    const selectionId = `selection-${crypto.randomUUID()}`;
+    const retry = () => runtime.publishPlanUpdated(window, sessionId, plan, selectionId);
+
+    expect(retry).toThrow(/delivery failed/i);
+    expect(() => retry()).not.toThrow();
+
+    const persisted = getDatabase()
+      .prepare(
+        "select count(*) as count from agent_events where session_id = ? and type = 'plan.updated'",
+      )
+      .get(sessionId) as { count: number };
+    expect(persisted.count).toBe(1);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenLastCalledWith(expect.any(String), {
+      type: "plan.updated",
+      sessionId,
+      plan,
+    });
+  });
+
+  it("rejects generic prompts while a HyperPlan selection reserves the session", async () => {
+    const sessionId = `hyperplan-reserved-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const window = createWindowStub();
+    expect(hyperPlanDraftStore.reserveHyperPlanSession({ sessionId, ownerId: 4 })).toBe(true);
+
+    await expect(
+      new PiSdkRuntime().prompt(window, {
+        sessionId,
+        message: "Continue with another task.",
+        context: [],
+      }),
+    ).rejects.toThrow(/HyperPlan choice/i);
+    expect(window.webContents.send).not.toHaveBeenCalled();
+    hyperPlanDraftStore.releaseHyperPlanSession({ sessionId, ownerId: 4 });
+  });
+
+  it("rejects HyperPlan operations while an authoritative run is active", () => {
+    const sessionId = `hyperplan-busy-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const run = createAgentRun({ sessionId, prompt: "Active work" });
+
+    expect(() => new PiSdkRuntime().assertHyperPlanSessionAvailable(sessionId)).toThrow(/busy/i);
+
+    updateAgentRunStatus(run.id, "failed");
+  });
+
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
     const registeredName = "mcp_docs_search";
     mocks.allowlistedMcpToolNames = [registeredName];
@@ -2396,6 +3442,108 @@ describe("PiSdkRuntime", () => {
       "while Modus is idle",
     );
     expect(compact).not.toHaveBeenCalled();
+  });
+
+  it("rejects compaction synchronously while a HyperPlan start reservation is held", async () => {
+    const sessionId = `compact-hyperplan-reserved-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const compactPi = vi.fn(async () => undefined);
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ isIdle: true, compact: compactPi }),
+    }));
+    let releaseOperation!: () => void;
+    const heldStart = hyperPlanDraftStore.runHyperPlanStartOperation({
+      ownerId: 61,
+      requestId: "held-start-for-compact",
+      kind: "original",
+      sessionId,
+      planId: "held-plan",
+      planFingerprint: "held-fingerprint",
+      start: () =>
+        new Promise((resolve) => {
+          releaseOperation = () =>
+            resolve({
+              sessionId,
+              planId: "held-plan",
+              planFingerprint: "held-fingerprint",
+              runId: "held-run",
+            });
+        }),
+    });
+    const compact = runtime.compact(createWindowStub(), sessionId);
+
+    await expect(compact).rejects.toThrow(/reserved|busy|compact/i);
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+    expect(compactPi).not.toHaveBeenCalled();
+    releaseOperation();
+    await heldStart;
+  });
+
+  it("holds a synchronous compact preflight across resume awaits against start and prompt", async () => {
+    const sessionId = `compact-preflight-race-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Compaction race plan",
+      overview: "Do not race compaction.",
+      content: "# Compaction race plan",
+      todos: [],
+      spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
+    });
+    let releaseResume!: () => void;
+    let signalResume!: () => void;
+    const resumeGate = new Promise<void>((resolve) => {
+      releaseResume = resolve;
+    });
+    const resumeCalled = new Promise<void>((resolve) => {
+      signalResume = resolve;
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => {
+      signalResume();
+      await resumeGate;
+      return { session: createMockPiSession({ isIdle: true, compact: async () => undefined }) };
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const compact = runtime.compact(window, sessionId);
+    await resumeCalled;
+
+    await expect(
+      runtime.prompt(window, { sessionId, message: "racing prompt", context: [] }),
+    ).rejects.toThrow(/intent-gate|compaction|preflight|busy/i);
+    await expect(
+      hyperPlanDraftStore.runHyperPlanStartOperation({
+        ownerId: 62,
+        requestId: "start-during-compact",
+        kind: "original",
+        sessionId,
+        planId: plan.id,
+        planFingerprint: fingerprintPlanSource(plan),
+        start: (_operation, onRunCreated) =>
+          runtime.startOriginalPlanBuild(window, {
+            ownerId: 62,
+            requestId: "start-during-compact",
+            sessionId,
+            planId: plan.id,
+            planFingerprint: fingerprintPlanSource(plan),
+            idempotencyKey: "start-during-compact",
+            onRunCreated,
+          }),
+      }),
+    ).rejects.toThrow(/busy|reserved/i);
+
+    releaseResume();
+    await compact;
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+    expect(
+      (
+        runtime as unknown as { preflightReservations: Map<string, symbol> }
+      ).preflightReservations.has(sessionId),
+    ).toBe(false);
   });
 
   it("re-prompts after threshold compaction so the Modus run continues", async () => {

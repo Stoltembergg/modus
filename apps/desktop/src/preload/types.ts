@@ -37,6 +37,8 @@ import type {
   GitStatusSummary,
   HarnessInsightsQuery,
   HarnessInsightsResult,
+  HyperPlanRevision,
+  HyperPlanSourceSnapshot,
   HyperPlanSummary,
   ManagedProcessInfo,
   ManagedProcessOrigin,
@@ -79,7 +81,15 @@ import type {
   WorkspaceAgentsState,
   WorkspaceInfo,
 } from "../shared/contracts";
+
 import type { StartupMetricInput } from "../shared/startup";
+
+export type HyperPlanBuildStart = {
+  sessionId: string;
+  planId: string;
+  planFingerprint: string;
+  runId: string;
+};
 
 export type SecurityState = {
   contextIsolation: boolean;
@@ -177,6 +187,22 @@ export type ModusApi = {
       planHash: string;
       revisedContent: string;
     }): Promise<PlanRef>;
+    createHyperPlanDraft(input: {
+      sessionId: string;
+      planId: string;
+    }): Promise<{ draftId: string; revision: HyperPlanRevision }>;
+    resolveHyperPlanDraft(input: {
+      draftId: string;
+      choice: "revision" | "original";
+      requestId: string;
+    }): Promise<{ selectionId: string; plan: PlanRef; planFingerprint: string }>;
+    startPlanBuild(input: { selectionId: string; requestId: string }): Promise<HyperPlanBuildStart>;
+    startOriginalPlanBuild(input: {
+      sessionId: string;
+      planId: string;
+      requestId: string;
+      sourceSnapshot: HyperPlanSourceSnapshot;
+    }): Promise<HyperPlanBuildStart>;
     compact(sessionId: string): Promise<void>;
     abort(sessionId: string): Promise<void>;
     /**

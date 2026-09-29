@@ -17,7 +17,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../browser/browser-service", () => mocks);
 
 vi.mock("./tool-context", () => ({
-  resolveAgentToolContext: () => ({ workspaceId: "workspace-1", cwd: "C:/repo" }),
+  resolveAgentToolContext: () => ({
+    workspaceId: "workspace-1",
+    sessionId: "session-1",
+    cwd: "C:/repo",
+  }),
 }));
 
 function loadTool(name: string) {
@@ -69,6 +73,10 @@ describe("browser agent tools", () => {
       "child",
       undefined,
     );
+    expect(mocks.engageAgentBrowser).toHaveBeenCalledWith(
+      { workspaceId: "workspace-1", tabId: "tab-1" },
+      "session-1",
+    );
     expect(result?.content).toEqual([
       { type: "text", text: '{\n  "result": {\n    "value": 2\n  }\n}' },
     ]);
@@ -114,6 +122,11 @@ describe("browser agent tools", () => {
       expect.objectContaining({ text: expect.stringContaining("Page.loadEventFired") }),
     );
     expect(second?.content).toEqual([{ type: "text", text: "No browser events." }]);
+    expect(mocks.engageAgentBrowser).toHaveBeenNthCalledWith(
+      2,
+      { workspaceId: "workspace-1", tabId: "tab-1" },
+      "session-1",
+    );
   });
 
   it("returns screenshot pixels as an image block", async () => {
@@ -143,6 +156,10 @@ describe("browser agent tools", () => {
       },
       { type: "image", data: "abc", mimeType: "image/png" },
     ]);
+    expect(mocks.engageAgentBrowser).toHaveBeenCalledWith(
+      { workspaceId: "workspace-1", tabId: "tab-1" },
+      "session-1",
+    );
     expect(result?.details).toEqual({
       path: "C:/tmp/shot.png",
       width: 800,
@@ -173,11 +190,62 @@ describe("browser agent tools", () => {
       target: { workspaceId: "workspace-1", tabId: "tab-1" },
       maxLines: 200,
     });
+    expect(mocks.engageAgentBrowser).toHaveBeenCalledWith(
+      { workspaceId: "workspace-1", tabId: "tab-1" },
+      "session-1",
+    );
     expect(result?.content).toEqual([
       {
         type: "text",
         text: 'Snapshot (1 refs)\n\nPage URL: https://example.test\nPage title: Example\n\n- button "Save" [ref=e1]',
       },
     ]);
+  });
+
+  it("passes the workspace when closing a tab", async () => {
+    const tool = loadTool("browser_tabs");
+
+    await tool.execute?.(
+      "call-1",
+      { action: "close", viewId: "tab-1" },
+      undefined,
+      undefined,
+      toolCtx(),
+    );
+
+    expect(mocks.closeBrowserTab).toHaveBeenCalledWith("tab-1", "workspace-1");
+  });
+
+  it("passes the workspace when selecting a tab", async () => {
+    mocks.selectBrowserTab.mockReturnValueOnce({ id: "tab-1", url: "https://example.test" });
+    const tool = loadTool("browser_tabs");
+
+    await tool.execute?.(
+      "call-1",
+      { action: "select", viewId: "tab-1" },
+      undefined,
+      undefined,
+      toolCtx(),
+    );
+
+    expect(mocks.selectBrowserTab).toHaveBeenCalledWith(undefined, "tab-1", "workspace-1");
+  });
+
+  it("propagates a cross-workspace close error", async () => {
+    mocks.closeBrowserTab.mockImplementationOnce(() => {
+      throw new Error("Browser tab does not belong to this workspace.");
+    });
+    const tool = loadTool("browser_tabs");
+
+    await expect(
+      tool.execute?.(
+        "call-1",
+        { action: "close", viewId: "tab-1" },
+        undefined,
+        undefined,
+        toolCtx(),
+      ),
+    ).rejects.toThrow("does not belong to this workspace");
+    expect(mocks.selectBrowserTab).not.toHaveBeenCalled();
   });
 });

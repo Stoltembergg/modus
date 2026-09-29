@@ -55,11 +55,18 @@ export function createBrowserTab(
 export function selectBrowserTab(
   window: BrowserWindowType | undefined,
   tabId: string,
+  workspaceId?: string,
 ): BrowserTabInfo {
+  if (workspaceId !== undefined) {
+    resolveTab({ tabId, workspaceId });
+  }
   return selectTab(window, tabId);
 }
 
-export function closeBrowserTab(tabId: string): void {
+export function closeBrowserTab(tabId: string, workspaceId?: string): void {
+  if (workspaceId !== undefined) {
+    resolveTab({ tabId, workspaceId });
+  }
   closeTab(tabId);
 }
 
@@ -71,14 +78,24 @@ export async function navigateBrowser(input: {
   newTab?: boolean;
   /** True for agent-tool navigations: lights the "AI in control" glow. */
   agentInitiated?: boolean;
+  /** Owning agent session for agent-initiated navigation. */
+  agentSessionId?: string;
 }): Promise<BrowserTabInfo> {
+  const agentSessionId = input.agentInitiated ? input.agentSessionId : undefined;
+  if (input.agentInitiated && !agentSessionId) {
+    throw new Error("agentSessionId is required for agent-initiated browser navigation.");
+  }
   const url = normalizeBrowserUrl(input.url);
   const shouldCreateTab = input.newTab || !input.tabId;
   let info: BrowserTabInfo;
   if (shouldCreateTab) {
-    const workspaceId =
-      input.workspaceId ??
-      (input.tabId ? resolveTab({ tabId: input.tabId }).workspaceId : undefined);
+    const sourceTab = input.tabId
+      ? resolveTab({
+          tabId: input.tabId,
+          ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+        })
+      : undefined;
+    const workspaceId = input.workspaceId ?? sourceTab?.workspaceId;
     if (!workspaceId) {
       throw new Error("workspaceId is required to create a browser tab.");
     }
@@ -88,20 +105,16 @@ export async function navigateBrowser(input: {
     if (!tabId) {
       throw new Error("tabId is required to navigate an existing browser tab.");
     }
+    resolveTab({
+      tabId,
+      ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+    });
     info = selectTab(input.window, tabId);
   }
   const tab = resolveTab({ tabId: info.id });
-  if (input.agentInitiated) {
-    // Agent navigations light the control glow; user address-bar navigations
-    // (same code path via IPC) stay visually neutral.
-    void tab.visual.engage();
-    // Authoritative "the agent is browsing" signal → renderer auto-reveals the
-    // browser panel if it isn't already showing.
-    emitBrowserEvent({
-      type: "browser.agent-activity",
-      workspaceId: info.workspaceId,
-      tabId: info.id,
-    });
+  if (agentSessionId) {
+    // Agent navigations hold the same session-scoped visual lease as tools.
+    engageAgentBrowser({ tabId: info.id }, agentSessionId);
   }
   // Bounded so a page that never fires did-finish-load can't hang the agent;
   // ERR_ABORTED (follow-up nav / redirect / our stop) is handled inside.
@@ -202,9 +215,11 @@ export function stopFindInBrowserPage(
  * workspace. Called by the agent runtime when a run finishes, fails, or is
  * cancelled — the visual control session spans the whole run, not one tool.
  */
-export function releaseAgentBrowserControl(workspaceId: string): void {
+export function releaseAgentBrowserControl(workspaceId: string, sessionId: string): void {
   for (const tab of tabsForWorkspace(workspaceId)) {
-    void tab.visual.release();
+    if (tab.agentControlOwners.delete(sessionId) && tab.agentControlOwners.size === 0) {
+      void tab.visual.release();
+    }
   }
 }
 
@@ -215,10 +230,13 @@ export function releaseAgentBrowserControl(workspaceId: string): void {
  * the moment the agent touches the browser and stays until the run releases it.
  * Best-effort: no tab yet (e.g. browser_tabs list before any tab) → no-op.
  */
-export function engageAgentBrowser(target: TabTarget = {}): void {
+export function engageAgentBrowser(target: TabTarget = {}, sessionId: string): void {
   try {
     const tab = resolveTab(target);
-    void tab.visual.engage();
+    if (!tab.agentControlOwners.has(sessionId)) {
+      tab.agentControlOwners.add(sessionId);
+      void tab.visual.engage();
+    }
     emitBrowserEvent({
       type: "browser.agent-activity",
       workspaceId: tab.workspaceId,

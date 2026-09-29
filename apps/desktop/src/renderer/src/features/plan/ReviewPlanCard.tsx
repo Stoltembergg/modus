@@ -1,11 +1,22 @@
 import { IconArrowRight, IconLoader2, IconPencil, IconSparkles, IconX } from "@tabler/icons-react";
-import { useEffect } from "react";
-import type { HyperPlanSummary, PlanRef } from "../../../../shared/contracts";
+import { useEffect, useState } from "react";
+import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../../../shared/contracts";
+import hpModeGif from "../../assets/hp-mode.gif";
+import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
 
-const hyperPlanModeGif = new URL("../../../../../../../docs/media/hp-mode.gif", import.meta.url)
-  .href;
+type HyperPlanDraftPreview = { draftId: string; revision: HyperPlanRevision };
+type HyperPlanChoice = "revision" | "original";
+
+type HyperPlanState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ready"; preview: HyperPlanDraftPreview }
+  | { status: "choosing"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice }
+  | { status: "review-error"; originalStart?: "pending" | "error" }
+  | { status: "choice-error"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice }
+  | { status: "start-error"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice };
 
 export function ReviewPlanCard({
   onBuildLocally,
@@ -13,10 +24,12 @@ export function ReviewPlanCard({
   onReviewWithHyperPlan,
   onUseRevisedPlan,
   onKeepPreviousPlan,
+  onChoosePlan,
   plan,
   hyperPlanStatus = "idle",
   hyperPlanSummary,
   hyperPlanError,
+  hyperPlanState,
 }: {
   onBuildLocally: () => void;
   onContinuePlanning: () => void;
@@ -27,8 +40,23 @@ export function ReviewPlanCard({
   hyperPlanStatus?: "idle" | "reviewing" | "applying" | "error" | "completed";
   hyperPlanSummary?: HyperPlanSummary;
   hyperPlanError?: string;
+  hyperPlanState?: HyperPlanState;
+  onChoosePlan?: (choice: HyperPlanChoice) => void;
 }) {
+  const [submittedChoice, setSubmittedChoice] = useState<HyperPlanChoice | null>(null);
   useEffect(() => {
+    if (
+      hyperPlanState?.status === "ready" ||
+      hyperPlanState?.status === "choice-error" ||
+      hyperPlanState?.status === "start-error" ||
+      hyperPlanState?.status === "review-error"
+    ) {
+      setSubmittedChoice(null);
+    }
+  }, [hyperPlanState]);
+
+  useEffect(() => {
+    if (hyperPlanState && hyperPlanState.status !== "idle") return;
     const onKey = (event: KeyboardEvent): void => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
         event.preventDefault();
@@ -37,7 +65,27 @@ export function ReviewPlanCard({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onBuildLocally]);
+  }, [onBuildLocally, hyperPlanState]);
+
+  if (hyperPlanState && hyperPlanState.status !== "idle") {
+    if (hyperPlanState.status === "loading") return <HyperPlanLoading />;
+    return (
+      <HyperPlanChoiceCard
+        {...(onChoosePlan
+          ? {
+              onChoice: (choice: HyperPlanChoice) => {
+                if (submittedChoice !== null) return;
+                setSubmittedChoice(choice);
+                onChoosePlan(choice);
+              },
+              onChoosePlan,
+            }
+          : {})}
+        {...(onReviewWithHyperPlan ? { onReviewWithHyperPlan } : {})}
+        state={hyperPlanState}
+      />
+    );
+  }
 
   const canReviewWithHyperPlan = Boolean(plan.spec && onReviewWithHyperPlan);
   const isReviewing = hyperPlanStatus === "reviewing";
@@ -70,7 +118,7 @@ export function ReviewPlanCard({
               <img
                 alt="HyperPlan review in progress"
                 className="mx-auto max-h-40 w-auto rounded-md object-contain"
-                src={hyperPlanModeGif}
+                src={hpModeGif}
               />
               <p className="mt-2 text-center text-xs text-fg-muted">
                 Reviewing plan with HyperPlan…
@@ -204,6 +252,223 @@ export function ReviewPlanCard({
     </div>
   );
 }
+
+function HyperPlanLoading() {
+  return (
+    <div
+      aria-label="Reviewing plan"
+      aria-live="polite"
+      className="flex min-h-[min(58vh,420px)] w-full flex-col items-center justify-center gap-5 overflow-hidden rounded-xl border border-composer-border bg-elevated p-6 shadow-composer-edge"
+      role="status"
+    >
+      <img
+        alt=""
+        className="max-h-56 w-auto max-w-full object-contain"
+        data-testid="hyperplan-gif"
+        src={hpModeGif}
+      />
+      <ThinkingStates className="text-sm text-fg-subtle" label="Thinking through your plan" />
+    </div>
+  );
+}
+
+function HyperPlanChoiceCard({
+  onChoice,
+  onChoosePlan,
+  onReviewWithHyperPlan,
+  state,
+}: {
+  onChoice?: (choice: HyperPlanChoice) => void;
+  onChoosePlan?: (choice: HyperPlanChoice) => void;
+  onReviewWithHyperPlan?: () => void;
+  state: Exclude<HyperPlanState, { status: "idle" } | { status: "loading" }>;
+}) {
+  if (state.status === "review-error") {
+    const originalPending = state.originalStart === "pending";
+    const originalFailed = state.originalStart === "error";
+    return (
+      <section aria-labelledby="hyperplan-review-error" className={choiceCardClass}>
+        <div className="mx-auto max-w-md text-center">
+          <h2 className="font-semibold text-fg text-base" id="hyperplan-review-error">
+            Review unavailable
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-fg-muted">
+            HyperPlan couldn’t revise this plan. Your original plan is unchanged.
+          </p>
+          <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
+            <button
+              className={secondaryChoiceButtonClass}
+              disabled={originalPending || originalFailed}
+              onClick={onReviewWithHyperPlan}
+              type="button"
+            >
+              {originalPending ? "Starting original plan…" : "Try review again"}
+            </button>
+            <button
+              className={primaryChoiceButtonClass}
+              disabled={!onChoosePlan || originalPending}
+              onClick={() => onChoice?.("original")}
+              type="button"
+            >
+              {originalFailed ? "Retry original plan build" : "Build the original plan"}
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const preview = state.preview;
+  const busy = state.status === "choosing";
+  const failedChoice =
+    state.status === "choice-error" || state.status === "start-error" ? state.choice : null;
+
+  return (
+    <section
+      aria-labelledby="hyperplan-revised-title"
+      className="rounded-xl border border-composer-border bg-elevated p-3 shadow-composer-edge sm:p-4"
+    >
+      <div className="scroll-thin max-h-[min(58vh,480px)] overflow-y-auto px-1">
+        <div className="mb-4 border-b border-hairline pb-3">
+          <p className="mb-1 text-2xs font-semibold uppercase tracking-[0.16em] text-accent">
+            Revised plan
+          </p>
+          <h1 className="font-semibold text-fg text-lg" id="hyperplan-revised-title">
+            {preview.revision.title}
+          </h1>
+          {preview.revision.overview ? (
+            <p className="mt-1 text-sm leading-relaxed text-fg-muted">
+              {preview.revision.overview}
+            </p>
+          ) : null}
+        </div>
+        <MarkdownMessage
+          className="modus-plan-markdown text-sm"
+          content={preview.revision.content}
+        />
+        {preview.revision.todos.length ? (
+          <section aria-label="Revised plan tasks" className="mt-4 border-t border-hairline pt-3">
+            <h2 className="font-semibold text-fg text-sm">Tasks</h2>
+            <ul className="mt-2 space-y-2">
+              {preview.revision.todos.map((todo) => (
+                <li
+                  className="rounded-lg border border-hairline bg-surface/50 p-2.5 text-sm text-fg-subtle"
+                  key={todo.id}
+                >
+                  <p className="break-words">{todo.content}</p>
+                  {todo.acceptanceCriterionIds?.length ? (
+                    <p className="mt-1 break-words text-xs text-fg-faint">
+                      Acceptance criteria:{" "}
+                      {todo.acceptanceCriterionIds
+                        .map(
+                          (id) =>
+                            preview.revision.spec.acceptanceCriteria.find(
+                              (criterion) => criterion.id === id,
+                            )?.description ?? id,
+                        )
+                        .join(" · ")}
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+        <RevisionSpec spec={preview.revision.spec} />
+      </div>
+
+      {state.status === "choice-error" ? (
+        <p aria-live="polite" className="mt-3 text-sm text-danger" role="alert">
+          We couldn’t confirm that choice. Retry the same choice to safely continue.
+        </p>
+      ) : null}
+      {state.status === "start-error" ? (
+        <p aria-live="polite" className="mt-3 text-sm text-danger" role="alert">
+          The build didn’t start. Retry the same choice; the original plan won’t be selected
+          automatically.
+        </p>
+      ) : null}
+      {busy ? (
+        <p aria-live="polite" className="mt-3 text-center text-sm text-fg-muted" role="status">
+          <IconLoader2
+            aria-hidden
+            className="mr-2 inline animate-spin motion-reduce:animate-none"
+            size={15}
+          />
+          Starting your selected plan…
+        </p>
+      ) : null}
+
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <button
+          className={primaryChoiceButtonClass}
+          disabled={busy || !onChoice || (failedChoice !== null && failedChoice !== "revision")}
+          onClick={() => onChoice?.(failedChoice ?? "revision")}
+          type="button"
+        >
+          {failedChoice === "revision"
+            ? "Retry revised plan choice"
+            : "Accept revised plan and build"}
+        </button>
+        <button
+          className={secondaryChoiceButtonClass}
+          disabled={busy || !onChoice || (failedChoice !== null && failedChoice !== "original")}
+          onClick={() => onChoice?.(failedChoice ?? "original")}
+          type="button"
+        >
+          {failedChoice === "original" ? "Retry original plan choice" : "Build the original plan"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+function RevisionSpec({ spec }: { spec: HyperPlanRevision["spec"] }) {
+  const groups = [
+    ["Requirements", spec.requirements.map((requirement) => requirement.text)],
+    ["Acceptance criteria", spec.acceptanceCriteria.map((criterion) => criterion.description)],
+    ["Assumptions", spec.assumptions],
+    ["Open questions", spec.openQuestions],
+  ] as const;
+
+  if (groups.every(([, items]) => items.length === 0)) return null;
+
+  return (
+    <section aria-label="Revised plan Spec" className="mt-4 border-t border-hairline pt-3">
+      <h2 className="font-semibold text-fg text-sm">Spec</h2>
+      <div className="mt-2 space-y-3">
+        {groups.map(([label, items]) =>
+          items.length ? (
+            <div key={label}>
+              <h3 className="mb-1 text-xs font-medium text-fg-muted">{label}</h3>
+              <ul className="space-y-1 text-sm leading-relaxed text-fg-subtle">
+                {(() => {
+                  const occurrences = new Map<string, number>();
+                  return items.map((item) => {
+                    const occurrence = occurrences.get(item) ?? 0;
+                    occurrences.set(item, occurrence + 1);
+                    return (
+                      <li className="break-words" key={JSON.stringify([label, item, occurrence])}>
+                        {item}
+                      </li>
+                    );
+                  });
+                })()}
+              </ul>
+            </div>
+          ) : null,
+        )}
+      </div>
+    </section>
+  );
+}
+
+const choiceCardClass =
+  "flex min-h-[min(58vh,420px)] items-center justify-center rounded-xl border border-composer-border bg-elevated p-6 shadow-composer-edge";
+const primaryChoiceButtonClass =
+  "inline-flex min-h-11 items-center justify-center rounded-lg bg-fg px-4 py-2 text-center font-semibold text-canvas text-sm transition-colors hover:bg-fg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-55";
+const secondaryChoiceButtonClass =
+  "inline-flex min-h-11 items-center justify-center rounded-lg border border-hairline bg-surface px-4 py-2 text-center font-medium text-fg text-sm transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-55";
 
 function criticLabel(critic: string): string {
   const labels: Record<string, string> = {

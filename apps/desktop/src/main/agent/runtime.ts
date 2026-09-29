@@ -13,6 +13,7 @@ import type {
   SkillSelection,
   ThinkingLevel,
 } from "../../shared/contracts";
+import type { HyperPlanDraftOwnerEpoch } from "./harness/hyperplan-draft-store";
 
 export type CreateAgentRuntimeInput = {
   id?: string;
@@ -52,10 +53,38 @@ export type PromptAgentInput = {
   planId?: string;
 };
 
+export type HyperPlanBuildStart = {
+  sessionId: string;
+  planId: string;
+  planFingerprint: string;
+  runId: string;
+};
+
+export type HyperPlanBuildStartInput = {
+  ownerId: number;
+  ownerEpoch?: HyperPlanDraftOwnerEpoch;
+  requestId: string;
+  sessionId: string;
+  planId: string;
+  planFingerprint: string;
+  idempotencyKey: string;
+  selectionId?: string;
+  existingRunId?: string;
+  onRunCreated: (runId: string) => void;
+};
+
 export type AgentRuntime = {
   create(window: BrowserWindowType, input: CreateAgentRuntimeInput): Promise<AgentSessionInfo>;
   ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo>;
   prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<void>;
+  startPlanBuild(
+    window: BrowserWindowType,
+    input: HyperPlanBuildStartInput,
+  ): Promise<HyperPlanBuildStart>;
+  startOriginalPlanBuild(
+    window: BrowserWindowType,
+    input: HyperPlanBuildStartInput,
+  ): Promise<HyperPlanBuildStart>;
   compact(window: BrowserWindowType, sessionId: string): Promise<void>;
   /** Spawn a child subagent and return immediately. Collect results with waitBackground. */
   runSubagent(

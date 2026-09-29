@@ -44,6 +44,11 @@ const api: ModusApi = {
     prompt: (input) => ipcRenderer.invoke("agent:prompt", input),
     reviewPlanWithHyperPlan: (input) => ipcRenderer.invoke("agent:review-plan-hyperplan", input),
     applyHyperPlanRevision: (input) => ipcRenderer.invoke("agent:apply-hyperplan-revision", input),
+    createHyperPlanDraft: (input) => ipcRenderer.invoke("agent:create-hyperplan-draft", input),
+    resolveHyperPlanDraft: (input) =>
+      ipcRenderer.invoke("agent:resolve-hyperplan-draft-choice", input),
+    startPlanBuild: (input) => ipcRenderer.invoke("agent:start-plan-build", input),
+    startOriginalPlanBuild: (input) => ipcRenderer.invoke("agent:start-original-plan-build", input),
     compact: (sessionId) => ipcRenderer.invoke("agent:compact", sessionId),
     abort: (sessionId) => ipcRenderer.invoke("agent:abort", sessionId),
     rollback: (input) => ipcRenderer.invoke("agent:rollback", input),

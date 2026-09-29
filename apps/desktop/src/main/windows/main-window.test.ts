@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const electronState = vi.hoisted(() => ({
   app: { isPackaged: false },
   webContentsHandlers: new Map<string, (...args: unknown[]) => void>(),
-  windowHandlers: new Map<string, (...args: unknown[]) => void>(),
+  windowHandlers: new Map<string, ((...args: unknown[]) => void)[]>(),
+  registerDraftOwner: vi.fn(() => Symbol("owner")),
+  invalidateDraftOwner: vi.fn(),
+  webContentsId: 42,
   loadURL: vi.fn(),
   loadFile: vi.fn(),
   lastWindow: undefined as unknown,
@@ -15,6 +18,7 @@ vi.mock("electron", () => ({
   app: electronState.app,
   BrowserWindow: class {
     webContents = {
+      id: electronState.webContentsId,
       mainFrame: { url: "" },
       on: (name: string, handler: (...args: unknown[]) => void) =>
         electronState.webContentsHandlers.set(name, handler),
@@ -23,10 +27,16 @@ vi.mock("electron", () => ({
       setWindowOpenHandler: vi.fn(),
       send: vi.fn(),
     };
-    on = (name: string, handler: (...args: unknown[]) => void) =>
-      electronState.windowHandlers.set(name, handler);
-    once = (name: string, handler: (...args: unknown[]) => void) =>
-      electronState.windowHandlers.set(name, handler);
+    on = (name: string, handler: (...args: unknown[]) => void) => {
+      const handlers = electronState.windowHandlers.get(name) ?? [];
+      handlers.push(handler);
+      electronState.windowHandlers.set(name, handlers);
+    };
+    once = (name: string, handler: (...args: unknown[]) => void) => {
+      const handlers = electronState.windowHandlers.get(name) ?? [];
+      handlers.push(handler);
+      electronState.windowHandlers.set(name, handlers);
+    };
     isDestroyed = () => false;
     isMaximized = () => false;
     loadURL = electronState.loadURL;
@@ -43,6 +53,11 @@ vi.mock("electron", () => ({
   shell: { openExternal: vi.fn() },
 }));
 
+vi.mock("../agent/harness/hyperplan-draft-store", () => ({
+  registerHyperPlanDraftOwner: electronState.registerDraftOwner,
+  invalidateHyperPlanDraftOwner: electronState.invalidateDraftOwner,
+}));
+
 describe("main window renderer target and redirects", () => {
   const originalRendererUrl = process.env.ELECTRON_RENDERER_URL;
   const originalResourcesPath = (process as NodeJS.Process & { resourcesPath?: string })
@@ -54,6 +69,9 @@ describe("main window renderer target and redirects", () => {
     electronState.windowHandlers.clear();
     electronState.loadURL.mockReset();
     electronState.loadFile.mockReset();
+    electronState.registerDraftOwner.mockReset().mockImplementation(() => Symbol("owner"));
+    electronState.invalidateDraftOwner.mockReset();
+    electronState.webContentsId = 42;
     electronState.lastWindow = undefined;
     Object.defineProperty(process, "resourcesPath", {
       configurable: true,
@@ -144,5 +162,29 @@ describe("main window renderer target and redirects", () => {
     const hashNavigation = { preventDefault: vi.fn() };
     onWillRedirect?.(hashNavigation, `${rendererFile}#settings`);
     expect(hashNavigation.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("clears owner drafts once across explicit window close and webContents destruction", async () => {
+    await createWindow();
+
+    for (const handler of electronState.windowHandlers.get("closed") ?? []) handler();
+    electronState.webContentsHandlers.get("destroyed")?.();
+
+    expect(electronState.registerDraftOwner).toHaveBeenCalledExactlyOnceWith(42);
+    expect(electronState.invalidateDraftOwner).toHaveBeenCalledExactlyOnceWith(
+      42,
+      expect.any(Symbol),
+    );
+  });
+
+  it("clears owner drafts when webContents is destroyed without window close", async () => {
+    await createWindow();
+
+    electronState.webContentsHandlers.get("destroyed")?.();
+
+    expect(electronState.invalidateDraftOwner).toHaveBeenCalledExactlyOnceWith(
+      42,
+      expect.any(Symbol),
+    );
   });
 });
