@@ -19,10 +19,10 @@ jobs:
           BRANCH=cursor/blacklist-management-ui-c747
           META=$(gh api "repos/${{ github.repository }}/contents/${PATH_FILE}?ref=${GOOD_REF}")
           CONTENT_B64=$(printf '%s' "$META" | python3 -c 'import sys,json; print(json.load(sys.stdin)["content"].replace("\n",""))')
-          DECODED=$(printf '%s' "$CONTENT_B64" | base64 -d)
-          python3 - <<PY
-          import os
-          text = os.environ['DECODED']
+          printf '%s' "$CONTENT_B64" | base64 -d > /tmp/contracts.ts
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path('/tmp/contracts.ts').read_text()
           print('chars', len(text))
           assert len(text) > 60000
           assert 'export type FailureBlacklistEntry' in text
@@ -31,10 +31,25 @@ jobs:
           assert text.startswith('export type WorkspaceInfo')
           PY
           CUR_SHA=$(gh api "repos/${{ github.repository }}/contents/${PATH_FILE}?ref=${BRANCH}" --jq .sha)
+          echo "current sha=$CUR_SHA"
           gh api --method PUT "repos/${{ github.repository }}/contents/${PATH_FILE}" \
             -f message='fix(contracts): restore shared contracts with FailureBlacklistEntry' \
             -f content="$CONTENT_B64" \
             -f sha="$CUR_SHA" \
             -f branch="$BRANCH"
+          echo "PUT ok"
+      - name: Remove self
+        if: always()
         env:
-          DECODED: placeholder
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH=cursor/blacklist-management-ui-c747
+          PATH_FILE=.github/workflows/gap3-restore-contracts.yml
+          SHA=$(gh api "repos/${{ github.repository }}/contents/${PATH_FILE}?ref=${BRANCH}" --jq .sha || true)
+          if [ -n "${SHA:-}" ]; then
+            gh api --method DELETE "repos/${{ github.repository }}/contents/${PATH_FILE}" \
+              -f message='chore: remove gap3-restore-contracts workflow' \
+              -f sha="$SHA" \
+              -f branch="$BRANCH" || true
+          fi
