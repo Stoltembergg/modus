@@ -1,4 +1,5 @@
-/** Gap 4 contracts split part 5/7 — do not edit by hand */
+import type { ContextItem, ContextKind, DesignElementPayload } from "./contracts-part-04";
+
 export type DesignAnnotationPayload = {
   /** Stable id for de-dup / removal in the composer. */
   id: string;
