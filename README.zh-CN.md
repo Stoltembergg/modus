@@ -64,7 +64,7 @@ scripts/          模型目录生成脚本
 - Git
 
 ```bash
-git clone https://github.com/stoltembergg-png/modus.git
+git clone https://github.com/Stoltembergg/modus.git
 cd modus
 npm install
 npm run dev
