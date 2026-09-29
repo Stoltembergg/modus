@@ -27,14 +27,21 @@ import {
   useRef,
   useState,
 } from "react";
-import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
+import type {
+  AgentGroupWithMembers,
+  AgentSessionInfo,
+  CreateAgentGroupInput,
+  WorkspaceInfo,
+} from "../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
+import { groupMemberSessionIds } from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
+import { SidebarGroups } from "./SidebarGroups";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
 import { ScrollReveal } from "./ui/ScrollReveal";
 
@@ -92,7 +99,20 @@ type SidebarProps = {
   onOpenLimits(): void;
   onWidthChange(width: number): void;
   canCreateSession: boolean;
+  /** Agent Groups (with members). Member chats show only under their group. */
+  groups?: readonly AgentGroupWithMembers[];
+  /** Project preselected in the create-group dialog (usually the active one). */
+  activeWorkspaceId?: string | null;
+  /** Group-row activity dot selector; defaults to an always-false stub until PR 3. */
+  isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
+  onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
+  onRenameGroup?(groupId: string, name: string): void;
+  onDeleteGroup?(groupId: string): void;
+  onRemoveGroupMember?(groupId: string, sessionId: string): void;
+  onSetGroupLead?(groupId: string, sessionId: string | null): void;
 };
+
+const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
 
 export function Sidebar({
   workspaces,
@@ -122,37 +142,55 @@ export function Sidebar({
   onWidthChange,
   canCreateSession,
   onRenameSession,
+  groups = NO_GROUPS,
+  activeWorkspaceId = null,
+  isGroupWorking,
+  onCreateGroup,
+  onRenameGroup,
+  onDeleteGroup,
+  onRemoveGroupMember,
+  onSetGroupLead,
 }: SidebarProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
+  const [groupsExpanded, setGroupsExpanded] = useState(true);
   const projectIds = useMemo(
     () => new Set(workspaces.map((workspace) => workspace.id)),
     [workspaces],
   );
-  const sessionsByWorkspace = groupSessionsByWorkspace(agentSessions);
+  // Group members are listed only under their group (Groups section).
+  const memberSessionIds = useMemo(() => groupMemberSessionIds(groups), [groups]);
+  const ungroupedSessions = useMemo(
+    () =>
+      memberSessionIds.size === 0
+        ? agentSessions
+        : agentSessions.filter((session) => !memberSessionIds.has(session.id)),
+    [agentSessions, memberSessionIds],
+  );
+  const sessionsByWorkspace = groupSessionsByWorkspace(ungroupedSessions);
   // Split inbox: pinned first, then unpinned
   const pinnedSessions = useMemo(
     () =>
-      agentSessions.filter(
+      ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
           session.pinnedAt &&
           (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
       ),
-    [agentSessions, projectIds],
+    [ungroupedSessions, projectIds],
   );
   const inboxSessions = useMemo(
     () =>
-      agentSessions.filter(
+      ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
           !session.pinnedAt &&
           (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
       ),
-    [agentSessions, projectIds],
+    [ungroupedSessions, projectIds],
   );
   const { ref: scrollFadeRef, fadeTop, fadeBottom } = useScrollFade();
   const scrollContainerRef = scrollFadeRef as RefObject<HTMLElement | null>;
@@ -298,6 +336,34 @@ export function Sidebar({
               <div className="mt-1" />
             </>
           )}
+
+          {onCreateGroup ? (
+            <>
+              <SectionHeader
+                expanded={groupsExpanded}
+                onToggle={() => setGroupsExpanded((expanded) => !expanded)}
+              >
+                Groups
+              </SectionHeader>
+              <CollapsibleMotion open={groupsExpanded} preset="default">
+                <SidebarGroups
+                  activeSessionId={activeSessionId}
+                  activityBySession={activityBySession}
+                  defaultWorkspaceId={activeWorkspaceId}
+                  groups={groups}
+                  onCreateGroup={onCreateGroup}
+                  onDeleteGroup={(id) => onDeleteGroup?.(id)}
+                  onRemoveMember={(groupId, sessionId) => onRemoveGroupMember?.(groupId, sessionId)}
+                  onRenameGroup={(id, name) => onRenameGroup?.(id, name)}
+                  onSelectSession={onSelectSession}
+                  onSetLead={(groupId, sessionId) => onSetGroupLead?.(groupId, sessionId)}
+                  sessions={agentSessions}
+                  workspaces={workspaces}
+                  {...(isGroupWorking ? { isGroupWorking } : {})}
+                />
+              </CollapsibleMotion>
+            </>
+          ) : null}
 
           <SectionHeader
             expanded={projectsExpanded}

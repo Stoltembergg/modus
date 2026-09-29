@@ -30,11 +30,13 @@ import {
 import type { SecurityState } from "../../../preload/types";
 import type {
   AgentEvent,
+  AgentGroupWithMembers,
   AgentMode,
   AgentSessionInfo,
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
+  CreateAgentGroupInput,
   FileDiff,
   ModelInfo,
   ModelSettingsState,
@@ -126,6 +128,7 @@ export function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [synchronizedWorkspaceId, setSynchronizedWorkspaceId] = useState<string | undefined>();
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
+  const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -249,11 +252,26 @@ export function App() {
     });
   }, []);
 
+  const refreshGroups = useCallback(async (): Promise<void> => {
+    try {
+      setAgentGroups(await window.modus.group.list());
+    } catch (error) {
+      console.warn("[groups] failed to load agent groups", error);
+    }
+  }, []);
+
   const refreshSessions = useCallback(async (): Promise<void> => {
+    // Groups ride along: deleting chats/projects cascades to memberships.
+    const groupsRefresh = refreshGroups();
     setAgentSessions(
       await window.modus.agent.list({ includeSessionId: activeSessionIdRef.current }),
     );
-  }, []);
+    await groupsRefresh;
+  }, [refreshGroups]);
+
+  useEffect(() => {
+    if (window.modus) void refreshGroups();
+  }, [refreshGroups]);
 
   function publishLocalAgentEvent(event: AgentEvent): void {
     hubRef.current.publish({
@@ -769,6 +787,23 @@ export function App() {
     await refreshSessions();
   }
 
+  /* ── Agent Groups — sidebar Groups section ─────────────────────────────── */
+
+  async function createGroup(input: CreateAgentGroupInput): Promise<void> {
+    // Errors propagate so the dialog can show them and stay open.
+    await window.modus.group.create(input);
+    await refreshGroups();
+  }
+
+  async function runGroupAction(action: () => Promise<AgentGroupWithMembers[]>): Promise<void> {
+    try {
+      setAgentGroups(await action());
+    } catch (error) {
+      setSessionCreateError(error instanceof Error ? error.message : String(error));
+      await refreshGroups();
+    }
+  }
+
   async function revealProject(id: string): Promise<void> {
     await window.modus.workspace.reveal(id).catch(() => {});
   }
@@ -1076,6 +1111,27 @@ export function App() {
                         open={responsiveSidebarOpen}
                         width={sidebarWidth}
                         workspaces={workspaces}
+                        groups={agentGroups}
+                        activeWorkspaceId={
+                          activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
+                        }
+                        onCreateGroup={createGroup}
+                        onRenameGroup={(id, name) =>
+                          void runGroupAction(() => window.modus.group.rename({ id, name }))
+                        }
+                        onDeleteGroup={(id) =>
+                          void runGroupAction(() => window.modus.group.remove(id))
+                        }
+                        onRemoveGroupMember={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.removeMember({ groupId, sessionId }),
+                          )
+                        }
+                        onSetGroupLead={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.setLead({ groupId, sessionId }),
+                          )
+                        }
                       />
 
                       <m.main
