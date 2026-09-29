@@ -41,6 +41,9 @@ export const GROUP_ERROR_CODES = [
   "not-coordinator",
   // group_assign_task: coordinator mode is off, or the group has no Lead.
   "coordinator-off",
+  // Agents store: no agent with that id / another agent already has that name.
+  "agent-not-found",
+  "agent-name-taken",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

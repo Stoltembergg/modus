@@ -73,6 +73,7 @@ type MemberRow = {
   group_id: string;
   session_id: string;
   role: string | null;
+  agent_id: string | null;
   joined_at: string;
 };
 
@@ -114,7 +115,7 @@ type DecisionRow = {
 };
 
 const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at, updated_at";
-const MEMBER_COLUMNS = "group_id, session_id, role, joined_at";
+const MEMBER_COLUMNS = "group_id, session_id, role, agent_id, joined_at";
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, created_at`;
 const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
@@ -138,6 +139,7 @@ function toMember(row: MemberRow): AgentGroupMember {
     groupId: row.group_id,
     sessionId: row.session_id,
     ...(row.role !== null ? { role: row.role } : {}),
+    ...(row.agent_id !== null ? { agentId: row.agent_id } : {}),
     joinedAt: row.joined_at,
   };
 }

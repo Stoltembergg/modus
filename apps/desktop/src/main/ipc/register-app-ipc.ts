@@ -91,6 +91,13 @@ import {
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import { plansRoot } from "../agent/tools/plan-tools";
+import {
+  createAgent,
+  deleteAgent,
+  listAgents,
+  setAgentArchived,
+  updateAgent,
+} from "../agents/agents-store";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -224,6 +231,7 @@ import {
 } from "../workspace/workspace-service";
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
+import { registerAgentsIpcHandlers } from "./agents-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerGroupIpcHandlers } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
@@ -1795,6 +1803,13 @@ export function registerAppIpc({
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
 
+  registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
+    listAgents,
+    createAgent,
+    updateAgent,
+    setAgentArchived,
+    deleteAgent,
+  });
   registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
     listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
     createAgentGroupWithMembers,

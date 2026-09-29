@@ -57,6 +57,13 @@ const api: ModusApi = {
       return () => ipcRenderer.removeListener("group:event", listener);
     },
   },
+  agents: {
+    list: () => ipcRenderer.invoke("agents:list"),
+    create: (input) => ipcRenderer.invoke("agents:create", input),
+    update: (input) => ipcRenderer.invoke("agents:update", input),
+    setArchived: (input) => ipcRenderer.invoke("agents:archive", input),
+    remove: (id) => ipcRenderer.invoke("agents:delete", { id }),
+  },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),
   },

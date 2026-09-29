@@ -29,6 +29,8 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "limit-reached": "This group already has 100 decisions. Delete one first.",
   "not-coordinator": "Only the group's Lead can assign tasks.",
   "coordinator-off": "Coordinator mode is off, or the group has no Lead.",
+  "agent-not-found": "That agent no longer exists.",
+  "agent-name-taken": "Another agent already has that name.",
 };
 
 /**
