@@ -1,8 +1,8 @@
 # Modus Adaptive Intelligence Core
 
-**Status:** Slice 2 implemented (safe auto-dispatch, persistence, learning promotion, timeline UI, cross-session blacklist)  
+**Status:** Slice 2 landed (PR #50). Gap 1 — safe Meta Controller children/MCP dispatch.  
 **Fork:** [Stoltembergg/modus](https://github.com/Stoltembergg/modus)  
-**PR:** [#50](https://github.com/Stoltembergg/modus/pull/50)  
+**PR:** [#50](https://github.com/Stoltembergg/modus/pull/50) (merged)  
 **Prior art:** `docs/superpowers/specs/2026-09-27-modus-adaptive-harness-core-design.md` (approved) + PR #46 (Task State) + slice 1 Meta Controller
 
 ## Goal
@@ -32,7 +32,7 @@ User prompt
     → Intent Gate (existing)
     → AdaptiveDecisionSnapshot (Task State + failures + blacklist + impact + policy)
     → decideNext()  [Meta Controller — pure]
-    → planSafeDispatch()  [allowlisted local effects only]
+    → planSafeDispatch()  [allowlisted local + read-only child/MCP effects]
     → Tools still go through ToolRegistry + permission broker
     → QA / tool outcomes → FailureIntelligence + blacklist + Task State
     → harness.decision / harness.failure → timeline notices + Insights
@@ -48,8 +48,10 @@ Allowlisted for automatic local effects (`active` mode):
 | `verify` | Strengthen verification gate for the turn |
 | `suggest_plan` | Advisory Plan/HyperPlan suggestion text |
 | `finish` | Terminal when verification already satisfied |
+| `spawn_readonly_specialist` | Spawn builtin read-only child (`explore` / `librarian` / `oracle` / `reviewer` / `debugger` / `ui-ux`) via `runSubagent`; deferred until Intent Gate proceeds; forced `readOnly` + shared isolation |
+| `mcp_preflight` | Spawn read-only **librarian** so allowlisted MCP tools run only through ToolRegistry + permission broker (`mcp:read-only-allowlist`) |
 
-**Never auto-dispatched:** `execute`, `suggest_oracle`, `replan`, `ask_user`, `avoid_retry`, child subagent spawn, MCP external calls, file writes, destructive shell. These remain hints or human-gated.
+**Never auto-dispatched:** `execute`, `suggest_oracle` (advisory hint only), `replan`, `ask_user`, `avoid_retry`, non-readonly children, worktree isolation, dangerous MCP, file writes, destructive shell.
 
 Cannot bypass permission broker, Intent Gate, Build consent, or destructive confirmation.
 
@@ -96,12 +98,14 @@ Events (unchanged types, now surfaced in UI):
 4. Decision timeline UI for decision/failure events  
 5. Cross-session failure blacklist with expire/clear  
 
+**Gap 1 (children/MCP safe dispatch):** Active mode may auto-dispatch `spawn_readonly_specialist` and `mcp_preflight` after Intent Gate; tools still go through ToolRegistry + permissions.
+
 **Remaining gaps / follow-ups**
 
-- Active dispatch still does not spawn children or call MCP (by design)
 - CodeGraph binary sync/index is still user/agent-triggered; we only persist hits already produced
 - No dedicated blacklist management panel beyond Settings clear-all
 - Promoted preferences are stored but not yet a full policy DSL consumer beyond Meta Controller avoidance signals
+- Additional orchestration polish beyond Gap 1 allowlist
 
 ## How to verify
 

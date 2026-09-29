@@ -162,4 +162,81 @@ describe("meta-controller", () => {
     );
     expect(decision.action).toBe("ask_user");
   });
+
+  it("spawns a read-only oracle specialist in active mode on high-risk failure", () => {
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "active",
+        qaStatus: "failed",
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "high",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+          suggestedRole: "oracle",
+        },
+        impact: {
+          blastRadius: "cross_module",
+          impactedPathCount: 8,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("spawn_readonly_specialist");
+    expect(decision.specialistRole).toBe("oracle");
+    expect(formatAdaptiveDecisionHint(decision)).toMatch(/read-only oracle/i);
+  });
+
+  it("keeps suggest_oracle as a hint in advisory mode", () => {
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "advisory",
+        classification: {
+          taskType: "oracle",
+          complexity: "moderate",
+          risk: "low",
+          confidence: "low",
+          reasons: ["architecture_question"],
+          suggestedRole: "oracle",
+        },
+      }),
+    );
+    expect(decision.action).toBe("suggest_oracle");
+  });
+
+  it("schedules MCP preflight librarian in active mode for librarian-scoped uncertainty", () => {
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "active",
+        classification: {
+          taskType: "librarian",
+          complexity: "complex",
+          risk: "low",
+          confidence: "high",
+          reasons: ["needs_external_docs"],
+          suggestedRole: "librarian",
+        },
+        impact: {
+          blastRadius: "module",
+          impactedPathCount: 0,
+          confidence: "unknown",
+          unknownReasons: ["no_typed_paths"],
+          reasonCodes: [],
+        },
+        unresolvedCriterionCount: 1,
+      }),
+    );
+    expect(decision.action).toBe("mcp_preflight");
+    expect(decision.specialistRole).toBe("librarian");
+  });
 });

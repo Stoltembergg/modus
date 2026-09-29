@@ -241,6 +241,8 @@ export type AdaptiveDecisionAction =
   | "retrieve_local"
   | "suggest_plan"
   | "suggest_oracle"
+  | "spawn_readonly_specialist"
+  | "mcp_preflight"
   | "verify"
   | "replan"
   | "ask_user"
@@ -304,6 +306,8 @@ export type AdaptiveDecision = {
   mode: AdaptiveDecisionMode;
   policy: AdaptiveExecutionPolicy;
   avoidStrategyCodes: string[];
+  /** Builtin read-only specialist for safe auto-dispatch (Gap 1). */
+  specialistRole?: BuiltinAgentRole;
 };
 
 export type AdaptiveDecisionSnapshot = {
