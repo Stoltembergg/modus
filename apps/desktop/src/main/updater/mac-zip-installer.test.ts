@@ -11,7 +11,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAC_INSTALL_WAIT_TICKS } from "./mac-install-script";
+import {
+  MAC_INSTALL_TICK_MS,
+  MAC_INSTALL_WAIT_MS,
+  MAC_INSTALL_WAIT_TICKS,
+} from "./mac-install-script";
 import {
   cleanupMacUpdateArtifacts,
   createMacZipInstaller,
@@ -253,9 +257,13 @@ describe("mac zip installer", () => {
     ).toBe("download-page");
   });
 
-  it("reports that a late quit still installs: the script outlives the service watchdog", () => {
-    expect(makeInstaller().installer.appliesOnQuit).toBe(true);
-    expect(MAC_INSTALL_WAIT_TICKS * 100).toBeGreaterThan(INSTALL_WATCHDOG_MS);
+  it("reports that a late quit still installs until the script's own deadline", () => {
+    const { installer } = makeInstaller();
+    expect(installer.appliesOnQuit).toBe(true);
+    // One constant for the script's wait and the service's deadline.
+    expect(installer.handOffDeadlineMs).toBe(MAC_INSTALL_WAIT_MS);
+    expect(MAC_INSTALL_WAIT_TICKS * MAC_INSTALL_TICK_MS).toBe(installer.handOffDeadlineMs);
+    expect(installer.handOffDeadlineMs).toBeGreaterThan(INSTALL_WATCHDOG_MS);
   });
 
   it("spawns the detached swap script and quits", async () => {

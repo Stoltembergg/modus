@@ -109,7 +109,9 @@ export function createElectronUpdaterSource(
 
 /**
  * Windows (NSIS) and Linux AppImage: electron-updater downloads (sha512-checked) and
- * installs. `appliesOnQuit` only for AppImage (see PlatformInstaller).
+ * installs. `appliesOnQuit` only for AppImage (see PlatformInstaller), and never a
+ * `handOffDeadlineMs`: the AppImage file is replaced at the hand-off, so the new version
+ * runs whenever the app is next started, however late it quits.
  */
 export function createElectronUpdaterInstaller(
   updater: ElectronUpdaterLike,

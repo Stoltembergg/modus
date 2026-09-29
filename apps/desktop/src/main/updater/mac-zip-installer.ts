@@ -3,7 +3,7 @@ import { constants, createWriteStream } from "node:fs";
 import { access, mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { macInstallFailurePath } from "./mac-install-failure";
-import { macInstallScriptArgs } from "./mac-install-script";
+import { MAC_INSTALL_WAIT_MS, macInstallScriptArgs } from "./mac-install-script";
 import type { PlatformInstaller, UpdateCandidate, UpdateLogger } from "./update-controller";
 import { UpdateInstallError } from "./update-errors";
 import {
@@ -256,8 +256,10 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
   };
 
   return {
-    // The detached script keeps waiting for the app to exit (MAC_INSTALL_WAIT_TICKS).
+    // The detached script keeps waiting for the app to exit, up to MAC_INSTALL_WAIT_MS
+    // from its spawn in install(); the service drops the promise at the same deadline.
     appliesOnQuit: appliesOnQuitFor("darwin"),
+    handOffDeadlineMs: MAC_INSTALL_WAIT_MS,
     async actionFor(candidate) {
       if (!zipFor(candidate)) {
         deps.logger.info(

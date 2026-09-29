@@ -99,6 +99,30 @@ describe("reduceUpdateState", () => {
     });
   });
 
+  it("turns only an applies-on-quit failure into a plain one when the hand-off expires", () => {
+    const applies = {
+      status: "failed",
+      version: "1.2.0",
+      retryable: true,
+      action: "install",
+      appliesOnQuit: true,
+    } as const;
+    expect(run([{ type: "hand-off-expired" }], applies)).toEqual({
+      status: "failed",
+      version: "1.2.0",
+      retryable: true,
+      action: "install",
+    });
+    for (const other of [
+      IDLE,
+      { status: "installing", version: "1.2.0" },
+      { status: "available", version: "1.2.0", action: "install" },
+      { status: "failed", version: "1.2.0", retryable: true, action: "install" },
+    ] as const) {
+      expect(run([{ type: "hand-off-expired" }], other)).toBe(other);
+    }
+  });
+
   it("dismisses offers and failures only", () => {
     expect(
       run([{ type: "dismissed" }], { status: "available", version: "1", action: "install" }),

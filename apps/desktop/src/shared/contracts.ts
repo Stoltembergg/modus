@@ -1962,7 +1962,8 @@ export type UpdateState =
       /**
        * The install was handed off but the app did not quit (install watchdog), and the
        * pending install still completes when Modus closes: AppImage already replaced
-       * the file; the macOS swap script waits up to 10 minutes from the handoff. Never
+       * the file; the macOS swap script waits up to 10 minutes from the handoff, and
+       * at that deadline the service drops this flag (plain retryable failure). Never
        * set on Windows (the NSIS installer gives up when it cannot close the app).
        */
       appliesOnQuit?: true;
