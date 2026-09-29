@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
-import { IconCrown, IconDots, IconPlayerStop } from "@tabler/icons-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { IconCrown, IconDots, IconLayoutSidebarRight, IconPlayerStop } from "@tabler/icons-react";
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentGroupWithMembers,
   AgentSessionInfo,
@@ -8,11 +8,13 @@ import type {
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
+import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import { CreateGroupDialog, type GroupMembersChange } from "./CreateGroupDialog";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
+import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
@@ -91,41 +93,70 @@ export function GroupRoom({
   const updatePending = useUpdatePending(window.modus.update);
   const [managing, setManaging] = useState(false);
   const running = isGroupRunning(memberStates, group.id);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const { tasks, replace } = useGroupTasks(group.id);
+  const titles = useMemo(
+    () => new Map(members.map((member) => [member.sessionId, member.title])),
+    [members],
+  );
+  const openTasks = activeTaskCount(tasks);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-testid="group-room">
-      <RoomHeader
-        group={group}
-        members={members}
-        memberStates={memberStates}
-        onDelete={onDelete}
-        onManageMembers={() => setManaging(true)}
-        onOpenMember={(sessionId) => {
-          const session = sessionsById.get(sessionId);
-          if (session) onOpenMember(session);
-        }}
-        onRename={onRename}
-        onStop={() => {
-          window.modus.group
-            .stop(group.id)
-            .catch((error: unknown) => console.warn("[groups] stop failed", error));
-        }}
-        projectName={workspace?.displayName}
-        running={running}
-      />
-      <MessageList
-        cwd={workspace?.rootPath}
-        groupId={group.id}
-        members={members}
-        onOpenFile={onOpenFile}
-      />
-      <GroupComposer
-        members={members}
-        onSend={async (body) => {
-          await window.modus.group.postMessage({ groupId: group.id, body });
-        }}
-        updatePending={updatePending}
-      />
+    <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <RoomHeader
+          group={group}
+          members={members}
+          memberStates={memberStates}
+          onDelete={onDelete}
+          onManageMembers={() => setManaging(true)}
+          onOpenMember={(sessionId) => {
+            const session = sessionsById.get(sessionId);
+            if (session) onOpenMember(session);
+          }}
+          onRename={onRename}
+          onStop={() => {
+            window.modus.group
+              .stop(group.id)
+              .catch((error: unknown) => console.warn("[groups] stop failed", error));
+          }}
+          projectName={workspace?.displayName}
+          running={running}
+          tasksButton={
+            <button
+              aria-expanded={tasksOpen}
+              aria-label={`Tasks (${openTasks} active)`}
+              className={cn(
+                "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-muted",
+                tasksOpen && "bg-hover text-fg-muted",
+              )}
+              onClick={() => setTasksOpen((open) => !open)}
+              title={tasksOpen ? "Hide tasks" : "Show tasks"}
+              type="button"
+            >
+              <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
+              Tasks
+              <span className="tabular-nums" data-testid="group-task-count">
+                {openTasks}
+              </span>
+            </button>
+          }
+        />
+        <MessageList
+          cwd={workspace?.rootPath}
+          groupId={group.id}
+          members={members}
+          onOpenFile={onOpenFile}
+        />
+        <GroupComposer
+          members={members}
+          onSend={async (body) => {
+            await window.modus.group.postMessage({ groupId: group.id, body });
+          }}
+          updatePending={updatePending}
+        />
+      </div>
+      {tasksOpen ? <GroupTaskPanel onCancelled={replace} tasks={tasks} titles={titles} /> : null}
       {managing ? (
         <CreateGroupDialog
           group={group}
@@ -150,6 +181,7 @@ function RoomHeader({
   memberStates,
   projectName,
   running,
+  tasksButton,
   onOpenMember,
   onStop,
   onRename,
@@ -161,6 +193,7 @@ function RoomHeader({
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
   running: boolean;
+  tasksButton: ReactNode;
   onOpenMember(sessionId: string): void;
   onStop(): void;
   onRename(name: string): void;
@@ -205,6 +238,7 @@ function RoomHeader({
             Stop
           </button>
         ) : null}
+        {tasksButton}
         <Menu.Root
           onOpenChange={(open) => {
             setMenuOpen(open);

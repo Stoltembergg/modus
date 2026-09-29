@@ -1,13 +1,16 @@
 import type {
   AgentGroupWithMembers,
   CreateAgentGroupInput,
+  GroupTask,
   UpdateAgentGroupMembersInput,
 } from "../../shared/contracts";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../shared/group-errors";
 import { IPC_CHANNELS } from "./channels";
 import {
+  groupCancelTaskSchema,
   groupCreateSchema,
   groupIdInputSchema,
+  groupListTasksSchema,
   groupMemberSchema,
   groupRemoveMemberSchema,
   groupRenameSchema,
@@ -30,6 +33,9 @@ export type GroupIpcService = {
     groupId: string,
     input: Omit<UpdateAgentGroupMembersInput, "groupId">,
   ): AgentGroupWithMembers;
+  listGroupTasks(groupId: string): GroupTask[];
+  /** The room's "Cancel task" (the only path to `cancelled`). */
+  cancelGroupTask(taskId: string): GroupTask;
 };
 
 /**
@@ -142,6 +148,19 @@ export function registerGroupIpcHandlers(
       leadSessionId: parsed.leadSessionId,
     });
     return list();
+  });
+
+  // The room's task panel: list a group's tasks; "Cancel task" returns the task.
+  ipc.handle(IPC_CHANNELS.groupListTasks, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupListTasksSchema, input, IPC_CHANNELS.groupListTasks);
+    return service.listGroupTasks(parsed.groupId);
+  });
+
+  ipc.handle(IPC_CHANNELS.groupCancelTask, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupCancelTaskSchema, input, IPC_CHANNELS.groupCancelTask);
+    return service.cancelGroupTask(parsed.taskId);
   });
 
   ipc.handle(IPC_CHANNELS.groupSetLead, (event, input) => {

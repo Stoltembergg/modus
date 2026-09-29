@@ -921,6 +921,10 @@ export const groupRenameSchema = z.object({ id: groupIdString, name: groupNameSt
 
 export const groupIdInputSchema = z.object({ id: groupIdString }).strict();
 
+export const groupListTasksSchema = z.object({ groupId: groupIdString }).strict();
+
+export const groupCancelTaskSchema = z.object({ taskId: nonEmptyString.max(128) }).strict();
+
 export const groupMemberSchema = z
   .object({
     groupId: groupIdString,

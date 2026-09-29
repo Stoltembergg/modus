@@ -45,6 +45,8 @@ const api: ModusApi = {
     listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
     workingGroupIds: () => ipcRenderer.invoke("group:working"),
     memberStates: () => ipcRenderer.invoke("group:member-states"),
+    listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
+    cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
     onEvent: (callback) => {
       const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);

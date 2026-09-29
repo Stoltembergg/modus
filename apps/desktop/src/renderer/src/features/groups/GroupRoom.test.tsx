@@ -8,10 +8,12 @@ import type {
   GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
+  GroupTask,
   UpdateState,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { GROUP_ROOM_EMPTY_TEXT, GroupRoom } from "./GroupRoom";
+import { CANCEL_TASK_CONFIRM_LABEL } from "./GroupTaskPanel";
 import { GROUP_MESSAGE_PAGE } from "./useGroupMessages";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
@@ -76,12 +78,18 @@ let listeners: Array<(event: GroupRuntimeEvent) => void>;
 let updateListeners: Array<(state: UpdateState) => void>;
 let pages: GroupMessage[][];
 let updateState: UpdateState;
+let tasks: GroupTask[];
 const group = {
   listMessages: vi.fn(async (_input: unknown) => pages.shift() ?? []),
   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
     message("posted", { body: input.body }),
   ),
   stop: vi.fn(async (_groupId: string) => undefined),
+  listTasks: vi.fn(async (_groupId: string) => tasks),
+  cancelTask: vi.fn(async (taskId: string) => {
+    const task = tasks.find((item) => item.id === taskId) as GroupTask;
+    return { ...task, status: "cancelled" as const };
+  }),
   onEvent: vi.fn((listener: (event: GroupRuntimeEvent) => void) => {
     listeners.push(listener);
     return () => {
@@ -102,6 +110,7 @@ beforeEach(() => {
   updateListeners = [];
   pages = [];
   updateState = { status: "idle" };
+  tasks = [];
   for (const fn of [...Object.values(group), ...Object.values(update)]) fn.mockClear();
   Object.assign(window, { modus: { group, update } });
 });
@@ -345,5 +354,76 @@ describe("GroupRoom", () => {
       for (const listener of updateListeners) listener({ status: "idle" });
     });
     expect(screen.queryByTestId("group-update-banner")).toBeNull();
+  });
+
+  it("task panel: closed by default with a counter, grouped by status, Cancelled collapsed", async () => {
+    const user = userEvent.setup();
+    const task = (id: string, status: GroupTask["status"], extra: Partial<GroupTask> = {}) => ({
+      id,
+      groupId: "g-1",
+      title: `Task ${id}`,
+      status,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      ...extra,
+    });
+    tasks = [
+      task("1", "open"),
+      task("2", "in_progress", { ownerSessionId: "s-lead", branch: "modus/group/p1" }),
+      task("3", "in_review", { ownerSessionId: "s-lead", reviewerSessionId: "s-rev-1" }),
+      task("4", "done"),
+      task("5", "cancelled"),
+    ];
+    renderRoom();
+    expect(screen.queryByTestId("group-task-panel")).toBeNull();
+    await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("3"));
+    await user.click(screen.getByRole("button", { name: "Tasks (3 active)" }));
+    const panel = screen.getByTestId("group-task-panel");
+    expect(
+      within(panel)
+        .getAllByTestId("task-section")
+        .map((section) => section.dataset.status),
+    ).toEqual(["open", "in_progress", "in_review", "done", "cancelled"]);
+    // Cancelled starts collapsed.
+    expect(within(panel).queryByText("Task 5")).toBeNull();
+    await user.click(within(panel).getByRole("button", { name: /Cancelled/ }));
+    expect(within(panel).getByText("Task 5")).toBeTruthy();
+
+    const cards = within(panel).getAllByTestId("group-task");
+    const review = cards.find((card) => card.textContent?.includes("Task 3")) as HTMLElement;
+    expect(review.textContent).toContain("OwnerPlanner");
+    expect(review.textContent).toContain("ReviewerReviewer");
+    const working = cards.find((card) => card.textContent?.includes("Task 2")) as HTMLElement;
+    expect(within(working).getByText("modus/group/p1")).toBeTruthy();
+    expect(within(working).getByRole("button", { name: "Copy branch" })).toBeTruthy();
+    // Done and cancelled tasks have no action.
+    for (const id of ["4", "5"]) {
+      const card = cards.find((item) => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
+      expect(within(card).queryByRole("button", { name: "Cancel task" })).toBeNull();
+    }
+  });
+
+  it('"Cancel task" needs two clicks and moves the task to Cancelled', async () => {
+    const user = userEvent.setup();
+    tasks = [
+      {
+        id: "t-1",
+        groupId: "g-1",
+        title: "Parser",
+        status: "open",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+    renderRoom();
+    await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("1"));
+    await user.click(screen.getByRole("button", { name: /^Tasks/ }));
+    await user.click(screen.getByRole("button", { name: "Cancel task" }));
+    expect(group.cancelTask).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: CANCEL_TASK_CONFIRM_LABEL }));
+    expect(group.cancelTask).toHaveBeenCalledWith("t-1");
+    await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("0"));
+    const section = screen.getByTestId("task-section");
+    expect(section.dataset.status).toBe("cancelled");
   });
 });
