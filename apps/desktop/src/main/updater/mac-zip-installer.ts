@@ -255,6 +255,8 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
   };
 
   return {
+    // The detached script keeps waiting for the app to exit (MAC_INSTALL_WAIT_TICKS).
+    appliesOnQuit: true,
     async actionFor(candidate) {
       if (!zipFor(candidate)) {
         deps.logger.info(

@@ -107,9 +107,16 @@ export function createElectronUpdaterSource(
   };
 }
 
-/** Windows (NSIS) and Linux AppImage: electron-updater downloads (sha512-checked) and installs. */
-export function createElectronUpdaterInstaller(updater: ElectronUpdaterLike): PlatformInstaller {
+/**
+ * Windows (NSIS) and Linux AppImage: electron-updater downloads (sha512-checked) and
+ * installs. `appliesOnQuit` only for AppImage (see PlatformInstaller).
+ */
+export function createElectronUpdaterInstaller(
+  updater: ElectronUpdaterLike,
+  options: { appliesOnQuit?: boolean } = {},
+): PlatformInstaller {
   return {
+    appliesOnQuit: options.appliesOnQuit ?? false,
     async actionFor() {
       return "install";
     },

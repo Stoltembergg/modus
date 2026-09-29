@@ -77,6 +77,28 @@ describe("reduceUpdateState", () => {
     expect(run([{ type: "failed", retryable: true, action: "install" }], IDLE)).toBe(IDLE);
   });
 
+  it("keeps the applies-on-quit flag of a watchdog failure until the next attempt", () => {
+    const failed = run(
+      [{ type: "failed", retryable: true, action: "install", appliesOnQuit: true }],
+      { status: "installing", version: "1.2.0" },
+    );
+    expect(failed).toEqual({
+      status: "failed",
+      version: "1.2.0",
+      retryable: true,
+      action: "install",
+      appliesOnQuit: true,
+    });
+    expect(run([{ type: "check-found", version: "1.2.0", action: "install" }], failed)).toBe(
+      failed,
+    );
+    expect(run([{ type: "download-started", version: "1.2.0" }], failed)).toEqual({
+      status: "downloading",
+      version: "1.2.0",
+      percent: 0,
+    });
+  });
+
   it("dismisses offers and failures only", () => {
     expect(
       run([{ type: "dismissed" }], { status: "available", version: "1", action: "install" }),

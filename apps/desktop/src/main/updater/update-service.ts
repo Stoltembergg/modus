@@ -221,7 +221,10 @@ export async function startUpdateService(): Promise<void> {
       logger: updaterLogger,
     });
   } else {
-    installer = createElectronUpdaterInstaller(updater);
+    // AppImage replaces the file at install; NSIS gives up if it cannot close the app.
+    installer = createElectronUpdaterInstaller(updater, {
+      appliesOnQuit: policy.platform === "linux",
+    });
   }
 
   controller = createUpdateController({

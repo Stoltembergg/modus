@@ -15,7 +15,7 @@ export type UpdateEvent =
   | { type: "download-finished" }
   | { type: "restart-deferred" }
   | { type: "install-started" }
-  | { type: "failed"; retryable: boolean; action: UpdateAction }
+  | { type: "failed"; retryable: boolean; action: UpdateAction; appliesOnQuit?: true }
   | { type: "dismissed" }
   /** Restored at startup from the mac install script's failure marker. */
   | { type: "previous-install-failed"; version: string; retryable: boolean; action: UpdateAction };
@@ -75,6 +75,7 @@ export function reduceUpdateState(state: UpdateState, event: UpdateEvent): Updat
           version: state.version,
           retryable: event.retryable,
           action: event.action,
+          ...(event.appliesOnQuit ? { appliesOnQuit: true as const } : {}),
         };
       }
       return state;

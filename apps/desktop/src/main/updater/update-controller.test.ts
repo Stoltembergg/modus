@@ -52,6 +52,9 @@ function setup(options: { installer?: PlatformInstaller; check?: UpdateSource["c
         actionFor: vi.fn(options.installer.actionFor),
         download: vi.fn(options.installer.download),
         install: vi.fn(options.installer.install),
+        ...(options.installer.appliesOnQuit === undefined
+          ? {}
+          : { appliesOnQuit: options.installer.appliesOnQuit }),
       }
     : {
         actionFor: vi.fn(async () => "install" as const),
@@ -307,8 +310,64 @@ describe("install flow", () => {
     await controller.checkNow();
     await controller.install();
     expect(controller.getState().status).toBe("installing");
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(controller.getState().status).toBe("installing");
+    await vi.advanceTimersByTimeAsync(1);
+    // NSIS-like installer: nothing is pending once the app failed to quit.
+    expect(controller.getState()).toEqual({
+      status: "failed",
+      version: "1.1.0",
+      retryable: true,
+      action: "install",
+    });
+  });
+
+  it("flags the watchdog failure as applied on quit when the installer still completes then", async () => {
+    const { controller } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: {
+        actionFor: async () => "install",
+        download: async () => undefined,
+        install: async () => undefined,
+        appliesOnQuit: true,
+      },
+    });
+    await controller.checkNow();
+    await controller.install();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(controller.getState().status).toBe("installing");
+    await vi.advanceTimersByTimeAsync(1);
+    // The handed-off install still runs when the app quits: the notice says so.
+    expect(controller.getState()).toEqual({
+      status: "failed",
+      version: "1.1.0",
+      retryable: true,
+      action: "install",
+      appliesOnQuit: true,
+    });
+  });
+
+  it("does not mark other install failures as applied on quit", async () => {
+    const { controller, installer } = setup({
+      check: async () => candidate("1.1.0"),
+      installer: {
+        actionFor: async () => "install",
+        download: async () => undefined,
+        install: async () => undefined,
+        appliesOnQuit: true,
+      },
+    });
+    installer.install.mockRejectedValueOnce(new Error("spawn failed"));
+    await controller.checkNow();
+    await controller.install();
+    expect(controller.getState()).toEqual({
+      status: "failed",
+      version: "1.1.0",
+      retryable: true,
+      action: "install",
+    });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(controller.getState()).toMatchObject({ status: "failed", retryable: true });
+    expect(controller.getState()).not.toHaveProperty("appliesOnQuit");
   });
 
   it("opens the release page instead of installing on deb installs", async () => {

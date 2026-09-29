@@ -23,6 +23,13 @@ export type PlatformInstaller = {
   download(candidate: UpdateCandidate, onProgress: (percent: number) => void): Promise<void>;
   /** Installs the downloaded update and quits/restarts the app. */
   install(candidate: UpdateCandidate): Promise<void>;
+  /**
+   * Whether a handed-off install still completes if the app quits later than expected:
+   * the AppImage file is already replaced, and the macOS swap script waits up to 10
+   * minutes for the app to exit. Not NSIS: its silent installer gives up right away
+   * when it cannot close the app.
+   */
+  appliesOnQuit?: boolean;
 };
 
 export type AgentActivityProbe = {
@@ -181,12 +188,12 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
     ...(deps.intervalMs === undefined ? {} : { intervalMs: deps.intervalMs }),
   });
 
-  const fail = (error: unknown, stage: string) => {
+  const fail = (error: unknown, stage: string, extra: { appliesOnQuit?: true } = {}) => {
     const failure = describeInstallFailure(error);
     deps.logger.warn(
       `update ${stage} failed: ${errorCode(error) ?? ""} ${errorMessage(error)}`.trim(),
     );
-    dispatch({ type: "failed", ...failure });
+    dispatch({ type: "failed", ...failure, ...extra });
   };
 
   const installNow = async (candidate: UpdateCandidate) => {
@@ -202,10 +209,15 @@ export function createUpdateController(deps: UpdateControllerDeps): UpdateContro
       return;
     }
     // install() hands off to the quit; if the app is somehow still alive later (e.g. a
-    // quit was vetoed), surface a retryable failure instead of "installing" forever.
+    // quit was vetoed), surface a retryable failure instead of "installing" forever. When
+    // the installer says the handed-off install still completes on quit, the notice says so.
     deps.timers.setTimeout(() => {
       if (state.status === "installing") {
-        fail(new Error("the app did not quit to install the update"), "install");
+        fail(
+          new Error("the app did not quit to install the update"),
+          "install",
+          deps.installer.appliesOnQuit ? { appliesOnQuit: true } : {},
+        );
       }
     }, installWatchdogMs);
   };
