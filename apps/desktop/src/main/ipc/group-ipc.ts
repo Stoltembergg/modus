@@ -4,9 +4,17 @@ import type {
   CreateAgentGroupInput,
   GroupDecision,
   GroupTask,
+  NewGroupAgentInput,
   UpdateAgentGroupMembersInput,
 } from "../../shared/contracts";
+import {
+  groupBlockedReason,
+  groupCreateCountError,
+  groupMemberCountError,
+  groupMembersUpdateCountError,
+} from "../../shared/group-blocked";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../shared/group-errors";
+import { requireAgentModel } from "./agent-model-rule";
 import { IPC_CHANNELS } from "./channels";
 import {
   groupCancelTaskSchema,
@@ -20,6 +28,7 @@ import {
   groupRenameSchema,
   groupSetLeadSchema,
   groupSetModeSchema,
+  groupSetWorkspaceSchema,
   groupUpdateMembersSchema,
   parseIpcInput,
 } from "./schemas";
@@ -28,18 +37,23 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 /** The group-store operations the sidebar needs (injected so the IPC layer is testable). */
 export type GroupIpcService = {
   listAgentGroupsWithMembers(): AgentGroupWithMembers[];
+  /** Creates the group with 2..10 NEW agents (one group per agent). */
   createAgentGroupWithMembers(input: CreateAgentGroupInput): AgentGroupWithMembers;
+  /** Whether `modelId` belongs to a configured provider (the agent model rule). */
+  isModelAvailable(modelId: string): boolean;
   renameAgentGroup(groupId: string, name: string): unknown;
   deleteAgentGroup(groupId: string): void;
-  addAgentGroupMember(input: { groupId: string; sessionId: string; role?: string }): unknown;
+  /** Adds an ungrouped (legacy) agent; new agents join with `agents:create`. */
+  addAgentGroupMember(input: { groupId: string; agentId: string; role?: string }): unknown;
+  /** Removing a member deletes its agent (`group-min-members` when 2 are left). */
   removeAgentGroupMember(groupId: string, sessionId: string): void;
   setAgentGroupLead(groupId: string, sessionId: string | null): unknown;
   /** The room menu's "Coordinator mode" toggle (PR 7). */
   setAgentGroupMode(groupId: string, mode: AgentGroupMode): unknown;
-  updateAgentGroupMembers(
-    groupId: string,
-    input: Omit<UpdateAgentGroupMembersInput, "groupId">,
-  ): AgentGroupWithMembers;
+  /** Moves the group (and its room sessions) to another Project; never to none. */
+  setAgentGroupWorkspace(groupId: string, workspaceId: string | null): unknown;
+  /** "Manage members": adds, removes and lead in ONE transaction (final-state rules). */
+  updateAgentGroupMembers(input: UpdateAgentGroupMembersInput): AgentGroupWithMembers;
   listGroupTasks(groupId: string): GroupTask[];
   /** The room's "Cancel task" (the only path to `cancelled`). */
   cancelGroupTask(taskId: string): GroupTask;
@@ -63,6 +77,38 @@ export function toGroupIpcError(error: unknown): unknown {
   return error;
 }
 
+/** `group-project-required` (groupBlockedReason's folder rule) before touching the store. */
+function requireProject(workspaceId: string | null): void {
+  if (groupBlockedReason({ workspaceId }, Number.POSITIVE_INFINITY) === "project-required") {
+    throw new Error(
+      encodeGroupErrorMessage("group-project-required", "A group needs a Project (folder)."),
+    );
+  }
+}
+
+/** The shared 2..10 rule (groupMemberCountError) for a change from `current` to `next`. */
+function requireMemberCount(current: number, next: number): void {
+  throwCountError(groupMemberCountError(current, next));
+}
+
+function throwCountError(code: "group-min-members" | "group-max-members" | null): void {
+  if (code === "group-min-members") {
+    throw new Error(encodeGroupErrorMessage(code, "A group needs at least 2 agents."));
+  }
+  if (code === "group-max-members") {
+    throw new Error(encodeGroupErrorMessage(code, "A group can have at most 10 agents."));
+  }
+}
+
+/** Only the fields present in a parsed member (exactOptionalPropertyTypes). */
+function definedMemberFields(
+  member: Record<string, unknown> & { name: string },
+): NewGroupAgentInput {
+  return Object.fromEntries(
+    Object.entries(member).filter(([, value]) => value !== undefined),
+  ) as NewGroupAgentInput;
+}
+
 type HandlerRegistration = {
   handle(channel: string, listener: (event: TrustedSenderEvent, input?: unknown) => unknown): void;
 };
@@ -72,8 +118,8 @@ type HandlerRegistration = {
  * list (like `workspace:pin`/`workspace:rename`), so the sidebar replaces its
  * state in one step. `group:create` returns the created group.
  *
- * The create dialog only groups EXISTING sessions; it never creates sessions,
- * so there is nothing to clean up when the store's transaction rolls back.
+ * Create / add / update make one hidden room session per group+agent pair
+ * inside the store's transaction, so a rollback leaves nothing behind.
  */
 export function registerGroupIpcHandlers(
   ipcMain: HandlerRegistration,
@@ -81,6 +127,9 @@ export function registerGroupIpcHandlers(
   service: GroupIpcService,
 ): void {
   const list = () => service.listAgentGroupsWithMembers();
+  /** Current member count (archived agents included); unknown group → the store answers. */
+  const memberCount = (groupId: string) =>
+    list().find((group) => group.id === groupId)?.members.length;
   const ipc: HandlerRegistration = {
     handle(channel, listener) {
       ipcMain.handle(channel, (event, input) => {
@@ -104,16 +153,24 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupCreate, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupCreateSchema, input, IPC_CHANNELS.groupCreate);
+    requireProject(parsed.workspaceId);
+    throwCountError(groupCreateCountError(parsed.members.length));
+    for (const member of parsed.members) requireAgentModel(service.isModelAvailable, member);
     return service.createAgentGroupWithMembers({
       name: parsed.name,
-      ...(parsed.workspaceId !== undefined ? { workspaceId: parsed.workspaceId } : {}),
+      workspaceId: parsed.workspaceId,
       ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
-      members: parsed.members.map((member) => ({
-        sessionId: member.sessionId,
-        ...(member.role ? { role: member.role } : {}),
-      })),
-      ...(parsed.leadSessionId !== undefined ? { leadSessionId: parsed.leadSessionId } : {}),
+      members: parsed.members.map((member) => definedMemberFields(member)),
+      ...(parsed.leadName !== undefined ? { leadName: parsed.leadName } : {}),
     });
+  });
+
+  ipc.handle(IPC_CHANNELS.groupSetWorkspace, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupSetWorkspaceSchema, input, IPC_CHANNELS.groupSetWorkspace);
+    requireProject(parsed.workspaceId);
+    service.setAgentGroupWorkspace(parsed.groupId, parsed.workspaceId);
+    return list();
   });
 
   ipc.handle(IPC_CHANNELS.groupRename, (event, input) => {
@@ -133,9 +190,11 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupAddMember, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupMemberSchema, input, IPC_CHANNELS.groupAddMember);
+    const count = memberCount(parsed.groupId);
+    if (count !== undefined) requireMemberCount(count, count + 1);
     service.addAgentGroupMember({
       groupId: parsed.groupId,
-      sessionId: parsed.sessionId,
+      agentId: parsed.agentId,
       ...(parsed.role ? { role: parsed.role } : {}),
     });
     return list();
@@ -144,6 +203,10 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupRemoveMember, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupRemoveMemberSchema, input, IPC_CHANNELS.groupRemoveMember);
+    const group = list().find((row) => row.id === parsed.groupId);
+    if (group?.members.some((member) => member.sessionId === parsed.sessionId)) {
+      requireMemberCount(group.members.length, group.members.length - 1);
+    }
     service.removeAgentGroupMember(parsed.groupId, parsed.sessionId);
     return list();
   });
@@ -151,12 +214,19 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupUpdateMembers, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupUpdateMembersSchema, input, IPC_CHANNELS.groupUpdateMembers);
-    service.updateAgentGroupMembers(parsed.groupId, {
-      members: parsed.members.map((member) => ({
-        sessionId: member.sessionId,
-        ...(member.role ? { role: member.role } : {}),
-      })),
-      leadSessionId: parsed.leadSessionId,
+    // The final count (the store checks it again inside its transaction).
+    const count = memberCount(parsed.groupId);
+    if (count !== undefined) {
+      throwCountError(
+        groupMembersUpdateCountError(count, parsed.add.length, parsed.removeAgentIds.length),
+      );
+    }
+    for (const member of parsed.add) requireAgentModel(service.isModelAvailable, member);
+    service.updateAgentGroupMembers({
+      groupId: parsed.groupId,
+      add: parsed.add.map((member) => definedMemberFields(member)),
+      removeAgentIds: parsed.removeAgentIds,
+      lead: parsed.lead,
     });
     return list();
   });

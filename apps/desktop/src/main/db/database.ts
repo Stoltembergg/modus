@@ -434,13 +434,7 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_agent_groups_workspace
       on agent_groups(workspace_id, updated_at desc);
 
-    create table if not exists agent_group_members (
-      group_id text not null references agent_groups(id) on delete cascade,
-      session_id text not null unique references agent_sessions(id) on delete cascade,
-      role text,
-      joined_at text not null,
-      primary key (group_id, session_id)
-    );
+    create table if not exists agent_group_members (${MEMBERS_TABLE_BODY});
 
     create table if not exists group_messages (
       id text primary key,
@@ -488,13 +482,25 @@ export function migrateDatabase(db: DatabaseSync): void {
   db.exec(`create index if not exists idx_group_decisions_group_created
     on group_decisions(group_id, created_at);`);
 
-  // Agents model (A1): an agent is its own entity (unique name, persona,
-  // defaults). Group members point at one through agent_group_members.agent_id;
+  // Agents model: an agent is its own entity (persona, defaults) and belongs to
+  // exactly ONE group (A2): agents.group_id, names unique per group. Group
+  // members point at it through agent_group_members.agent_id (unique: 1:1);
   // the room runtime stays keyed by the member's session_id.
-  db.exec(`
-    create table if not exists agents (
+  db.exec(`create table if not exists agents (${AGENTS_TABLE_BODY});`);
+  migrateGroupMembersToAgents(db);
+  migrateMembershipByAgent(db);
+  migrateAgentsToOneGroup(db);
+}
+
+/**
+ * `group_id` is nullable in SQL on purpose: legacy agents without a membership
+ * keep NULL (see UNGROUPED_AGENT_POLICY); "an agent needs a group" is enforced
+ * by IPC (agents:create). Names are unique per group, case-insensitively.
+ */
+const AGENTS_TABLE_BODY = `
       id text primary key,
-      name text not null collate nocase unique,
+      group_id text references agent_groups(id) on delete cascade,
+      name text not null collate nocase,
       role text not null default '',
       instructions text not null default '',
       model_id text,
@@ -504,28 +510,169 @@ export function migrateDatabase(db: DatabaseSync): void {
       template_id text,
       created_at text not null,
       updated_at text not null,
-      archived_at text
-    );
-  `);
-  migrateGroupMembersToAgents(db);
+      archived_at text,
+      unique (group_id, name)
+    `;
+const AGENT_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
+  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
+
+/**
+ * Two migration cases are still undecided; both are conservative (nothing is
+ * deleted) and each is one switch here:
+ * - an agent with NO membership: "keep-null" leaves group_id NULL;
+ * - an agent in SEVERAL groups: "split" keeps it in its first group (oldest
+ *   joined_at) and makes one copy per other group (new agent id, same
+ *   persona), re-pointing that membership to the copy.
+ */
+export const UNGROUPED_AGENT_POLICY: "keep-null" = "keep-null";
+export const MULTI_GROUP_AGENT_POLICY: "split" = "split";
+
+/**
+ * A2, idempotent: rebuild `agents` with group_id (when missing), then give
+ * every agent the group of its membership (policies above) and enforce 1:1
+ * with a unique index on agent_group_members(agent_id). The rebuild drops the
+ * parent table of agent_group_members.agent_id, so foreign keys are switched
+ * off around it (they cannot change inside a transaction) and checked before
+ * the commit.
+ */
+function migrateAgentsToOneGroup(db: DatabaseSync): void {
+  const rebuild = !hasColumn(db, "agents", "group_id");
+  const foreignKeys = (db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number })
+    .foreign_keys;
+  if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("begin");
+    try {
+      if (rebuild) {
+        db.exec(`create table agents_replacement (${AGENTS_TABLE_BODY});
+          insert into agents_replacement (${AGENT_COLUMNS}) select ${AGENT_COLUMNS} from agents;
+          drop table agents;
+          alter table agents_replacement rename to agents;`);
+      }
+      assignAgentGroups(db);
+      db.exec(`create unique index if not exists idx_agent_group_members_agent
+        on agent_group_members(agent_id)`);
+      if (rebuild && db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+        throw new Error("agents migration left dangling foreign keys");
+      }
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    if (rebuild && foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
-/** Next free agent name: "Jennie", then "Jennie 2", "Jennie 3" (case-insensitive). */
-export function uniqueAgentName(db: DatabaseSync, base: string): string {
-  const taken = db.prepare("select 1 from agents where name = ?");
+/** Sets agents.group_id from memberships (the caller owns the transaction). */
+function assignAgentGroups(db: DatabaseSync): void {
+  const memberships = db
+    .prepare(
+      `select m.agent_id, m.group_id, m.session_id from agent_group_members m
+       join agents a on a.id = m.agent_id
+       where a.group_id is null or a.group_id <> m.group_id
+          or (select count(*) from agent_group_members o where o.agent_id = m.agent_id) > 1
+       order by m.agent_id, m.joined_at, m.rowid`,
+    )
+    .all() as Array<{ agent_id: string; group_id: string; session_id: string }>;
+  const byAgent = new Map<string, Array<{ group_id: string; session_id: string }>>();
+  for (const row of memberships) {
+    const list = byAgent.get(row.agent_id) ?? [];
+    list.push(row);
+    byAgent.set(row.agent_id, list);
+  }
+  const setGroup = db.prepare("update agents set group_id = ? where id = ?");
+  const copy = db.prepare(
+    `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
+       avatar_face, avatar_color, template_id, created_at, updated_at, archived_at)
+     select ?, ?, name, role, instructions, model_id, default_workspace_id,
+       avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+     from agents where id = ?`,
+  );
+  const repoint = db.prepare(
+    "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
+  );
+  for (const [agentId, rows] of byAgent) {
+    const [first, ...others] = rows;
+    if (!first) continue;
+    setGroup.run(first.group_id, agentId);
+    if (MULTI_GROUP_AGENT_POLICY !== "split") continue;
+    for (const row of others) {
+      const id = randomUUID();
+      copy.run(id, row.group_id, agentId);
+      repoint.run(id, row.group_id, row.session_id);
+    }
+  }
+  // UNGROUPED_AGENT_POLICY "keep-null": agents without a membership are left as is.
+}
+
+/** Next free agent name in a group: "Jennie", then "Jennie 2", "Jennie 3" (case-insensitive). */
+export function uniqueAgentName(db: DatabaseSync, base: string, groupId?: string): string {
+  // Names are unique per group (A2). Without a group (migrations, legacy
+  // agents) the check is global, which also works on the A1 table shape.
+  const taken =
+    groupId === undefined
+      ? db.prepare("select 1 from agents where name = ?")
+      : db.prepare("select 1 from agents where name = ? and group_id = ?");
+  const isTaken = (name: string) =>
+    (groupId === undefined ? taken.get(name) : taken.get(name, groupId)) !== undefined;
   let name = base;
-  for (let suffix = 2; taken.get(name) !== undefined; suffix += 1) {
+  for (let suffix = 2; isTaken(name); suffix += 1) {
     name = `${base} ${suffix}`;
   }
   return name;
 }
 
 /**
- * One-shot (runs when agent_group_members gains agent_id): every current
- * member becomes an agent named after its session title (deduped, "Agent"
- * when blank) with empty role/instructions and a face/color derived from its id. The member keeps its session, so
- * the room history is preserved.
+ * Membership by agent (A2): one row per group+agent pair, whose `session_id`
+ * is that pair's hidden room session (kind 'group_member'). Everything in the
+ * room runtime stays keyed by session_id.
  */
+const MEMBERS_TABLE_BODY = `
+      group_id text not null references agent_groups(id) on delete cascade,
+      session_id text not null unique references agent_sessions(id) on delete cascade,
+      role text,
+      joined_at text not null,
+      agent_id text not null references agents(id) on delete cascade,
+      primary key (group_id, session_id),
+      unique (group_id, agent_id)
+    `;
+
+/**
+ * Every member row with a NULL agent_id becomes its own agent, named after its
+ * session title (deduped, "Agent" when blank) with empty role/instructions and
+ * a face/color derived from its id. The member keeps its session, so the room
+ * history is preserved. Idempotent (only NULL rows); the caller owns the
+ * transaction.
+ */
+function backfillMemberAgents(db: DatabaseSync): void {
+  const members = db
+    .prepare(
+      `select m.group_id, m.session_id, trim(coalesce(s.title, '')) as title
+       from agent_group_members m join agent_sessions s on s.id = m.session_id
+       where m.agent_id is null
+       order by m.joined_at, m.rowid`,
+    )
+    .all() as Array<{ group_id: string; session_id: string; title: string }>;
+  const insertAgent = db.prepare(
+    `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
+     values (?, ?, ?, ?, ?, ?)`,
+  );
+  const link = db.prepare(
+    "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
+  );
+  const now = new Date().toISOString();
+  for (const member of members) {
+    const id = randomUUID();
+    const { avatarFace, avatarColor } = agentAvatarForId(id);
+    const name = uniqueAgentName(db, member.title || "Agent");
+    insertAgent.run(id, name, avatarFace, avatarColor, now, now);
+    link.run(id, member.group_id, member.session_id);
+  }
+}
+
+/** A1, one-shot (runs when agent_group_members gains agent_id): link every member to an agent. */
 function migrateGroupMembersToAgents(db: DatabaseSync): void {
   if (hasColumn(db, "agent_group_members", "agent_id")) return;
   db.exec("begin");
@@ -536,28 +683,42 @@ function migrateGroupMembersToAgents(db: DatabaseSync): void {
       "agent_id",
       "text references agents(id) on delete set null",
     );
-    const members = db
-      .prepare(
-        `select m.group_id, m.session_id, trim(coalesce(s.title, '')) as title
-         from agent_group_members m join agent_sessions s on s.id = m.session_id
-         order by m.joined_at, m.rowid`,
-      )
-      .all() as Array<{ group_id: string; session_id: string; title: string }>;
-    const insertAgent = db.prepare(
-      `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?)`,
-    );
-    const link = db.prepare(
-      "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
-    );
-    const now = new Date().toISOString();
-    for (const member of members) {
-      const id = randomUUID();
-      const { avatarFace, avatarColor } = agentAvatarForId(id);
-      const name = uniqueAgentName(db, member.title || "Agent");
-      insertAgent.run(id, name, avatarFace, avatarColor, now, now);
-      link.run(id, member.group_id, member.session_id);
+    backfillMemberAgents(db);
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
+}
+
+/**
+ * A2, idempotent, one transaction: backfill any member still without an agent
+ * (e.g. added between A1 and A2), mark every member session 'group_member'
+ * (it stays in the group's Project), then rebuild the table with agent_id NOT
+ * NULL and unique (group_id, agent_id). Finally drop hidden room sessions left
+ * without a membership (a teardown interrupted by a crash).
+ */
+function migrateMembershipByAgent(db: DatabaseSync): void {
+  const agentColumn = (
+    db.prepare("PRAGMA table_info(agent_group_members)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>
+  ).find((column) => column.name === "agent_id");
+  db.exec("begin");
+  try {
+    backfillMemberAgents(db);
+    db.exec(`update agent_sessions set kind = 'group_member'
+      where kind = 'chat' and id in (select session_id from agent_group_members)`);
+    if (agentColumn?.notnull !== 1) {
+      db.exec(`create table agent_group_members_replacement (${MEMBERS_TABLE_BODY});
+        insert into agent_group_members_replacement (group_id, session_id, role, joined_at, agent_id)
+          select group_id, session_id, role, joined_at, agent_id from agent_group_members;
+        drop table agent_group_members;
+        alter table agent_group_members_replacement rename to agent_group_members;`);
     }
+    db.exec(`delete from agent_sessions where kind = 'group_member'
+      and id not in (select session_id from agent_group_members)`);
     db.exec("commit");
   } catch (error) {
     db.exec("rollback");

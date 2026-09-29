@@ -8,6 +8,7 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../../db/database");
+const { setAgentArchived } = await import("../../agents/agents-store");
 const { ensureChatsWorkspace } = await import("../../workspace/workspace-store");
 const {
   appendGroupMessage,
@@ -181,7 +182,7 @@ describe("group member tools", () => {
     );
   });
 
-  it("an ambiguous reviewer title returns ambiguous-member with the matching session ids", () => {
+  it("members resolve by their unique agent name: same-titled chats become Twin and twin 2", () => {
     const ws = insertWorkspace();
     const lead = insertSession(ws, "Lead");
     const twinA = insertSession(ws, "Twin");
@@ -193,22 +194,18 @@ describe("group member tools", () => {
       leadSessionId: lead,
     });
     const caller = { sessionId: lead, groupId: group.id };
-    const created = runGroupTool("group_create_task", caller, { title: "T", reviewer: "@Twin" });
-    expect(created).toMatch(/^\[group-error:ambiguous-member\] /);
-    expect(created).toContain(twinA);
-    expect(created).toContain(twinB);
-    expect(listGroupTasks(group.id)).toEqual([]);
-
     const id = taskIdFrom(runGroupTool("group_create_task", caller, { title: "T" }));
     runGroupTool("group_claim_task", caller, { id });
-    const review = runGroupTool("group_request_review", caller, { id, reviewer: "TWIN" });
-    expect(review).toMatch(/^\[group-error:ambiguous-member\] /);
-    expect(review).toContain(`${twinA}, ${twinB}`);
-    expect(listGroupTasks(group.id)[0]?.status).toBe("in_progress");
-    // The retry with a session id works.
-    expect(runGroupTool("group_request_review", caller, { id, reviewer: twinB })).toContain(
-      "Review requested from @twin",
+    // No ambiguity any more (agent names are unique); "twin 2" and ids resolve too.
+    expect(runGroupTool("group_request_review", caller, { id, reviewer: "@TWIN" })).toContain(
+      "Review requested from @Twin",
     );
+    const other = taskIdFrom(runGroupTool("group_create_task", caller, { title: "U" }));
+    runGroupTool("group_claim_task", caller, { id: other });
+    expect(
+      runGroupTool("group_request_review", caller, { id: other, reviewer: "twin 2" }),
+    ).toContain("Review requested from @twin 2");
+    expect(listGroupTasks(group.id).map((task) => task.reviewerSessionId)).toEqual([twinA, twinB]);
   });
 
   it("returns store errors as [group-error:<code>] text and never throws", () => {
@@ -509,6 +506,33 @@ describe("group_assign_task (coordinator mode)", () => {
         body: `Assigned: "Parser" (task ${id}) → @Beta: start with the lexer`,
       },
     ]);
+  });
+
+  it("refuses an archived assignee (member-archived) and a group without a folder", () => {
+    const { group, beta, lead, create } = coordinated();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const id = create("Parser");
+    const agentId = getDatabase()
+      .prepare("select agent_id from agent_group_members where session_id = ?")
+      .get(beta) as { agent_id: string };
+    setAgentArchived(agentId.agent_id, true);
+    try {
+      expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "@Beta" })).toMatch(
+        /^\[group-error:member-archived\] /,
+      );
+    } finally {
+      setAgentArchived(agentId.agent_id, false);
+    }
+    for (const workspaceId of [null, "modus-inbox-chats"]) {
+      getDatabase()
+        .prepare("update agent_groups set workspace_id = ? where id = ?")
+        .run(workspaceId, group.id);
+      expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "@Beta" })).toMatch(
+        /^\[group-error:group-project-required\] /,
+      );
+    }
+    expect(wakes).toEqual([]);
+    expect(listGroupTasks(group.id)[0]?.status).toBe("open");
   });
 
   it("reassigns an in_progress task: Reassigned old → new, wakes only the new owner", () => {

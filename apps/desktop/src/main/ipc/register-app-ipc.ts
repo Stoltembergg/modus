@@ -68,11 +68,14 @@ import {
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import {
-  createAgent,
+  createAgentInGroup,
+  createGroupWithNewAgents,
   deleteAgent,
+  getAgent,
   listAgents,
   setAgentArchived,
   updateAgent,
+  updateGroupMembers,
 } from "../agents/agents-store";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
@@ -122,20 +125,19 @@ import {
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
 import { getGroupRuntime } from "../groups/group-runtime-service";
 import {
-  addAgentGroupMember,
+  addAgentToGroup,
   cancelGroupTask,
-  createAgentGroupWithMembers,
   deleteAgentGroup,
   deleteGroupDecision,
   listAgentGroupsWithMembers,
   listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
-  removeAgentGroupMember,
+  removeAgentFromGroup,
   renameAgentGroup,
   setAgentGroupLead,
   setAgentGroupMode,
-  updateAgentGroupMembers,
+  setAgentGroupWorkspace,
 } from "../groups/group-store";
 import {
   ensurePersonalizationFile,
@@ -1367,23 +1369,46 @@ export function registerAppIpc({
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
 
+  // A member leaving (remove, update, group or agent delete) takes its hidden
+  // room session with it: stop its runtime, then delete the record.
+  const teardownRoomSessions = (sessionIds: readonly string[]): void => {
+    void sessionIds
+      .reduce<Promise<void>>(
+        (previous, id) => previous.then(() => deleteAgentSessionTree(id)),
+        Promise.resolve(),
+      )
+      .catch((error) => console.warn("[modus] room session teardown failed:", error));
+  };
+  // The agent model rule: a model of a configured provider (listModels).
+  const isModelAvailable = (modelId: string) => listModels().some((model) => model.id === modelId);
   registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
     listAgents,
-    createAgent,
+    createAgentInGroup,
+    getAgent,
+    isModelAvailable,
     updateAgent,
     setAgentArchived,
-    deleteAgent,
+    deleteAgent: (agentId) => teardownRoomSessions(deleteAgent(agentId)),
   });
   registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
     listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
-    createAgentGroupWithMembers,
+    createAgentGroupWithMembers: (input) => createGroupWithNewAgents(input),
+    isModelAvailable,
     renameAgentGroup,
-    deleteAgentGroup,
-    addAgentGroupMember,
-    removeAgentGroupMember,
+    deleteAgentGroup: (groupId) => teardownRoomSessions(deleteAgentGroup(groupId)),
+    addAgentGroupMember: (input) => addAgentToGroup(input),
+    removeAgentGroupMember: (groupId, sessionId) => {
+      removeAgentFromGroup(groupId, sessionId);
+      teardownRoomSessions([sessionId]);
+    },
     setAgentGroupLead,
     setAgentGroupMode,
-    updateAgentGroupMembers,
+    setAgentGroupWorkspace,
+    updateAgentGroupMembers: (input) => {
+      const { group, removedSessionIds } = updateGroupMembers(input);
+      teardownRoomSessions(removedSessionIds);
+      return group;
+    },
     listGroupTasks: (groupId) => listGroupTasks(groupId),
     cancelGroupTask,
     listGroupDecisions: (groupId) => listGroupDecisions(groupId),

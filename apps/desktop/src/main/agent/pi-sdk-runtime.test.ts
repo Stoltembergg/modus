@@ -1433,10 +1433,17 @@ describe("PiSdkRuntime", () => {
          values (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(loner, workspaceId, "loner", cwd, "idle", now, now);
+    const partner = `group-partner-${crypto.randomUUID()}`;
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(partner, workspaceId, "partner", cwd, "idle", now, now);
     const group = createAgentGroupWithMembers({
       name: "Squad",
       workspaceId,
-      members: [{ sessionId: member }],
+      members: [{ sessionId: member }, { sessionId: partner }],
     });
     const runtime = new PiSdkRuntime(); // registers the process-wide tools
     const info = (id: string) => ({

@@ -109,6 +109,8 @@ export type AgentSessionInfo = {
   subagentWorktree?: SubagentWorktreeInfo;
   pinnedAt?: string;
   archivedAt?: string;
+  /** Set only for an agent's hidden group room session (never listed as a chat). */
+  kind?: "group_member";
   createdAt: string;
   updatedAt: string;
 };

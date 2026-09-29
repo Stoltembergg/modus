@@ -31,6 +31,12 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "coordinator-off": "Coordinator mode is off, or the group has no Lead.",
   "agent-not-found": "That agent no longer exists.",
   "agent-name-taken": "Another agent already has that name.",
+  "group-project-required": "Choose a folder to continue this group.",
+  "member-archived": "That agent is archived. Restore it first.",
+  "group-min-members": "A group needs at least 2 agents.",
+  "group-max-members": "A group can have at most 10 agents.",
+  "agent-model-required": "Choose a model for this agent.",
+  "agent-model-unavailable": "That model is not available. Connect its provider or choose another.",
 };
 
 /**

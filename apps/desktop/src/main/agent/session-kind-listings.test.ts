@@ -98,11 +98,14 @@ describe("session listings only list kind = 'chat'", () => {
     expect(getAgentSession(`${workspaceId}-room`)?.title).toBe("Jennie room");
   });
 
-  it("sidebar: includeSessionId never adds a room session", () => {
-    const ids = listAgentSessions({ includeSessionId: `${workspaceId}-room` }).map(
-      (session) => session.id,
+  it("sidebar: includeSessionId keeps the active room session, marked group_member", () => {
+    const room = listAgentSessions({ includeSessionId: `${workspaceId}-room` }).find(
+      (session) => session.id === `${workspaceId}-room`,
     );
-    expect(ids).not.toContain(`${workspaceId}-room`);
+    expect(room?.kind).toBe("group_member");
+    expect(
+      listAgentSessions().find((session) => session.id === `${workspaceId}-chat`)?.kind,
+    ).toBeUndefined();
   });
 
   it("Project archive: listArchivedAgentSessions", () => {

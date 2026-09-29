@@ -21,8 +21,12 @@ import type {
 } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
-import { CreateGroupDialog, type GroupMembersChange } from "../features/groups/CreateGroupDialog";
-import { groupMemberSessionIds, isGroupWorkingStub } from "../features/groups/groupSidebarModel";
+import {
+  CreateGroupDialog,
+  type GroupDialogModel,
+  type GroupMembersChange,
+} from "../features/groups/CreateGroupDialog";
+import { groupDeleteConfirmLabel, isGroupWorkingStub } from "../features/groups/groupSidebarModel";
 import { MemberName } from "../features/groups/MemberName";
 import { type MemberLabel, memberLabels } from "../features/groups/memberLabels";
 import { cn } from "../lib/cn";
@@ -44,6 +48,9 @@ export type SidebarGroupsProps = {
   sessions: readonly AgentSessionInfo[];
   /** Projects for the create dialog's Project picker. */
   workspaces: readonly WorkspaceInfo[];
+  /** Models for the dialog's new agents (configured providers). */
+  models?: readonly GroupDialogModel[];
+  defaultModelId?: string | undefined;
   /** Project preselected in the create dialog (usually the active one). */
   defaultWorkspaceId?: string | null;
   activeSessionId?: string | undefined;
@@ -79,6 +86,8 @@ export function SidebarGroups({
   groups,
   sessions,
   workspaces,
+  models = [],
+  defaultModelId,
   defaultWorkspaceId = null,
   activeSessionId,
   activityBySession,
@@ -103,7 +112,6 @@ export function SidebarGroups({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   );
-  const memberIds = useMemo(() => groupMemberSessionIds(groups), [groups]);
   const managingGroup = managingId ? groups.find((group) => group.id === managingId) : undefined;
 
   function toggle(groupId: string): void {
@@ -119,11 +127,10 @@ export function SidebarGroups({
     <div data-testid="sidebar-groups">
       {groups.map((group) => {
         const expanded = !collapsed.has(group.id);
-        const memberSessions = group.members
-          .map((member) => sessionsById.get(member.sessionId))
-          .filter((session): session is AgentSessionInfo => Boolean(session));
+        // Members come from the group itself (agent name and archived state):
+        // their hidden room sessions are not in the sidebar's session list.
         const labels = memberLabels(
-          memberSessions.map((session) => ({ sessionId: session.id, title: session.title })),
+          group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
         );
         return (
           <div data-group-id={group.id} key={group.id}>
@@ -147,21 +154,22 @@ export function SidebarGroups({
               working={isGroupWorking(group)}
               {...(onSelectGroup ? { onSelect: () => onSelectGroup(group) } : {})}
             />
-            {expanded && memberSessions.length > 0 ? (
+            {expanded && group.members.length > 0 ? (
               <div className={SB_NEST}>
-                {memberSessions.map((session) => {
-                  const isLead = group.leadSessionId === session.id;
+                {group.members.map((member) => {
+                  const isLead = group.leadSessionId === member.sessionId;
+                  const session = sessionsById.get(member.sessionId);
                   return (
                     <MemberRow
-                      activity={activityBySession[session.id]}
-                      isActive={activeSessionId === session.id}
+                      activity={activityBySession[member.sessionId]}
+                      isActive={activeSessionId === member.sessionId}
                       isLead={isLead}
-                      key={session.id}
-                      onRemove={() => onRemoveMember(group.id, session.id)}
-                      onSelect={() => onSelectSession(session)}
-                      onToggleLead={() => onSetLead(group.id, isLead ? null : session.id)}
-                      role={group.members.find((m) => m.sessionId === session.id)?.role}
-                      label={labels.get(session.id) ?? { title: session.title }}
+                      key={member.sessionId}
+                      onRemove={() => onRemoveMember(group.id, member.sessionId)}
+                      onSelect={() => (session ? onSelectSession(session) : onSelectGroup?.(group))}
+                      onToggleLead={() => onSetLead(group.id, isLead ? null : member.sessionId)}
+                      role={member.role ?? (member.agentRole || undefined)}
+                      label={labels.get(member.sessionId) ?? { title: member.name }}
                     />
                   );
                 })}
@@ -188,25 +196,25 @@ export function SidebarGroups({
       </button>
 
       <CreateGroupDialog
+        defaultModelId={defaultModelId}
         defaultWorkspaceId={defaultWorkspaceId}
-        memberSessionIds={memberIds}
+        models={models}
         onCreate={onCreateGroup}
         onOpenChange={setDialogOpen}
         open={dialogOpen}
-        sessions={sessions}
         workspaces={workspaces}
       />
       {managingGroup ? (
         <CreateGroupDialog
+          defaultModelId={defaultModelId}
           group={managingGroup}
-          memberSessionIds={memberIds}
           mode="edit"
+          models={models}
           onOpenChange={(open) => {
             if (!open) setManagingId(null);
           }}
           onSave={(change) => onUpdateMembers(managingGroup.id, change)}
           open
-          sessions={sessions}
           workspaces={workspaces}
         />
       ) : null}
@@ -251,6 +259,7 @@ export function GroupRow({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const items = (
     <GroupMenuItems
+      agentCount={memberCount}
       confirmDelete={confirmDelete}
       onConfirmDelete={setConfirmDelete}
       onDelete={onDelete}
@@ -361,7 +370,6 @@ export function GroupRow({
 }
 
 /** Exact confirm label of the two-step Delete item. */
-export const GROUP_DELETE_CONFIRM_LABEL = "Member sessions return to the sidebar";
 
 /** Group row dot: amber "waiting for you" wins over the working dot. */
 function GroupRowDot({ working, waiting }: { working: boolean; waiting: boolean }) {
@@ -393,6 +401,7 @@ function GroupRowDot({ working, waiting }: { working: boolean; waiting: boolean 
  * menu and the room header menu.
  */
 export function GroupMenuItems({
+  agentCount,
   confirmDelete,
   onConfirmDelete,
   onStartRename,
@@ -400,6 +409,8 @@ export function GroupMenuItems({
   onDelete,
   coordinator,
 }: {
+  /** The group's agents (deleted with it): for the delete confirmation. */
+  agentCount: number;
   confirmDelete: boolean;
   onConfirmDelete(next: boolean): void;
   onStartRename(): void;
@@ -453,7 +464,7 @@ export function GroupMenuItems({
           onDelete();
         }}
       >
-        {confirmDelete ? GROUP_DELETE_CONFIRM_LABEL : "Delete"}
+        {confirmDelete ? groupDeleteConfirmLabel(agentCount) : "Delete"}
       </GroupMenuItem>
     </>
   );

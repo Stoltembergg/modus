@@ -235,7 +235,11 @@ describe("group_start_worktree", () => {
   it("refuses with no-git-project when the group has no Project", async () => {
     const chats = ensureChatsWorkspace();
     const alpha = insertSession(CHATS_WORKSPACE_ID, chats.rootPath, "Alpha");
-    const group = createAgentGroupWithMembers({ name: "Inbox", members: [{ sessionId: alpha }] });
+    const beta = insertSession(CHATS_WORKSPACE_ID, chats.rootPath, "Beta");
+    const group = createAgentGroupWithMembers({
+      name: "Inbox",
+      members: [{ sessionId: alpha }, { sessionId: beta }],
+    });
 
     expect(await startMemberWorktree({ sessionId: alpha, groupId: group.id })).toMatch(
       /^\[group-error:no-git-project\] /,
@@ -284,8 +288,8 @@ describe("group_start_worktree", () => {
     const kept = [deleted.alpha, deleted.beta].map((id) => getAgentSession(id)?.subagentWorktree);
     deleteAgentGroup(deleted.group.id);
     for (const [index, id] of [deleted.alpha, deleted.beta].entries()) {
-      expect(getAgentSession(id)?.cwd).toBe(deleted.root);
-      expect(getAgentSession(id)?.subagentWorktree).toBeUndefined();
+      // The room sessions go with the group (A2); the worktree and branch stay on disk.
+      expect(getAgentSession(id)).toBeUndefined();
       expect(existsSync(kept[index]?.path ?? "")).toBe(true);
       expect(git(deleted.root, "rev-parse", "--verify", kept[index]?.branch ?? "")).not.toBe("");
     }

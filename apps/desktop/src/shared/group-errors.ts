@@ -44,6 +44,19 @@ export const GROUP_ERROR_CODES = [
   // Agents store: no agent with that id / another agent already has that name.
   "agent-not-found",
   "agent-name-taken",
+  // The group has no Project (null or the Chats inbox): creating/moving it there, or
+  // sending / waking / assigning in it until a folder is chosen (see groupNeedsProject).
+  "group-project-required",
+  // group_assign_task: the assignee's agent is archived (it stays a member, never woken).
+  "member-archived",
+  // A group has 2..10 member agents (shared/group-blocked.ts): fewer than 2 on create
+  // or removal, and while blocked with one member; more than 10 on create or add.
+  "group-min-members",
+  "group-max-members",
+  // agents:create / agents:update without a template: a model is required and must
+  // belong to a configured provider.
+  "agent-model-required",
+  "agent-model-unavailable",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

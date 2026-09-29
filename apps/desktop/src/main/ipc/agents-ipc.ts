@@ -1,4 +1,5 @@
-import type { AgentInfo, CreateAgentInput, UpdateAgentInput } from "../../shared/contracts";
+import type { AgentInfo, CreateGroupAgentInput, UpdateAgentInput } from "../../shared/contracts";
+import { requireAgentModel } from "./agent-model-rule";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
 import {
@@ -13,9 +14,14 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 /** The agents-store operations (injected so the IPC layer is testable). */
 export type AgentsIpcService = {
   listAgents(): AgentInfo[];
-  createAgent(input: CreateAgentInput): AgentInfo;
+  /** A new agent in its (only) group: membership and room session included. */
+  createAgentInGroup(input: CreateGroupAgentInput): AgentInfo;
+  getAgent(agentId: string): AgentInfo | undefined;
+  /** Whether `modelId` belongs to a configured provider (listModels). */
+  isModelAvailable(modelId: string): boolean;
   updateAgent(agentId: string, input: UpdateAgentInput): unknown;
   setAgentArchived(agentId: string, archived: boolean): unknown;
+  /** Same operation as removing the member: `group-min-members` when 2 are left. */
   deleteAgent(agentId: string): void;
 };
 
@@ -66,12 +72,28 @@ export function registerAgentsIpcHandlers(
   ipc.handle(IPC_CHANNELS.agentsCreate, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentsCreateSchema, input, IPC_CHANNELS.agentsCreate);
-    return service.createAgent({ ...definedFields(parsed), name: parsed.name });
+    requireAgentModel(service.isModelAvailable, parsed);
+    const { groupId, templateId, ...fields } = parsed;
+    return service.createAgentInGroup({
+      ...definedFields(fields),
+      name: parsed.name,
+      groupId,
+      ...(templateId !== undefined ? { templateId } : {}),
+    });
   });
 
   ipc.handle(IPC_CHANNELS.agentsUpdate, (event, input) => {
     assertTrustedSender(event);
     const { id, ...fields } = parseIpcInput(agentsUpdateSchema, input, IPC_CHANNELS.agentsUpdate);
+    const current = service.getAgent(id);
+    if (current) {
+      const changed = fields.modelId !== undefined;
+      requireAgentModel(
+        service.isModelAvailable,
+        { templateId: current.templateId, modelId: changed ? fields.modelId : current.modelId },
+        changed,
+      );
+    }
     service.updateAgent(id, definedFields(fields));
     return list();
   });

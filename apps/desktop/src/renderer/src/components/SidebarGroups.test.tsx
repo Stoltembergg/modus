@@ -8,8 +8,9 @@ import type {
   WorkspaceInfo,
 } from "../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
+import { groupDeleteConfirmLabel } from "../features/groups/groupSidebarModel";
 import { Sidebar } from "./Sidebar";
-import { GROUP_DELETE_CONFIRM_LABEL, SidebarGroups } from "./SidebarGroups";
+import { SidebarGroups } from "./SidebarGroups";
 
 function session(id: string, overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo {
   return {
@@ -36,8 +37,8 @@ const WORKSPACES: WorkspaceInfo[] = [
 ];
 
 const SESSIONS = [
-  session("member-a"),
-  session("member-b"),
+  session("member-a", { kind: "group_member" }),
+  session("member-b", { kind: "group_member" }),
   session("project-chat"),
   session("pinned-inbox", {
     workspaceId: CHATS_WORKSPACE_ID,
@@ -46,12 +47,21 @@ const SESSIONS = [
   session("inbox-member", {
     workspaceId: CHATS_WORKSPACE_ID,
     pinnedAt: "2026-01-02T00:00:00.000Z",
+    kind: "group_member",
   }),
   session("inbox-chat", { workspaceId: CHATS_WORKSPACE_ID }),
 ];
 
-function member(groupId: string, sessionId: string) {
-  return { groupId, sessionId, joinedAt: "2026-01-01T00:00:00.000Z" };
+/** A member: its agent's name (here the session title) comes with the group. */
+function member(groupId: string, sessionId: string, name = `Chat ${sessionId}`) {
+  return {
+    groupId,
+    sessionId,
+    agentId: `agent-${sessionId}`,
+    name,
+    agentRole: "",
+    joinedAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 
 const GROUPS: AgentGroupWithMembers[] = [
@@ -183,8 +193,10 @@ describe("SidebarGroups", () => {
     // Delete is two-step; the confirm label is exact and the menu stays open.
     await user.click(within(menu).getByRole("menuitem", { name: "Delete" }));
     expect(handlers.onDeleteGroup).not.toHaveBeenCalled();
-    const confirm = within(menu).getByRole("menuitem", { name: GROUP_DELETE_CONFIRM_LABEL });
-    expect(confirm.textContent).toBe("Member sessions return to the sidebar");
+    const confirm = within(menu).getByRole("menuitem", { name: groupDeleteConfirmLabel(2) });
+    expect(confirm.textContent).toBe(
+      "This deletes its 2 agents, their chats and all group messages",
+    );
     await user.click(confirm);
     expect(handlers.onDeleteGroup).toHaveBeenCalledWith("g-project");
 
@@ -220,19 +232,15 @@ describe("SidebarGroups", () => {
     ]);
   });
 
-  it("Manage members edits the group through one atomic update", async () => {
+  it("Manage members adds new agents, removes members (never below 2) and sets the lead", async () => {
     const user = userEvent.setup();
     const handlers = groupHandlers();
-    const sessions = [
-      ...SESSIONS,
-      session("free-chat"),
-      session("other-ws", { workspaceId: "ws-2" }),
-    ];
     render(
       <SidebarGroups
         activityBySession={{}}
         groups={GROUPS}
-        sessions={sessions}
+        models={[{ id: "m-1", name: "Model 1" }]}
+        sessions={SESSIONS}
         workspaces={WORKSPACES}
         {...handlers}
       />,
@@ -248,25 +256,21 @@ describe("SidebarGroups", () => {
     );
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Manage members")).toBeTruthy();
-    // Current members (preselected) plus eligible chats of the same Project.
-    const boxes = within(dialog).getAllByRole("checkbox") as HTMLInputElement[];
-    expect(boxes.map((box) => [box.closest("label")?.textContent, box.checked])).toEqual([
-      ["Chat member-a", true],
-      ["Chat member-b", true],
-      ["Chat project-chat", false],
-      ["Chat free-chat", false],
-    ]);
-    expect((within(dialog).getByRole("combobox") as HTMLSelectElement).value).toBe("member-a");
-
-    await user.click(within(dialog).getByRole("checkbox", { name: "Chat member-a" }));
-    await user.click(within(dialog).getByRole("checkbox", { name: "Chat free-chat" }));
-    await user.selectOptions(within(dialog).getByRole("combobox"), "free-chat");
+    // Two members left: removing one is disabled until another agent is added.
+    const removeA = within(dialog).getByRole("button", { name: "Remove Chat member-a" });
+    expect((removeA as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Agent 1 name" }), "Cy");
+    expect((removeA as HTMLButtonElement).disabled).toBe(false);
+    await user.click(removeA);
+    await user.selectOptions(within(dialog).getByRole("combobox", { name: /Lead/ }), "member-b");
     await user.click(within(dialog).getByRole("button", { name: "Save members" }));
 
     expect(handlers.onUpdateMembers).toHaveBeenCalledTimes(1);
     expect(handlers.onUpdateMembers).toHaveBeenCalledWith("g-project", {
-      members: [{ sessionId: "member-b" }, { sessionId: "free-chat" }],
-      leadSessionId: "free-chat",
+      add: [{ name: "Cy", modelId: "m-1" }],
+      removeAgentIds: ["agent-member-a"],
+      lead: { agentId: "agent-member-b" },
     });
   });
 });
@@ -331,106 +335,12 @@ describe("Sidebar with groups", () => {
     expect(screen.getAllByText("Chat inbox-chat")).toHaveLength(1);
   });
 
-  it("puts a deleted group's chats back in the other sections", () => {
-    const noop = vi.fn();
-    const props = {
-      activityBySession: {},
-      agentSessions: SESSIONS,
-      canCreateSession: true,
-      maxWidth: 480,
-      onArchiveProjectChats: noop,
-      onArchiveSession: noop,
-      onCreateGroup: vi.fn(async () => undefined),
-      onDeleteProjectChats: noop,
-      onDeleteSession: noop,
-      onListArchivedSessions: vi.fn(async () => []),
-      onNewSession: noop,
-      onNewWorkspaceSession: noop,
-      onOpenLimits: noop,
-      onOpenSettings: noop,
-      onOpenWorkspace: noop,
-      onPinProject: noop,
-      onPinSession: noop,
-      onRemoveProject: noop,
-      onRenameProject: noop,
-      onRestoreSession: noop,
-      onRevealProject: noop,
-      onSelectSession: noop,
-      onWidthChange: noop,
-      open: true,
-      width: 280,
-      workspaces: WORKSPACES,
-    };
-    const { rerender } = render(<Sidebar {...props} groups={GROUPS} />);
-    expect(
-      within(screen.getByTestId("sidebar-groups")).getByText("Chat inbox-member"),
-    ).toBeTruthy();
-    rerender(<Sidebar {...props} groups={[GROUPS[0] as AgentGroupWithMembers]} />);
-    expect(
-      within(screen.getByTestId("sidebar-groups")).queryByText("Chat inbox-member"),
-    ).toBeNull();
+  it("room sessions (kind group_member) never show outside the Groups section, even pinned", () => {
+    renderSidebar();
+    const pinned = screen.getByTestId("sidebar-pinned");
+    expect(within(pinned).queryByText("Chat inbox-member")).toBeNull();
+    expect(within(pinned).getByText("Chat pinned-inbox")).toBeTruthy();
     expect(screen.getAllByText("Chat inbox-member")).toHaveLength(1);
-  });
-
-  it("keeps pins: a pinned member shows only under its group, and in Pinned again once it leaves", () => {
-    const noop = vi.fn();
-    const props = {
-      activityBySession: {},
-      agentSessions: SESSIONS,
-      canCreateSession: true,
-      maxWidth: 480,
-      onArchiveProjectChats: noop,
-      onArchiveSession: noop,
-      onCreateGroup: vi.fn(async () => undefined),
-      onDeleteProjectChats: noop,
-      onDeleteSession: noop,
-      onListArchivedSessions: vi.fn(async () => []),
-      onNewSession: noop,
-      onNewWorkspaceSession: noop,
-      onOpenLimits: noop,
-      onOpenSettings: noop,
-      onOpenWorkspace: noop,
-      onPinProject: noop,
-      onPinSession: noop,
-      onRemoveProject: noop,
-      onRenameProject: noop,
-      onRestoreSession: noop,
-      onRevealProject: noop,
-      onSelectSession: noop,
-      onWidthChange: noop,
-      open: true,
-      width: 280,
-      workspaces: WORKSPACES,
-    };
-    const inPinned = (title: string) =>
-      within(screen.getByTestId("sidebar-pinned")).queryByText(title) !== null;
-    const inGroups = (title: string) =>
-      within(screen.getByTestId("sidebar-groups")).queryByText(title) !== null;
-    const [squad, crew] = GROUPS as [AgentGroupWithMembers, AgentGroupWithMembers];
-
-    // Member (pinned): only under the group.
-    const { rerender } = render(<Sidebar {...props} groups={GROUPS} />);
-    expect(inGroups("Chat inbox-member")).toBe(true);
-    expect(inPinned("Chat inbox-member")).toBe(false);
-    expect(screen.getAllByText("Chat inbox-member")).toHaveLength(1);
-    expect(inPinned("Chat pinned-inbox")).toBe(true);
-
-    // Removed from the group (group kept, now empty): back in Pinned.
-    rerender(<Sidebar {...props} groups={[squad, { ...crew, members: [] }]} />);
-    expect(inGroups("Chat inbox-member")).toBe(false);
-    expect(inPinned("Chat inbox-member")).toBe(true);
-    expect(screen.getAllByText("Chat inbox-member")).toHaveLength(1);
-
-    // Rejoins, then the group is deleted: back in Pinned again.
-    rerender(<Sidebar {...props} groups={GROUPS} />);
-    expect(inPinned("Chat inbox-member")).toBe(false);
-    rerender(<Sidebar {...props} groups={[squad]} />);
-    expect(inPinned("Chat inbox-member")).toBe(true);
-    expect(screen.getAllByText("Chat inbox-member")).toHaveLength(1);
-    // The pin itself was never touched.
-    expect(SESSIONS.find((s) => s.id === "inbox-member")?.pinnedAt).toBe(
-      "2026-01-02T00:00:00.000Z",
-    );
   });
 
   describe("Remove project with groups", () => {
@@ -499,7 +409,7 @@ describe("Sidebar with groups", () => {
       await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
       expect(onRemoveProject).not.toHaveBeenCalled();
       const confirm = within(menu).getByRole("menuitem", {
-        name: "1 group and its member chats will be deleted",
+        name: "This also deletes 1 group with their agents, chats and messages: Release squad",
       });
       await user.click(confirm);
       expect(onRemoveProject).toHaveBeenCalledWith("ws-1");
@@ -512,7 +422,7 @@ describe("Sidebar with groups", () => {
       await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
       expect(
         within(menu).getByRole("menuitem", {
-          name: "2 groups and their member chats will be deleted",
+          name: "This also deletes 2 groups with their agents, chats and messages: Release squad, Second",
         }),
       ).toBeTruthy();
       expect(onRemoveProject).not.toHaveBeenCalled();
@@ -606,7 +516,7 @@ describe("SidebarGroups duplicate member titles", () => {
       name: "Dup squad",
       workspaceId: "ws-1",
       mode: "free",
-      members: sessions.map((s) => member("g-dup", s.id)),
+      members: sessions.map((s) => member("g-dup", s.id, s.title)),
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     };

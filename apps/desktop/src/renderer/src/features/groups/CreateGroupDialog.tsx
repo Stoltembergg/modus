@@ -1,43 +1,54 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { IconCrown } from "@tabler/icons-react";
+import { IconCrown, IconPlus, IconX } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentGroupWithMembers,
-  AgentSessionInfo,
   CreateAgentGroupInput,
+  GroupLeadRef,
+  NewGroupAgentInput,
   UpdateAgentGroupMembersInput,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
+import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 import { cn } from "../../lib/cn";
 import { describeGroupError } from "./groupErrors";
-import { eligibleGroupSessions, manageableGroupSessions } from "./groupSidebarModel";
 
-/** Select value for "no Project" (members come from the Chats inbox). */
+/** Select value while no Project is chosen (a group needs one: Create stays disabled). */
 const NO_PROJECT = "";
 
-/** Target members and lead sent by the "Manage members" mode. */
+/**
+ * What "Manage members" sends, as ONE `group:update-members` call: new agents
+ * to create, members to remove (removing a member deletes its agent) and the
+ * final lead (a kept member or a new agent).
+ */
 export type GroupMembersChange = Omit<UpdateAgentGroupMembersInput, "groupId">;
+
+/** Lead select value of a new (draft) agent; kept members use their session id. */
+const newLeadValue = (key: number) => `new:${key}`;
+
+/** A model offered for the new agents (a configured provider's). */
+export type GroupDialogModel = { id: string; name: string };
 
 type DialogCommonProps = {
   open: boolean;
   onOpenChange(open: boolean): void;
   /** Projects offered in the Project picker (the Chats inbox is excluded). */
   workspaces: readonly WorkspaceInfo[];
-  /** Candidate sessions (root, non-archived); filtered further by eligibility. */
-  sessions: readonly AgentSessionInfo[];
-  /** Sessions already in some group (never offered, except the edited group's own). */
-  memberSessionIds: ReadonlySet<string>;
+  /** Models for the new agents (an agent without a template needs one). */
+  models: readonly GroupDialogModel[];
+  /** Preselected model (the app default). */
+  defaultModelId?: string | undefined;
 };
 
 type CreateModeProps = DialogCommonProps & {
   mode?: "create";
-  /** Project preselected when the dialog opens (e.g. the active one); default no Project. */
+  /** Project preselected when the dialog opens (e.g. the active one). */
   defaultWorkspaceId?: string | null;
   onCreate(input: CreateAgentGroupInput): Promise<void>;
 };
 
 type EditModeProps = DialogCommonProps & {
-  /** "Manage members": add/remove members and change the lead of `group`. */
+  /** "Manage members": add new agents, remove members and change the lead of `group`. */
   mode: "edit";
   group: AgentGroupWithMembers;
   onSave(change: GroupMembersChange): Promise<void>;
@@ -45,21 +56,32 @@ type EditModeProps = DialogCommonProps & {
 
 type CreateGroupDialogProps = CreateModeProps | EditModeProps;
 
+type DraftAgent = { key: number; name: string; role: string };
+
+let draftKey = 0;
+const draft = (): DraftAgent => ({ key: ++draftKey, name: "", role: "" });
+
+const FIELD = cn(
+  "h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-sm text-fg outline-none",
+  "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
+);
+
 /**
- * Single-screen "New group" dialog: name, Project (optional), members, lead.
- * It only groups EXISTING chats: it never creates sessions. In `mode="edit"`
- * it becomes "Manage members" for an existing group: the Project is fixed,
- * the name is not editable here (Rename does that), and the list offers the
- * eligible chats plus the current members, preselected.
+ * Minimal "New group" dialog (the full modal is A4): name, Project (required),
+ * model, 2..10 NEW agents (name + role; an agent belongs to one group) and the
+ * lead. In `mode="edit"` it becomes "Manage members": remove members (which
+ * deletes their agents; not below 2), add new agents (up to 10) and pick the lead.
  */
 export function CreateGroupDialog(props: CreateGroupDialogProps) {
-  const { open, onOpenChange, workspaces, sessions, memberSessionIds } = props;
+  const { open, onOpenChange, workspaces, models } = props;
   const editGroup = props.mode === "edit" ? props.group : undefined;
   const defaultWorkspaceId = props.mode === "edit" ? null : (props.defaultWorkspaceId ?? null);
   const [name, setName] = useState("");
   const [workspaceId, setWorkspaceId] = useState<string>(NO_PROJECT);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [leadSessionId, setLeadSessionId] = useState<string | null>(null);
+  const [modelId, setModelId] = useState("");
+  const [agents, setAgents] = useState<DraftAgent[]>([]);
+  const [removed, setRemoved] = useState<string[]>([]);
+  const [lead, setLead] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const nameRef = useRef<HTMLInputElement>(null);
@@ -68,77 +90,112 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
 
   // Reset only when the dialog opens (or switches group), not on every list refresh.
   const editGroupId = editGroup?.id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: editGroup is read at open time only.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read at open time only.
   useEffect(() => {
-    if (open) {
-      if (editGroup) {
-        setName(editGroup.name);
-        setWorkspaceId(editGroup.workspaceId ?? NO_PROJECT);
-        setSelected(editGroup.members.map((member) => member.sessionId));
-        setLeadSessionId(editGroup.leadSessionId ?? null);
-      } else {
-        setName("");
-        const initial =
-          defaultWorkspaceId && projects.some((project) => project.id === defaultWorkspaceId)
-            ? defaultWorkspaceId
-            : NO_PROJECT;
-        setWorkspaceId(initial);
-        setSelected([]);
-        setLeadSessionId(null);
-      }
-      setBusy(false);
-      setError(undefined);
+    if (!open) return;
+    const initialModel =
+      props.defaultModelId && models.some((model) => model.id === props.defaultModelId)
+        ? props.defaultModelId
+        : (models[0]?.id ?? "");
+    setModelId(initialModel);
+    setRemoved([]);
+    if (editGroup) {
+      setName(editGroup.name);
+      setWorkspaceId(editGroup.workspaceId ?? NO_PROJECT);
+      setAgents([]);
+      setLead(editGroup.leadSessionId ?? "");
+    } else {
+      setName("");
+      setWorkspaceId(
+        defaultWorkspaceId && projects.some((project) => project.id === defaultWorkspaceId)
+          ? defaultWorkspaceId
+          : NO_PROJECT,
+      );
+      setAgents([draft(), draft()]);
+      setLead("");
     }
+    setBusy(false);
+    setError(undefined);
   }, [open, defaultWorkspaceId, projects, editGroupId]);
 
-  const eligible = useMemo(
-    () =>
-      editGroup
-        ? manageableGroupSessions(sessions, editGroup, memberSessionIds)
-        : eligibleGroupSessions(sessions, workspaceId || null, memberSessionIds),
-    [sessions, workspaceId, memberSessionIds, editGroup],
-  );
-  const selectedSessions = eligible.filter((session) => selected.includes(session.id));
-  // At least one member (enforced here only; the store itself accepts an empty group).
-  const canCreate =
-    (editGroup ? true : name.trim().length > 0) && selectedSessions.length > 0 && !busy;
+  const kept = editGroup
+    ? editGroup.members.filter((member) => !removed.includes(member.sessionId))
+    : [];
+  const named = agents.filter((agent) => agent.name.trim());
+  const total = kept.length + named.length;
+  const names = [...kept.map((member) => member.name), ...named.map((agent) => agent.name.trim())];
+  const duplicate = new Set(names.map((value) => value.toLocaleLowerCase())).size !== names.length;
+  const needsModel = named.length > 0 && !modelId;
+  // The FINAL state (like groupMembersUpdateCountError): 2..10, except that a
+  // legacy group above 10 may shrink as long as nothing is added.
+  const countOk =
+    total >= GROUP_MIN_MEMBERS &&
+    (total <= GROUP_MAX_MEMBERS || (editGroup !== undefined && named.length === 0));
+  const canSubmit =
+    !busy &&
+    countOk &&
+    !duplicate &&
+    !needsModel &&
+    agents.every((agent) => agent.name.trim() || !agent.role.trim()) &&
+    (editGroup ? true : name.trim().length > 0 && workspaceId !== NO_PROJECT);
+  const canAddAgent = total < GROUP_MAX_MEMBERS;
   const projectName = editGroup?.workspaceId
     ? (projects.find((project) => project.id === editGroup.workspaceId)?.displayName ??
       "Unknown project")
-    : "No project";
+    : "No folder";
+  const hint = duplicate
+    ? "Each agent needs a different name."
+    : total < GROUP_MIN_MEMBERS
+      ? `A group needs at least ${GROUP_MIN_MEMBERS} agents.`
+      : !countOk
+        ? `A group can have at most ${GROUP_MAX_MEMBERS} agents.`
+        : !editGroup && workspaceId === NO_PROJECT
+          ? "Choose a project for the group."
+          : needsModel
+            ? "Choose a model for the new agents."
+            : undefined;
 
-  function changeProject(next: string): void {
-    setWorkspaceId(next);
-    // Members must belong to the chosen Project: reset the picks.
-    setSelected([]);
-    setLeadSessionId(null);
+  function updateAgent(key: number, patch: Partial<DraftAgent>): void {
+    setAgents((current) =>
+      current.map((agent) => (agent.key === key ? { ...agent, ...patch } : agent)),
+    );
   }
 
-  function toggleMember(sessionId: string): void {
-    setSelected((current) => {
-      if (current.includes(sessionId)) {
-        if (leadSessionId === sessionId) setLeadSessionId(null);
-        return current.filter((id) => id !== sessionId);
-      }
-      return [...current, sessionId];
-    });
+  function toMember(agent: DraftAgent): NewGroupAgentInput {
+    return {
+      name: agent.name.trim(),
+      ...(agent.role.trim() ? { role: agent.role.trim() } : {}),
+      modelId,
+    };
   }
 
   async function submit(): Promise<void> {
-    if (!canCreate) return;
+    if (!canSubmit) return;
     setBusy(true);
     setError(undefined);
-    const members = selectedSessions.map((session) => ({ sessionId: session.id }));
-    const lead = leadSessionId && selected.includes(leadSessionId) ? leadSessionId : null;
     try {
+      const leadDraft = named.find((agent) => newLeadValue(agent.key) === lead);
       if (props.mode === "edit") {
-        await props.onSave({ members, leadSessionId: lead });
+        const keptLead = kept.find((member) => member.sessionId === lead);
+        const nextLead: GroupLeadRef | null = keptLead
+          ? { agentId: keptLead.agentId }
+          : leadDraft
+            ? { name: leadDraft.name.trim() }
+            : null;
+        await props.onSave({
+          add: named.map(toMember),
+          removeAgentIds: (editGroup?.members ?? [])
+            .filter((member) => removed.includes(member.sessionId))
+            .map((member) => member.agentId),
+          lead: nextLead,
+        });
       } else {
+        const leadName = leadDraft?.name.trim();
         await props.onCreate({
           name: name.trim(),
-          workspaceId: workspaceId || null,
-          members,
-          leadSessionId: lead,
+          workspaceId,
+          members: named.map(toMember),
+          ...(leadName ? { leadName } : {}),
         });
       }
       onOpenChange(false);
@@ -148,6 +205,17 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
       setBusy(false);
     }
   }
+
+  const newLeadOptions = named.map((agent) => ({
+    value: newLeadValue(agent.key),
+    label: agent.name.trim(),
+  }));
+  const leadOptions = editGroup
+    ? [
+        ...kept.map((member) => ({ value: member.sessionId, label: member.name })),
+        ...newLeadOptions,
+      ]
+    : newLeadOptions;
 
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
@@ -181,7 +249,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
                 {editGroup
                   ? `${editGroup.name} · ${projectName}`
-                  : "Group existing chats so they can work together."}
+                  : "New agents that work together in one project."}
               </Dialog.Description>
             </div>
 
@@ -191,10 +259,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   <label className="flex flex-col gap-1">
                     <span className="text-2xs text-fg-subtle">Name</span>
                     <input
-                      className={cn(
-                        "h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-sm text-fg outline-none",
-                        "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
-                      )}
+                      className={FIELD}
                       maxLength={120}
                       onChange={(event) => setName(event.target.value)}
                       placeholder="e.g. Release squad"
@@ -206,14 +271,13 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   <label className="flex flex-col gap-1">
                     <span className="text-2xs text-fg-subtle">Project</span>
                     <select
-                      className={cn(
-                        "h-8 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm text-fg outline-none",
-                        "focus:border-hairline-strong",
-                      )}
-                      onChange={(event) => changeProject(event.target.value)}
+                      className={cn(FIELD, "px-2")}
+                      onChange={(event) => setWorkspaceId(event.target.value)}
                       value={workspaceId}
                     >
-                      <option value={NO_PROJECT}>No project</option>
+                      <option disabled value={NO_PROJECT}>
+                        Choose a project
+                      </option>
                       {projects.map((project) => (
                         <option key={project.id} value={project.id}>
                           {project.displayName}
@@ -225,34 +289,94 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               )}
 
               <fieldset className="flex min-w-0 flex-col gap-1">
-                <legend className="mb-1 text-2xs text-fg-subtle">Members</legend>
-                {eligible.length === 0 ? (
-                  <p className="rounded-lg border border-hairline border-dashed px-2.5 py-2 text-2xs text-fg-faint">
-                    {workspaceId || editGroup?.workspaceId
-                      ? "No available chats in this project. Chats already in a group, archived chats and subagents can't be added."
-                      : "No available chats without a folder. Chats already in a group, archived chats and subagents can't be added."}
-                  </p>
-                ) : (
-                  <ul className="scroll-thin max-h-44 overflow-y-auto rounded-lg border border-hairline">
-                    {eligible.map((session) => {
-                      const checked = selected.includes(session.id);
-                      return (
-                        <li key={session.id}>
-                          <label className="flex h-8 cursor-pointer items-center gap-2 px-2.5 text-xs text-fg-muted hover:bg-hover">
-                            <input
-                              checked={checked}
-                              className="size-3.5 shrink-0"
-                              onChange={() => toggleMember(session.id)}
-                              type="checkbox"
-                            />
-                            <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                          </label>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                <legend className="mb-1 text-2xs text-fg-subtle">Agents</legend>
+                <ul className="scroll-thin flex max-h-56 flex-col gap-1 overflow-y-auto">
+                  {kept.map((member) => (
+                    <li
+                      className="flex h-8 items-center gap-2 px-1 text-xs text-fg-muted"
+                      key={member.sessionId}
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {member.name}
+                        {member.agentRole ? (
+                          <span className="text-fg-faint"> · {member.agentRole}</span>
+                        ) : null}
+                      </span>
+                      <button
+                        aria-label={`Remove ${member.name}`}
+                        className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg disabled:opacity-40"
+                        disabled={kept.length + named.length <= GROUP_MIN_MEMBERS}
+                        onClick={() => {
+                          setRemoved((current) => [...current, member.sessionId]);
+                          if (lead === member.sessionId) setLead("");
+                        }}
+                        title="Removing a member deletes its agent"
+                        type="button"
+                      >
+                        <IconX size={12} />
+                      </button>
+                    </li>
+                  ))}
+                  {agents.map((agent, index) => (
+                    <li className="flex items-center gap-1.5" key={agent.key}>
+                      <input
+                        aria-label={`Agent ${index + 1} name`}
+                        className={FIELD}
+                        maxLength={80}
+                        onChange={(event) => updateAgent(agent.key, { name: event.target.value })}
+                        placeholder="Name"
+                        value={agent.name}
+                      />
+                      <input
+                        aria-label={`Agent ${index + 1} role`}
+                        className={FIELD}
+                        maxLength={80}
+                        onChange={(event) => updateAgent(agent.key, { role: event.target.value })}
+                        placeholder="Role (optional)"
+                        value={agent.role}
+                      />
+                      <button
+                        aria-label={`Remove agent ${index + 1}`}
+                        className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg"
+                        onClick={() => {
+                          setAgents((current) => current.filter((item) => item.key !== agent.key));
+                          if (lead === newLeadValue(agent.key)) setLead("");
+                        }}
+                        type="button"
+                      >
+                        <IconX size={12} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  className="flex h-7 items-center gap-1 self-start rounded-md px-1.5 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40"
+                  disabled={!canAddAgent || agents.length + kept.length >= GROUP_MAX_MEMBERS}
+                  onClick={() => setAgents((current) => [...current, draft()])}
+                  type="button"
+                >
+                  <IconPlus size={12} />
+                  Add agent
+                </button>
               </fieldset>
+
+              {agents.length > 0 ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-2xs text-fg-subtle">Model for new agents</span>
+                  <select
+                    className={cn(FIELD, "px-2")}
+                    onChange={(event) => setModelId(event.target.value)}
+                    value={modelId}
+                  >
+                    {models.length === 0 ? <option value="">No model configured</option> : null}
+                    {models.map((model) => (
+                      <option key={model.id} value={model.id}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
 
               <label className="flex flex-col gap-1">
                 <span className="flex items-center gap-1 text-2xs text-fg-subtle">
@@ -260,22 +384,20 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   Lead
                 </span>
                 <select
-                  className={cn(
-                    "h-8 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm text-fg outline-none",
-                    "focus:border-hairline-strong disabled:opacity-50",
-                  )}
-                  disabled={selectedSessions.length === 0}
-                  onChange={(event) => setLeadSessionId(event.target.value || null)}
-                  value={leadSessionId ?? ""}
+                  className={cn(FIELD, "px-2 disabled:opacity-50")}
+                  disabled={leadOptions.length === 0}
+                  onChange={(event) => setLead(event.target.value)}
+                  value={leadOptions.some((option) => option.value === lead) ? lead : ""}
                 >
                   <option value="">No lead</option>
-                  {selectedSessions.map((session) => (
-                    <option key={session.id} value={session.id}>
-                      {session.title}
+                  {leadOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
               </label>
+              {hint ? <p className="text-2xs text-fg-faint">{hint}</p> : null}
             </div>
 
             {error ? (
@@ -298,11 +420,11 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               <button
                 className={cn(
                   "h-7 rounded-md px-3 text-xs transition-colors",
-                  canCreate
+                  canSubmit
                     ? "bg-accent text-white hover:opacity-90"
                     : "cursor-not-allowed bg-chip-strong text-fg-faint",
                 )}
-                disabled={!canCreate}
+                disabled={!canSubmit}
                 type="submit"
               >
                 {editGroup

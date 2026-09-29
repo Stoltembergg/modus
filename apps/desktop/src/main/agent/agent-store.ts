@@ -25,6 +25,7 @@ type AgentSessionRow = {
   subagent_conflict_files_json: string | null;
   pinned_at: string | null;
   archived_at: string | null;
+  kind: "chat" | "group_member";
   created_at: string;
   updated_at: string;
 };
@@ -33,7 +34,7 @@ const SESSION_COLUMNS = `id, workspace_id, title, cwd, status, runtime, model, p
   pi_session_file, parent_session_id, subagent_task, subagent_type, subagent_readonly,
   subagent_worktree_path, subagent_worktree_branch, subagent_worktree_base_sha,
   subagent_integration_status, subagent_changed_files_json, subagent_conflict_files_json,
-  pinned_at, archived_at, created_at, updated_at`;
+  pinned_at, archived_at, kind, created_at, updated_at`;
 
 function parseJsonArray(text: string | null): string[] | undefined {
   if (!text) return undefined;
@@ -76,6 +77,9 @@ function toSession(row: AgentSessionRow): AgentSessionInfo {
   }
   if (row.archived_at !== null) {
     session.archivedAt = row.archived_at;
+  }
+  if (row.kind === "group_member") {
+    session.kind = "group_member";
   }
   if (row.subagent_task !== null) {
     session.subagentTask = row.subagent_task;
@@ -327,11 +331,11 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
     options.includeSessionId &&
     !sessions.some((session) => session.id === options.includeSessionId)
   ) {
-    const included = getDatabase()
-      .prepare(`select ${SESSION_COLUMNS} from agent_sessions where id = ? and kind = 'chat'`)
-      .get(options.includeSessionId) as AgentSessionRow | undefined;
+    // The active session is kept even when it is a hidden room session opened
+    // from the room (marked `kind: "group_member"`; the sidebar never lists it).
+    const included = getAgentSession(options.includeSessionId);
     if (included) {
-      sessions.push(toSession(included));
+      sessions.push(included);
     }
   }
   return sessions;

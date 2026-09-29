@@ -4,17 +4,25 @@ import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState }
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
-  AgentSessionInfo,
   GroupMessage,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
+import {
+  GROUP_BLOCKED_TEXT,
+  type GroupBlockedReason,
+  groupBlockedReason,
+} from "../../../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
-import { CreateGroupDialog, type GroupMembersChange } from "./CreateGroupDialog";
+import {
+  CreateGroupDialog,
+  type GroupDialogModel,
+  type GroupMembersChange,
+} from "./CreateGroupDialog";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
 import { GroupDecisionsSection } from "./GroupDecisions";
 import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel";
@@ -52,13 +60,15 @@ export function memberColor(sessionId: string): string {
 
 export type GroupRoomProps = {
   group: AgentGroupWithMembers;
-  /** Root sessions (member titles and the Manage members dialog). */
-  sessions: readonly AgentSessionInfo[];
   workspaces: readonly WorkspaceInfo[];
-  /** Every session already in some group (the Manage members dialog). */
-  memberSessionIds: ReadonlySet<string>;
+  /** Models for new agents in the Manage members dialog. */
+  models?: readonly GroupDialogModel[];
+  defaultModelId?: string | undefined;
   memberStates: GroupMemberStatesById;
-  onOpenMember(session: AgentSessionInfo): void;
+  /** Opens a member's hidden room session (to answer "Waiting for you"). */
+  onOpenMember(sessionId: string): void;
+  /** "Choose folder" on a group without a Project: pick one and move the group. */
+  onChooseFolder?: (() => void) | undefined;
   onRename(name: string): void;
   /** The menu's "Coordinator mode" toggle (PR 7). */
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
@@ -70,29 +80,24 @@ export type GroupRoomProps = {
 /** The group room (main panel): header with members, the message list and the composer. */
 export function GroupRoom({
   group,
-  sessions,
   workspaces,
-  memberSessionIds,
+  models = [],
+  defaultModelId,
   memberStates,
   onOpenMember,
+  onChooseFolder,
   onRename,
   onSetMode,
   onUpdateMembers,
   onDelete,
   onOpenFile,
 }: GroupRoomProps) {
-  const sessionsById = useMemo(
-    () => new Map(sessions.map((session) => [session.id, session])),
-    [sessions],
-  );
+  // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
-    () =>
-      group.members.map((member) => ({
-        sessionId: member.sessionId,
-        title: sessionsById.get(member.sessionId)?.title ?? member.sessionId,
-      })),
-    [group.members, sessionsById],
+    () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
+    [group.members],
   );
+  const blocked = groupBlockedReason(group, group.members);
   const workspace = group.workspaceId
     ? workspaces.find((item) => item.id === group.workspaceId)
     : undefined;
@@ -113,10 +118,7 @@ export function GroupRoom({
           memberStates={memberStates}
           onDelete={onDelete}
           onManageMembers={() => setManaging(true)}
-          onOpenMember={(sessionId) => {
-            const session = sessionsById.get(sessionId);
-            if (session) onOpenMember(session);
-          }}
+          onOpenMember={onOpenMember}
           onRename={onRename}
           onSetMode={onSetMode}
           onStop={() => {
@@ -152,13 +154,20 @@ export function GroupRoom({
           members={members}
           onOpenFile={onOpenFile}
         />
-        <GroupComposer
-          members={members}
-          onSend={async (body) => {
-            await window.modus.group.postMessage({ groupId: group.id, body });
-          }}
-          updatePending={updatePending}
-        />
+        {blocked ? (
+          <BlockedBanner
+            onAction={blocked === "project-required" ? onChooseFolder : () => setManaging(true)}
+            reason={blocked}
+          />
+        ) : (
+          <GroupComposer
+            members={members}
+            onSend={async (body) => {
+              await window.modus.group.postMessage({ groupId: group.id, body });
+            }}
+            updatePending={updatePending}
+          />
+        )}
       </div>
       {tasksOpen ? (
         <GroupTaskPanel
@@ -170,17 +179,48 @@ export function GroupRoom({
       ) : null}
       {managing ? (
         <CreateGroupDialog
+          defaultModelId={defaultModelId}
           group={group}
-          memberSessionIds={memberSessionIds}
           mode="edit"
+          models={models}
           onOpenChange={(open) => {
             if (!open) setManaging(false);
           }}
           onSave={onUpdateMembers}
           open
-          sessions={sessions}
           workspaces={workspaces}
         />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * A blocked group is read-only (no composer): "Choose a folder to continue
+ * this group" / "Add a member to continue", with the way out as a button.
+ */
+export function BlockedBanner({
+  reason,
+  onAction,
+}: {
+  reason: GroupBlockedReason;
+  onAction?: (() => void) | undefined;
+}) {
+  return (
+    <div
+      className="mx-4 mb-3 flex items-center gap-3 rounded-lg border border-hairline bg-chip px-3 py-2 text-xs text-fg-muted"
+      data-testid="group-blocked-banner"
+      role="status"
+    >
+      <span className="min-w-0 flex-1">{GROUP_BLOCKED_TEXT[reason]}</span>
+      {onAction ? (
+        <button
+          className="h-7 shrink-0 rounded-md bg-accent px-3 text-white text-xs hover:opacity-90"
+          onClick={onAction}
+          type="button"
+        >
+          {reason === "project-required" ? "Choose folder" : "Add agent"}
+        </button>
       ) : null}
     </div>
   );
@@ -280,6 +320,7 @@ function RoomHeader({
             <Menu.Positioner align="end" side="bottom" sideOffset={4}>
               <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
                 <GroupMenuItems
+                  agentCount={group.members.length}
                   confirmDelete={confirmDelete}
                   coordinator={
                     onSetMode
