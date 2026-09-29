@@ -20,7 +20,6 @@ const { ensureChatsWorkspace, removeWorkspace } = await import("../workspace/wor
 const {
   GroupStoreError,
   addAgentGroupMember,
-  addGroupDecision,
   appendGroupMessage,
   cancelGroupTask,
   claimGroupTask,
@@ -28,25 +27,28 @@ const {
   getGroupMessage,
   releaseGroupTask,
   requestGroupTaskReview,
+  recordGroupDecision,
   reviewGroupTask,
   createAgentGroup,
   createAgentGroupWithMembers,
   createGroupTask,
+  deleteGroupDecision,
+  GROUP_DECISION_LIMIT,
+  GROUP_DECISION_MAX_CHARS,
   deleteAgentGroup,
   getAgentGroup,
   getAgentGroupForSession,
-  listActiveGroupDecisions,
   listAgentGroupMembers,
   listAgentGroupMemberSessionIds,
   listAgentGroups,
   listAgentGroupsWithMembers,
+  listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
   setAgentGroupMode,
-  supersedeGroupDecision,
   updateAgentGroupMembers,
   updateGroupTask,
 } = await import("./group-store");
@@ -1037,25 +1039,157 @@ describe("member task transitions", () => {
 });
 
 describe("decisions", () => {
-  it("adds, supersedes and lists only active decisions", () => {
+  it("records trimmed decisions and lists them newest first", () => {
     const { a, group } = projectGroupFixture();
-    const source = appendGroupMessage({
+    const source = appendGroupMessage({ groupId: group.id, authorKind: "user", body: "SQLite?" });
+    const first = recordGroupDecision({
       groupId: group.id,
-      authorKind: "user",
-      body: "Use SQLite",
+      text: "  Use SQLite  ",
+      authorSessionId: a,
+      sourceMessageId: source.id,
     });
-    const first = addGroupDecision({
+    expect(first).toMatchObject({
       groupId: group.id,
       text: "Use SQLite",
+      authorSessionId: a,
       sourceMessageId: source.id,
-      createdBySessionId: a,
     });
-    const other = addGroupDecision({ groupId: group.id, text: "Ship weekly" });
+    const second = recordGroupDecision({ groupId: group.id, text: "Ship weekly" });
+    expect(second.authorSessionId).toBeUndefined();
+    expect(second.sourceMessageId).toBeUndefined();
+    expect(listGroupDecisions(group.id).map((d) => d.id)).toEqual([second.id, first.id]);
+    expect(listGroupDecisions(createAgentGroup({ name: "Empty" }).id)).toEqual([]);
+  });
 
-    const replacement = supersedeGroupDecision(first.id, { text: "Use SQLite with WAL" });
-    expect(listActiveGroupDecisions(group.id).map((d) => d.id)).toEqual([other.id, replacement.id]);
-    expectStoreError(() => supersedeGroupDecision(first.id, { text: "again" }), "invalid-value");
-    expectStoreError(() => supersedeGroupDecision("missing", { text: "x" }), "decision-not-found");
+  it("rejects empty or over-long text with invalid-text", () => {
+    const { a, group } = projectGroupFixture();
+    for (const text of ["", "   ", "x".repeat(GROUP_DECISION_MAX_CHARS + 1)]) {
+      expectStoreError(
+        () => recordGroupDecision({ groupId: group.id, text, authorSessionId: a }),
+        "invalid-text",
+      );
+    }
+    const padded = ` ${"y".repeat(GROUP_DECISION_MAX_CHARS)} `;
+    expect(recordGroupDecision({ groupId: group.id, text: padded }).text).toHaveLength(
+      GROUP_DECISION_MAX_CHARS,
+    );
+  });
+
+  it("checks the group, the author's membership and the source message", () => {
+    const { group } = projectGroupFixture();
+    const outsider = insertSession(insertWorkspace());
+    expectStoreError(
+      () => recordGroupDecision({ groupId: "missing", text: "x" }),
+      "group-not-found",
+    );
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "x", authorSessionId: outsider }),
+      "not-a-member",
+    );
+    const other = createAgentGroup({ name: "Other" });
+    const foreign = appendGroupMessage({ groupId: other.id, authorKind: "user", body: "hi" });
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "x", sourceMessageId: foreign.id }),
+      "message-not-found",
+    );
+    expect(listGroupDecisions(group.id)).toEqual([]);
+  });
+
+  it(`allows at most ${GROUP_DECISION_LIMIT} decisions per group (limit-reached)`, () => {
+    const { a, group } = projectGroupFixture();
+    for (let index = 0; index < GROUP_DECISION_LIMIT; index += 1) {
+      recordGroupDecision({ groupId: group.id, text: `D${index}`, authorSessionId: a });
+    }
+    expectStoreError(
+      () => recordGroupDecision({ groupId: group.id, text: "one more", authorSessionId: a }),
+      "limit-reached",
+    );
+    expect(listGroupDecisions(group.id)).toHaveLength(GROUP_DECISION_LIMIT);
+    // Other groups have their own limit; deleting frees a slot.
+    const other = createAgentGroup({ name: "Other" });
+    expect(recordGroupDecision({ groupId: other.id, text: "fine" }).text).toBe("fine");
+    const [newest] = listGroupDecisions(group.id);
+    deleteGroupDecision(newest?.id ?? "");
+    expect(recordGroupDecision({ groupId: group.id, text: "again" }).text).toBe("again");
+  });
+
+  it("deletes a decision physically", () => {
+    const { group } = projectGroupFixture();
+    const keep = recordGroupDecision({ groupId: group.id, text: "Keep" });
+    const drop = recordGroupDecision({ groupId: group.id, text: "Drop" });
+    expect(deleteGroupDecision(drop.id)).toMatchObject({ id: drop.id, text: "Drop" });
+    expect(listGroupDecisions(group.id).map((d) => d.id)).toEqual([keep.id]);
+    expect(countRows("group_decisions", "id", drop.id)).toBe(0);
+    expectStoreError(() => deleteGroupDecision(drop.id), "decision-not-found");
+  });
+
+  it("migrates the legacy group_decisions shape (active rows kept, author carried over)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "modus-group-decisions-migrate-"));
+    const db = new DatabaseSync(join(dir, "modus.sqlite"));
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(db);
+      const now = new Date().toISOString();
+      db.exec(`drop table group_decisions;
+        create table group_decisions (
+          id text primary key,
+          group_id text not null references agent_groups(id) on delete cascade,
+          text text not null,
+          source_message_id text references group_messages(id) on delete set null,
+          created_by_session_id text references agent_sessions(id) on delete set null,
+          created_at text not null,
+          superseded_by_id text references group_decisions(id) on delete set null
+        );
+        create index idx_group_decisions_group_created on group_decisions(group_id, created_at);`);
+      db.prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values ('w', 'root-w', 'repo', 1, ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+         values ('s', 'w', 'Chat', 'root-w', 'idle', ?, ?)`,
+      ).run(now, now);
+      db.prepare(
+        `insert into agent_groups (id, name, workspace_id, mode, created_at, updated_at)
+         values ('g', 'G', 'w', 'free', ?, ?)`,
+      ).run(now, now);
+      const insert = db.prepare(
+        `insert into group_decisions (id, group_id, text, created_by_session_id, created_at, superseded_by_id)
+         values (?, 'g', ?, ?, ?, ?)`,
+      );
+      insert.run("new", "Use WAL", "s", now, null);
+      insert.run("old", "Use SQLite", "s", now, "new");
+      insert.run("user", "Ship weekly", null, now, null);
+
+      migrateDatabase(db);
+      migrateDatabase(db);
+
+      const columns = (
+        db.prepare("PRAGMA table_info(group_decisions)").all() as Array<{ name: string }>
+      ).map((column) => column.name);
+      expect(columns).toEqual([
+        "id",
+        "group_id",
+        "text",
+        "author_session_id",
+        "source_message_id",
+        "created_at",
+      ]);
+      const rows = db
+        .prepare("select id, text, author_session_id from group_decisions order by id")
+        .all();
+      expect(rows).toEqual([
+        { id: "new", text: "Use WAL", author_session_id: "s" },
+        { id: "user", text: "Ship weekly", author_session_id: null },
+      ]);
+      const indexes = (
+        db.prepare("PRAGMA index_list(group_decisions)").all() as Array<{ name: string }>
+      ).map((index) => index.name);
+      expect(indexes).toContain("idx_group_decisions_group_created");
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1067,7 +1201,7 @@ describe("deletion semantics", () => {
     insertRun(b);
     appendGroupMessage({ groupId: group.id, authorKind: "agent", authorSessionId: a, body: "hi" });
     createGroupTask({ groupId: group.id, title: "Task", ownerSessionId: b });
-    addGroupDecision({ groupId: group.id, text: "Decision" });
+    recordGroupDecision({ groupId: group.id, text: "Decision" });
 
     deleteAgentGroup(group.id);
 
@@ -1122,7 +1256,7 @@ describe("deletion semantics", () => {
       createdBySessionId: a,
       reviewerSessionId: a,
     });
-    const decision = addGroupDecision({ groupId: group.id, text: "D", createdBySessionId: a });
+    const decision = recordGroupDecision({ groupId: group.id, text: "D", authorSessionId: a });
 
     deleteAgentSession(a);
 
@@ -1139,9 +1273,9 @@ describe("deletion semantics", () => {
     expect(storedTask?.ownerSessionId).toBeUndefined();
     expect(storedTask?.createdBySessionId).toBeUndefined();
     expect(storedTask?.reviewerSessionId).toBeUndefined();
-    const [storedDecision] = listActiveGroupDecisions(group.id);
+    const [storedDecision] = listGroupDecisions(group.id);
     expect(storedDecision?.id).toBe(decision.id);
-    expect(storedDecision?.createdBySessionId).toBeUndefined();
+    expect(storedDecision?.authorSessionId).toBeUndefined();
 
     // The group keeps working after the deletion.
     expect(

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import type { AgentGroupWithMembers, GroupTask } from "../../shared/contracts";
+import type { AgentGroupWithMembers, GroupDecision, GroupTask } from "../../shared/contracts";
 import type { GroupIpcService } from "./group-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
@@ -25,6 +25,8 @@ const GROUP_CHANNELS = [
   "group:update-members",
   "group:list-tasks",
   "group:cancel-task",
+  "group:list-decisions",
+  "group:delete-decision",
 ];
 
 const GROUP: AgentGroupWithMembers = {
@@ -45,6 +47,14 @@ const TASK: GroupTask = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
+const DECISION: GroupDecision = {
+  id: "d-1",
+  groupId: "g-1",
+  text: "Use SQLite",
+  authorSessionId: "s-1",
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
+
 type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
 
 function mockService() {
@@ -61,6 +71,8 @@ function mockService() {
     ),
     listGroupTasks: vi.fn((_groupId: string): GroupTask[] => [TASK]),
     cancelGroupTask: vi.fn((_taskId: string): GroupTask => ({ ...TASK, status: "cancelled" })),
+    listGroupDecisions: vi.fn((_groupId: string): GroupDecision[] => [DECISION]),
+    deleteGroupDecision: vi.fn((_decisionId: string): GroupDecision => DECISION),
   } satisfies GroupIpcService;
 }
 
@@ -158,6 +170,14 @@ describe("group IPC", () => {
         status: "cancelled",
       });
       expect(service.cancelGroupTask).toHaveBeenCalledWith("t-1");
+      expect(handlers.get("group:list-decisions")?.(trusted, { groupId: "g-1" })).toEqual([
+        DECISION,
+      ]);
+      expect(service.listGroupDecisions).toHaveBeenCalledWith("g-1");
+      expect(handlers.get("group:delete-decision")?.(trusted, { decisionId: "d-1" })).toEqual(
+        DECISION,
+      );
+      expect(service.deleteGroupDecision).toHaveBeenCalledWith("d-1");
     } finally {
       unregister();
     }
@@ -201,7 +221,68 @@ describe("group IPC", () => {
       expect(call("group:cancel-task", { taskId: "t-1", status: "done" })).toThrow(
         /Invalid IPC payload/,
       );
+      expect(call("group:list-decisions", { groupId: "" })).toThrow(/Invalid IPC payload/);
+      expect(call("group:list-decisions", "g-1")).toThrow(/Invalid IPC payload/);
+      expect(call("group:delete-decision", { decisionId: "" })).toThrow(/Invalid IPC payload/);
+      expect(call("group:delete-decision", { decisionId: "x".repeat(129) })).toThrow(
+        /Invalid IPC payload/,
+      );
       for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("group:delete-decision is the user's only: a member session in the payload is refused", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      for (const input of [
+        { decisionId: "d-1", sessionId: "s-1" },
+        { decisionId: "d-1", actorSessionId: "s-1" },
+        { decisionId: "d-1", authorSessionId: "s-1" },
+      ]) {
+        expect(() => handlers.get("group:delete-decision")?.(trusted, input)).toThrow(
+          /Invalid IPC payload/,
+        );
+      }
+      expect(service.deleteGroupDecision).not.toHaveBeenCalled();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("group:delete-decision with the real store deletes the row and posts nothing", async () => {
+    const store = await import("../groups/group-store");
+    const { decodeGroupErrorMessage } = await import("../../shared/group-errors");
+    const handlers = await register({
+      ...mockService(),
+      listGroupDecisions: (groupId) => store.listGroupDecisions(groupId),
+      deleteGroupDecision: store.deleteGroupDecision,
+    });
+    const group = store.createAgentGroup({ name: "Decisions" });
+    const keep = store.recordGroupDecision({ groupId: group.id, text: "Keep" });
+    const drop = store.recordGroupDecision({ groupId: group.id, text: "Drop" });
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      expect(
+        (
+          handlers.get("group:list-decisions")?.(trusted, { groupId: group.id }) as GroupDecision[]
+        ).map((decision) => decision.id),
+      ).toEqual([drop.id, keep.id]);
+      expect(
+        handlers.get("group:delete-decision")?.(trusted, { decisionId: drop.id }),
+      ).toMatchObject({ id: drop.id });
+      expect(store.listGroupDecisions(group.id).map((decision) => decision.id)).toEqual([keep.id]);
+      expect(store.listGroupMessages(group.id)).toEqual([]);
+      let caught: unknown;
+      try {
+        handlers.get("group:delete-decision")?.(trusted, { decisionId: drop.id });
+      } catch (error) {
+        caught = error;
+      }
+      expect(decodeGroupErrorMessage(caught).code).toBe("decision-not-found");
     } finally {
       unregister();
     }
@@ -221,6 +302,8 @@ describe("group IPC", () => {
       updateAgentGroupMembers: store.updateAgentGroupMembers,
       listGroupTasks: (groupId) => store.listGroupTasks(groupId),
       cancelGroupTask: store.cancelGroupTask,
+      listGroupDecisions: (groupId) => store.listGroupDecisions(groupId),
+      deleteGroupDecision: store.deleteGroupDecision,
     });
     const db = getDatabase();
     const now = new Date().toISOString();

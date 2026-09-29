@@ -12,6 +12,8 @@ const { ensureChatsWorkspace } = await import("../../workspace/workspace-store")
 const {
   appendGroupMessage,
   createAgentGroupWithMembers,
+  GROUP_DECISION_LIMIT,
+  listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
@@ -357,12 +359,14 @@ describe("group member tools", () => {
         ["group_request_review", { id, reviewer: "Beta" }],
         ["group_review_task", { id, verdict: "approve" }],
         ["group_start_worktree", {}],
+        ["group_record_decision", { text: "Sneaky decision" }],
       ] as const) {
         expect(await call(name, params)).toMatch(/^\[group-error:not-a-member\] /);
       }
     }
     expect(listGroupTasks(group.id)).toEqual(tasksBefore);
     expect(listGroupMessages(group.id)).toEqual(messagesBefore);
+    expect(listGroupDecisions(group.id)).toEqual([]);
     expect(wakes).toEqual([]);
   });
 
@@ -391,5 +395,80 @@ describe("group member tools", () => {
     expect(
       (await execute("call-2", {}, undefined, undefined, { cwd: "/tmp" })).content[0]?.text,
     ).toMatch(/^\[group-error:not-a-member\] /);
+  });
+});
+
+describe("group_record_decision", () => {
+  it("records a trimmed decision and posts 'Decision: <text>' as the member without waking anyone", () => {
+    const { group, alpha } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool(
+      "group_record_decision",
+      { sessionId: alpha, groupId: group.id },
+      { text: "  Use SQLite with WAL  " },
+    );
+    const [decision] = listGroupDecisions(group.id);
+    expect(decision).toMatchObject({ text: "Use SQLite with WAL", authorSessionId: alpha });
+    expect(text).toBe(`Recorded decision ${decision?.id}: Use SQLite with WAL`);
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        body: "Decision: Use SQLite with WAL",
+        wake: false,
+      },
+    ]);
+  });
+
+  it("returns invalid-text for empty or over-500-character text and records nothing", () => {
+    const { group, alpha } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const caller = { sessionId: alpha, groupId: group.id };
+    for (const text of ["", "   \n ", "x".repeat(501)]) {
+      expect(runGroupTool("group_record_decision", caller, { text })).toMatch(
+        /^\[group-error:invalid-text\] /,
+      );
+    }
+    expect(runGroupTool("group_record_decision", caller, { text: ` ${"y".repeat(500)} ` })).toMatch(
+      /^Recorded decision /,
+    );
+    expect(listGroupDecisions(group.id)).toHaveLength(1);
+    expect(wakes).toHaveLength(1);
+  });
+
+  it(`returns limit-reached past ${GROUP_DECISION_LIMIT} decisions per group`, () => {
+    const { group, alpha, beta } = squad();
+    for (let index = 0; index < GROUP_DECISION_LIMIT; index += 1) {
+      runGroupTool(
+        "group_record_decision",
+        { sessionId: index % 2 ? alpha : beta, groupId: group.id },
+        { text: `D${index}` },
+      );
+    }
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    expect(
+      runGroupTool("group_record_decision", { sessionId: alpha, groupId: group.id }, { text: "x" }),
+    ).toMatch(/^\[group-error:limit-reached\] /);
+    expect(listGroupDecisions(group.id)).toHaveLength(GROUP_DECISION_LIMIT);
+    expect(wakes).toEqual([]);
+  });
+
+  it("refuses a member of another group (not-a-member) and a caller that left", () => {
+    const { group, alpha } = squad();
+    const other = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    expect(
+      runGroupTool(
+        "group_record_decision",
+        { sessionId: other.alpha, groupId: group.id },
+        { text: "x" },
+      ),
+    ).toMatch(/^\[group-error:not-a-member\] /);
+    removeAgentGroupMember(group.id, alpha);
+    expect(
+      runGroupTool("group_record_decision", { sessionId: alpha, groupId: group.id }, { text: "x" }),
+    ).toMatch(/^\[group-error:not-a-member\] /);
+    expect(listGroupDecisions(group.id)).toEqual([]);
+    expect(wakes).toEqual([]);
   });
 });

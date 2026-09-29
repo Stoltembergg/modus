@@ -925,6 +925,11 @@ export const groupListTasksSchema = z.object({ groupId: groupIdString }).strict(
 
 export const groupCancelTaskSchema = z.object({ taskId: nonEmptyString.max(128) }).strict();
 
+export const groupListDecisionsSchema = z.object({ groupId: groupIdString }).strict();
+
+/** Strict: the user deletes; a payload naming a session (a member acting) is refused. */
+export const groupDeleteDecisionSchema = z.object({ decisionId: nonEmptyString.max(128) }).strict();
+
 export const groupMemberSchema = z
   .object({
     groupId: groupIdString,

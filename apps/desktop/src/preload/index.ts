@@ -47,6 +47,8 @@ const api: ModusApi = {
     memberStates: () => ipcRenderer.invoke("group:member-states"),
     listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
     cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
+    listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
+    deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
     onEvent: (callback) => {
       const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);

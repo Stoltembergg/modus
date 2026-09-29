@@ -83,13 +83,14 @@ export type GroupTask = {
   updatedAt: string;
 };
 
+/** Shared context of a group (PR 6): recorded by members, deleted only by the user. */
 export type GroupDecision = {
   id: string;
   groupId: string;
   text: string;
+  /** Absent when the author session was deleted (shown as a former member, never the user). */
+  authorSessionId?: string;
   sourceMessageId?: string;
-  createdBySessionId?: string;
-  supersededById?: string;
   createdAt: string;
 };
 

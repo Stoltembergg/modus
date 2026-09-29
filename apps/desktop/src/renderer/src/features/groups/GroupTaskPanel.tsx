@@ -1,5 +1,5 @@
 import { IconChevronRight, IconGitBranch } from "@tabler/icons-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../shared/contracts";
 import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
@@ -52,15 +52,20 @@ export function useGroupTasks(groupId: string) {
   return { tasks, replace };
 }
 
-/** Right-hand task panel of the room. The only user action is "Cancel task". */
+/**
+ * Right-hand side panel of the room: `top` (the Decisions section) above the
+ * tasks. The only task action is "Cancel task".
+ */
 export function GroupTaskPanel({
   tasks,
   labels,
   onCancelled,
+  top,
 }: {
   tasks: readonly GroupTask[];
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
+  top?: ReactNode;
 }) {
   const [cancelledOpen, setCancelledOpen] = useState(false);
   return (
@@ -69,6 +74,7 @@ export function GroupTaskPanel({
       className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-hairline border-l px-3 py-3"
       data-testid="group-task-panel"
     >
+      {top}
       {tasks.length === 0 ? (
         <div className="px-1 py-6 text-center text-fg-faint text-xs">
           No tasks yet. Members create them as they work.

@@ -14,6 +14,7 @@ import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import { CreateGroupDialog, type GroupMembersChange } from "./CreateGroupDialog";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
+import { GroupDecisionsSection } from "./GroupDecisions";
 import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
 import { MemberName } from "./MemberName";
@@ -153,7 +154,14 @@ export function GroupRoom({
           updatePending={updatePending}
         />
       </div>
-      {tasksOpen ? <GroupTaskPanel labels={labels} onCancelled={replace} tasks={tasks} /> : null}
+      {tasksOpen ? (
+        <GroupTaskPanel
+          labels={labels}
+          onCancelled={replace}
+          tasks={tasks}
+          top={<GroupDecisionsSection groupId={group.id} labels={labels} />}
+        />
+      ) : null}
       {managing ? (
         <CreateGroupDialog
           group={group}

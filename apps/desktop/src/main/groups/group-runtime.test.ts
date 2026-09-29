@@ -10,16 +10,22 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
-const { createAgentGroupWithMembers, listGroupMessages, removeAgentGroupMember } = await import(
-  "./group-store"
-);
+const {
+  createAgentGroupWithMembers,
+  listGroupMessages,
+  recordGroupDecision,
+  removeAgentGroupMember,
+} = await import("./group-store");
 const {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
   ESTIMATED_INPUT_TOKENS_PER_CHAIN,
   GROUP_CHAIN_LIMITS,
   GROUP_MAX_CONCURRENT_TURNS,
+  GROUP_PROMPT_DECISIONS_MAX_ITEMS,
+  GROUP_PROMPT_DECISIONS_MAX_TOKENS,
   GROUP_STATUS_TEXT,
   GroupRuntime,
+  composeGroupDecisionsSection,
   composeGroupWakePrompt,
   estimateGroupTokens,
   isUpdatePendingState,
@@ -555,6 +561,139 @@ describe("chain limits", () => {
   });
 });
 
+/* ── shared context: the "Group decisions" prompt section (PR 6) ───────── */
+
+describe("group decisions in the wake prompt", () => {
+  const decision = (id: string, text: string, authorSessionId?: string) => ({
+    id,
+    groupId: "g",
+    text,
+    ...(authorSessionId ? { authorSessionId } : {}),
+    createdAt: id,
+  });
+  const titles = new Map([
+    ["a", "Alpha"],
+    ["b", "Beta"],
+  ]);
+
+  it("lists decisions newest first with their author, escaped; a deleted or departed author is a former member, never the user", () => {
+    const section = composeGroupDecisionsSection(
+      [
+        decision("4", "Use <WAL>", "a"),
+        decision("3", "Ship weekly"),
+        decision("2", "Pin deps", "gone"),
+        decision("1", "Old", "b"),
+      ],
+      titles,
+    );
+    expect(section).toBe(
+      [
+        "<group_decisions>",
+        "Group decisions (newest first; the group agreed on these, keep to them):",
+        "- Use &lt;WAL&gt; (@Alpha)",
+        "- Ship weekly (former member)",
+        "- Pin deps (former member)",
+        "- Old (@Beta)",
+        "</group_decisions>",
+      ].join("\n"),
+    );
+    expect(composeGroupDecisionsSection([], titles)).toBe("");
+  });
+
+  it(`keeps at most ${GROUP_PROMPT_DECISIONS_MAX_ITEMS} items and notes the omitted older ones`, () => {
+    const all = Array.from({ length: 25 }, (_, index) =>
+      decision(String(100 - index), `Decision ${100 - index}`, "a"),
+    );
+    const section = composeGroupDecisionsSection(all, titles);
+    const items = section.split("\n").filter((line) => line.startsWith("- "));
+    expect(items).toHaveLength(GROUP_PROMPT_DECISIONS_MAX_ITEMS);
+    expect(items[0]).toBe("- Decision 100 (@Alpha)");
+    expect(items.at(-1)).toBe("- Decision 81 (@Alpha)");
+    expect(section).toContain("\n(5 older decisions omitted)\n</group_decisions>");
+  });
+
+  it(`stays within ~${GROUP_PROMPT_DECISIONS_MAX_TOKENS / 1000}k estimated tokens`, () => {
+    const all = Array.from({ length: 20 }, (_, index) =>
+      decision(String(index), `${index} ${"x".repeat(495)}`, "b"),
+    );
+    const section = composeGroupDecisionsSection(all, titles);
+    expect(estimateGroupTokens(section)).toBeLessThanOrEqual(GROUP_PROMPT_DECISIONS_MAX_TOKENS);
+    const kept = section.split("\n").filter((line) => line.startsWith("- ")).length;
+    expect(kept).toBeGreaterThan(10);
+    expect(kept).toBeLessThan(20);
+    expect(section).toContain(`(${20 - kept} older decisions omitted)`);
+  });
+
+  it("puts the section after the roster and before the history", () => {
+    const prompt = composeGroupWakePrompt({
+      group: { id: "g", name: "Squad", mode: "free", createdAt: "", updatedAt: "" },
+      members: [
+        { sessionId: "a", title: "Alpha" },
+        { sessionId: "b", title: "Beta" },
+      ],
+      sessionId: "b",
+      trigger: {
+        id: "m2",
+        groupId: "g",
+        authorKind: "user",
+        kind: "message",
+        body: "@Beta go",
+        mentions: ["b"],
+        createdAt: "2",
+      },
+      history: [
+        {
+          id: "m1",
+          groupId: "g",
+          authorKind: "user",
+          kind: "message",
+          body: "start",
+          mentions: [],
+          createdAt: "1",
+        },
+      ],
+      decisions: [decision("1", "Use SQLite", "a")],
+      maxContextTokens: 8_000,
+    });
+    const at = (text: string) => prompt?.indexOf(text) ?? -1;
+    expect(at("- Use SQLite (@Alpha)")).toBeGreaterThan(at("You are @Beta"));
+    expect(at("</group_decisions>")).toBeLessThan(at("<recent_messages>"));
+    expect(at("<recent_messages>")).toBeLessThan(at("<group_message"));
+  });
+
+  it("every woken member gets the group's decisions, counted in the chain budget", () => {
+    const { group, alpha, beta } = squad();
+    recordGroupDecision({ groupId: group.id, text: "Use SQLite", authorSessionId: alpha });
+    recordGroupDecision({ groupId: group.id, text: "Ship weekly" });
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta plan it" });
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    const prompts = runtime.calls.map((call) => call.input.message);
+    for (const prompt of prompts) {
+      expect(prompt).toContain(
+        "- Ship weekly (former member)\n- Use SQLite (@Alpha)\n</group_decisions>",
+      );
+    }
+    expect(groups.chainSnapshot(user.id).inputTokens).toBe(
+      prompts.reduce((sum, prompt) => sum + estimateGroupTokens(prompt), 0),
+    );
+  });
+
+  it("the decisions can push a wake over the chain's input-token budget", () => {
+    const plain = squad();
+    const probe = setup();
+    probe.groups.postUserMessage({ groupId: plain.group.id, body: "@Alpha hi" });
+    const without = estimateGroupTokens(probe.runtime.calls[0]?.input.message ?? "");
+
+    const { group, alpha } = squad();
+    recordGroupDecision({ groupId: group.id, text: "x".repeat(400), authorSessionId: alpha });
+    const { runtime, groups } = setup({ limits: { maxEstimatedInputTokens: without + 20 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha hi" });
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.chainSnapshot(user.id).ended).toBe("input-token-budget");
+  });
+});
+
 /* ── intent gate: the question opens inside prompt(); the slot is released ── */
 
 describe("intent gate on a group turn", () => {
@@ -880,6 +1019,32 @@ describe("task tool wakes", () => {
     expect(room(group.id).at(-1)?.id).toBe(status?.id);
     expect(runtime.pendingSessions()).toEqual([beta]);
     expect(runtime.started).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id)).toEqual(before);
+  });
+
+  it('a status without a target ("Decision: …") posts in the chain and wakes nobody', () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha decide" });
+    const before = groups.chainSnapshot(user.id);
+    const status = groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: alpha,
+      body: "Decision: Use SQLite",
+      wake: false,
+    });
+    expect(status).toMatchObject({
+      authorSessionId: alpha,
+      kind: "status",
+      body: "Decision: Use SQLite",
+      mentions: [],
+      chainId: user.id,
+    });
+    expect(runtime.started).toEqual([alpha]);
+    expect(groups.chainSnapshot(user.id)).toEqual(before);
+    // Even without wake: false, a status aimed at nobody routes nowhere.
+    groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, body: "Decision: x" });
+    expect(runtime.started).toEqual([alpha]);
     expect(groups.chainSnapshot(user.id)).toEqual(before);
   });
 

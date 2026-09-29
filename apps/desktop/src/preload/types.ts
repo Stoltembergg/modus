@@ -38,6 +38,7 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  GroupDecision,
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
@@ -199,6 +200,10 @@ export type ModusApi = {
     listTasks(groupId: string): Promise<GroupTask[]>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
+    /** The group's decisions (newest first) for the side panel's "Decisions". */
+    listDecisions(groupId: string): Promise<GroupDecision[]>;
+    /** "Delete" a decision (physical; posts nothing in the room). */
+    deleteDecision(decisionId: string): Promise<GroupDecision>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   file: {
