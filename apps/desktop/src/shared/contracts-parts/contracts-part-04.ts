@@ -1,4 +1,7 @@
-/** Gap 4 contracts split part 4/7 — do not edit by hand */
+import type { AgentRunStatus } from "./contracts-part-01";
+import type { DiffMode, DiffTotals, ReviewFile } from "./contracts-part-03";
+import type { DesignAnnotationPayload } from "./contracts-part-05";
+
 export type DiffReviewReady = {
   state: "ready";
   files: ReviewFile[];
