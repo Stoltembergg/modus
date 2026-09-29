@@ -847,6 +847,33 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
       continue;
     }
 
+    if (event.type === "harness.decision") {
+      const action = event.decision.action.replace(/_/g, " ");
+      const reasons = event.decision.reasonCodes.slice(0, 3).join(", ");
+      blocks.push({
+        body: reasons
+          ? `${action} · ${event.decision.mode} · ${reasons}`
+          : `${action} · ${event.decision.mode}`,
+        id,
+        title: "adaptive decision",
+        type: "notice",
+      });
+      continue;
+    }
+
+    if (event.type === "harness.failure") {
+      const attempt = event.attempt;
+      const hypothesis = attempt.hypothesisCode ? ` · ${attempt.hypothesisCode}` : "";
+      blocks.push({
+        body: `${attempt.strategyCode}${hypothesis} · ${attempt.status} · ${attempt.reasonCode}`,
+        id,
+        title: "strategy attempt",
+        type: "notice",
+        isError: attempt.status === "failed" || attempt.status === "discarded",
+      });
+      continue;
+    }
+
     if (event.type === "queue.updated") {
       // Pi queue noise (steer/follow-up envelopes) — not a user-facing notice.
       continue;

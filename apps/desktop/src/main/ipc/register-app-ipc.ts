@@ -205,6 +205,7 @@ import {
   setProjectPinned,
 } from "../workspace/workspace-service";
 import { upsertWorkspace } from "../workspace/workspace-store";
+import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
@@ -1782,6 +1783,7 @@ export function registerAppIpc({
     deleteProjectMemory,
   });
   registerHarnessInsightsIpcHandlers(ipcMain, assertTrustedSender, { getHarnessInsights });
+  registerAdaptiveHarnessIpcHandlers(ipcMain, assertTrustedSender);
 
   ipcMain.handle(IPC_CHANNELS.modelSetDefault, (event, model: string) => {
     assertTrustedSender(event);

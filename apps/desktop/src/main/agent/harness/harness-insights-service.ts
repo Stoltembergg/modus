@@ -38,6 +38,8 @@ const INSIGHT_EVENT_TYPES = new Set([
   "harness.route",
   "harness.qa",
   "harness.continuation",
+  "harness.decision",
+  "harness.failure",
   "checkpoint.restored",
   "context.updated",
   "subagent.started",

@@ -796,6 +796,7 @@ export function getWorkspaceHarnessInsightEvidence(
          and e.type in (
            'run.started', 'run.completed', 'run.failed', 'tool.ended',
            'harness.route', 'harness.qa', 'harness.continuation',
+           'harness.decision', 'harness.failure',
            'checkpoint.restored', 'context.updated', 'subagent.started', 'subagent.updated'
          )
          and json_valid(e.payload_json)

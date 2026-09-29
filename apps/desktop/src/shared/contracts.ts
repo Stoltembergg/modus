@@ -235,6 +235,116 @@ export type TaskClassificationInput = {
   hasDestructiveAction?: boolean;
 };
 
+/* ── Adaptive intelligence (Meta Controller decision layer) ───────────── */
+
+export type AdaptiveDecisionAction =
+  | "retrieve_local"
+  | "suggest_plan"
+  | "suggest_oracle"
+  | "verify"
+  | "replan"
+  | "ask_user"
+  | "execute"
+  | "finish"
+  | "avoid_retry";
+
+export type AdaptiveDecisionMode = "shadow" | "advisory" | "active";
+
+export type AdaptiveFailureAttemptStatus =
+  | "tested"
+  | "failed"
+  | "discarded"
+  | "supported"
+  | "unknown";
+
+export type AdaptiveFailureAttempt = {
+  id: string;
+  sessionId: string;
+  runId: string;
+  strategyCode: string;
+  hypothesisCode?: string;
+  status: AdaptiveFailureAttemptStatus;
+  reasonCode: string;
+  revision?: string;
+  evidenceEventIds: string[];
+  createdAt: string;
+};
+
+export type ProjectImpactConfidence = "low" | "medium" | "high" | "unknown";
+
+export type ProjectImpactEstimate = {
+  revision?: string;
+  blastRadius: "none" | "local" | "module" | "cross_module" | "unknown";
+  impactedPathCount: number;
+  confidence: ProjectImpactConfidence;
+  unknownReasons: string[];
+  reasonCodes: string[];
+};
+
+export type AdaptiveVerificationLevel = "none" | "light" | "standard" | "strict";
+
+export type AdaptiveExecutionPolicy = {
+  version: 1;
+  verificationLevel: AdaptiveVerificationLevel;
+  suggestHyperPlan: boolean;
+  suggestedRole?: BuiltinAgentRole;
+  maxParallelChildren: number;
+  preferredModelId?: string;
+  reasonCodes: string[];
+};
+
+export type AdaptiveDecision = {
+  version: 1;
+  action: AdaptiveDecisionAction;
+  reasonCodes: string[];
+  confidence: "low" | "medium" | "high";
+  expectedUncertaintyReduction: number;
+  verificationLevel: AdaptiveVerificationLevel;
+  budgetTokens: number;
+  mode: AdaptiveDecisionMode;
+  policy: AdaptiveExecutionPolicy;
+  avoidStrategyCodes: string[];
+};
+
+export type AdaptiveDecisionSnapshot = {
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  mode: "build" | "plan" | "spec";
+  classification: HarnessTaskClassification;
+  taskState?: Pick<
+    HarnessTaskState,
+    "phase" | "verificationStatus" | "criteria" | "openQuestionRefs" | "hypothesisRefs"
+  >;
+  qaStatus?: AutoQAStatus;
+  failureAttempts: AdaptiveFailureAttempt[];
+  impact?: ProjectImpactEstimate;
+  remainingContinuationBudget: number;
+  enabledModelIds: string[];
+  decisionMode: AdaptiveDecisionMode;
+  openQuestionCount: number;
+  unresolvedCriterionCount: number;
+};
+
+export type ContextUncertaintyCandidate = {
+  id: string;
+  sourceId: string;
+  trust: "local-memory" | "code-map" | "external-reference" | "git" | "plan" | "docs";
+  estimatedTokens: number;
+  addressesCriterionIds: string[];
+  addressesOpenQuestionIds: string[];
+  freshnessScore: number;
+  relevanceScore: number;
+};
+
+export type ContextUncertaintyScore = {
+  id: string;
+  sourceId: string;
+  score: number;
+  expectedUncertaintyReduction: number;
+  reasons: string[];
+};
+
 export type SubagentWorktreeInfo = {
   path: string;
   branch: string;
@@ -513,6 +623,19 @@ export type HarnessInsightsResult = {
 export type AgentEvent =
   | HarnessRouteEvent
   | { type: "harness.task_state"; sessionId: string; runId: string; state: HarnessTaskState }
+  | {
+      type: "harness.decision";
+      sessionId: string;
+      runId: string;
+      decision: AdaptiveDecision;
+      boundary: "pre_prompt" | "post_qa" | "post_failure";
+    }
+  | {
+      type: "harness.failure";
+      sessionId: string;
+      runId: string;
+      attempt: AdaptiveFailureAttempt;
+    }
   | { type: "agent.started"; sessionId: string }
   | { type: "agent.ended"; sessionId: string }
   | {

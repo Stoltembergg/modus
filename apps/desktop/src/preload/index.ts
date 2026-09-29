@@ -198,6 +198,13 @@ const api: ModusApi = {
   },
   harnessInsights: {
     get: (input: HarnessInsightsQuery) => ipcRenderer.invoke("harness-insights:get", input),
+    listPromotions: (input) => ipcRenderer.invoke("harness-promotions:list", input ?? {}),
+    promote: (input) => ipcRenderer.invoke("harness-promotions:promote", input),
+    rejectPromotion: (input) => ipcRenderer.invoke("harness-promotions:reject", input),
+    listFailureBlacklist: (input) =>
+      ipcRenderer.invoke("harness-failure-blacklist:list", input ?? {}),
+    clearFailureBlacklist: (input) =>
+      ipcRenderer.invoke("harness-failure-blacklist:clear", input ?? {}),
   },
   model: {
     list: () => ipcRenderer.invoke("model:list"),

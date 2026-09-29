@@ -1,0 +1,165 @@
+import { describe, expect, it } from "vitest";
+import type { AdaptiveDecisionSnapshot, AdaptiveFailureAttempt } from "../../../shared/contracts";
+import { decideNext, formatAdaptiveDecisionHint } from "./meta-controller";
+
+function snapshot(overrides: Partial<AdaptiveDecisionSnapshot> = {}): AdaptiveDecisionSnapshot {
+  return {
+    sessionId: "s1",
+    runId: "r1",
+    workspaceId: "w1",
+    mode: "build",
+    classification: {
+      taskType: "implementation",
+      complexity: "simple",
+      risk: "low",
+      confidence: "high",
+      reasons: ["clear_implementation_request"],
+    },
+    failureAttempts: [],
+    remainingContinuationBudget: 1,
+    enabledModelIds: [],
+    decisionMode: "advisory",
+    openQuestionCount: 0,
+    unresolvedCriterionCount: 0,
+    ...overrides,
+  };
+}
+
+describe("meta-controller", () => {
+  it("finishes when verification is satisfied", () => {
+    const decision = decideNext(
+      snapshot({
+        taskState: {
+          phase: "terminal",
+          verificationStatus: "verified",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+        qaStatus: "passed",
+      }),
+    );
+    expect(decision.action).toBe("finish");
+    expect(formatAdaptiveDecisionHint(decision)).toBeUndefined();
+  });
+
+  it("avoids repeating a failed strategy at the same revision", () => {
+    const attempt: AdaptiveFailureAttempt = {
+      id: "a1",
+      sessionId: "s1",
+      runId: "r1",
+      strategyCode: "same_edit_retry",
+      status: "failed",
+      reasonCode: "qa_failed",
+      revision: "rev1",
+      evidenceEventIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const decision = decideNext(
+      snapshot({
+        qaStatus: "failed",
+        failureAttempts: [attempt],
+        impact: {
+          revision: "rev1",
+          blastRadius: "local",
+          impactedPathCount: 1,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [
+            {
+              criterionId: "check:tests",
+              source: "check",
+              status: "failed",
+              evidenceEventIds: [],
+              requiredCheckKinds: ["tests"],
+            },
+          ],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("avoid_retry");
+    expect(decision.avoidStrategyCodes).toContain("same_edit_retry");
+    expect(formatAdaptiveDecisionHint(decision)).toMatch(/Do not repeat/i);
+  });
+
+  it("requests verification before finish when evidence is missing", () => {
+    const decision = decideNext(
+      snapshot({
+        classification: {
+          taskType: "implementation",
+          complexity: "moderate",
+          risk: "medium",
+          confidence: "high",
+          reasons: ["multiple_files_in_scope"],
+        },
+        unresolvedCriterionCount: 2,
+        qaStatus: "missing",
+        taskState: {
+          phase: "executing",
+          verificationStatus: "pending",
+          criteria: [
+            {
+              criterionId: "check:tests",
+              source: "check",
+              status: "pending",
+              evidenceEventIds: [],
+              requiredCheckKinds: ["tests"],
+            },
+          ],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("verify");
+    expect(decision.verificationLevel).toBe("standard");
+  });
+
+  it("suggests plan for complex scope without forcing execution change in shadow mode", () => {
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "shadow",
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "medium",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+        },
+        impact: {
+          blastRadius: "cross_module",
+          impactedPathCount: 9,
+          confidence: "high",
+          unknownReasons: [],
+          reasonCodes: ["cross_module_scope"],
+        },
+      }),
+    );
+    expect(decision.action).toBe("suggest_plan");
+    expect(decision.mode).toBe("shadow");
+    expect(formatAdaptiveDecisionHint(decision)).toBeUndefined();
+  });
+
+  it("asks the user when the task is awaiting clarification", () => {
+    const decision = decideNext(
+      snapshot({
+        openQuestionCount: 1,
+        taskState: {
+          phase: "awaiting_user",
+          verificationStatus: "pending",
+          criteria: [],
+          openQuestionRefs: ["q1"],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("ask_user");
+  });
+});

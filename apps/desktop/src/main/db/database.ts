@@ -340,6 +340,67 @@ export function migrateDatabase(db: DatabaseSync): void {
       throw error;
     }
   }
+
+  db.exec(`
+    create table if not exists project_model_edges (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      revision text not null,
+      from_path text not null,
+      to_path text not null,
+      kind text not null check (kind in ('discovery','changed','depends')),
+      source text not null check (source in ('codegraph','git','checkpoint')),
+      updated_at text not null
+    );
+    create index if not exists idx_project_model_edges_workspace_revision
+      on project_model_edges(workspace_id, revision, updated_at desc);
+
+    create table if not exists project_model_snapshots (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      revision text not null,
+      estimate_json text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_project_model_snapshots_workspace
+      on project_model_snapshots(workspace_id, updated_at desc);
+
+    create table if not exists harness_failure_blacklist (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      signature text not null,
+      strategy_code text not null,
+      hypothesis_code text,
+      hit_count integer not null default 1,
+      first_seen_at text not null,
+      last_seen_at text not null,
+      expires_at text not null,
+      status text not null check (status in ('active','cleared','expired')),
+      source_run_id text
+    );
+    create index if not exists idx_harness_failure_blacklist_workspace_status
+      on harness_failure_blacklist(workspace_id, status, expires_at);
+
+    create table if not exists harness_promotions (
+      id text primary key,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      insight_id text not null,
+      kind text not null,
+      claim text not null,
+      recommendation text not null,
+      confidence text not null,
+      sample_count integer not null,
+      status text not null check (status in ('proposed','validated','promoted','rejected','expired')),
+      evidence_run_ids_json text not null,
+      created_at text not null,
+      updated_at text not null,
+      promoted_at text,
+      rejected_at text,
+      rejection_reason text
+    );
+    create index if not exists idx_harness_promotions_workspace_status
+      on harness_promotions(workspace_id, status, updated_at desc);
+  `);
 }
 
 export function getDatabase(): DatabaseSync {

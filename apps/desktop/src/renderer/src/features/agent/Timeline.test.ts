@@ -30,6 +30,56 @@ function tool(id: string, name: string, complete = true, isError = false) {
 }
 
 describe("buildBlocks", () => {
+  it("renders adaptive decision and failure notices", () => {
+    const blocks = buildBlocks([
+      item("d1", {
+        type: "harness.decision",
+        sessionId: "s",
+        runId: "r",
+        boundary: "pre_prompt",
+        decision: {
+          version: 1,
+          action: "verify",
+          reasonCodes: ["evidence_required"],
+          confidence: "high",
+          expectedUncertaintyReduction: 14,
+          verificationLevel: "standard",
+          budgetTokens: 1200,
+          mode: "active",
+          policy: {
+            version: 1,
+            verificationLevel: "standard",
+            suggestHyperPlan: false,
+            maxParallelChildren: 1,
+            reasonCodes: [],
+          },
+          avoidStrategyCodes: [],
+        },
+      }),
+      item("f1", {
+        type: "harness.failure",
+        sessionId: "s",
+        runId: "r",
+        attempt: {
+          id: "a1",
+          sessionId: "s",
+          runId: "r",
+          strategyCode: "same_edit_retry",
+          status: "failed",
+          reasonCode: "qa_failed",
+          evidenceEventIds: [],
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      }),
+    ]);
+    expect(blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "notice", title: "adaptive decision" }),
+        expect.objectContaining({ type: "notice", title: "strategy attempt", isError: true }),
+      ]),
+    );
+  });
+
   it("renders an optimistic user prompt immediately", () => {
     const blocks = buildBlocks(
       optimisticUserPromptEvents({
