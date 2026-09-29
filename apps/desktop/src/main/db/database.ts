@@ -439,8 +439,9 @@ export function migrateDatabase(db: DatabaseSync): void {
       mentions_json text not null default '[]',
       created_at text not null
     );
-    create index if not exists idx_group_messages_group_created
-      on group_messages(group_id, created_at);
+    drop index if exists idx_group_messages_group_created;
+    create index if not exists idx_group_messages_group_created_id
+      on group_messages(group_id, created_at, id);
 
     create table if not exists group_tasks (
       id text primary key,

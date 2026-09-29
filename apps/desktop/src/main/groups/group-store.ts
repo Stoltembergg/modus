@@ -7,6 +7,7 @@ import type {
   GroupDecision,
   GroupMessage,
   GroupMessageAuthorKind,
+  GroupMessageCursor,
   GroupMessageKind,
   GroupTask,
   GroupTaskStatus,
@@ -29,6 +30,8 @@ export type GroupStoreErrorCode =
   | "decision-not-found"
   | "workspace-mismatch"
   | "already-in-group"
+  | "subagent-session"
+  | "archived-session"
   | "not-a-member"
   | "invalid-value";
 
@@ -52,6 +55,10 @@ const TASK_STATUSES: readonly GroupTaskStatus[] = [
   "done",
   "cancelled",
 ];
+/** Status a task returns to when its owner/reviewer leaves the group. */
+const INITIAL_TASK_STATUS: GroupTaskStatus = "open";
+/** Terminal statuses: tasks here keep their owner/reviewer references as history. */
+const CLOSED_TASK_STATUSES: readonly GroupTaskStatus[] = ["done", "cancelled"];
 const DEFAULT_MESSAGE_PAGE = 50;
 const MAX_MESSAGE_PAGE = 500;
 
@@ -380,10 +387,31 @@ export function addAgentGroupMember(input: {
   const db = getDatabase();
   const group = requireGroupRow(input.groupId);
   const session = db
-    .prepare("select id, workspace_id from agent_sessions where id = ?")
-    .get(input.sessionId) as { id: string; workspace_id: string } | undefined;
+    .prepare(
+      "select id, workspace_id, parent_session_id, archived_at from agent_sessions where id = ?",
+    )
+    .get(input.sessionId) as
+    | {
+        id: string;
+        workspace_id: string;
+        parent_session_id: string | null;
+        archived_at: string | null;
+      }
+    | undefined;
   if (!session) {
     throw new GroupStoreError("session-not-found", `Agent session not found: ${input.sessionId}`);
+  }
+  if (session.parent_session_id !== null) {
+    throw new GroupStoreError(
+      "subagent-session",
+      `Session ${input.sessionId} is a subagent session; only top-level sessions can join a group.`,
+    );
+  }
+  if (session.archived_at !== null) {
+    throw new GroupStoreError(
+      "archived-session",
+      `Session ${input.sessionId} is archived; unarchive it before adding it to a group.`,
+    );
   }
   const expectedWorkspaceId = group.workspace_id ?? CHATS_WORKSPACE_ID;
   if (session.workspace_id !== expectedWorkspaceId) {
@@ -420,20 +448,48 @@ export function addAgentGroupMember(input: {
   };
 }
 
-/** Removes a member; clears the group lead when the removed member was the lead. */
+/**
+ * Removes a member, atomically:
+ * - clears the group lead when the removed member was the lead;
+ * - detaches them from the group's OPEN tasks (any status other than
+ *   done/cancelled) where they are owner or reviewer: those references become
+ *   NULL and the task returns to the initial status. Closed tasks keep their
+ *   references as history.
+ */
 export function removeAgentGroupMember(groupId: string, sessionId: string): void {
   const db = getDatabase();
   inTransaction(db, () => {
+    const result = db
+      .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
+      .run(groupId, sessionId);
+    if (Number(result.changes) === 0) {
+      return;
+    }
     db.prepare(
       `update agent_groups set lead_session_id = null
        where id = ? and lead_session_id = ?`,
     ).run(groupId, sessionId);
-    const result = db
-      .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
-      .run(groupId, sessionId);
-    if (Number(result.changes) > 0) {
-      touchGroup(groupId);
-    }
+    const closed = CLOSED_TASK_STATUSES.map(() => "?").join(", ");
+    db.prepare(
+      `update group_tasks
+       set owner_session_id = case when owner_session_id = ? then null else owner_session_id end,
+           reviewer_session_id = case when reviewer_session_id = ? then null else reviewer_session_id end,
+           status = ?,
+           updated_at = ?
+       where group_id = ?
+         and status not in (${closed})
+         and (owner_session_id = ? or reviewer_session_id = ?)`,
+    ).run(
+      sessionId,
+      sessionId,
+      INITIAL_TASK_STATUS,
+      new Date().toISOString(),
+      groupId,
+      ...CLOSED_TASK_STATUSES,
+      sessionId,
+      sessionId,
+    );
+    touchGroup(groupId);
   });
 }
 
@@ -565,15 +621,17 @@ export function appendGroupMessage(input: {
 }
 
 /**
- * Returns one page of messages in chronological order (oldest first).
- * - `before`: the newest `limit` messages strictly older than this ISO timestamp.
- * - `after`: the oldest `limit` messages strictly newer than this ISO timestamp.
+ * Returns one page of messages in chronological order (oldest first), keyed by
+ * the total order (created_at, id). Ordering and cursors use the same key, so
+ * paging never skips or repeats messages that share a timestamp.
+ * - `before`: the newest `limit` messages strictly before this cursor.
+ * - `after`: the oldest `limit` messages strictly after this cursor.
  * - neither: the newest `limit` messages.
- * Ties on created_at are ordered by insertion.
+ * Use the first/last returned message's `{ createdAt, id }` as the next cursor.
  */
 export function listGroupMessages(
   groupId: string,
-  options: { before?: string; after?: string; limit?: number } = {},
+  options: { before?: GroupMessageCursor; after?: GroupMessageCursor; limit?: number } = {},
 ): GroupMessage[] {
   const limit = Math.max(
     1,
@@ -583,19 +641,19 @@ export function listGroupMessages(
   const conditions = ["group_id = ?"];
   const params: string[] = [groupId];
   if (options.before !== undefined) {
-    conditions.push("created_at < ?");
-    params.push(options.before);
+    conditions.push("(created_at, id) < (?, ?)");
+    params.push(options.before.createdAt, options.before.id);
   }
   if (options.after !== undefined) {
-    conditions.push("created_at > ?");
-    params.push(options.after);
+    conditions.push("(created_at, id) > (?, ?)");
+    params.push(options.after.createdAt, options.after.id);
   }
   const where = conditions.join(" and ");
   if (options.after !== undefined && options.before === undefined) {
     const rows = db
       .prepare(
         `select ${MESSAGE_COLUMNS} from group_messages where ${where}
-         order by created_at asc, rowid asc limit ?`,
+         order by created_at asc, id asc limit ?`,
       )
       .all(...params, limit) as MessageRow[];
     return rows.map(toMessage);
@@ -603,7 +661,7 @@ export function listGroupMessages(
   const rows = db
     .prepare(
       `select ${MESSAGE_COLUMNS} from group_messages where ${where}
-       order by created_at desc, rowid desc limit ?`,
+       order by created_at desc, id desc limit ?`,
     )
     .all(...params, limit) as MessageRow[];
   return rows.reverse().map(toMessage);

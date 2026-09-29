@@ -155,6 +155,9 @@ export type GroupMessage = {
   createdAt: string;
 };
 
+/** Message pagination cursor: the (createdAt, id) total order of group messages. */
+export type GroupMessageCursor = { createdAt: string; id: string };
+
 export type GroupTaskStatus = "open" | "in_progress" | "in_review" | "done" | "cancelled";
 
 export type GroupTask = {

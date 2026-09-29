@@ -14,9 +14,8 @@ vi.mock("electron", () => ({
 }));
 
 const { getDatabase, migrateDatabase } = await import("../db/database");
-const { deleteAgentSession, getAgentSession, listAgentSessions } = await import(
-  "../agent/agent-store"
-);
+const { deleteAgentSession, getAgentSession, listAgentSessions, setAgentSessionArchived } =
+  await import("../agent/agent-store");
 const { ensureChatsWorkspace, removeWorkspace } = await import("../workspace/workspace-store");
 const {
   GroupStoreError,
@@ -148,7 +147,7 @@ describe("group schema", () => {
         "group_messages",
         "group_tasks",
         "group_decisions",
-        "idx_group_messages_group_created",
+        "idx_group_messages_group_created_id",
       ]),
     );
     expect(() => {
@@ -316,6 +315,34 @@ describe("members", () => {
   });
 });
 
+describe("member eligibility", () => {
+  it("rejects a subagent session with subagent-session", () => {
+    const { workspaceId, a, group } = projectGroupFixture();
+    const child = insertSession(workspaceId);
+    getDatabase()
+      .prepare("update agent_sessions set parent_session_id = ? where id = ?")
+      .run(a, child);
+
+    expectStoreError(
+      () => addAgentGroupMember({ groupId: group.id, sessionId: child }),
+      "subagent-session",
+    );
+    expect(getAgentGroupForSession(child)).toBeUndefined();
+  });
+
+  it("rejects an archived session with archived-session", () => {
+    const { workspaceId, group } = projectGroupFixture();
+    const archived = insertSession(workspaceId);
+    setAgentSessionArchived(archived, true);
+
+    expectStoreError(
+      () => addAgentGroupMember({ groupId: group.id, sessionId: archived }),
+      "archived-session",
+    );
+    expect(getAgentGroupForSession(archived)).toBeUndefined();
+  });
+});
+
 describe("lead", () => {
   it("requires the lead to be a member and clears it when the lead leaves", () => {
     const { workspaceId, a, group } = projectGroupFixture();
@@ -376,10 +403,15 @@ describe("messages", () => {
       status.id,
     ]);
     expect(
-      listGroupMessages(group.id, { before: "2026-01-01T00:00:02.000Z" }).map((m) => m.id),
+      listGroupMessages(group.id, { before: { createdAt: reply.createdAt, id: reply.id } }).map(
+        (m) => m.id,
+      ),
     ).toEqual([opener.id]);
     expect(
-      listGroupMessages(group.id, { after: "2026-01-01T00:00:01.000Z", limit: 1 }).map((m) => m.id),
+      listGroupMessages(group.id, {
+        after: { createdAt: opener.createdAt, id: opener.id },
+        limit: 1,
+      }).map((m) => m.id),
     ).toEqual([reply.id]);
   });
 
@@ -458,6 +490,78 @@ describe("messages", () => {
   });
 });
 
+describe("message pagination cursor", () => {
+  it("pages same-millisecond messages by (created_at, id) without skips or duplicates", () => {
+    const { group } = projectGroupFixture();
+    const sameMs = "2026-02-02T10:00:00.000Z";
+    // Inserted first, but with the lexicographically LARGER id.
+    const first = appendGroupMessage({
+      id: "msg-zzz",
+      groupId: group.id,
+      authorKind: "user",
+      body: "first inserted",
+      createdAt: sameMs,
+    });
+    const second = appendGroupMessage({
+      id: "msg-aaa",
+      groupId: group.id,
+      authorKind: "user",
+      body: "second inserted",
+      createdAt: sameMs,
+    });
+    const earlier = appendGroupMessage({
+      id: "msg-mmm",
+      groupId: group.id,
+      authorKind: "user",
+      body: "earlier",
+      createdAt: "2026-02-02T09:59:59.999Z",
+    });
+    const later = appendGroupMessage({
+      id: "msg-bbb",
+      groupId: group.id,
+      authorKind: "user",
+      body: "later",
+      createdAt: "2026-02-02T10:00:00.001Z",
+    });
+    const expected = [earlier.id, second.id, first.id, later.id];
+    const cursor = (m: { createdAt: string; id: string }) => ({ createdAt: m.createdAt, id: m.id });
+
+    expect(listGroupMessages(group.id).map((m) => m.id)).toEqual(expected);
+
+    // Backwards (newest first), one per page.
+    const backwards: string[] = [];
+    let page = listGroupMessages(group.id, { limit: 1 });
+    while (page.length > 0) {
+      const [message] = page;
+      if (!message) break;
+      backwards.push(message.id);
+      page = listGroupMessages(group.id, { before: cursor(message), limit: 1 });
+    }
+    expect(backwards).toEqual([...expected].reverse());
+
+    // Forwards (oldest first), one per page, starting before the first message.
+    const forwards: string[] = [];
+    page = listGroupMessages(group.id, {
+      after: { createdAt: "2026-02-02T00:00:00.000Z", id: "" },
+      limit: 1,
+    });
+    while (page.length > 0) {
+      const [message] = page;
+      if (!message) break;
+      forwards.push(message.id);
+      page = listGroupMessages(group.id, { after: cursor(message), limit: 1 });
+    }
+    expect(forwards).toEqual(expected);
+    expect(new Set(forwards).size).toBe(expected.length);
+
+    // Stable: repeating a page gives the same result.
+    expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })).toEqual(
+      listGroupMessages(group.id, { before: cursor(first), limit: 1 }),
+    );
+    expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })[0]?.id).toBe(second.id);
+  });
+});
+
 describe("tasks", () => {
   it("creates, updates (handoff and review) and lists tasks", () => {
     const { a, b, group } = projectGroupFixture();
@@ -491,6 +595,55 @@ describe("tasks", () => {
     const other = createGroupTask({ groupId: group.id, title: "Docs", status: "done" });
     expect(listGroupTasks(group.id).map((t) => t.id)).toEqual([task.id, other.id]);
     expect(listGroupTasks(group.id, { status: "done" }).map((t) => t.id)).toEqual([other.id]);
+  });
+
+  it("removing a member detaches them from open tasks but keeps closed tasks as history", () => {
+    const { a, b, group } = projectGroupFixture();
+    const owned = createGroupTask({
+      groupId: group.id,
+      title: "Owned in progress",
+      status: "in_progress",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+    });
+    const reviewing = createGroupTask({
+      groupId: group.id,
+      title: "Reviewed by a",
+      status: "in_review",
+      ownerSessionId: b,
+      reviewerSessionId: a,
+    });
+    const done = createGroupTask({
+      groupId: group.id,
+      title: "Done",
+      status: "done",
+      ownerSessionId: a,
+      reviewerSessionId: a,
+      branch: "feat/done",
+    });
+    const cancelled = createGroupTask({
+      groupId: group.id,
+      title: "Cancelled",
+      status: "cancelled",
+      ownerSessionId: a,
+    });
+    const unrelated = createGroupTask({
+      groupId: group.id,
+      title: "Unrelated",
+      status: "in_progress",
+      ownerSessionId: b,
+    });
+
+    removeAgentGroupMember(group.id, a);
+
+    const byId = new Map(listGroupTasks(group.id).map((task) => [task.id, task]));
+    expect(byId.get(owned.id)).toMatchObject({ status: "open", reviewerSessionId: b });
+    expect(byId.get(owned.id)?.ownerSessionId).toBeUndefined();
+    expect(byId.get(reviewing.id)).toMatchObject({ status: "open", ownerSessionId: b });
+    expect(byId.get(reviewing.id)?.reviewerSessionId).toBeUndefined();
+    expect(byId.get(done.id)).toEqual(done);
+    expect(byId.get(cancelled.id)).toEqual(cancelled);
+    expect(byId.get(unrelated.id)).toEqual(unrelated);
   });
 
   it("rejects invalid statuses and non-member owners", () => {
