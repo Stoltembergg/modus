@@ -160,6 +160,7 @@ const checkpointService = await import("./checkpoint-service");
 const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/tool-context");
 const { resolveQuestionRequest } = await import("../interaction/question-broker");
 const todoToolRuntime = await import("./tools/todo-tools");
+const permissionExtension = await import("./pi-permission-extension");
 const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -1696,6 +1697,91 @@ describe("PiSdkRuntime", () => {
       reasonCode: "actionable_todos",
     });
     expect(markers[0]?.payload_json).not.toContain("Implement the feature");
+  });
+
+  it("records the tool-call count of each assistant message_end (group_start_worktree must be alone)", async () => {
+    const { lastAssistantToolCallCount } = await import("./tools/tool-batch");
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const seen: Array<number | undefined> = [];
+    const toolCall = (id: string) => ({ type: "toolCall", id, name: "bash", arguments: {} });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "assistant", content: [toolCall("a"), toolCall("b")] },
+        });
+        // What a tool of that batch would read while it executes.
+        seen.push(lastAssistantToolCallCount(sessionId));
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "toolResult", content: [{ type: "text", text: "ok" }] },
+        });
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "assistant", content: [toolCall("c")] },
+        });
+        seen.push(lastAssistantToolCallCount(sessionId));
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "tool-batch-user",
+    });
+
+    expect(seen).toEqual([2, 1]);
+    await runtime.releaseRuntime(sessionId);
+    expect(lastAssistantToolCallCount(sessionId)).toBeUndefined();
+  });
+
+  it("does not auto-continue a turn whose stored cwd moved (member worktree); the turn is ok", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const moved = await mkdtemp(join(tmpdir(), "modus-pi-runtime-moved-"));
+    let promptCount = 0;
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        promptCount += 1;
+        recordAgentEvent({
+          type: "todos.updated",
+          sessionId,
+          todos: [{ id: "todo-1", content: "Finish implementation", status: "pending" }],
+        });
+        // What group_start_worktree does mid-turn.
+        getDatabase()
+          .prepare("update agent_sessions set cwd = ? where id = ?")
+          .run(moved, sessionId);
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "moving to my worktree" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    const result = await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Implement the feature",
+      sessionId,
+      userMessageId: "cwd-moved-user",
+    });
+
+    expect(promptCount).toBe(1);
+    expect(result.outcome).toBe("ok");
+    await rm(moved, { recursive: true, force: true });
   });
 
   it.each([
@@ -4111,6 +4197,43 @@ describe("PiSdkRuntime", () => {
       .prepare("select updated_at from agent_sessions where id = ?")
       .get(sessionId) as { updated_at: string };
     expect(row.updated_at).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("rebuilds an idle cached SDK session in the moved cwd (member worktree), keeping to-dos", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    expect((await runtime.ensure(window, sessionId)).cwd).toBe(cwd);
+    const creates = mocks.createAgentSession.mock.calls.length;
+    // Same cwd: the cached session is reused.
+    await runtime.ensure(window, sessionId);
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates);
+
+    const moved = await mkdtemp(join(tmpdir(), "modus-pi-runtime-moved-"));
+    await writeFile(join(moved, "AGENTS.md"), "Worktree rule marker 4b.\n");
+    const permission = vi.spyOn(permissionExtension, "createModusPermissionExtension");
+    const clearCache = vi.spyOn(todoToolRuntime, "clearTodoSessionCache");
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(moved, sessionId);
+    expect((await runtime.ensure(window, sessionId)).cwd).toBe(moved);
+
+    // Rebuilt once, with the PI tools, permission extension and Project rules on the worktree.
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates + 1);
+    expect(mocks.createAgentSession.mock.calls.at(-1)?.[0]).toMatchObject({ cwd: moved });
+    const loader = mocks.resourceLoaderOptions.at(-1) as {
+      cwd: string;
+      appendSystemPrompt: string[];
+    };
+    expect(loader.cwd).toBe(moved);
+    expect(loader.appendSystemPrompt.join("\n")).toContain("Worktree rule marker 4b.");
+    expect(permission).toHaveBeenCalledWith(sessionId, expect.any(Function), moved);
+    // Unlike releaseRuntime, the rebuild keeps the in-memory to-dos.
+    expect(clearCache).not.toHaveBeenCalledWith(sessionId);
+    permission.mockRestore();
+    clearCache.mockRestore();
+    await rm(moved, { recursive: true, force: true });
   });
 
   it("releaseRuntime drops the SDK session without cancelling descendant DB rows", async () => {

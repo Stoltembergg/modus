@@ -1032,3 +1032,42 @@ describe("app version IPC", () => {
     ).toThrow("Blocked IPC call from untrusted renderer frame.");
   });
 });
+
+describe("subagent worktree IPC with Agent Group member sessions", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.getAgentSession.mockReset();
+    // A member session with a group worktree: it has no parentSessionId.
+    mocks.getAgentSession.mockReturnValue({
+      id: "member-1",
+      workspaceId: "workspace-1",
+      cwd: "C:/workspace/.modus/worktrees/group-g1-alpha",
+      subagentWorktree: {
+        path: "C:/workspace/.modus/worktrees/group-g1-alpha",
+        branch: "group/g1/alpha",
+        baseSha: "abc123",
+        integrationStatus: "applied",
+      },
+    });
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it.each([
+    IPC_CHANNELS.agentApplySubagentWorktree,
+    IPC_CHANNELS.agentAbortSubagentWorktreeApply,
+    IPC_CHANNELS.agentCleanupSubagentWorktree,
+  ])("%s refuses a member session (no parentSessionId)", async (channel) => {
+    const handler = mocks.handlers.get(channel);
+    if (!handler) throw new Error(`${channel} was not registered.`);
+    await expect(handler(trustedEvent as never, "member-1" as never)).rejects.toThrow(
+      "Subagent worktree not found.",
+    );
+    // Refused before looking up any parent session or touching git.
+    expect(mocks.getAgentSession).toHaveBeenCalledTimes(1);
+    expect(mocks.getAgentSession).toHaveBeenCalledWith("member-1");
+  });
+});

@@ -180,6 +180,7 @@ import { toolRegistry } from "./tools/registry";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
 import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
+import { clearAssistantToolCallCount, noteAssistantMessageToolCalls } from "./tools/tool-batch";
 import {
   type AgentToolContext,
   runWithAgentToolContext,
@@ -1680,7 +1681,13 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<SdkRuntimeSession | undefined> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
-      return existing;
+      if (!this.storedCwdMoved(sessionId, existing)) {
+        return existing;
+      }
+      // The stored cwd moved (an Agent Group member entered or left its
+      // worktree): rebuild the SDK session so its tools, permission extension
+      // and Project rules use the new cwd. The in-memory to-dos stay.
+      await this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
     const pending = this.resumePromises.get(sessionId);
@@ -1693,6 +1700,20 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     this.resumePromises.set(sessionId, next);
     return await next;
+  }
+
+  /** True when the persisted cwd differs from the cached SDK session's and it is idle. */
+  private storedCwdMoved(sessionId: string, runtimeSession: SdkRuntimeSession): boolean {
+    const stored = getAgentSession(sessionId)?.cwd;
+    return (
+      stored !== undefined &&
+      stored !== runtimeSession.info.cwd &&
+      !runtimeSession.session.isStreaming &&
+      !runtimeSession.session.isCompacting &&
+      !this.runOutputTrackers.has(sessionId) &&
+      !this.pendingIntentGates.has(sessionId) &&
+      !getActiveAgentRun(sessionId)
+    );
   }
 
   async ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo> {
@@ -1820,6 +1841,9 @@ export class PiSdkRuntime implements AgentRuntime {
     };
     const sessionUnsubscribe = session.subscribe((event) => {
       this.noteAssistantResponseUsage(params.info.id, event);
+      // Before PI runs this message's tool calls: group_start_worktree must be alone.
+      if (event.type === "message_end")
+        noteAssistantMessageToolCalls(params.info.id, event.message);
       for (const normalized of normalizePiEvent(event)) {
         if (normalized.type === "tool.delta" || normalized.type === "tool.started") {
           const hiddenProfiles = toolRegistry.getEntry(normalized.toolName)?.ui
@@ -2827,8 +2851,11 @@ export class PiSdkRuntime implements AgentRuntime {
         const compact = runtimeSession.lastCompactionEnd;
         runtimeSession.lastCompactionEnd = undefined;
         const stillRunning = getAgentRun(run.id)?.status === "running";
+        // group_start_worktree moved the cwd this turn: never auto-continue in the old one.
+        const cwdMoved = getAgentSession(input.sessionId)?.cwd !== runtimeSession.info.cwd;
         if (
           stillRunning &&
+          !cwdMoved &&
           compact &&
           compact.reason === "threshold" &&
           !compact.willRetry &&
@@ -2849,7 +2876,8 @@ export class PiSdkRuntime implements AgentRuntime {
           outputTracker.hasVisibleOutput &&
           !turnError &&
           !this.cancellingRuns.has(run.id) &&
-          !continuationStarted
+          !continuationStarted &&
+          !cwdMoved
         ) {
           if (requiredChecks.length > 0 && runCheckpoint) {
             const scopedChanges = await getChangeStatsSinceStrict(
@@ -3841,9 +3869,13 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
-  private async disposeSessionOnly(sessionId: string): Promise<void> {
+  private async disposeSessionOnly(
+    sessionId: string,
+    options: { keepTodos?: boolean } = {},
+  ): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
-    clearTodoSessionCache(sessionId);
+    if (!options.keepTodos) clearTodoSessionCache(sessionId);
+    clearAssistantToolCallCount(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     // Settle any in-flight resume first: it would otherwise re-cache a live

@@ -8,24 +8,34 @@ import type { GroupMessage, GroupTask, GroupTaskStatus } from "../../../shared/c
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
 import type { ToolProfileName } from "../../../shared/tools";
 import {
+  createMemberWorktree,
+  MemberBranchCheckedOutError,
+  MemberWorktreeUnavailableError,
+} from "../../git/git-service";
+import {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
   estimateGroupTokens,
   type GroupTaskWake,
+  type GroupWorktreeReady,
 } from "../../groups/group-runtime";
 import {
   claimGroupTask,
   createMemberGroupTask,
+  fillMemberTaskBranches,
   getAgentGroupForSession,
   getGroupMessage,
   listAgentGroupMembers,
   listGroupMessages,
   listGroupTasks,
+  memberWorktreeBranchPrefix,
   releaseGroupTask,
   requestGroupTaskReview,
   reviewGroupTask,
 } from "../../groups/group-store";
-import { getAgentSession } from "../agent-store";
+import { getWorkspace } from "../../workspace/workspace-store";
+import { getAgentSession, updateAgentSessionWorktree } from "../agent-store";
 import { toolRegistry } from "./registry";
+import { lastAssistantToolCallCount } from "./tool-batch";
 import { resolveAgentToolContext } from "./tool-context";
 
 /**
@@ -34,7 +44,8 @@ import { resolveAgentToolContext } from "./tool-context";
  * There is deliberately no "post to room" tool: a member's final turn text is
  * the only way it posts. Task transition rules live in the group store; a
  * rejected transition comes back to the model as `[group-error:<code>] …`
- * text, never as a thrown error.
+ * text, never as a thrown error. PR 4b adds group_start_worktree (a member's
+ * own worktree + branch of the group's Project, see startMemberWorktree).
  */
 
 export const GROUP_READ_MESSAGES_TOOL = "group_read_messages";
@@ -44,6 +55,7 @@ export const GROUP_CLAIM_TASK_TOOL = "group_claim_task";
 export const GROUP_RELEASE_TASK_TOOL = "group_release_task";
 export const GROUP_REQUEST_REVIEW_TOOL = "group_request_review";
 export const GROUP_REVIEW_TASK_TOOL = "group_review_task";
+export const GROUP_START_WORKTREE_TOOL = "group_start_worktree";
 
 export const GROUP_TOOL_NAMES = [
   GROUP_READ_MESSAGES_TOOL,
@@ -53,9 +65,12 @@ export const GROUP_TOOL_NAMES = [
   GROUP_RELEASE_TASK_TOOL,
   GROUP_REQUEST_REVIEW_TOOL,
   GROUP_REVIEW_TASK_TOOL,
+  GROUP_START_WORKTREE_TOOL,
 ] as const;
 
 export type GroupToolName = (typeof GROUP_TOOL_NAMES)[number];
+/** The tools runGroupTool runs synchronously (group_start_worktree runs git: startMemberWorktree). */
+export type SyncGroupToolName = Exclude<GroupToolName, typeof GROUP_START_WORKTREE_TOOL>;
 
 /** Page size cap for group_read_messages. */
 export const GROUP_READ_MESSAGES_MAX_LIMIT = 50;
@@ -73,6 +88,19 @@ export function setGroupTaskWakeSink(sink: ((wake: GroupTaskWake) => void) | und
   taskWakeSink = sink;
 }
 
+let worktreeReadySink: ((ready: GroupWorktreeReady) => boolean) | undefined;
+
+/**
+ * Told when group_start_worktree moved a member's cwd (GroupRuntime.handleWorktreeReady
+ * in the app). Returns true when the call ran inside the member's group turn:
+ * that turn then ends after the tool result and the runtime re-wakes the member.
+ */
+export function setGroupWorktreeReadySink(
+  sink: ((ready: GroupWorktreeReady) => boolean) | undefined,
+): void {
+  worktreeReadySink = sink;
+}
+
 /* ── core (pure of PI; tested directly) ──────────────────────────────── */
 
 export type GroupToolCaller = { sessionId: string; groupId?: string | undefined };
@@ -87,11 +115,19 @@ export type GroupToolParams = {
   group_release_task: { id: string };
   group_request_review: { id: string; reviewer: string };
   group_review_task: { id: string; verdict: "approve" | "changes"; note?: string };
+  group_start_worktree: Record<string, never>;
 };
 
 class ToolInputError extends Error {
   constructor(
-    readonly code: "not-a-member" | "invalid-value" | "message-not-found" | "ambiguous-member",
+    readonly code:
+      | "not-a-member"
+      | "invalid-value"
+      | "message-not-found"
+      | "ambiguous-member"
+      | "no-git-project"
+      | "branch-checked-out"
+      | "call-alone",
     message: string,
   ) {
     super(message);
@@ -177,6 +213,7 @@ function formatTask(members: Roster, task: GroupTask): string {
     `owner=${label(members, task.ownerSessionId)}`,
     `reviewer=${label(members, task.reviewerSessionId)}`,
   ];
+  if (task.branch) parts.push(`branch=${task.branch}`);
   const head = parts.join(" ");
   return task.description ? `${head}\n  ${task.description}` : head;
 }
@@ -245,7 +282,7 @@ function readMessages(
 }
 
 /** Runs one member tool for `caller`; always returns text (errors included). */
-export function runGroupTool<N extends GroupToolName>(
+export function runGroupTool<N extends SyncGroupToolName>(
   name: N,
   caller: GroupToolCaller,
   params: GroupToolParams[N],
@@ -275,7 +312,9 @@ export function runGroupTool<N extends GroupToolName>(
       }
       case "group_claim_task": {
         const { id } = params as GroupToolParams["group_claim_task"];
-        return `Claimed ${formatTask(members, claimGroupTask(groupId, id, actor))}`;
+        const branch = memberWorktreeBranch(groupId, actor);
+        const task = claimGroupTask(groupId, id, actor, branch ? { branch } : {});
+        return `Claimed ${formatTask(members, task)}`;
       }
       case "group_release_task": {
         const { id } = params as GroupToolParams["group_release_task"];
@@ -331,6 +370,103 @@ export function runGroupTool<N extends GroupToolName>(
     }
   } catch (error) {
     return errorText(error);
+  }
+}
+
+/** The member's worktree branch in `groupId`, when it has started one. */
+function memberWorktreeBranch(groupId: string, sessionId: string): string | undefined {
+  const branch = getAgentSession(sessionId)?.subagentWorktree?.branch;
+  return branch?.startsWith(memberWorktreeBranchPrefix(groupId)) ? branch : undefined;
+}
+
+/** What group_start_worktree returns: the tool text, and whether the turn ends after it. */
+export type StartWorktreeResult = { text: string; endTurn: boolean };
+
+/**
+ * group_start_worktree: gives the caller its own worktree of the group's
+ * Project (created once, then reused across tasks) and moves the session's
+ * cwd into it. Fills `branch` on the caller's in_progress tasks that have
+ * none. Never merges anything back into the Project root. Errors come back as
+ * `[group-error:<code>] …` text like runGroupTool.
+ *
+ * PI fixes a session's cwd (tools, permission extension, Project rules) when
+ * the session is built, so a moved cwd only applies to the next turn. Inside
+ * the member's group turn (the sink says so) the turn ends right after this
+ * result (`endTurn` → PI `terminate`) and the GroupRuntime re-wakes the member
+ * in the worktree. Outside one, or when the cwd did not move, nothing stops.
+ */
+export async function startMemberWorktree(caller: GroupToolCaller): Promise<StartWorktreeResult> {
+  try {
+    const groupId = requireCallerGroup(caller);
+    const actor = caller.sessionId;
+    // PI ends the turn only when every call of the batch terminates: refuse
+    // before touching anything unless this call is alone (count unknown = refuse).
+    const batch = lastAssistantToolCallCount(actor);
+    if (batch !== 1) {
+      throw new ToolInputError(
+        "call-alone",
+        `${
+          batch === undefined
+            ? "Could not tell how many tool calls your message made."
+            : `Your message made ${batch} tool calls.`
+        } Nothing was changed: call group_start_worktree alone in its own message.`,
+      );
+    }
+    const workspaceId = getAgentGroupForSession(actor)?.workspaceId;
+    const project = workspaceId ? getWorkspace(workspaceId) : undefined;
+    if (!project) {
+      throw new ToolInputError(
+        "no-git-project",
+        "This group has no Project; member worktrees need a Git repository Project.",
+      );
+    }
+    const session = getAgentSession(actor);
+    const memberKey = actor.replace(/[^a-z0-9]/gi, "").slice(0, 8) || actor.slice(0, 8);
+    const current = memberWorktreeBranch(groupId, actor);
+    // Keep the slug the member already has (its title may have changed since).
+    const memberSlug = current
+      ? current.slice(memberWorktreeBranchPrefix(groupId).length)
+      : `${session?.title ?? "member"}-${memberKey}`;
+    let worktree: Awaited<ReturnType<typeof createMemberWorktree>>;
+    try {
+      worktree = await createMemberWorktree(project.rootPath, { groupId, memberSlug, memberKey });
+    } catch (error) {
+      if (error instanceof MemberWorktreeUnavailableError) {
+        throw new ToolInputError("no-git-project", error.message);
+      }
+      if (error instanceof MemberBranchCheckedOutError) {
+        throw new ToolInputError(
+          "branch-checked-out",
+          `${error.message} Do not retry: the user must switch that checkout to another branch first.`,
+        );
+      }
+      throw error;
+    }
+    // Re-check after git ran: a member removed meanwhile must not get its cwd moved back.
+    requireCallerGroup({ sessionId: actor, groupId });
+    const { cwd, created, ...info } = worktree;
+    const moved = getAgentSession(actor)?.cwd !== cwd;
+    updateAgentSessionWorktree(actor, info, { cwd });
+    const tagged = fillMemberTaskBranches(groupId, actor, info.branch);
+    const endTurn =
+      moved && (worktreeReadySink?.({ groupId, sessionId: actor, branch: info.branch }) ?? false);
+    const next = !moved
+      ? "You are already working in it."
+      : endTurn
+        ? "Your turn ends now; you will be woken again in the worktree to continue the same message. Do not call more tools."
+        : "It becomes your working directory from your next message; until then use absolute paths under it.";
+    const text = [
+      `Worktree ${created ? "created" : "reused"}: ${cwd}`,
+      `branch=${info.branch} base=${info.baseSha.slice(0, 12)}`,
+      tagged.length > 0
+        ? `Branch set on your in_progress task(s): ${tagged.map((task) => task.id).join(", ")}.`
+        : "No in_progress task of yours needed a branch.",
+      next,
+      "Nothing is merged back into the Project automatically.",
+    ].join("\n");
+    return { text, endTurn };
+  } catch (error) {
+    return { text: errorText(error), endTurn: false };
   }
 }
 
@@ -390,6 +526,7 @@ const schemas = {
     },
     { additionalProperties: false },
   ),
+  group_start_worktree: Type.Object({}, { additionalProperties: false }),
 } satisfies Record<GroupToolName, unknown>;
 
 const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; snippet: string }> =
@@ -434,10 +571,20 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
         'Decide a task you were asked to review: "approve" marks it done; "changes" sends it back to in_progress and wakes the owner (include a note).',
       snippet: 'group_review_task(id, "approve"|"changes", note?) — review a task.',
     },
+    group_start_worktree: {
+      label: "Start member worktree",
+      description:
+        "Get your own Git worktree of the group's Project (branch group/<groupId>/<you>), created once and reused for all your tasks. Call it on its own: in a group turn your turn ends after it and you are woken again, working inside the worktree. Nothing is merged back automatically.",
+      snippet: "group_start_worktree() — work in your own branch/worktree.",
+    },
   };
 
-function toResult(text: string): AgentToolResult<{ text: string }> {
-  return { content: [{ type: "text", text }], details: { text } };
+function toResult(text: string, terminate = false): AgentToolResult<{ text: string }> {
+  return {
+    content: [{ type: "text", text }],
+    details: { text },
+    ...(terminate ? { terminate } : {}),
+  };
 }
 
 function defineGroupTool(name: GroupToolName): ToolDefinition {
@@ -450,13 +597,13 @@ function defineGroupTool(name: GroupToolName): ToolDefinition {
     parameters: schemas[name],
     execute: async (_toolCallId, params: Static<(typeof schemas)[typeof name]>, _s, _u, ctx) => {
       const context = resolveAgentToolContext(ctx.cwd);
-      return toResult(
-        runGroupTool(
-          name,
-          { sessionId: context.sessionId, groupId: context.groupId },
-          params as never,
-        ),
-      );
+      const caller = { sessionId: context.sessionId, groupId: context.groupId };
+      if (name === GROUP_START_WORKTREE_TOOL) {
+        // `terminate`: PI stops after this tool batch (when every call in it asks to).
+        const result = await startMemberWorktree(caller);
+        return toResult(result.text, result.endTurn);
+      }
+      return toResult(runGroupTool(name, caller, params as never));
     },
   }) as ToolDefinition;
 }
@@ -479,7 +626,10 @@ export function registerGroupTools(): void {
         permission: { danger: "safe" },
         capabilities: [readOnly ? "read" : "write"],
         readOnly,
-        ui: { verb: DESCRIPTIONS[name].label, ...(readOnly ? {} : { primaryArgKey: "id" }) },
+        ui: {
+          verb: DESCRIPTIONS[name].label,
+          ...(readOnly || name === GROUP_START_WORKTREE_TOOL ? {} : { primaryArgKey: "id" }),
+        },
       },
       definition: defineGroupTool(name),
     });

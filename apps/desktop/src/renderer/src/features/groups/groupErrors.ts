@@ -21,6 +21,10 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "invalid-transition": "That task can't move to that status from where it is.",
   "self-review": "A task's owner can't review their own task.",
   "ambiguous-member": "More than one member has that name. Pick the chat by its id.",
+  "no-git-project": "Member worktrees need the group's Project to be a Git repository.",
+  "branch-checked-out":
+    "The member's branch is checked out in another folder. Switch that checkout to another branch first.",
+  "call-alone": "The member must start its worktree with a message that makes no other tool call.",
 };
 
 /**

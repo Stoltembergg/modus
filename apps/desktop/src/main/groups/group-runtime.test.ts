@@ -1078,3 +1078,120 @@ describe("queue", () => {
     expect(room(group.id)).toHaveLength(1);
   });
 });
+
+describe("worktree re-wake (group_start_worktree)", () => {
+  const ready = (groupId: string, sessionId: string) => ({
+    groupId,
+    sessionId,
+    branch: `group/${groupId}/alpha`,
+  });
+
+  it("the turn ends ok, posts Worktree ready (no wake) and re-wakes the member with the same trigger", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "build the parser" });
+    const first = runtime.take(alpha);
+
+    expect(groups.handleWorktreeReady(ready(group.id, alpha))).toBe(true);
+    first.resolve({ outcome: "ok", finalText: "Starting my worktree." });
+    await flush();
+
+    const after = room(group.id).slice(1);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: alpha,
+      kind: "status",
+      body: `Worktree ready: \`group/${group.id}/alpha\``,
+      chainId: user.id,
+      mentions: [],
+    });
+    expect(after.some((message) => message.body === GROUP_STATUS_TEXT.aborted)).toBe(false);
+    // Same member, same chain, same trigger: the prompt is rebuilt from the user message.
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(runtime.calls[0]?.input.message).toBe(first.input.message);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({
+      hops: 2,
+      wakesByMember: { [alpha]: 2 },
+    });
+    // The re-woken turn is an ordinary group turn: its reply posts and routes.
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Done in my worktree." });
+    await flush();
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorSessionId: alpha,
+      kind: "message",
+      body: "Done in my worktree.",
+      chainId: user.id,
+    });
+  });
+
+  it("at the hop limit nobody is woken (the chain ends with its limit status)", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup({ limits: { maxHops: 1 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
+    expect(groups.handleWorktreeReady(ready(group.id, alpha))).toBe(true);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 1, ended: "max-hops" });
+    expect(room(group.id).map((message) => message.body)).toEqual([
+      "go",
+      `Worktree ready: \`group/${group.id}/alpha\``,
+      GROUP_STATUS_TEXT.limit["max-hops"],
+    ]);
+  });
+
+  it("at the member's wake limit nobody is woken", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup({ limits: { maxWakesPerMember: 1 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
+    groups.handleWorktreeReady(ready(group.id, alpha));
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({ ended: "max-member-wakes" });
+  });
+
+  it("a chain ended during the turn wakes nobody; an already ended chain does not end the turn", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    expect(groups.handleWorktreeReady(ready(group.id, alpha))).toBe(true);
+    runtime.openGate(beta); // Beta's gate ends the chain.
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
+    expect(room(group.id).at(-1)?.body).toBe(`Worktree ready: \`group/${group.id}/alpha\``);
+
+    const next = squad();
+    const second = setup();
+    second.groups.postUserMessage({ groupId: next.group.id, body: "@Alpha @Beta go" });
+    second.runtime.openGate(next.beta);
+    expect(second.groups.handleWorktreeReady(ready(next.group.id, next.alpha))).toBe(false);
+  });
+
+  it("outside a group turn (own chat, gated turn, another group) nothing is re-woken", () => {
+    const { group, alpha, beta } = squad();
+    const other = squad();
+    const { runtime, groups } = setup();
+    expect(groups.handleWorktreeReady(ready(group.id, alpha))).toBe(false);
+    groups.postUserMessage({ groupId: group.id, body: "@Beta go" });
+    runtime.openGate(beta);
+    expect(groups.handleWorktreeReady(ready(group.id, beta))).toBe(false);
+    groups.postUserMessage({ groupId: other.group.id, body: "go" });
+    expect(groups.handleWorktreeReady(ready(group.id, other.alpha))).toBe(false);
+    expect(runtime.pendingSessions()).toEqual([beta, other.alpha]);
+  });
+
+  it("a user stop (aborted) keeps the normal Turn stopped status and no re-wake", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "go" });
+    groups.handleWorktreeReady(ready(group.id, alpha));
+    runtime.take(alpha).resolve({ outcome: "aborted" });
+    await flush();
+    expect(room(group.id).at(-1)?.body).toBe(GROUP_STATUS_TEXT.aborted);
+    expect(runtime.pendingSessions()).toEqual([]);
+  });
+});
