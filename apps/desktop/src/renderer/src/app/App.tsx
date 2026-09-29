@@ -76,6 +76,8 @@ import {
 } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
+import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+import { describeGroupError } from "../features/groups/groupErrors";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
 import {
@@ -795,11 +797,16 @@ export function App() {
     await refreshGroups();
   }
 
+  async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
+    // Errors propagate so the "Manage members" dialog can show them and stay open.
+    setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
+  }
+
   async function runGroupAction(action: () => Promise<AgentGroupWithMembers[]>): Promise<void> {
     try {
       setAgentGroups(await action());
     } catch (error) {
-      setSessionCreateError(error instanceof Error ? error.message : String(error));
+      setSessionCreateError(describeGroupError(error));
       await refreshGroups();
     }
   }
@@ -1116,6 +1123,7 @@ export function App() {
                           activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
                         }
                         onCreateGroup={createGroup}
+                        onUpdateGroupMembers={updateGroupMembers}
                         onRenameGroup={(id, name) =>
                           void runGroupAction(() => window.modus.group.rename({ id, name }))
                         }

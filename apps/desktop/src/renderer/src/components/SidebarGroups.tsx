@@ -1,3 +1,4 @@
+import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
 import {
   IconCrown,
@@ -6,6 +7,7 @@ import {
   IconPencil,
   IconTrash,
   IconUserMinus,
+  IconUsers,
   IconUsersGroup,
   IconUsersPlus,
 } from "@tabler/icons-react";
@@ -18,7 +20,7 @@ import type {
 } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
-import { CreateGroupDialog } from "../features/groups/CreateGroupDialog";
+import { CreateGroupDialog, type GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { groupMemberSessionIds, isGroupWorkingStub } from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
@@ -52,6 +54,8 @@ export type SidebarGroupsProps = {
   onSelectSession(session: AgentSessionInfo): void;
   onCreateGroup(input: CreateAgentGroupInput): Promise<void>;
   onRenameGroup(groupId: string, name: string): void;
+  /** Apply "Manage members" (atomic; rejects so the dialog can show the error). */
+  onUpdateMembers(groupId: string, change: GroupMembersChange): Promise<void>;
   onDeleteGroup(groupId: string): void;
   onRemoveMember(groupId: string, sessionId: string): void;
   onSetLead(groupId: string, sessionId: string | null): void;
@@ -74,11 +78,13 @@ export function SidebarGroups({
   onSelectSession,
   onCreateGroup,
   onRenameGroup,
+  onUpdateMembers,
   onDeleteGroup,
   onRemoveMember,
   onSetLead,
 }: SidebarGroupsProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [managingId, setManagingId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const sessionsById = useMemo(
@@ -86,6 +92,7 @@ export function SidebarGroups({
     [sessions],
   );
   const memberIds = useMemo(() => groupMemberSessionIds(groups), [groups]);
+  const managingGroup = managingId ? groups.find((group) => group.id === managingId) : undefined;
 
   function toggle(groupId: string): void {
     setCollapsed((current) => {
@@ -116,6 +123,7 @@ export function SidebarGroups({
                 if (next && next !== group.name) onRenameGroup(group.id, next);
               }}
               onDelete={() => onDeleteGroup(group.id)}
+              onManageMembers={() => setManagingId(group.id)}
               onStartRename={() => setRenamingId(group.id)}
               onToggle={() => toggle(group.id)}
               renaming={renamingId === group.id}
@@ -170,6 +178,20 @@ export function SidebarGroups({
         sessions={sessions}
         workspaces={workspaces}
       />
+      {managingGroup ? (
+        <CreateGroupDialog
+          group={managingGroup}
+          memberSessionIds={memberIds}
+          mode="edit"
+          onOpenChange={(open) => {
+            if (!open) setManagingId(null);
+          }}
+          onSave={(change) => onUpdateMembers(managingGroup.id, change)}
+          open
+          sessions={sessions}
+          workspaces={workspaces}
+        />
+      ) : null}
     </div>
   );
 }
@@ -184,6 +206,7 @@ export function GroupRow({
   onStartRename,
   onCommitRename,
   onCancelRename,
+  onManageMembers,
   onDelete,
 }: {
   name: string;
@@ -195,97 +218,160 @@ export function GroupRow({
   onStartRename(): void;
   onCommitRename(name: string): void;
   onCancelRename(): void;
+  onManageMembers(): void;
   onDelete(): void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const items = (
+    <GroupMenuItems
+      confirmDelete={confirmDelete}
+      onConfirmDelete={setConfirmDelete}
+      onDelete={onDelete}
+      onManageMembers={onManageMembers}
+      onStartRename={onStartRename}
+    />
+  );
   return (
-    <div
-      className={cn(SB_ROW, "group text-fg-muted hover:bg-hover hover:text-fg")}
-      data-testid="group-row"
+    <ContextMenu.Root
+      onOpenChange={(open) => {
+        setContextOpen(open);
+        if (!open) setConfirmDelete(false);
+      }}
+      open={contextOpen}
     >
-      <span className={cn(SB_RAIL, "relative text-current")}>
-        <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
-        {working ? (
-          <span
-            className="absolute top-0 right-0 size-1.5 rounded-full bg-accent"
-            data-testid="group-activity-dot"
-            title="A member is working"
-          >
-            <span className="sr-only">A member is working</span>
-          </span>
-        ) : null}
-      </span>
-      {renaming ? (
-        <GroupRenameInput initial={name} onCancel={onCancelRename} onCommit={onCommitRename} />
-      ) : (
-        <button
-          aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-          onClick={onToggle}
-          type="button"
-        >
-          <span className="min-w-0 flex-1 truncate">{name}</span>
-          <span
-            className="shrink-0 px-1 text-2xs text-fg-faint tabular-nums"
-            data-testid="group-member-count"
-            title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
-          >
-            {memberCount}
-            <span className="sr-only"> member{memberCount === 1 ? "" : "s"}</span>
-          </span>
-        </button>
-      )}
-      <Menu.Root
-        onOpenChange={(open) => {
-          setMenuOpen(open);
-          if (!open) setConfirmDelete(false);
-        }}
-        open={menuOpen}
+      <ContextMenu.Trigger
+        className={cn(
+          SB_ROW,
+          "group text-fg-muted hover:bg-hover hover:text-fg",
+          contextOpen && "bg-hover text-fg",
+        )}
+        data-testid="group-row"
       >
-        <span
-          className={cn(
-            "shrink-0 items-center",
-            menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex",
-          )}
-        >
-          <Menu.Trigger
-            aria-label="Group actions"
-            className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-active hover:text-fg-muted data-popup-open:bg-active data-popup-open:text-fg-muted"
-          >
-            <IconDots size={SB_ACTION} stroke={SB_ACTION_STROKE} />
-          </Menu.Trigger>
+        <span className={cn(SB_RAIL, "relative text-current")}>
+          <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
+          {working ? (
+            <span
+              className="absolute top-0 right-0 size-1.5 rounded-full bg-accent"
+              data-testid="group-activity-dot"
+              title="A member is working"
+            >
+              <span className="sr-only">A member is working</span>
+            </span>
+          ) : null}
         </span>
-        <Menu.Portal>
-          <Menu.Positioner align="start" side="bottom" sideOffset={4}>
-            <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
-              <GroupMenuItem
-                icon={<IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
-                onClick={onStartRename}
-              >
-                Rename group
-              </GroupMenuItem>
-              <div className="my-1 h-px bg-hairline" />
-              <GroupMenuItem
-                closeOnClick={confirmDelete}
-                danger
-                icon={<IconTrash size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
-                onClick={() => {
-                  if (!confirmDelete) {
-                    setConfirmDelete(true);
-                    return;
-                  }
-                  setConfirmDelete(false);
-                  onDelete();
-                }}
-              >
-                {confirmDelete ? "Confirm delete (chats are kept)" : "Delete group"}
-              </GroupMenuItem>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
-    </div>
+        {renaming ? (
+          <GroupRenameInput initial={name} onCancel={onCancelRename} onCommit={onCommitRename} />
+        ) : (
+          <button
+            aria-expanded={expanded}
+            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+            onClick={onToggle}
+            type="button"
+          >
+            <span className="min-w-0 flex-1 truncate">{name}</span>
+            <span
+              className="shrink-0 px-1 text-2xs text-fg-faint tabular-nums"
+              data-testid="group-member-count"
+              title={`${memberCount} member${memberCount === 1 ? "" : "s"}`}
+            >
+              {memberCount}
+              <span className="sr-only"> member{memberCount === 1 ? "" : "s"}</span>
+            </span>
+          </button>
+        )}
+        <Menu.Root
+          onOpenChange={(open) => {
+            setMenuOpen(open);
+            if (!open) setConfirmDelete(false);
+          }}
+          open={menuOpen}
+        >
+          <span
+            className={cn(
+              "shrink-0 items-center",
+              menuOpen ? "flex" : "hidden group-hover:flex group-focus-within:flex",
+            )}
+          >
+            <Menu.Trigger
+              aria-label="Group actions"
+              className="flex size-6 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-active hover:text-fg-muted data-popup-open:bg-active data-popup-open:text-fg-muted"
+            >
+              <IconDots size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+            </Menu.Trigger>
+          </span>
+          <Menu.Portal>
+            <Menu.Positioner align="start" side="bottom" sideOffset={4}>
+              <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
+                {items}
+              </Menu.Popup>
+            </Menu.Positioner>
+          </Menu.Portal>
+        </Menu.Root>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Positioner>
+          <ContextMenu.Popup
+            className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1"
+            data-testid="group-context-menu"
+          >
+            {items}
+          </ContextMenu.Popup>
+        </ContextMenu.Positioner>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
+  );
+}
+
+/** Exact confirm label of the two-step Delete item. */
+export const GROUP_DELETE_CONFIRM_LABEL = "Member sessions return to the sidebar";
+
+/** Rename / Manage members / Delete, shared by the "…" menu and the row's context menu. */
+function GroupMenuItems({
+  confirmDelete,
+  onConfirmDelete,
+  onStartRename,
+  onManageMembers,
+  onDelete,
+}: {
+  confirmDelete: boolean;
+  onConfirmDelete(next: boolean): void;
+  onStartRename(): void;
+  onManageMembers(): void;
+  onDelete(): void;
+}) {
+  return (
+    <>
+      <GroupMenuItem
+        icon={<IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+        onClick={onStartRename}
+      >
+        Rename
+      </GroupMenuItem>
+      <GroupMenuItem
+        icon={<IconUsers size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+        onClick={onManageMembers}
+      >
+        Manage members
+      </GroupMenuItem>
+      <div className="my-1 h-px bg-hairline" />
+      <GroupMenuItem
+        closeOnClick={confirmDelete}
+        danger
+        icon={<IconTrash size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+        onClick={() => {
+          if (!confirmDelete) {
+            onConfirmDelete(true);
+            return;
+          }
+          onConfirmDelete(false);
+          onDelete();
+        }}
+      >
+        {confirmDelete ? GROUP_DELETE_CONFIRM_LABEL : "Delete"}
+      </GroupMenuItem>
+    </>
   );
 }
 

@@ -2,8 +2,13 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentSessionInfo, WorkspaceInfo } from "../../../../shared/contracts";
+import type {
+  AgentGroupWithMembers,
+  AgentSessionInfo,
+  WorkspaceInfo,
+} from "../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
+import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
 import { CreateGroupDialog } from "./CreateGroupDialog";
 
 function session(id: string, overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo {
@@ -128,5 +133,74 @@ describe("CreateGroupDialog", () => {
       "Session b is already a member of a group.",
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+});
+
+describe("CreateGroupDialog in edit mode (Manage members)", () => {
+  const GROUP: AgentGroupWithMembers = {
+    id: "g-1",
+    name: "Squad",
+    workspaceId: "ws-1",
+    mode: "free",
+    leadSessionId: "taken",
+    members: [{ groupId: "g-1", sessionId: "taken", joinedAt: "2026-01-01T00:00:00.000Z" }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  function renderEdit(onSave = vi.fn(async (_change: unknown) => undefined)) {
+    render(
+      <CreateGroupDialog
+        group={GROUP}
+        memberSessionIds={new Set(["taken", "b"])}
+        mode="edit"
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+        open
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+      />,
+    );
+    return { onSave, dialog: screen.getByRole("dialog") };
+  }
+
+  it("fixes the Project, lists eligible chats plus current members, and needs one member", async () => {
+    const user = userEvent.setup();
+    const { dialog, onSave } = renderEdit();
+    expect(within(dialog).getByText("Manage members")).toBeTruthy();
+    expect(within(dialog).getByText("Squad · Repo")).toBeTruthy();
+    expect(within(dialog).queryByRole("textbox")).toBeNull();
+    // "b" is in another group; child/archived/other-Project chats are never offered.
+    const boxes = within(dialog).getAllByRole("checkbox") as HTMLInputElement[];
+    expect(boxes.map((box) => [box.closest("label")?.textContent, box.checked])).toEqual([
+      ["Chat a", false],
+      ["Chat taken", true],
+    ]);
+
+    // Unchecking the only member disables Save (minimum enforced in the dialog only).
+    await user.click(within(dialog).getByRole("checkbox", { name: "Chat taken" }));
+    const save = within(dialog).getByRole("button", { name: "Save members" }) as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await user.click(within(dialog).getByRole("checkbox", { name: "Chat a" }));
+    expect(save.disabled).toBe(false);
+    await user.click(save);
+    expect(onSave).toHaveBeenCalledWith({ members: [{ sessionId: "a" }], leadSessionId: null });
+  });
+
+  it("shows the mapped message when the save is refused and stays open", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn(async (_change: unknown) => {
+      throw new Error(
+        `Error invoking remote method 'group:update-members': Error: ${encodeGroupErrorMessage("archived-session", "Session a is archived.")}`,
+      );
+    });
+    const { dialog } = renderEdit(onSave);
+    await user.click(within(dialog).getByRole("checkbox", { name: "Chat a" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save members" }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toBe(
+        "Archived chats can't join a group. Restore the chat first.",
+      ),
+    );
   });
 });

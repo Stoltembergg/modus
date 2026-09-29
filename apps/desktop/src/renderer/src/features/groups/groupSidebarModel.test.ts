@@ -5,6 +5,7 @@ import {
   eligibleGroupSessions,
   groupMemberSessionIds,
   isGroupWorkingStub,
+  manageableGroupSessions,
 } from "./groupSidebarModel";
 
 function session(id: string, overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo {
@@ -52,5 +53,28 @@ describe("groupSidebarModel", () => {
 
   it("keeps the activity selector stubbed off until the runtime lands", () => {
     expect(isGroupWorkingStub(GROUP)).toBe(false);
+  });
+});
+
+describe("manageableGroupSessions", () => {
+  it("offers the eligible chats plus the group's own members, never other groups' members", () => {
+    const sessions = [
+      session("mine"),
+      session("free"),
+      session("theirs"),
+      session("inbox", { workspaceId: CHATS_WORKSPACE_ID }),
+    ];
+    const group: AgentGroupWithMembers = {
+      id: "g",
+      name: "G",
+      workspaceId: "ws-1",
+      mode: "free",
+      members: [{ groupId: "g", sessionId: "mine", joinedAt: "2026-01-01T00:00:00.000Z" }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    expect(
+      manageableGroupSessions(sessions, group, new Set(["mine", "theirs"])).map((s) => s.id),
+    ).toEqual(["mine", "free"]);
   });
 });

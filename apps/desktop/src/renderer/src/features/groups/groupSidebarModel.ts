@@ -33,6 +33,21 @@ export function eligibleGroupSessions(
 }
 
 /**
+ * Sessions the "Manage members" dialog offers for `group`: the eligible ones
+ * for its Project plus its current members (which are "in a group" only
+ * because they are in this one).
+ */
+export function manageableGroupSessions(
+  sessions: readonly AgentSessionInfo[],
+  group: AgentGroupWithMembers,
+  memberSessionIds: ReadonlySet<string>,
+): AgentSessionInfo[] {
+  const own = new Set(group.members.map((member) => member.sessionId));
+  const others = new Set([...memberSessionIds].filter((id) => !own.has(id)));
+  return eligibleGroupSessions(sessions, group.workspaceId ?? null, others);
+}
+
+/**
  * Selector for the Groups row activity dot: true while any member is working.
  * Always false until the group runtime lands (PR 3); keep the signature so the
  * sidebar only needs a real implementation wired in, not new props.

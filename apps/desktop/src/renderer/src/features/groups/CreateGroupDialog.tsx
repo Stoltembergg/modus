@@ -2,49 +2,60 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconCrown } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AgentGroupWithMembers,
   AgentSessionInfo,
   CreateAgentGroupInput,
+  UpdateAgentGroupMembersInput,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
-import { eligibleGroupSessions } from "./groupSidebarModel";
+import { describeGroupError } from "./groupErrors";
+import { eligibleGroupSessions, manageableGroupSessions } from "./groupSidebarModel";
 
 /** Select value for "no Project" (members come from the Chats inbox). */
 const NO_PROJECT = "";
 
-type CreateGroupDialogProps = {
+/** Target members and lead sent by the "Manage members" mode. */
+export type GroupMembersChange = Omit<UpdateAgentGroupMembersInput, "groupId">;
+
+type DialogCommonProps = {
   open: boolean;
   onOpenChange(open: boolean): void;
   /** Projects offered in the Project picker (the Chats inbox is excluded). */
   workspaces: readonly WorkspaceInfo[];
   /** Candidate sessions (root, non-archived); filtered further by eligibility. */
   sessions: readonly AgentSessionInfo[];
-  /** Sessions already in some group (never offered). */
+  /** Sessions already in some group (never offered, except the edited group's own). */
   memberSessionIds: ReadonlySet<string>;
+};
+
+type CreateModeProps = DialogCommonProps & {
+  mode?: "create";
   /** Project preselected when the dialog opens (e.g. the active one); default no Project. */
   defaultWorkspaceId?: string | null;
   onCreate(input: CreateAgentGroupInput): Promise<void>;
 };
 
-function errorMessage(caught: unknown): string {
-  const text = caught instanceof Error ? caught.message : String(caught);
-  // Electron prefixes remote errors: "Error invoking remote method 'x': Error: msg".
-  return text.replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, "");
-}
+type EditModeProps = DialogCommonProps & {
+  /** "Manage members": add/remove members and change the lead of `group`. */
+  mode: "edit";
+  group: AgentGroupWithMembers;
+  onSave(change: GroupMembersChange): Promise<void>;
+};
+
+type CreateGroupDialogProps = CreateModeProps | EditModeProps;
 
 /**
  * Single-screen "New group" dialog: name, Project (optional), members, lead.
- * It only groups EXISTING chats: it never creates sessions.
+ * It only groups EXISTING chats: it never creates sessions. In `mode="edit"`
+ * it becomes "Manage members" for an existing group: the Project is fixed,
+ * the name is not editable here (Rename does that), and the list offers the
+ * eligible chats plus the current members, preselected.
  */
-export function CreateGroupDialog({
-  open,
-  onOpenChange,
-  workspaces,
-  sessions,
-  memberSessionIds,
-  defaultWorkspaceId = null,
-  onCreate,
-}: CreateGroupDialogProps) {
+export function CreateGroupDialog(props: CreateGroupDialogProps) {
+  const { open, onOpenChange, workspaces, sessions, memberSessionIds } = props;
+  const editGroup = props.mode === "edit" ? props.group : undefined;
+  const defaultWorkspaceId = props.mode === "edit" ? null : (props.defaultWorkspaceId ?? null);
   const [name, setName] = useState("");
   const [workspaceId, setWorkspaceId] = useState<string>(NO_PROJECT);
   const [selected, setSelected] = useState<string[]>([]);
@@ -55,27 +66,46 @@ export function CreateGroupDialog({
 
   const projects = useMemo(() => workspaces.filter((workspace) => !workspace.inbox), [workspaces]);
 
+  // Reset only when the dialog opens (or switches group), not on every list refresh.
+  const editGroupId = editGroup?.id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: editGroup is read at open time only.
   useEffect(() => {
     if (open) {
-      setName("");
-      const initial =
-        defaultWorkspaceId && projects.some((project) => project.id === defaultWorkspaceId)
-          ? defaultWorkspaceId
-          : NO_PROJECT;
-      setWorkspaceId(initial);
-      setSelected([]);
-      setLeadSessionId(null);
+      if (editGroup) {
+        setName(editGroup.name);
+        setWorkspaceId(editGroup.workspaceId ?? NO_PROJECT);
+        setSelected(editGroup.members.map((member) => member.sessionId));
+        setLeadSessionId(editGroup.leadSessionId ?? null);
+      } else {
+        setName("");
+        const initial =
+          defaultWorkspaceId && projects.some((project) => project.id === defaultWorkspaceId)
+            ? defaultWorkspaceId
+            : NO_PROJECT;
+        setWorkspaceId(initial);
+        setSelected([]);
+        setLeadSessionId(null);
+      }
       setBusy(false);
       setError(undefined);
     }
-  }, [open, defaultWorkspaceId, projects]);
+  }, [open, defaultWorkspaceId, projects, editGroupId]);
 
   const eligible = useMemo(
-    () => eligibleGroupSessions(sessions, workspaceId || null, memberSessionIds),
-    [sessions, workspaceId, memberSessionIds],
+    () =>
+      editGroup
+        ? manageableGroupSessions(sessions, editGroup, memberSessionIds)
+        : eligibleGroupSessions(sessions, workspaceId || null, memberSessionIds),
+    [sessions, workspaceId, memberSessionIds, editGroup],
   );
   const selectedSessions = eligible.filter((session) => selected.includes(session.id));
-  const canCreate = name.trim().length > 0 && selectedSessions.length > 0 && !busy;
+  // At least one member (enforced here only; the store itself accepts an empty group).
+  const canCreate =
+    (editGroup ? true : name.trim().length > 0) && selectedSessions.length > 0 && !busy;
+  const projectName = editGroup?.workspaceId
+    ? (projects.find((project) => project.id === editGroup.workspaceId)?.displayName ??
+      "Unknown project")
+    : "No project";
 
   function changeProject(next: string): void {
     setWorkspaceId(next);
@@ -98,16 +128,22 @@ export function CreateGroupDialog({
     if (!canCreate) return;
     setBusy(true);
     setError(undefined);
+    const members = selectedSessions.map((session) => ({ sessionId: session.id }));
+    const lead = leadSessionId && selected.includes(leadSessionId) ? leadSessionId : null;
     try {
-      await onCreate({
-        name: name.trim(),
-        workspaceId: workspaceId || null,
-        members: selectedSessions.map((session) => ({ sessionId: session.id })),
-        leadSessionId: leadSessionId && selected.includes(leadSessionId) ? leadSessionId : null,
-      });
+      if (props.mode === "edit") {
+        await props.onSave({ members, leadSessionId: lead });
+      } else {
+        await props.onCreate({
+          name: name.trim(),
+          workspaceId: workspaceId || null,
+          members,
+          leadSessionId: lead,
+        });
+      }
       onOpenChange(false);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(describeGroupError(caught));
     } finally {
       setBusy(false);
     }
@@ -130,7 +166,7 @@ export function CreateGroupDialog({
             "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
             "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
           )}
-          initialFocus={nameRef}
+          initialFocus={editGroup ? true : nameRef}
         >
           <form
             onSubmit={(event) => {
@@ -139,52 +175,60 @@ export function CreateGroupDialog({
             }}
           >
             <div className="px-4 pt-3.5 pb-1">
-              <Dialog.Title className="font-medium text-fg text-sm">New group</Dialog.Title>
-              <Dialog.Description className="mt-0.5 text-2xs text-fg-faint">
-                Group existing chats so they can work together.
+              <Dialog.Title className="font-medium text-fg text-sm">
+                {editGroup ? "Manage members" : "New group"}
+              </Dialog.Title>
+              <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
+                {editGroup
+                  ? `${editGroup.name} · ${projectName}`
+                  : "Group existing chats so they can work together."}
               </Dialog.Description>
             </div>
 
             <div className="flex flex-col gap-3 px-4 pt-2">
-              <label className="flex flex-col gap-1">
-                <span className="text-2xs text-fg-subtle">Name</span>
-                <input
-                  className={cn(
-                    "h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-sm text-fg outline-none",
-                    "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
-                  )}
-                  maxLength={120}
-                  onChange={(event) => setName(event.target.value)}
-                  placeholder="e.g. Release squad"
-                  ref={nameRef}
-                  value={name}
-                />
-              </label>
+              {editGroup ? null : (
+                <>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-2xs text-fg-subtle">Name</span>
+                    <input
+                      className={cn(
+                        "h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-sm text-fg outline-none",
+                        "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
+                      )}
+                      maxLength={120}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder="e.g. Release squad"
+                      ref={nameRef}
+                      value={name}
+                    />
+                  </label>
 
-              <label className="flex flex-col gap-1">
-                <span className="text-2xs text-fg-subtle">Project</span>
-                <select
-                  className={cn(
-                    "h-8 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm text-fg outline-none",
-                    "focus:border-hairline-strong",
-                  )}
-                  onChange={(event) => changeProject(event.target.value)}
-                  value={workspaceId}
-                >
-                  <option value={NO_PROJECT}>No project</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <label className="flex flex-col gap-1">
+                    <span className="text-2xs text-fg-subtle">Project</span>
+                    <select
+                      className={cn(
+                        "h-8 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm text-fg outline-none",
+                        "focus:border-hairline-strong",
+                      )}
+                      onChange={(event) => changeProject(event.target.value)}
+                      value={workspaceId}
+                    >
+                      <option value={NO_PROJECT}>No project</option>
+                      {projects.map((project) => (
+                        <option key={project.id} value={project.id}>
+                          {project.displayName}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              )}
 
               <fieldset className="flex min-w-0 flex-col gap-1">
                 <legend className="mb-1 text-2xs text-fg-subtle">Members</legend>
                 {eligible.length === 0 ? (
                   <p className="rounded-lg border border-hairline border-dashed px-2.5 py-2 text-2xs text-fg-faint">
-                    {workspaceId
+                    {workspaceId || editGroup?.workspaceId
                       ? "No available chats in this project. Chats already in a group, archived chats and subagents can't be added."
                       : "No available chats without a folder. Chats already in a group, archived chats and subagents can't be added."}
                   </p>
@@ -261,7 +305,13 @@ export function CreateGroupDialog({
                 disabled={!canCreate}
                 type="submit"
               >
-                {busy ? "Creating…" : "Create group"}
+                {editGroup
+                  ? busy
+                    ? "Saving…"
+                    : "Save members"
+                  : busy
+                    ? "Creating…"
+                    : "Create group"}
               </button>
             </div>
           </form>

@@ -36,6 +36,7 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
+import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { groupMemberSessionIds } from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
@@ -107,6 +108,8 @@ type SidebarProps = {
   isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
   onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
   onRenameGroup?(groupId: string, name: string): void;
+  /** "Manage members" (atomic); rejects so the dialog can show the error. */
+  onUpdateGroupMembers?(groupId: string, change: GroupMembersChange): Promise<void>;
   onDeleteGroup?(groupId: string): void;
   onRemoveGroupMember?(groupId: string, sessionId: string): void;
   onSetGroupLead?(groupId: string, sessionId: string | null): void;
@@ -147,6 +150,7 @@ export function Sidebar({
   isGroupWorking,
   onCreateGroup,
   onRenameGroup,
+  onUpdateGroupMembers,
   onDeleteGroup,
   onRemoveGroupMember,
   onSetGroupLead,
@@ -300,38 +304,40 @@ export function Sidebar({
               </SectionHeader>
 
               <CollapsibleMotion open={pinnedExpanded} preset="default">
-                <AnimatePresence initial={false}>
-                  {pinnedSessions.map((session) => (
-                    <ScrollReveal
-                      key={session.id}
-                      offsetY={8}
-                      scrollContainerRef={scrollContainerRef}
-                      blurStrength={3}
-                    >
-                      <SessionRow
-                        activity={activityBySession[session.id]}
-                        isActive={activeSessionId === session.id}
-                        pinned={true}
-                        onSelect={() => onSelectSession(session)}
-                        onPin={(event) => {
-                          event.stopPropagation();
-                          onPinSession(session, false);
-                        }}
-                        onRename={(title) => onRenameSession?.(session.id, title)}
-                        onArchive={(event) => {
-                          event.stopPropagation();
-                          onArchiveSession(session);
-                        }}
-                        onDelete={(event) => {
-                          event.stopPropagation();
-                          onDeleteSession(session);
-                        }}
-                        title={session.title}
-                        updatedAt={session.updatedAt}
-                      />
-                    </ScrollReveal>
-                  ))}
-                </AnimatePresence>
+                <div data-testid="sidebar-pinned">
+                  <AnimatePresence initial={false}>
+                    {pinnedSessions.map((session) => (
+                      <ScrollReveal
+                        key={session.id}
+                        offsetY={8}
+                        scrollContainerRef={scrollContainerRef}
+                        blurStrength={3}
+                      >
+                        <SessionRow
+                          activity={activityBySession[session.id]}
+                          isActive={activeSessionId === session.id}
+                          pinned={true}
+                          onSelect={() => onSelectSession(session)}
+                          onPin={(event) => {
+                            event.stopPropagation();
+                            onPinSession(session, false);
+                          }}
+                          onRename={(title) => onRenameSession?.(session.id, title)}
+                          onArchive={(event) => {
+                            event.stopPropagation();
+                            onArchiveSession(session);
+                          }}
+                          onDelete={(event) => {
+                            event.stopPropagation();
+                            onDeleteSession(session);
+                          }}
+                          title={session.title}
+                          updatedAt={session.updatedAt}
+                        />
+                      </ScrollReveal>
+                    ))}
+                  </AnimatePresence>
+                </div>
               </CollapsibleMotion>
               <div className="mt-1" />
             </>
@@ -357,6 +363,9 @@ export function Sidebar({
                   onRenameGroup={(id, name) => onRenameGroup?.(id, name)}
                   onSelectSession={onSelectSession}
                   onSetLead={(groupId, sessionId) => onSetGroupLead?.(groupId, sessionId)}
+                  onUpdateMembers={async (groupId, change) => {
+                    await onUpdateGroupMembers?.(groupId, change);
+                  }}
                   sessions={agentSessions}
                   workspaces={workspaces}
                   {...(isGroupWorking ? { isGroupWorking } : {})}
