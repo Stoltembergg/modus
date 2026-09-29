@@ -34,10 +34,15 @@ function budgetFor(level: AdaptiveVerificationLevel, complex: boolean): number {
  */
 export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision {
   // Gap 4: hydrate promoted policies when the adapter omitted them (pi-sdk parity).
+  // Fail-closed if storage/Electron is unavailable (unit tests, early boot).
   if (snapshot.promotedPolicies === undefined) {
-    const loaded = loadPromotedPolicies(snapshot.workspaceId);
-    if (loaded.length > 0) {
-      snapshot = { ...snapshot, promotedPolicies: loaded };
+    try {
+      const loaded = loadPromotedPolicies(snapshot.workspaceId);
+      if (loaded.length > 0) {
+        snapshot = { ...snapshot, promotedPolicies: loaded };
+      }
+    } catch {
+      // leave promotedPolicies undefined → treated as []
     }
   }
   const unresolved = unresolvedCriteria(snapshot);
