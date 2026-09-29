@@ -3,7 +3,12 @@ import type {
   UpdateRestoreInspectorTab,
   UpdateRestoreUiState,
 } from "../../../../shared/contracts";
-import { hasPendingDownloadedUpdate } from "../../../../shared/update-restore";
+import {
+  hasPendingDownloadedUpdate,
+  MAX_RESTORE_DRAFT_CHARS,
+  MAX_RESTORE_DRAFTS,
+  MAX_RESTORE_UI_STATE_BYTES,
+} from "../../../../shared/update-restore";
 import type { MentionEditorPart } from "../composer/MentionEditor";
 import { subscribeToUpdateState, type UpdateApi } from "./UpdateToast";
 
@@ -66,16 +71,62 @@ export function snapshotUiState(input: UiStateInput): UpdateRestoreUiState {
       drafts[sessionId] = { text: draft.value, mode: draft.mode };
     }
   }
+  const heroText = input.heroDraft.value.trim() ? input.heroDraft.value : "";
   const tab = INSPECTOR_TABS.find((known) => known === input.inspector.tab) ?? "changes";
-  return {
+  return fitUiStateToCap({
     activeWorkspaceId: input.activeWorkspaceId ?? null,
     activeSessionId: input.activeSessionId ?? null,
     drafts,
-    hero: { text: input.heroDraft.value.trim() ? input.heroDraft.value : "", mode: input.heroMode },
+    hero: { text: heroText, mode: input.heroMode },
     sidebar: { open: input.sidebar.open, width: panelWidth(input.sidebar.width) },
     inspector: { open: input.inspector.open, width: panelWidth(input.inspector.width), tab },
     settingsOpen: input.settingsOpen,
+  });
+}
+
+const encoder = new TextEncoder();
+
+function byteLength(value: unknown): number {
+  return encoder.encode(JSON.stringify(value)).length;
+}
+
+/**
+ * Keeps the snapshot inside main's limits so one huge draft does not cost the rest: a
+ * draft over the per-draft limit is dropped, then the largest drafts (the hero text
+ * counts as one) go until at most MAX_RESTORE_DRAFTS remain and the payload fits the
+ * byte cap. Layout and navigation are never trimmed.
+ */
+export function fitUiStateToCap(state: UpdateRestoreUiState): UpdateRestoreUiState {
+  const HERO = Symbol("hero");
+  type Entry = { key: string | typeof HERO; bytes: number };
+  const drafts = { ...state.drafts };
+  let hero = state.hero;
+  const entries: Entry[] = [];
+  for (const [sessionId, draft] of Object.entries(drafts)) {
+    if (draft.text.length > MAX_RESTORE_DRAFT_CHARS) delete drafts[sessionId];
+    else entries.push({ key: sessionId, bytes: byteLength(draft.text) });
+  }
+  if (hero.text.length > MAX_RESTORE_DRAFT_CHARS) hero = { ...hero, text: "" };
+  else if (hero.text) entries.push({ key: HERO, bytes: byteLength(hero.text) });
+  entries.sort((a, b) => b.bytes - a.bytes);
+
+  const build = (): UpdateRestoreUiState => ({ ...state, drafts: { ...drafts }, hero });
+  const dropLargest = () => {
+    const entry = entries.shift();
+    if (!entry) return false;
+    if (entry.key === HERO) hero = { ...hero, text: "" };
+    else delete drafts[entry.key];
+    return true;
   };
+  while (Object.keys(drafts).length > MAX_RESTORE_DRAFTS) {
+    // Only session drafts count towards the limit: skip the hero entry here.
+    const index = entries.findIndex((entry) => entry.key !== HERO);
+    const [entry] = entries.splice(index, 1);
+    if (entry && entry.key !== HERO) delete drafts[entry.key];
+  }
+  let next = build();
+  while (byteLength(next) > MAX_RESTORE_UI_STATE_BYTES && dropLargest()) next = build();
+  return next;
 }
 
 /**

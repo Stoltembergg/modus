@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRestoreUiState, UpdateState } from "../../../../shared/contracts";
 import {
+  MAX_RESTORE_DRAFT_CHARS,
+  MAX_RESTORE_DRAFTS,
+  MAX_RESTORE_UI_STATE_BYTES,
+} from "../../../../shared/update-restore";
+import {
   createUiStatePusher,
+  fitUiStateToCap,
   isComposerDraftEmpty,
   restorableUiState,
   snapshotUiState,
@@ -78,6 +84,94 @@ describe("snapshotUiState hero", () => {
       settingsOpen: false,
     });
     expect(snapshot.hero).toEqual({ text: "an idea\nsecond line", mode: "spec" });
+  });
+});
+
+describe("fitUiStateToCap", () => {
+  const bytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).length;
+  const draft = (chars: number, char = "é") => ({
+    text: char.repeat(chars),
+    mode: "build" as const,
+  });
+
+  it("leaves a payload under the cap untouched", () => {
+    expect(fitUiStateToCap(STATE)).toEqual(STATE);
+  });
+
+  it("drops the largest drafts until the payload fits, keeping the rest", () => {
+    // "é" is 2 bytes: about 780 KB in total; dropping only the largest is not enough.
+    const state = {
+      ...STATE,
+      drafts: {
+        a: draft(99_000),
+        b: draft(98_000),
+        c: draft(96_000),
+        d: draft(97_000),
+        small: draft(10, "x"),
+      },
+    };
+    expect(bytes(state)).toBeGreaterThan(MAX_RESTORE_UI_STATE_BYTES);
+    const fitted = fitUiStateToCap(state);
+    expect(Object.keys(fitted.drafts).sort()).toEqual(["c", "d", "small"]);
+    expect(bytes(fitted)).toBeLessThanOrEqual(MAX_RESTORE_UI_STATE_BYTES);
+    expect(fitted.sidebar).toEqual(STATE.sidebar);
+    expect(fitted.activeSessionId).toBe(STATE.activeSessionId);
+  });
+
+  it("counts the hero text as a draft", () => {
+    const state = {
+      ...STATE,
+      drafts: { a: draft(90_000), b: draft(90_000) },
+      hero: { text: "é".repeat(99_000), mode: "plan" as const },
+    };
+    const fitted = fitUiStateToCap(state);
+    expect(fitted.hero).toEqual({ text: "", mode: "plan" });
+    expect(Object.keys(fitted.drafts).sort()).toEqual(["a", "b"]);
+  });
+
+  it("drops drafts over the per-draft limit and keeps at most the draft limit", () => {
+    const tooLong = {
+      ...STATE,
+      drafts: { long: draft(MAX_RESTORE_DRAFT_CHARS + 1, "x"), ok: draft(3, "x") },
+    };
+    expect(Object.keys(fitUiStateToCap(tooLong).drafts)).toEqual(["ok"]);
+    const longHero = {
+      ...STATE,
+      hero: { text: "x".repeat(MAX_RESTORE_DRAFT_CHARS + 1), mode: "build" as const },
+    };
+    expect(fitUiStateToCap(longHero).hero.text).toBe("");
+
+    const many = Object.fromEntries(
+      Array.from({ length: MAX_RESTORE_DRAFTS + 3 }, (_, i) => [
+        `s-${i}`,
+        draft(i < 3 ? 50 : 5, "x"),
+      ]),
+    );
+    const fitted = fitUiStateToCap({ ...STATE, drafts: many });
+    expect(Object.keys(fitted.drafts)).toHaveLength(MAX_RESTORE_DRAFTS);
+    expect(fitted.drafts["s-0"]).toBeUndefined();
+    expect(fitted.drafts["s-2"]).toBeUndefined();
+    expect(fitted.drafts["s-3"]).toBeDefined();
+  });
+
+  it("is applied by snapshotUiState", () => {
+    const snapshot = snapshotUiState({
+      activeWorkspaceId: "ws-1",
+      activeSessionId: "a",
+      composerDraftBySession: Object.fromEntries(
+        ["a", "b", "c", "d"].map((id, i) => [
+          id,
+          { value: "é".repeat(80_000 + i), mode: "build" as const },
+        ]),
+      ),
+      heroDraft: { value: "" },
+      heroMode: "build",
+      sessionIds: new Set(["a", "b", "c", "d"]),
+      sidebar: { open: true, width: 300 },
+      inspector: { open: false, width: 384, tab: "changes" },
+      settingsOpen: false,
+    });
+    expect(Object.keys(snapshot.drafts).sort()).toEqual(["a", "b", "c"]);
   });
 });
 

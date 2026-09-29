@@ -1,6 +1,11 @@
 import { z } from "zod";
 import type { ContextItem } from "../../shared/contracts";
 import { STARTUP_RENDERER_MILESTONES } from "../../shared/startup";
+import {
+  MAX_RESTORE_DRAFT_CHARS,
+  MAX_RESTORE_DRAFTS,
+  MAX_RESTORE_UI_STATE_BYTES,
+} from "../../shared/update-restore";
 
 const nonEmptyString = z.string().trim().min(1);
 const optionalNonEmptyString = nonEmptyString.optional();
@@ -688,9 +693,11 @@ export const updateNoInputSchema = z.undefined();
 
 const restoreIdSchema = z.string().min(1).max(256);
 const restorePanelSchema = { open: z.boolean(), width: z.number().finite().min(0).max(4096) };
-export const MAX_RESTORE_DRAFTS = 200;
 const restoreDraftSchema = z
-  .object({ text: z.string().max(100_000), mode: z.enum(["build", "plan", "spec"]) })
+  .object({
+    text: z.string().max(MAX_RESTORE_DRAFT_CHARS),
+    mode: z.enum(["build", "plan", "spec"]),
+  })
   .strict();
 
 /** UI state the renderer pushes while an update is pending (and read back from disk). */
@@ -715,9 +722,6 @@ export const updateRestoreUiStateSchema = z
   })
   .strict();
 
-/** Byte cap for the renderer payload and for the snapshot file read back from disk. */
-export const MAX_RESTORE_UI_STATE_BYTES = 512 * 1024;
-
 function jsonByteLength(value: unknown): number {
   try {
     return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
@@ -726,6 +730,7 @@ function jsonByteLength(value: unknown): number {
   }
 }
 
+/** Byte cap (MAX_RESTORE_UI_STATE_BYTES) applies to the renderer payload and the file on disk. */
 export const updateSaveUiStateSchema = z
   .unknown()
   .refine((value) => jsonByteLength(value) <= MAX_RESTORE_UI_STATE_BYTES, {

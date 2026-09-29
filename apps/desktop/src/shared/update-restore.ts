@@ -1,5 +1,10 @@
 import type { UpdateState } from "./contracts";
 
+/** Limits of the UI restore snapshot, shared by the renderer (trimming) and main (validation). */
+export const MAX_RESTORE_UI_STATE_BYTES = 512 * 1024;
+export const MAX_RESTORE_DRAFTS = 200;
+export const MAX_RESTORE_DRAFT_CHARS = 100_000;
+
 /**
  * A downloaded update will be applied by the next quit: the restart is imminent or
  * running (ready, waiting-for-agents, installing), or the handoff already happened and

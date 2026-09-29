@@ -1,7 +1,8 @@
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { UpdateRestoreUiState } from "../../shared/contracts";
-import { MAX_RESTORE_UI_STATE_BYTES, updateSaveUiStateSchema } from "../ipc/schemas";
+import { MAX_RESTORE_UI_STATE_BYTES } from "../../shared/update-restore";
+import { updateSaveUiStateSchema } from "../ipc/schemas";
 import type { UpdateLogger } from "./update-controller";
 import { isNewerStableVersion } from "./update-policy";
 
