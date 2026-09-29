@@ -16,6 +16,7 @@ const NAV_LABELS = [
   "Personalization",
   "Project memory",
   "Harness Insights",
+  "Failure blacklist",
   "MCP",
   "Skills",
   "Subagents",
@@ -24,7 +25,15 @@ const NAV_LABELS = [
 ] as const;
 
 const GROUPED_NAV = {
-  Workspace: ["Project memory", "Harness Insights", "MCP", "Skills", "Subagents", "Rules"],
+  Workspace: [
+    "Project memory",
+    "Harness Insights",
+    "Failure blacklist",
+    "MCP",
+    "Skills",
+    "Subagents",
+    "Rules",
+  ],
   "Models & limits": ["Model & Provider", "Limits"],
   Interface: ["General", "Appearance", "Personalization"],
 } as const;
@@ -123,7 +132,7 @@ describe("groupSettingsNav", () => {
 });
 
 describe("Settings navigation search", () => {
-  it("shows all eleven nav items when the query is empty", () => {
+  it("shows all twelve nav items when the query is empty", () => {
     const markup = renderSidebar({ query: "" });
 
     expect(navLabels(markup)).toEqual(RENDERED_NAV_LABELS);
@@ -154,8 +163,8 @@ describe("Settings navigation search", () => {
   it("keeps the heading of every group that still has a partial match", () => {
     const markup = renderSidebar({ query: "li" });
 
-    expect(groupHeadings(markup)).toEqual(["Models & limits", "Interface"]);
-    expect(navLabels(markup)).toEqual(["Limits", "Personalization"]);
+    expect(groupHeadings(markup)).toEqual(["Workspace", "Models & limits", "Interface"]);
+    expect(navLabels(markup)).toEqual(["Failure blacklist", "Limits", "Personalization"]);
 
     const acrossAll = renderSidebar({ query: "en" });
     expect(groupHeadings(acrossAll)).toEqual(["Workspace", "Interface"]);

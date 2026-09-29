@@ -24,6 +24,7 @@ import type {
   DiffTarget,
   DocHit,
   DocSource,
+  FailureBlacklistEntry,
   FileDiff,
   FileEntry,
   FileReadResult,
@@ -418,7 +419,7 @@ export type ModusApi = {
       promotionId: string;
       reason?: string;
     }): Promise<{ ok: boolean }>;
-    listFailureBlacklist(input?: { workspaceId?: string }): Promise<unknown[]>;
+    listFailureBlacklist(input?: { workspaceId?: string }): Promise<FailureBlacklistEntry[]>;
     clearFailureBlacklist(input?: {
       workspaceId?: string;
       strategyCode?: string;

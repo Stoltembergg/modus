@@ -624,6 +624,21 @@ export type HarnessInsightsResult = {
   insights: HarnessInsight[];
 };
 
+/** Cross-session soft-discouraged strategy entry (TTL-bound; never a hard permanent block). */
+export type FailureBlacklistEntry = {
+  id: string;
+  workspaceId: string;
+  signature: string;
+  strategyCode: string;
+  hypothesisCode?: string;
+  hitCount: number;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  status: "active" | "cleared" | "expired";
+  sourceRunId?: string;
+};
+
 export type AgentEvent =
   | HarnessRouteEvent
   | { type: "harness.task_state"; sessionId: string; runId: string; state: HarnessTaskState }

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { FailureBlacklistEntry } from "../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import { getDatabase } from "../../db/database";
 import { failureAttemptSignature } from "./failure-intelligence";
@@ -8,19 +9,7 @@ export const MAX_BLACKLIST_ENTRIES = 500;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SAFE_CODE = /^[a-z][a-z0-9_]{0,95}$/;
 
-export type FailureBlacklistEntry = {
-  id: string;
-  workspaceId: string;
-  signature: string;
-  strategyCode: string;
-  hypothesisCode?: string;
-  hitCount: number;
-  firstSeenAt: string;
-  lastSeenAt: string;
-  expiresAt: string;
-  status: "active" | "cleared" | "expired";
-  sourceRunId?: string;
-};
+export type { FailureBlacklistEntry };
 
 export type UpsertFailureBlacklistInput = {
   workspaceId: string;

@@ -9,6 +9,7 @@ export type SettingsSectionId =
   | "rules"
   | "project-memory"
   | "harness-insights"
+  | "failure-blacklist"
   | "limits";
 
 export type ModelConfigPatch = {
