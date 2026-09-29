@@ -33,6 +33,10 @@ export const GROUP_ERROR_CODES = [
   "branch-checked-out",
   // group_start_worktree was not the only tool call of its message.
   "call-alone",
+  // group_record_decision: text empty after trim or over 500 characters.
+  "invalid-text",
+  // group_record_decision: the group already has 100 decisions.
+  "limit-reached",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

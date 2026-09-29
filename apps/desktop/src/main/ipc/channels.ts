@@ -22,6 +22,8 @@ export const IPC_CHANNELS = {
   groupUpdateMembers: "group:update-members",
   groupListTasks: "group:list-tasks",
   groupCancelTask: "group:cancel-task",
+  groupListDecisions: "group:list-decisions",
+  groupDeleteDecision: "group:delete-decision",
   groupPostMessage: "group:post-message",
   groupListMessages: "group:list-messages",
   groupWorking: "group:working",

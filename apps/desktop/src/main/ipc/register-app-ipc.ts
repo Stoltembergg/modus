@@ -143,7 +143,9 @@ import {
   cancelGroupTask,
   createAgentGroupWithMembers,
   deleteAgentGroup,
+  deleteGroupDecision,
   listAgentGroupsWithMembers,
+  listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
@@ -1803,6 +1805,8 @@ export function registerAppIpc({
     updateAgentGroupMembers,
     listGroupTasks: (groupId) => listGroupTasks(groupId),
     cancelGroupTask,
+    listGroupDecisions: (groupId) => listGroupDecisions(groupId),
+    deleteGroupDecision,
   });
   // Member task tools (review / changes) wake members through the GroupRuntime.
   setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));

@@ -463,14 +463,44 @@ export function migrateDatabase(db: DatabaseSync): void {
       id text primary key,
       group_id text not null references agent_groups(id) on delete cascade,
       text text not null,
+      author_session_id text references agent_sessions(id) on delete set null,
       source_message_id text references group_messages(id) on delete set null,
-      created_by_session_id text references agent_sessions(id) on delete set null,
-      created_at text not null,
-      superseded_by_id text references group_decisions(id) on delete set null
+      created_at text not null
     );
-    create index if not exists idx_group_decisions_group_created
-      on group_decisions(group_id, created_at);
   `);
+  migrateLegacyGroupDecisions(db);
+  db.exec(`create index if not exists idx_group_decisions_group_created
+    on group_decisions(group_id, created_at);`);
+}
+
+/**
+ * PR 6: group_decisions briefly had created_by_session_id / superseded_by_id
+ * (never written by the app). Rebuild it in the shared-context shape, keeping
+ * only active rows; the author carries over.
+ */
+function migrateLegacyGroupDecisions(db: DatabaseSync): void {
+  if (!hasColumn(db, "group_decisions", "superseded_by_id")) return;
+  db.exec("begin");
+  try {
+    db.exec(`create table group_decisions_replacement (
+        id text primary key,
+        group_id text not null references agent_groups(id) on delete cascade,
+        text text not null,
+        author_session_id text references agent_sessions(id) on delete set null,
+        source_message_id text references group_messages(id) on delete set null,
+        created_at text not null
+      );
+      insert into group_decisions_replacement
+        (id, group_id, text, author_session_id, source_message_id, created_at)
+        select id, group_id, text, created_by_session_id, source_message_id, created_at
+        from group_decisions where superseded_by_id is null;
+      drop table group_decisions;
+      alter table group_decisions_replacement rename to group_decisions;`);
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
 }
 
 export function getDatabase(): DatabaseSync {

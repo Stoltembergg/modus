@@ -2,6 +2,7 @@ import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
   AgentGroupInfo,
   GroupChainEndReason,
+  GroupDecision,
   GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
@@ -21,6 +22,7 @@ import {
   getAgentGroupForSession,
   getGroupMessage,
   listAgentGroupMembers,
+  listGroupDecisions,
   listGroupMessages,
 } from "./group-store";
 
@@ -39,6 +41,9 @@ import {
  */
 export const ESTIMATED_INPUT_TOKENS_PER_CHAIN = 150_000;
 export const ESTIMATED_CONTEXT_TOKENS_PER_WAKE = 8_000;
+/** The "Group decisions" prompt section (PR 6): newest first, at most 20 items and ~2k estimated tokens. */
+export const GROUP_PROMPT_DECISIONS_MAX_ITEMS = 20;
+export const GROUP_PROMPT_DECISIONS_MAX_TOKENS = 2_000;
 
 export const GROUP_CHAIN_LIMITS = {
   /** Member turns per chain (every woken turn, and an unblocked member's result, is one hop). */
@@ -106,7 +111,8 @@ export type GroupRuntimeHost = {
 export type GroupTaskWake = {
   groupId: string;
   actorSessionId: string;
-  targetSessionId: string;
+  /** Mentioned and woken; absent for a status aimed at nobody ("Decision: …"), which never wakes. */
+  targetSessionId?: string;
   /** Task status text posted as the acting member, e.g. "Review requested: …". */
   body: string;
   /**
@@ -219,6 +225,42 @@ function authorLabel(message: GroupMessage, titles: Map<string, string>): string
 }
 
 /**
+ * The group's shared context for a wake prompt: `decisions` (newest first)
+ * until 20 items or ~2k estimated tokens, then "(N older decisions omitted)".
+ * Empty when the group has no decisions.
+ */
+export function composeGroupDecisionsSection(
+  decisions: readonly GroupDecision[],
+  titles: ReadonlyMap<string, string>,
+): string {
+  if (decisions.length === 0) return "";
+  const open = [
+    "<group_decisions>",
+    "Group decisions (newest first; the group agreed on these, keep to them):",
+  ].join("\n");
+  const close = "</group_decisions>";
+  const omittedLine = (count: number) => `(${count} older decisions omitted)`;
+  // Reserve room for the omitted line (its longest possible count) up front.
+  const reserve = estimateGroupTokens(`${omittedLine(decisions.length)}\n`);
+  let used = estimateGroupTokens(`${open}\n${close}`) + reserve;
+  const lines: string[] = [];
+  for (const decision of decisions) {
+    if (lines.length >= GROUP_PROMPT_DECISIONS_MAX_ITEMS) break;
+    const author = decision.authorSessionId
+      ? `@${titles.get(decision.authorSessionId) ?? decision.authorSessionId}`
+      : "user";
+    const line = `- ${escapeText(decision.text)} (${escapeText(author)})`;
+    const cost = estimateGroupTokens(`${line}\n`);
+    if (used + cost > GROUP_PROMPT_DECISIONS_MAX_TOKENS) break;
+    used += cost;
+    lines.push(line);
+  }
+  const omitted = decisions.length - lines.length;
+  if (omitted > 0) lines.push(omittedLine(omitted));
+  return [open, ...lines, close].join("\n");
+}
+
+/**
  * The prompt a woken member receives: who it is, the recent room history (newest
  * first until the per-wake budget is spent, shown oldest first) and the message
  * that woke it. Returns undefined when even the trigger does not fit the budget.
@@ -229,6 +271,8 @@ export function composeGroupWakePrompt(input: {
   sessionId: string;
   trigger: GroupMessage;
   history: readonly GroupMessage[];
+  /** The group's decisions, newest first ("Group decisions" section, see composeGroupDecisionsSection). */
+  decisions?: readonly GroupDecision[];
   maxContextTokens: number;
 }): string | undefined {
   const titles = new Map(input.members.map((member) => [member.sessionId, member.title]));
@@ -248,7 +292,10 @@ export function composeGroupWakePrompt(input: {
   ].join("\n");
   const triggerBlock = `<group_message from="${escapeText(authorLabel(input.trigger, titles))}">\n${escapeText(input.trigger.body)}\n</group_message>`;
   const footer = "</group_room>";
-  let used = estimateGroupTokens(`${header}\n${triggerBlock}\n${footer}`);
+  const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
+  let used = estimateGroupTokens(
+    `${header}\n${decisions ? `${decisions}\n` : ""}${triggerBlock}\n${footer}`,
+  );
   if (used > input.maxContextTokens) return undefined;
   const lines: string[] = [];
   for (let index = input.history.length - 1; index >= 0; index -= 1) {
@@ -262,7 +309,7 @@ export function composeGroupWakePrompt(input: {
   }
   const history =
     lines.length > 0 ? `<recent_messages>\n${lines.join("\n")}\n</recent_messages>` : "";
-  return [header, history, triggerBlock, footer].filter(Boolean).join("\n");
+  return [header, decisions, history, triggerBlock, footer].filter(Boolean).join("\n");
 }
 
 export class GroupRuntime {
@@ -431,7 +478,7 @@ export class GroupRuntime {
         authorSessionId: input.actorSessionId,
         kind: "status",
         body: input.body,
-        mentions: [input.targetSessionId],
+        mentions: input.targetSessionId ? [input.targetSessionId] : [],
         ...(joined ? { chainId: joined.chainId } : { startsChain: true }),
       });
     } catch (error) {
@@ -439,7 +486,7 @@ export class GroupRuntime {
       return undefined;
     }
     this.emitMessage(message);
-    if (input.wake === false) return message;
+    if (input.wake === false || !input.targetSessionId) return message;
     const chain = joined ?? this.openChain(input.groupId, message.id);
     this.route(chain, message, [input.targetSessionId]);
     this.retireIdleChains();
@@ -675,6 +722,8 @@ export class GroupRuntime {
       before: { createdAt: message.createdAt, id: message.id },
       limit: 100,
     });
+    // Shared context (PR 6): part of every member's prompt, so of the chain budget too.
+    const decisions = listGroupDecisions(group.id);
     for (const sessionId of targets) {
       if (chain.agentMessages >= this.limits.maxAgentMessages) {
         this.endChain(chain, "max-agent-messages");
@@ -694,6 +743,7 @@ export class GroupRuntime {
         sessionId,
         trigger: message,
         history,
+        decisions,
         maxContextTokens: this.limits.maxEstimatedContextTokensPerWake,
       });
       if (prompt === undefined) {
