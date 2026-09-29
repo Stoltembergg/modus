@@ -1,4 +1,10 @@
-/** Gap 4 contracts split part 3/7 — do not edit by hand */
+import type { AdaptiveDecision, AdaptiveFailureAttempt, CompactionReason, ContextUsageInfo, HarnessQAResult, HarnessRouteEvent, HarnessTaskState, PromptDelivery, PromptImageAttachment } from "./contracts-part-01";
+import type { AgentResponseModel, AgentRunTokenUsage, CheckpointInfo, CodeGraphDiscoveryHit, PermissionRequest, QuestionAnswer, QuestionRequest, SessionRunStatus, SubagentActivity, SubagentStatus, TodoItem } from "./contracts-part-02";
+import type { ContextItem, PermissionDecision } from "./contracts-part-04";
+import type { MessageContextChip } from "./contracts-part-05";
+import type { AgentReviewResult, PlanRef } from "./contracts-part-06";
+import type { SkillSelection } from "./contracts-part-07";
+
 export type AgentEvent =
   | HarnessRouteEvent
   | { type: "harness.task_state"; sessionId: string; runId: string; state: HarnessTaskState }
