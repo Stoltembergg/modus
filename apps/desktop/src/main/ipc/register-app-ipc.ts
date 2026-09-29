@@ -137,6 +137,16 @@ import {
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
 import {
+  addAgentGroupMember,
+  createAgentGroupWithMembers,
+  deleteAgentGroup,
+  listAgentGroupsWithMembers,
+  removeAgentGroupMember,
+  renameAgentGroup,
+  setAgentGroupLead,
+  updateAgentGroupMembers,
+} from "../groups/group-store";
+import {
   ensurePersonalizationFile,
   getPersonalization,
   savePersonalization,
@@ -207,6 +217,7 @@ import {
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { IPC_CHANNELS } from "./channels";
+import { registerGroupIpcHandlers } from "./group-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
@@ -1774,6 +1785,17 @@ export function registerAppIpc({
   });
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
+
+  registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
+    listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
+    createAgentGroupWithMembers,
+    renameAgentGroup,
+    deleteAgentGroup,
+    addAgentGroupMember,
+    removeAgentGroupMember,
+    setAgentGroupLead,
+    updateAgentGroupMembers,
+  });
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {
     getProjectMemorySnapshot,

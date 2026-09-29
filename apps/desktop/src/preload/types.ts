@@ -1,6 +1,7 @@
 import type {
   AddDocInput,
   AgentEvent,
+  AgentGroupWithMembers,
   AgentMode,
   AgentReviewDepth,
   AgentReviewResult,
@@ -18,6 +19,7 @@ import type {
   ContextItem,
   ContextKind,
   ContextSuggestion,
+  CreateAgentGroupInput,
   CustomProviderConfig,
   DiffFilePatch,
   DiffReview,
@@ -76,6 +78,7 @@ import type {
   TestCustomProviderInput,
   TestCustomProviderResult,
   ThinkingLevel,
+  UpdateAgentGroupMembersInput,
   UpdateModelConfigInput,
   UpdateRestoreUiState,
   UpdateState,
@@ -141,6 +144,33 @@ export type ModusApi = {
     remove(id: string): Promise<WorkspaceInfo[]>;
     /** Reveal a project's root folder in the OS file manager. */
     reveal(id: string): Promise<void>;
+  };
+  group: {
+    /** Every Agent Group with its members (sidebar Groups section). */
+    list(): Promise<AgentGroupWithMembers[]>;
+    /**
+     * Create a group with its (existing) member sessions and lead in one
+     * all-or-nothing step; rejects if any member is refused.
+     */
+    create(input: CreateAgentGroupInput): Promise<AgentGroupWithMembers>;
+    /** Rename a group; returns the refreshed group list. */
+    rename(input: { id: string; name: string }): Promise<AgentGroupWithMembers[]>;
+    /** Delete a group (its member chats are kept); returns the refreshed group list. */
+    remove(id: string): Promise<AgentGroupWithMembers[]>;
+    addMember(input: {
+      groupId: string;
+      sessionId: string;
+      role?: string;
+    }): Promise<AgentGroupWithMembers[]>;
+    /** Remove a member (the chat is kept); returns the refreshed group list. */
+    removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
+    /** Set or clear (null) the lead; the lead must be a member. */
+    setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
+    /**
+     * Replace the members and lead in one all-or-nothing step (rejects, writing
+     * nothing, if any added member is refused); returns the refreshed list.
+     */
+    updateMembers(input: UpdateAgentGroupMembersInput): Promise<AgentGroupWithMembers[]>;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

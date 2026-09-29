@@ -23,6 +23,7 @@ const {
   addGroupDecision,
   appendGroupMessage,
   createAgentGroup,
+  createAgentGroupWithMembers,
   createGroupTask,
   deleteAgentGroup,
   getAgentGroup,
@@ -31,6 +32,7 @@ const {
   listAgentGroupMembers,
   listAgentGroupMemberSessionIds,
   listAgentGroups,
+  listAgentGroupsWithMembers,
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
@@ -38,6 +40,7 @@ const {
   setAgentGroupLead,
   setAgentGroupMode,
   supersedeGroupDecision,
+  updateAgentGroupMembers,
   updateGroupTask,
 } = await import("./group-store");
 
@@ -823,5 +826,254 @@ describe("deletion semantics", () => {
       appendGroupMessage({ groupId: group.id, authorKind: "agent", authorSessionId: b, body: "ok" })
         .authorSessionId,
     ).toBe(b);
+  });
+});
+
+describe("createAgentGroupWithMembers (all or nothing)", () => {
+  function groupRowCount(): number {
+    return Number(
+      (getDatabase().prepare("select count(*) as n from agent_groups").get() as { n: number }).n,
+    );
+  }
+  function memberRowCount(): number {
+    return Number(
+      (
+        getDatabase().prepare("select count(*) as n from agent_group_members").get() as {
+          n: number;
+        }
+      ).n,
+    );
+  }
+
+  it("creates the group, its members and its lead in one step", () => {
+    const workspaceId = insertWorkspace();
+    const a = insertSession(workspaceId);
+    const b = insertSession(workspaceId);
+
+    const created = createAgentGroupWithMembers({
+      name: "  Crew ",
+      workspaceId,
+      members: [{ sessionId: a, role: "implement" }, { sessionId: b }],
+      leadSessionId: b,
+    });
+
+    expect(created).toMatchObject({ name: "Crew", workspaceId, mode: "free", leadSessionId: b });
+    expect(created.members).toEqual([
+      expect.objectContaining({ sessionId: a, role: "implement" }),
+      expect.objectContaining({ sessionId: b }),
+    ]);
+    expect(listAgentGroupsWithMembers({ workspaceId })).toEqual([created]);
+  });
+
+  it("writes nothing when the second member is already in a group", () => {
+    const workspaceId = insertWorkspace();
+    const a = insertSession(workspaceId);
+    const taken = insertSession(workspaceId);
+    createAgentGroupWithMembers({ name: "Existing", workspaceId, members: [{ sessionId: taken }] });
+    const groupsBefore = groupRowCount();
+    const membersBefore = memberRowCount();
+
+    expectStoreError(
+      () =>
+        createAgentGroupWithMembers({
+          id: "group-rolled-back",
+          name: "Doomed",
+          workspaceId,
+          members: [{ sessionId: a }, { sessionId: taken }],
+          leadSessionId: a,
+        }),
+      "already-in-group",
+    );
+
+    expect(groupRowCount()).toBe(groupsBefore);
+    expect(memberRowCount()).toBe(membersBefore);
+    expect(getAgentGroup("group-rolled-back")).toBeUndefined();
+    expect(getAgentGroupForSession(a)).toBeUndefined();
+    expect(countRows("agent_groups", "lead_session_id", a)).toBe(0);
+  });
+
+  it("writes nothing when the second member is from another workspace", () => {
+    const workspaceId = insertWorkspace();
+    const a = insertSession(workspaceId);
+    const foreign = insertSession(insertWorkspace());
+    const groupsBefore = groupRowCount();
+    const membersBefore = memberRowCount();
+
+    expectStoreError(
+      () =>
+        createAgentGroupWithMembers({
+          name: "Mismatch",
+          workspaceId,
+          members: [{ sessionId: a }, { sessionId: foreign }],
+          leadSessionId: a,
+        }),
+      "workspace-mismatch",
+    );
+
+    expect(groupRowCount()).toBe(groupsBefore);
+    expect(memberRowCount()).toBe(membersBefore);
+    expect(getAgentGroupForSession(a)).toBeUndefined();
+  });
+
+  it("rejects a lead outside the members and duplicate members before writing", () => {
+    const workspaceId = insertWorkspace();
+    const a = insertSession(workspaceId);
+    const b = insertSession(workspaceId);
+    const groupsBefore = groupRowCount();
+
+    expectStoreError(
+      () =>
+        createAgentGroupWithMembers({
+          name: "Bad lead",
+          workspaceId,
+          members: [{ sessionId: a }],
+          leadSessionId: b,
+        }),
+      "not-a-member",
+    );
+    expectStoreError(
+      () =>
+        createAgentGroupWithMembers({
+          name: "Dupes",
+          workspaceId,
+          members: [{ sessionId: a }, { sessionId: a }],
+        }),
+      "invalid-value",
+    );
+    expectStoreError(
+      () =>
+        createAgentGroupWithMembers({
+          name: "Ghost project",
+          workspaceId: "missing-workspace",
+          members: [],
+        }),
+      "workspace-not-found",
+    );
+    expect(groupRowCount()).toBe(groupsBefore);
+  });
+
+  it("groups without a Project take chats from the Chats inbox", () => {
+    const inbox = insertSession(CHATS_WORKSPACE_ID);
+    const created = createAgentGroupWithMembers({
+      name: "Inbox crew",
+      members: [{ sessionId: inbox }],
+      leadSessionId: inbox,
+    });
+    expect(created.workspaceId).toBeUndefined();
+    expect(created.leadSessionId).toBe(inbox);
+    expect(listAgentGroupsWithMembers({ workspaceId: null }).map((g) => g.id)).toContain(
+      created.id,
+    );
+  });
+});
+
+describe("updateAgentGroupMembers (all or nothing)", () => {
+  it("adds, removes and changes the lead in one step; zero members is allowed", () => {
+    const { workspaceId, a, b, group } = projectGroupFixture();
+    const c = insertSession(workspaceId);
+    setAgentGroupLead(group.id, a);
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "T",
+      status: "in_progress",
+      ownerSessionId: a,
+    });
+
+    const updated = updateAgentGroupMembers(group.id, {
+      members: [{ sessionId: b }, { sessionId: c, role: "verify" }],
+      leadSessionId: c,
+    });
+
+    expect(updated.leadSessionId).toBe(c);
+    expect(updated.members.map((m) => [m.sessionId, m.role])).toEqual([
+      [b, "review"],
+      [c, "verify"],
+    ]);
+    // The removed member went through the removeAgentGroupMember path.
+    const [storedTask] = listGroupTasks(group.id);
+    expect(storedTask?.id).toBe(task.id);
+    expect(storedTask?.status).toBe("open");
+    expect(storedTask?.ownerSessionId).toBeUndefined();
+
+    const emptied = updateAgentGroupMembers(group.id, { members: [], leadSessionId: null });
+    expect(emptied.members).toEqual([]);
+    expect(emptied.leadSessionId).toBeUndefined();
+  });
+
+  it("writes nothing when an added member is refused", () => {
+    const { workspaceId, a, b, group } = projectGroupFixture();
+    setAgentGroupLead(group.id, a);
+    const task = createGroupTask({ groupId: group.id, title: "T", ownerSessionId: a });
+    const archived = insertSession(workspaceId);
+    getDatabase()
+      .prepare("update agent_sessions set archived_at = ? where id = ?")
+      .run(new Date().toISOString(), archived);
+    const before = { group: getAgentGroup(group.id), members: listAgentGroupMembers(group.id) };
+
+    // Would remove `a` and add an archived session: the refusal must undo the removal too.
+    expectStoreError(
+      () =>
+        updateAgentGroupMembers(group.id, {
+          members: [{ sessionId: b }, { sessionId: archived }],
+          leadSessionId: b,
+        }),
+      "archived-session",
+    );
+
+    expect(getAgentGroup(group.id)).toEqual(before.group);
+    expect(listAgentGroupMembers(group.id)).toEqual(before.members);
+    expect(listGroupTasks(group.id)).toEqual([task]);
+  });
+
+  it("rejects a lead outside the target members before writing", () => {
+    const { a, b, group } = projectGroupFixture();
+    expectStoreError(
+      () => updateAgentGroupMembers(group.id, { members: [{ sessionId: a }], leadSessionId: b }),
+      "not-a-member",
+    );
+    expect(listAgentGroupMembers(group.id).map((m) => m.sessionId)).toEqual([a, b]);
+  });
+});
+
+describe("archiving a member", () => {
+  it("removes it from its group: lead cleared, open task released owner-first", () => {
+    const { a, b, group } = projectGroupFixture();
+    setAgentGroupLead(group.id, a);
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Owned",
+      status: "in_progress",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+    });
+
+    setAgentSessionArchived(a, true);
+
+    expect(getAgentGroupForSession(a)).toBeUndefined();
+    expect(listAgentGroupMembers(group.id).map((m) => m.sessionId)).toEqual([b]);
+    expect(getAgentGroup(group.id)?.leadSessionId).toBeUndefined();
+    const [stored] = listGroupTasks(group.id);
+    expect(stored?.id).toBe(task.id);
+    expect(stored?.status).toBe("open");
+    expect(stored?.ownerSessionId).toBeUndefined();
+    expect(stored?.reviewerSessionId).toBe(b);
+
+    // Restoring does not re-add it.
+    setAgentSessionArchived(a, false);
+    expect(getAgentGroupForSession(a)).toBeUndefined();
+  });
+
+  it("joins a caller's transaction instead of nesting one", () => {
+    const { a, group } = projectGroupFixture();
+    const db = getDatabase();
+    db.exec("begin");
+    try {
+      setAgentSessionArchived(a, true);
+    } finally {
+      db.exec("rollback");
+    }
+    // Rolled back together with the caller's transaction.
+    expect(getAgentSession(a)?.archivedAt).toBeUndefined();
+    expect(getAgentGroupForSession(a)?.id).toBe(group.id);
   });
 });

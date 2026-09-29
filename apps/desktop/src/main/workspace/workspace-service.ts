@@ -42,22 +42,23 @@ export function renameProject(id: string, displayName: string): WorkspaceInfo[] 
   return listProjectWorkspaces();
 }
 
-/** Soft-archive all of a project's visible chats. Returns count archived. */
+/** Soft-archive a project's visible chats (group members excluded). Returns count archived. */
 export async function archiveProjectChats(id: string): Promise<number> {
   return archiveWorkspaceSessions(id);
 }
 
-/** Permanently delete all chats in a project. Returns count deleted. */
+/** Permanently delete a project's chats (group members excluded). Returns count deleted. */
 export async function deleteProjectChats(id: string): Promise<number> {
   return deleteWorkspaceSessions(id);
 }
 
 /**
- * Remove a project from Modus: tear down its sessions first (no orphaned
+ * Remove a project from Modus: tear down all of its sessions first (no orphaned
  * runtimes/checkpoints), then drop the workspace row. Files on disk are kept.
  */
 export async function removeProject(id: string): Promise<WorkspaceInfo[]> {
-  await deleteWorkspaceSessions(id);
+  // Everything goes, group members included; the groups cascade with the workspace row.
+  await deleteWorkspaceSessions(id, { includeGroupMembers: true });
   removeWorkspace(id);
   return listProjectWorkspaces();
 }

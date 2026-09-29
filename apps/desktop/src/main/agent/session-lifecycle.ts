@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { app } from "electron";
+import { listAgentGroupMemberSessionIds } from "../groups/group-store";
 import { denyPendingQuestionRequestsForSession } from "../interaction/question-broker";
 import { finalizeProjectMemoryRun } from "../memory/project-memory-service";
 import { denyPendingPermissionRequestsForSession } from "../permissions/permission-broker";
@@ -74,10 +75,16 @@ export async function setAgentSessionArchivedTree(
   setAgentSessionArchived(sessionId, archived);
 }
 
-/** Soft-archive visible root sessions in a workspace. Returns the count changed. */
+/**
+ * Soft-archive visible root sessions in a workspace, except group members
+ * (they live under their group, not in the Project list). Returns the count
+ * changed, which matches what the Projects section shows.
+ */
 export async function archiveWorkspaceSessions(workspaceId: string): Promise<number> {
+  const members = new Set(listAgentGroupMemberSessionIds());
   const sessions = listAgentSessions().filter(
-    (session) => session.workspaceId === workspaceId && !session.parentSessionId,
+    (session) =>
+      session.workspaceId === workspaceId && !session.parentSessionId && !members.has(session.id),
   );
   for (const session of sessions) {
     await setAgentSessionArchivedTree(session.id, true);
@@ -85,10 +92,21 @@ export async function archiveWorkspaceSessions(workspaceId: string): Promise<num
   return sessions.length;
 }
 
-/** Permanently delete every session belonging to a workspace. Returns the count removed. */
-export async function deleteWorkspaceSessions(workspaceId: string): Promise<number> {
+/**
+ * Permanently delete a workspace's root sessions (live and archived). Group
+ * members are skipped unless `includeGroupMembers` is set, which only
+ * "Remove project" does (it takes everything). Returns the count removed.
+ */
+export async function deleteWorkspaceSessions(
+  workspaceId: string,
+  options: { includeGroupMembers?: boolean } = {},
+): Promise<number> {
+  const members = options.includeGroupMembers
+    ? new Set<string>()
+    : new Set(listAgentGroupMemberSessionIds());
   const sessions = [...listAgentSessions(), ...listArchivedAgentSessions(workspaceId)].filter(
-    (session) => session.workspaceId === workspaceId && !session.parentSessionId,
+    (session) =>
+      session.workspaceId === workspaceId && !session.parentSessionId && !members.has(session.id),
   );
   for (const session of sessions) {
     await deleteAgentSessionTree(session.id);

@@ -30,11 +30,13 @@ import {
 import type { SecurityState } from "../../../preload/types";
 import type {
   AgentEvent,
+  AgentGroupWithMembers,
   AgentMode,
   AgentSessionInfo,
   BrowserEvent,
   ContextItem,
   ContextUsageInfo,
+  CreateAgentGroupInput,
   FileDiff,
   ModelInfo,
   ModelSettingsState,
@@ -74,6 +76,8 @@ import {
 } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
+import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+import { describeGroupError } from "../features/groups/groupErrors";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
 import {
@@ -126,6 +130,7 @@ export function App() {
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [synchronizedWorkspaceId, setSynchronizedWorkspaceId] = useState<string | undefined>();
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
+  const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -249,11 +254,26 @@ export function App() {
     });
   }, []);
 
+  const refreshGroups = useCallback(async (): Promise<void> => {
+    try {
+      setAgentGroups(await window.modus.group.list());
+    } catch (error) {
+      console.warn("[groups] failed to load agent groups", error);
+    }
+  }, []);
+
   const refreshSessions = useCallback(async (): Promise<void> => {
+    // Groups ride along: deleting chats/projects cascades to memberships.
+    const groupsRefresh = refreshGroups();
     setAgentSessions(
       await window.modus.agent.list({ includeSessionId: activeSessionIdRef.current }),
     );
-  }, []);
+    await groupsRefresh;
+  }, [refreshGroups]);
+
+  useEffect(() => {
+    if (window.modus) void refreshGroups();
+  }, [refreshGroups]);
 
   function publishLocalAgentEvent(event: AgentEvent): void {
     hubRef.current.publish({
@@ -769,6 +789,28 @@ export function App() {
     await refreshSessions();
   }
 
+  /* ── Agent Groups — sidebar Groups section ─────────────────────────────── */
+
+  async function createGroup(input: CreateAgentGroupInput): Promise<void> {
+    // Errors propagate so the dialog can show them and stay open.
+    await window.modus.group.create(input);
+    await refreshGroups();
+  }
+
+  async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
+    // Errors propagate so the "Manage members" dialog can show them and stay open.
+    setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
+  }
+
+  async function runGroupAction(action: () => Promise<AgentGroupWithMembers[]>): Promise<void> {
+    try {
+      setAgentGroups(await action());
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+      await refreshGroups();
+    }
+  }
+
   async function revealProject(id: string): Promise<void> {
     await window.modus.workspace.reveal(id).catch(() => {});
   }
@@ -1076,6 +1118,28 @@ export function App() {
                         open={responsiveSidebarOpen}
                         width={sidebarWidth}
                         workspaces={workspaces}
+                        groups={agentGroups}
+                        activeWorkspaceId={
+                          activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
+                        }
+                        onCreateGroup={createGroup}
+                        onUpdateGroupMembers={updateGroupMembers}
+                        onRenameGroup={(id, name) =>
+                          void runGroupAction(() => window.modus.group.rename({ id, name }))
+                        }
+                        onDeleteGroup={(id) =>
+                          void runGroupAction(() => window.modus.group.remove(id))
+                        }
+                        onRemoveGroupMember={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.removeMember({ groupId, sessionId }),
+                          )
+                        }
+                        onSetGroupLead={(groupId, sessionId) =>
+                          void runGroupAction(() =>
+                            window.modus.group.setLead({ groupId, sessionId }),
+                          )
+                        }
                       />
 
                       <m.main

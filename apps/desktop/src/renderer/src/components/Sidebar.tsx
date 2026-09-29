@@ -27,14 +27,26 @@ import {
   useRef,
   useState,
 } from "react";
-import type { AgentSessionInfo, WorkspaceInfo } from "../../../shared/contracts";
+import type {
+  AgentGroupWithMembers,
+  AgentSessionInfo,
+  CreateAgentGroupInput,
+  WorkspaceInfo,
+} from "../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
+import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+import {
+  countProjectGroups,
+  groupMemberSessionIds,
+  removeProjectGroupsWarning,
+} from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
+import { SidebarGroups } from "./SidebarGroups";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
 import { ScrollReveal } from "./ui/ScrollReveal";
 
@@ -92,7 +104,22 @@ type SidebarProps = {
   onOpenLimits(): void;
   onWidthChange(width: number): void;
   canCreateSession: boolean;
+  /** Agent Groups (with members). Member chats show only under their group. */
+  groups?: readonly AgentGroupWithMembers[];
+  /** Project preselected in the create-group dialog (usually the active one). */
+  activeWorkspaceId?: string | null;
+  /** Group-row activity dot selector; defaults to an always-false stub until PR 3. */
+  isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
+  onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
+  onRenameGroup?(groupId: string, name: string): void;
+  /** "Manage members" (atomic); rejects so the dialog can show the error. */
+  onUpdateGroupMembers?(groupId: string, change: GroupMembersChange): Promise<void>;
+  onDeleteGroup?(groupId: string): void;
+  onRemoveGroupMember?(groupId: string, sessionId: string): void;
+  onSetGroupLead?(groupId: string, sessionId: string | null): void;
 };
+
+const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
 
 export function Sidebar({
   workspaces,
@@ -122,37 +149,56 @@ export function Sidebar({
   onWidthChange,
   canCreateSession,
   onRenameSession,
+  groups = NO_GROUPS,
+  activeWorkspaceId = null,
+  isGroupWorking,
+  onCreateGroup,
+  onRenameGroup,
+  onUpdateGroupMembers,
+  onDeleteGroup,
+  onRemoveGroupMember,
+  onSetGroupLead,
 }: SidebarProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
+  const [groupsExpanded, setGroupsExpanded] = useState(true);
   const projectIds = useMemo(
     () => new Set(workspaces.map((workspace) => workspace.id)),
     [workspaces],
   );
-  const sessionsByWorkspace = groupSessionsByWorkspace(agentSessions);
+  // Group members are listed only under their group (Groups section).
+  const memberSessionIds = useMemo(() => groupMemberSessionIds(groups), [groups]);
+  const ungroupedSessions = useMemo(
+    () =>
+      memberSessionIds.size === 0
+        ? agentSessions
+        : agentSessions.filter((session) => !memberSessionIds.has(session.id)),
+    [agentSessions, memberSessionIds],
+  );
+  const sessionsByWorkspace = groupSessionsByWorkspace(ungroupedSessions);
   // Split inbox: pinned first, then unpinned
   const pinnedSessions = useMemo(
     () =>
-      agentSessions.filter(
+      ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
           session.pinnedAt &&
           (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
       ),
-    [agentSessions, projectIds],
+    [ungroupedSessions, projectIds],
   );
   const inboxSessions = useMemo(
     () =>
-      agentSessions.filter(
+      ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
           !session.pinnedAt &&
           (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
       ),
-    [agentSessions, projectIds],
+    [ungroupedSessions, projectIds],
   );
   const { ref: scrollFadeRef, fadeTop, fadeBottom } = useScrollFade();
   const scrollContainerRef = scrollFadeRef as RefObject<HTMLElement | null>;
@@ -262,42 +308,75 @@ export function Sidebar({
               </SectionHeader>
 
               <CollapsibleMotion open={pinnedExpanded} preset="default">
-                <AnimatePresence initial={false}>
-                  {pinnedSessions.map((session) => (
-                    <ScrollReveal
-                      key={session.id}
-                      offsetY={8}
-                      scrollContainerRef={scrollContainerRef}
-                      blurStrength={3}
-                    >
-                      <SessionRow
-                        activity={activityBySession[session.id]}
-                        isActive={activeSessionId === session.id}
-                        pinned={true}
-                        onSelect={() => onSelectSession(session)}
-                        onPin={(event) => {
-                          event.stopPropagation();
-                          onPinSession(session, false);
-                        }}
-                        onRename={(title) => onRenameSession?.(session.id, title)}
-                        onArchive={(event) => {
-                          event.stopPropagation();
-                          onArchiveSession(session);
-                        }}
-                        onDelete={(event) => {
-                          event.stopPropagation();
-                          onDeleteSession(session);
-                        }}
-                        title={session.title}
-                        updatedAt={session.updatedAt}
-                      />
-                    </ScrollReveal>
-                  ))}
-                </AnimatePresence>
+                <div data-testid="sidebar-pinned">
+                  <AnimatePresence initial={false}>
+                    {pinnedSessions.map((session) => (
+                      <ScrollReveal
+                        key={session.id}
+                        offsetY={8}
+                        scrollContainerRef={scrollContainerRef}
+                        blurStrength={3}
+                      >
+                        <SessionRow
+                          activity={activityBySession[session.id]}
+                          isActive={activeSessionId === session.id}
+                          pinned={true}
+                          onSelect={() => onSelectSession(session)}
+                          onPin={(event) => {
+                            event.stopPropagation();
+                            onPinSession(session, false);
+                          }}
+                          onRename={(title) => onRenameSession?.(session.id, title)}
+                          onArchive={(event) => {
+                            event.stopPropagation();
+                            onArchiveSession(session);
+                          }}
+                          onDelete={(event) => {
+                            event.stopPropagation();
+                            onDeleteSession(session);
+                          }}
+                          title={session.title}
+                          updatedAt={session.updatedAt}
+                        />
+                      </ScrollReveal>
+                    ))}
+                  </AnimatePresence>
+                </div>
               </CollapsibleMotion>
               <div className="mt-1" />
             </>
           )}
+
+          {onCreateGroup ? (
+            <>
+              <SectionHeader
+                expanded={groupsExpanded}
+                onToggle={() => setGroupsExpanded((expanded) => !expanded)}
+              >
+                Groups
+              </SectionHeader>
+              <CollapsibleMotion open={groupsExpanded} preset="default">
+                <SidebarGroups
+                  activeSessionId={activeSessionId}
+                  activityBySession={activityBySession}
+                  defaultWorkspaceId={activeWorkspaceId}
+                  groups={groups}
+                  onCreateGroup={onCreateGroup}
+                  onDeleteGroup={(id) => onDeleteGroup?.(id)}
+                  onRemoveMember={(groupId, sessionId) => onRemoveGroupMember?.(groupId, sessionId)}
+                  onRenameGroup={(id, name) => onRenameGroup?.(id, name)}
+                  onSelectSession={onSelectSession}
+                  onSetLead={(groupId, sessionId) => onSetGroupLead?.(groupId, sessionId)}
+                  onUpdateMembers={async (groupId, change) => {
+                    await onUpdateGroupMembers?.(groupId, change);
+                  }}
+                  sessions={agentSessions}
+                  workspaces={workspaces}
+                  {...(isGroupWorking ? { isGroupWorking } : {})}
+                />
+              </CollapsibleMotion>
+            </>
+          ) : null}
 
           <SectionHeader
             expanded={projectsExpanded}
@@ -357,6 +436,7 @@ export function Sidebar({
                       onArchiveChats={() => onArchiveProjectChats(workspace.id)}
                       onDeleteChats={() => onDeleteProjectChats(workspace.id)}
                       onRemove={() => onRemoveProject(workspace.id)}
+                      groupCount={countProjectGroups(groups, workspace.id)}
                       scrollContainerRef={scrollContainerRef}
                     />
                   </m.div>
@@ -467,6 +547,7 @@ function WorkspaceItem({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   scrollContainerRef,
 }: {
   workspace: WorkspaceInfo;
@@ -490,6 +571,8 @@ function WorkspaceItem({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  /** Groups this Project owns; "Remove" confirms first when there are any. */
+  groupCount: number;
   scrollContainerRef: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -542,6 +625,7 @@ function WorkspaceItem({
         onArchiveChats={onArchiveChats}
         onDeleteChats={onDeleteChats}
         onRemove={onRemove}
+        groupCount={groupCount}
         title={workspace.rootPath}
       >
         {workspace.displayName}
@@ -823,6 +907,7 @@ function ProjectRow({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   title,
 }: {
   children: ReactNode;
@@ -840,6 +925,7 @@ function ProjectRow({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  groupCount: number;
   title?: string;
 }) {
   const FolderIcon = expanded ? IconFolderOpen : IconFolder;
@@ -858,6 +944,7 @@ function ProjectRow({
 
   return (
     <ProjectActions
+      groupCount={groupCount}
       onArchiveChats={onArchiveChats}
       onDeleteChats={onDeleteChats}
       onPin={onPin}
@@ -1037,6 +1124,7 @@ function ProjectActions({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   children,
 }: {
   pinned: boolean;
@@ -1047,10 +1135,13 @@ function ProjectActions({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  /** Groups the Project owns: with any, "Remove" asks for a second click first. */
+  groupCount: number;
   children(open: boolean, trigger: ReactNode): ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmDeleteChats, setConfirmDeleteChats] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const trigger = (
     <Menu.Trigger
       aria-label="Project actions"
@@ -1066,6 +1157,7 @@ function ProjectActions({
         setOpen(nextOpen);
         if (!nextOpen) {
           setConfirmDeleteChats(false);
+          setConfirmRemove(false);
         }
       }}
       open={open}
@@ -1126,11 +1218,20 @@ function ProjectActions({
               {confirmDeleteChats ? "Confirm delete chats" : "Delete chats"}
             </ProjectMenuItem>
             <ProjectMenuItem
+              closeOnClick={groupCount === 0 || confirmRemove}
               danger
               icon={<IconX size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
-              onClick={onRemove}
+              onClick={() => {
+                // No groups: unchanged, removes right away. With groups: warn first.
+                if (groupCount > 0 && !confirmRemove) {
+                  setConfirmRemove(true);
+                  return;
+                }
+                setConfirmRemove(false);
+                onRemove();
+              }}
             >
-              Remove
+              {confirmRemove ? removeProjectGroupsWarning(groupCount) : "Remove"}
             </ProjectMenuItem>
           </Menu.Popup>
         </Menu.Positioner>
@@ -1144,11 +1245,13 @@ function ProjectMenuItem({
   children,
   onClick,
   danger = false,
+  closeOnClick = true,
 }: {
   icon: ReactNode;
   children: ReactNode;
   onClick(): void;
   danger?: boolean;
+  closeOnClick?: boolean;
 }) {
   return (
     <Menu.Item
@@ -1156,6 +1259,7 @@ function ProjectMenuItem({
         "flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm outline-none select-none data-highlighted:bg-hover",
         danger ? "text-danger" : "text-fg",
       )}
+      closeOnClick={closeOnClick}
       onClick={onClick}
     >
       <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>

@@ -890,3 +890,66 @@ export function parseIpcInput<T>(schema: z.ZodType<T>, value: unknown, channel: 
   }
   return result.data;
 }
+
+/* ── Agent Groups (group:*) ─────────────────────────────────────────────── */
+
+const groupIdString = nonEmptyString.max(128);
+const groupSessionIdString = nonEmptyString.max(128);
+const groupNameString = z.string().trim().min(1).max(120);
+export const MAX_GROUP_MEMBERS = 32;
+
+export const groupCreateSchema = z
+  .object({
+    name: groupNameString,
+    workspaceId: groupIdString.nullable().optional(),
+    mode: z.enum(["free", "coordinator"]).optional(),
+    members: z
+      .array(
+        z
+          .object({
+            sessionId: groupSessionIdString,
+            role: z.string().trim().max(40).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_GROUP_MEMBERS),
+    leadSessionId: groupSessionIdString.nullable().optional(),
+  })
+  .strict();
+
+export const groupRenameSchema = z.object({ id: groupIdString, name: groupNameString }).strict();
+
+export const groupIdInputSchema = z.object({ id: groupIdString }).strict();
+
+export const groupMemberSchema = z
+  .object({
+    groupId: groupIdString,
+    sessionId: groupSessionIdString,
+    role: z.string().trim().max(40).optional(),
+  })
+  .strict();
+
+export const groupRemoveMemberSchema = z
+  .object({ groupId: groupIdString, sessionId: groupSessionIdString })
+  .strict();
+
+export const groupUpdateMembersSchema = z
+  .object({
+    groupId: groupIdString,
+    members: z
+      .array(
+        z
+          .object({
+            sessionId: groupSessionIdString,
+            role: z.string().trim().max(40).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_GROUP_MEMBERS),
+    leadSessionId: groupSessionIdString.nullable(),
+  })
+  .strict();
+
+export const groupSetLeadSchema = z
+  .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
+  .strict();

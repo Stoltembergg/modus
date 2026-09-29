@@ -4,6 +4,7 @@ import type {
   AgentGroupInfo,
   AgentGroupMember,
   AgentGroupMode,
+  AgentGroupWithMembers,
   GroupDecision,
   GroupMessage,
   GroupMessageAuthorKind,
@@ -13,6 +14,7 @@ import type {
   GroupTaskStatus,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import type { GroupErrorCode } from "../../shared/group-errors";
 import { getDatabase } from "../db/database";
 
 /*
@@ -22,18 +24,8 @@ import { getDatabase } from "../db/database";
  * are enforced here and surfaced as a typed `GroupStoreError`.
  */
 
-export type GroupStoreErrorCode =
-  | "group-not-found"
-  | "session-not-found"
-  | "message-not-found"
-  | "task-not-found"
-  | "decision-not-found"
-  | "workspace-mismatch"
-  | "already-in-group"
-  | "subagent-session"
-  | "archived-session"
-  | "not-a-member"
-  | "invalid-value";
+/** Error codes (shared with the renderer, which maps them to readable messages). */
+export type GroupStoreErrorCode = GroupErrorCode;
 
 export class GroupStoreError extends Error {
   readonly code: GroupStoreErrorCode;
@@ -284,26 +276,163 @@ function touchGroup(groupId: string): string {
 
 /* ── Groups ────────────────────────────────────────────────────────────── */
 
-export function createAgentGroup(input: {
+type NewGroupInput = {
   id?: string;
   name: string;
   /** Owning Project. Omit (or pass the Chats inbox id) for a group with no Project. */
   workspaceId?: string | null;
   mode?: AgentGroupMode;
-}): AgentGroupInfo {
+};
+
+/*
+ * Shared, NON-transactional helpers. They validate and write single rows so
+ * both the one-step functions (createAgentGroup, addAgentGroupMember) and the
+ * all-or-nothing createAgentGroupWithMembers use the exact same rules.
+ * `inTransaction` is not nestable, so these helpers never open one.
+ */
+
+/** Validates a new group's fields and inserts its row (lead unset). Returns the group id. */
+function insertGroupRow(input: NewGroupInput): { id: string; workspaceId: string | null } {
   const name = requireText(input.name, "name");
   const mode = requireOneOf(input.mode ?? "free", GROUP_MODES, "group mode");
   const workspaceId =
     input.workspaceId && input.workspaceId !== CHATS_WORKSPACE_ID ? input.workspaceId : null;
+  const db = getDatabase();
+  if (
+    workspaceId !== null &&
+    db.prepare("select 1 from workspaces where id = ?").get(workspaceId) === undefined
+  ) {
+    throw new GroupStoreError("workspace-not-found", `Workspace not found: ${workspaceId}`);
+  }
   const id = input.id ?? randomUUID();
   const now = new Date().toISOString();
-  getDatabase()
+  db.prepare(
+    `insert into agent_groups (id, name, workspace_id, mode, lead_session_id, created_at, updated_at)
+     values (?, ?, ?, ?, null, ?, ?)`,
+  ).run(id, name, workspaceId, mode, now, now);
+  return { id, workspaceId };
+}
+
+/**
+ * Throws unless the session may join a group owned by `groupWorkspaceId`
+ * (null = no Project): it must exist, be top-level, not archived, and live in
+ * the group's workspace (the Chats inbox for a group with no Project).
+ */
+function assertSessionCanJoin(
+  groupId: string,
+  groupWorkspaceId: string | null,
+  sessionId: string,
+): void {
+  const session = getDatabase()
     .prepare(
-      `insert into agent_groups (id, name, workspace_id, mode, lead_session_id, created_at, updated_at)
-       values (?, ?, ?, ?, null, ?, ?)`,
+      "select id, workspace_id, parent_session_id, archived_at from agent_sessions where id = ?",
     )
-    .run(id, name, workspaceId, mode, now, now);
-  return toGroup(requireGroupRow(id));
+    .get(sessionId) as
+    | {
+        id: string;
+        workspace_id: string;
+        parent_session_id: string | null;
+        archived_at: string | null;
+      }
+    | undefined;
+  if (!session) {
+    throw new GroupStoreError("session-not-found", `Agent session not found: ${sessionId}`);
+  }
+  if (session.parent_session_id !== null) {
+    throw new GroupStoreError(
+      "subagent-session",
+      `Session ${sessionId} is a subagent session; only top-level sessions can join a group.`,
+    );
+  }
+  if (session.archived_at !== null) {
+    throw new GroupStoreError(
+      "archived-session",
+      `Session ${sessionId} is archived; unarchive it before adding it to a group.`,
+    );
+  }
+  const expectedWorkspaceId = groupWorkspaceId ?? CHATS_WORKSPACE_ID;
+  if (session.workspace_id !== expectedWorkspaceId) {
+    throw new GroupStoreError(
+      "workspace-mismatch",
+      groupWorkspaceId === null
+        ? `Session ${sessionId} belongs to a Project; a group without a Project only accepts chats without a folder.`
+        : `Session ${sessionId} belongs to a different workspace than group ${groupId}.`,
+    );
+  }
+}
+
+/** Inserts a member row, mapping the unique-session constraint to `already-in-group`. */
+function insertMemberRow(groupId: string, sessionId: string, role?: string): AgentGroupMember {
+  const normalizedRole = role?.trim() ? role.trim() : null;
+  const joinedAt = new Date().toISOString();
+  try {
+    getDatabase()
+      .prepare(
+        `insert into agent_group_members (group_id, session_id, role, joined_at)
+         values (?, ?, ?, ?)`,
+      )
+      .run(groupId, sessionId, normalizedRole, joinedAt);
+  } catch (error) {
+    if (isUniqueMemberViolation(error)) {
+      throw new GroupStoreError(
+        "already-in-group",
+        `Session ${sessionId} is already a member of a group.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return {
+    groupId,
+    sessionId,
+    ...(normalizedRole !== null ? { role: normalizedRole } : {}),
+    joinedAt,
+  };
+}
+
+export function createAgentGroup(input: NewGroupInput): AgentGroupInfo {
+  return toGroup(requireGroupRow(insertGroupRow(input).id));
+}
+
+/**
+ * Creates a group, its members and (optionally) its lead in ONE transaction:
+ * all or nothing. Any refused member (wrong workspace, already in a group,
+ * subagent, archived, missing) or a lead that is not among `members` rolls
+ * everything back, so no group, member or lead row is left behind.
+ */
+export function createAgentGroupWithMembers(
+  input: NewGroupInput & {
+    members: Array<{ sessionId: string; role?: string }>;
+    leadSessionId?: string | null;
+  },
+): AgentGroupWithMembers {
+  const sessionIds = input.members.map((member) => member.sessionId);
+  if (new Set(sessionIds).size !== sessionIds.length) {
+    throw new GroupStoreError("invalid-value", "Each session can be listed only once.");
+  }
+  const leadSessionId = input.leadSessionId ?? null;
+  if (leadSessionId !== null && !sessionIds.includes(leadSessionId)) {
+    throw new GroupStoreError(
+      "not-a-member",
+      `The lead session ${leadSessionId} must be one of the group's members.`,
+    );
+  }
+  const db = getDatabase();
+  const groupId = inTransaction(db, () => {
+    const { id, workspaceId } = insertGroupRow(input);
+    for (const member of input.members) {
+      assertSessionCanJoin(id, workspaceId, member.sessionId);
+      insertMemberRow(id, member.sessionId, member.role);
+    }
+    if (leadSessionId !== null) {
+      db.prepare("update agent_groups set lead_session_id = ? where id = ?").run(leadSessionId, id);
+    }
+    return id;
+  });
+  return {
+    ...toGroup(requireGroupRow(groupId)),
+    members: listAgentGroupMembers(groupId),
+  };
 }
 
 export function getAgentGroup(groupId: string): AgentGroupInfo | undefined {
@@ -388,68 +517,11 @@ export function addAgentGroupMember(input: {
   sessionId: string;
   role?: string;
 }): AgentGroupMember {
-  const db = getDatabase();
   const group = requireGroupRow(input.groupId);
-  const session = db
-    .prepare(
-      "select id, workspace_id, parent_session_id, archived_at from agent_sessions where id = ?",
-    )
-    .get(input.sessionId) as
-    | {
-        id: string;
-        workspace_id: string;
-        parent_session_id: string | null;
-        archived_at: string | null;
-      }
-    | undefined;
-  if (!session) {
-    throw new GroupStoreError("session-not-found", `Agent session not found: ${input.sessionId}`);
-  }
-  if (session.parent_session_id !== null) {
-    throw new GroupStoreError(
-      "subagent-session",
-      `Session ${input.sessionId} is a subagent session; only top-level sessions can join a group.`,
-    );
-  }
-  if (session.archived_at !== null) {
-    throw new GroupStoreError(
-      "archived-session",
-      `Session ${input.sessionId} is archived; unarchive it before adding it to a group.`,
-    );
-  }
-  const expectedWorkspaceId = group.workspace_id ?? CHATS_WORKSPACE_ID;
-  if (session.workspace_id !== expectedWorkspaceId) {
-    throw new GroupStoreError(
-      "workspace-mismatch",
-      group.workspace_id === null
-        ? `Session ${input.sessionId} belongs to a Project; a group without a Project only accepts chats without a folder.`
-        : `Session ${input.sessionId} belongs to a different workspace than group ${input.groupId}.`,
-    );
-  }
-  const role = input.role?.trim() ? input.role.trim() : null;
-  const joinedAt = new Date().toISOString();
-  try {
-    db.prepare(
-      `insert into agent_group_members (group_id, session_id, role, joined_at)
-       values (?, ?, ?, ?)`,
-    ).run(input.groupId, input.sessionId, role, joinedAt);
-  } catch (error) {
-    if (isUniqueMemberViolation(error)) {
-      throw new GroupStoreError(
-        "already-in-group",
-        `Session ${input.sessionId} is already a member of a group.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  touchGroup(input.groupId);
-  return {
-    groupId: input.groupId,
-    sessionId: input.sessionId,
-    ...(role !== null ? { role } : {}),
-    joinedAt,
-  };
+  assertSessionCanJoin(group.id, group.workspace_id, input.sessionId);
+  const member = insertMemberRow(group.id, input.sessionId, input.role);
+  touchGroup(group.id);
+  return member;
 }
 
 /**
@@ -472,54 +544,124 @@ export function addAgentGroupMember(input: {
 export function removeAgentGroupMember(groupId: string, sessionId: string): void {
   const db = getDatabase();
   inTransaction(db, () => {
-    const result = db
-      .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
-      .run(groupId, sessionId);
-    if (Number(result.changes) === 0) {
-      return;
-    }
-    db.prepare(
-      `update agent_groups set lead_session_id = null
-       where id = ? and lead_session_id = ?`,
-    ).run(groupId, sessionId);
-    const closedParams = Object.fromEntries(
-      CLOSED_TASK_STATUSES.map((status, index) => [`closed${index}`, status]),
+    detachMemberRows(groupId, sessionId);
+  });
+}
+
+/**
+ * NON-transactional core of member removal (the caller owns the transaction):
+ * deletes the member row, clears the lead if it was them, and releases their
+ * non-closed tasks with the owner-first rules documented on
+ * removeAgentGroupMember. Returns false when the session was not a member.
+ */
+function detachMemberRows(groupId: string, sessionId: string): boolean {
+  const db = getDatabase();
+  const result = db
+    .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
+    .run(groupId, sessionId);
+  if (Number(result.changes) === 0) {
+    return false;
+  }
+  db.prepare(
+    `update agent_groups set lead_session_id = null
+     where id = ? and lead_session_id = ?`,
+  ).run(groupId, sessionId);
+  const closedParams = Object.fromEntries(
+    CLOSED_TASK_STATUSES.map((status, index) => [`closed${index}`, status]),
+  );
+  const closed = Object.keys(closedParams)
+    .map((name) => `:${name}`)
+    .join(", ");
+  // SQLite evaluates every SET expression against the OLD row, so the
+  // owner check in the status CASE sees the owner before it is cleared.
+  db.prepare(
+    `update group_tasks
+     set status = case
+           when owner_session_id = :session then :initialStatus
+           when reviewer_session_id = :session and status = :inReview then :inProgress
+           else status
+         end,
+         owner_session_id = case
+           when owner_session_id = :session then null
+           else owner_session_id
+         end,
+         reviewer_session_id = case
+           when reviewer_session_id = :session then null
+           else reviewer_session_id
+         end,
+         updated_at = :now
+     where group_id = :groupId
+       and status not in (${closed})
+       and (owner_session_id = :session or reviewer_session_id = :session)`,
+  ).run({
+    session: sessionId,
+    initialStatus: INITIAL_TASK_STATUS,
+    inReview: IN_REVIEW_TASK_STATUS,
+    inProgress: IN_PROGRESS_TASK_STATUS,
+    now: new Date().toISOString(),
+    groupId,
+    ...closedParams,
+  });
+  touchGroup(groupId);
+  return true;
+}
+
+/**
+ * Removes `sessionId` from whatever group it belongs to, via the same path as
+ * removeAgentGroupMember (lead cleared, open tasks released owner-first).
+ * NON-transactional: meant to run inside the caller's transaction (e.g. the
+ * archive update in agent-store) so both commit or roll back together.
+ * Returns the group id it left, if any.
+ */
+export function detachSessionFromGroupRows(sessionId: string): string | undefined {
+  const row = getDatabase()
+    .prepare("select group_id from agent_group_members where session_id = ?")
+    .get(sessionId) as { group_id: string } | undefined;
+  if (!row) return undefined;
+  detachMemberRows(row.group_id, sessionId);
+  return row.group_id;
+}
+
+/**
+ * Replaces a group's membership and lead in ONE transaction (all or nothing),
+ * given the target member list: sessions no longer listed are removed exactly
+ * like removeAgentGroupMember; new ones must pass the same join rules as
+ * addAgentGroupMember; existing members keep their role and joined_at. The
+ * lead must be one of the target members (or null). Zero members is allowed.
+ */
+export function updateAgentGroupMembers(
+  groupId: string,
+  input: { members: Array<{ sessionId: string; role?: string }>; leadSessionId: string | null },
+): AgentGroupWithMembers {
+  const group = requireGroupRow(groupId);
+  const targetIds = input.members.map((member) => member.sessionId);
+  if (new Set(targetIds).size !== targetIds.length) {
+    throw new GroupStoreError("invalid-value", "Each session can be listed only once.");
+  }
+  if (input.leadSessionId !== null && !targetIds.includes(input.leadSessionId)) {
+    throw new GroupStoreError(
+      "not-a-member",
+      `The lead session ${input.leadSessionId} must be one of the group's members.`,
     );
-    const closed = Object.keys(closedParams)
-      .map((name) => `:${name}`)
-      .join(", ");
-    // SQLite evaluates every SET expression against the OLD row, so the
-    // owner check in the status CASE sees the owner before it is cleared.
-    db.prepare(
-      `update group_tasks
-       set status = case
-             when owner_session_id = :session then :initialStatus
-             when reviewer_session_id = :session and status = :inReview then :inProgress
-             else status
-           end,
-           owner_session_id = case
-             when owner_session_id = :session then null
-             else owner_session_id
-           end,
-           reviewer_session_id = case
-             when reviewer_session_id = :session then null
-             else reviewer_session_id
-           end,
-           updated_at = :now
-       where group_id = :groupId
-         and status not in (${closed})
-         and (owner_session_id = :session or reviewer_session_id = :session)`,
-    ).run({
-      session: sessionId,
-      initialStatus: INITIAL_TASK_STATUS,
-      inReview: IN_REVIEW_TASK_STATUS,
-      inProgress: IN_PROGRESS_TASK_STATUS,
-      now: new Date().toISOString(),
+  }
+  const db = getDatabase();
+  inTransaction(db, () => {
+    const currentIds = new Set(listAgentGroupMembers(groupId).map((member) => member.sessionId));
+    for (const sessionId of currentIds) {
+      if (!targetIds.includes(sessionId)) detachMemberRows(groupId, sessionId);
+    }
+    for (const member of input.members) {
+      if (currentIds.has(member.sessionId)) continue;
+      assertSessionCanJoin(groupId, group.workspace_id, member.sessionId);
+      insertMemberRow(groupId, member.sessionId, member.role);
+    }
+    db.prepare("update agent_groups set lead_session_id = ? where id = ?").run(
+      input.leadSessionId,
       groupId,
-      ...closedParams,
-    });
+    );
     touchGroup(groupId);
   });
+  return { ...toGroup(requireGroupRow(groupId)), members: listAgentGroupMembers(groupId) };
 }
 
 export function listAgentGroupMembers(groupId: string): AgentGroupMember[] {
@@ -530,6 +672,24 @@ export function listAgentGroupMembers(groupId: string): AgentGroupMember[] {
     )
     .all(groupId) as MemberRow[];
   return rows.map(toMember);
+}
+
+/** Groups (same filter/order as listAgentGroups) with their members, for the sidebar. */
+export function listAgentGroupsWithMembers(
+  options: { workspaceId?: string | null } = {},
+): AgentGroupWithMembers[] {
+  const groups = listAgentGroups(options);
+  if (groups.length === 0) return [];
+  const rows = getDatabase()
+    .prepare(`select ${MEMBER_COLUMNS} from agent_group_members order by joined_at, rowid`)
+    .all() as MemberRow[];
+  const byGroup = new Map<string, AgentGroupMember[]>();
+  for (const row of rows) {
+    const members = byGroup.get(row.group_id) ?? [];
+    members.push(toMember(row));
+    byGroup.set(row.group_id, members);
+  }
+  return groups.map((group) => ({ ...group, members: byGroup.get(group.id) ?? [] }));
 }
 
 export function getAgentGroupForSession(sessionId: string): AgentGroupInfo | undefined {

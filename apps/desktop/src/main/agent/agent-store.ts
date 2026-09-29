@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentSessionInfo, SubagentWorktreeInfo } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
+import { detachSessionFromGroupRows } from "../groups/group-store";
 
 type AgentSessionRow = {
   id: string;
@@ -362,13 +363,36 @@ export function setAgentSessionPinned(
   return getAgentSession(sessionId);
 }
 
+/**
+ * Archives / unarchives a session. Archiving also removes it from its Agent
+ * Group (same path as removeAgentGroupMember: lead cleared, open tasks
+ * released owner-first) in the same transaction. Restoring does not re-add it.
+ */
 export function setAgentSessionArchived(
   sessionId: string,
   archived: boolean,
 ): AgentSessionInfo | undefined {
-  getDatabase()
-    .prepare("update agent_sessions set archived_at = ? where id = ?")
-    .run(archived ? new Date().toISOString() : null, sessionId);
+  const db = getDatabase();
+  const apply = (): void => {
+    db.prepare("update agent_sessions set archived_at = ? where id = ?").run(
+      archived ? new Date().toISOString() : null,
+      sessionId,
+    );
+    if (archived) detachSessionFromGroupRows(sessionId);
+  };
+  if (db.isTransaction) {
+    // Already inside a caller's transaction: never nest BEGIN.
+    apply();
+  } else {
+    db.exec("begin");
+    try {
+      apply();
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
   return getAgentSession(sessionId);
 }
 
