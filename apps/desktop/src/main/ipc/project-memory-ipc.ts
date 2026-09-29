@@ -1,6 +1,7 @@
 import type { IpcMain } from "electron";
 import { CHATS_WORKSPACE_ID, type ProjectMemorySnapshot } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
+import { scheduleCodeGraphAutoSync } from "../fast-codebase/codegraph-auto-sync";
 import { getWorkspace } from "../workspace/workspace-store";
 import { IPC_CHANNELS } from "./channels";
 import {
@@ -87,6 +88,11 @@ export function registerProjectMemoryIpcHandlers(
     if (event.sender) {
       registerSenderTeardown(event);
       setSelectedWorkspace(event.sender, workspaceId);
+    }
+    // Keep CodeGraph binary index warm in the background (non-blocking).
+    // Project Model still persists hits when fast_codebase / discoveries produce them.
+    if (workspaceId) {
+      scheduleCodeGraphAutoSync({ workspaceId, reason: "workspace_select" });
     }
   });
 
