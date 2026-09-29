@@ -9,8 +9,7 @@ const manifest = JSON.parse(readFileSync(join(restore, "manifest.json"), "utf8")
 for (const entry of manifest.files) {
   const parts = [];
   for (const chunkName of entry.chunks) {
-    const name = chunkName.split("/")
-.pop();
+    const name = chunkName.split("/").pop();
     parts.push(readFileSync(join(restore, "chunks", name), "utf8").trim());
   }
   const raw = Buffer.from(parts.join(""), "base64");
