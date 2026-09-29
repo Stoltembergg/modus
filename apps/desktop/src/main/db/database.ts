@@ -401,6 +401,75 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_harness_promotions_workspace_status
       on harness_promotions(workspace_id, status, updated_at desc);
   `);
+
+  // Agent Groups: rooms of normal agent_sessions. A null workspace_id means the
+  // group has no Project (members then live in the Chats inbox workspace).
+  // Deleting a group never deletes the member sessions themselves.
+  db.exec(`
+    create table if not exists agent_groups (
+      id text primary key,
+      name text not null,
+      workspace_id text references workspaces(id) on delete cascade,
+      mode text not null default 'free' check (mode in ('free','coordinator')),
+      lead_session_id text references agent_sessions(id) on delete set null,
+      created_at text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_agent_groups_workspace
+      on agent_groups(workspace_id, updated_at desc);
+
+    create table if not exists agent_group_members (
+      group_id text not null references agent_groups(id) on delete cascade,
+      session_id text not null unique references agent_sessions(id) on delete cascade,
+      role text,
+      joined_at text not null,
+      primary key (group_id, session_id)
+    );
+
+    create table if not exists group_messages (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      author_kind text not null check (author_kind in ('user','agent','system')),
+      author_session_id text references agent_sessions(id) on delete set null,
+      reply_to_message_id text references group_messages(id) on delete set null,
+      to_session_id text,
+      chain_id text references group_messages(id) on delete set null,
+      kind text not null default 'message' check (kind in ('message','status')),
+      body text not null,
+      mentions_json text not null default '[]',
+      created_at text not null
+    );
+    create index if not exists idx_group_messages_group_created
+      on group_messages(group_id, created_at);
+
+    create table if not exists group_tasks (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      title text not null,
+      description text,
+      status text not null default 'open' check (status in ('open','in_progress','in_review','done','cancelled')),
+      owner_session_id text references agent_sessions(id) on delete set null,
+      created_by_session_id text references agent_sessions(id) on delete set null,
+      reviewer_session_id text references agent_sessions(id) on delete set null,
+      branch text,
+      created_at text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_group_tasks_group_status
+      on group_tasks(group_id, status, updated_at desc);
+
+    create table if not exists group_decisions (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      text text not null,
+      source_message_id text references group_messages(id) on delete set null,
+      created_by_session_id text references agent_sessions(id) on delete set null,
+      created_at text not null,
+      superseded_by_id text references group_decisions(id) on delete set null
+    );
+    create index if not exists idx_group_decisions_group_created
+      on group_decisions(group_id, created_at);
+  `);
 }
 
 export function getDatabase(): DatabaseSync {
