@@ -66,11 +66,15 @@ export type HarnessInsightsViewState =
 export function HarnessInsightsView({
   onPeriodChange,
   onRefresh,
+  onPromote,
+  onClearBlacklist,
   periodDays,
   state,
 }: {
   onPeriodChange(days: HarnessInsightsWindowDays): void;
   onRefresh(): void;
+  onPromote?(insight: HarnessInsight): void;
+  onClearBlacklist?(): void;
   periodDays: HarnessInsightsWindowDays;
   state: HarnessInsightsViewState;
 }) {
@@ -145,13 +149,25 @@ export function HarnessInsightsView({
           </button>
         </div>
       ) : (
-        <HarnessInsightsResults result={state.result} />
+        <HarnessInsightsResults
+          onClearBlacklist={() => void onClearBlacklist?.()}
+          onPromote={(insight) => void onPromote?.(insight)}
+          result={state.result}
+        />
       )}
     </>
   );
 }
 
-function HarnessInsightsResults({ result }: { result: HarnessInsightsResult }) {
+function HarnessInsightsResults({
+  result,
+  onPromote,
+  onClearBlacklist,
+}: {
+  result: HarnessInsightsResult;
+  onPromote?(insight: HarnessInsight): void;
+  onClearBlacklist?(): void;
+}) {
   const insufficient =
     result.evidenceState === "unknown" || result.sampleCount < MIN_COMPARABLE_INSIGHT_EPISODES;
 
@@ -164,14 +180,26 @@ function HarnessInsightsResults({ result }: { result: HarnessInsightsResult }) {
             {result.sampleCount} {result.sampleCount === 1 ? "episode" : "episodes"} sampled
           </p>
         </div>
-        <span className="max-w-full break-words rounded-full border border-hairline-soft px-2.5 py-1 text-2xs text-fg-faint">
-          <span className="mr-1 font-medium">Period</span>
-          {harnessInsightPeriod(result.period)}
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="max-w-full break-words rounded-full border border-hairline-soft px-2.5 py-1 text-2xs text-fg-faint">
+            <span className="mr-1 font-medium">Period</span>
+            {harnessInsightPeriod(result.period)}
+          </span>
+          {onClearBlacklist ? (
+            <button
+              className="h-7 rounded-md border border-hairline-soft px-2.5 text-2xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+              onClick={onClearBlacklist}
+              type="button"
+            >
+              Clear failure blacklist
+            </button>
+          ) : null}
+        </div>
       </section>
 
       <p className="text-xs leading-relaxed text-fg-faint">
-        Patterns are suggestions from structured local activity. Nothing is applied or changed.
+        Patterns are suggestions from structured local activity. Promotion requires your explicit
+        confirmation and never rewrites skills or prompts silently.
       </p>
 
       {insufficient ? (
@@ -220,12 +248,21 @@ function HarnessInsightsResults({ result }: { result: HarnessInsightsResult }) {
                     {insight.recommendation}
                   </p>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-2xs text-fg-faint">
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-2xs text-fg-faint">
                   <span>
                     {insight.sampleCount} {insight.sampleCount === 1 ? "sample" : "samples"}
                   </span>
                   <span>{harnessInsightConfidenceLabel(insight.confidence)}</span>
                   <span>Period · {harnessInsightPeriod(insight.period)}</span>
+                  {onPromote ? (
+                    <button
+                      className="ml-auto h-7 rounded-md border border-hairline-soft px-2.5 text-2xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                      onClick={() => onPromote(insight)}
+                      type="button"
+                    >
+                      Promote with confirmation
+                    </button>
+                  ) : null}
                 </div>
                 <HarnessInsightLimitations limitations={insight.limitations} />
                 {insight.sourceRefs.length ? (
@@ -309,7 +346,26 @@ export function HarnessInsightsSettingsPanel({
 
   return (
     <HarnessInsightsView
+      onClearBlacklist={async () => {
+        if (!workspaceId) return;
+        await window.modus.harnessInsights.clearFailureBlacklist({
+          workspaceId,
+          clearAll: true,
+        });
+      }}
       onPeriodChange={setPeriodDays}
+      onPromote={async (insight) => {
+        if (!workspaceId) return;
+        const confirmed = window.confirm(
+          "Promote this harness suggestion? This stores a versioned preference only — it does not rewrite skills or prompts.",
+        );
+        if (!confirmed) return;
+        await window.modus.harnessInsights.promote({
+          workspaceId,
+          insight,
+          confirmedByUser: true,
+        });
+      }}
       onRefresh={() => void load()}
       periodDays={periodDays}
       state={state}

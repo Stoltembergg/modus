@@ -11,11 +11,15 @@ import {
 import { app, type BrowserWindow as BrowserWindowType } from "electron";
 import { buildContextChips } from "../../shared/context-chips";
 import type {
+  AdaptiveDecision,
+  AdaptiveDecisionMode,
+  AdaptiveFailureAttempt,
   AgentEvent,
   AgentResponseModel,
   AgentRunInfo,
   AgentRunTokenUsage,
   AgentSessionInfo,
+  AutoQAStatus,
   CodeGraphDiscoveryRef,
   ContextItem,
   ContextUsageInfo,
@@ -94,18 +98,35 @@ import {
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
 import {
+  listAvoidedStrategyCodesFromBlacklist,
+  upsertFailureBlacklistEntry,
+} from "./harness/failure-blacklist";
+import {
+  appendFailureAttempt,
+  createFailureAttempt,
+  createFailureLedger,
+  isDuplicateFailedAttempt,
+} from "./harness/failure-intelligence";
+import {
   isHyperPlanSessionReserved,
   ownsHyperPlanStartReservation,
   releaseHyperPlanRunReservation,
 } from "./harness/hyperplan-draft-store";
 import { evaluateIntentGate } from "./harness/intent-gate";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
+import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
+import {
+  estimateProjectImpactWithStore,
+  upsertProjectModelChangedPaths,
+  upsertProjectModelDiscoveries,
+} from "./harness/project-model-store";
 import {
   type RunQAEvent,
   recognizeCheckInvocation,
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
+import { planSafeDispatch } from "./harness/safe-dispatch";
 import { classifyHarnessTask } from "./harness/task-classifier";
 import {
   createHarnessTaskState,
@@ -239,7 +260,15 @@ type RunOutputTracker = {
   taskPlan?: PlanRef;
   requiredChecks: HarnessTaskCheckKind[];
   responseModel?: AgentResponseModel;
+  failureAttempts: AdaptiveFailureAttempt[];
+  lastAdaptiveDecision?: AdaptiveDecision;
+  lastQaStatus?: AutoQAStatus;
+  adaptiveRetrievalDigest?: string;
+  forceVerifyGate?: boolean;
 };
+
+/** Active mode: allowlisted safe actions may auto-dispatch; others stay hints. */
+const ADAPTIVE_DECISION_MODE: AdaptiveDecisionMode = "active";
 
 type ExclusiveStartHooks = {
   input: HyperPlanBuildStartInput;
@@ -1023,6 +1052,168 @@ export class PiSdkRuntime implements AgentRuntime {
     });
   }
 
+  private async consultAdaptiveController(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+    input: {
+      sessionId: string;
+      runId: string;
+      workspaceId: string;
+      mode: "build" | "plan" | "spec";
+      classification: HarnessTaskState["classification"];
+      boundary: "pre_prompt" | "post_qa" | "post_failure";
+      changedPaths?: string[];
+      revision?: string;
+      qaStatus?: AutoQAStatus;
+      remainingContinuationBudget?: number;
+    },
+  ): Promise<AdaptiveDecision | undefined> {
+    try {
+      const unresolvedCriterionCount = (tracker.taskState?.criteria ?? []).filter(
+        (criterion) =>
+          criterion.status === "pending" ||
+          criterion.status === "unknown" ||
+          criterion.status === "failed" ||
+          criterion.status === "blocked",
+      ).length;
+      const impact = estimateProjectImpactWithStore(input.workspaceId, {
+        ...(input.revision ? { revision: input.revision } : {}),
+        changedPaths: input.changedPaths ?? [],
+        planCriterionCount: tracker.taskPlan?.spec?.acceptanceCriteria.length ?? 0,
+      });
+      const blacklistAvoided = listAvoidedStrategyCodesFromBlacklist(input.workspaceId);
+      const blacklistAttempts: AdaptiveFailureAttempt[] = blacklistAvoided.map((strategyCode) => ({
+        id: `blacklist:${strategyCode}`,
+        sessionId: input.sessionId,
+        runId: input.runId,
+        strategyCode,
+        status: "failed" as const,
+        reasonCode: "cross_session_blacklist",
+        ...(input.revision ? { revision: input.revision } : {}),
+        evidenceEventIds: [],
+        createdAt: new Date().toISOString(),
+      }));
+      const decision = decideNext({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        workspaceId: input.workspaceId,
+        mode: input.mode,
+        classification: input.classification,
+        ...(tracker.taskState
+          ? {
+              taskState: {
+                phase: tracker.taskState.phase,
+                verificationStatus: tracker.taskState.verificationStatus,
+                criteria: tracker.taskState.criteria,
+                openQuestionRefs: tracker.taskState.openQuestionRefs,
+                hypothesisRefs: tracker.taskState.hypothesisRefs,
+              },
+            }
+          : {}),
+        ...(input.qaStatus !== undefined
+          ? { qaStatus: input.qaStatus }
+          : tracker.lastQaStatus !== undefined
+            ? { qaStatus: tracker.lastQaStatus }
+            : {}),
+        failureAttempts: [...tracker.failureAttempts, ...blacklistAttempts],
+        impact,
+        remainingContinuationBudget: input.remainingContinuationBudget ?? 1,
+        enabledModelIds: listScopedModels().map((entry) => modelToId(entry.model)),
+        decisionMode: ADAPTIVE_DECISION_MODE,
+        openQuestionCount: tracker.taskState?.openQuestionRefs.length ?? 0,
+        unresolvedCriterionCount,
+      });
+      tracker.lastAdaptiveDecision = decision;
+      const dispatch = planSafeDispatch(decision);
+      if (dispatch.kind === "verify_gate") tracker.forceVerifyGate = true;
+      if (dispatch.kind === "retrieve_local" && !tracker.adaptiveRetrievalDigest) {
+        try {
+          const memoryDigest = await planTurnContext({
+            workspaceId: input.workspaceId,
+            inbox: false,
+            query: input.classification.reasons.join(" ") || input.classification.taskType,
+            contextPaths: [],
+            contextSymbols: [],
+            git: { changedPaths: input.changedPaths ?? [] },
+            sessionId: input.sessionId,
+            runId: input.runId,
+          });
+          if (memoryDigest.memoryIds.length > 0) {
+            tracker.adaptiveRetrievalDigest = memoryDigest.memoryIds.slice(0, 6).join(", ");
+          }
+        } catch {
+          // Local retrieval is best-effort; decision still stands.
+        }
+      }
+      runtimeSession.emit({
+        type: "harness.decision",
+        sessionId: input.sessionId,
+        runId: input.runId,
+        decision,
+        boundary: input.boundary,
+      });
+      return decision;
+    } catch (error) {
+      console.warn("[modus] adaptive controller failed:", error);
+      return undefined;
+    }
+  }
+
+  private recordAdaptiveFailure(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+    input: {
+      sessionId: string;
+      runId: string;
+      strategyCode: string;
+      reasonCode: string;
+      revision?: string;
+      evidenceEventIds?: string[];
+      hypothesisCode?: string;
+    },
+  ): void {
+    try {
+      const candidate = {
+        strategyCode: input.strategyCode,
+        ...(input.hypothesisCode ? { hypothesisCode: input.hypothesisCode } : {}),
+        ...(input.revision ? { revision: input.revision } : {}),
+      };
+      if (isDuplicateFailedAttempt(tracker.failureAttempts, candidate)) {
+        return;
+      }
+      const attempt = createFailureAttempt({
+        sessionId: input.sessionId,
+        runId: input.runId,
+        strategyCode: input.strategyCode,
+        status: "failed",
+        reasonCode: input.reasonCode,
+        ...(input.hypothesisCode ? { hypothesisCode: input.hypothesisCode } : {}),
+        ...(input.revision ? { revision: input.revision } : {}),
+        ...(input.evidenceEventIds ? { evidenceEventIds: input.evidenceEventIds } : {}),
+      });
+      const ledger = appendFailureAttempt(createFailureLedger(tracker.failureAttempts), attempt);
+      tracker.failureAttempts = ledger.attempts;
+      runtimeSession.emit({
+        type: "harness.failure",
+        sessionId: input.sessionId,
+        runId: input.runId,
+        attempt,
+      });
+      const workspaceId = runtimeSession.info.workspaceId;
+      if (workspaceId) {
+        upsertFailureBlacklistEntry({
+          workspaceId,
+          strategyCode: attempt.strategyCode,
+          ...(attempt.hypothesisCode ? { hypothesisCode: attempt.hypothesisCode } : {}),
+          ...(attempt.revision ? { revision: attempt.revision } : {}),
+          sourceRunId: input.runId,
+        });
+      }
+    } catch (error) {
+      console.warn("[modus] failure intelligence record failed:", error);
+    }
+  }
+
   private observeTaskStateEvent(runtimeSession: SdkRuntimeSession, event: AgentEvent): void {
     if (event.type === "harness.task_state") return;
     const tracker = this.runOutputTrackers.get(event.sessionId);
@@ -1094,14 +1285,14 @@ export class PiSdkRuntime implements AgentRuntime {
     return plan;
   }
 
-  private emitHarnessQA(
+  private async emitHarnessQA(
     runtimeSession: SdkRuntimeSession,
     input: PromptAgentInput,
     tracker: RunOutputTracker,
     changedPaths: string[],
     changedScopeKnown: boolean,
     aborted = false,
-  ): void {
+  ): Promise<void> {
     const runId = tracker.runId;
     const plan = tracker.taskPlan;
     const summary = summarizeHarnessQA({
@@ -1132,6 +1323,49 @@ export class PiSdkRuntime implements AgentRuntime {
       }
     }
     runtimeSession.emit({ type: "harness.qa", sessionId: input.sessionId, runId, result });
+    tracker.lastQaStatus = result.status;
+    if (changedPaths.length > 0) {
+      try {
+        upsertProjectModelChangedPaths({
+          workspaceId: runtimeSession.info.workspaceId,
+          revision: runId,
+          paths: changedPaths,
+        });
+      } catch {
+        // best-effort
+      }
+    }
+    if (result.status === "failed") {
+      this.recordAdaptiveFailure(runtimeSession, tracker, {
+        sessionId: input.sessionId,
+        runId,
+        strategyCode: "same_edit_retry",
+        reasonCode: "qa_failed",
+        evidenceEventIds: result.evidence
+          .map((item) => item.eventId)
+          .filter((id): id is string => typeof id === "string"),
+      });
+    }
+    const classification =
+      tracker.taskState?.classification ??
+      classifyHarnessTask({
+        text: input.message,
+        mode: input.mode ?? "build",
+        contextPaths: [],
+        changedPaths,
+      });
+    const postQaDecision = await this.consultAdaptiveController(runtimeSession, tracker, {
+      sessionId: input.sessionId,
+      runId,
+      workspaceId: runtimeSession.info.workspaceId,
+      mode: input.mode ?? "build",
+      classification,
+      boundary: result.status === "failed" ? "post_failure" : "post_qa",
+      changedPaths,
+      qaStatus: result.status,
+      remainingContinuationBudget: 0,
+    });
+    void postQaDecision;
   }
 
   private emitToWindow(
@@ -1149,6 +1383,22 @@ export class PiSdkRuntime implements AgentRuntime {
       if (event.type === "run.started") {
         const tracker = this.runOutputTrackers.get(event.sessionId);
         if (tracker?.runId === event.runId) tracker.runStartedRowId = rowId;
+      }
+      if (event.type === "codegraph.discoveries") {
+        const session = getAgentSession(event.sessionId);
+        const workspaceId = session?.workspaceId;
+        const revision = event.runId;
+        if (workspaceId && revision) {
+          try {
+            upsertProjectModelDiscoveries({
+              workspaceId,
+              revision,
+              hits: event.hits,
+            });
+          } catch {
+            // Project model persistence is best-effort.
+          }
+        }
       }
       window.webContents.send(IPC_CHANNELS.agentEvent, event);
       maybeNotifyAgentEvent(window, event);
@@ -1966,6 +2216,7 @@ export class PiSdkRuntime implements AgentRuntime {
         hasReportedUsage: false,
         hasQueuedInput: false,
         requiredChecks: [],
+        failureAttempts: [],
       };
       this.runOutputTrackers.set(input.sessionId, outputTracker);
 
@@ -2145,6 +2396,23 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       throw error;
     }
+    const adaptiveClassification =
+      outputTracker.taskState?.classification ??
+      classifyHarnessTask({
+        text: input.message,
+        mode: input.mode ?? "build",
+        contextPaths: projectMemoryHints(input.context, runtimeSession.info.cwd).paths,
+        changedPaths: [],
+      });
+    const prePromptDecision = await this.consultAdaptiveController(runtimeSession, outputTracker, {
+      sessionId: input.sessionId,
+      runId: run.id,
+      workspaceId: runtimeSession.info.workspaceId,
+      mode: input.mode ?? "build",
+      classification: adaptiveClassification,
+      boundary: "pre_prompt",
+      remainingContinuationBudget: 1,
+    });
     let runCheckpoint: Awaited<ReturnType<typeof createCheckpoint>> | undefined;
     let turnEndAttempted = false;
     const captureTurnEnd = async (): Promise<void> => {
@@ -2303,6 +2571,12 @@ export class PiSdkRuntime implements AgentRuntime {
         turnMessage +=
           "\n\n<plan_mode_suggestion>Optional plan suggestion: this task has complex scope. Consider Plan Mode, but continue in the current mode unless the user chooses otherwise.</plan_mode_suggestion>";
       }
+      const adaptiveHint = prePromptDecision
+        ? formatAdaptiveDecisionHint(prePromptDecision)
+        : undefined;
+      if (adaptiveHint) {
+        turnMessage += `\n\n<adaptive_policy>${adaptiveHint}</adaptive_policy>`;
+      }
       let thresholdContinues = 0;
       let isFirstPrompt = true;
       const eligibleScripts = eligibleCheckScripts(runtimeSession.info.cwd, requiredChecks);
@@ -2373,6 +2647,31 @@ export class PiSdkRuntime implements AgentRuntime {
           if (qaSummary.restoreRowId === undefined) delete outputTracker.lastQaRestoreRowId;
           else outputTracker.lastQaRestoreRowId = qaSummary.restoreRowId;
           const qa = qaSummary.result;
+          outputTracker.lastQaStatus = qa.status;
+          if (qa.status === "failed") {
+            this.recordAdaptiveFailure(runtimeSession, outputTracker, {
+              sessionId: input.sessionId,
+              runId: run.id,
+              strategyCode: "same_edit_retry",
+              reasonCode: "qa_failed",
+              ...(runCheckpoint?.commitHash ? { revision: runCheckpoint.commitHash } : {}),
+              evidenceEventIds: qa.evidence
+                .map((item) => item.eventId)
+                .filter((id): id is string => typeof id === "string"),
+            });
+          }
+          const midDecision = await this.consultAdaptiveController(runtimeSession, outputTracker, {
+            sessionId: input.sessionId,
+            runId: run.id,
+            workspaceId: runtimeSession.info.workspaceId,
+            mode: input.mode ?? "build",
+            classification: adaptiveClassification,
+            boundary: qa.status === "failed" ? "post_failure" : "post_qa",
+            changedPaths: settledChangedPaths,
+            ...(runCheckpoint?.commitHash ? { revision: runCheckpoint.commitHash } : {}),
+            qaStatus: qa.status,
+            remainingContinuationBudget: continuationAttempt < 1 ? 1 : 0,
+          });
           const todos = getLatestSessionTodos(input.sessionId) ?? [];
           const decision = evaluateTodoContinuation({
             todos,
@@ -2389,7 +2688,8 @@ export class PiSdkRuntime implements AgentRuntime {
             eligibleScripts.length > 0 &&
             qa.required &&
             (qa.status === "missing" || qa.status === "unavailable");
-          if (todoNeedsContinuation || qaNeedsContinuation) {
+          const avoidRetry = midDecision?.action === "avoid_retry";
+          if (!avoidRetry && (todoNeedsContinuation || qaNeedsContinuation)) {
             continuationAttempt = 1;
             continuationStarted = true;
             emitForStart({
@@ -2400,7 +2700,26 @@ export class PiSdkRuntime implements AgentRuntime {
               reasonCode: todoNeedsContinuation ? "actionable_todos" : "missing_qa",
             });
             turnMessage = todoContinuationMessage(eligibleScripts, qaNeedsContinuation);
+            // Do not append verify hints here: the continuation message already
+            // names the exact eligible scripts; extra check words break that contract.
+            if (
+              midDecision &&
+              (midDecision.action === "avoid_retry" ||
+                midDecision.action === "replan" ||
+                midDecision.action === "suggest_oracle")
+            ) {
+              const retryHint = formatAdaptiveDecisionHint(midDecision);
+              if (retryHint) {
+                turnMessage += `\n\n<adaptive_policy>${retryHint}</adaptive_policy>`;
+              }
+            }
             continue;
+          }
+          if (avoidRetry) {
+            const hint = formatAdaptiveDecisionHint(midDecision);
+            if (hint) {
+              turnMessage += `\n\n<adaptive_policy>${hint}</adaptive_policy>`;
+            }
           }
         }
         break;

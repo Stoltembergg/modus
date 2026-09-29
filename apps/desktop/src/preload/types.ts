@@ -35,6 +35,7 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
   HyperPlanRevision,
@@ -405,6 +406,23 @@ export type ModusApi = {
   };
   harnessInsights: {
     get(input: HarnessInsightsQuery): Promise<HarnessInsightsResult>;
+    listPromotions(input?: { workspaceId?: string }): Promise<unknown[]>;
+    promote(input: {
+      workspaceId?: string;
+      insight: HarnessInsight;
+      confirmedByUser: true;
+    }): Promise<{ ok: boolean; reasonCodes?: string[]; record?: unknown }>;
+    rejectPromotion(input: {
+      workspaceId?: string;
+      promotionId: string;
+      reason?: string;
+    }): Promise<{ ok: boolean }>;
+    listFailureBlacklist(input?: { workspaceId?: string }): Promise<unknown[]>;
+    clearFailureBlacklist(input?: {
+      workspaceId?: string;
+      strategyCode?: string;
+      clearAll?: boolean;
+    }): Promise<{ cleared: number }>;
   };
   model: {
     list(): Promise<ModelInfo[]>;
