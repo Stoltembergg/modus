@@ -13,8 +13,11 @@ const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
 const {
   createAgentGroupWithMembers,
   listGroupMessages,
+  createMemberGroupTask,
   recordGroupDecision,
   removeAgentGroupMember,
+  setAgentGroupLead,
+  setAgentGroupMode,
 } = await import("./group-store");
 const {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
@@ -23,9 +26,11 @@ const {
   GROUP_MAX_CONCURRENT_TURNS,
   GROUP_PROMPT_DECISIONS_MAX_ITEMS,
   GROUP_PROMPT_DECISIONS_MAX_TOKENS,
+  GROUP_PROMPT_SNAPSHOT_MAX_TOKENS,
   GROUP_STATUS_TEXT,
   GroupRuntime,
   composeGroupDecisionsSection,
+  composeGroupSnapshotSection,
   composeGroupWakePrompt,
   estimateGroupTokens,
   isUpdatePendingState,
@@ -691,6 +696,168 @@ describe("group decisions in the wake prompt", () => {
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha hi" });
     expect(runtime.pendingSessions()).toEqual([]);
     expect(groups.chainSnapshot(user.id).ended).toBe("input-token-budget");
+  });
+});
+
+/* ── coordinator mode: routing, Group snapshot (PR 7) ─────────────────── */
+
+describe("coordinator mode", () => {
+  const task = (id: string, status: string, extra: Record<string, string> = {}) => ({
+    id,
+    groupId: "g",
+    title: `Task ${id}`,
+    status: status as "open",
+    createdAt: "",
+    updatedAt: "",
+    ...extra,
+  });
+
+  it("the snapshot lists members (id, lead/you, state, branch) and the active tasks", () => {
+    const section = composeGroupSnapshotSection({
+      sessionId: "a",
+      leadSessionId: "a",
+      members: [
+        { sessionId: "a", title: "Alpha", state: "working" },
+        { sessionId: "b", title: "Beta", state: "idle", branch: "modus/group/g/b" },
+        { sessionId: "c", title: "Beta", state: "waiting" },
+      ],
+      tasks: [
+        task("1", "open", { reviewerSessionId: "b" }),
+        task("2", "in_progress", { ownerSessionId: "b" }),
+        task("3", "in_review", { ownerSessionId: "b", reviewerSessionId: "c" }),
+        task("4", "done", { ownerSessionId: "b" }),
+        task("5", "cancelled"),
+      ],
+    });
+    expect(section).toBe(
+      [
+        "<group_snapshot>",
+        "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
+        "Members:",
+        "- @Alpha (id a) lead, you: working",
+        "- @Beta (id b): idle, branch modus/group/g/b",
+        "- @Beta (id c): waiting",
+        "Tasks (open, in progress, in review):",
+        '- task 1 [open] "Task 1" owner=none reviewer=@Beta (id b)',
+        '- task 2 [in_progress] "Task 2" owner=@Beta (id b) reviewer=none',
+        '- task 3 [in_review] "Task 3" owner=@Beta (id b) reviewer=@Beta (id c)',
+        "</group_snapshot>",
+      ].join("\n"),
+    );
+  });
+
+  it(`stays within ~${GROUP_PROMPT_SNAPSHOT_MAX_TOKENS / 1000}k estimated tokens, noting omitted tasks`, () => {
+    const tasks = Array.from({ length: 80 }, (_, index) =>
+      task(String(index), "open", { title: `${index} ${"x".repeat(150)}` }),
+    );
+    const section = composeGroupSnapshotSection({
+      sessionId: "a",
+      leadSessionId: "a",
+      members: [{ sessionId: "a", title: "Alpha", state: "idle" }],
+      tasks,
+    });
+    expect(estimateGroupTokens(section)).toBeLessThanOrEqual(GROUP_PROMPT_SNAPSHOT_MAX_TOKENS);
+    const kept = section.split("\n").filter((line) => line.startsWith("- task ")).length;
+    expect(kept).toBeGreaterThan(10);
+    expect(section).toContain(`(${80 - kept} more tasks omitted)`);
+    const empty = composeGroupSnapshotSection({
+      sessionId: "a",
+      leadSessionId: "a",
+      members: [{ sessionId: "a", title: "Alpha", state: "idle" }],
+      tasks: [],
+    });
+    expect(empty).toContain("Tasks (open, in progress, in review):\n- none\n</group_snapshot>");
+  });
+
+  it("with the mode on, a user message with no mention wakes only the Lead, who gets the snapshot", () => {
+    const { group, alpha, beta } = squad();
+    setAgentGroupMode(group.id, "coordinator");
+    createMemberGroupTask({ groupId: group.id, actorSessionId: beta, title: "Parser" });
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "ship the parser" });
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    const prompt = runtime.calls[0]?.input.message ?? "";
+    expect(prompt).toContain("<group_snapshot>");
+    expect(prompt).toContain(`- @Alpha (id ${alpha}) lead, you: working`);
+    expect(prompt).toContain(`- @Beta (id ${beta}): idle`);
+    expect(prompt).toContain('[open] "Parser" owner=none');
+    // Counted in the chain budget (it is part of the prompt).
+    expect(groups.chainSnapshot(user.id).inputTokens).toBe(estimateGroupTokens(prompt));
+  });
+
+  it("an explicit mention still wakes the mentioned member, without the snapshot; members route as before", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    setAgentGroupMode(group.id, "coordinator");
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta check it" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "@Gamma and @Alpha, over to you" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
+    const byMember = new Map(
+      runtime.calls.map((call) => [call.input.sessionId, call.input.message]),
+    );
+    expect(byMember.get(alpha)).toContain("<group_snapshot>");
+    expect(byMember.get(gamma)).not.toContain("<group_snapshot>");
+  });
+
+  it("without a Lead the flag is ignored (default routing, no snapshot); a new Lead coordinates", async () => {
+    const { group, beta } = squad();
+    setAgentGroupMode(group.id, "coordinator");
+    setAgentGroupLead(group.id, null);
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "anyone?" });
+    expect(runtime.pendingSessions()).toEqual([]);
+    groups.postUserMessage({ groupId: group.id, body: "@Beta you then" });
+    expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
+    runtime.take(beta).resolve({ outcome: "ok" });
+    await flush();
+    setAgentGroupLead(group.id, beta);
+    groups.postUserMessage({ groupId: group.id, body: "plan it" });
+    expect(runtime.calls.at(-1)?.input.sessionId).toBe(beta);
+    expect(runtime.calls.at(-1)?.input.message).toContain(`- @Beta (id ${beta}) lead, you:`);
+  });
+
+  it("with the mode off the Lead gets no snapshot", () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "hi" });
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
+  });
+
+  it("group_assign_task from the Lead's turn wakes the assignee (a hop); assigning itself does not", async () => {
+    const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
+    const { group, alpha, beta } = squad();
+    setAgentGroupMode(group.id, "coordinator");
+    const { runtime, groups } = setup();
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const lead = { sessionId: alpha, groupId: group.id };
+      const first = createMemberGroupTask({ groupId: group.id, actorSessionId: alpha, title: "A" });
+      const second = createMemberGroupTask({
+        groupId: group.id,
+        actorSessionId: alpha,
+        title: "B",
+      });
+      const user = groups.postUserMessage({ groupId: group.id, body: "split the work" });
+      runGroupTool("group_assign_task", lead, { taskId: first.id, memberId: "Beta" });
+      expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+      expect(room(group.id).at(-1)).toMatchObject({
+        kind: "status",
+        authorSessionId: alpha,
+        mentions: [beta],
+        chainId: user.id,
+      });
+      expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 2 });
+      runGroupTool("group_assign_task", lead, { taskId: second.id, memberId: "Alpha" });
+      expect(room(group.id).at(-1)?.body).toBe(`Assigned: "B" (task ${second.id}) → @Alpha`);
+      expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+      expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 2 });
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
   });
 });
 

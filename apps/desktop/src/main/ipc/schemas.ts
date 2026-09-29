@@ -963,6 +963,10 @@ export const groupSetLeadSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
   .strict();
 
+export const groupSetModeSchema = z
+  .object({ groupId: groupIdString, mode: z.enum(["free", "coordinator"]) })
+  .strict();
+
 /** A room message body; long enough for pasted logs, bounded for the prompt budget. */
 export const MAX_GROUP_MESSAGE_BODY = 20_000;
 

@@ -1,4 +1,5 @@
 import type {
+  AgentGroupMode,
   AgentGroupWithMembers,
   CreateAgentGroupInput,
   GroupDecision,
@@ -18,6 +19,7 @@ import {
   groupRemoveMemberSchema,
   groupRenameSchema,
   groupSetLeadSchema,
+  groupSetModeSchema,
   groupUpdateMembersSchema,
   parseIpcInput,
 } from "./schemas";
@@ -32,6 +34,8 @@ export type GroupIpcService = {
   addAgentGroupMember(input: { groupId: string; sessionId: string; role?: string }): unknown;
   removeAgentGroupMember(groupId: string, sessionId: string): void;
   setAgentGroupLead(groupId: string, sessionId: string | null): unknown;
+  /** The room menu's "Coordinator mode" toggle (PR 7). */
+  setAgentGroupMode(groupId: string, mode: AgentGroupMode): unknown;
   updateAgentGroupMembers(
     groupId: string,
     input: Omit<UpdateAgentGroupMembersInput, "groupId">,
@@ -192,6 +196,13 @@ export function registerGroupIpcHandlers(
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupSetLeadSchema, input, IPC_CHANNELS.groupSetLead);
     service.setAgentGroupLead(parsed.groupId, parsed.sessionId);
+    return list();
+  });
+
+  ipc.handle(IPC_CHANNELS.groupSetMode, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupSetModeSchema, input, IPC_CHANNELS.groupSetMode);
+    service.setAgentGroupMode(parsed.groupId, parsed.mode);
     return list();
   });
 }

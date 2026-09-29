@@ -19,6 +19,7 @@ import {
   type GroupWorktreeReady,
 } from "../../groups/group-runtime";
 import {
+  assignGroupTask,
   claimGroupTask,
   createMemberGroupTask,
   fillMemberTaskBranches,
@@ -60,6 +61,7 @@ export const GROUP_REQUEST_REVIEW_TOOL = "group_request_review";
 export const GROUP_REVIEW_TASK_TOOL = "group_review_task";
 export const GROUP_START_WORKTREE_TOOL = "group_start_worktree";
 export const GROUP_RECORD_DECISION_TOOL = "group_record_decision";
+export const GROUP_ASSIGN_TASK_TOOL = "group_assign_task";
 
 export const GROUP_TOOL_NAMES = [
   GROUP_READ_MESSAGES_TOOL,
@@ -71,6 +73,7 @@ export const GROUP_TOOL_NAMES = [
   GROUP_REVIEW_TASK_TOOL,
   GROUP_START_WORKTREE_TOOL,
   GROUP_RECORD_DECISION_TOOL,
+  GROUP_ASSIGN_TASK_TOOL,
 ] as const;
 
 export type GroupToolName = (typeof GROUP_TOOL_NAMES)[number];
@@ -122,6 +125,7 @@ export type GroupToolParams = {
   group_review_task: { id: string; verdict: "approve" | "changes"; note?: string };
   group_start_worktree: Record<string, never>;
   group_record_decision: { text: string };
+  group_assign_task: { taskId: string; memberId: string; note?: string };
 };
 
 class ToolInputError extends Error {
@@ -383,6 +387,32 @@ export function runGroupTool<N extends SyncGroupToolName>(
         });
         return `Recorded decision ${decision.id}: ${decision.text}`;
       }
+      case "group_assign_task": {
+        const input = params as GroupToolParams["group_assign_task"];
+        const assignee = resolveMember(members, input.memberId);
+        const branch = memberWorktreeBranch(groupId, assignee);
+        const { task, previousOwnerSessionId } = assignGroupTask(
+          groupId,
+          input.taskId,
+          actor,
+          assignee,
+          branch ? { branch } : {},
+        );
+        const note = input.note?.trim().slice(0, MAX_NOTE_CHARS);
+        const subject = `"${task.title}" (task ${task.id})`;
+        const body = previousOwnerSessionId
+          ? `Reassigned: ${subject}: ${label(members, previousOwnerSessionId)} → ${label(members, assignee)}`
+          : `Assigned: ${subject} → ${label(members, assignee)}`;
+        // Wakes the new owner (a hop); the Lead assigning itself only posts the line.
+        taskWakeSink?.({
+          groupId,
+          actorSessionId: actor,
+          targetSessionId: assignee,
+          body: note ? `${body}: ${note}` : body,
+          ...(assignee === actor ? { wake: false } : {}),
+        });
+        return `${previousOwnerSessionId ? "Reassigned" : "Assigned"} ${formatTask(members, task)}`;
+      }
       default:
         throw new ToolInputError("invalid-value", `Unknown group tool ${String(name)}.`);
     }
@@ -550,6 +580,14 @@ const schemas = {
     { text: Type.String({ description: "The decision, 1-500 characters." }) },
     { additionalProperties: false },
   ),
+  group_assign_task: Type.Object(
+    {
+      taskId: idParam,
+      memberId: Type.String({ minLength: 1, description: "Member title or session id." }),
+      note: Type.Optional(Type.String({ maxLength: MAX_NOTE_CHARS })),
+    },
+    { additionalProperties: false },
+  ),
 } satisfies Record<GroupToolName, unknown>;
 
 const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; snippet: string }> =
@@ -606,6 +644,13 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
         'Record a decision the group agreed on (1-500 characters) so every member sees it in the group\'s decisions from now on. Posts "Decision: <text>" in the room without waking anyone. A group keeps at most 100 decisions; only the user deletes them.',
       snippet: "group_record_decision(text) — record an agreed decision for the group.",
     },
+    group_assign_task: {
+      label: "Assign group task",
+      description:
+        "Coordinator mode, Lead only: give a task to a member (yourself included). An open task moves to in_progress with that owner; an in_progress task owned by someone else is reassigned. Posts the assignment in the room and wakes the new owner (not you). in_review, done and cancelled tasks cannot be assigned.",
+      snippet:
+        "group_assign_task(taskId, memberId, note?) — as coordinator, hand a task to a member.",
+    },
   };
 
 function toResult(text: string, terminate = false): AgentToolResult<{ text: string }> {
@@ -659,7 +704,14 @@ export function registerGroupTools(): void {
           verb: DESCRIPTIONS[name].label,
           ...(readOnly || name === GROUP_START_WORKTREE_TOOL
             ? {}
-            : { primaryArgKey: name === GROUP_RECORD_DECISION_TOOL ? "text" : "id" }),
+            : {
+                primaryArgKey:
+                  name === GROUP_RECORD_DECISION_TOOL
+                    ? "text"
+                    : name === GROUP_ASSIGN_TASK_TOOL
+                      ? "taskId"
+                      : "id",
+              }),
         },
       },
       definition: defineGroupTool(name),

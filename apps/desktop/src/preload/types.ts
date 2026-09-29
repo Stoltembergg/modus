@@ -1,6 +1,7 @@
 import type {
   AddDocInput,
   AgentEvent,
+  AgentGroupMode,
   AgentGroupWithMembers,
   AgentMode,
   AgentReviewDepth,
@@ -173,6 +174,8 @@ export type ModusApi = {
     removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
     /** Set or clear (null) the lead; the lead must be a member. */
     setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
+    /** Coordinator mode on/off (kept but ignored while the group has no Lead). */
+    setMode(input: { groupId: string; mode: AgentGroupMode }): Promise<AgentGroupWithMembers[]>;
     /**
      * Replace the members and lead in one all-or-nothing step (rejects, writing
      * nothing, if any added member is refused); returns the refreshed list.

@@ -27,6 +27,8 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "call-alone": "The member must start its worktree with a message that makes no other tool call.",
   "invalid-text": "A decision needs 1 to 500 characters of text.",
   "limit-reached": "This group already has 100 decisions. Delete one first.",
+  "not-coordinator": "Only the group's Lead can assign tasks.",
+  "coordinator-off": "Coordinator mode is off, or the group has no Lead.",
 };
 
 /**

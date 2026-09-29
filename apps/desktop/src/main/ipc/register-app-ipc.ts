@@ -151,6 +151,7 @@ import {
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
+  setAgentGroupMode,
   updateAgentGroupMembers,
 } from "../groups/group-store";
 import {
@@ -1802,6 +1803,7 @@ export function registerAppIpc({
     addAgentGroupMember,
     removeAgentGroupMember,
     setAgentGroupLead,
+    setAgentGroupMode,
     updateAgentGroupMembers,
     listGroupTasks: (groupId) => listGroupTasks(groupId),
     cancelGroupTask,

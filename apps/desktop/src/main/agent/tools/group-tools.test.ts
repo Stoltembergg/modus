@@ -17,6 +17,8 @@ const {
   listGroupMessages,
   listGroupTasks,
   removeAgentGroupMember,
+  setAgentGroupLead,
+  setAgentGroupMode,
 } = await import("../../groups/group-store");
 const {
   GROUP_READ_MESSAGES_MAX_LIMIT,
@@ -360,6 +362,7 @@ describe("group member tools", () => {
         ["group_review_task", { id, verdict: "approve" }],
         ["group_start_worktree", {}],
         ["group_record_decision", { text: "Sneaky decision" }],
+        ["group_assign_task", { taskId: id, memberId: "Beta" }],
       ] as const) {
         expect(await call(name, params)).toMatch(/^\[group-error:not-a-member\] /);
       }
@@ -469,6 +472,102 @@ describe("group_record_decision", () => {
       runGroupTool("group_record_decision", { sessionId: alpha, groupId: group.id }, { text: "x" }),
     ).toMatch(/^\[group-error:not-a-member\] /);
     expect(listGroupDecisions(group.id)).toEqual([]);
+    expect(wakes).toEqual([]);
+  });
+});
+
+describe("group_assign_task (coordinator mode)", () => {
+  /** Squad with Alpha as Lead and coordinator mode on. */
+  function coordinated() {
+    const fixture = squad();
+    setAgentGroupMode(fixture.group.id, "coordinator");
+    const lead = { sessionId: fixture.alpha, groupId: fixture.group.id };
+    const create = (title: string) =>
+      taskIdFrom(runGroupTool("group_create_task", lead, { title }));
+    return { ...fixture, lead, create };
+  }
+
+  it("assigns an open task: in_progress, posts Assigned and wakes the member (with the note)", () => {
+    const { group, alpha, beta, lead, create } = coordinated();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const id = create("Parser");
+    const text = runGroupTool("group_assign_task", lead, {
+      taskId: id,
+      memberId: "@Beta",
+      note: " start with the lexer ",
+    });
+    expect(text).toMatch(/^Assigned task \S+ \[in_progress\] "Parser" owner=@Beta/);
+    expect(listGroupTasks(group.id)[0]).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: beta,
+    });
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: beta,
+        body: `Assigned: "Parser" (task ${id}) → @Beta: start with the lexer`,
+      },
+    ]);
+  });
+
+  it("reassigns an in_progress task: Reassigned old → new, wakes only the new owner", () => {
+    const { group, alpha, beta, lead, create } = coordinated();
+    const gamma = insertSession(insertWorkspace(), "Gamma");
+    const id = create("Parser");
+    runGroupTool("group_claim_task", { sessionId: beta, groupId: group.id }, { id });
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    // Gamma is not a member yet.
+    expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: gamma })).toMatch(
+      /^\[group-error:not-a-member\] /,
+    );
+    const text = runGroupTool("group_assign_task", lead, { taskId: id, memberId: alpha });
+    expect(text).toMatch(/^Reassigned task \S+ \[in_progress\] "Parser" owner=@Alpha/);
+    // The Lead took it itself: the line posts, nobody is woken.
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: alpha,
+        body: `Reassigned: "Parser" (task ${id}): @Beta → @Alpha`,
+        wake: false,
+      },
+    ]);
+    runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" });
+    expect(wakes.at(-1)).toEqual({
+      groupId: group.id,
+      actorSessionId: alpha,
+      targetSessionId: beta,
+      body: `Reassigned: "Parser" (task ${id}): @Alpha → @Beta`,
+    });
+  });
+
+  it("returns not-coordinator, coordinator-off and invalid-transition as text, waking nobody", () => {
+    const { group, beta, lead, create } = coordinated();
+    const id = create("Parser");
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    expect(
+      runGroupTool(
+        "group_assign_task",
+        { sessionId: beta, groupId: group.id },
+        { taskId: id, memberId: "Alpha" },
+      ),
+    ).toMatch(/^\[group-error:not-coordinator\] /);
+    runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" });
+    wakes.length = 0;
+    // Beta already owns it.
+    expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" })).toMatch(
+      /^\[group-error:invalid-transition\] /,
+    );
+    setAgentGroupLead(group.id, null);
+    expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" })).toMatch(
+      /^\[group-error:coordinator-off\] /,
+    );
+    setAgentGroupLead(group.id, lead.sessionId);
+    setAgentGroupMode(group.id, "free");
+    expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" })).toMatch(
+      /^\[group-error:coordinator-off\] /,
+    );
     expect(wakes).toEqual([]);
   });
 });

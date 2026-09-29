@@ -40,6 +40,7 @@ const api: ModusApi = {
     addMember: (input) => ipcRenderer.invoke("group:add-member", input),
     removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
     setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
+    setMode: (input) => ipcRenderer.invoke("group:set-mode", input),
     updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
     postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
     listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),

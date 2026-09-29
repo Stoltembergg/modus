@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 
 let userData: string;
 
@@ -21,6 +22,7 @@ const {
   GroupStoreError,
   addAgentGroupMember,
   appendGroupMessage,
+  assignGroupTask,
   cancelGroupTask,
   claimGroupTask,
   createMemberGroupTask,
@@ -1035,6 +1037,109 @@ describe("member task transitions", () => {
     expectStoreError(() => reviewGroupTask(group.id, task.id, b, "changes"), "not-reviewer");
     // It is claimable again.
     expect(claimGroupTask(group.id, task.id, c)).toMatchObject({ ownerSessionId: c });
+  });
+});
+
+describe("coordinator mode (PR 7)", () => {
+  /** Squad (lead a) with a third member c and a stranger from the same Project. */
+  function coordinated() {
+    const fixture = projectGroupFixture();
+    const c = insertSession(fixture.workspaceId);
+    addAgentGroupMember({ groupId: fixture.group.id, sessionId: c });
+    setAgentGroupLead(fixture.group.id, fixture.a);
+    setAgentGroupMode(fixture.group.id, "coordinator");
+    const stranger = insertSession(fixture.workspaceId);
+    return { ...fixture, c, stranger };
+  }
+
+  it("persists the flag; without a Lead it is kept but inactive, and a new Lead coordinates", () => {
+    const { a, b, group } = coordinated();
+    expect(getAgentGroup(group.id)?.mode).toBe("coordinator");
+    expect(listAgentGroupsWithMembers().find((item) => item.id === group.id)?.mode).toBe(
+      "coordinator",
+    );
+    expect(isCoordinatorModeActive(getAgentGroup(group.id) ?? group)).toBe(true);
+    setAgentGroupLead(group.id, null);
+    const leaderless = getAgentGroup(group.id);
+    expect(leaderless?.mode).toBe("coordinator");
+    expect(isCoordinatorModeActive(leaderless ?? group)).toBe(false);
+    setAgentGroupLead(group.id, b);
+    expect(isCoordinatorModeActive(getAgentGroup(group.id) ?? group)).toBe(true);
+    expect(isCoordinatorModeActive({ mode: "free", leadSessionId: a })).toBe(false);
+    setAgentGroupMode(group.id, "free");
+    expect(getAgentGroup(group.id)?.mode).toBe("free");
+  });
+
+  it("assign: an open task goes in_progress with the assignee (branch filled, reviewer cleared)", () => {
+    const { a, b, c, group } = coordinated();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: c,
+      title: "Parser",
+      reviewerSessionId: b,
+    });
+    const result = assignGroupTask(group.id, task.id, a, b, { branch: "modus/group/b" });
+    expect(result.previousOwnerSessionId).toBeUndefined();
+    expect(result.task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: b,
+      branch: "modus/group/b",
+    });
+    // The assignee was the suggested reviewer: cleared, like a claim.
+    expect(result.task.reviewerSessionId).toBeUndefined();
+    // The Lead may assign to itself.
+    const own = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "Own" });
+    expect(assignGroupTask(group.id, own.id, a, a).task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: a,
+    });
+  });
+
+  it("assign: an in_progress task with another owner is reassigned (branch follows the new owner)", () => {
+    const { a, b, c, group } = coordinated();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    claimGroupTask(group.id, task.id, b, { branch: "modus/group/b" });
+    const moved = assignGroupTask(group.id, task.id, a, c);
+    expect(moved.previousOwnerSessionId).toBe(b);
+    expect(moved.task).toMatchObject({ status: "in_progress", ownerSessionId: c });
+    expect(moved.task.branch).toBeUndefined();
+    const back = assignGroupTask(group.id, task.id, a, b, { branch: "modus/group/b" });
+    expect(back.task).toMatchObject({ ownerSessionId: b, branch: "modus/group/b" });
+    // Already the owner: nothing to reassign.
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "invalid-transition");
+  });
+
+  it("assign: in_review, done and cancelled are invalid-transition", () => {
+    const { a, b, c, group } = coordinated();
+    const review = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "R" });
+    claimGroupTask(group.id, review.id, b);
+    requestGroupTaskReview(group.id, review.id, b, c);
+    const done = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "D" });
+    claimGroupTask(group.id, done.id, b);
+    requestGroupTaskReview(group.id, done.id, b, c);
+    reviewGroupTask(group.id, done.id, c, "approve");
+    const cancelled = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "C" });
+    cancelGroupTask(cancelled.id);
+    for (const task of [review, done, cancelled]) {
+      expectStoreError(() => assignGroupTask(group.id, task.id, a, c), "invalid-transition");
+    }
+  });
+
+  it("assign: coordinator-off, not-coordinator, not-a-member and task-not-found", () => {
+    const { a, b, group, stranger } = coordinated();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    expectStoreError(() => assignGroupTask(group.id, task.id, b, a), "not-coordinator");
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, stranger), "not-a-member");
+    expectStoreError(() => assignGroupTask(group.id, "missing", a, b), "task-not-found");
+    const other = createAgentGroup({ name: "Other" });
+    const foreign = createGroupTask({ groupId: other.id, title: "Foreign" });
+    expectStoreError(() => assignGroupTask(group.id, foreign.id, a, b), "task-not-found");
+    setAgentGroupLead(group.id, null);
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "coordinator-off");
+    setAgentGroupLead(group.id, a);
+    setAgentGroupMode(group.id, "free");
+    expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "coordinator-off");
+    expect(listGroupTasks(group.id).find((item) => item.id === task.id)?.status).toBe("open");
   });
 });
 

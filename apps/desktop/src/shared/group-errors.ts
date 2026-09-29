@@ -37,6 +37,10 @@ export const GROUP_ERROR_CODES = [
   "invalid-text",
   // group_record_decision: the group already has 100 decisions.
   "limit-reached",
+  // group_assign_task (coordinator mode): the caller is not the group's Lead.
+  "not-coordinator",
+  // group_assign_task: coordinator mode is off, or the group has no Lead.
+  "coordinator-off",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];
