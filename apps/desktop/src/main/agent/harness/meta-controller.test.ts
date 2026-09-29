@@ -239,4 +239,159 @@ describe("meta-controller", () => {
     expect(decision.action).toBe("mcp_preflight");
     expect(decision.specialistRole).toBe("librarian");
   });
+
+  it("applies promoted avoid strategies to prefer avoid_retry on QA fail", () => {
+    const decision = decideNext(
+      snapshot({
+        qaStatus: "failed",
+        promotedPolicies: [
+          {
+            version: 1,
+            promotionId: "p1",
+            insightId: "i1",
+            kind: "repeated_failures",
+            source: "promoted_insight",
+            promotedAt: "2026-01-01T00:00:00.000Z",
+            effects: [{ op: "add_avoid_strategies", codes: ["same_edit_retry", "blind_retry"] }],
+          },
+        ],
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("avoid_retry");
+    expect(decision.avoidStrategyCodes).toEqual(
+      expect.arrayContaining(["same_edit_retry", "blind_retry"]),
+    );
+    expect(decision.reasonCodes).toContain("promoted_policy_add_avoid_strategies");
+  });
+
+  it("prefers retrieve_local under promoted context_pressure bias", () => {
+    const decision = decideNext(
+      snapshot({
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "medium",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+        },
+        impact: {
+          blastRadius: "cross_module",
+          impactedPathCount: 9,
+          confidence: "unknown",
+          unknownReasons: ["no_typed_paths"],
+          reasonCodes: [],
+        },
+        unresolvedCriterionCount: 1,
+        promotedPolicies: [
+          {
+            version: 1,
+            promotionId: "p2",
+            insightId: "i2",
+            kind: "context_pressure",
+            source: "promoted_insight",
+            promotedAt: "2026-01-01T00:00:00.000Z",
+            effects: [{ op: "prefer_retrieve_local", bias: true }],
+          },
+        ],
+      }),
+    );
+    expect(decision.action).toBe("retrieve_local");
+    expect(decision.reasonCodes).toContain("promoted_policy_prefer_retrieve_local");
+    expect(["execute", "spawn_readonly_specialist"]).not.toContain(decision.action);
+  });
+
+  it("prefers replan on QA fail when same_path_rework policy is promoted", () => {
+    const decision = decideNext(
+      snapshot({
+        qaStatus: "failed",
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "high",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+        },
+        impact: {
+          blastRadius: "cross_module",
+          impactedPathCount: 8,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        promotedPolicies: [
+          {
+            version: 1,
+            promotionId: "p3",
+            insightId: "i3",
+            kind: "same_path_rework",
+            source: "promoted_insight",
+            promotedAt: "2026-01-01T00:00:00.000Z",
+            effects: [
+              { op: "prefer_replan_on_qa_fail", bias: true },
+              { op: "add_avoid_strategies", codes: ["same_edit_retry"] },
+            ],
+          },
+        ],
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    // Avoid strategies still win when present; replan bias applies when avoid does not fire.
+    // same_edit_retry is in avoid list → avoid_retry takes precedence (safe).
+    expect(decision.action).toBe("avoid_retry");
+  });
+
+  it("replans on QA fail from prefer_replan when no avoid codes apply", () => {
+    const decision = decideNext(
+      snapshot({
+        qaStatus: "failed",
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "high",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+        },
+        impact: {
+          blastRadius: "cross_module",
+          impactedPathCount: 8,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        promotedPolicies: [
+          {
+            version: 1,
+            promotionId: "p4",
+            insightId: "i4",
+            kind: "same_path_rework",
+            source: "promoted_insight",
+            promotedAt: "2026-01-01T00:00:00.000Z",
+            effects: [{ op: "prefer_replan_on_qa_fail", bias: true }],
+          },
+        ],
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("replan");
+    expect(decision.reasonCodes).toContain("promoted_policy_prefer_replan_on_qa_fail");
+  });
 });
