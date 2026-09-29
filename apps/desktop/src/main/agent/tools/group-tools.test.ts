@@ -534,6 +534,7 @@ describe("group_assign_task (coordinator mode)", () => {
       },
     ]);
     runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" });
+    // No branch on the task: no suffix.
     expect(wakes.at(-1)).toEqual({
       groupId: group.id,
       actorSessionId: alpha,

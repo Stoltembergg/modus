@@ -400,8 +400,11 @@ export function runGroupTool<N extends SyncGroupToolName>(
         );
         const note = input.note?.trim().slice(0, MAX_NOTE_CHARS);
         const subject = `"${task.title}" (task ${task.id})`;
+        // A reassigned task keeps the old owner's branch (where the earlier work is).
         const body = previousOwnerSessionId
-          ? `Reassigned: ${subject}: ${label(members, previousOwnerSessionId)} → ${label(members, assignee)}`
+          ? `Reassigned: ${subject}: ${label(members, previousOwnerSessionId)} → ${label(members, assignee)}${
+              task.branch ? ` (branch: \`${task.branch}\`)` : ""
+            }`
           : `Assigned: ${subject} → ${label(members, assignee)}`;
         // Wakes the new owner (a hop); the Lead assigning itself only posts the line.
         taskWakeSink?.({

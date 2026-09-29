@@ -35,6 +35,7 @@ const {
   createAgentGroupWithMembers,
   createGroupTask,
   deleteGroupDecision,
+  fillMemberTaskBranches,
   GROUP_DECISION_LIMIT,
   GROUP_DECISION_MAX_CHARS,
   deleteAgentGroup,
@@ -1095,15 +1096,30 @@ describe("coordinator mode (PR 7)", () => {
     });
   });
 
-  it("assign: an in_progress task with another owner is reassigned (branch follows the new owner)", () => {
+  it("assign: an in_progress task with another owner is reassigned; its branch never changes", () => {
     const { a, b, c, group } = coordinated();
     const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
     claimGroupTask(group.id, task.id, b, { branch: "modus/group/b" });
-    const moved = assignGroupTask(group.id, task.id, a, c);
+    // The old owner's branch stays: the record of where the earlier work is.
+    const moved = assignGroupTask(group.id, task.id, a, c, { branch: "modus/group/c" });
     expect(moved.previousOwnerSessionId).toBe(b);
-    expect(moved.task).toMatchObject({ status: "in_progress", ownerSessionId: c });
-    expect(moved.task.branch).toBeUndefined();
-    const back = assignGroupTask(group.id, task.id, a, b, { branch: "modus/group/b" });
+    expect(moved.task).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: c,
+      branch: "modus/group/b",
+    });
+    // The new owner's worktree only fills null branches: this one is kept.
+    expect(fillMemberTaskBranches(group.id, c, "modus/group/c")).toEqual([]);
+    expect(listGroupTasks(group.id).find((item) => item.id === task.id)?.branch).toBe(
+      "modus/group/b",
+    );
+    // No branch stays no branch on reassignment.
+    const bare = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "Bare" });
+    claimGroupTask(group.id, bare.id, b);
+    expect(assignGroupTask(group.id, bare.id, a, c, { branch: "modus/group/c" }).task.branch).toBe(
+      undefined,
+    );
+    const back = assignGroupTask(group.id, task.id, a, b);
     expect(back.task).toMatchObject({ ownerSessionId: b, branch: "modus/group/b" });
     // Already the owner: nothing to reassign.
     expectStoreError(() => assignGroupTask(group.id, task.id, a, b), "invalid-transition");

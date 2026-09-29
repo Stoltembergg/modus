@@ -1090,8 +1090,6 @@ function writeTaskTransition(
     owner?: string | null;
     reviewer?: string | null;
     branch?: string;
-    /** Overwrites the branch (a reassignment: the old owner's branch does not follow). */
-    replaceBranch?: string | null;
   },
 ): GroupTask {
   const sets = ["status = ?"];
@@ -1108,9 +1106,6 @@ function writeTaskTransition(
     // Fills a missing branch only; an existing value is never overwritten.
     sets.push("branch = coalesce(branch, ?)");
     params.push(fields.branch);
-  } else if (fields.replaceBranch !== undefined) {
-    sets.push("branch = ?");
-    params.push(fields.replaceBranch);
   }
   sets.push("updated_at = ?");
   params.push(new Date().toISOString());
@@ -1172,7 +1167,8 @@ export function claimGroupTask(
 /**
  * Coordinator mode (PR 7): the Lead hands a task to a member (itself included).
  * `open` → `in_progress` with the assignee; `in_progress` with another owner is
- * a reassignment (returns the previous owner); in_review / done / cancelled
+ * a reassignment (returns the previous owner; the branch is kept on purpose, as
+ * the record of where the earlier work is); in_review / done / cancelled
  * (and the current owner again) are invalid-transition. Only while the mode is
  * in effect (coordinator-off) and only by the Lead (not-coordinator).
  */
@@ -1221,7 +1217,6 @@ export function assignGroupTask(
         status: IN_PROGRESS_TASK_STATUS,
         owner: assigneeSessionId,
         ...reviewer,
-        replaceBranch: options.branch ?? null,
       }),
       previousOwnerSessionId: task.ownerSessionId,
     };
