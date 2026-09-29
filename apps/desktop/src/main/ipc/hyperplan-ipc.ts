@@ -14,6 +14,7 @@ import {
   getHyperPlanOwnerEpochIdentity,
   getHyperPlanSelection,
   getHyperPlanStartOperation,
+  type HyperPlanDraftOwnerEpoch,
   isHyperPlanChoicePublished,
   markHyperPlanChoicePublished,
   peekHyperPlanDraft,
@@ -153,7 +154,9 @@ export function registerHyperPlanIpcHandlers(ipcMain: IpcMainLike): void {
 
   ipcMain.handle(IPC_CHANNELS.agentCreateHyperPlanDraft, async (event, input) => {
     assertTrustedSender(event);
-    let reservation: { sessionId: string; ownerId: number; ownerEpoch: number } | undefined;
+    let reservation:
+      | { sessionId: string; ownerId: number; ownerEpoch: HyperPlanDraftOwnerEpoch }
+      | undefined;
     try {
       const parsed = parseIpcInput(
         agentCreateHyperPlanDraftSchema,
