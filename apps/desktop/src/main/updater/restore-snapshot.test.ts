@@ -1,0 +1,235 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UpdateRestoreUiState } from "../../shared/contracts";
+import { MAX_RESTORE_UI_STATE_BYTES } from "../../shared/update-restore";
+import { updateSaveUiStateSchema } from "../ipc/schemas";
+import {
+  createRestoreSnapshotKeeper,
+  MAX_RESTORE_SNAPSHOT_FILE_BYTES,
+  RESTORE_SNAPSHOT_MAX_AGE_MS,
+  RESTORE_SNAPSHOT_SCHEMA_VERSION,
+  restoreSnapshotPath,
+  takeRestoreSnapshot,
+} from "./restore-snapshot";
+
+const NOW = Date.parse("2026-09-29T12:00:00.000Z");
+const logger = () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() });
+
+const UI_STATE: UpdateRestoreUiState = {
+  activeWorkspaceId: "ws-1",
+  activeSessionId: "s-1",
+  drafts: { "s-1": { text: "half-written prompt", mode: "plan" } },
+  hero: { text: "new idea", mode: "spec" },
+  sidebar: { open: false, width: 280 },
+  inspector: { open: true, width: 520, tab: "files" },
+  settingsOpen: false,
+};
+
+let root: string;
+let workDir: string;
+
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "modus-restore-"));
+  workDir = join(root, "updater");
+});
+
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
+
+function keeper(pending: boolean) {
+  return createRestoreSnapshotKeeper({
+    workDir,
+    currentVersion: "1.2.0",
+    hasPendingUpdate: () => pending,
+    now: () => NOW,
+    logger: logger(),
+  });
+}
+
+function writeFile(content: unknown) {
+  const path = restoreSnapshotPath(workDir);
+  mkdirSync(workDir, { recursive: true });
+  writeFileSync(path, typeof content === "string" ? content : JSON.stringify(content));
+  return path;
+}
+
+function file(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: RESTORE_SNAPSHOT_SCHEMA_VERSION,
+    fromVersion: "1.2.0",
+    createdAt: new Date(NOW - 60_000).toISOString(),
+    state: UI_STATE,
+    ...overrides,
+  };
+}
+
+function take(currentVersion = "1.3.0", now = NOW) {
+  const log = logger();
+  return {
+    state: takeRestoreSnapshot({ workDir, currentVersion, now: () => now, logger: log }),
+    log,
+  };
+}
+
+describe("restore snapshot write on quit", () => {
+  it("writes the latest state synchronously while an update is pending", () => {
+    const k = keeper(true);
+    k.remember({ ...UI_STATE, settingsOpen: true });
+    k.remember(UI_STATE);
+    expect(k.writeOnQuit()).toBe(true);
+    const written = JSON.parse(readFileSync(restoreSnapshotPath(workDir), "utf8"));
+    expect(written).toEqual({
+      schemaVersion: 1,
+      fromVersion: "1.2.0",
+      createdAt: "2026-09-29T12:00:00.000Z",
+      state: UI_STATE,
+    });
+    expect(existsSync(`${restoreSnapshotPath(workDir)}.tmp`)).toBe(false);
+    if (process.platform !== "win32") {
+      expect(statSync(restoreSnapshotPath(workDir)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("writes nothing without a pending downloaded update", () => {
+    const k = keeper(false);
+    k.remember(UI_STATE);
+    expect(k.writeOnQuit()).toBe(false);
+    expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
+  });
+
+  it("writes nothing once the kept state was cleared", () => {
+    const k = keeper(true);
+    k.remember(UI_STATE);
+    k.remember(null);
+    expect(k.writeOnQuit()).toBe(false);
+    expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
+  });
+
+  it("writes nothing when the renderer never pushed a state", () => {
+    expect(keeper(true).writeOnQuit()).toBe(false);
+    expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
+  });
+
+  it("never throws at quit when the directory cannot be written", () => {
+    writeFileSync(join(root, "blocker"), "");
+    const log = logger();
+    const k = createRestoreSnapshotKeeper({
+      workDir: join(root, "blocker", "updater"),
+      currentVersion: "1.2.0",
+      hasPendingUpdate: () => true,
+      now: () => NOW,
+      logger: log,
+    });
+    k.remember(UI_STATE);
+    expect(k.writeOnQuit()).toBe(false);
+    expect(log.warn).toHaveBeenCalled();
+  });
+});
+
+describe("restore snapshot take at startup", () => {
+  it("restores after a version change and deletes the file once read", () => {
+    const k = keeper(true);
+    k.remember(UI_STATE);
+    k.writeOnQuit();
+    expect(take("1.3.0").state).toEqual(UI_STATE);
+    expect(existsSync(restoreSnapshotPath(workDir))).toBe(false);
+    expect(take("1.3.0").state).toBeNull();
+  });
+
+  it("restores on any semver upgrade (numeric, not string, comparison)", () => {
+    for (const [from, current] of [
+      ["1.2.0", "1.2.1"],
+      ["1.9.0", "1.10.0"],
+      ["0.9.9", "1.0.0"],
+    ]) {
+      writeFile(file({ fromVersion: from }));
+      expect(take(current).state).toEqual(UI_STATE);
+    }
+  });
+
+  it("discards when the running version is not stable", () => {
+    writeFile(file());
+    expect(take("1.3.0-beta.1").state).toBeNull();
+  });
+
+  it("returns null when there is no file", () => {
+    expect(take().state).toBeNull();
+  });
+
+  it.each([
+    ["invalid JSON", "{not json"],
+    ["a JSON null", "null"],
+    ["the same version", file({ fromVersion: "1.3.0" })],
+    ["a downgrade", file({ fromVersion: "1.4.0" })],
+    ["a downgrade by patch", file({ fromVersion: "1.3.1" })],
+    ["a non-stable from version", file({ fromVersion: "1.2.0-beta.1" })],
+    ["a missing from version", file({ fromVersion: undefined })],
+    ["an unknown schema", file({ schemaVersion: 2 })],
+    ["a missing schema", file({ schemaVersion: undefined })],
+    [
+      "a snapshot older than 24 h",
+      file({ createdAt: new Date(NOW - RESTORE_SNAPSHOT_MAX_AGE_MS).toISOString() }),
+    ],
+    ["a snapshot from the future", file({ createdAt: new Date(NOW + 60_000).toISOString() })],
+    ["an unreadable date", file({ createdAt: "yesterday" })],
+    ["an invalid state", file({ state: { ...UI_STATE, activeSessionId: 42 } })],
+    ["an extra state field", file({ state: { ...UI_STATE, attachments: [] } })],
+    ["an oversized file", file({ padding: "x".repeat(600 * 1024) })],
+    [
+      "a file just over the file cap",
+      file({ padding: "x".repeat(MAX_RESTORE_SNAPSHOT_FILE_BYTES) }),
+    ],
+  ])("discards %s silently and deletes the file", (_label, content) => {
+    const path = writeFile(content);
+    const { state, log } = take("1.3.0");
+    expect(state).toBeNull();
+    expect(existsSync(path)).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("restores a state of exactly the IPC byte cap written through the real path", () => {
+    // Measured like the IPC cap: UTF-8 bytes of JSON.stringify(state).
+    const size = (value: unknown) => Buffer.byteLength(JSON.stringify(value), "utf8");
+    const drafts: UpdateRestoreUiState["drafts"] = {};
+    for (let i = 0; i < 7; i += 1) drafts[`s-${i}`] = { text: "x".repeat(74_000), mode: "build" };
+    const base = { ...UI_STATE, drafts };
+    const missing = MAX_RESTORE_UI_STATE_BYTES - size(base);
+    expect(missing).toBeGreaterThan(0);
+    drafts["s-6"] = { text: "x".repeat(74_000 + missing), mode: "build" };
+    const state = { ...UI_STATE, drafts };
+    expect(size(state)).toBe(MAX_RESTORE_UI_STATE_BYTES);
+
+    // Passes the IPC check at the cap; one byte more does not.
+    const accepted = updateSaveUiStateSchema.safeParse(state);
+    expect(accepted.success).toBe(true);
+    const over = {
+      ...state,
+      drafts: { ...drafts, "s-0": { text: "x".repeat(74_001), mode: "build" } },
+    };
+    expect(updateSaveUiStateSchema.safeParse(over).success).toBe(false);
+
+    const k = keeper(true);
+    k.remember(accepted.success ? accepted.data : null);
+    expect(k.writeOnQuit()).toBe(true);
+    const fileBytes = statSync(restoreSnapshotPath(workDir)).size;
+    expect(fileBytes).toBeGreaterThan(MAX_RESTORE_UI_STATE_BYTES);
+    expect(fileBytes).toBeLessThanOrEqual(MAX_RESTORE_SNAPSHOT_FILE_BYTES);
+    expect(take("1.3.0").state).toEqual(state);
+  });
+
+  it("keeps a snapshot just under 24 h old", () => {
+    writeFile(file({ createdAt: new Date(NOW - RESTORE_SNAPSHOT_MAX_AGE_MS + 1).toISOString() }));
+    expect(take("1.3.0").state).toEqual(UI_STATE);
+  });
+});

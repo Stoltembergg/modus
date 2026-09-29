@@ -183,6 +183,8 @@ export const IPC_CHANNELS = {
   updateRestartNow: "update:restart-now",
   updateDismiss: "update:dismiss",
   updateOpenReleasePage: "update:open-release-page",
+  updateSaveUiState: "update:save-ui-state",
+  updateTakeRestoredUiState: "update:take-restored-ui-state",
   updateStateEvent: "update:state-event",
 } as const;
 

@@ -3,7 +3,8 @@ import { closeSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { app, BrowserWindow, net, shell } from "electron";
-import type { UpdateState } from "../../shared/contracts";
+import type { UpdateRestoreUiState, UpdateState } from "../../shared/contracts";
+import { hasPendingDownloadedUpdate } from "../../shared/update-restore";
 import { getAgentRuntime } from "../agent/runtime-registry";
 import { IPC_CHANNELS } from "../ipc/channels";
 import type { UpdateIpcService } from "../ipc/update-ipc";
@@ -23,6 +24,11 @@ import {
   createMacZipInstaller,
   type HttpResponse,
 } from "./mac-zip-installer";
+import {
+  createRestoreSnapshotKeeper,
+  type RestoreSnapshotKeeper,
+  takeRestoreSnapshot,
+} from "./restore-snapshot";
 import {
   createUpdateController,
   type PlatformInstaller,
@@ -60,10 +66,49 @@ const nodeTimers: UpdateTimers = {
 };
 
 let controller: UpdateController | null = null;
+let restoreKeeper: RestoreSnapshotKeeper | null = null;
+let restoredUiState: UpdateRestoreUiState | null = null;
+
+function updaterWorkDir(): string {
+  return join(app.getPath("userData"), "updater");
+}
+
+function getRestoreKeeper(): RestoreSnapshotKeeper {
+  restoreKeeper ??= createRestoreSnapshotKeeper({
+    workDir: updaterWorkDir(),
+    currentVersion: app.getVersion(),
+    hasPendingUpdate: () => hasPendingDownloadedUpdate(controller?.getState() ?? IDLE),
+    now: () => Date.now(),
+    logger: updaterLogger,
+  });
+  return restoreKeeper;
+}
 
 /**
- * Hook run right before the app quits to install an update. No-op for now; saving and
- * restoring UI state across the restart lands here later.
+ * Takes the UI snapshot left by the previous version (read + delete). Call once at
+ * startup, before the window loads and before the macOS cleanup empties the updater dir.
+ */
+export function takeRestoreSnapshotAtStartup(): void {
+  restoredUiState = takeRestoreSnapshot({
+    workDir: updaterWorkDir(),
+    currentVersion: app.getVersion(),
+    now: () => Date.now(),
+    logger: updaterLogger,
+  });
+}
+
+/**
+ * Synchronous; call from `before-quit`. Writes the latest UI state only while a
+ * downloaded update is pending, so it also covers autoInstallOnAppQuit (a plain quit
+ * with a ready update on Windows/AppImage), where beforeInstallRestart never runs.
+ */
+export function saveRestoreSnapshotOnQuit(): void {
+  restoreKeeper?.writeOnQuit();
+}
+
+/**
+ * Hook run right before the app quits to install an update. The UI state is not
+ * collected here: the renderer pushes it ahead of time and before-quit writes it.
  */
 export async function beforeInstallRestart(): Promise<void> {}
 
@@ -78,6 +123,12 @@ export function getUpdateService(): UpdateIpcService {
     openReleasePage: async () => {
       if (controller) return controller.openReleasePage();
       await shell.openExternal(releasePageUrl());
+    },
+    saveUiState: (state) => getRestoreKeeper().remember(state),
+    takeRestoredUiState: () => {
+      const state = restoredUiState;
+      restoredUiState = null;
+      return state;
     },
   };
 }
@@ -188,7 +239,7 @@ export async function startUpdateService(): Promise<void> {
     installer = pageOnlyInstaller;
   } else if (policy.platform === "darwin") {
     const bundlePath = resolve(app.getPath("exe"), "../../..");
-    const workDir = join(app.getPath("userData"), "updater");
+    const workDir = updaterWorkDir();
     // The script's failure marker lives in workDir: take it before the cleanup.
     await restorePreviousMacInstallFailure({
       workDir,

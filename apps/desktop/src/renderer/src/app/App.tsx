@@ -42,6 +42,7 @@ import type {
   PromptDelivery,
   PromptImageAttachment,
   SkillSelection,
+  UpdateRestoreUiState,
   WorkspaceInfo,
 } from "../../../shared/contracts";
 import modusLogo from "../assets/modus-logo.png";
@@ -66,11 +67,24 @@ import {
 import type { ChatComposerDraft, ChatComposerDraftUpdate } from "../features/agent/ChatPane";
 import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
-import { Composer, createEmptyComposerDraft } from "../features/composer/Composer";
+import {
+  Composer,
+  type ComposerDraft,
+  createEmptyComposerDraft,
+} from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import {
+  createUiStatePusher,
+  isComposerDraftEmpty,
+  isNavigationUntouched,
+  mergeRestoredDrafts,
+  planUiRestore,
+  snapshotUiState,
+  type UiStatePusher,
+} from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
 import { useGitBranch } from "../lib/useGitBranch";
@@ -127,6 +141,8 @@ export function App() {
   // Composer mode for the hero (new-chat) screen — controlled so the "Plan New
   // Idea" pill can start a session straight in plan mode.
   const [heroMode, setHeroMode] = useState<AgentMode>("build");
+  // Lifted only so the text survives an update restart (see restoreUiState).
+  const [heroDraft, setHeroDraft] = useState<ComposerDraft>(createEmptyComposerDraft);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(null);
@@ -158,6 +174,9 @@ export function App() {
   }>({ sessionId: undefined, workspaceId: undefined });
   const layoutRowRef = useRef<HTMLDivElement>(null);
   const initialHydrationRef = useRef<InitialAppHydration | null>(null);
+  const restoredUiStateRef = useRef<Promise<UpdateRestoreUiState | null> | null>(null);
+  const uiStatePusherRef = useRef<UiStatePusher | null>(null);
+  const heroComposerRef = useRef({ draft: heroDraft, contextItems: heroContextItems });
 
   // Track the panel row's live width so side-panel widths can be clamped to keep
   // the main column at least MAIN_MIN_WIDTH (responsive to window + panel state).
@@ -184,6 +203,10 @@ export function App() {
   useEffect(() => {
     activeWorkspaceRef.current = activeWorkspace;
   }, [activeWorkspace]);
+
+  useEffect(() => {
+    heroComposerRef.current = { draft: heroDraft, contextItems: heroContextItems };
+  }, [heroDraft, heroContextItems]);
 
   const requestedWorkspaceId =
     activeWorkspace && !activeWorkspace.inbox ? activeWorkspace.id : undefined;
@@ -324,6 +347,60 @@ export function App() {
           logInitialHydrationError("model settings", error);
         }
       });
+    // UI state saved by the previous version across an update restart (taken once by
+    // main). Applied after the lists load so every id can be checked against them; each
+    // part (navigation, drafts, hero, layout) stands on its own.
+    let restored = restoredUiStateRef.current;
+    if (!restored) {
+      restored = window.modus.update.takeRestoredUiState().catch(() => null);
+      restoredUiStateRef.current = restored;
+    }
+    void Promise.all([restored, hydration.workspaces, hydration.sessions])
+      .then(([snapshot, items, sessions]) => {
+        if (!active || !snapshot) return;
+        const plan = planUiRestore(snapshot, {
+          workspaceIds: new Set(items.map((item) => item.id)),
+          sessionIds: new Set(sessions.map((session) => session.id)),
+        });
+        const { navigation, hero, layout } = plan;
+        // Never undo what the user already did since startup.
+        const navigationUntouched = isNavigationUntouched(
+          {
+            workspaceId: activeWorkspaceRef.current?.id,
+            sessionId: activeSessionIdRef.current,
+          },
+          items[0]?.id,
+        );
+        if (navigation && navigationUntouched) {
+          setActiveWorkspace(
+            items.find((item) => item.id === navigation.activeWorkspaceId) ?? null,
+          );
+          setActiveSessionId(navigation.activeSessionId ?? undefined);
+        }
+        const heroComposer = heroComposerRef.current;
+        if (
+          hero &&
+          isComposerDraftEmpty({ ...heroComposer.draft, contextItems: heroComposer.contextItems })
+        ) {
+          setHeroDraft({ ...createEmptyComposerDraft(), value: hero.text });
+          setHeroMode(hero.mode);
+        }
+        setComposerDraftBySession((current) =>
+          mergeRestoredDrafts(current, plan.drafts, (draft) => ({
+            ...createEmptyComposerDraft(),
+            value: draft.text,
+            contextItems: [],
+            mode: draft.mode,
+          })),
+        );
+        setSidebarOpen(layout.sidebar.open);
+        setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, layout.sidebar.width));
+        setInspectorOpen(layout.inspector.open);
+        setInspectorWidth(Math.max(INSPECTOR_MIN_WIDTH, layout.inspector.width));
+        setInspectorTab(layout.inspector.tab);
+        setSettingsOpen(layout.settingsOpen);
+      })
+      .catch(() => undefined);
     void hydration.settled.then(() => {
       if (active) {
         reportRendererStartup("renderer.initial-hydration-settled");
@@ -339,6 +416,47 @@ export function App() {
     () => window.modus?.model.onCatalogChanged(() => void refreshModelSettings()),
     [refreshModelSettings],
   );
+
+  // While a downloaded update is pending, main keeps the latest UI state and writes it
+  // on quit; the pusher sends nothing otherwise.
+  useEffect(() => {
+    if (!window.modus) return;
+    const pusher = createUiStatePusher(window.modus.update);
+    uiStatePusherRef.current = pusher;
+    return () => {
+      pusher.dispose();
+      uiStatePusherRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    uiStatePusherRef.current?.update(
+      snapshotUiState({
+        activeWorkspaceId: activeWorkspace?.id,
+        activeSessionId,
+        composerDraftBySession,
+        heroDraft,
+        heroMode,
+        sessionIds: new Set(agentSessions.map((session) => session.id)),
+        sidebar: { open: sidebarOpen, width: sidebarWidth },
+        inspector: { open: inspectorOpen, width: inspectorWidth, tab: inspectorTab },
+        settingsOpen,
+      }),
+    );
+  }, [
+    activeWorkspace?.id,
+    activeSessionId,
+    composerDraftBySession,
+    heroDraft,
+    heroMode,
+    agentSessions,
+    sidebarOpen,
+    sidebarWidth,
+    inspectorOpen,
+    inspectorWidth,
+    inspectorTab,
+    settingsOpen,
+  ]);
 
   /* ── Global event intake: one IPC listener feeds the active chat + sidebar ── */
   useEffect(() => {
@@ -404,6 +522,16 @@ export function App() {
       unsubscribeFocus();
     };
   }, [refreshSessions]);
+
+  // Opening a session unmounts the hero composer: its text is dropped, as it was
+  // before the draft was lifted into App.
+  useEffect(() => {
+    if (activeSessionId) {
+      setHeroDraft((current) =>
+        isComposerDraftEmpty(current) ? current : createEmptyComposerDraft(),
+      );
+    }
+  }, [activeSessionId]);
 
   // The open session is "watched": its unread flag clears.
   useEffect(() => {
@@ -1111,6 +1239,8 @@ export function App() {
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
+                                  draft={heroDraft}
+                                  onDraftChange={setHeroDraft}
                                   footer={
                                     <HeroEnvironmentTray
                                       activeWorkspace={activeWorkspace}

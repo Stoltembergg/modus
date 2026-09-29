@@ -1,6 +1,6 @@
-import type { UpdateState } from "../../shared/contracts";
+import type { UpdateRestoreUiState, UpdateState } from "../../shared/contracts";
 import { IPC_CHANNELS } from "./channels";
-import { parseIpcInput, updateNoInputSchema } from "./schemas";
+import { parseIpcInput, updateNoInputSchema, updateSaveUiStateSchema } from "./schemas";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
 export type UpdateIpcService = {
@@ -10,6 +10,13 @@ export type UpdateIpcService = {
   restartNow(): Promise<void>;
   dismiss(): void;
   openReleasePage(): Promise<void>;
+  /**
+   * Latest UI state while an update is pending (kept in memory, written on quit). null
+   * clears it: a push that fails validation must not leave an older state to restore.
+   */
+  saveUiState(state: UpdateRestoreUiState | null): void;
+  /** The snapshot taken at startup, once; null afterwards or when none applies. */
+  takeRestoredUiState(): UpdateRestoreUiState | null;
 };
 
 type HandlerRegistration = {
@@ -45,4 +52,16 @@ export function registerUpdateIpcHandlers(
     service.dismiss();
   });
   handle(IPC_CHANNELS.updateOpenReleasePage, () => service.openReleasePage());
+  handle(IPC_CHANNELS.updateTakeRestoredUiState, () => service.takeRestoredUiState());
+  ipcMain.handle(IPC_CHANNELS.updateSaveUiState, (event, input) => {
+    assertTrustedSender(event);
+    let state: UpdateRestoreUiState;
+    try {
+      state = parseIpcInput(updateSaveUiStateSchema, input, IPC_CHANNELS.updateSaveUiState);
+    } catch (error) {
+      service.saveUiState(null);
+      throw error;
+    }
+    service.saveUiState(state);
+  });
 }
