@@ -1,8 +1,8 @@
 # Modus Adaptive Intelligence Core
 
-**Status:** Slice 2 landed (PR #50). Gap 1 — safe Meta Controller children/MCP dispatch.  
+**Status:** Slice 2 landed (PR #50). **Gap 1 shipped** — safe Meta Controller children/MCP dispatch (PR #54). **Gap 2 shipped** — automatic CodeGraph binary sync/index. Gaps 3–5 remain open.  
 **Fork:** [Stoltembergg/modus](https://github.com/Stoltembergg/modus)  
-**PR:** [#50](https://github.com/Stoltembergg/modus/pull/50) (merged)  
+**PR:** [#50](https://github.com/Stoltembergg/modus/pull/50) (merged); Gap 1: [#54](https://github.com/Stoltembergg/modus/pull/54); Gap 2: (this change)  
 **Prior art:** `docs/superpowers/specs/2026-09-27-modus-adaptive-harness-core-design.md` (approved) + PR #46 (Task State) + slice 1 Meta Controller
 
 ## Goal
@@ -100,9 +100,10 @@ Events (unchanged types, now surfaced in UI):
 
 **Gap 1 (children/MCP safe dispatch):** Active mode may auto-dispatch `spawn_readonly_specialist` and `mcp_preflight` after Intent Gate; tools still go through ToolRegistry + permissions.
 
+**Gap 2 (automatic CodeGraph sync):** Project workspace selection schedules a non-blocking CodeGraph binary `init`/`sync` via `scheduleCodeGraphAutoSync` → `ensureCodeGraphIndex`. Does not query, does not block prompt submission, and does not change Meta Controller preflight (still no sync on the critical path). Project Model continues to persist discovery hits when Fast Codebase / `codegraph.discoveries` produce them.
+
 **Remaining gaps / follow-ups**
 
-- CodeGraph binary sync/index is still user/agent-triggered; we only persist hits already produced
 - No dedicated blacklist management panel beyond Settings clear-all
 - Promoted preferences are stored but not yet a full policy DSL consumer beyond Meta Controller avoidance signals
 - Additional orchestration polish beyond Gap 1 allowlist
@@ -111,7 +112,7 @@ Events (unchanged types, now surfaced in UI):
 
 ```bash
 npm install
-npm run test --workspace @modus/desktop -- harness/meta-controller harness/safe-dispatch harness/adaptive-slice2 harness/failure-intelligence harness/execution-policy harness/project-model harness/context-engine
+npm run test --workspace @modus/desktop -- harness/meta-controller harness/safe-dispatch harness/adaptive-slice2 harness/failure-intelligence harness/execution-policy harness/project-model harness/context-engine fast-codebase/codegraph-auto-sync fast-codebase/fast-codebase-service
 npm run typecheck --workspace @modus/desktop
 npm run check
 ```
