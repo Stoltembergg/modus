@@ -39,6 +39,7 @@ const api: ModusApi = {
     addMember: (input) => ipcRenderer.invoke("group:add-member", input),
     removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
     setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
+    updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
   },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),

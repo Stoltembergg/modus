@@ -22,6 +22,7 @@ const GROUP_CHANNELS = [
   "group:add-member",
   "group:remove-member",
   "group:set-lead",
+  "group:update-members",
 ];
 
 const GROUP: AgentGroupWithMembers = {
@@ -44,6 +45,9 @@ function mockService() {
     addAgentGroupMember: vi.fn((_input: unknown): unknown => undefined),
     removeAgentGroupMember: vi.fn((_groupId: string, _sessionId: string): void => undefined),
     setAgentGroupLead: vi.fn((_groupId: string, _sessionId: string | null): unknown => undefined),
+    updateAgentGroupMembers: vi.fn(
+      (_groupId: string, _input: unknown): AgentGroupWithMembers => GROUP,
+    ),
   } satisfies GroupIpcService;
 }
 
@@ -124,6 +128,17 @@ describe("group IPC", () => {
       expect(service.removeAgentGroupMember).toHaveBeenCalledWith("g-1", "s-3");
       handlers.get("group:set-lead")?.(trusted, { groupId: "g-1", sessionId: null });
       expect(service.setAgentGroupLead).toHaveBeenCalledWith("g-1", null);
+      expect(
+        handlers.get("group:update-members")?.(trusted, {
+          groupId: "g-1",
+          members: [{ sessionId: "s-1" }, { sessionId: "s-4", role: "verify" }],
+          leadSessionId: "s-4",
+        }),
+      ).toEqual([GROUP]);
+      expect(service.updateAgentGroupMembers).toHaveBeenCalledWith("g-1", {
+        members: [{ sessionId: "s-1" }, { sessionId: "s-4", role: "verify" }],
+        leadSessionId: "s-4",
+      });
     } finally {
       unregister();
     }
@@ -160,6 +175,9 @@ describe("group IPC", () => {
         /Invalid IPC payload/,
       );
       expect(call("group:set-lead", { groupId: "g-1" })).toThrow(/Invalid IPC payload/);
+      expect(call("group:update-members", { groupId: "g-1", members: [] })).toThrow(
+        /Invalid IPC payload/,
+      );
       for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
     } finally {
       unregister();
@@ -177,6 +195,7 @@ describe("group IPC", () => {
       addAgentGroupMember: store.addAgentGroupMember,
       removeAgentGroupMember: store.removeAgentGroupMember,
       setAgentGroupLead: store.setAgentGroupLead,
+      updateAgentGroupMembers: store.updateAgentGroupMembers,
     });
     const db = getDatabase();
     const now = new Date().toISOString();
@@ -206,7 +225,7 @@ describe("group IPC", () => {
           members: [{ sessionId: "s-ok" }, { sessionId: "s-taken" }],
           leadSessionId: "s-ok",
         }),
-      ).toThrow(/already a member/);
+      ).toThrow(/^\[group-error:already-in-group\] Session s-taken is already a member/);
 
       expect(handlers.get("group:list")?.(trusted, undefined)).toEqual(before);
       expect(store.getAgentGroupForSession("s-ok")).toBeUndefined();
@@ -215,6 +234,45 @@ describe("group IPC", () => {
         n: number;
       };
       expect(Number(sessions.n)).toBe(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("preserves GroupStoreError.code across the IPC boundary", async () => {
+    const { GroupStoreError } = await import("../groups/group-store");
+    const { decodeGroupErrorMessage } = await import("../../shared/group-errors");
+    const service = mockService();
+    service.updateAgentGroupMembers.mockImplementation(() => {
+      throw new GroupStoreError("archived-session", "Session s-9 is archived.");
+    });
+    service.renameAgentGroup.mockImplementation(() => {
+      throw new Error("disk full");
+    });
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      let caught: unknown;
+      try {
+        handlers.get("group:update-members")?.(trusted, {
+          groupId: "g-1",
+          members: [{ sessionId: "s-9" }],
+          leadSessionId: null,
+        });
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      // Only `message` survives Electron's IPC; simulate its wrapper prefix too.
+      const wire = `Error invoking remote method 'group:update-members': Error: ${(caught as Error).message}`;
+      expect(decodeGroupErrorMessage(new Error(wire))).toEqual({
+        code: "archived-session",
+        message: "Session s-9 is archived.",
+      });
+      // Non-group errors pass through without a code.
+      expect(() => handlers.get("group:rename")?.(trusted, { id: "g-1", name: "x" })).toThrow(
+        /^disk full$/,
+      );
     } finally {
       unregister();
     }

@@ -19,6 +19,7 @@ export const IPC_CHANNELS = {
   groupAddMember: "group:add-member",
   groupRemoveMember: "group:remove-member",
   groupSetLead: "group:set-lead",
+  groupUpdateMembers: "group:update-members",
   fileOpen: "file:open",
   agentCreate: "agent:create",
   agentList: "agent:list",

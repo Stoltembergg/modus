@@ -14,6 +14,7 @@ import type {
   GroupTaskStatus,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import type { GroupErrorCode } from "../../shared/group-errors";
 import { getDatabase } from "../db/database";
 
 /*
@@ -23,19 +24,8 @@ import { getDatabase } from "../db/database";
  * are enforced here and surfaced as a typed `GroupStoreError`.
  */
 
-export type GroupStoreErrorCode =
-  | "group-not-found"
-  | "workspace-not-found"
-  | "session-not-found"
-  | "message-not-found"
-  | "task-not-found"
-  | "decision-not-found"
-  | "workspace-mismatch"
-  | "already-in-group"
-  | "subagent-session"
-  | "archived-session"
-  | "not-a-member"
-  | "invalid-value";
+/** Error codes (shared with the renderer, which maps them to readable messages). */
+export type GroupStoreErrorCode = GroupErrorCode;
 
 export class GroupStoreError extends Error {
   readonly code: GroupStoreErrorCode;
@@ -554,54 +544,124 @@ export function addAgentGroupMember(input: {
 export function removeAgentGroupMember(groupId: string, sessionId: string): void {
   const db = getDatabase();
   inTransaction(db, () => {
-    const result = db
-      .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
-      .run(groupId, sessionId);
-    if (Number(result.changes) === 0) {
-      return;
-    }
-    db.prepare(
-      `update agent_groups set lead_session_id = null
-       where id = ? and lead_session_id = ?`,
-    ).run(groupId, sessionId);
-    const closedParams = Object.fromEntries(
-      CLOSED_TASK_STATUSES.map((status, index) => [`closed${index}`, status]),
+    detachMemberRows(groupId, sessionId);
+  });
+}
+
+/**
+ * NON-transactional core of member removal (the caller owns the transaction):
+ * deletes the member row, clears the lead if it was them, and releases their
+ * non-closed tasks with the owner-first rules documented on
+ * removeAgentGroupMember. Returns false when the session was not a member.
+ */
+function detachMemberRows(groupId: string, sessionId: string): boolean {
+  const db = getDatabase();
+  const result = db
+    .prepare("delete from agent_group_members where group_id = ? and session_id = ?")
+    .run(groupId, sessionId);
+  if (Number(result.changes) === 0) {
+    return false;
+  }
+  db.prepare(
+    `update agent_groups set lead_session_id = null
+     where id = ? and lead_session_id = ?`,
+  ).run(groupId, sessionId);
+  const closedParams = Object.fromEntries(
+    CLOSED_TASK_STATUSES.map((status, index) => [`closed${index}`, status]),
+  );
+  const closed = Object.keys(closedParams)
+    .map((name) => `:${name}`)
+    .join(", ");
+  // SQLite evaluates every SET expression against the OLD row, so the
+  // owner check in the status CASE sees the owner before it is cleared.
+  db.prepare(
+    `update group_tasks
+     set status = case
+           when owner_session_id = :session then :initialStatus
+           when reviewer_session_id = :session and status = :inReview then :inProgress
+           else status
+         end,
+         owner_session_id = case
+           when owner_session_id = :session then null
+           else owner_session_id
+         end,
+         reviewer_session_id = case
+           when reviewer_session_id = :session then null
+           else reviewer_session_id
+         end,
+         updated_at = :now
+     where group_id = :groupId
+       and status not in (${closed})
+       and (owner_session_id = :session or reviewer_session_id = :session)`,
+  ).run({
+    session: sessionId,
+    initialStatus: INITIAL_TASK_STATUS,
+    inReview: IN_REVIEW_TASK_STATUS,
+    inProgress: IN_PROGRESS_TASK_STATUS,
+    now: new Date().toISOString(),
+    groupId,
+    ...closedParams,
+  });
+  touchGroup(groupId);
+  return true;
+}
+
+/**
+ * Removes `sessionId` from whatever group it belongs to, via the same path as
+ * removeAgentGroupMember (lead cleared, open tasks released owner-first).
+ * NON-transactional: meant to run inside the caller's transaction (e.g. the
+ * archive update in agent-store) so both commit or roll back together.
+ * Returns the group id it left, if any.
+ */
+export function detachSessionFromGroupRows(sessionId: string): string | undefined {
+  const row = getDatabase()
+    .prepare("select group_id from agent_group_members where session_id = ?")
+    .get(sessionId) as { group_id: string } | undefined;
+  if (!row) return undefined;
+  detachMemberRows(row.group_id, sessionId);
+  return row.group_id;
+}
+
+/**
+ * Replaces a group's membership and lead in ONE transaction (all or nothing),
+ * given the target member list: sessions no longer listed are removed exactly
+ * like removeAgentGroupMember; new ones must pass the same join rules as
+ * addAgentGroupMember; existing members keep their role and joined_at. The
+ * lead must be one of the target members (or null). Zero members is allowed.
+ */
+export function updateAgentGroupMembers(
+  groupId: string,
+  input: { members: Array<{ sessionId: string; role?: string }>; leadSessionId: string | null },
+): AgentGroupWithMembers {
+  const group = requireGroupRow(groupId);
+  const targetIds = input.members.map((member) => member.sessionId);
+  if (new Set(targetIds).size !== targetIds.length) {
+    throw new GroupStoreError("invalid-value", "Each session can be listed only once.");
+  }
+  if (input.leadSessionId !== null && !targetIds.includes(input.leadSessionId)) {
+    throw new GroupStoreError(
+      "not-a-member",
+      `The lead session ${input.leadSessionId} must be one of the group's members.`,
     );
-    const closed = Object.keys(closedParams)
-      .map((name) => `:${name}`)
-      .join(", ");
-    // SQLite evaluates every SET expression against the OLD row, so the
-    // owner check in the status CASE sees the owner before it is cleared.
-    db.prepare(
-      `update group_tasks
-       set status = case
-             when owner_session_id = :session then :initialStatus
-             when reviewer_session_id = :session and status = :inReview then :inProgress
-             else status
-           end,
-           owner_session_id = case
-             when owner_session_id = :session then null
-             else owner_session_id
-           end,
-           reviewer_session_id = case
-             when reviewer_session_id = :session then null
-             else reviewer_session_id
-           end,
-           updated_at = :now
-       where group_id = :groupId
-         and status not in (${closed})
-         and (owner_session_id = :session or reviewer_session_id = :session)`,
-    ).run({
-      session: sessionId,
-      initialStatus: INITIAL_TASK_STATUS,
-      inReview: IN_REVIEW_TASK_STATUS,
-      inProgress: IN_PROGRESS_TASK_STATUS,
-      now: new Date().toISOString(),
+  }
+  const db = getDatabase();
+  inTransaction(db, () => {
+    const currentIds = new Set(listAgentGroupMembers(groupId).map((member) => member.sessionId));
+    for (const sessionId of currentIds) {
+      if (!targetIds.includes(sessionId)) detachMemberRows(groupId, sessionId);
+    }
+    for (const member of input.members) {
+      if (currentIds.has(member.sessionId)) continue;
+      assertSessionCanJoin(groupId, group.workspace_id, member.sessionId);
+      insertMemberRow(groupId, member.sessionId, member.role);
+    }
+    db.prepare("update agent_groups set lead_session_id = ? where id = ?").run(
+      input.leadSessionId,
       groupId,
-      ...closedParams,
-    });
+    );
     touchGroup(groupId);
   });
+  return { ...toGroup(requireGroupRow(groupId)), members: listAgentGroupMembers(groupId) };
 }
 
 export function listAgentGroupMembers(groupId: string): AgentGroupMember[] {

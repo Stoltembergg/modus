@@ -144,6 +144,7 @@ import {
   removeAgentGroupMember,
   renameAgentGroup,
   setAgentGroupLead,
+  updateAgentGroupMembers,
 } from "../groups/group-store";
 import {
   ensurePersonalizationFile,
@@ -1793,6 +1794,7 @@ export function registerAppIpc({
     addAgentGroupMember,
     removeAgentGroupMember,
     setAgentGroupLead,
+    updateAgentGroupMembers,
   });
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {

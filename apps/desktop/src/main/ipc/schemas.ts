@@ -933,6 +933,23 @@ export const groupRemoveMemberSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString })
   .strict();
 
+export const groupUpdateMembersSchema = z
+  .object({
+    groupId: groupIdString,
+    members: z
+      .array(
+        z
+          .object({
+            sessionId: groupSessionIdString,
+            role: z.string().trim().max(40).optional(),
+          })
+          .strict(),
+      )
+      .max(MAX_GROUP_MEMBERS),
+    leadSessionId: groupSessionIdString.nullable(),
+  })
+  .strict();
+
 export const groupSetLeadSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString.nullable() })
   .strict();

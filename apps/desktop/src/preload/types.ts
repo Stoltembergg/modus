@@ -78,6 +78,7 @@ import type {
   TestCustomProviderInput,
   TestCustomProviderResult,
   ThinkingLevel,
+  UpdateAgentGroupMembersInput,
   UpdateModelConfigInput,
   UpdateRestoreUiState,
   UpdateState,
@@ -165,6 +166,11 @@ export type ModusApi = {
     removeMember(input: { groupId: string; sessionId: string }): Promise<AgentGroupWithMembers[]>;
     /** Set or clear (null) the lead; the lead must be a member. */
     setLead(input: { groupId: string; sessionId: string | null }): Promise<AgentGroupWithMembers[]>;
+    /**
+     * Replace the members and lead in one all-or-nothing step (rejects, writing
+     * nothing, if any added member is refused); returns the refreshed list.
+     */
+    updateMembers(input: UpdateAgentGroupMembersInput): Promise<AgentGroupWithMembers[]>;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

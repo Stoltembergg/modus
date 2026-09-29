@@ -138,6 +138,14 @@ export type AgentGroupMember = {
 /** A group plus its member rows (what the sidebar and `group:*` IPC return). */
 export type AgentGroupWithMembers = AgentGroupInfo & { members: AgentGroupMember[] };
 
+/** `group:update-members` payload: the target member list and lead (all or nothing). */
+export type UpdateAgentGroupMembersInput = {
+  groupId: string;
+  members: Array<{ sessionId: string; role?: string }>;
+  /** Must be one of `members`, or null for no lead. */
+  leadSessionId: string | null;
+};
+
 /** `group:create` payload: the group, its existing member sessions and lead, all at once. */
 export type CreateAgentGroupInput = {
   name: string;
