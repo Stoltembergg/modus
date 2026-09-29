@@ -12,6 +12,7 @@ import {
 import { macInstallScriptArgs } from "./mac-install-script";
 import { macInstallLockPath } from "./mac-zip-installer";
 import { createUpdateController, type UpdateCandidate } from "./update-controller";
+import { RELEASES_URL } from "./update-policy";
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 // MODUS_SCRIPT_SHELL="bash --posix" runs the script the way macOS's /bin/sh does.
@@ -118,9 +119,7 @@ describePosix("mac install failure marker, end to end", () => {
       "previous update install of 1.1.0 failed: launch-failed (exit 7)",
     );
     await controller.retry();
-    expect(openExternal).toHaveBeenCalledWith(
-      "https://github.com/stoltembergg-png/modus/releases/tag/v1.1.0",
-    );
+    expect(openExternal).toHaveBeenCalledWith(`${RELEASES_URL}/tag/v1.1.0`);
   });
 
   it("app-did-not-quit is retried in place: retry looks the release up and downloads", async () => {
@@ -129,7 +128,7 @@ describePosix("mac install failure marker, end to end", () => {
       version: "1.1.0",
       files: [
         {
-          url: "https://github.com/stoltembergg-png/modus/releases/download/v1.1.0/Modus-1.1.0-mac-arm64.zip",
+          url: `${RELEASES_URL}/download/v1.1.0/Modus-1.1.0-mac-arm64.zip`,
           sha512: "x",
           size: 1,
         },

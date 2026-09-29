@@ -4,4 +4,4 @@
  * URL allowlist. No Electron or Node imports: electron-builder.config.ts loads this
  * file through jiti at packaging time.
  */
-export const RELEASE_REPO = { owner: "stoltembergg-png", repo: "modus" } as const;
+export const RELEASE_REPO = { owner: "Stoltembergg", repo: "modus" } as const;
