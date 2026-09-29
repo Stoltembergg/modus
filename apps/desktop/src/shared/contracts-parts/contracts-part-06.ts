@@ -330,3 +330,4 @@ export type PlanRef = {
 
 export type ConfigScope = "workspace" | "user";
 export type SkillScope = ConfigScope | "builtin";
+
