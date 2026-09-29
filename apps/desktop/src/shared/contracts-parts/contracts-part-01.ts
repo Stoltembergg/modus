@@ -1,4 +1,6 @@
-/** Gap 4 contracts split part 1/7 — do not edit by hand */
+import type { HarnessPolicyDocument } from "./contracts-part-02";
+import type { PlanRef } from "./contracts-part-06";
+
 export type WorkspaceInfo = {
   id: string;
   rootPath: string;
