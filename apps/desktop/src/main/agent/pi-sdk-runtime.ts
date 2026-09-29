@@ -161,6 +161,8 @@ import type {
   HyperPlanBuildStart,
   HyperPlanBuildStartInput,
   PromptAgentInput,
+  PromptTurnResult,
+  TurnSettledEvent,
   WaitMemoryCandidateSummary,
 } from "./runtime";
 import { deriveSessionTitle, shouldReplaceSessionTitle } from "./session-title";
@@ -727,8 +729,12 @@ function composeSubagentPrompt(input: {
   ].join("\n");
 }
 
+/** Filled by `executePrompt` so `prompt()` can report how its turn ended. */
+type PromptProbe = { runId?: string; joined?: boolean };
+
 export class PiSdkRuntime implements AgentRuntime {
   private sessions = new Map<string, SdkRuntimeSession>();
+  private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
   private cancellingRuns = new Set<string>();
@@ -997,21 +1003,32 @@ export class PiSdkRuntime implements AgentRuntime {
       mode: "build",
       planId: input.planId,
     };
-    void this.executePrompt(window, promptInput, {
-      input,
-      onStarted: (runId) => {
-        settled = true;
-        resolveStarted({
-          sessionId: input.sessionId,
-          planId: input.planId,
-          planFingerprint: input.planFingerprint,
-          runId,
-        });
+    const probe: PromptProbe = {};
+    void this.executePrompt(
+      window,
+      promptInput,
+      {
+        input,
+        onStarted: (runId) => {
+          settled = true;
+          resolveStarted({
+            sessionId: input.sessionId,
+            planId: input.planId,
+            planFingerprint: input.planFingerprint,
+            runId,
+          });
+        },
       },
-    }).catch((error: unknown) => {
-      if (!settled) rejectStarted(error);
-      else console.error("[modus] HyperPlan build turn failed:", error);
-    });
+      probe,
+    )
+      .then(() => {
+        this.notifyTurnSettled(input.sessionId, "plan-build", probe);
+      })
+      .catch((error: unknown) => {
+        if (!settled) rejectStarted(error);
+        else console.error("[modus] HyperPlan build turn failed:", error);
+        this.notifyTurnSettled(input.sessionId, "plan-build", probe, true);
+      });
     return started;
   }
 
@@ -2009,14 +2026,83 @@ export class PiSdkRuntime implements AgentRuntime {
     });
   }
 
-  async prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<void> {
-    return this.executePrompt(window, input);
+  async prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult> {
+    const probe: PromptProbe = {};
+    try {
+      await this.executePrompt(window, input, undefined, probe);
+    } catch (error) {
+      this.notifyTurnSettled(input.sessionId, "prompt", probe, true);
+      throw error;
+    }
+    const result = this.promptTurnResult(input.sessionId, probe);
+    this.notifyTurnSettled(input.sessionId, "prompt", probe, false, result);
+    return result;
+  }
+
+  isSessionStreaming(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.session.isStreaming === true;
+  }
+
+  onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void {
+    this.turnSettledListeners.add(listener);
+    return () => {
+      this.turnSettledListeners.delete(listener);
+    };
+  }
+
+  /**
+   * The additive `prompt()` result, read from the run's durable status. A
+   * prompt that only joined an already-streaming turn has no run of its own:
+   * it reports `ok` without text (the owning turn reports the output).
+   */
+  private promptTurnResult(sessionId: string, probe: PromptProbe): PromptTurnResult {
+    if (!probe.runId) return { outcome: probe.joined ? "ok" : "failed" };
+    const run = getAgentRun(probe.runId);
+    if (!run) return { outcome: "aborted" };
+    switch (run.status) {
+      case "completed": {
+        const finalText = runAssistantOutput(sessionId, probe.runId);
+        // A plan turn that ends with a HyperPlan choice pending waits on the user.
+        const outcome = isHyperPlanSessionReserved(sessionId) ? "blocked" : "ok";
+        return finalText ? { outcome, finalText } : { outcome };
+      }
+      case "blocked":
+        return { outcome: "blocked" };
+      case "cancelled":
+        return { outcome: "aborted" };
+      case "running":
+        return { outcome: "ok" };
+      default:
+        return { outcome: "failed" };
+    }
+  }
+
+  /** Listeners see only run-backed turns (a rejected prompt that never started a run is not a turn). */
+  private notifyTurnSettled(
+    sessionId: string,
+    origin: TurnSettledEvent["origin"],
+    probe: PromptProbe,
+    threw = false,
+    known?: PromptTurnResult,
+  ): void {
+    if (!probe.runId || this.turnSettledListeners.size === 0) return;
+    const result: PromptTurnResult = threw
+      ? { outcome: "failed" }
+      : (known ?? this.promptTurnResult(sessionId, probe));
+    for (const listener of this.turnSettledListeners) {
+      try {
+        listener({ sessionId, origin, result });
+      } catch (error) {
+        console.warn("[modus] turn-settled listener failed:", error);
+      }
+    }
   }
 
   private async executePrompt(
     window: BrowserWindowType,
     input: PromptAgentInput,
     exclusiveStart?: ExclusiveStartHooks,
+    probe?: PromptProbe,
   ): Promise<void> {
     const startInput = exclusiveStart?.input;
     if (
@@ -2243,6 +2329,7 @@ export class PiSdkRuntime implements AgentRuntime {
     // pi's own `isStreaming`, never a guess from the delivery label.
     if (!startInput && delivery !== "normal" && runtimeSession.session.isStreaming) {
       await this.enqueueTurnMessage(runtimeSession, input, delivery, toolContext);
+      if (probe) probe.joined = true;
       return;
     }
     if (
@@ -2255,6 +2342,7 @@ export class PiSdkRuntime implements AgentRuntime {
       // Join the already-owned turn as a follow-up without emitting that message
       // a second time or opening a competing run/tracker.
       await this.enqueueTurnMessage(runtimeSession, input, "follow-up", toolContext, false);
+      if (probe) probe.joined = true;
       return;
     }
 
@@ -2300,6 +2388,7 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!run || run.sessionId !== input.sessionId) {
       throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
     }
+    if (probe) probe.runId = run.id;
     const userMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
     let outputTracker!: RunOutputTracker;
     let requiredChecks: ReturnType<typeof requiredChecksForRun> = [];
@@ -3967,6 +4056,39 @@ function shouldPersistSubagentUpdate(event: AgentEvent): boolean {
     event.type === "run.cancelled" ||
     event.type === "tool.started"
   );
+}
+
+/**
+ * The last assistant text produced by one run: only events after that run's
+ * `run.started` count, so a run with no text never reports an earlier turn's.
+ */
+function runAssistantOutput(sessionId: string, runId: string): string | undefined {
+  const roles = new Map<string, "assistant" | "user">();
+  const textByMessage = new Map<string, string>();
+  let inRun = false;
+  let lastAssistantMessageId: string | undefined;
+  for (const { event } of listAgentEvents(sessionId)) {
+    if (event.type === "run.started") {
+      inRun = event.runId === runId;
+      continue;
+    }
+    if (!inRun) continue;
+    if (event.type === "message.started") {
+      roles.set(event.messageId, event.role);
+      if (event.role === "assistant") {
+        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
+        lastAssistantMessageId = event.messageId;
+      }
+    } else if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
+      textByMessage.set(
+        event.messageId,
+        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
+      );
+      lastAssistantMessageId = event.messageId;
+    }
+  }
+  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
+  return output || undefined;
 }
 
 function lastAssistantOutput(sessionId: string): string | undefined {

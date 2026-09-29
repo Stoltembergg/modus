@@ -1576,8 +1576,9 @@ describe("PiSdkRuntime", () => {
     const runId = getActiveAgentRun(sessionId)?.id;
     expect(runId).toBeDefined();
 
+    expect(runtime.isSessionStreaming(sessionId)).toBe(session.isStreaming === true);
     await runtime.abort(sessionId);
-    await prompt;
+    expect(await prompt).toEqual({ outcome: "aborted" });
 
     expect(citationId).not.toBe("");
     expect(mcpCitations.resolveMcpCitation(sessionId, runId ?? "", citationId)).toBeUndefined();
@@ -2434,13 +2435,14 @@ describe("PiSdkRuntime", () => {
       },
     );
 
-    await new PiSdkRuntime().prompt(window, {
+    const result = await new PiSdkRuntime().prompt(window, {
       context: [],
       delivery: "normal",
       message: "Delete the production database PRIVATE_INTENT_TEXT",
       sessionId,
     });
 
+    expect(result).toEqual({ outcome: "blocked" });
     expect(modelPrompt).not.toHaveBeenCalled();
     const events = getDatabase()
       .prepare("select type, payload_json from agent_events where session_id = ? order by rowid")
@@ -3103,7 +3105,7 @@ describe("PiSdkRuntime", () => {
           sessionId,
           userMessageId: "planner-error-user",
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ outcome: "ok", finalText: "done" });
       expect(composed).toContain("continue without memory");
       expect(composed).not.toContain("<project_memory_context>");
       expect(warning).toHaveBeenCalledOnce();
@@ -3198,7 +3200,7 @@ describe("PiSdkRuntime", () => {
         sessionId,
         userMessageId: "git-failure-user",
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ outcome: "ok", finalText: "done" });
     expect(git).toHaveBeenCalledOnce();
     expect(planner).toHaveBeenCalledWith(expect.objectContaining({ git: { changedPaths: [] } }));
   });
@@ -4164,13 +4166,14 @@ describe("PiSdkRuntime", () => {
     const runtime = new PiSdkRuntime();
     const window = createWindowStub();
 
-    await runtime.prompt(window, {
+    const result = await runtime.prompt(window, {
       context: [],
       delivery: "normal",
       message: "回答我",
       sessionId,
       userMessageId: "local-user-empty",
     });
+    expect(result).toEqual({ outcome: "failed" });
 
     const run = getDatabase()
       .prepare(
@@ -4393,14 +4396,19 @@ describe("PiSdkRuntime", () => {
     }));
     const runtime = new PiSdkRuntime();
     const window = createWindowStub();
+    const settled: unknown[] = [];
+    runtime.onTurnSettled((event) => settled.push(event));
 
-    await runtime.prompt(window, {
+    const result = await runtime.prompt(window, {
       context: [],
       delivery: "normal",
       message: "hello",
       sessionId,
       userMessageId: "local-user-output",
     });
+    expect(result).toEqual({ outcome: "ok", finalText: "hello" });
+    expect(settled).toEqual([{ sessionId, origin: "prompt", result }]);
+    expect(runtime.isSessionStreaming(sessionId)).toBe(false);
 
     const run = getDatabase()
       .prepare(

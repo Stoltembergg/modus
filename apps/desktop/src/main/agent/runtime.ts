@@ -73,10 +73,35 @@ export type HyperPlanBuildStartInput = {
   onRunCreated: (runId: string) => void;
 };
 
+/**
+ * How a `prompt()` turn ended, for programmatic callers (the group runtime).
+ * - `ok`: the turn completed; `finalText` is the run's last assistant text (if any).
+ * - `failed`: the run failed (model error, no output, setup failure).
+ * - `aborted`: the run was cancelled/stopped (or rolled back).
+ * - `blocked`: the turn stopped waiting on the user: the intent gate did not
+ *   get its confirmation, or a HyperPlan choice is pending after the turn.
+ * A prompt that throws never produces a result; callers treat it as `failed`.
+ */
+export type PromptTurnOutcome = "ok" | "failed" | "aborted" | "blocked";
+export type PromptTurnResult = { finalText?: string; outcome: PromptTurnOutcome };
+
+/** A turn settled on a session, whoever started it (see `onTurnSettled`). */
+export type TurnSettledEvent = {
+  sessionId: string;
+  /** `prompt`: any `prompt()` call; `plan-build`: a HyperPlan build started by the user. */
+  origin: "prompt" | "plan-build";
+  result: PromptTurnResult;
+};
+
 export type AgentRuntime = {
   create(window: BrowserWindowType, input: CreateAgentRuntimeInput): Promise<AgentSessionInfo>;
   ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo>;
-  prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<void>;
+  /** Additive result: existing callers may ignore it. */
+  prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult>;
+  /** pi's own `isStreaming` for a live session (false when not loaded). */
+  isSessionStreaming(sessionId: string): boolean;
+  /** Observe every settled run-backed turn; returns an unsubscribe function. */
+  onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void;
   startPlanBuild(
     window: BrowserWindowType,
     input: HyperPlanBuildStartInput,
