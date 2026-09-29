@@ -12,6 +12,7 @@ import type {
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { AppearanceSettingsPanel } from "./sections/appearance";
+import { FailureBlacklistSettingsPanel } from "./sections/failure-blacklist";
 import { GeneralSettingsPanel } from "./sections/general";
 import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
 import { LimitsSettingsPanel } from "./sections/limits";
@@ -542,6 +543,9 @@ export function SettingsPanel({
           ) : null}
           {activeSection === "harness-insights" ? (
             <HarnessInsightsSettingsPanel workspaceId={workspaceId} />
+          ) : null}
+          {activeSection === "failure-blacklist" ? (
+            <FailureBlacklistSettingsPanel workspaceId={workspaceId} />
           ) : null}
           {activeSection === "limits" ? <LimitsSettingsPanel models={state?.models ?? []} /> : null}
           {activeSection === "model-provider" ? (
