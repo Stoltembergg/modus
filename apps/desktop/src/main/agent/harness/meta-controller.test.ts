@@ -86,6 +86,7 @@ describe("meta-controller", () => {
     );
     expect(decision.action).toBe("avoid_retry");
     expect(decision.avoidStrategyCodes).toContain("same_edit_retry");
+    expect(decision.changeStrategy?.recommended).toBe("replan_scope");
     expect(formatAdaptiveDecisionHint(decision)).toMatch(/Do not repeat/i);
   });
 
@@ -307,7 +308,7 @@ describe("meta-controller", () => {
     expect(["execute", "spawn_readonly_specialist"]).not.toContain(decision.action);
   });
 
-  it("prefers replan on QA fail when same_path_rework policy is promoted", () => {
+  it("awaits Oracle on high-risk QA fail when avoid codes apply but Oracle not consulted", () => {
     const decision = decideNext(
       snapshot({
         qaStatus: "failed",
@@ -348,9 +349,113 @@ describe("meta-controller", () => {
         },
       }),
     );
-    // Avoid strategies still win when present; replan bias applies when avoid does not fire.
-    // same_edit_retry is in avoid list → avoid_retry takes precedence (safe).
-    expect(decision.action).toBe("avoid_retry");
+    // Gap 5: high-risk + avoided + Oracle not consulted → advisory suggest_oracle (active → spawn).
+    // prefer_replan_on_qa_fail still shapes changeStrategy.recommended.
+    expect(decision.action).toBe("suggest_oracle");
+    expect(decision.changeStrategy?.recommended).toBe("replan_scope");
+  });
+
+  it("after Oracle findings, does not spawn again and recommends replan_scope", () => {
+    const attempt: AdaptiveFailureAttempt = {
+      id: "a1",
+      sessionId: "s1",
+      runId: "r1",
+      strategyCode: "same_edit_retry",
+      status: "failed",
+      reasonCode: "qa_failed",
+      revision: "rev1",
+      evidenceEventIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "active",
+        qaStatus: "failed",
+        oracleConsulted: true,
+        oracleDigestPresent: true,
+        failureAttempts: [attempt],
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "high",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+          suggestedRole: "oracle",
+        },
+        impact: {
+          revision: "rev1",
+          blastRadius: "cross_module",
+          impactedPathCount: 8,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("replan");
+    expect(decision.action).not.toBe("spawn_readonly_specialist");
+    expect(decision.changeStrategy?.recommended).toBe("replan_scope");
+    expect(decision.reasonCodes).toEqual(
+      expect.arrayContaining(["change_strategy_replan_scope", "oracle_findings_present"]),
+    );
+    expect(formatAdaptiveDecisionHint(decision)).toMatch(
+      /Recommended change strategy: replan scope/i,
+    );
+  });
+
+  it("spawns read-only oracle in active mode when avoided and Oracle not consulted", () => {
+    const attempt: AdaptiveFailureAttempt = {
+      id: "a2",
+      sessionId: "s1",
+      runId: "r1",
+      strategyCode: "same_edit_retry",
+      status: "failed",
+      reasonCode: "qa_failed",
+      revision: "rev1",
+      evidenceEventIds: [],
+      createdAt: new Date().toISOString(),
+    };
+    const decision = decideNext(
+      snapshot({
+        decisionMode: "active",
+        qaStatus: "failed",
+        oracleConsulted: false,
+        failureAttempts: [attempt],
+        classification: {
+          taskType: "implementation",
+          complexity: "complex",
+          risk: "high",
+          confidence: "high",
+          reasons: ["cross_subsystem_scope"],
+          suggestedRole: "oracle",
+        },
+        impact: {
+          revision: "rev1",
+          blastRadius: "cross_module",
+          impactedPathCount: 8,
+          confidence: "medium",
+          unknownReasons: [],
+          reasonCodes: [],
+        },
+        taskState: {
+          phase: "verifying",
+          verificationStatus: "failed",
+          criteria: [],
+          openQuestionRefs: [],
+          hypothesisRefs: [],
+        },
+      }),
+    );
+    expect(decision.action).toBe("spawn_readonly_specialist");
+    expect(decision.specialistRole).toBe("oracle");
+    expect(decision.changeStrategy?.recommended).toBe("none");
   });
 
   it("replans on QA fail from prefer_replan when no avoid codes apply", () => {
