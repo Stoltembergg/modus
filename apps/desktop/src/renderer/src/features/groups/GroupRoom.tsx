@@ -95,10 +95,7 @@ export function GroupRoom({
   const running = isGroupRunning(memberStates, group.id);
   const [tasksOpen, setTasksOpen] = useState(false);
   const { tasks, replace } = useGroupTasks(group.id);
-  const titles = useMemo(
-    () => new Map(members.map((member) => [member.sessionId, member.title])),
-    [members],
-  );
+  const labels = useMemo(() => memberLabels(members), [members]);
   const openTasks = activeTaskCount(tasks);
 
   return (
@@ -156,7 +153,7 @@ export function GroupRoom({
           updatePending={updatePending}
         />
       </div>
-      {tasksOpen ? <GroupTaskPanel onCancelled={replace} tasks={tasks} titles={titles} /> : null}
+      {tasksOpen ? <GroupTaskPanel labels={labels} onCancelled={replace} tasks={tasks} /> : null}
       {managing ? (
         <CreateGroupDialog
           group={group}

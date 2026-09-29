@@ -5,6 +5,8 @@ import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { describeGroupError } from "./groupErrors";
+import { MemberName } from "./MemberName";
+import type { MemberLabel } from "./memberLabels";
 
 /** Panel sections in order; Cancelled starts collapsed. */
 export const TASK_SECTIONS: ReadonlyArray<{ status: GroupTaskStatus; label: string }> = [
@@ -53,11 +55,11 @@ export function useGroupTasks(groupId: string) {
 /** Right-hand task panel of the room. The only user action is "Cancel task". */
 export function GroupTaskPanel({
   tasks,
-  titles,
+  labels,
   onCancelled,
 }: {
   tasks: readonly GroupTask[];
-  titles: ReadonlyMap<string, string>;
+  labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
 }) {
   const [cancelledOpen, setCancelledOpen] = useState(false);
@@ -100,7 +102,7 @@ export function GroupTaskPanel({
             )}
             {open
               ? items.map((task) => (
-                  <TaskCard key={task.id} onCancelled={onCancelled} task={task} titles={titles} />
+                  <TaskCard key={task.id} onCancelled={onCancelled} labels={labels} task={task} />
                 ))
               : null}
           </section>
@@ -112,18 +114,22 @@ export function GroupTaskPanel({
 
 function TaskCard({
   task,
-  titles,
+  labels,
   onCancelled,
 }: {
   task: GroupTask;
-  titles: ReadonlyMap<string, string>;
+  labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const name = (id: string | undefined, none: string) =>
-    id ? (titles.get(id) ?? id) : <span className="text-fg-faint">{none}</span>;
+    id ? (
+      <MemberName label={labels.get(id) ?? { title: id }} />
+    ) : (
+      <span className="text-fg-faint">{none}</span>
+    );
   const cancellable = task.status !== "done" && task.status !== "cancelled";
 
   async function cancel(): Promise<void> {

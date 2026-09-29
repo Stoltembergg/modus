@@ -392,7 +392,9 @@ describe("GroupRoom", () => {
     const cards = within(panel).getAllByTestId("group-task");
     const review = cards.find((card) => card.textContent?.includes("Task 3")) as HTMLElement;
     expect(review.textContent).toContain("OwnerPlanner");
-    expect(review.textContent).toContain("ReviewerReviewer");
+    // The reviewer title repeats in the group: short id suffix.
+    expect(review.textContent).toContain("ReviewerReviewer · srev1");
+    expect(within(review).getByTestId("member-id-suffix").textContent).toBe(" · srev1");
     const working = cards.find((card) => card.textContent?.includes("Task 2")) as HTMLElement;
     expect(within(working).getByText("modus/group/p1")).toBeTruthy();
     expect(within(working).getByRole("button", { name: "Copy branch" })).toBeTruthy();
