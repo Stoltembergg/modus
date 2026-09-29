@@ -58,6 +58,23 @@ export function groupMemberCountError(
   return null;
 }
 
+/**
+ * The 2..10 rule for ONE `group:update-members` change, on the FINAL count
+ * (`current - removed + added`): fewer than 2 → min. Above 10 → max when the
+ * change adds anyone; a legacy group above 10 may still remove members (its
+ * count only shrinks toward the range), but can never add while above 10.
+ */
+export function groupMembersUpdateCountError(
+  current: number,
+  added: number,
+  removed: number,
+): "group-min-members" | "group-max-members" | null {
+  const final = current - removed + added;
+  if (final < GROUP_MIN_MEMBERS) return "group-min-members";
+  if (added > 0 && final > GROUP_MAX_MEMBERS) return "group-max-members";
+  return null;
+}
+
 /** The room banner (and error message) for each blocked reason. */
 export const GROUP_BLOCKED_TEXT: Record<GroupBlockedReason, string> = {
   "project-required": "Choose a folder to continue this group",

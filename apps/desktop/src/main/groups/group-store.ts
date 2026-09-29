@@ -495,7 +495,8 @@ function requireCreateCount(count: number): void {
   throwCountError(groupCreateCountError(count));
 }
 
-function throwCountError(code: "group-min-members" | "group-max-members" | null): void {
+/** A 2..10 rule result (shared/group-blocked) as a store error; null passes. */
+export function throwCountError(code: "group-min-members" | "group-max-members" | null): void {
   if (code === "group-min-members") {
     throw new GroupStoreError(code, "A group needs at least 2 agents.");
   }
@@ -552,7 +553,8 @@ export function createAgentGroup(input: NewGroupInput): AgentGroupInfo {
  * Creates a group, its members and (optionally) its lead in ONE transaction:
  * all or nothing. Any refused member (wrong workspace, already in a group,
  * subagent, archived, missing) or a lead that is not among `members` rolls
- * everything back, so no group, member or lead row is left behind.
+ * everything back, so no group, member or lead row is left behind. The same
+ * 2..10 rule as `group:create` (groupCreateCountError) applies.
  */
 export function createAgentGroupWithMembers(
   input: NewGroupInput & {
@@ -571,6 +573,7 @@ export function createAgentGroupWithMembers(
       `The lead session ${leadSessionId} must be one of the group's members.`,
     );
   }
+  requireCreateCount(sessionIds.length);
   const db = getDatabase();
   const groupId = inTransaction(db, () => {
     const { id, workspaceId } = insertGroupRow(input);
@@ -717,51 +720,6 @@ export function removeAgentFromGroup(groupId: string, sessionId: string): void {
   withGroupTransaction(() => {
     removeAgentFromGroupRows(groupId, sessionId);
   });
-}
-
-/**
- * Replaces a group's agents and lead in ONE transaction. Agents no longer
- * listed are removed, which deletes them (one group per agent); new entries
- * must be ungrouped agents. The target count follows the 2..10 rule
- * (groupMemberCountError). Returns the group and the removed session ids (the
- * caller stops their runtime).
- */
-export function updateAgentGroupAgents(
-  groupId: string,
-  input: { members: Array<{ agentId: string; role?: string }>; leadAgentId: string | null },
-): { group: AgentGroupWithMembers; removedSessionIds: string[] } {
-  requireGroupRow(groupId);
-  const targetIds = input.members.map((member) => member.agentId);
-  if (new Set(targetIds).size !== targetIds.length) {
-    throw new GroupStoreError("invalid-value", "Each agent can be listed only once.");
-  }
-  if (input.leadAgentId !== null && !targetIds.includes(input.leadAgentId)) {
-    throw new GroupStoreError(
-      "not-a-member",
-      `The lead agent ${input.leadAgentId} must be one of the group's members.`,
-    );
-  }
-  const removedSessionIds: string[] = [];
-  withGroupTransaction(() => {
-    const before = listAgentGroupMembers(groupId);
-    requireMemberCount(before.length, targetIds.length);
-    const current = new Map(before.map((member) => [member.agentId, member]));
-    for (const [agentId, member] of current) {
-      if (targetIds.includes(agentId)) continue;
-      removeAgentFromGroupRows(groupId, member.sessionId, false);
-      removedSessionIds.push(member.sessionId);
-    }
-    let leadSessionId: string | null = null;
-    for (const member of input.members) {
-      const sessionId =
-        current.get(member.agentId)?.sessionId ??
-        joinGroupRows(groupId, member.agentId, member.role, { cap: false }).sessionId;
-      if (member.agentId === input.leadAgentId) leadSessionId = sessionId;
-    }
-    setGroupLeadRow(groupId, leadSessionId);
-    touchGroup(groupId);
-  });
-  return { group: getAgentGroupWithMembers(groupId), removedSessionIds };
 }
 
 /**

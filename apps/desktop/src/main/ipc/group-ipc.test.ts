@@ -78,9 +78,7 @@ function mockService() {
     setAgentGroupWorkspace: vi.fn(
       (_groupId: string, _workspaceId: string | null): unknown => undefined,
     ),
-    updateAgentGroupMembers: vi.fn(
-      (_groupId: string, _input: unknown): AgentGroupWithMembers => GROUP,
-    ),
+    updateAgentGroupMembers: vi.fn((_input: unknown): AgentGroupWithMembers => GROUP),
     listGroupTasks: vi.fn((_groupId: string): GroupTask[] => [TASK]),
     cancelGroupTask: vi.fn((_taskId: string): GroupTask => ({ ...TASK, status: "cancelled" })),
     listGroupDecisions: vi.fn((_groupId: string): GroupDecision[] => [DECISION]),
@@ -177,13 +175,16 @@ describe("group IPC", () => {
       expect(
         handlers.get("group:update-members")?.(trusted, {
           groupId: "g-1",
-          members: [{ agentId: "a-1" }, { agentId: "a-4", role: "verify" }],
-          leadAgentId: "a-4",
+          add: [agentSpec("Cy"), { ...agentSpec("Di"), role: "verify" }],
+          removeAgentIds: [],
+          lead: { name: "Cy" },
         }),
       ).toEqual([GROUP]);
-      expect(service.updateAgentGroupMembers).toHaveBeenCalledWith("g-1", {
-        members: [{ agentId: "a-1" }, { agentId: "a-4", role: "verify" }],
-        leadAgentId: "a-4",
+      expect(service.updateAgentGroupMembers).toHaveBeenCalledWith({
+        groupId: "g-1",
+        add: [agentSpec("Cy"), { ...agentSpec("Di"), role: "verify" }],
+        removeAgentIds: [],
+        lead: { name: "Cy" },
       });
       expect(handlers.get("group:list-tasks")?.(trusted, { groupId: "g-1" })).toEqual([TASK]);
       expect(service.listGroupTasks).toHaveBeenCalledWith("g-1");
@@ -358,6 +359,61 @@ describe("group IPC", () => {
     }
   });
 
+  it("group:update-members with the real store: one transaction, final-state rules", async () => {
+    const { getDatabase } = await import("../db/database");
+    const store = await import("../groups/group-store");
+    const agents = await import("../agents/agents-store");
+    const service = {
+      ...mockService(),
+      listAgentGroupsWithMembers: () => store.listAgentGroupsWithMembers(),
+      updateAgentGroupMembers: (input: Parameters<GroupIpcService["updateAgentGroupMembers"]>[0]) =>
+        agents.updateGroupMembers(input).group,
+    };
+    const handlers = await register(service);
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+         values ('ws-upd', 'root-ws-upd', 'repo', 1, ?, ?)`,
+      )
+      .run(now, now);
+    const group = agents.createGroupWithNewAgents({
+      name: "Swap",
+      workspaceId: "ws-upd",
+      members: [agentSpec("Ana"), agentSpec("Bo")],
+      leadName: "Ana",
+    });
+    const oldIds = group.members.map((member) => member.agentId);
+    const { trusted, unregister } = await trustedEvent();
+    const update = (input: Record<string, unknown>) => () =>
+      handlers.get("group:update-members")?.(trusted, {
+        groupId: group.id,
+        add: [],
+        removeAgentIds: [],
+        lead: null,
+        ...input,
+      });
+    try {
+      // Fewer than 2 in the final state, or a model-less new agent: refused before the store.
+      expect(update({ removeAgentIds: [oldIds[0]] })).toThrow(
+        /^\[group-error:group-min-members\] /,
+      );
+      expect(update({ add: [{ name: "Cy" }] })).toThrow(/^\[group-error:agent-model-required\] /);
+      // Replace both members at once: add 2 new, remove the 2 old, lead a new one.
+      const listed = update({
+        add: [agentSpec("Cy"), agentSpec("Di")],
+        removeAgentIds: oldIds,
+        lead: { name: "Di" },
+      })() as AgentGroupWithMembers[];
+      const after = listed.find((row) => row.id === group.id);
+      expect(after?.members.map((member) => member.name)).toEqual(["Cy", "Di"]);
+      expect(after?.leadSessionId).toBe(after?.members[1]?.sessionId);
+      for (const agentId of oldIds) expect(agents.getAgent(agentId)).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
   it("group:create refuses no folder, the member count and the model rule before the store", async () => {
     const service = mockService();
     const handlers = await register(service);
@@ -453,8 +509,9 @@ describe("group IPC", () => {
       try {
         handlers.get("group:update-members")?.(trusted, {
           groupId: "g-1",
-          members: [{ agentId: "a-9" }, { agentId: "a-8" }],
-          leadAgentId: null,
+          add: [agentSpec("A9"), agentSpec("A8")],
+          removeAgentIds: [],
+          lead: null,
         });
       } catch (error) {
         caught = error;

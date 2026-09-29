@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   AgentGroupWithMembers,
   CreateAgentGroupInput,
+  GroupLeadRef,
   NewGroupAgentInput,
+  UpdateAgentGroupMembersInput,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
@@ -15,15 +17,14 @@ import { describeGroupError } from "./groupErrors";
 const NO_PROJECT = "";
 
 /**
- * What "Manage members" sends: new agents to create in the group, members to
- * remove (removing a member deletes its agent) and the lead among the kept
- * members.
+ * What "Manage members" sends, as ONE `group:update-members` call: new agents
+ * to create, members to remove (removing a member deletes its agent) and the
+ * final lead (a kept member or a new agent).
  */
-export type GroupMembersChange = {
-  add: NewGroupAgentInput[];
-  removeSessionIds: string[];
-  leadSessionId: string | null;
-};
+export type GroupMembersChange = Omit<UpdateAgentGroupMembersInput, "groupId">;
+
+/** Lead select value of a new (draft) agent; kept members use their session id. */
+const newLeadValue = (key: number) => `new:${key}`;
 
 /** A model offered for the new agents (a configured provider's). */
 export type GroupDialogModel = { id: string; name: string };
@@ -125,11 +126,11 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
   const names = [...kept.map((member) => member.name), ...named.map((agent) => agent.name.trim())];
   const duplicate = new Set(names.map((value) => value.toLocaleLowerCase())).size !== names.length;
   const needsModel = named.length > 0 && !modelId;
-  const countOk = editGroup
-    ? // Legacy groups outside 2..10 may shrink / grow back toward the range.
-      (total >= GROUP_MIN_MEMBERS || total >= editGroup.members.length) &&
-      (total <= GROUP_MAX_MEMBERS || total <= editGroup.members.length)
-    : total >= GROUP_MIN_MEMBERS && total <= GROUP_MAX_MEMBERS;
+  // The FINAL state (like groupMembersUpdateCountError): 2..10, except that a
+  // legacy group above 10 may shrink as long as nothing is added.
+  const countOk =
+    total >= GROUP_MIN_MEMBERS &&
+    (total <= GROUP_MAX_MEMBERS || (editGroup !== undefined && named.length === 0));
   const canSubmit =
     !busy &&
     countOk &&
@@ -146,11 +147,13 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
     ? "Each agent needs a different name."
     : total < GROUP_MIN_MEMBERS
       ? `A group needs at least ${GROUP_MIN_MEMBERS} agents.`
-      : !editGroup && workspaceId === NO_PROJECT
-        ? "Choose a project for the group."
-        : needsModel
-          ? "Choose a model for the new agents."
-          : undefined;
+      : !countOk
+        ? `A group can have at most ${GROUP_MAX_MEMBERS} agents.`
+        : !editGroup && workspaceId === NO_PROJECT
+          ? "Choose a project for the group."
+          : needsModel
+            ? "Choose a model for the new agents."
+            : undefined;
 
   function updateAgent(key: number, patch: Partial<DraftAgent>): void {
     setAgents((current) =>
@@ -171,15 +174,23 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
     setBusy(true);
     setError(undefined);
     try {
+      const leadDraft = named.find((agent) => newLeadValue(agent.key) === lead);
       if (props.mode === "edit") {
-        const leadSessionId = kept.some((member) => member.sessionId === lead) ? lead : null;
+        const keptLead = kept.find((member) => member.sessionId === lead);
+        const nextLead: GroupLeadRef | null = keptLead
+          ? { agentId: keptLead.agentId }
+          : leadDraft
+            ? { name: leadDraft.name.trim() }
+            : null;
         await props.onSave({
           add: named.map(toMember),
-          removeSessionIds: removed,
-          leadSessionId,
+          removeAgentIds: (editGroup?.members ?? [])
+            .filter((member) => removed.includes(member.sessionId))
+            .map((member) => member.agentId),
+          lead: nextLead,
         });
       } else {
-        const leadName = named.find((agent) => String(agent.key) === lead)?.name.trim();
+        const leadName = leadDraft?.name.trim();
         await props.onCreate({
           name: name.trim(),
           workspaceId,
@@ -195,9 +206,16 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
     }
   }
 
+  const newLeadOptions = named.map((agent) => ({
+    value: newLeadValue(agent.key),
+    label: agent.name.trim(),
+  }));
   const leadOptions = editGroup
-    ? kept.map((member) => ({ value: member.sessionId, label: member.name }))
-    : named.map((agent) => ({ value: String(agent.key), label: agent.name.trim() }));
+    ? [
+        ...kept.map((member) => ({ value: member.sessionId, label: member.name })),
+        ...newLeadOptions,
+      ]
+    : newLeadOptions;
 
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
@@ -322,7 +340,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                         className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg"
                         onClick={() => {
                           setAgents((current) => current.filter((item) => item.key !== agent.key));
-                          if (lead === String(agent.key)) setLead("");
+                          if (lead === newLeadValue(agent.key)) setLead("");
                         }}
                         type="button"
                       >

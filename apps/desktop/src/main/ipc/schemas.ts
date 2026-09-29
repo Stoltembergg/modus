@@ -944,6 +944,20 @@ const groupSessionIdString = nonEmptyString.max(128);
 const groupNameString = z.string().trim().min(1).max(120);
 export const MAX_GROUP_MEMBERS = 32;
 
+/** A NEW agent created in a group (group:create members, group:update-members adds). */
+const newGroupAgentSchema = z
+  .object({
+    name: agentFields.name,
+    role: agentFields.role.optional(),
+    instructions: agentFields.instructions.optional(),
+    modelId: agentFields.modelId.optional(),
+    defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
+    avatarFace: agentFields.avatarFace.optional(),
+    avatarColor: agentFields.avatarColor.optional(),
+    templateId: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
 export const groupCreateSchema = z
   .object({
     name: groupNameString,
@@ -951,23 +965,8 @@ export const groupCreateSchema = z
     workspaceId: groupIdString.nullable(),
     mode: z.enum(["free", "coordinator"]).optional(),
     // NEW agents, created in the group (one group per agent). The 2..10 rule is
-    // groupMemberCountError; this bound only caps the payload.
-    members: z
-      .array(
-        z
-          .object({
-            name: agentFields.name,
-            role: agentFields.role.optional(),
-            instructions: agentFields.instructions.optional(),
-            modelId: agentFields.modelId.optional(),
-            defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
-            avatarFace: agentFields.avatarFace.optional(),
-            avatarColor: agentFields.avatarColor.optional(),
-            templateId: z.string().min(1).max(128).optional(),
-          })
-          .strict(),
-      )
-      .max(MAX_GROUP_MEMBERS),
+    // groupCreateCountError; this bound only caps the payload.
+    members: z.array(newGroupAgentSchema).max(MAX_GROUP_MEMBERS),
     leadName: agentFields.name.nullable().optional(),
   })
   .strict();
@@ -1001,20 +1000,18 @@ export const groupRemoveMemberSchema = z
   .object({ groupId: groupIdString, sessionId: groupSessionIdString })
   .strict();
 
+/** "Manage members" in one payload: adds, removes and the final lead (one transaction). */
 export const groupUpdateMembersSchema = z
   .object({
     groupId: groupIdString,
-    members: z
-      .array(
-        z
-          .object({
-            agentId: groupIdString,
-            role: z.string().trim().max(40).optional(),
-          })
-          .strict(),
-      )
-      .max(MAX_GROUP_MEMBERS),
-    leadAgentId: groupIdString.nullable(),
+    add: z.array(newGroupAgentSchema).max(MAX_GROUP_MEMBERS),
+    removeAgentIds: z.array(groupIdString).max(MAX_GROUP_MEMBERS),
+    lead: z
+      .union([
+        z.object({ agentId: groupIdString }).strict(),
+        z.object({ name: agentFields.name }).strict(),
+      ])
+      .nullable(),
   })
   .strict();
 

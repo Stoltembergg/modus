@@ -28,6 +28,8 @@ const {
   ESTIMATED_INPUT_TOKENS_PER_CHAIN,
   GROUP_CHAIN_LIMITS,
   GROUP_MAX_CONCURRENT_TURNS,
+  GROUP_ROSTER_DESCRIPTION_MAX_CHARS,
+  agentDescription,
   GROUP_PROMPT_DECISIONS_MAX_ITEMS,
   GROUP_PROMPT_DECISIONS_MAX_TOKENS,
   GROUP_PROMPT_SNAPSHOT_MAX_TOKENS,
@@ -40,6 +42,7 @@ const {
   isUpdatePendingState,
   parseGroupMentions,
 } = await import("./group-runtime");
+const { insertLegacyGroup } = await import("./legacy-group.fixture");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
@@ -1716,6 +1719,23 @@ describe("agents in the room", () => {
     );
   });
 
+  it("the roster entry is the role plus the first line of the instructions, cut at 120 chars", async () => {
+    expect(GROUP_ROSTER_DESCRIPTION_MAX_CHARS).toBe(120);
+    expect(agentDescription("\n  Reviews every diff.  \nBe strict.")).toBe("Reviews every diff.");
+    expect(agentDescription("   \n")).toBeUndefined();
+    expect(agentDescription(undefined)).toBeUndefined();
+    const long = `${"x".repeat(119)}yz and more`;
+    expect(agentDescription(long)).toBe(`${"x".repeat(119)}y`);
+    expect(agentDescription(long)).toHaveLength(120);
+    const { group, lead, leadSession } = agentsRoom();
+    updateAgent(lead.id, { instructions: `${long}\nsecond line` });
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: `@${lead.name} go` });
+    expect(runtime.take(leadSession).input.message).toContain(
+      `- @${lead.name} [Lead] (lead) (you): ${"x".repeat(119)}y\n`,
+    );
+  });
+
   it("mentions match the agent name; an agent without instructions has no persona block", async () => {
     const { group, builder, builderSession } = agentsRoom();
     const { runtime, groups } = setup();
@@ -1871,11 +1891,7 @@ describe("agents in the room", () => {
   it("a legacy group with 1 member is blocked (min-members) until an agent joins", async () => {
     const ws = insertWorkspace();
     const only = insertSession(ws, "Solo");
-    const group = createAgentGroupWithMembers({
-      name: "Legacy",
-      workspaceId: ws,
-      members: [{ sessionId: only }],
-    });
+    const group = insertLegacyGroup({ name: "Legacy", workspaceId: ws, sessionIds: [only] });
     const { runtime, groups } = setup();
     expect(() => groups.postUserMessage({ groupId: group.id, body: "@Solo hi" })).toThrow(
       expect.objectContaining({ code: "group-min-members" }),
@@ -1889,11 +1905,7 @@ describe("agents in the room", () => {
   it("a legacy group with 11 members works normally", async () => {
     const ws = insertWorkspace();
     const sessions = Array.from({ length: 11 }, (_, index) => insertSession(ws, `M${index + 1}`));
-    const group = createAgentGroupWithMembers({
-      name: "Big legacy",
-      workspaceId: ws,
-      members: sessions.map((sessionId) => ({ sessionId })),
-    });
+    const group = insertLegacyGroup({ name: "Big legacy", workspaceId: ws, sessionIds: sessions });
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "@M11 hi" });
     expect(runtime.pendingSessions()).toEqual([sessions[10]]);

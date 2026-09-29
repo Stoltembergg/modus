@@ -269,8 +269,8 @@ describe("SidebarGroups", () => {
     expect(handlers.onUpdateMembers).toHaveBeenCalledTimes(1);
     expect(handlers.onUpdateMembers).toHaveBeenCalledWith("g-project", {
       add: [{ name: "Cy", modelId: "m-1" }],
-      removeSessionIds: ["member-a"],
-      leadSessionId: "member-b",
+      removeAgentIds: ["agent-member-a"],
+      lead: { agentId: "agent-member-b" },
     });
   });
 });

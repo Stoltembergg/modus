@@ -111,12 +111,21 @@ export type UpdateAgentInput = Partial<CreateAgentInput>;
 /** A group plus its member rows (what the sidebar and `group:*` IPC return). */
 export type AgentGroupWithMembers = AgentGroupInfo & { members: AgentGroupMember[] };
 
-/** `group:update-members` payload: the target agents and lead agent (all or nothing). */
+/** The lead after a members change: a kept member (by agent id) or a new agent (by name). */
+export type GroupLeadRef = { agentId: string } | { name: string };
+
+/**
+ * `group:update-members` ("Manage members"): ONE transaction, all or nothing.
+ * The 2..10 rule and the lead are checked against the FINAL state.
+ */
 export type UpdateAgentGroupMembersInput = {
   groupId: string;
-  members: Array<{ agentId: string; role?: string }>;
-  /** Must be one of `members`, or null for no lead. */
-  leadAgentId: string | null;
+  /** NEW agents created in the group (the agent model rule applies to each). */
+  add: NewGroupAgentInput[];
+  /** Members removed; removing a member deletes its agent. */
+  removeAgentIds: string[];
+  /** The final lead (a kept member or one of `add`), or null for none. */
+  lead: GroupLeadRef | null;
 };
 
 /** `group:create` payload: the group, its agents and lead agent, all at once. */

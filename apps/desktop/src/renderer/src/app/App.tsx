@@ -838,24 +838,9 @@ export function App() {
   }
 
   async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
-    // Errors propagate so the "Manage members" dialog can show them and stay open.
-    // One agent per group: adding creates the agent in the group, removing deletes
-    // it. Adds go first so a 2-member group can swap an agent. Not atomic: a
-    // failure leaves the steps already done (the list is refreshed either way).
-    try {
-      for (const agent of change.add) await window.modus.agents.create({ ...agent, groupId });
-      for (const sessionId of change.removeSessionIds) {
-        await window.modus.group.removeMember({ groupId, sessionId });
-      }
-      const group = (await window.modus.group.list()).find(
-        (item: AgentGroupWithMembers) => item.id === groupId,
-      );
-      if (group && (group.leadSessionId ?? null) !== change.leadSessionId) {
-        await window.modus.group.setLead({ groupId, sessionId: change.leadSessionId });
-      }
-    } finally {
-      await refreshGroups();
-    }
+    // ONE all-or-nothing call (adds, removes and lead in one transaction); errors
+    // propagate so the "Manage members" dialog can show them and stay open.
+    setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
   }
 
   /** A member chip in the room: open its hidden room session (e.g. "Waiting for you"). */

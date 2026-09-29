@@ -7,6 +7,7 @@ import {
   groupBlockedReason,
   groupCreateCountError,
   groupMemberCountError,
+  groupMembersUpdateCountError,
 } from "./group-blocked";
 
 describe("groupBlockedReason", () => {
@@ -49,5 +50,26 @@ describe("member count rules", () => {
     // Legacy 1-member group: adding unblocks it.
     expect(groupMemberCountError(1, 2)).toBeNull();
     expect(groupMemberCountError(0, 1)).toBeNull();
+  });
+});
+
+describe("groupMembersUpdateCountError (one update, the FINAL count)", () => {
+  it("checks current - removed + added", () => {
+    // Replace both members of a 2-member group.
+    expect(groupMembersUpdateCountError(2, 2, 2)).toBeNull();
+    expect(groupMembersUpdateCountError(2, 0, 1)).toBe("group-min-members");
+    expect(groupMembersUpdateCountError(3, 1, 3)).toBe("group-min-members");
+    expect(groupMembersUpdateCountError(10, 1, 0)).toBe("group-max-members");
+    expect(groupMembersUpdateCountError(10, 1, 1)).toBeNull();
+    // Lead-only change of a legacy 1-member group is refused: the final state is below 2.
+    expect(groupMembersUpdateCountError(1, 0, 0)).toBe("group-min-members");
+    expect(groupMembersUpdateCountError(1, 1, 0)).toBeNull();
+  });
+
+  it("a legacy group above 10 may remove members but never add while above 10", () => {
+    expect(groupMembersUpdateCountError(11, 0, 1)).toBeNull();
+    expect(groupMembersUpdateCountError(12, 0, 1)).toBeNull();
+    expect(groupMembersUpdateCountError(11, 1, 1)).toBe("group-max-members");
+    expect(groupMembersUpdateCountError(12, 1, 3)).toBeNull();
   });
 });

@@ -99,6 +99,7 @@ import {
   listAgents,
   setAgentArchived,
   updateAgent,
+  updateGroupMembers,
 } from "../agents/agents-store";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
@@ -161,7 +162,6 @@ import {
   setAgentGroupLead,
   setAgentGroupMode,
   setAgentGroupWorkspace,
-  updateAgentGroupAgents,
 } from "../groups/group-store";
 import {
   ensurePersonalizationFile,
@@ -1840,8 +1840,8 @@ export function registerAppIpc({
     setAgentGroupLead,
     setAgentGroupMode,
     setAgentGroupWorkspace,
-    updateAgentGroupMembers: (groupId, input) => {
-      const { group, removedSessionIds } = updateAgentGroupAgents(groupId, input);
+    updateAgentGroupMembers: (input) => {
+      const { group, removedSessionIds } = updateGroupMembers(input);
       teardownRoomSessions(removedSessionIds);
       return group;
     },

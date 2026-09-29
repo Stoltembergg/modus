@@ -186,8 +186,10 @@ export type ModusApi = {
     /** Coordinator mode on/off (kept but ignored while the group has no Lead). */
     setMode(input: { groupId: string; mode: AgentGroupMode }): Promise<AgentGroupWithMembers[]>;
     /**
-     * Replace the members and lead in one all-or-nothing step (rejects, writing
-     * nothing, if any added member is refused); returns the refreshed list.
+     * "Manage members" in ONE all-or-nothing step: create the `add` agents,
+     * remove `removeAgentIds` (deleting their agents) and set the final lead.
+     * The 2..10 rule and the lead are checked on the final state; returns the
+     * refreshed list.
      */
     updateMembers(input: UpdateAgentGroupMembersInput): Promise<AgentGroupWithMembers[]>;
     /**

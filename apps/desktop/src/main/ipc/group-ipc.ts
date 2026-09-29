@@ -11,6 +11,7 @@ import {
   groupBlockedReason,
   groupCreateCountError,
   groupMemberCountError,
+  groupMembersUpdateCountError,
 } from "../../shared/group-blocked";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../shared/group-errors";
 import { requireAgentModel } from "./agent-model-rule";
@@ -51,10 +52,8 @@ export type GroupIpcService = {
   setAgentGroupMode(groupId: string, mode: AgentGroupMode): unknown;
   /** Moves the group (and its room sessions) to another Project; never to none. */
   setAgentGroupWorkspace(groupId: string, workspaceId: string | null): unknown;
-  updateAgentGroupMembers(
-    groupId: string,
-    input: Omit<UpdateAgentGroupMembersInput, "groupId">,
-  ): AgentGroupWithMembers;
+  /** "Manage members": adds, removes and lead in ONE transaction (final-state rules). */
+  updateAgentGroupMembers(input: UpdateAgentGroupMembersInput): AgentGroupWithMembers;
   listGroupTasks(groupId: string): GroupTask[];
   /** The room's "Cancel task" (the only path to `cancelled`). */
   cancelGroupTask(taskId: string): GroupTask;
@@ -215,14 +214,19 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupUpdateMembers, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupUpdateMembersSchema, input, IPC_CHANNELS.groupUpdateMembers);
+    // The final count (the store checks it again inside its transaction).
     const count = memberCount(parsed.groupId);
-    if (count !== undefined) requireMemberCount(count, parsed.members.length);
-    service.updateAgentGroupMembers(parsed.groupId, {
-      members: parsed.members.map((member) => ({
-        agentId: member.agentId,
-        ...(member.role ? { role: member.role } : {}),
-      })),
-      leadAgentId: parsed.leadAgentId,
+    if (count !== undefined) {
+      throwCountError(
+        groupMembersUpdateCountError(count, parsed.add.length, parsed.removeAgentIds.length),
+      );
+    }
+    for (const member of parsed.add) requireAgentModel(service.isModelAvailable, member);
+    service.updateAgentGroupMembers({
+      groupId: parsed.groupId,
+      add: parsed.add.map((member) => definedMemberFields(member)),
+      removeAgentIds: parsed.removeAgentIds,
+      lead: parsed.lead,
     });
     return list();
   });

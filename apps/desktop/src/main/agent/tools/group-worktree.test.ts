@@ -235,7 +235,11 @@ describe("group_start_worktree", () => {
   it("refuses with no-git-project when the group has no Project", async () => {
     const chats = ensureChatsWorkspace();
     const alpha = insertSession(CHATS_WORKSPACE_ID, chats.rootPath, "Alpha");
-    const group = createAgentGroupWithMembers({ name: "Inbox", members: [{ sessionId: alpha }] });
+    const beta = insertSession(CHATS_WORKSPACE_ID, chats.rootPath, "Beta");
+    const group = createAgentGroupWithMembers({
+      name: "Inbox",
+      members: [{ sessionId: alpha }, { sessionId: beta }],
+    });
 
     expect(await startMemberWorktree({ sessionId: alpha, groupId: group.id })).toMatch(
       /^\[group-error:no-git-project\] /,

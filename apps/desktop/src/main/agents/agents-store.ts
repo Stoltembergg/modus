@@ -12,8 +12,10 @@ import {
   type CreateAgentInput,
   type CreateGroupAgentInput,
   type NewGroupAgentInput,
+  type UpdateAgentGroupMembersInput,
   type UpdateAgentInput,
 } from "../../shared/contracts";
+import { groupMembersUpdateCountError } from "../../shared/group-blocked";
 import { getDatabase, uniqueAgentName } from "../db/database";
 import {
   GroupStoreError,
@@ -22,6 +24,7 @@ import {
   joinGroupRows,
   removeAgentFromGroupRows,
   setGroupLeadRow,
+  throwCountError,
   withGroupTransaction,
 } from "../groups/group-store";
 
@@ -255,6 +258,65 @@ export function createGroupWithNewAgents(input: {
     }
     if (leadSessionId !== null) setGroupLeadRow(groupId, leadSessionId);
     return getAgentGroupWithMembers(groupId);
+  });
+}
+
+/**
+ * `group:update-members` ("Manage members") in ONE transaction: removes
+ * `removeAgentIds` (deleting those agents and their room sessions), creates
+ * the `add` agents in the group, and sets the lead. The 2..10 rule
+ * (groupMembersUpdateCountError) and the lead are checked against the FINAL
+ * state, so a 2-member group can replace both members at once. Any failure
+ * rolls everything back. Returns the group and the removed session ids (the
+ * caller stops their runtime).
+ */
+export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
+  group: AgentGroupWithMembers;
+  removedSessionIds: string[];
+} {
+  const { groupId, add, removeAgentIds, lead } = input;
+  if (new Set(removeAgentIds).size !== removeAgentIds.length) {
+    throw new GroupStoreError("invalid-value", "Each agent can be removed only once.");
+  }
+  const addKey = (name: string) => name.trim().toLocaleLowerCase();
+  return withGroupTransaction(() => {
+    const before = getAgentGroupWithMembers(groupId).members;
+    const removed = removeAgentIds.map((agentId) => {
+      const member = before.find((row) => row.agentId === agentId);
+      if (!member) {
+        throw new GroupStoreError("not-a-member", `Agent ${agentId} is not a member of the group.`);
+      }
+      return member;
+    });
+    throwCountError(groupMembersUpdateCountError(before.length, add.length, removed.length));
+    const kept = before.filter((member) => !removeAgentIds.includes(member.agentId));
+    let leadSessionId: string | null = null;
+    if (lead && "agentId" in lead) {
+      const member = kept.find((row) => row.agentId === lead.agentId);
+      if (!member) {
+        throw new GroupStoreError(
+          "not-a-member",
+          `The lead agent ${lead.agentId} must be a member after the change.`,
+        );
+      }
+      leadSessionId = member.sessionId;
+    } else if (lead && !add.some((agent) => addKey(agent.name) === addKey(lead.name))) {
+      throw new GroupStoreError("not-a-member", `The lead "${lead.name}" must be a new member.`);
+    }
+    // Removes first: their names are free for the new agents.
+    for (const member of removed) removeAgentFromGroupRows(groupId, member.sessionId, false);
+    for (const member of add) {
+      const agent = createAgent(newAgentFields(member, groupId));
+      const row = joinGroupRows(groupId, agent.id, undefined, { cap: false });
+      if (lead && "name" in lead && addKey(agent.name) === addKey(lead.name)) {
+        leadSessionId = row.sessionId;
+      }
+    }
+    setGroupLeadRow(groupId, leadSessionId);
+    return {
+      group: getAgentGroupWithMembers(groupId),
+      removedSessionIds: removed.map((member) => member.sessionId),
+    };
   });
 }
 

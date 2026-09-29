@@ -14,21 +14,27 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 const { getDatabase, migrateDatabase } = await import("../db/database");
 const { getAgentSession, listAgentSessions } = await import("../agent/agent-store");
 const { ensureChatsWorkspace, removeWorkspace } = await import("../workspace/workspace-store");
-const { createAgent, createAgentInGroup, createGroupWithNewAgents, deleteAgent, getAgent } =
-  await import("../agents/agents-store");
+const {
+  createAgent,
+  createAgentInGroup,
+  createGroupWithNewAgents,
+  deleteAgent,
+  getAgent,
+  updateGroupMembers,
+} = await import("../agents/agents-store");
 const {
   addAgentToGroup,
   appendGroupMessage,
-  createAgentGroupWithMembers,
   deleteAgentGroup,
   getAgentGroup,
+  getAgentGroupWithMembers,
   listAgentGroupMembers,
   listGroupMessages,
   removeAgentFromGroup,
   setAgentGroupWorkspace,
-  updateAgentGroupAgents,
 } = await import("./group-store");
 const { groupBlockedReason } = await import("../../shared/group-blocked");
+const { insertLegacyGroup } = await import("./legacy-group.fixture");
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -81,15 +87,15 @@ function newGroup(count = 2, workspaceId: string | null = insertWorkspace()) {
   return createGroupWithNewAgents({ name: uid("G"), workspaceId, members: newAgents(count) });
 }
 
-/** A legacy group (built through the session path, which has no 2..10 rule). */
+/** A legacy group outside 2..10 (rows written directly: the stores refuse to build one). */
 function legacyGroup(count: number) {
   const workspaceId = insertWorkspace();
-  return createAgentGroupWithMembers({
+  return insertLegacyGroup({
     name: uid("Legacy"),
     workspaceId,
-    members: Array.from({ length: count }, (_, index) => ({
-      sessionId: insertSession(workspaceId, `Old ${index + 1}`),
-    })),
+    sessionIds: Array.from({ length: count }, (_, index) =>
+      insertSession(workspaceId, `Old ${index + 1}`),
+    ),
   });
 }
 
@@ -97,6 +103,13 @@ function statusLines(groupId: string): string[] {
   return listGroupMessages(groupId, { limit: 200 })
     .filter((message) => message.kind === "status")
     .map((message) => message.body);
+}
+
+function countRows(table: string, column: string, value: string): number {
+  const row = getDatabase()
+    .prepare(`select count(*) as count from ${table} where ${column} = ?`)
+    .get(value) as { count: number };
+  return Number(row.count);
 }
 
 function orphanRoomSessions(): number {
@@ -208,9 +221,11 @@ describe("one group per agent", () => {
     expect(listAgentGroupMembers(group.id)).toHaveLength(2);
     expectCode(
       () =>
-        updateAgentGroupAgents(group.id, {
-          members: [{ agentId: a?.agentId ?? "" }],
-          leadAgentId: null,
+        updateGroupMembers({
+          groupId: group.id,
+          add: [],
+          removeAgentIds: [b?.agentId ?? ""],
+          lead: null,
         }),
       "group-min-members",
     );
@@ -300,6 +315,7 @@ describe("one group per agent", () => {
     appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hi" });
     removeWorkspace(ws);
     expect(getAgentGroup(group.id)).toBeUndefined();
+    expect(countRows("agents", "group_id", group.id)).toBe(0);
     for (const member of group.members) {
       expect(getAgent(member.agentId)).toBeUndefined();
       expect(getAgentSession(member.sessionId)).toBeUndefined();
@@ -308,6 +324,148 @@ describe("one group per agent", () => {
     expect(orphanRoomSessions()).toBe(0);
     expect(getAgentSession(chat)).toBeDefined();
     expect(getAgent(ungrouped.id)).toBeDefined();
+  });
+});
+
+describe("group:update-members (one transaction, final-state rules)", () => {
+  const ids = (group: { members: Array<{ agentId: string }> }) =>
+    group.members.map((member) => member.agentId);
+
+  it("a 2-member group can replace both members at once (add 2, remove 2)", () => {
+    const group = newGroup(2);
+    const { group: after, removedSessionIds } = updateGroupMembers({
+      groupId: group.id,
+      add: newAgents(2, "New"),
+      removeAgentIds: ids(group),
+      lead: { name: "new 2" },
+    });
+    expect(after.members.map((member) => member.name)).toEqual(["New 1", "New 2"]);
+    expect(after.leadSessionId).toBe(after.members[1]?.sessionId);
+    expect(removedSessionIds.sort()).toEqual(group.members.map((m) => m.sessionId).sort());
+    for (const member of group.members) {
+      expect(getAgent(member.agentId)).toBeUndefined();
+      expect(getAgentSession(member.sessionId)).toBeUndefined();
+    }
+    for (const member of after.members) expect(getAgent(member.agentId)?.groupId).toBe(group.id);
+    expect(countRows("agents", "group_id", group.id)).toBe(2);
+    expect(orphanRoomSessions()).toBe(0);
+    // A removed name is free for a new agent in the same change.
+    const again = updateGroupMembers({
+      groupId: group.id,
+      add: [{ name: "New 1", modelId: MODEL }],
+      removeAgentIds: [after.members[0]?.agentId ?? ""],
+      lead: { agentId: after.members[1]?.agentId ?? "" },
+    });
+    expect(again.group.members.map((member) => member.name)).toEqual(["New 2", "New 1"]);
+    expect(again.group.leadSessionId).toBe(after.members[1]?.sessionId);
+  });
+
+  it("a final state below 2 is refused and nothing changes", () => {
+    const group = newGroup(3);
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: group.id,
+          add: newAgents(1, "Only"),
+          removeAgentIds: ids(group),
+          lead: null,
+        }),
+      "group-min-members",
+    );
+    expect(ids(getAgentGroupWithMembers(group.id))).toEqual(ids(group));
+  });
+
+  it("a lead outside the final set is refused (a removed member or an unknown name)", () => {
+    const group = newGroup(3);
+    const [first, second] = ids(group);
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: group.id,
+          add: [],
+          removeAgentIds: [first ?? ""],
+          lead: { agentId: first ?? "" },
+        }),
+      "not-a-member",
+    );
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: group.id,
+          add: newAgents(1, "Fresh"),
+          removeAgentIds: [],
+          lead: { name: "Nobody" },
+        }),
+      "not-a-member",
+    );
+    // Removing an agent that is not in the group is refused too.
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: group.id,
+          add: [],
+          removeAgentIds: [createAgent({ name: uid("Loose") }).id],
+          lead: null,
+        }),
+      "not-a-member",
+    );
+    expect(ids(getAgentGroupWithMembers(group.id))).toEqual(ids(group));
+    expect(getAgentGroupWithMembers(group.id).leadSessionId ?? null).toBeNull();
+    expect(second).toBeDefined();
+  });
+
+  it("a failure after some steps rolls back every step (all or nothing)", () => {
+    const group = newGroup(2);
+    const before = [countRows("agents", "group_id", group.id), orphanRoomSessions()];
+    // The second new agent takes a kept member's name: refused after the removal and first add.
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: group.id,
+          add: [
+            { name: "Fresh", modelId: MODEL },
+            { name: "Agent 2", modelId: MODEL },
+          ],
+          removeAgentIds: [ids(group)[0] ?? ""],
+          lead: null,
+        }),
+      "agent-name-taken",
+    );
+    expect(ids(getAgentGroupWithMembers(group.id))).toEqual(ids(group));
+    expect([countRows("agents", "group_id", group.id), orphanRoomSessions()]).toEqual(before);
+    expect(statusLines(group.id)).toEqual([]);
+  });
+
+  it("an 11th member via update is refused; a legacy group of 11 may shrink but not swap", () => {
+    const ten = newGroup(10);
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: ten.id,
+          add: newAgents(1, "X"),
+          removeAgentIds: [],
+          lead: null,
+        }),
+      "group-max-members",
+    );
+    const legacy = legacyGroup(11);
+    expectCode(
+      () =>
+        updateGroupMembers({
+          groupId: legacy.id,
+          add: newAgents(1, "X"),
+          removeAgentIds: [ids(legacy)[0] ?? ""],
+          lead: null,
+        }),
+      "group-max-members",
+    );
+    const shrunk = updateGroupMembers({
+      groupId: legacy.id,
+      add: [],
+      removeAgentIds: [ids(legacy)[0] ?? ""],
+      lead: null,
+    });
+    expect(shrunk.group.members).toHaveLength(10);
   });
 });
 

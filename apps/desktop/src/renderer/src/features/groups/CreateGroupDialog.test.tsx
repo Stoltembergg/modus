@@ -201,10 +201,48 @@ describe("CreateGroupDialog in edit mode (Manage members)", () => {
     ).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Save members" }));
     // The removed lead is dropped.
+    expect(onSave).toHaveBeenCalledWith({ add: [], removeAgentIds: ["agent-s-ana"], lead: null });
+  });
+
+  it("replaces both members of a 2-member group in ONE save, with a new agent as lead", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn(async (_change: unknown) => undefined);
+    render(
+      <CreateGroupDialog
+        group={{ ...GROUP, members: GROUP.members.slice(0, 2) }}
+        mode="edit"
+        models={MODELS}
+        onOpenChange={vi.fn()}
+        onSave={onSave}
+        open
+        workspaces={WORKSPACES}
+      />,
+    );
+    const dialog = screen.getByRole("dialog");
+    // At 2, nothing can be removed until new agents are added.
+    const removeAna = within(dialog).getByRole("button", {
+      name: "Remove Ana",
+    }) as HTMLButtonElement;
+    expect(removeAna.disabled).toBe(true);
+    await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Agent 1 name" }), "Cy");
+    await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Agent 2 name" }), "Di");
+    await user.click(within(dialog).getByRole("button", { name: "Remove Ana" }));
+    await user.click(within(dialog).getByRole("button", { name: "Remove Bo" }));
+    const lead = within(dialog).getByRole("combobox", { name: /Lead/ }) as HTMLSelectElement;
+    expect([...lead.options].map((option) => option.textContent)).toEqual(["No lead", "Cy", "Di"]);
+    const di = [...lead.options].find((option) => option.textContent === "Di");
+    await user.selectOptions(lead, di?.value ?? "");
+    await user.click(within(dialog).getByRole("button", { name: "Save members" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
     expect(onSave).toHaveBeenCalledWith({
-      add: [],
-      removeSessionIds: ["s-ana"],
-      leadSessionId: null,
+      add: [
+        { name: "Cy", modelId: "m-1" },
+        { name: "Di", modelId: "m-1" },
+      ],
+      removeAgentIds: ["agent-s-ana", "agent-s-bo"],
+      lead: { name: "Di" },
     });
   });
 
@@ -212,7 +250,7 @@ describe("CreateGroupDialog in edit mode (Manage members)", () => {
     const user = userEvent.setup();
     const onSave = vi.fn(async (_change: unknown) => {
       throw new Error(
-        `Error invoking remote method 'group:remove-member': Error: ${encodeGroupErrorMessage("group-min-members", "A group needs at least 2 agents.")}`,
+        `Error invoking remote method 'group:update-members': Error: ${encodeGroupErrorMessage("group-min-members", "A group needs at least 2 agents.")}`,
       );
     });
     const { dialog } = renderEdit(onSave);

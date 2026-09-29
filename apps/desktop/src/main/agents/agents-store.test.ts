@@ -359,7 +359,7 @@ describe("migration: group members become agents", () => {
     const group = createAgentGroupWithMembers({
       name: "Linked room",
       workspaceId,
-      members: [{ sessionId: session }],
+      members: [{ sessionId: session }, { sessionId: insertSession(workspaceId, uid("Other")) }],
     });
     const member = listAgentGroupMembers(group.id)[0];
     expect(member).toMatchObject({ sessionId: session, name: title, agentRole: "" });

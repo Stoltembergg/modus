@@ -201,19 +201,18 @@ type MemberRef = {
 export const GROUP_ROSTER_DESCRIPTION_MAX_CHARS = 120;
 
 /**
- * A short description of an agent for the roster: the first non-empty line of
- * its instructions, whitespace collapsed, cut at 120 characters. (The agents
- * table has no description column yet; A3/A4 may add one.)
+ * The roster entry's description: the first line of the agent's instructions
+ * (leading blank lines skipped), truncated to 120 characters. Shown after the
+ * role: `- @Name [Role]: <first line>`. (The agents table has no description
+ * column yet; A3/A4 may add one.)
  */
 export function agentDescription(instructions: string | undefined): string | undefined {
   const line = (instructions ?? "")
     .split("\n")
-    .map((text) => text.replace(/\s+/g, " ").trim())
+    .map((text) => text.trim())
     .find(Boolean);
   if (!line) return undefined;
-  return line.length > GROUP_ROSTER_DESCRIPTION_MAX_CHARS
-    ? `${line.slice(0, GROUP_ROSTER_DESCRIPTION_MAX_CHARS - 1).trimEnd()}…`
-    : line;
+  return line.slice(0, GROUP_ROSTER_DESCRIPTION_MAX_CHARS).trimEnd();
 }
 
 /** The room's CURRENT membership, read fresh on every call (never cached). */

@@ -1449,7 +1449,11 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
     const workspaceId = insertWorkspace();
     const a = insertSession(workspaceId);
     const taken = insertSession(workspaceId);
-    createAgentGroupWithMembers({ name: "Existing", workspaceId, members: [{ sessionId: taken }] });
+    createAgentGroupWithMembers({
+      name: "Existing",
+      workspaceId,
+      members: [{ sessionId: taken }, { sessionId: insertSession(workspaceId) }],
+    });
     const groupsBefore = groupRowCount();
     const membersBefore = memberRowCount();
 
@@ -1506,7 +1510,7 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
         createAgentGroupWithMembers({
           name: "Bad lead",
           workspaceId,
-          members: [{ sessionId: a }],
+          members: [{ sessionId: a }, { sessionId: insertSession(workspaceId) }],
           leadSessionId: b,
         }),
       "not-a-member",
@@ -1525,7 +1529,7 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
         createAgentGroupWithMembers({
           name: "Ghost project",
           workspaceId: "missing-workspace",
-          members: [],
+          members: [{ sessionId: a }, { sessionId: b }],
         }),
       "workspace-not-found",
     );
@@ -1536,7 +1540,7 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
     const inbox = insertSession(CHATS_WORKSPACE_ID);
     const created = createAgentGroupWithMembers({
       name: "Inbox crew",
-      members: [{ sessionId: inbox }],
+      members: [{ sessionId: inbox }, { sessionId: insertSession(CHATS_WORKSPACE_ID) }],
       leadSessionId: inbox,
     });
     expect(created.workspaceId).toBeUndefined();
