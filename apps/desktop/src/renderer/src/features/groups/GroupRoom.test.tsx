@@ -148,21 +148,27 @@ function states(entry?: Partial<GroupMemberStates>): GroupMemberStatesById {
   ]);
 }
 
-function renderRoom(memberStates: GroupMemberStatesById = states(), onOpenMember = vi.fn()) {
+function renderRoom(
+  memberStates: GroupMemberStatesById = states(),
+  onOpenMember = vi.fn(),
+  roomGroup: AgentGroupWithMembers = GROUP,
+  onSetMode = vi.fn(),
+) {
   const view = render(
     <GroupRoom
-      group={GROUP}
+      group={roomGroup}
       memberSessionIds={new Set(SESSIONS.map((s) => s.id))}
       memberStates={memberStates}
       onDelete={vi.fn()}
       onOpenMember={onOpenMember}
       onRename={vi.fn()}
+      onSetMode={onSetMode}
       onUpdateMembers={vi.fn(async () => undefined)}
       sessions={SESSIONS}
       workspaces={WORKSPACES}
     />,
   );
-  return { ...view, onOpenMember };
+  return { ...view, onOpenMember, onSetMode };
 }
 
 const emit = (event: GroupRuntimeEvent) =>
@@ -591,5 +597,48 @@ describe("GroupRoom decisions", () => {
     await vi.waitFor(() =>
       expect(within(panel).getByTestId("decision-count").textContent).toBe("2"),
     );
+  });
+});
+
+describe("GroupRoom coordinator mode", () => {
+  async function openMenu(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("button", { name: "Group actions" }));
+    return screen.findByRole("menuitemcheckbox", { name: /Coordinator mode/ });
+  }
+
+  it("the menu toggle turns it on; no Coordinator badge while it is off", async () => {
+    const user = userEvent.setup();
+    const { onSetMode } = renderRoom();
+    expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.getAttribute("aria-disabled")).not.toBe("true");
+    await user.click(toggle);
+    expect(onSetMode).toHaveBeenCalledWith("coordinator");
+  });
+
+  it("with the mode on and a Lead: the Coordinator badge next to the Project badge; the toggle turns it off", async () => {
+    const user = userEvent.setup();
+    const { onSetMode } = renderRoom(states(), vi.fn(), { ...GROUP, mode: "coordinator" });
+    const badge = screen.getByTestId("group-coordinator-badge");
+    expect(badge.textContent).toBe("Coordinator");
+    expect(screen.getByTestId("group-project-badge").nextElementSibling).toBe(badge);
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    await user.click(toggle);
+    expect(onSetMode).toHaveBeenCalledWith("free");
+  });
+
+  it("without a Lead the stored flag is ignored: no badge, toggle off and disabled", async () => {
+    const user = userEvent.setup();
+    const { leadSessionId: _lead, ...leaderless } = GROUP;
+    const { onSetMode } = renderRoom(states(), vi.fn(), { ...leaderless, mode: "coordinator" });
+    expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    const toggle = await openMenu(user);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle.textContent).toContain("Needs a Lead");
+    await user.click(toggle);
+    expect(onSetMode).not.toHaveBeenCalled();
   });
 });
