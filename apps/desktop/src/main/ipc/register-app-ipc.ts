@@ -11,13 +11,7 @@ import {
   nativeImage,
   shell,
 } from "electron";
-import type {
-  DiffReview,
-  DiffReviewReady,
-  DiffTarget,
-  HyperPlanSourceSnapshot,
-  PlanRef,
-} from "../../shared/contracts";
+import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
 import { listAgentEvents, recordAgentEvent } from "../agent/agent-event-store";
 import { listAgentRuns } from "../agent/agent-run-store";
 import {
@@ -35,22 +29,6 @@ import {
   restoreCheckpoint,
 } from "../agent/checkpoint-service";
 import { getHarnessInsights } from "../agent/harness/harness-insights-service";
-import { runHyperPlanReview, runHyperPlanRevision } from "../agent/harness/hyperplan";
-import {
-  getHyperPlanChoiceReplay,
-  getHyperPlanDraftOwnerEpoch,
-  getHyperPlanOwnerEpochIdentity,
-  getHyperPlanSelection,
-  getHyperPlanStartOperation,
-  isHyperPlanChoicePublished,
-  markHyperPlanChoicePublished,
-  peekHyperPlanDraft,
-  releaseHyperPlanSession,
-  reserveHyperPlanSession,
-  resolveHyperPlanDraftRequest,
-  runHyperPlanStartOperation,
-  storeHyperPlanDraft,
-} from "../agent/harness/hyperplan-draft-store";
 import {
   cancelProviderAuth,
   configureProvider,
@@ -78,7 +56,6 @@ import {
 } from "../agent/provider-limits-service";
 import { listAgentReviews, startAgentReview } from "../agent/review-service";
 import { rollbackToUserMessage } from "../agent/rollback-service";
-import type { HyperPlanBuildStart, HyperPlanBuildStartInput } from "../agent/runtime";
 import { getAgentRuntime } from "../agent/runtime-registry";
 import { deleteAgentSessionTree, setAgentSessionArchivedTree } from "../agent/session-lifecycle";
 import {
@@ -90,7 +67,6 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
-import { plansRoot } from "../agent/tools/plan-tools";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -188,12 +164,6 @@ import {
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
-import {
-  fingerprintPlanSource,
-  promotePlanRevision,
-  readPlanById,
-  updatePlanContentById,
-} from "../plan/plan-store";
 import { onManagedProcessChange } from "../process/managed-process-bus";
 import { killManagedProcess, listManagedProcesses } from "../process/managed-process-facade";
 import { getWorkspaceAgents, listRuleFiles, saveWorkspaceAgents } from "../rules/rules-service";
@@ -225,21 +195,16 @@ import { IPC_CHANNELS } from "./channels";
 import { registerGroupIpcHandlers } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
+import { registerHyperPlanIpcHandlers } from "./hyperplan-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
 import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
-  agentApplyHyperPlanRevisionSchema,
-  agentCreateHyperPlanDraftSchema,
   agentCreateSchema,
   agentCycleModelSchema,
   agentListSchema,
   agentPromptSchema,
-  agentResolveHyperPlanDraftChoiceSchema,
-  agentReviewPlanWithHyperPlanSchema,
   agentRollbackSchema,
   agentSetModelSchema,
-  agentStartOriginalPlanBuildSchema,
-  agentStartPlanBuildSchema,
   approvalModeClearProjectSchema,
   approvalModeGetSchema,
   approvalModeSchema,
@@ -355,28 +320,6 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindowType {
   }
 
   return window;
-}
-
-type HyperPlanRuntime = ReturnType<typeof getAgentRuntime> & {
-  assertHyperPlanSessionAvailable(sessionId: string): void;
-  publishPlanUpdated(
-    window: BrowserWindowType,
-    sessionId: string,
-    plan: PlanRef,
-    idempotencyKey?: string,
-  ): void;
-  startPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart>;
-  startOriginalPlanBuild(
-    window: BrowserWindowType,
-    input: HyperPlanBuildStartInput,
-  ): Promise<HyperPlanBuildStart>;
-};
-
-function getHyperPlanRuntime(): HyperPlanRuntime {
-  return getAgentRuntime() as HyperPlanRuntime;
 }
 
 export function registerAppIpc({
@@ -545,386 +488,7 @@ export function registerAppIpc({
     });
   });
 
-  ipcMain.handle(IPC_CHANNELS.agentReviewPlanWithHyperPlan, async (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentReviewPlanWithHyperPlanSchema,
-      input,
-      IPC_CHANNELS.agentReviewPlanWithHyperPlan,
-    );
-    const session = getAgentSession(parsed.sessionId);
-    if (!session) throw new Error("Agent session not found.");
-    const plan = readPlanById(plansRoot(), parsed.planId);
-    if (
-      !plan?.spec ||
-      plan.id !== parsed.planId ||
-      plan.sessionId !== session.id ||
-      plan.workspaceId !== session.workspaceId
-    ) {
-      throw new Error("Spec plan does not belong to this session.");
-    }
-    return await runHyperPlanReview({ planContent: plan.content, spec: plan.spec });
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentApplyHyperPlanRevision, async (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentApplyHyperPlanRevisionSchema,
-      input,
-      IPC_CHANNELS.agentApplyHyperPlanRevision,
-    );
-    const session = getAgentSession(parsed.sessionId);
-    if (!session) throw new Error("Agent session not found.");
-    const plan = readPlanById(plansRoot(), parsed.planId);
-    if (
-      !plan?.spec ||
-      plan.id !== parsed.planId ||
-      plan.sessionId !== session.id ||
-      plan.workspaceId !== session.workspaceId
-    ) {
-      throw new Error("Spec plan does not belong to this session.");
-    }
-    if (plan.hash !== parsed.planHash) {
-      throw new Error("Plan changed since review; reload it before applying this revision.");
-    }
-    const senderWindow = getSenderWindow(event);
-    let updatedEvent: { type: "plan.updated"; sessionId: string; plan: typeof plan } | undefined;
-    const updated = updatePlanContentById(
-      plansRoot(),
-      plan.id,
-      parsed.planHash,
-      parsed.revisedContent,
-      (persistedPlan) => {
-        updatedEvent = { type: "plan.updated", sessionId: session.id, plan: persistedPlan };
-        recordAgentEvent(updatedEvent);
-      },
-    );
-    if (!updated) throw new Error("Spec plan not found.");
-    if (!updatedEvent) throw new Error("Plan update event was not persisted.");
-    try {
-      senderWindow.webContents.send(IPC_CHANNELS.agentEvent, updatedEvent);
-    } catch (error) {
-      console.error("Failed to deliver committed plan.updated event to sender window.", error);
-    }
-    return updated;
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentCreateHyperPlanDraft, async (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentCreateHyperPlanDraftSchema,
-      input,
-      IPC_CHANNELS.agentCreateHyperPlanDraft,
-    );
-    const ownerId = event.sender.id;
-    const ownerEpoch = getHyperPlanDraftOwnerEpoch(ownerId);
-    if (!ownerEpoch) throw new Error("HyperPlan draft owner is not active.");
-    const session = getAgentSession(parsed.sessionId);
-    if (!session) throw new Error("Agent session not found.");
-    const sourcePlan = readPlanById(plansRoot(), parsed.planId);
-    if (
-      !sourcePlan?.spec ||
-      sourcePlan.id !== parsed.planId ||
-      sourcePlan.sessionId !== session.id ||
-      sourcePlan.workspaceId !== session.workspaceId
-    ) {
-      throw new Error("Spec plan does not belong to this session.");
-    }
-    const runtime = getHyperPlanRuntime();
-    runtime.assertHyperPlanSessionAvailable(session.id);
-    if (!reserveHyperPlanSession({ sessionId: session.id, ownerId, ownerEpoch })) {
-      throw new Error("HyperPlan review is already active for this session.");
-    }
-    const sourceFingerprint = fingerprintPlanSource(sourcePlan);
-    try {
-      const revision = await runHyperPlanRevision({
-        title: sourcePlan.title,
-        overview: sourcePlan.overview,
-        content: sourcePlan.content,
-        todos: sourcePlan.todos,
-        spec: sourcePlan.spec,
-      });
-      const currentSession = getAgentSession(parsed.sessionId);
-      const currentPlan = readPlanById(plansRoot(), parsed.planId);
-      if (
-        !currentSession ||
-        currentSession.workspaceId !== session.workspaceId ||
-        !currentPlan ||
-        currentPlan.id !== parsed.planId ||
-        currentPlan.sessionId !== session.id ||
-        currentPlan.workspaceId !== session.workspaceId ||
-        fingerprintPlanSource(currentPlan) !== sourceFingerprint
-      ) {
-        throw new Error("Plan source changed during HyperPlan generation; run a fresh review.");
-      }
-      return storeHyperPlanDraft({ ownerId, ownerEpoch, sourcePlan: currentPlan, revision });
-    } finally {
-      releaseHyperPlanSession({ sessionId: session.id, ownerId, ownerEpoch });
-    }
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentResolveHyperPlanDraftChoice, (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentResolveHyperPlanDraftChoiceSchema,
-      input,
-      IPC_CHANNELS.agentResolveHyperPlanDraftChoice,
-    );
-    const ownerId = event.sender.id;
-    const ownerEpoch = getHyperPlanDraftOwnerEpoch(ownerId);
-    if (!ownerEpoch) throw new Error("HyperPlan draft owner incarnation is no longer active.");
-    const replay = getHyperPlanChoiceReplay({ ownerId, ownerEpoch, ...parsed });
-    if (replay) {
-      const current = readPlanById(plansRoot(), replay.plan.id);
-      const session = getAgentSession(replay.plan.sessionId);
-      if (
-        !session ||
-        !current ||
-        current.id !== replay.plan.id ||
-        current.sessionId !== replay.plan.sessionId ||
-        current.workspaceId !== replay.plan.workspaceId ||
-        session.workspaceId !== current.workspaceId ||
-        fingerprintPlanSource(current) !== replay.planFingerprint
-      ) {
-        throw new Error("Plan source changed after the HyperPlan choice; retry is no longer safe.");
-      }
-      if (
-        parsed.choice === "revision" &&
-        !isHyperPlanChoicePublished({ ownerId, ownerEpoch, ...parsed })
-      ) {
-        getHyperPlanRuntime().publishPlanUpdated(
-          getSenderWindow(event),
-          replay.plan.sessionId,
-          replay.plan,
-          replay.selectionId,
-        );
-        markHyperPlanChoicePublished({ ownerId, ownerEpoch, ...parsed });
-      }
-      return replay;
-    }
-
-    const draft = peekHyperPlanDraft({ ownerId, ownerEpoch, draftId: parsed.draftId });
-    if (!draft)
-      throw new Error("HyperPlan draft is missing, expired, or belongs to another owner.");
-    const session = getAgentSession(draft.sessionId);
-    const sourcePlan = readPlanById(plansRoot(), draft.planId);
-    if (
-      !session ||
-      !sourcePlan?.spec ||
-      sourcePlan.id !== draft.planId ||
-      sourcePlan.sessionId !== session.id ||
-      sourcePlan.workspaceId !== session.workspaceId ||
-      session.workspaceId !== draft.workspaceId
-    ) {
-      throw new Error("Spec plan does not belong to this session.");
-    }
-    const runtime = getHyperPlanRuntime();
-    runtime.assertHyperPlanSessionAvailable(session.id);
-    const selection = resolveHyperPlanDraftRequest({
-      ownerId,
-      ownerEpoch,
-      ...parsed,
-      sourcePlan,
-      resolvePlan: (storedDraft) => {
-        const latestSession = getAgentSession(storedDraft.sessionId);
-        const latestPlan = readPlanById(plansRoot(), storedDraft.planId);
-        if (
-          !latestSession ||
-          !latestPlan?.spec ||
-          latestPlan.id !== storedDraft.planId ||
-          latestPlan.sessionId !== storedDraft.sessionId ||
-          latestPlan.workspaceId !== storedDraft.workspaceId ||
-          latestSession.workspaceId !== storedDraft.workspaceId ||
-          fingerprintPlanSource(latestPlan) !== storedDraft.sourceFingerprint
-        ) {
-          throw new Error("HyperPlan draft source is stale; run a fresh review.");
-        }
-        if (parsed.choice === "original") return latestPlan;
-        return promotePlanRevision(plansRoot(), {
-          planId: storedDraft.planId,
-          expectedFingerprint: storedDraft.sourceFingerprint,
-          revision: storedDraft.revision,
-        });
-      },
-    });
-    if (
-      parsed.choice === "revision" &&
-      !isHyperPlanChoicePublished({ ownerId, ownerEpoch, ...parsed })
-    ) {
-      runtime.publishPlanUpdated(
-        getSenderWindow(event),
-        session.id,
-        getHyperPlanChoiceReplay({ ownerId, ownerEpoch, ...parsed })?.plan ?? sourcePlan,
-        selection.selectionId,
-      );
-      markHyperPlanChoicePublished({ ownerId, ownerEpoch, ...parsed });
-    }
-    return selection;
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentStartPlanBuild, async (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentStartPlanBuildSchema,
-      input,
-      IPC_CHANNELS.agentStartPlanBuild,
-    );
-    const ownerId = event.sender.id;
-    const ownerEpoch = getHyperPlanDraftOwnerEpoch(ownerId);
-    if (!ownerEpoch) throw new Error("HyperPlan draft owner incarnation is no longer active.");
-    const previous = getHyperPlanStartOperation({
-      ownerId,
-      ownerEpoch,
-      requestId: parsed.requestId,
-    });
-    if (
-      previous &&
-      (previous.kind !== "selection" || previous.selectionId !== parsed.selectionId)
-    ) {
-      throw new Error("HyperPlan build start request conflict.");
-    }
-    if (previous?.state === "started" && previous.result) {
-      return runHyperPlanStartOperation({
-        ownerId,
-        ownerEpoch,
-        requestId: parsed.requestId,
-        kind: "selection",
-        selectionId: parsed.selectionId,
-        sessionId: previous.sessionId,
-        planId: previous.planId,
-        planFingerprint: previous.planFingerprint,
-        start: async () => previous.result as HyperPlanBuildStart,
-      });
-    }
-    const selection = previous
-      ? {
-          selectionId: parsed.selectionId,
-          sessionId: previous.sessionId,
-          planId: previous.planId,
-          planFingerprint: previous.planFingerprint,
-        }
-      : getHyperPlanSelection({ ownerId, ownerEpoch, selectionId: parsed.selectionId });
-    if (!selection)
-      throw new Error("HyperPlan selection is missing, expired, or belongs to another owner.");
-    const session = getAgentSession(selection.sessionId);
-    const plan = readPlanById(plansRoot(), selection.planId);
-    if (
-      !session ||
-      !plan ||
-      plan.id !== selection.planId ||
-      plan.sessionId !== session.id ||
-      plan.workspaceId !== session.workspaceId ||
-      ("workspaceId" in selection && plan.workspaceId !== selection.workspaceId) ||
-      (previous?.state !== "started" && fingerprintPlanSource(plan) !== selection.planFingerprint)
-    )
-      throw new Error("Plan fingerprint changed; this HyperPlan selection cannot be started.");
-
-    const runtime = getHyperPlanRuntime();
-    return runHyperPlanStartOperation({
-      ownerId,
-      ownerEpoch,
-      requestId: parsed.requestId,
-      kind: "selection",
-      selectionId: parsed.selectionId,
-      sessionId: session.id,
-      planId: plan.id,
-      planFingerprint: selection.planFingerprint,
-      start: (operation, markRunCreated) =>
-        runtime.startPlanBuild(getSenderWindow(event), {
-          ownerId,
-          ownerEpoch,
-          requestId: parsed.requestId,
-          sessionId: session.id,
-          planId: plan.id,
-          planFingerprint: selection.planFingerprint,
-          selectionId: parsed.selectionId,
-          idempotencyKey: parsed.selectionId,
-          ...(operation.runId ? { existingRunId: operation.runId } : {}),
-          onRunCreated: markRunCreated,
-        }),
-    });
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentStartOriginalPlanBuild, async (event, input) => {
-    assertTrustedSender(event);
-    const parsed = parseIpcInput(
-      agentStartOriginalPlanBuildSchema,
-      input,
-      IPC_CHANNELS.agentStartOriginalPlanBuild,
-    );
-    const ownerId = event.sender.id;
-    const ownerEpoch = getHyperPlanDraftOwnerEpoch(ownerId);
-    if (!ownerEpoch) throw new Error("HyperPlan draft owner incarnation is no longer active.");
-    const epochIdentity = getHyperPlanOwnerEpochIdentity(ownerEpoch);
-    if (!epochIdentity) throw new Error("HyperPlan draft owner incarnation is no longer active.");
-    const previous = getHyperPlanStartOperation({
-      ownerId,
-      ownerEpoch,
-      requestId: parsed.requestId,
-    });
-    if (
-      previous &&
-      (previous.kind !== "original" ||
-        previous.sessionId !== parsed.sessionId ||
-        previous.planId !== parsed.planId ||
-        previous.planFingerprint !==
-          fingerprintPlanSource(parsed.sourceSnapshot as HyperPlanSourceSnapshot))
-    )
-      throw new Error("HyperPlan build start request conflict.");
-    if (previous?.state === "started" && previous.result) {
-      return runHyperPlanStartOperation({
-        ownerId,
-        ownerEpoch,
-        requestId: parsed.requestId,
-        kind: "original",
-        sessionId: previous.sessionId,
-        planId: previous.planId,
-        planFingerprint: previous.planFingerprint,
-        start: async () => previous.result as HyperPlanBuildStart,
-      });
-    }
-    const session = getAgentSession(parsed.sessionId);
-    const plan = readPlanById(plansRoot(), parsed.planId);
-    if (
-      !session ||
-      !plan ||
-      plan.sessionId !== session.id ||
-      plan.workspaceId !== session.workspaceId
-    ) {
-      throw new Error(
-        "The requested original plan is missing or not owned by this session workspace.",
-      );
-    }
-    const expectedFingerprint = fingerprintPlanSource(
-      parsed.sourceSnapshot as HyperPlanSourceSnapshot,
-    );
-    if (fingerprintPlanSource(plan) !== expectedFingerprint) {
-      throw new Error("The original plan source fingerprint changed since it was reviewed.");
-    }
-    const planFingerprint = expectedFingerprint;
-    const runtime = getHyperPlanRuntime();
-    return runHyperPlanStartOperation({
-      ownerId,
-      ownerEpoch,
-      requestId: parsed.requestId,
-      kind: "original",
-      sessionId: session.id,
-      planId: plan.id,
-      planFingerprint,
-      start: (operation, markRunCreated) =>
-        runtime.startOriginalPlanBuild(getSenderWindow(event), {
-          ownerId,
-          ownerEpoch,
-          requestId: parsed.requestId,
-          sessionId: session.id,
-          planId: plan.id,
-          planFingerprint,
-          idempotencyKey: `original:${ownerId}:${epochIdentity}:${parsed.requestId}`,
-          ...(operation.runId ? { existingRunId: operation.runId } : {}),
-          onRunCreated: markRunCreated,
-        }),
-    });
-  });
+  registerHyperPlanIpcHandlers(ipcMain);
 
   ipcMain.handle(IPC_CHANNELS.agentCompact, async (event, sessionId: string) => {
     assertTrustedSender(event);

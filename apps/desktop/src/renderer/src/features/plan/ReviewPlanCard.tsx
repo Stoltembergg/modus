@@ -14,7 +14,7 @@ type HyperPlanState =
   | { status: "loading" }
   | { status: "ready"; preview: HyperPlanDraftPreview }
   | { status: "choosing"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice }
-  | { status: "review-error"; originalStart?: "pending" | "error" }
+  | { status: "review-error"; reason?: string; originalStart?: "pending" | "error" }
   | { status: "choice-error"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice }
   | { status: "start-error"; preview: HyperPlanDraftPreview; choice: HyperPlanChoice };
 
@@ -293,8 +293,15 @@ function HyperPlanChoiceCard({
             Review unavailable
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-fg-muted">
-            HyperPlan couldn’t revise this plan. Your original plan is unchanged.
+            {state.reason?.trim()
+              ? state.reason
+              : "HyperPlan couldn’t revise this plan. Your original plan is unchanged."}
           </p>
+          {!state.reason?.trim() ? null : (
+            <p className="mt-1 text-sm leading-relaxed text-fg-subtle">
+              Your original plan is unchanged.
+            </p>
+          )}
           <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-center">
             <button
               className={secondaryChoiceButtonClass}

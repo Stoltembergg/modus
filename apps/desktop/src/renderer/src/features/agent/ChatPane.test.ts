@@ -4,6 +4,7 @@ import {
   createHyperPlanOperations,
   hyperPlanSourceProjection,
   reconcileHyperPlanReview,
+  safeHyperPlanReviewReason,
 } from "./ChatPane";
 
 const preview = {
@@ -451,6 +452,35 @@ describe("HyperPlan renderer operations", () => {
       planId: "plan-1",
     });
     expect(api.resolveHyperPlanDraft).not.toHaveBeenCalled();
+  });
+
+  it("forwards the Spec/composer model into createHyperPlanDraft", async () => {
+    const api = createApi();
+    const operations = createHyperPlanOperations(api, () => "request-1");
+
+    await operations.review({
+      sessionId: "session-1",
+      planId: "plan-1",
+      model: "composer-model",
+    });
+
+    expect(api.createHyperPlanDraft).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      planId: "plan-1",
+      model: "composer-model",
+    });
+  });
+
+  it("keeps only short path-free HyperPlan failure reasons for the UI", () => {
+    expect(safeHyperPlanReviewReason(new Error("No model available for HyperPlan review."))).toBe(
+      "No model available for HyperPlan review.",
+    );
+    expect(
+      safeHyperPlanReviewReason(new Error("Session setup failed: /home/user/.modus/secret")),
+    ).toBe("HyperPlan review is unavailable. Try again or build the original plan.");
+    expect(safeHyperPlanReviewReason(new Error("private detail with token=abc"))).toBe(
+      "HyperPlan review is unavailable. Try again or build the original plan.",
+    );
   });
 
   it.each([
