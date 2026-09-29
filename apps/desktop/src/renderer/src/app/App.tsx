@@ -77,8 +77,14 @@ import {
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+import { GroupRoom } from "../features/groups/GroupRoom";
 import { describeGroupError } from "../features/groups/groupErrors";
-import { useWorkingGroups } from "../features/groups/useWorkingGroups";
+import { groupMemberSessionIds } from "../features/groups/groupSidebarModel";
+import {
+  groupActivityState,
+  isGroupRunning,
+  useGroupMemberStates,
+} from "../features/groups/useWorkingGroups";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
 import {
@@ -132,11 +138,21 @@ export function App() {
   const [synchronizedWorkspaceId, setSynchronizedWorkspaceId] = useState<string | undefined>();
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
-  const workingGroupIds = useWorkingGroups();
+  const groupMemberStates = useGroupMemberStates();
   const isGroupWorking = useCallback(
-    (group: AgentGroupWithMembers) => workingGroupIds.has(group.id),
-    [workingGroupIds],
+    (group: AgentGroupWithMembers) => isGroupRunning(groupMemberStates, group.id),
+    [groupMemberStates],
   );
+  const isGroupWaiting = useCallback(
+    (group: AgentGroupWithMembers) => groupActivityState(groupMemberStates, group.id) === "waiting",
+    [groupMemberStates],
+  );
+  /** The group whose room fills the main panel (instead of a chat). */
+  const [activeGroupId, setActiveGroupId] = useState<string | undefined>();
+  const activeGroup = activeGroupId
+    ? agentGroups.find((group) => group.id === activeGroupId)
+    : undefined;
+  const allGroupMemberIds = useMemo(() => groupMemberSessionIds(agentGroups), [agentGroups]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
@@ -210,6 +226,18 @@ export function App() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+
+  // Opening any chat (sidebar, member chip, new session) closes the group room.
+  useEffect(() => {
+    if (activeSessionId) setActiveGroupId(undefined);
+  }, [activeSessionId]);
+
+  // The open group was deleted (here or elsewhere): back to the hero.
+  useEffect(() => {
+    if (activeGroupId && !agentGroups.some((group) => group.id === activeGroupId)) {
+      setActiveGroupId(undefined);
+    }
+  }, [activeGroupId, agentGroups]);
 
   useEffect(() => {
     activeWorkspaceRef.current = activeWorkspace;
@@ -689,7 +717,15 @@ export function App() {
    * first prompt (`submitHeroPrompt`), so "New chat" never spawns an empty
    * session — it just returns to the hero, optionally switching workspace first.
    */
+  function selectGroup(group: AgentGroupWithMembers): void {
+    setSessionCreateError(undefined);
+    setSettingsOpen(false);
+    setActiveSessionId(undefined);
+    setActiveGroupId(group.id);
+  }
+
   function openNewChat(workspace?: WorkspaceInfo | null): void {
+    setActiveGroupId(undefined);
     if (workspace !== undefined) {
       setActiveWorkspace(workspace);
     }
@@ -1126,6 +1162,9 @@ export function App() {
                         workspaces={workspaces}
                         groups={agentGroups}
                         isGroupWorking={isGroupWorking}
+                        isGroupWaiting={isGroupWaiting}
+                        activeGroupId={activeGroup?.id}
+                        onSelectGroup={selectGroup}
                         activeWorkspaceId={
                           activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
                         }
@@ -1221,7 +1260,40 @@ export function App() {
                         ) : null}
 
                         <AnimatePresence mode="wait">
-                          {activeSession ? (
+                          {activeGroup ? (
+                            <m.div
+                              animate={{ opacity: 1, y: 0 }}
+                              className="flex min-h-0 min-w-0 flex-1"
+                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
+                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                              key={`group:${activeGroup.id}`}
+                              transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
+                            >
+                              <GroupRoom
+                                group={activeGroup}
+                                key={activeGroup.id}
+                                memberSessionIds={allGroupMemberIds}
+                                memberStates={groupMemberStates}
+                                onDelete={() => {
+                                  const id = activeGroup.id;
+                                  setActiveGroupId(undefined);
+                                  void runGroupAction(() => window.modus.group.remove(id));
+                                }}
+                                onOpenFile={openWorkspaceFile}
+                                onOpenMember={selectSession}
+                                onRename={(name) =>
+                                  void runGroupAction(() =>
+                                    window.modus.group.rename({ id: activeGroup.id, name }),
+                                  )
+                                }
+                                onUpdateMembers={(change) =>
+                                  updateGroupMembers(activeGroup.id, change)
+                                }
+                                sessions={rootSessions}
+                                workspaces={workspaces}
+                              />
+                            </m.div>
+                          ) : activeSession ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="flex min-h-0 min-w-0 flex-1"

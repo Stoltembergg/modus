@@ -1,41 +1,70 @@
 import { describe, expect, it } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
-import { applyGroupActivityEvent } from "./useWorkingGroups";
+import {
+  applyGroupActivityEvent,
+  type GroupMemberStatesById,
+  groupActivityState,
+  isGroupRunning,
+  memberActivityState,
+} from "./useWorkingGroups";
 
-const activity = (groupId: string, running: string[], queued: string[] = []) =>
+const activity = (
+  groupId: string,
+  running: string[],
+  queued: string[] = [],
+  waiting: string[] = [],
+) =>
   ({
     type: "group.activity",
     groupId,
     runningSessionIds: running,
     queuedSessionIds: queued,
+    waitingSessionIds: waiting,
   }) as const;
 
 describe("applyGroupActivityEvent", () => {
-  it("marks a group working while a member runs or waits, and idle when both are empty", () => {
-    const empty: ReadonlySet<string> = new Set();
+  it("tracks a group while a member runs, queues or waits, and drops it when all are empty", () => {
+    const empty: GroupMemberStatesById = new Map();
     const running = applyGroupActivityEvent(empty, activity("g1", ["s1"]));
-    expect([...running]).toEqual(["g1"]);
+    expect(groupActivityState(running, "g1")).toBe("working");
+    expect(isGroupRunning(running, "g1")).toBe(true);
     const queued = applyGroupActivityEvent(running, activity("g1", [], ["s2"]));
-    expect(queued).toBe(running);
-    expect([...applyGroupActivityEvent(queued, activity("g1", []))]).toEqual([]);
+    expect(groupActivityState(queued, "g1")).toBe("working");
+    const idle = applyGroupActivityEvent(queued, activity("g1", []));
+    expect(idle.has("g1")).toBe(false);
+    expect(groupActivityState(idle, "g1")).toBe("idle");
+    // Already idle: same map.
+    expect(applyGroupActivityEvent(idle, activity("g1", []))).toBe(idle);
+  });
+
+  it("waiting for you takes priority over working, for the group and per member", () => {
+    const states = applyGroupActivityEvent(new Map(), activity("g1", ["s1"], [], ["s2"]));
+    expect(groupActivityState(states, "g1")).toBe("waiting");
+    expect(memberActivityState(states, "g1", "s1")).toBe("working");
+    expect(memberActivityState(states, "g1", "s2")).toBe("waiting");
+    expect(memberActivityState(states, "g1", "s3")).toBe("idle");
+    // Waiting alone: the group is not running (no Stop button).
+    const waitingOnly = applyGroupActivityEvent(states, activity("g1", [], [], ["s2"]));
+    expect(isGroupRunning(waitingOnly, "g1")).toBe(false);
+    expect(groupActivityState(waitingOnly, "g1")).toBe("waiting");
   });
 
   it("ignores other events", () => {
-    const set: ReadonlySet<string> = new Set(["g1"]);
+    const states = applyGroupActivityEvent(new Map(), activity("g1", ["s1"]));
     expect(
-      applyGroupActivityEvent(set, {
+      applyGroupActivityEvent(states, {
         type: "group.message",
         groupId: "g1",
         message: {} as GroupMessage,
       }),
-    ).toBe(set);
+    ).toBe(states);
     expect(
-      applyGroupActivityEvent(set, {
+      applyGroupActivityEvent(states, {
         type: "group.chain-ended",
         groupId: "g1",
         chainId: "c1",
-        reason: "blocked",
+        reason: "stopped",
       }),
-    ).toBe(set);
+    ).toBe(states);
   });
 });

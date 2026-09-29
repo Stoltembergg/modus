@@ -50,6 +50,12 @@ export type SidebarGroupsProps = {
    * exists; replace the stub with a real selector to light the dot.
    */
   isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
+  /** Amber "waiting for you" dot; wins over the working dot. */
+  isGroupWaiting?: (group: AgentGroupWithMembers) => boolean;
+  /** The group whose room is open (its row is selected like a chat row). */
+  activeGroupId?: string | undefined;
+  /** Open the group's room. Without it the name toggles the member list (legacy). */
+  onSelectGroup?(group: AgentGroupWithMembers): void;
   canCreateGroup?: boolean;
   onSelectSession(session: AgentSessionInfo): void;
   onCreateGroup(input: CreateAgentGroupInput): Promise<void>;
@@ -74,6 +80,9 @@ export function SidebarGroups({
   activeSessionId,
   activityBySession,
   isGroupWorking = isGroupWorkingStub,
+  isGroupWaiting,
+  activeGroupId,
+  onSelectGroup,
   canCreateGroup = true,
   onSelectSession,
   onCreateGroup,
@@ -127,7 +136,10 @@ export function SidebarGroups({
               onStartRename={() => setRenamingId(group.id)}
               onToggle={() => toggle(group.id)}
               renaming={renamingId === group.id}
+              selected={activeGroupId === group.id}
+              waiting={isGroupWaiting?.(group) ?? false}
               working={isGroupWorking(group)}
+              {...(onSelectGroup ? { onSelect: () => onSelectGroup(group) } : {})}
             />
             {expanded && memberSessions.length > 0 ? (
               <div className={SB_NEST}>
@@ -200,8 +212,11 @@ export function GroupRow({
   name,
   memberCount,
   working,
+  waiting = false,
+  selected = false,
   expanded,
   renaming,
+  onSelect,
   onToggle,
   onStartRename,
   onCommitRename,
@@ -212,8 +227,12 @@ export function GroupRow({
   name: string;
   memberCount: number;
   working: boolean;
+  waiting?: boolean;
+  selected?: boolean;
   expanded: boolean;
   renaming: boolean;
+  /** Opens the room; the rail icon then toggles the member list. */
+  onSelect?: () => void;
   onToggle(): void;
   onStartRename(): void;
   onCommitRename(name: string): void;
@@ -244,30 +263,41 @@ export function GroupRow({
       <ContextMenu.Trigger
         className={cn(
           SB_ROW,
-          "group text-fg-muted hover:bg-hover hover:text-fg",
-          contextOpen && "bg-hover text-fg",
+          "group",
+          selected ? "row-selected" : "text-fg-muted hover:bg-hover hover:text-fg",
+          contextOpen && !selected && "bg-hover text-fg",
         )}
+        data-selected={selected || undefined}
         data-testid="group-row"
       >
-        <span className={cn(SB_RAIL, "relative text-current")}>
-          <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
-          {working ? (
-            <span
-              className="absolute top-0 right-0 size-1.5 rounded-full bg-accent"
-              data-testid="group-activity-dot"
-              title="A member is working"
-            >
-              <span className="sr-only">A member is working</span>
-            </span>
-          ) : null}
-        </span>
+        {onSelect ? (
+          <button
+            aria-expanded={expanded}
+            aria-label={expanded ? "Hide members" : "Show members"}
+            className={cn(SB_RAIL, "pointer-events-auto relative text-current")}
+            onClick={onToggle}
+            type="button"
+          >
+            <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
+            <GroupRowDot waiting={waiting} working={working} />
+          </button>
+        ) : (
+          <span className={cn(SB_RAIL, "relative text-current")}>
+            <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
+            <GroupRowDot waiting={waiting} working={working} />
+          </span>
+        )}
         {renaming ? (
           <GroupRenameInput initial={name} onCancel={onCancelRename} onCommit={onCommitRename} />
         ) : (
           <button
-            aria-expanded={expanded}
+            {...(onSelect
+              ? selected
+                ? { "aria-current": "page" as const }
+                : {}
+              : { "aria-expanded": expanded })}
             className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
-            onClick={onToggle}
+            onClick={onSelect ?? onToggle}
             type="button"
           >
             <span className="min-w-0 flex-1 truncate">{name}</span>
@@ -327,8 +357,36 @@ export function GroupRow({
 /** Exact confirm label of the two-step Delete item. */
 export const GROUP_DELETE_CONFIRM_LABEL = "Member sessions return to the sidebar";
 
-/** Rename / Manage members / Delete, shared by the "…" menu and the row's context menu. */
-function GroupMenuItems({
+/** Group row dot: amber "waiting for you" wins over the working dot. */
+function GroupRowDot({ working, waiting }: { working: boolean; waiting: boolean }) {
+  if (waiting) {
+    return (
+      <span
+        className="absolute top-0 right-0 size-1.5 rounded-full bg-amber-400"
+        data-testid="group-waiting-dot"
+        title="A member is waiting for you"
+      >
+        <span className="sr-only">A member is waiting for you</span>
+      </span>
+    );
+  }
+  if (!working) return null;
+  return (
+    <span
+      className="absolute top-0 right-0 size-1.5 rounded-full bg-accent"
+      data-testid="group-activity-dot"
+      title="A member is working"
+    >
+      <span className="sr-only">A member is working</span>
+    </span>
+  );
+}
+
+/**
+ * Rename / Manage members / Delete, shared by the "…" menu, the row's context
+ * menu and the room header menu.
+ */
+export function GroupMenuItems({
   confirmDelete,
   onConfirmDelete,
   onStartRename,
@@ -437,7 +495,7 @@ function MemberRow({
   );
 }
 
-function GroupRenameInput({
+export function GroupRenameInput({
   initial,
   onCommit,
   onCancel,

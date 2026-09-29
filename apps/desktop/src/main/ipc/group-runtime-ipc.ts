@@ -1,11 +1,17 @@
 import type {
+  GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
   PostGroupMessageInput,
 } from "../../shared/contracts";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
-import { groupListMessagesSchema, groupPostMessageSchema, parseIpcInput } from "./schemas";
+import {
+  groupListMessagesSchema,
+  groupPostMessageSchema,
+  groupStopSchema,
+  parseIpcInput,
+} from "./schemas";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
 /** The room operations the renderer needs (the GroupRuntime plus the message store). */
@@ -16,6 +22,8 @@ export type GroupRuntimeIpcService = {
     options: { before?: GroupMessageCursor; after?: GroupMessageCursor; limit?: number },
   ): GroupMessage[];
   workingGroupIds(): string[];
+  memberStates(): GroupMemberStates[];
+  stopGroup(groupId: string): void;
 };
 
 type HandlerRegistration = {
@@ -23,7 +31,8 @@ type HandlerRegistration = {
 };
 
 /**
- * `group:post-message`, `group:list-messages` and `group:working`. Live updates
+ * `group:post-message`, `group:list-messages`, `group:working`,
+ * `group:member-states` and `group:stop`. Live updates
  * are pushed on `group:event` (see GroupRuntimeEvent in shared/contracts).
  */
 export function registerGroupRuntimeIpcHandlers(
@@ -68,5 +77,21 @@ export function registerGroupRuntimeIpcHandlers(
       throw new Error(`Invalid IPC payload for ${IPC_CHANNELS.groupWorking}: expected no input`);
     }
     return service.workingGroupIds();
+  });
+
+  handle(IPC_CHANNELS.groupMemberStates, (event, input) => {
+    assertTrustedSender(event);
+    if (input !== undefined) {
+      throw new Error(
+        `Invalid IPC payload for ${IPC_CHANNELS.groupMemberStates}: expected no input`,
+      );
+    }
+    return service.memberStates();
+  });
+
+  handle(IPC_CHANNELS.groupStop, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(groupStopSchema, input, IPC_CHANNELS.groupStop);
+    service.stopGroup(parsed.groupId);
   });
 }

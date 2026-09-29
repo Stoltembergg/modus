@@ -1808,6 +1808,8 @@ export function registerAppIpc({
     postUserMessage: (input) => getGroupRuntime().postUserMessage(input),
     listGroupMessages: (groupId, options) => listGroupMessages(groupId, options),
     workingGroupIds: () => getGroupRuntime().workingGroupIds(),
+    memberStates: () => getGroupRuntime().memberStates(),
+    stopGroup: (groupId) => getGroupRuntime().stopGroup(groupId),
   });
 
   registerProjectMemoryIpcHandlers(ipcMain, assertTrustedSender, {

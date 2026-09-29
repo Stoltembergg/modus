@@ -44,6 +44,8 @@ const api: ModusApi = {
     postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
     listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
     workingGroupIds: () => ipcRenderer.invoke("group:working"),
+    memberStates: () => ipcRenderer.invoke("group:member-states"),
+    stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
     onEvent: (callback) => {
       const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);
       ipcRenderer.on("group:event", listener);

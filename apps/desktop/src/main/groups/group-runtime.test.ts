@@ -86,6 +86,15 @@ class FakeAgentRuntime {
   /** Every session ever prompted, in order. */
   started: string[] = [];
   streaming = new Set<string>();
+  aborted: string[] = [];
+  /** Like PiSdkRuntime.abort: the running turn settles as `aborted`. */
+  async abort(sessionId: string): Promise<void> {
+    this.aborted.push(sessionId);
+    const index = this.calls.findIndex((call) => call.input.sessionId === sessionId);
+    if (index < 0) return;
+    const [call] = this.calls.splice(index, 1);
+    call?.resolve({ outcome: "aborted" });
+  }
   prompt(_window: unknown, input: PromptAgentInput): Promise<PromptTurnResult> {
     this.started.push(input.sessionId);
     return new Promise((resolve, reject) => this.calls.push({ input, resolve, reject }));
@@ -992,6 +1001,7 @@ describe("queue", () => {
       groupId: group.id,
       runningSessionIds: [alpha, beta],
       queuedSessionIds: [gamma],
+      waitingSessionIds: [],
     });
     // A second wake for Alpha waits behind its running turn.
     groups.postUserMessage({ groupId: group.id, body: "@Alpha also this" });
@@ -1193,5 +1203,101 @@ describe("worktree re-wake (group_start_worktree)", () => {
     await flush();
     expect(room(group.id).at(-1)?.body).toBe(GROUP_STATUS_TEXT.aborted);
     expect(runtime.pendingSessions()).toEqual([]);
+  });
+});
+
+/* ── Stop and member states (room UI) ──────────────────────────────────── */
+
+describe("stopGroup (room Stop button)", () => {
+  it('ends the chain, drops queued wakes and aborts running turns, which post "Turn stopped"', async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups, events } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    groups.stopGroup(group.id);
+    expect(groups.chainSnapshot(user.id).ended).toBe("stopped");
+    expect(events).toContainEqual({
+      type: "group.chain-ended",
+      groupId: group.id,
+      chainId: user.id,
+      reason: "stopped",
+    });
+    expect(runtime.aborted).toEqual([alpha, beta]);
+    await flush();
+    const statuses = room(group.id).filter((m) => m.kind === "status");
+    expect(statuses.map((m) => [m.authorSessionId, m.body])).toEqual([
+      [alpha, "Turn stopped"],
+      [beta, "Turn stopped"],
+    ]);
+    // No limit line for a stop, Gamma never starts and the group goes idle.
+    expect(runtime.started).not.toContain(gamma);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.isGroupWorking(group.id)).toBe(false);
+    expect(groups.liveChainIds()).toEqual([]);
+    expect(events.filter((e) => e.type === "group.activity").at(-1)).toMatchObject({
+      runningSessionIds: [],
+      queuedSessionIds: [],
+    });
+    // The room goes on with a new chain.
+    groups.postUserMessage({ groupId: group.id, body: "@Beta again" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+  });
+
+  it("leaves other groups and turns waiting at the intent gate alone", async () => {
+    const { group, alpha, beta } = squad();
+    const other = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha go" });
+    runtime.openGate(alpha);
+    groups.postUserMessage({ groupId: other.group.id, body: "@Beta go" });
+    groups.stopGroup(group.id);
+    expect(runtime.aborted).toEqual([]);
+    expect(runtime.pendingSessions()).toEqual([alpha, other.beta]);
+    expect(groups.isAwaitingUser(beta)).toBe(false);
+    expect(groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds).toEqual([
+      alpha,
+    ]);
+  });
+});
+
+describe("member states", () => {
+  it("reports running, queued and waiting-for-you members per group, in snapshot and push", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups, events } = setup();
+    expect(groups.memberStates()).toEqual([]);
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
+    expect(groups.memberStates()).toEqual([
+      {
+        groupId: group.id,
+        runningSessionIds: [alpha, beta],
+        queuedSessionIds: [gamma],
+        waitingSessionIds: [],
+      },
+    ]);
+    // Alpha hits the intent gate: waiting for you (and its slot goes free).
+    runtime.openGate(alpha);
+    expect(events.filter((e) => e.type === "group.activity").at(-1)).toMatchObject({
+      runningSessionIds: [beta],
+      waitingSessionIds: [alpha],
+    });
+    // Beta ends with a HyperPlan choice pending: waiting for you too.
+    runtime.take(beta).resolve({ outcome: "blocked" });
+    await flush();
+    expect(groups.memberStates()).toEqual([
+      {
+        groupId: group.id,
+        runningSessionIds: [],
+        queuedSessionIds: [],
+        waitingSessionIds: [alpha, beta],
+      },
+    ]);
+    // Answered at the gate / plan built: no longer waiting.
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "done" });
+    runtime.settle({ sessionId: beta, origin: "plan-build", result: { outcome: "ok" } });
+    await flush();
+    expect(groups.memberStates()).toEqual([]);
+    expect(events.filter((e) => e.type === "group.activity").at(-1)).toMatchObject({
+      waitingSessionIds: [],
+    });
   });
 });

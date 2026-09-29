@@ -2,6 +2,7 @@ import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
   AgentGroupInfo,
   GroupChainEndReason,
+  GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
   PostGroupMessageInput,
@@ -71,7 +72,7 @@ export const GROUP_STATUS_TEXT = {
     "max-member-wakes": `Waiting for you: a member was already woken ${GROUP_CHAIN_LIMITS.maxWakesPerMember} times in this chain.`,
     "input-token-budget": `Waiting for you: this chain used its estimated ${ESTIMATED_INPUT_TOKENS_PER_CHAIN / 1000}k-token budget of group prompts.`,
     "context-too-large": `Waiting for you: the message does not fit the estimated ${ESTIMATED_CONTEXT_TOKENS_PER_WAKE / 1000}k-token group context of a turn.`,
-  } satisfies Record<Exclude<GroupChainEndReason, "blocked">, string>,
+  } satisfies Record<Exclude<GroupChainEndReason, "blocked" | "stopped">, string>,
 } as const;
 
 /** An update is about to restart the app: new group turns wait (`ready` alone does not hold them). */
@@ -82,6 +83,8 @@ export function isUpdatePendingState(state: UpdateState): boolean {
 /** The slice of the agent runtime the group runtime needs (PiSdkRuntime satisfies it). */
 export type GroupAgentRuntime = {
   prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult>;
+  /** Stops a session's running turn (it settles as `aborted`). */
+  abort(sessionId: string): Promise<void>;
   isSessionStreaming(sessionId: string): boolean;
   /** Every settled turn (unblocks a HyperPlan-blocked member). */
   onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void;
@@ -377,8 +380,10 @@ export class GroupRuntime {
   handleMemberUnblocked(sessionId: string, result: PromptTurnResult): void {
     this.awaitingUser.delete(sessionId);
     const group = getAgentGroupForSession(sessionId);
+    if (!group) return;
+    this.emitActivity(group.id); // no longer waiting for the user
     const text = result.outcome === "ok" ? result.finalText?.trim() : undefined;
-    if (!group || !text) return;
+    if (!text) return;
     let root: GroupMessage;
     try {
       root = appendGroupMessage({
@@ -453,6 +458,39 @@ export class GroupRuntime {
     if (this.chains.get(turn.chainId)?.ended) return false;
     turn.worktreeBranch = input.branch;
     return true;
+  }
+
+  /**
+   * The user pressed Stop in the room: every live chain of the group ends
+   * (queued wakes drop, nothing else is woken) and the group's running member
+   * turns are aborted; they settle as "Turn stopped". Turns waiting at the
+   * intent gate stay with the user in the member's chat.
+   */
+  stopGroup(groupId: string): void {
+    for (const chain of [...this.chains.values()]) {
+      if (chain.groupId === groupId) this.endChain(chain, "stopped");
+    }
+    for (const wake of [...this.running.values()]) {
+      if (wake.groupId !== groupId) continue;
+      this.runtime
+        .abort(wake.sessionId)
+        .catch((error) => console.warn("[modus] group stop abort failed:", error));
+    }
+    this.emitActivity(groupId);
+  }
+
+  /** Member states of every group with a running, queued or waiting member (`group:member-states`). */
+  memberStates(): GroupMemberStates[] {
+    const ids = new Set(this.workingGroupIds());
+    for (const wake of this.gated.values()) ids.add(wake.groupId);
+    for (const sessionId of this.awaitingUser.keys()) {
+      const groupId = getAgentGroupForSession(sessionId)?.id;
+      if (groupId) ids.add(groupId);
+    }
+    return [...ids].map((groupId) => {
+      const { runningSessionIds, queuedSessionIds, waitingSessionIds } = this.activityOf(groupId);
+      return { groupId, runningSessionIds, queuedSessionIds, waitingSessionIds };
+    });
   }
 
   isGroupWorking(groupId: string): boolean {
@@ -681,7 +719,8 @@ export class GroupRuntime {
       else this.queues.set(sessionId, kept);
     }
     if (this.queuedCount() === 0) this.clearRetry();
-    if (reason !== "blocked") {
+    // blocked / stopped: the member (or the user) already said why.
+    if (reason !== "blocked" && reason !== "stopped") {
       try {
         this.emitMessage(
           appendGroupMessage({
@@ -895,6 +934,7 @@ export class GroupRuntime {
     working: boolean;
     runningSessionIds: string[];
     queuedSessionIds: string[];
+    waitingSessionIds: string[];
   } {
     const runningSessionIds = [...this.running.values()]
       .filter((wake) => wake.groupId === groupId)
@@ -907,16 +947,32 @@ export class GroupRuntime {
           .map((wake) => wake.sessionId),
       ),
     ];
+    // Waiting for the user: a turn at the intent gate, or a HyperPlan choice pending.
+    const waiting = new Set(
+      [...this.gated.values()]
+        .filter((wake) => wake.groupId === groupId)
+        .map((wake) => wake.sessionId),
+    );
+    for (const sessionId of this.awaitingUser.keys()) {
+      if (getAgentGroupForSession(sessionId)?.id === groupId) waiting.add(sessionId);
+    }
     return {
       working: runningSessionIds.length > 0 || queuedSessionIds.length > 0,
       runningSessionIds,
       queuedSessionIds,
+      waitingSessionIds: [...waiting],
     };
   }
 
   private emitActivity(groupId: string): void {
-    const { runningSessionIds, queuedSessionIds } = this.activityOf(groupId);
-    this.host.emit({ type: "group.activity", groupId, runningSessionIds, queuedSessionIds });
+    const { runningSessionIds, queuedSessionIds, waitingSessionIds } = this.activityOf(groupId);
+    this.host.emit({
+      type: "group.activity",
+      groupId,
+      runningSessionIds,
+      queuedSessionIds,
+      waitingSessionIds,
+    });
   }
 
   private emitMessage(message: GroupMessage): void {

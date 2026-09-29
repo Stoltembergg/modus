@@ -23,6 +23,8 @@ export const IPC_CHANNELS = {
   groupPostMessage: "group:post-message",
   groupListMessages: "group:list-messages",
   groupWorking: "group:working",
+  groupMemberStates: "group:member-states",
+  groupStop: "group:stop",
   groupEvent: "group:event",
   fileOpen: "file:open",
   agentCreate: "agent:create",

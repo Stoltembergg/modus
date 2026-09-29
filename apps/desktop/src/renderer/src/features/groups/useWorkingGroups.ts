@@ -1,36 +1,98 @@
 import { useEffect, useState } from "react";
-import type { GroupRuntimeEvent } from "../../../../shared/contracts";
+import type { GroupMemberStates, GroupRuntimeEvent } from "../../../../shared/contracts";
 
-/** Next set of working group ids after a runtime event (same set when unchanged). */
+/** Per group: running / queued / waiting-for-you members (only groups with any). */
+export type GroupMemberStatesById = ReadonlyMap<string, GroupMemberStates>;
+
+/** Room chip / sidebar row state: waiting for you beats working. */
+export type GroupActivityState = "waiting" | "working" | "idle";
+
+function isEmpty(states: GroupMemberStates): boolean {
+  return (
+    states.runningSessionIds.length === 0 &&
+    states.queuedSessionIds.length === 0 &&
+    states.waitingSessionIds.length === 0
+  );
+}
+
+/** Next member states after a runtime event (same map when unchanged). */
 export function applyGroupActivityEvent(
-  working: ReadonlySet<string>,
+  states: GroupMemberStatesById,
   event: GroupRuntimeEvent,
-): ReadonlySet<string> {
-  if (event.type !== "group.activity") return working;
-  const isWorking = event.runningSessionIds.length > 0 || event.queuedSessionIds.length > 0;
-  if (isWorking === working.has(event.groupId)) return working;
-  const next = new Set(working);
-  if (isWorking) next.add(event.groupId);
-  else next.delete(event.groupId);
+): GroupMemberStatesById {
+  if (event.type !== "group.activity") return states;
+  const next = new Map(states);
+  const entry: GroupMemberStates = {
+    groupId: event.groupId,
+    runningSessionIds: event.runningSessionIds,
+    queuedSessionIds: event.queuedSessionIds,
+    waitingSessionIds: event.waitingSessionIds,
+  };
+  if (isEmpty(entry)) {
+    if (!states.has(event.groupId)) return states;
+    next.delete(event.groupId);
+  } else next.set(event.groupId, entry);
   return next;
 }
 
+/** The whole group: amber when a member waits for the user, else working, else idle. */
+export function groupActivityState(
+  states: GroupMemberStatesById,
+  groupId: string,
+): GroupActivityState {
+  const entry = states.get(groupId);
+  if (!entry) return "idle";
+  if (entry.waitingSessionIds.length > 0) return "waiting";
+  return entry.runningSessionIds.length > 0 || entry.queuedSessionIds.length > 0
+    ? "working"
+    : "idle";
+}
+
+/** One member of a group (a queued wake is not "working" yet). */
+export function memberActivityState(
+  states: GroupMemberStatesById,
+  groupId: string,
+  sessionId: string,
+): GroupActivityState {
+  const entry = states.get(groupId);
+  if (entry?.waitingSessionIds.includes(sessionId)) return "waiting";
+  if (entry?.runningSessionIds.includes(sessionId)) return "working";
+  return "idle";
+}
+
+/** True while a member turn runs or is queued: the room's Stop button shows. */
+export function isGroupRunning(states: GroupMemberStatesById, groupId: string): boolean {
+  const entry = states.get(groupId);
+  return Boolean(
+    entry && (entry.runningSessionIds.length > 0 || entry.queuedSessionIds.length > 0),
+  );
+}
+
 /**
- * Groups with a member turn running or queued, from the main-process
- * GroupRuntime (`group:working` snapshot, then `group:event` activity pushes).
- * Feeds the sidebar activity dot.
+ * Member states of every group from the main-process GroupRuntime
+ * (`group:member-states` snapshot, then `group:event` activity pushes, which
+ * win over the snapshot). Feeds the sidebar dot and the room chips.
  */
-export function useWorkingGroups(): ReadonlySet<string> {
-  const [working, setWorking] = useState<ReadonlySet<string>>(() => new Set());
+export function useGroupMemberStates(): GroupMemberStatesById {
+  const [states, setStates] = useState<GroupMemberStatesById>(() => new Map());
   useEffect(() => {
     let disposed = false;
+    const pushed = new Set<string>();
     const unsubscribe = window.modus.group.onEvent((event: GroupRuntimeEvent) => {
-      setWorking((current) => applyGroupActivityEvent(current, event));
+      if (event.type === "group.activity") pushed.add(event.groupId);
+      setStates((current) => applyGroupActivityEvent(current, event));
     });
     window.modus.group
-      .workingGroupIds()
-      .then((ids: string[]) => {
-        if (!disposed) setWorking((current) => new Set([...current, ...ids]));
+      .memberStates()
+      .then((snapshot: GroupMemberStates[]) => {
+        if (disposed) return;
+        setStates((current) => {
+          const fresh = snapshot.filter((entry) => !pushed.has(entry.groupId));
+          if (fresh.length === 0) return current;
+          const next = new Map(current);
+          for (const entry of fresh) next.set(entry.groupId, entry);
+          return next;
+        });
       })
       .catch((error: unknown) => console.warn("[groups] failed to load group activity", error));
     return () => {
@@ -38,5 +100,5 @@ export function useWorkingGroups(): ReadonlySet<string> {
       unsubscribe();
     };
   }, []);
-  return working;
+  return states;
 }
