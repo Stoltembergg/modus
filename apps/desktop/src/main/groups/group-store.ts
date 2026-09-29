@@ -55,8 +55,12 @@ const TASK_STATUSES: readonly GroupTaskStatus[] = [
   "done",
   "cancelled",
 ];
-/** Status a task returns to when its owner/reviewer leaves the group. */
+/** Status a task returns to when its owner leaves the group. */
 const INITIAL_TASK_STATUS: GroupTaskStatus = "open";
+/** Work-in-progress status; an in-review task falls back here when its reviewer leaves. */
+const IN_PROGRESS_TASK_STATUS: GroupTaskStatus = "in_progress";
+/** Awaiting-review status. */
+const IN_REVIEW_TASK_STATUS: GroupTaskStatus = "in_review";
 /** Terminal statuses: tasks here keep their owner/reviewer references as history. */
 const CLOSED_TASK_STATUSES: readonly GroupTaskStatus[] = ["done", "cancelled"];
 const DEFAULT_MESSAGE_PAGE = 50;
@@ -449,12 +453,21 @@ export function addAgentGroupMember(input: {
 }
 
 /**
- * Removes a member, atomically:
+ * Removes a member, atomically (one transaction):
  * - clears the group lead when the removed member was the lead;
- * - detaches them from the group's OPEN tasks (any status other than
- *   done/cancelled) where they are owner or reviewer: those references become
- *   NULL and the task returns to the initial status. Closed tasks keep their
- *   references as history.
+ * - detaches them from the group's non-closed tasks (closed = done/cancelled,
+ *   which keep their references as history), in ONE update so nothing
+ *   applies twice:
+ *   - OWNER (whether or not also reviewer) — takes precedence: owner cleared,
+ *     reviewer cleared too if it is the same session, status -> 'open'.
+ *   - ONLY reviewer (owner is someone else or NULL): reviewer cleared; status
+ *     unchanged, except 'in_review' falls back to 'in_progress'.
+ *
+ * Reading convention: a non-closed task whose owner is NULL counts as 'open',
+ * whatever its stored status (this is how PR 3 will read tasks). Deleting a
+ * session sets owner/reviewer to NULL through the foreign keys WITHOUT
+ * resetting the status; that is intentional and there is deliberately no
+ * trigger for it.
  */
 export function removeAgentGroupMember(groupId: string, sessionId: string): void {
   const db = getDatabase();
@@ -469,26 +482,42 @@ export function removeAgentGroupMember(groupId: string, sessionId: string): void
       `update agent_groups set lead_session_id = null
        where id = ? and lead_session_id = ?`,
     ).run(groupId, sessionId);
-    const closed = CLOSED_TASK_STATUSES.map(() => "?").join(", ");
+    const closedParams = Object.fromEntries(
+      CLOSED_TASK_STATUSES.map((status, index) => [`closed${index}`, status]),
+    );
+    const closed = Object.keys(closedParams)
+      .map((name) => `:${name}`)
+      .join(", ");
+    // SQLite evaluates every SET expression against the OLD row, so the
+    // owner check in the status CASE sees the owner before it is cleared.
     db.prepare(
       `update group_tasks
-       set owner_session_id = case when owner_session_id = ? then null else owner_session_id end,
-           reviewer_session_id = case when reviewer_session_id = ? then null else reviewer_session_id end,
-           status = ?,
-           updated_at = ?
-       where group_id = ?
+       set status = case
+             when owner_session_id = :session then :initialStatus
+             when reviewer_session_id = :session and status = :inReview then :inProgress
+             else status
+           end,
+           owner_session_id = case
+             when owner_session_id = :session then null
+             else owner_session_id
+           end,
+           reviewer_session_id = case
+             when reviewer_session_id = :session then null
+             else reviewer_session_id
+           end,
+           updated_at = :now
+       where group_id = :groupId
          and status not in (${closed})
-         and (owner_session_id = ? or reviewer_session_id = ?)`,
-    ).run(
-      sessionId,
-      sessionId,
-      INITIAL_TASK_STATUS,
-      new Date().toISOString(),
+         and (owner_session_id = :session or reviewer_session_id = :session)`,
+    ).run({
+      session: sessionId,
+      initialStatus: INITIAL_TASK_STATUS,
+      inReview: IN_REVIEW_TASK_STATUS,
+      inProgress: IN_PROGRESS_TASK_STATUS,
+      now: new Date().toISOString(),
       groupId,
-      ...CLOSED_TASK_STATUSES,
-      sessionId,
-      sessionId,
-    );
+      ...closedParams,
+    });
     touchGroup(groupId);
   });
 }

@@ -597,7 +597,7 @@ describe("tasks", () => {
     expect(listGroupTasks(group.id, { status: "done" }).map((t) => t.id)).toEqual([other.id]);
   });
 
-  it("removing a member detaches them from open tasks but keeps closed tasks as history", () => {
+  it("(c) removing the owner resets the open task to open; closed tasks stay as history", () => {
     const { a, b, group } = projectGroupFixture();
     const owned = createGroupTask({
       groupId: group.id,
@@ -605,13 +605,6 @@ describe("tasks", () => {
       status: "in_progress",
       ownerSessionId: a,
       reviewerSessionId: b,
-    });
-    const reviewing = createGroupTask({
-      groupId: group.id,
-      title: "Reviewed by a",
-      status: "in_review",
-      ownerSessionId: b,
-      reviewerSessionId: a,
     });
     const done = createGroupTask({
       groupId: group.id,
@@ -639,11 +632,64 @@ describe("tasks", () => {
     const byId = new Map(listGroupTasks(group.id).map((task) => [task.id, task]));
     expect(byId.get(owned.id)).toMatchObject({ status: "open", reviewerSessionId: b });
     expect(byId.get(owned.id)?.ownerSessionId).toBeUndefined();
-    expect(byId.get(reviewing.id)).toMatchObject({ status: "open", ownerSessionId: b });
-    expect(byId.get(reviewing.id)?.reviewerSessionId).toBeUndefined();
     expect(byId.get(done.id)).toEqual(done);
     expect(byId.get(cancelled.id)).toEqual(cancelled);
     expect(byId.get(unrelated.id)).toEqual(unrelated);
+  });
+
+  it("(a) removing only the reviewer keeps an in_progress task in_progress", () => {
+    const { a, b, group } = projectGroupFixture();
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Being built",
+      status: "in_progress",
+      ownerSessionId: b,
+      reviewerSessionId: a,
+    });
+
+    removeAgentGroupMember(group.id, a);
+
+    const [stored] = listGroupTasks(group.id);
+    expect(stored?.id).toBe(task.id);
+    expect(stored).toMatchObject({ status: "in_progress", ownerSessionId: b });
+    expect(stored?.reviewerSessionId).toBeUndefined();
+  });
+
+  it("(b) removing only the reviewer sends an in_review task back to in_progress", () => {
+    const { a, b, group } = projectGroupFixture();
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Awaiting review",
+      status: "in_review",
+      ownerSessionId: b,
+      reviewerSessionId: a,
+    });
+
+    removeAgentGroupMember(group.id, a);
+
+    const [stored] = listGroupTasks(group.id);
+    expect(stored?.id).toBe(task.id);
+    expect(stored).toMatchObject({ status: "in_progress", ownerSessionId: b });
+    expect(stored?.reviewerSessionId).toBeUndefined();
+  });
+
+  it("(d) removing a member who is both owner and reviewer clears both and resets to open", () => {
+    const { a, group } = projectGroupFixture();
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Self-reviewed",
+      status: "in_review",
+      ownerSessionId: a,
+      reviewerSessionId: a,
+    });
+
+    removeAgentGroupMember(group.id, a);
+
+    const [stored] = listGroupTasks(group.id);
+    expect(stored?.id).toBe(task.id);
+    expect(stored?.status).toBe("open");
+    expect(stored?.ownerSessionId).toBeUndefined();
+    expect(stored?.reviewerSessionId).toBeUndefined();
   });
 
   it("rejects invalid statuses and non-member owners", () => {
