@@ -98,7 +98,7 @@ export function SettingsSidebar({
 
       <div className="border-hairline-soft border-t px-2 pt-3 text-xs text-fg-faint">
         <div>Modus Desktop</div>
-        <div className="mt-1">{version ? `v${version}` : "Modus"}</div>
+        {version ? <div className="mt-1">v{version}</div> : null}
       </div>
     </aside>
   );
