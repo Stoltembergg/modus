@@ -59,10 +59,14 @@ vi.mock("../plan/plan-store", () => ({
   readPlanById: mocks.readPlanById,
   updatePlanContentById: mocks.updatePlanContentById,
 }));
-vi.mock("../agent/harness/hyperplan", () => ({
-  runHyperPlanReview: mocks.runHyperPlanReview,
-  runHyperPlanRevision: mocks.runHyperPlanRevision,
-}));
+vi.mock("../agent/harness/hyperplan", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agent/harness/hyperplan")>();
+  return {
+    ...actual,
+    runHyperPlanReview: mocks.runHyperPlanReview,
+    runHyperPlanRevision: mocks.runHyperPlanRevision,
+  };
+});
 vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
   startProviderAuth: mocks.startProviderAuth,
@@ -485,13 +489,16 @@ describe("dedicated HyperPlan review IPC", () => {
       draftId: expect.any(String),
       revision: { title: "Revised plan" },
     });
-    expect(mocks.runHyperPlanRevision).toHaveBeenCalledWith({
-      title: plan.title,
-      overview: plan.overview,
-      content: plan.content,
-      todos: plan.todos,
-      spec: plan.spec,
-    });
+    expect(mocks.runHyperPlanRevision).toHaveBeenCalledWith(
+      {
+        title: plan.title,
+        overview: plan.overview,
+        content: plan.content,
+        todos: plan.todos,
+        spec: plan.spec,
+      },
+      undefined,
+    );
     await expect(
       handler(
         event as never,
@@ -503,6 +510,52 @@ describe("dedicated HyperPlan review IPC", () => {
       ),
     ).rejects.toThrow();
     expect(mocks.runHyperPlanRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the composer or session model into HyperPlan revision", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    if (!handler) throw new Error("HyperPlan draft IPC handler was not registered.");
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      workspaceId: "workspace-1",
+      cwd: "C:/workspace",
+      model: "session-model",
+    });
+
+    await handler(
+      { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+      { sessionId: "session-1", planId: "plan-1", model: "composer-model" } as never,
+    );
+
+    expect(mocks.runHyperPlanRevision).toHaveBeenCalledWith(
+      expect.objectContaining({ title: plan.title }),
+      { modelId: "composer-model" },
+    );
+  });
+
+  it("surfaces a sanitized HyperPlan failure without leaking private details", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentCreateHyperPlanDraft);
+    if (!handler) throw new Error("HyperPlan draft IPC handler was not registered.");
+    const senderWithId = { ...sender, id: 4 };
+    registerTrustedSender(senderWithId, "file:///app/index.html");
+    mocks.runHyperPlanRevision.mockRejectedValueOnce(
+      new Error("Session setup failed: /home/user/.modus/providers/secret.json"),
+    );
+
+    let thrown: unknown;
+    try {
+      await handler(
+        { sender: senderWithId, senderFrame: sender.mainFrame } as never,
+        { sessionId: "session-1", planId: "plan-1" } as never,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/unavailable|try again/i);
+    expect((thrown as Error).message).not.toMatch(/secret\.json|\/home\/user/);
   });
 
   it("discards a generation if the authoritative source changes while review is in flight", async () => {
@@ -604,7 +657,9 @@ describe("dedicated HyperPlan review IPC", () => {
       todos: [],
       spec: { requirements: [], acceptanceCriteria: [], assumptions: [], openQuestions: [] },
     });
-    await expect(oldAttempt).rejects.toThrow(/owner|incarnation|invalid/i);
+    await expect(oldAttempt).rejects.toThrow(
+      /unavailable in this window|owner|incarnation|invalid/i,
+    );
     expect(isHyperPlanSessionReserved("session-1")).toBe(true);
     expect(invalidateHyperPlanDraftOwner(ownerId, newEpoch)).toBe(true);
   });

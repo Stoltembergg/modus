@@ -111,6 +111,7 @@ export const agentReviewPlanWithHyperPlanSchema = z
   .object({
     sessionId: nonEmptyString.max(128),
     planId: nonEmptyString.max(128),
+    model: optionalNonEmptyString,
   })
   .strict();
 
@@ -135,6 +136,8 @@ export const agentCreateHyperPlanDraftSchema = z
   .object({
     sessionId: nonEmptyString.max(128),
     planId: nonEmptyString.max(128),
+    /** Spec/composer model id; HyperPlan prefers this over the global default. */
+    model: optionalNonEmptyString,
   })
   .strict();
 

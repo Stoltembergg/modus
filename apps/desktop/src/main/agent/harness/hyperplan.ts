@@ -17,7 +17,7 @@ import type {
   HyperPlanSummary,
   PlanSpec,
 } from "../../../shared/contracts";
-import { getDefaultModel, getModelRegistry } from "../model-service";
+import { findModel, getDefaultModel, getModelRegistry } from "../model-service";
 
 const CRITICS: Array<{ id: HyperPlanCriticId; prompt: string }> = [
   {
@@ -159,7 +159,7 @@ type FailureReason =
   | "critic_quarantine";
 type PromptResult = { output?: string; reason?: FailureReason; message?: string };
 
-class HyperPlanReviewFailure extends Error {
+export class HyperPlanReviewFailure extends Error {
   constructor(
     readonly reason: FailureReason,
     message: string,
@@ -167,6 +167,59 @@ class HyperPlanReviewFailure extends Error {
     super(message);
     this.name = "HyperPlanReviewFailure";
   }
+}
+
+/** Fixed copy shown in the review-error UI — never interpolates raw provider/path text. */
+const USER_FACING_BY_REASON: Record<FailureReason, string> = {
+  session_setup_failure:
+    "No model available for HyperPlan review. Choose a model in Spec and try again.",
+  prompt_failure:
+    "The model could not complete HyperPlan review. Try again or build the original plan.",
+  timeout: "HyperPlan review timed out. Try again or build the original plan.",
+  output_limit: "HyperPlan review output was too large. Try again with a shorter plan.",
+  cleanup_failure: "HyperPlan review failed during cleanup. Restart Modus if this keeps happening.",
+  invalid_synthesis_output: "The model returned invalid review JSON. Try again.",
+  empty_synthesis_output: "HyperPlan review produced an empty synthesis. Try again.",
+  critic_timeout: "A HyperPlan critic timed out. Try again or build the original plan.",
+  critic_quarantine:
+    "HyperPlan review is temporarily blocked after a failed cleanup. Restart Modus or try again later.",
+};
+
+const GENERIC_USER_FACING =
+  "HyperPlan review is unavailable. Try again or build the original plan.";
+
+/**
+ * Maps HyperPlan failures to a short, secret-safe message for the renderer.
+ * Never forwards raw Error.message (may contain paths or provider details).
+ */
+export function userFacingHyperPlanMessage(error: unknown): string {
+  if (error instanceof HyperPlanReviewFailure) {
+    return USER_FACING_BY_REASON[error.reason] ?? GENERIC_USER_FACING;
+  }
+  const raw = error instanceof Error ? error.message : String(error);
+  if (/no model available/i.test(raw)) return USER_FACING_BY_REASON.session_setup_failure;
+  if (/review busy|already active/i.test(raw)) {
+    return "HyperPlan review is already running. Try again in a moment.";
+  }
+  if (/size budget|too large|12 KiB/i.test(raw)) {
+    return "This plan is too large for HyperPlan review. Shorten it and try again.";
+  }
+  if (/invalid revision output/i.test(raw)) {
+    return "The model returned an invalid revised plan. Try again.";
+  }
+  if (/changed during|changed since|source changed/i.test(raw)) {
+    return "The plan changed during review. Try again.";
+  }
+  if (/does not belong|spec plan not found|agent session not found/i.test(raw)) {
+    return "This plan is not available for HyperPlan review.";
+  }
+  if (/draft owner|not active/i.test(raw)) {
+    return "HyperPlan review is unavailable in this window. Try again.";
+  }
+  if (/revision unavailable|did not complete/i.test(raw)) {
+    return USER_FACING_BY_REASON.prompt_failure;
+  }
+  return GENERIC_USER_FACING;
 }
 
 function capUtf8(text: string, maxBytes: number): string {
@@ -331,7 +384,7 @@ function parseRevision(raw: string | undefined): HyperPlanRevision | undefined {
   }
 }
 
-async function createIsolatedSession(): Promise<{
+async function createIsolatedSession(modelId?: string): Promise<{
   session: IsolatedSession;
   tempDir: string;
 }> {
@@ -355,7 +408,8 @@ async function createIsolatedSession(): Promise<{
       reload: async () => {},
     };
     const modelRegistry = getModelRegistry();
-    const model = getDefaultModel();
+    // Prefer Spec/session/composer model; fall back to settings default.
+    const model = findModel(modelId) ?? getDefaultModel();
     if (!model) throw new Error("No model available.");
     const { session } = await createAgentSession({
       cwd: tempDir,
@@ -399,6 +453,7 @@ async function runBoundedPrompt(
   prompt: string,
   timeoutMs: number,
   maxOutputBytes: number,
+  modelId?: string,
 ): Promise<PromptResult> {
   if (!prompt) {
     return {
@@ -489,7 +544,7 @@ async function runBoundedPrompt(
       }
     };
     try {
-      const created = await createIsolatedSession();
+      const created = await createIsolatedSession(modelId);
       session = created.session;
       tempDir = created.tempDir;
       sessionCreated = true;
@@ -723,6 +778,7 @@ async function runHyperPlanPipeline(
   input: {
     planContent: string;
     spec: PlanSpec;
+    modelId?: string;
   },
   retainAdmission = false,
 ): Promise<{ summary: HyperPlanSummary; synthesis?: SynthesisOutput }> {
@@ -735,6 +791,7 @@ async function runHyperPlanPipeline(
   const criticFailures = new Map<HyperPlanCriticId, string>();
   const criticFailureReasons = new Map<HyperPlanCriticId, FailureReason>();
   const boundedInput = input;
+  const modelId = input.modelId;
   let pipelineCompleted = false;
   try {
     const criticRuns = CRITICS.map(async ({ id, prompt }) => {
@@ -744,6 +801,7 @@ async function runHyperPlanPipeline(
           criticPrompt(id, prompt, boundedInput),
           CRITIC_TIMEOUT_MS,
           MAX_CRITIC_OUTPUT_BYTES,
+          modelId,
         );
       } catch (error) {
         outcome = {
@@ -803,6 +861,7 @@ async function runHyperPlanPipeline(
         synthesisPrompt({ ...boundedInput, critiques: completedCritiques }),
         SYNTHESIS_TIMEOUT_MS,
         MAX_SYNTHESIS_OUTPUT_BYTES,
+        modelId,
       );
       synthesis = parseSynthesis(synthesisResult);
     } catch (error) {
@@ -839,6 +898,7 @@ async function runHyperPlanPipeline(
 export async function runHyperPlanReview(input: {
   planContent: string;
   spec: PlanSpec;
+  modelId?: string;
 }): Promise<HyperPlanSummary> {
   if (Buffer.byteLength(input.planContent, "utf8") > MAX_CRITIC_PLAN_BYTES) {
     throw new Error("Plan content exceeds the 12 KiB HyperPlan review limit.");
@@ -872,6 +932,7 @@ export async function runHyperPlanReview(input: {
 
 export async function runHyperPlanRevision(
   input: HyperPlanReviewInput,
+  options?: { modelId?: string },
 ): Promise<HyperPlanRevision> {
   const initialPrompt = revisionPrompt(input, {
     revisedContent: "",
@@ -884,9 +945,10 @@ export async function runHyperPlanRevision(
   if (!initialPrompt) throw new Error("HyperPlan revision input exceeds its size budget");
 
   let admissionAcquired = false;
+  const modelId = options?.modelId;
   try {
     const { summary, synthesis } = await runHyperPlanPipeline(
-      { planContent: input.content, spec: input.spec },
+      { planContent: input.content, spec: input.spec, ...(modelId ? { modelId } : {}) },
       true,
     );
     admissionAcquired = true;
@@ -895,7 +957,12 @@ export async function runHyperPlanRevision(
     }
     const prompt = revisionPrompt(input, synthesis);
     if (!prompt) throw new Error("HyperPlan revision input exceeds its size budget");
-    const result = await runBoundedPrompt(prompt, REVISION_TIMEOUT_MS, MAX_REVISION_OUTPUT_BYTES);
+    const result = await runBoundedPrompt(
+      prompt,
+      REVISION_TIMEOUT_MS,
+      MAX_REVISION_OUTPUT_BYTES,
+      modelId,
+    );
     const revision = parseRevision(result.output);
     if (!revision) throw new Error("HyperPlan revision unavailable: invalid revision output");
     return revision;

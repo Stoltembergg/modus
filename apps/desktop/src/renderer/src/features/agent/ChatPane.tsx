@@ -112,7 +112,7 @@ export function createHyperPlanOperations(
   >();
 
   return {
-    review(input: { sessionId: string; planId: string }) {
+    review(input: { sessionId: string; planId: string; model?: string }) {
       return api.createHyperPlanDraft(input);
     },
     async choose(preview: HyperPlanPreview, choice: HyperPlanChoice) {
@@ -202,6 +202,27 @@ function operationError(stage: HyperPlanOperationError["stage"]): HyperPlanOpera
   return Object.assign(new Error("HyperPlan operation failed"), { stage });
 }
 
+const GENERIC_HYPERPLAN_REVIEW_ERROR =
+  "HyperPlan review is unavailable. Try again or build the original plan.";
+
+/**
+ * Accept only short, path-free messages from main. Raw IPC noise falls back to the generic copy.
+ */
+export function safeHyperPlanReviewReason(error: unknown): string {
+  if (!(error instanceof Error)) return GENERIC_HYPERPLAN_REVIEW_ERROR;
+  const message = error.message.replace(/[\r\n\t]+/g, " ").trim();
+  if (
+    !message ||
+    message.length > 200 ||
+    /[\\/]/.test(message) ||
+    /(?:^|[\s])(?:[A-Za-z]:\\|\/(?:Users|home|tmp|var|etc|private)\b)/.test(message) ||
+    /token|secret|password|api[_-]?key|authorization/i.test(message)
+  ) {
+    return GENERIC_HYPERPLAN_REVIEW_ERROR;
+  }
+  return message;
+}
+
 type HyperPlanSourceSnapshot = ReturnType<typeof hyperPlanSourceProjection>;
 
 type HyperPlanReviewState =
@@ -218,6 +239,8 @@ type HyperPlanReviewState =
       planHash: string;
       sourceSnapshot: HyperPlanSourceSnapshot;
       status: "review-error";
+      /** Safe, user-facing failure reason from main (no secrets/paths). */
+      reason?: string;
       originalStart?: "pending" | "error";
     }
   | {
@@ -1051,7 +1074,11 @@ export function ChatPane({
     const sourceSnapshot = hyperPlanSourceProjection(plan);
     setHyperPlanReview({ planId: plan.id, planHash: plan.hash, sourceSnapshot, status: "loading" });
     try {
-      const preview = await hyperPlanOperations.current.review({ sessionId, planId: plan.id });
+      const preview = await hyperPlanOperations.current.review({
+        sessionId,
+        planId: plan.id,
+        ...(paneModel ? { model: paneModel } : {}),
+      });
       if (requestId === hyperPlanRequestId.current) {
         setHyperPlanReview({
           planId: plan.id,
@@ -1061,15 +1088,17 @@ export function ChatPane({
           preview,
         });
       }
-    } catch {
+    } catch (error) {
       if (requestId === hyperPlanRequestId.current) {
+        const reason = safeHyperPlanReviewReason(error);
         setHyperPlanReview({
           planId: plan.id,
           planHash: plan.hash,
           sourceSnapshot,
           status: "review-error",
+          reason,
         });
-        setPromptError("HyperPlan review is unavailable. Try again or build the original plan.");
+        setPromptError(reason);
       }
     }
   }
@@ -1485,6 +1514,9 @@ export function ChatPane({
                               : visibleHyperPlanReview.status === "review-error"
                                 ? {
                                     status: "review-error" as const,
+                                    ...(visibleHyperPlanReview.reason
+                                      ? { reason: visibleHyperPlanReview.reason }
+                                      : {}),
                                     ...(visibleHyperPlanReview.originalStart
                                       ? { originalStart: visibleHyperPlanReview.originalStart }
                                       : {}),

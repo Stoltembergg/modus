@@ -269,4 +269,30 @@ describe("ReviewPlanCard", () => {
     expect(onChoosePlan).toHaveBeenCalledExactlyOnceWith("original");
     expect(onReviewWithHyperPlan).not.toHaveBeenCalled();
   });
+
+  it("shows a safe review failure reason while keeping retry and original build actions", () => {
+    render(
+      <ReviewPlanCard
+        onBuildLocally={vi.fn()}
+        onContinuePlanning={vi.fn()}
+        onChoosePlan={vi.fn()}
+        onReviewWithHyperPlan={vi.fn()}
+        hyperPlanState={{
+          status: "review-error",
+          reason: "No model available for HyperPlan review. Choose a model in Spec and try again.",
+        }}
+        plan={plan}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Review unavailable" })).toBeTruthy();
+    expect(
+      screen.getByText(
+        "No model available for HyperPlan review. Choose a model in Spec and try again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByText("Your original plan is unchanged.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Try review again" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Build the original plan" })).toBeTruthy();
+  });
 });

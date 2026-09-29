@@ -266,6 +266,7 @@ export type ModusApi = {
     reviewPlanWithHyperPlan(input: {
       sessionId: string;
       planId: string;
+      model?: string;
     }): Promise<HyperPlanSummary>;
     applyHyperPlanRevision(input: {
       sessionId: string;
@@ -276,6 +277,8 @@ export type ModusApi = {
     createHyperPlanDraft(input: {
       sessionId: string;
       planId: string;
+      /** Spec/composer model; HyperPlan prefers this over the global default. */
+      model?: string;
     }): Promise<{ draftId: string; revision: HyperPlanRevision }>;
     resolveHyperPlanDraft(input: {
       draftId: string;

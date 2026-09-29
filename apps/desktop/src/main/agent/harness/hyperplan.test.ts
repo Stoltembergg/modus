@@ -84,10 +84,16 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 vi.mock("../model-service", () => ({
   getDefaultModel: () => ({ id: "test-model" }),
+  findModel: (modelId: string | undefined) => (modelId ? { id: modelId } : undefined),
   getModelRegistry: () => ({ authStorage: {}, modelRegistry: {} }),
 }));
 
-import { runHyperPlanReview, runHyperPlanRevision } from "./hyperplan";
+import {
+  HyperPlanReviewFailure,
+  runHyperPlanReview,
+  runHyperPlanRevision,
+  userFacingHyperPlanMessage,
+} from "./hyperplan";
 
 const spec: PlanSpec = {
   requirements: [{ id: "req-one", text: "The requirement." }],
@@ -693,6 +699,27 @@ describe("runHyperPlanRevision", () => {
     expect(mocks.sessionOptions.every((options) => options.noTools === "all")).toBe(true);
   });
 
+  it("uses the requested model id for isolated critic sessions", async () => {
+    useSuccessfulPromptHandler();
+    await runHyperPlanRevision(revisionInput(), { modelId: "composer-model" });
+    expect(mocks.sessionOptions.length).toBeGreaterThan(0);
+    expect(
+      mocks.sessionOptions.every(
+        (options) => (options.model as { id: string }).id === "composer-model",
+      ),
+    ).toBe(true);
+  });
+
+  it("falls back to the default model when no model id is provided", async () => {
+    useSuccessfulPromptHandler();
+    await runHyperPlanRevision(revisionInput());
+    expect(
+      mocks.sessionOptions.every(
+        (options) => (options.model as { id: string }).id === "test-model",
+      ),
+    ).toBe(true);
+  });
+
   it("does not produce a revision when no critic completes", async () => {
     mocks.promptHandler = async (prompt, emit) => {
       if (criticId(prompt)) throw new Error("critic unavailable");
@@ -863,6 +890,31 @@ describe("review quarantine", () => {
     expect(mocks.promptTexts.some((prompt) => prompt.includes("SYNTHESIS_INPUT:"))).toBe(false);
     await expect(isolatedHarness.runHyperPlanReview(reviewInput())).rejects.toThrow(
       "HyperPlan review busy",
+    );
+  });
+});
+
+describe("userFacingHyperPlanMessage", () => {
+  it("maps failure reasons to fixed copy without forwarding raw details", () => {
+    expect(
+      userFacingHyperPlanMessage(
+        new HyperPlanReviewFailure(
+          "session_setup_failure",
+          "Session setup failed: /tmp/secret/path token=abc",
+        ),
+      ),
+    ).toMatch(/No model available for HyperPlan/i);
+    expect(userFacingHyperPlanMessage(new Error("No model available."))).toMatch(
+      /No model available for HyperPlan/i,
+    );
+    expect(userFacingHyperPlanMessage(new Error("HyperPlan review busy"))).toMatch(
+      /already running/i,
+    );
+    expect(
+      userFacingHyperPlanMessage(new Error("Plan source changed during HyperPlan generation")),
+    ).toMatch(/plan changed during review/i);
+    expect(userFacingHyperPlanMessage(new Error("/home/user/.modus/secret.key leaked"))).toMatch(
+      /unavailable/i,
     );
   });
 });
