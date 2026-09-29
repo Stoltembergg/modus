@@ -26,6 +26,7 @@ const UI_STATE: UpdateRestoreUiState = {
   activeWorkspaceId: "ws-1",
   activeSessionId: "s-1",
   drafts: { "s-1": { text: "half-written prompt", mode: "plan" } },
+  hero: { text: "new idea", mode: "spec" },
   sidebar: { open: false, width: 280 },
   inspector: { open: true, width: 520, tab: "files" },
   settingsOpen: false,

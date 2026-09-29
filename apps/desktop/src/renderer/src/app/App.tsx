@@ -67,13 +67,18 @@ import {
 import type { ChatComposerDraft, ChatComposerDraftUpdate } from "../features/agent/ChatPane";
 import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
-import { Composer, createEmptyComposerDraft } from "../features/composer/Composer";
+import {
+  Composer,
+  type ComposerDraft,
+  createEmptyComposerDraft,
+} from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
 import {
   createUiStatePusher,
+  isComposerDraftEmpty,
   restorableUiState,
   snapshotUiState,
   type UiStatePusher,
@@ -134,6 +139,8 @@ export function App() {
   // Composer mode for the hero (new-chat) screen — controlled so the "Plan New
   // Idea" pill can start a session straight in plan mode.
   const [heroMode, setHeroMode] = useState<AgentMode>("build");
+  // Lifted only so the text survives an update restart (see restoreUiState).
+  const [heroDraft, setHeroDraft] = useState<ComposerDraft>(createEmptyComposerDraft);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(null);
@@ -350,6 +357,10 @@ export function App() {
         if (!state) return;
         setActiveWorkspace(items.find((item) => item.id === state.activeWorkspaceId) ?? null);
         setActiveSessionId(state.activeSessionId ?? undefined);
+        if (state.hero.text) {
+          setHeroDraft({ ...createEmptyComposerDraft(), value: state.hero.text });
+          setHeroMode(state.hero.mode);
+        }
         setComposerDraftBySession((current) => {
           const next = { ...current };
           for (const [sessionId, draft] of Object.entries(state.drafts)) {
@@ -404,6 +415,8 @@ export function App() {
         activeWorkspaceId: activeWorkspace?.id,
         activeSessionId,
         composerDraftBySession,
+        heroDraft,
+        heroMode,
         sessionIds: new Set(agentSessions.map((session) => session.id)),
         sidebar: { open: sidebarOpen, width: sidebarWidth },
         inspector: { open: inspectorOpen, width: inspectorWidth, tab: inspectorTab },
@@ -414,6 +427,8 @@ export function App() {
     activeWorkspace?.id,
     activeSessionId,
     composerDraftBySession,
+    heroDraft,
+    heroMode,
     agentSessions,
     sidebarOpen,
     sidebarWidth,
@@ -487,6 +502,16 @@ export function App() {
       unsubscribeFocus();
     };
   }, [refreshSessions]);
+
+  // Opening a session unmounts the hero composer: its text is dropped, as it was
+  // before the draft was lifted into App.
+  useEffect(() => {
+    if (activeSessionId) {
+      setHeroDraft((current) =>
+        isComposerDraftEmpty(current) ? current : createEmptyComposerDraft(),
+      );
+    }
+  }, [activeSessionId]);
 
   // The open session is "watched": its unread flag clears.
   useEffect(() => {
@@ -1194,6 +1219,8 @@ export function App() {
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
+                                  draft={heroDraft}
+                                  onDraftChange={setHeroDraft}
                                   footer={
                                     <HeroEnvironmentTray
                                       activeWorkspace={activeWorkspace}

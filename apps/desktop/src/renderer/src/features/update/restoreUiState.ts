@@ -4,6 +4,7 @@ import type {
   UpdateRestoreUiState,
 } from "../../../../shared/contracts";
 import { hasPendingDownloadedUpdate } from "../../../../shared/update-restore";
+import type { MentionEditorPart } from "../composer/MentionEditor";
 import { subscribeToUpdateState, type UpdateApi } from "./UpdateToast";
 
 /** Coalesces bursts (typing, panel drags) into one push to main. */
@@ -25,12 +26,32 @@ export type UiStateInput = {
   activeWorkspaceId: string | undefined;
   activeSessionId: string | undefined;
   composerDraftBySession: Record<string, { value: string; mode: AgentMode }>;
+  /** Start-screen composer text; its context chips and images are left out. */
+  heroDraft: { value: string };
+  heroMode: AgentMode;
   /** Sessions the sidebar knows; drafts of anything else are left out. */
   sessionIds: ReadonlySet<string>;
   sidebar: { open: boolean; width: number };
   inspector: { open: boolean; width: number; tab: string };
   settingsOpen: boolean;
 };
+
+/** Nothing typed or attached: safe to fill with a restored draft. */
+export function isComposerDraftEmpty(draft: {
+  value: string;
+  images: readonly unknown[];
+  selectedSkills: readonly unknown[];
+  parts?: readonly MentionEditorPart[] | undefined;
+  contextItems?: readonly unknown[] | undefined;
+}): boolean {
+  return (
+    !draft.value.trim() &&
+    draft.images.length === 0 &&
+    draft.selectedSkills.length === 0 &&
+    (draft.contextItems?.length ?? 0) === 0 &&
+    !(draft.parts ?? []).some((part) => part.type !== "text" || part.text.trim() !== "")
+  );
+}
 
 /** Main rejects widths outside 0..4096; NaN becomes 0 (the panel's own minimum wins). */
 function panelWidth(width: number): number {
@@ -50,6 +71,7 @@ export function snapshotUiState(input: UiStateInput): UpdateRestoreUiState {
     activeWorkspaceId: input.activeWorkspaceId ?? null,
     activeSessionId: input.activeSessionId ?? null,
     drafts,
+    hero: { text: input.heroDraft.value.trim() ? input.heroDraft.value : "", mode: input.heroMode },
     sidebar: { open: input.sidebar.open, width: panelWidth(input.sidebar.width) },
     inspector: { open: input.inspector.open, width: panelWidth(input.inspector.width), tab },
     settingsOpen: input.settingsOpen,

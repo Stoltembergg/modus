@@ -16,6 +16,7 @@ const UI_STATE = {
   activeWorkspaceId: "ws-1",
   activeSessionId: "s-1",
   drafts: { "s-1": { text: "half-written prompt", mode: "plan" as const } },
+  hero: { text: "", mode: "build" as const },
   sidebar: { open: true, width: 300 },
   inspector: { open: false, width: 384, tab: "changes" as const },
   settingsOpen: false,
@@ -106,6 +107,12 @@ describe("update IPC registration", () => {
       expect(() => save({ ...UI_STATE, sidebar: { open: true, width: Number.NaN } })).toThrow();
       const huge = { ...UI_STATE, drafts: { "s-1": { text: "x".repeat(100_001), mode: "build" } } };
       expect(() => save(huge)).toThrow();
+      expect(() =>
+        save({ ...UI_STATE, hero: { text: "x".repeat(100_001), mode: "build" } }),
+      ).toThrow();
+      expect(() =>
+        save({ ...UI_STATE, hero: { text: "x", mode: "build", contextItems: [] } }),
+      ).toThrow();
       const tooMany = Object.fromEntries(
         Array.from({ length: 201 }, (_, i) => [`s-${i}`, { text: "a", mode: "build" }]),
       );
@@ -119,8 +126,8 @@ describe("update IPC registration", () => {
       );
       expect(() => save({ ...UI_STATE, drafts: heavy })).toThrow("UI state too large");
       // Every rejected push clears main's copy instead of keeping an older one.
-      expect(service.saveUiState).toHaveBeenCalledTimes(8);
-      expect(service.saveUiState.mock.calls.slice(1)).toEqual(Array(7).fill([null]));
+      expect(service.saveUiState).toHaveBeenCalledTimes(10);
+      expect(service.saveUiState.mock.calls.slice(1)).toEqual(Array(9).fill([null]));
       expect(handlers.get("update:take-restored-ui-state")?.(trusted, undefined)).toBeNull();
       expect(() => handlers.get("update:take-restored-ui-state")?.(trusted, {})).toThrow();
     } finally {

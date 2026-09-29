@@ -1978,6 +1978,8 @@ export type UpdateRestoreUiState = {
   activeSessionId: string | null;
   /** Keyed by session id; only sessions with a non-empty draft. */
   drafts: Record<string, { text: string; mode: AgentMode }>;
+  /** The start-screen (hero) composer: text and mode only, like the drafts. */
+  hero: { text: string; mode: AgentMode };
   sidebar: { open: boolean; width: number };
   inspector: { open: boolean; width: number; tab: UpdateRestoreInspectorTab };
   settingsOpen: boolean;

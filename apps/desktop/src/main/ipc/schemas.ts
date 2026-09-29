@@ -689,6 +689,9 @@ export const updateNoInputSchema = z.undefined();
 const restoreIdSchema = z.string().min(1).max(256);
 const restorePanelSchema = { open: z.boolean(), width: z.number().finite().min(0).max(4096) };
 export const MAX_RESTORE_DRAFTS = 200;
+const restoreDraftSchema = z
+  .object({ text: z.string().max(100_000), mode: z.enum(["build", "plan", "spec"]) })
+  .strict();
 
 /** UI state the renderer pushes while an update is pending (and read back from disk). */
 export const updateRestoreUiStateSchema = z
@@ -696,15 +699,11 @@ export const updateRestoreUiStateSchema = z
     activeWorkspaceId: restoreIdSchema.nullable(),
     activeSessionId: restoreIdSchema.nullable(),
     drafts: z
-      .record(
-        restoreIdSchema,
-        z
-          .object({ text: z.string().max(100_000), mode: z.enum(["build", "plan", "spec"]) })
-          .strict(),
-      )
+      .record(restoreIdSchema, restoreDraftSchema)
       .refine((drafts) => Object.keys(drafts).length <= MAX_RESTORE_DRAFTS, {
         message: "too many drafts",
       }),
+    hero: restoreDraftSchema,
     sidebar: z.object(restorePanelSchema).strict(),
     inspector: z
       .object({

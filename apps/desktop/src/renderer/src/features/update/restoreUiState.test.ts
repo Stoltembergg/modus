@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRestoreUiState, UpdateState } from "../../../../shared/contracts";
 import {
   createUiStatePusher,
+  isComposerDraftEmpty,
   restorableUiState,
   snapshotUiState,
   UI_STATE_PUSH_DEBOUNCE_MS,
@@ -12,6 +13,7 @@ const STATE: UpdateRestoreUiState = {
   activeWorkspaceId: "ws-1",
   activeSessionId: "s-1",
   drafts: { "s-1": { text: "draft", mode: "build" } },
+  hero: { text: "", mode: "build" },
   sidebar: { open: true, width: 300 },
   inspector: { open: false, width: 384, tab: "changes" },
   settingsOpen: false,
@@ -43,6 +45,8 @@ describe("snapshotUiState", () => {
         "s-2": { value: "   ", mode: "build" },
         gone: { value: "orphan", mode: "build" },
       },
+      heroDraft: { value: "   " },
+      heroMode: "plan",
       sessionIds: new Set(["s-1", "s-2"]),
       sidebar: { open: false, width: 301.6 },
       inspector: { open: true, width: Number.POSITIVE_INFINITY, tab: "not-a-tab" },
@@ -52,10 +56,50 @@ describe("snapshotUiState", () => {
       activeWorkspaceId: null,
       activeSessionId: "s-1",
       drafts: { "s-1": { text: "keep me", mode: "plan" } },
+      hero: { text: "", mode: "plan" },
       sidebar: { open: false, width: 302 },
       inspector: { open: true, width: 4096, tab: "changes" },
       settingsOpen: true,
     });
+  });
+});
+
+describe("snapshotUiState hero", () => {
+  it("keeps the start-screen text and mode", () => {
+    const snapshot = snapshotUiState({
+      activeWorkspaceId: "ws-1",
+      activeSessionId: undefined,
+      composerDraftBySession: {},
+      heroDraft: { value: "an idea\nsecond line" },
+      heroMode: "spec",
+      sessionIds: new Set(),
+      sidebar: { open: true, width: 300 },
+      inspector: { open: false, width: 384, tab: "changes" },
+      settingsOpen: false,
+    });
+    expect(snapshot.hero).toEqual({ text: "an idea\nsecond line", mode: "spec" });
+  });
+});
+
+describe("isComposerDraftEmpty", () => {
+  const empty = { value: "", images: [], selectedSkills: [] };
+  it("treats whitespace and empty text parts as empty", () => {
+    expect(isComposerDraftEmpty(empty)).toBe(true);
+    expect(
+      isComposerDraftEmpty({ ...empty, value: "  \n", parts: [{ type: "text", text: " " }] }),
+    ).toBe(true);
+  });
+  it("sees text, images, skills, context chips and inline tokens", () => {
+    expect(isComposerDraftEmpty({ ...empty, value: "hi" })).toBe(false);
+    expect(isComposerDraftEmpty({ ...empty, images: [{}] })).toBe(false);
+    expect(isComposerDraftEmpty({ ...empty, selectedSkills: [{}] })).toBe(false);
+    expect(isComposerDraftEmpty({ ...empty, contextItems: [{}] })).toBe(false);
+    expect(
+      isComposerDraftEmpty({
+        ...empty,
+        parts: [{ type: "skill", skill: { name: "x", path: "/x" } as never }],
+      }),
+    ).toBe(false);
   });
 });
 
