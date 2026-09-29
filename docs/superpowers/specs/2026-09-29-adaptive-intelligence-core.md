@@ -1,6 +1,6 @@
 # Modus Adaptive Intelligence Core
 
-**Status:** Slice 2 landed (PR #50). **Gap 1 shipped** — safe Meta Controller children/MCP dispatch (PR #54). **Gap 2 shipped** — automatic CodeGraph binary sync/index. Gaps 3–5 remain open.  
+**Status:** Slice 2 landed (PR #50). **Gaps 1–4 shipped** — safe children/MCP dispatch (#54); automatic CodeGraph sync (#55); blacklist management UI (#58); policy DSL for promoted learning (this change). Gap 5 remains open.  
 **Fork:** [Stoltembergg/modus](https://github.com/Stoltembergg/modus)  
 **PR:** [#50](https://github.com/Stoltembergg/modus/pull/50) (merged); Gap 1: [#54](https://github.com/Stoltembergg/modus/pull/54); Gap 2: (this change)  
 **Prior art:** `docs/superpowers/specs/2026-09-27-modus-adaptive-harness-core-design.md` (approved) + PR #46 (Task State) + slice 1 Meta Controller
