@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AgentGroupWithMembers, AgentSessionInfo } from "../../../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
 import {
+  countProjectGroups,
   eligibleGroupSessions,
   groupMemberSessionIds,
   isGroupWorkingStub,
   manageableGroupSessions,
+  removeProjectGroupsWarning,
 } from "./groupSidebarModel";
 
 function session(id: string, overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo {
@@ -76,5 +78,24 @@ describe("manageableGroupSessions", () => {
     expect(
       manageableGroupSessions(sessions, group, new Set(["mine", "theirs"])).map((s) => s.id),
     ).toEqual(["mine", "free"]);
+  });
+});
+
+describe("Remove project group warning", () => {
+  it("counts a Project's groups and words the warning for 1 and many", () => {
+    const g = (id: string, workspaceId?: string): AgentGroupWithMembers => ({
+      id,
+      name: id,
+      ...(workspaceId ? { workspaceId } : {}),
+      mode: "free",
+      members: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const groups = [g("a", "ws-1"), g("b", "ws-1"), g("c", "ws-2"), g("d")];
+    expect(countProjectGroups(groups, "ws-1")).toBe(2);
+    expect(countProjectGroups(groups, "ws-3")).toBe(0);
+    expect(removeProjectGroupsWarning(1)).toBe("1 group and its member chats will be deleted");
+    expect(removeProjectGroupsWarning(2)).toBe("2 groups and their member chats will be deleted");
   });
 });

@@ -37,7 +37,11 @@ import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
-import { groupMemberSessionIds } from "../features/groups/groupSidebarModel";
+import {
+  countProjectGroups,
+  groupMemberSessionIds,
+  removeProjectGroupsWarning,
+} from "../features/groups/groupSidebarModel";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
@@ -432,6 +436,7 @@ export function Sidebar({
                       onArchiveChats={() => onArchiveProjectChats(workspace.id)}
                       onDeleteChats={() => onDeleteProjectChats(workspace.id)}
                       onRemove={() => onRemoveProject(workspace.id)}
+                      groupCount={countProjectGroups(groups, workspace.id)}
                       scrollContainerRef={scrollContainerRef}
                     />
                   </m.div>
@@ -542,6 +547,7 @@ function WorkspaceItem({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   scrollContainerRef,
 }: {
   workspace: WorkspaceInfo;
@@ -565,6 +571,8 @@ function WorkspaceItem({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  /** Groups this Project owns; "Remove" confirms first when there are any. */
+  groupCount: number;
   scrollContainerRef: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(true);
@@ -617,6 +625,7 @@ function WorkspaceItem({
         onArchiveChats={onArchiveChats}
         onDeleteChats={onDeleteChats}
         onRemove={onRemove}
+        groupCount={groupCount}
         title={workspace.rootPath}
       >
         {workspace.displayName}
@@ -898,6 +907,7 @@ function ProjectRow({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   title,
 }: {
   children: ReactNode;
@@ -915,6 +925,7 @@ function ProjectRow({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  groupCount: number;
   title?: string;
 }) {
   const FolderIcon = expanded ? IconFolderOpen : IconFolder;
@@ -933,6 +944,7 @@ function ProjectRow({
 
   return (
     <ProjectActions
+      groupCount={groupCount}
       onArchiveChats={onArchiveChats}
       onDeleteChats={onDeleteChats}
       onPin={onPin}
@@ -1112,6 +1124,7 @@ function ProjectActions({
   onArchiveChats,
   onDeleteChats,
   onRemove,
+  groupCount,
   children,
 }: {
   pinned: boolean;
@@ -1122,10 +1135,13 @@ function ProjectActions({
   onArchiveChats(): void;
   onDeleteChats(): void;
   onRemove(): void;
+  /** Groups the Project owns: with any, "Remove" asks for a second click first. */
+  groupCount: number;
   children(open: boolean, trigger: ReactNode): ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmDeleteChats, setConfirmDeleteChats] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const trigger = (
     <Menu.Trigger
       aria-label="Project actions"
@@ -1141,6 +1157,7 @@ function ProjectActions({
         setOpen(nextOpen);
         if (!nextOpen) {
           setConfirmDeleteChats(false);
+          setConfirmRemove(false);
         }
       }}
       open={open}
@@ -1201,11 +1218,20 @@ function ProjectActions({
               {confirmDeleteChats ? "Confirm delete chats" : "Delete chats"}
             </ProjectMenuItem>
             <ProjectMenuItem
+              closeOnClick={groupCount === 0 || confirmRemove}
               danger
               icon={<IconX size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
-              onClick={onRemove}
+              onClick={() => {
+                // No groups: unchanged, removes right away. With groups: warn first.
+                if (groupCount > 0 && !confirmRemove) {
+                  setConfirmRemove(true);
+                  return;
+                }
+                setConfirmRemove(false);
+                onRemove();
+              }}
             >
-              Remove
+              {confirmRemove ? removeProjectGroupsWarning(groupCount) : "Remove"}
             </ProjectMenuItem>
           </Menu.Popup>
         </Menu.Positioner>
@@ -1219,11 +1245,13 @@ function ProjectMenuItem({
   children,
   onClick,
   danger = false,
+  closeOnClick = true,
 }: {
   icon: ReactNode;
   children: ReactNode;
   onClick(): void;
   danger?: boolean;
+  closeOnClick?: boolean;
 }) {
   return (
     <Menu.Item
@@ -1231,6 +1259,7 @@ function ProjectMenuItem({
         "flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm outline-none select-none data-highlighted:bg-hover",
         danger ? "text-danger" : "text-fg",
       )}
+      closeOnClick={closeOnClick}
       onClick={onClick}
     >
       <span className="flex size-4 shrink-0 items-center justify-center">{icon}</span>

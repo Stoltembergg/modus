@@ -432,4 +432,99 @@ describe("Sidebar with groups", () => {
       "2026-01-02T00:00:00.000Z",
     );
   });
+
+  describe("Remove project with groups", () => {
+    const WS2: WorkspaceInfo = {
+      ...(WORKSPACES[0] as WorkspaceInfo),
+      id: "ws-2",
+      rootPath: "/other",
+      displayName: "Other",
+    };
+    const [squad] = GROUPS as [AgentGroupWithMembers];
+    const second: AgentGroupWithMembers = {
+      ...squad,
+      id: "g-project-2",
+      name: "Second",
+      members: [],
+    };
+
+    function renderWith(groups: AgentGroupWithMembers[]) {
+      const noop = vi.fn();
+      const onRemoveProject = vi.fn();
+      render(
+        <Sidebar
+          activityBySession={{}}
+          agentSessions={SESSIONS}
+          canCreateSession
+          groups={groups}
+          maxWidth={480}
+          onArchiveProjectChats={noop}
+          onArchiveSession={noop}
+          onCreateGroup={vi.fn(async () => undefined)}
+          onDeleteProjectChats={noop}
+          onDeleteSession={noop}
+          onListArchivedSessions={vi.fn(async () => [])}
+          onNewSession={noop}
+          onNewWorkspaceSession={noop}
+          onOpenLimits={noop}
+          onOpenSettings={noop}
+          onOpenWorkspace={noop}
+          onPinProject={noop}
+          onPinSession={noop}
+          onRemoveProject={onRemoveProject}
+          onRenameProject={noop}
+          onRestoreSession={noop}
+          onRevealProject={noop}
+          onSelectSession={noop}
+          onWidthChange={noop}
+          open
+          width={280}
+          workspaces={[...WORKSPACES, WS2]}
+        />,
+      );
+      return onRemoveProject;
+    }
+
+    async function openProjectMenu(user: ReturnType<typeof userEvent.setup>, index: number) {
+      await user.click(
+        screen.getAllByRole("button", { name: "Project actions" })[index] as HTMLElement,
+      );
+      return screen.findByRole("menu");
+    }
+
+    it("warns with the singular for one group, then removes on the second click", async () => {
+      const user = userEvent.setup();
+      const onRemoveProject = renderWith(GROUPS);
+      const menu = await openProjectMenu(user, 0);
+      await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+      expect(onRemoveProject).not.toHaveBeenCalled();
+      const confirm = within(menu).getByRole("menuitem", {
+        name: "1 group and its member chats will be deleted",
+      });
+      await user.click(confirm);
+      expect(onRemoveProject).toHaveBeenCalledWith("ws-1");
+    });
+
+    it("warns with the plural and the right count for several groups", async () => {
+      const user = userEvent.setup();
+      const onRemoveProject = renderWith([...GROUPS, second]);
+      const menu = await openProjectMenu(user, 0);
+      await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+      expect(
+        within(menu).getByRole("menuitem", {
+          name: "2 groups and their member chats will be deleted",
+        }),
+      ).toBeTruthy();
+      expect(onRemoveProject).not.toHaveBeenCalled();
+    });
+
+    it("removes right away with the unchanged label when the Project has no groups", async () => {
+      const user = userEvent.setup();
+      const onRemoveProject = renderWith(GROUPS);
+      const menu = await openProjectMenu(user, 1);
+      await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
+      expect(onRemoveProject).toHaveBeenCalledWith("ws-2");
+      expect(screen.queryByText(/member chats will be deleted/)).toBeNull();
+    });
+  });
 });

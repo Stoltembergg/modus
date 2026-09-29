@@ -47,6 +47,21 @@ export function manageableGroupSessions(
   return eligibleGroupSessions(sessions, group.workspaceId ?? null, others);
 }
 
+/** How many groups a Project owns (they are deleted with it by "Remove project"). */
+export function countProjectGroups(
+  groups: readonly AgentGroupWithMembers[],
+  workspaceId: string,
+): number {
+  return groups.filter((group) => group.workspaceId === workspaceId).length;
+}
+
+/** Remove-project confirmation when the Project owns groups (`count` >= 1). */
+export function removeProjectGroupsWarning(count: number): string {
+  return count === 1
+    ? "1 group and its member chats will be deleted"
+    : `${count} groups and their member chats will be deleted`;
+}
+
 /**
  * Selector for the Groups row activity dot: true while any member is working.
  * Always false until the group runtime lands (PR 3); keep the signature so the

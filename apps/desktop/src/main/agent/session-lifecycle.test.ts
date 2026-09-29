@@ -10,6 +10,7 @@ const lifecycleState = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({ app: { getPath: () => "C:/user-data" } }));
+vi.mock("../groups/group-store", () => ({ listAgentGroupMemberSessionIds: vi.fn(() => []) }));
 vi.mock("../interaction/question-broker", () => ({
   denyPendingQuestionRequestsForSession: vi.fn(() => lifecycleState.calls.push("deny-questions")),
 }));
