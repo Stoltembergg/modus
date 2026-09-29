@@ -64,19 +64,21 @@ export function updateToastContent(state: UpdateState): UpdateToastContent | nul
         dismissible: false,
       };
     case "failed": {
-      // The service opens the release page for page failures and non-retryable ones,
-      // so offer that directly instead of a "Try again" that would do the same.
-      const pageOnly = state.action === "download-page" || !state.retryable;
-      const actions = pageOnly ? [DOWNLOAD] : [{ id: "retry" as const, label: "Try again" }];
       if (state.appliesOnQuit) {
+        // Nothing to do but close Modus: the pending install already runs on quit, so
+        // no Try again and no Restart now. Only dismiss.
         return {
           title: "The update will be applied when Modus closes",
           detail: `Version ${state.version} is ready.`,
           tone: "info",
-          actions,
+          actions: [],
           dismissible: true,
         };
       }
+      // The service opens the release page for page failures and non-retryable ones,
+      // so offer that directly instead of a "Try again" that would do the same.
+      const pageOnly = state.action === "download-page" || !state.retryable;
+      const actions = pageOnly ? [DOWNLOAD] : [{ id: "retry" as const, label: "Try again" }];
       return {
         title: `Couldn't update to ${state.version}`,
         ...(pageOnly ? { detail: "Download it from the release page." } : {}),

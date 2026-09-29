@@ -183,9 +183,25 @@ describe("update toast", () => {
     expect(view.markup).toContain("The update will be applied when Modus closes");
     expect(view.markup).toContain("Version 1.2.0 is ready.");
     expect(view.markup).not.toContain("Couldn");
-    expect(view.labels).toEqual(["Dismiss update", "Try again"]);
-    view.click("Try again");
-    expectOnlyCalled(view.api, "retry");
+    // Only the text and dismiss: no Try again, no Restart now, no Download.
+    expect(view.labels).toEqual(["Dismiss update"]);
+    expect(view.markup).not.toContain("data-update-action");
+    expect(view.markup).not.toContain("Try again");
+    expect(view.markup).not.toContain("Restart now");
+    view.click("Dismiss update");
+    expectOnlyCalled(view.api, "dismiss");
+  });
+
+  it("shows no action button when the page-only update applies on quit either", () => {
+    const content = updateToastContent({
+      status: "failed",
+      version: "1.2.0",
+      retryable: false,
+      action: "download-page",
+      appliesOnQuit: true,
+    });
+    expect(content?.actions).toEqual([]);
+    expect(content?.dismissible).toBe(true);
   });
 
   it("uses the danger tone only for real failures", () => {
