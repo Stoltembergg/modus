@@ -135,6 +135,20 @@ export type AgentGroupMember = {
   joinedAt: string;
 };
 
+/** A group plus its member rows (what the sidebar and `group:*` IPC return). */
+export type AgentGroupWithMembers = AgentGroupInfo & { members: AgentGroupMember[] };
+
+/** `group:create` payload: the group, its existing member sessions and lead, all at once. */
+export type CreateAgentGroupInput = {
+  name: string;
+  /** Owning Project id; omit/null for a group with no Project (members from the Chats inbox). */
+  workspaceId?: string | null;
+  mode?: AgentGroupMode;
+  members: Array<{ sessionId: string; role?: string }>;
+  /** Must be one of `members`. */
+  leadSessionId?: string | null;
+};
+
 export type GroupMessageAuthorKind = "user" | "agent" | "system";
 export type GroupMessageKind = "message" | "status";
 

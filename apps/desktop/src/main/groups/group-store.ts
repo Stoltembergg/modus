@@ -4,6 +4,7 @@ import type {
   AgentGroupInfo,
   AgentGroupMember,
   AgentGroupMode,
+  AgentGroupWithMembers,
   GroupDecision,
   GroupMessage,
   GroupMessageAuthorKind,
@@ -24,6 +25,7 @@ import { getDatabase } from "../db/database";
 
 export type GroupStoreErrorCode =
   | "group-not-found"
+  | "workspace-not-found"
   | "session-not-found"
   | "message-not-found"
   | "task-not-found"
@@ -284,26 +286,163 @@ function touchGroup(groupId: string): string {
 
 /* ── Groups ────────────────────────────────────────────────────────────── */
 
-export function createAgentGroup(input: {
+type NewGroupInput = {
   id?: string;
   name: string;
   /** Owning Project. Omit (or pass the Chats inbox id) for a group with no Project. */
   workspaceId?: string | null;
   mode?: AgentGroupMode;
-}): AgentGroupInfo {
+};
+
+/*
+ * Shared, NON-transactional helpers. They validate and write single rows so
+ * both the one-step functions (createAgentGroup, addAgentGroupMember) and the
+ * all-or-nothing createAgentGroupWithMembers use the exact same rules.
+ * `inTransaction` is not nestable, so these helpers never open one.
+ */
+
+/** Validates a new group's fields and inserts its row (lead unset). Returns the group id. */
+function insertGroupRow(input: NewGroupInput): { id: string; workspaceId: string | null } {
   const name = requireText(input.name, "name");
   const mode = requireOneOf(input.mode ?? "free", GROUP_MODES, "group mode");
   const workspaceId =
     input.workspaceId && input.workspaceId !== CHATS_WORKSPACE_ID ? input.workspaceId : null;
+  const db = getDatabase();
+  if (
+    workspaceId !== null &&
+    db.prepare("select 1 from workspaces where id = ?").get(workspaceId) === undefined
+  ) {
+    throw new GroupStoreError("workspace-not-found", `Workspace not found: ${workspaceId}`);
+  }
   const id = input.id ?? randomUUID();
   const now = new Date().toISOString();
-  getDatabase()
+  db.prepare(
+    `insert into agent_groups (id, name, workspace_id, mode, lead_session_id, created_at, updated_at)
+     values (?, ?, ?, ?, null, ?, ?)`,
+  ).run(id, name, workspaceId, mode, now, now);
+  return { id, workspaceId };
+}
+
+/**
+ * Throws unless the session may join a group owned by `groupWorkspaceId`
+ * (null = no Project): it must exist, be top-level, not archived, and live in
+ * the group's workspace (the Chats inbox for a group with no Project).
+ */
+function assertSessionCanJoin(
+  groupId: string,
+  groupWorkspaceId: string | null,
+  sessionId: string,
+): void {
+  const session = getDatabase()
     .prepare(
-      `insert into agent_groups (id, name, workspace_id, mode, lead_session_id, created_at, updated_at)
-       values (?, ?, ?, ?, null, ?, ?)`,
+      "select id, workspace_id, parent_session_id, archived_at from agent_sessions where id = ?",
     )
-    .run(id, name, workspaceId, mode, now, now);
-  return toGroup(requireGroupRow(id));
+    .get(sessionId) as
+    | {
+        id: string;
+        workspace_id: string;
+        parent_session_id: string | null;
+        archived_at: string | null;
+      }
+    | undefined;
+  if (!session) {
+    throw new GroupStoreError("session-not-found", `Agent session not found: ${sessionId}`);
+  }
+  if (session.parent_session_id !== null) {
+    throw new GroupStoreError(
+      "subagent-session",
+      `Session ${sessionId} is a subagent session; only top-level sessions can join a group.`,
+    );
+  }
+  if (session.archived_at !== null) {
+    throw new GroupStoreError(
+      "archived-session",
+      `Session ${sessionId} is archived; unarchive it before adding it to a group.`,
+    );
+  }
+  const expectedWorkspaceId = groupWorkspaceId ?? CHATS_WORKSPACE_ID;
+  if (session.workspace_id !== expectedWorkspaceId) {
+    throw new GroupStoreError(
+      "workspace-mismatch",
+      groupWorkspaceId === null
+        ? `Session ${sessionId} belongs to a Project; a group without a Project only accepts chats without a folder.`
+        : `Session ${sessionId} belongs to a different workspace than group ${groupId}.`,
+    );
+  }
+}
+
+/** Inserts a member row, mapping the unique-session constraint to `already-in-group`. */
+function insertMemberRow(groupId: string, sessionId: string, role?: string): AgentGroupMember {
+  const normalizedRole = role?.trim() ? role.trim() : null;
+  const joinedAt = new Date().toISOString();
+  try {
+    getDatabase()
+      .prepare(
+        `insert into agent_group_members (group_id, session_id, role, joined_at)
+         values (?, ?, ?, ?)`,
+      )
+      .run(groupId, sessionId, normalizedRole, joinedAt);
+  } catch (error) {
+    if (isUniqueMemberViolation(error)) {
+      throw new GroupStoreError(
+        "already-in-group",
+        `Session ${sessionId} is already a member of a group.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  return {
+    groupId,
+    sessionId,
+    ...(normalizedRole !== null ? { role: normalizedRole } : {}),
+    joinedAt,
+  };
+}
+
+export function createAgentGroup(input: NewGroupInput): AgentGroupInfo {
+  return toGroup(requireGroupRow(insertGroupRow(input).id));
+}
+
+/**
+ * Creates a group, its members and (optionally) its lead in ONE transaction:
+ * all or nothing. Any refused member (wrong workspace, already in a group,
+ * subagent, archived, missing) or a lead that is not among `members` rolls
+ * everything back, so no group, member or lead row is left behind.
+ */
+export function createAgentGroupWithMembers(
+  input: NewGroupInput & {
+    members: Array<{ sessionId: string; role?: string }>;
+    leadSessionId?: string | null;
+  },
+): AgentGroupWithMembers {
+  const sessionIds = input.members.map((member) => member.sessionId);
+  if (new Set(sessionIds).size !== sessionIds.length) {
+    throw new GroupStoreError("invalid-value", "Each session can be listed only once.");
+  }
+  const leadSessionId = input.leadSessionId ?? null;
+  if (leadSessionId !== null && !sessionIds.includes(leadSessionId)) {
+    throw new GroupStoreError(
+      "not-a-member",
+      `The lead session ${leadSessionId} must be one of the group's members.`,
+    );
+  }
+  const db = getDatabase();
+  const groupId = inTransaction(db, () => {
+    const { id, workspaceId } = insertGroupRow(input);
+    for (const member of input.members) {
+      assertSessionCanJoin(id, workspaceId, member.sessionId);
+      insertMemberRow(id, member.sessionId, member.role);
+    }
+    if (leadSessionId !== null) {
+      db.prepare("update agent_groups set lead_session_id = ? where id = ?").run(leadSessionId, id);
+    }
+    return id;
+  });
+  return {
+    ...toGroup(requireGroupRow(groupId)),
+    members: listAgentGroupMembers(groupId),
+  };
 }
 
 export function getAgentGroup(groupId: string): AgentGroupInfo | undefined {
@@ -388,68 +527,11 @@ export function addAgentGroupMember(input: {
   sessionId: string;
   role?: string;
 }): AgentGroupMember {
-  const db = getDatabase();
   const group = requireGroupRow(input.groupId);
-  const session = db
-    .prepare(
-      "select id, workspace_id, parent_session_id, archived_at from agent_sessions where id = ?",
-    )
-    .get(input.sessionId) as
-    | {
-        id: string;
-        workspace_id: string;
-        parent_session_id: string | null;
-        archived_at: string | null;
-      }
-    | undefined;
-  if (!session) {
-    throw new GroupStoreError("session-not-found", `Agent session not found: ${input.sessionId}`);
-  }
-  if (session.parent_session_id !== null) {
-    throw new GroupStoreError(
-      "subagent-session",
-      `Session ${input.sessionId} is a subagent session; only top-level sessions can join a group.`,
-    );
-  }
-  if (session.archived_at !== null) {
-    throw new GroupStoreError(
-      "archived-session",
-      `Session ${input.sessionId} is archived; unarchive it before adding it to a group.`,
-    );
-  }
-  const expectedWorkspaceId = group.workspace_id ?? CHATS_WORKSPACE_ID;
-  if (session.workspace_id !== expectedWorkspaceId) {
-    throw new GroupStoreError(
-      "workspace-mismatch",
-      group.workspace_id === null
-        ? `Session ${input.sessionId} belongs to a Project; a group without a Project only accepts chats without a folder.`
-        : `Session ${input.sessionId} belongs to a different workspace than group ${input.groupId}.`,
-    );
-  }
-  const role = input.role?.trim() ? input.role.trim() : null;
-  const joinedAt = new Date().toISOString();
-  try {
-    db.prepare(
-      `insert into agent_group_members (group_id, session_id, role, joined_at)
-       values (?, ?, ?, ?)`,
-    ).run(input.groupId, input.sessionId, role, joinedAt);
-  } catch (error) {
-    if (isUniqueMemberViolation(error)) {
-      throw new GroupStoreError(
-        "already-in-group",
-        `Session ${input.sessionId} is already a member of a group.`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
-  touchGroup(input.groupId);
-  return {
-    groupId: input.groupId,
-    sessionId: input.sessionId,
-    ...(role !== null ? { role } : {}),
-    joinedAt,
-  };
+  assertSessionCanJoin(group.id, group.workspace_id, input.sessionId);
+  const member = insertMemberRow(group.id, input.sessionId, input.role);
+  touchGroup(group.id);
+  return member;
 }
 
 /**
@@ -530,6 +612,24 @@ export function listAgentGroupMembers(groupId: string): AgentGroupMember[] {
     )
     .all(groupId) as MemberRow[];
   return rows.map(toMember);
+}
+
+/** Groups (same filter/order as listAgentGroups) with their members, for the sidebar. */
+export function listAgentGroupsWithMembers(
+  options: { workspaceId?: string | null } = {},
+): AgentGroupWithMembers[] {
+  const groups = listAgentGroups(options);
+  if (groups.length === 0) return [];
+  const rows = getDatabase()
+    .prepare(`select ${MEMBER_COLUMNS} from agent_group_members order by joined_at, rowid`)
+    .all() as MemberRow[];
+  const byGroup = new Map<string, AgentGroupMember[]>();
+  for (const row of rows) {
+    const members = byGroup.get(row.group_id) ?? [];
+    members.push(toMember(row));
+    byGroup.set(row.group_id, members);
+  }
+  return groups.map((group) => ({ ...group, members: byGroup.get(group.id) ?? [] }));
 }
 
 export function getAgentGroupForSession(sessionId: string): AgentGroupInfo | undefined {

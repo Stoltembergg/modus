@@ -31,6 +31,15 @@ const api: ModusApi = {
     remove: (id) => ipcRenderer.invoke("workspace:remove", { id }),
     reveal: (id) => ipcRenderer.invoke("workspace:reveal", { id }),
   },
+  group: {
+    list: () => ipcRenderer.invoke("group:list"),
+    create: (input) => ipcRenderer.invoke("group:create", input),
+    rename: (input) => ipcRenderer.invoke("group:rename", input),
+    remove: (id) => ipcRenderer.invoke("group:delete", { id }),
+    addMember: (input) => ipcRenderer.invoke("group:add-member", input),
+    removeMember: (input) => ipcRenderer.invoke("group:remove-member", input),
+    setLead: (input) => ipcRenderer.invoke("group:set-lead", input),
+  },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),
   },
