@@ -338,3 +338,5 @@ export type PlanRef = {
 
 export type ConfigScope = "workspace" | "user";
 export type SkillScope = ConfigScope | "builtin";
+/** Settings/runtime source for a subagent profile (Markdown CRUD vs Modus defaults). */
+export type SubagentScope = ConfigScope | "builtin";

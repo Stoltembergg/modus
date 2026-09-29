@@ -111,11 +111,39 @@ describe("loadWorkspaceSubagents", () => {
     });
   });
 
-  it("lists built-ins as non-editable defaults without adding them to Settings CRUD", () => {
+  it("lists built-ins as non-editable Settings defaults without Markdown CRUD", () => {
     const available = listAvailableSubagents(cwd, home);
     expect(available.map((agent) => agent.name)).toContain("explore");
     expect(available.every((agent) => agent.source === "builtin")).toBe(true);
-    expect(listSubagents(cwd, home)).toEqual([]);
+
+    const settings = listSubagents(cwd, home);
+    expect(settings.map((agent) => agent.name)).toEqual([
+      "explore",
+      "librarian",
+      "oracle",
+      "reviewer",
+      "debugger",
+      "ui-ux",
+    ]);
+    expect(
+      settings.every(
+        (agent) =>
+          agent.scope === "builtin" &&
+          agent.source === "builtin" &&
+          !agent.editable &&
+          !agent.deletable &&
+          agent.path === `builtin:${agent.name}`,
+      ),
+    ).toBe(true);
+  });
+
+  it("hides a built-in from Settings when Markdown overrides the same name", () => {
+    writeAgent(join(home, ".modus"), "explore", "custom explore");
+    const settings = listSubagents(cwd, home);
+    expect(settings.filter((agent) => agent.name === "explore")).toEqual([
+      expect.objectContaining({ scope: "user", editable: true }),
+    ]);
+    expect(settings.some((agent) => agent.path === "builtin:explore")).toBe(false);
   });
 
   it("preserves generic profile fallback for unknown names", () => {
@@ -215,6 +243,8 @@ describe("loadWorkspaceSubagents", () => {
     expect(prompt).toContain("exact name listed below");
     expect(prompt).not.toContain("UPDATED BODY");
 
-    expect(deleteSubagent(cwd, updated.path)).toEqual([]);
+    expect(deleteSubagent(cwd, updated.path).filter((agent) => agent.scope !== "builtin")).toEqual(
+      [],
+    );
   });
 });
