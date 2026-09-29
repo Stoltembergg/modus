@@ -298,6 +298,24 @@ export type AdaptiveExecutionPolicy = {
   reasonCodes: string[];
 };
 
+/** Allowlisted strategy labels for Failure Intelligence + Meta Controller (Gap 5). */
+export type ChangeStrategyCode =
+  | "same_edit_retry"
+  | "blind_retry"
+  | "narrow_fix"
+  | "expand_tests"
+  | "retrieve_then_edit"
+  | "replan_scope"
+  | "ask_clarification";
+
+export type ChangeStrategyPlan = {
+  version: 1;
+  avoided: ChangeStrategyCode[];
+  recommended: ChangeStrategyCode | "none";
+  oracleConsulted: boolean;
+  reasonCodes: string[];
+};
+
 export type AdaptiveDecision = {
   version: 1;
   action: AdaptiveDecisionAction;
@@ -311,6 +329,8 @@ export type AdaptiveDecision = {
   avoidStrategyCodes: string[];
   /** Builtin read-only specialist for safe auto-dispatch (Gap 1). */
   specialistRole?: BuiltinAgentRole;
+  /** Recommended next strategy after Failure Intelligence / Oracle (Gap 5). */
+  changeStrategy?: ChangeStrategyPlan;
 };
 
 export type AdaptiveDecisionSnapshot = {
@@ -333,6 +353,10 @@ export type AdaptiveDecisionSnapshot = {
   unresolvedCriterionCount: number;
   /** User-confirmed promoted learning policies for this workspace (Gap 4). */
   promotedPolicies?: HarnessPolicyDocument[];
+  /** True after adaptive Oracle spawn join was attempted this run (Gap 5). */
+  oracleConsulted?: boolean;
+  /** True when a capped Oracle findings digest is available (Gap 5). */
+  oracleDigestPresent?: boolean;
 };
 
 export type ContextUncertaintyCandidate = {
