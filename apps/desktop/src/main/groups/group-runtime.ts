@@ -95,6 +95,15 @@ export type GroupRuntimeHost = {
   emit(event: GroupRuntimeEvent): void;
 };
 
+/** A wake requested by a member task tool (see GroupRuntime.handleTaskWake). */
+export type GroupTaskWake = {
+  groupId: string;
+  actorSessionId: string;
+  targetSessionId: string;
+  /** Task status text posted as the acting member, e.g. "Review requested: …". */
+  body: string;
+};
+
 export type GroupRuntimeOptions = {
   runtime: GroupAgentRuntime;
   host: GroupRuntimeHost;
@@ -381,6 +390,41 @@ export class GroupRuntime {
     this.retireIdleChains();
   }
 
+  /**
+   * A member task tool woke someone (review requested → reviewer; changes
+   * requested → owner). Posts a task status as the acting member (mentioning
+   * the target) and routes it like a mention, so the wake counts hops, wakes
+   * and budget in the chain. Inside a group turn it joins that turn's chain
+   * (an ended chain wakes nobody); outside one (the member working in its own
+   * chat) it opens a new chain.
+   */
+  handleTaskWake(input: GroupTaskWake): GroupMessage | undefined {
+    const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
+    const joined =
+      turn && turn.groupId === input.groupId ? this.chains.get(turn.chainId) : undefined;
+    let message: GroupMessage;
+    try {
+      message = appendGroupMessage({
+        createdAt: this.stamp(),
+        groupId: input.groupId,
+        authorKind: "agent",
+        authorSessionId: input.actorSessionId,
+        kind: "status",
+        body: input.body,
+        mentions: [input.targetSessionId],
+        ...(joined ? { chainId: joined.chainId } : { startsChain: true }),
+      });
+    } catch (error) {
+      console.warn("[modus] group task status failed:", error);
+      return undefined;
+    }
+    this.emitMessage(message);
+    const chain = joined ?? this.openChain(input.groupId, message.id);
+    this.route(chain, message, [input.targetSessionId]);
+    this.retireIdleChains();
+    return message;
+  }
+
   isGroupWorking(groupId: string): boolean {
     return this.activityOf(groupId).working;
   }
@@ -487,7 +531,17 @@ export class GroupRuntime {
    * wake the replied-to author unless it is mentioned; agents without mentions
    * wake nobody.
    */
-  private wakeTargets(group: AgentGroupInfo, message: GroupMessage): string[] {
+  private wakeTargets(
+    group: AgentGroupInfo,
+    message: GroupMessage,
+    explicitTargets?: readonly string[],
+  ): string[] {
+    if (explicitTargets) {
+      const memberIds = new Set(listAgentGroupMembers(group.id).map((member) => member.sessionId));
+      return [...new Set(explicitTargets)].filter(
+        (id) => memberIds.has(id) && id !== message.authorSessionId,
+      );
+    }
     if (message.kind !== "message") return [];
     const memberIds = new Set(listAgentGroupMembers(group.id).map((member) => member.sessionId));
     let targets: string[];
@@ -514,11 +568,15 @@ export class GroupRuntime {
     );
   }
 
-  private route(chain: ChainState, message: GroupMessage): void {
+  private route(
+    chain: ChainState,
+    message: GroupMessage,
+    explicitTargets?: readonly string[],
+  ): void {
     if (chain.ended) return;
     const group = getAgentGroup(chain.groupId);
     if (!group) return;
-    const targets = this.wakeTargets(group, message);
+    const targets = this.wakeTargets(group, message, explicitTargets);
     if (targets.length === 0) return;
     const members = membersOf(group.id);
     const history = listGroupMessages(group.id, {

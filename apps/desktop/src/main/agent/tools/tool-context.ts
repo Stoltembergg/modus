@@ -19,6 +19,8 @@ export type AgentToolContext = {
   profile?: ToolProfileName;
   mode?: AgentMode;
   parentSessionId?: string;
+  /** The agent group this session is a member of (member tools need it). */
+  groupId?: string;
   window?: BrowserWindowType;
   /** Persists + pushes an agent event (recordAgentEvent + webContents.send). */
   emit?: EmitAgentEvent;

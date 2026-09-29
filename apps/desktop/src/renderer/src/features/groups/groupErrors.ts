@@ -15,6 +15,11 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "archived-session": "Archived chats can't join a group. Restore the chat first.",
   "not-a-member": "That chat isn't a member of this group.",
   "invalid-value": "Some of the group details are invalid.",
+  "not-owner": "Only the task's owner can do that.",
+  "not-reviewer": "Only the task's reviewer can do that.",
+  "task-taken": "That task already has an owner.",
+  "invalid-transition": "That task can't move to that status from where it is.",
+  "self-review": "A task's owner can't review their own task.",
 };
 
 /**

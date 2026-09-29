@@ -43,6 +43,7 @@ import {
   getChangeStatsSinceStrict,
   getGitMemoryContext,
 } from "../git/git-service";
+import { getAgentGroupForSession } from "../groups/group-store";
 import { resolveGlobalGuidancePrompt } from "../guidance/guidance-service";
 import {
   denyPendingQuestionRequestsForSession,
@@ -171,6 +172,7 @@ import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-co
 import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
+import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
@@ -659,6 +661,12 @@ function dedupeToolsByName<T extends { name: string }>(tools: T[]): T[] {
   return [...byName.values()];
 }
 
+/** `{ groupId }` when the session is a member of an agent group (else `{}`). */
+function groupIdFor(sessionId: string): { groupId?: string } {
+  const groupId = getAgentGroupForSession(sessionId)?.id;
+  return groupId ? { groupId } : {};
+}
+
 export function activeToolNamesForSession(
   info: AgentSessionInfo,
   profile: ToolProfileName,
@@ -688,6 +696,10 @@ export function activeToolNamesForSession(
     });
   }
   const disabled = new Set<string>();
+  // Agent Groups member tools exist only for sessions that are group members.
+  if (!groupIdFor(info.id).groupId) {
+    for (const name of active) if (isGroupToolName(name)) disabled.add(name);
+  }
   if (info.parentSessionId) {
     // Parent-only orchestration: children neither spawn peers nor wait on them.
     for (const name of SUBAGENT_TOOL_NAMES) disabled.add(name);
@@ -772,6 +784,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerQuestionTools();
     registerSubagentTools(this);
     registerWaitTools(this);
+    registerGroupTools();
   }
 
   private cancelPendingIntentGate(sessionId: string): void {
@@ -1655,6 +1668,7 @@ export class PiSdkRuntime implements AgentRuntime {
       ...(runtimeSession.info.parentSessionId
         ? { parentSessionId: runtimeSession.info.parentSessionId }
         : {}),
+      ...groupIdFor(runtimeSession.info.id),
       window,
       emit: runtimeSession.emit,
     };

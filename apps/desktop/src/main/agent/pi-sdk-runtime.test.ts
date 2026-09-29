@@ -1418,6 +1418,66 @@ describe("PiSdkRuntime", () => {
     updateAgentRunStatus(run.id, "failed");
   });
 
+  it("activates the group member tools only for group members; the tool context carries groupId", async () => {
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
+    const member = `group-member-${crypto.randomUUID()}`;
+    const loner = `group-loner-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(member, workspaceId, join(userData, "missing.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(loner, workspaceId, "loner", cwd, "idle", now, now);
+    const group = createAgentGroupWithMembers({
+      name: "Squad",
+      workspaceId,
+      members: [{ sessionId: member }],
+    });
+    const runtime = new PiSdkRuntime(); // registers the process-wide tools
+    const info = (id: string) => ({
+      id,
+      workspaceId,
+      title: "chat",
+      cwd,
+      status: "idle" as const,
+      createdAt: "",
+      updatedAt: "",
+    });
+
+    expect(activeToolNamesForSession(info(member), "chat")).toEqual(
+      expect.arrayContaining([...GROUP_TOOL_NAMES]),
+    );
+    // Plan mode keeps only the read-only ones.
+    expect(
+      activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
+    ).toEqual(["group_read_messages", "group_list_tasks"]);
+    for (const profile of ["chat", "plan"] as const) {
+      expect(
+        activeToolNamesForSession(info(loner), profile).filter((name) =>
+          (GROUP_TOOL_NAMES as readonly string[]).includes(name),
+        ),
+      ).toEqual([]);
+    }
+
+    const toolContextFor = (
+      runtime as unknown as {
+        toolContextFor(session: unknown, window: unknown, profile: string, mode?: string): unknown;
+      }
+    ).toolContextFor.bind(runtime);
+    const window = createWindowStub();
+    expect(toolContextFor({ info: info(member), emit: vi.fn() }, window, "chat")).toMatchObject({
+      sessionId: member,
+      groupId: group.id,
+    });
+    expect(toolContextFor({ info: info(loner), emit: vi.fn() }, window, "chat")).not.toHaveProperty(
+      "groupId",
+    );
+  });
+
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
     const registeredName = "mcp_docs_search";
     mocks.allowlistedMcpToolNames = [registeredName];
