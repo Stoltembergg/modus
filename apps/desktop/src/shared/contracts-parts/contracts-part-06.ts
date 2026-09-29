@@ -1,4 +1,6 @@
-/** Gap 4 contracts split part 6/7 — do not edit by hand */
+import type { HarnessEvidenceRef } from "./contracts-part-01";
+import type { JsonObject, ModelCompatibilityInput, ModelCost, ModelInputKind, ThinkingLevel } from "./contracts-part-05";
+
 export type CustomProviderModelConfig = {
   id: string;
   name: string;
