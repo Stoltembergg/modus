@@ -42,6 +42,7 @@ import type {
   PromptDelivery,
   PromptImageAttachment,
   SkillSelection,
+  UpdateRestoreUiState,
   WorkspaceInfo,
 } from "../../../shared/contracts";
 import modusLogo from "../assets/modus-logo.png";
@@ -71,6 +72,12 @@ import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import {
+  createUiStatePusher,
+  restorableUiState,
+  snapshotUiState,
+  type UiStatePusher,
+} from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
 import { useGitBranch } from "../lib/useGitBranch";
@@ -158,6 +165,8 @@ export function App() {
   }>({ sessionId: undefined, workspaceId: undefined });
   const layoutRowRef = useRef<HTMLDivElement>(null);
   const initialHydrationRef = useRef<InitialAppHydration | null>(null);
+  const restoredUiStateRef = useRef<Promise<UpdateRestoreUiState | null> | null>(null);
+  const uiStatePusherRef = useRef<UiStatePusher | null>(null);
 
   // Track the panel row's live width so side-panel widths can be clamped to keep
   // the main column at least MAIN_MIN_WIDTH (responsive to window + panel state).
@@ -324,6 +333,43 @@ export function App() {
           logInitialHydrationError("model settings", error);
         }
       });
+    // UI state saved by the previous version across an update restart (taken once by
+    // main). Applied after the lists load so every id can be checked against them.
+    let restored = restoredUiStateRef.current;
+    if (!restored) {
+      restored = window.modus.update.takeRestoredUiState().catch(() => null);
+      restoredUiStateRef.current = restored;
+    }
+    void Promise.all([restored, hydration.workspaces, hydration.sessions])
+      .then(([snapshot, items, sessions]) => {
+        if (!active || !snapshot) return;
+        const state = restorableUiState(snapshot, {
+          workspaceIds: new Set(items.map((item) => item.id)),
+          sessionIds: new Set(sessions.map((session) => session.id)),
+        });
+        if (!state) return;
+        setActiveWorkspace(items.find((item) => item.id === state.activeWorkspaceId) ?? null);
+        setActiveSessionId(state.activeSessionId ?? undefined);
+        setComposerDraftBySession((current) => {
+          const next = { ...current };
+          for (const [sessionId, draft] of Object.entries(state.drafts)) {
+            next[sessionId] = {
+              ...createEmptyComposerDraft(),
+              value: draft.text,
+              contextItems: [],
+              mode: draft.mode,
+            };
+          }
+          return next;
+        });
+        setSidebarOpen(state.sidebar.open);
+        setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, state.sidebar.width));
+        setInspectorOpen(state.inspector.open);
+        setInspectorWidth(Math.max(INSPECTOR_MIN_WIDTH, state.inspector.width));
+        setInspectorTab(state.inspector.tab);
+        setSettingsOpen(state.settingsOpen);
+      })
+      .catch(() => undefined);
     void hydration.settled.then(() => {
       if (active) {
         reportRendererStartup("renderer.initial-hydration-settled");
@@ -339,6 +385,43 @@ export function App() {
     () => window.modus?.model.onCatalogChanged(() => void refreshModelSettings()),
     [refreshModelSettings],
   );
+
+  // While a downloaded update is pending, main keeps the latest UI state and writes it
+  // on quit; the pusher sends nothing otherwise.
+  useEffect(() => {
+    if (!window.modus) return;
+    const pusher = createUiStatePusher(window.modus.update);
+    uiStatePusherRef.current = pusher;
+    return () => {
+      pusher.dispose();
+      uiStatePusherRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    uiStatePusherRef.current?.update(
+      snapshotUiState({
+        activeWorkspaceId: activeWorkspace?.id,
+        activeSessionId,
+        composerDraftBySession,
+        sessionIds: new Set(agentSessions.map((session) => session.id)),
+        sidebar: { open: sidebarOpen, width: sidebarWidth },
+        inspector: { open: inspectorOpen, width: inspectorWidth, tab: inspectorTab },
+        settingsOpen,
+      }),
+    );
+  }, [
+    activeWorkspace?.id,
+    activeSessionId,
+    composerDraftBySession,
+    agentSessions,
+    sidebarOpen,
+    sidebarWidth,
+    inspectorOpen,
+    inspectorWidth,
+    inspectorTab,
+    settingsOpen,
+  ]);
 
   /* ── Global event intake: one IPC listener feeds the active chat + sidebar ── */
   useEffect(() => {
