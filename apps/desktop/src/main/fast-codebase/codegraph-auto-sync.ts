@@ -1,9 +1,6 @@
 import { CHATS_WORKSPACE_ID, type WorkspaceInfo } from "../../shared/contracts";
 import { getWorkspace } from "../workspace/workspace-store";
-import {
-  type CodeGraphIndexState,
-  ensureCodeGraphIndex,
-} from "./ensure-codegraph-index";
+import { type CodeGraphIndexState, ensureCodeGraphIndex } from "./ensure-codegraph-index";
 import type { CodeGraphRunner } from "./fast-codebase-service";
 
 /**
