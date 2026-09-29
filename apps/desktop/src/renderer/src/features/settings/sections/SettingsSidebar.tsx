@@ -1,5 +1,6 @@
 import {
   IconArrowLeft,
+  IconBan,
   IconBrain,
   IconBulb,
   IconCube,
@@ -25,6 +26,7 @@ const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   personalization: <IconUser size={16} stroke={1.7} />,
   "project-memory": <IconBrain size={16} stroke={1.7} />,
   "harness-insights": <IconBulb size={16} stroke={1.7} />,
+  "failure-blacklist": <IconBan size={16} stroke={1.7} />,
   mcp: <IconPlugConnected size={16} stroke={1.7} />,
   skills: <IconCube size={16} stroke={1.7} />,
   subagents: <IconUsers size={16} stroke={1.7} />,
