@@ -22,6 +22,9 @@ import type {
  * - suggest_oracle / replan / ask_user / avoid_retry / execute
  * - non-readonly children, worktree isolation, dangerous MCP, file writes,
  *   destructive shell
+ *
+ * Gap 5: change-strategy / Oracle findings stay hint-only — do NOT add
+ * suggest_oracle, execute, replan, ask_user, or avoid_retry here.
  */
 export const SAFE_AUTO_DISPATCH_ACTIONS = [
   "retrieve_local",
