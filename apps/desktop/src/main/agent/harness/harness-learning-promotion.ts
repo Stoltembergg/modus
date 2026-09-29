@@ -3,6 +3,8 @@ import type { HarnessInsight, HarnessInsightConfidence } from "../../../shared/c
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import { getDatabase } from "../../db/database";
 import { MIN_COMPARABLE_EPISODES } from "./harness-insights-service";
+import { compileInsightToPolicy } from "./policy-dsl";
+import { clearPromotedPolicy } from "./promoted-policy-store";
 
 export type HarnessPromotionStatus = "proposed" | "validated" | "promoted" | "rejected" | "expired";
 
@@ -141,7 +143,16 @@ export function promoteHarnessInsight(
   const proposed = proposeHarnessPromotion(input.workspaceId, input.insight, now);
   if (!proposed) return { ok: false, reasonCodes: ["invalid_workspace_or_insight"] };
 
-  // Persist a versioned preference flag only — never rewrite skills/prompts.
+  const compiled = compileInsightToPolicy({
+    insight: input.insight,
+    promotionId: proposed.id,
+    promotedAt: now,
+  });
+  if (!compiled.ok) {
+    return { ok: false, reasonCodes: compiled.reasonCodes };
+  }
+
+  // Persist a versioned preference + compiled policy DSL — never rewrite skills/prompts.
   const preferenceKey = `harness.promotion.${proposed.kind}`;
   getDatabase()
     .prepare(
@@ -156,6 +167,7 @@ export function promoteHarnessInsight(
         recommendation: proposed.recommendation,
         promotedAt: now,
         version: 1,
+        policy: compiled.policy,
       }),
       now,
     );
@@ -181,7 +193,19 @@ export function rejectHarnessPromotion(
   now = new Date().toISOString(),
 ): boolean {
   if (!SAFE_ID.test(workspaceId) || !SAFE_ID.test(promotionId)) return false;
-  const result = getDatabase()
+  const db = getDatabase();
+  const existing = db
+    .prepare(`select kind, status from harness_promotions where id = ? and workspace_id = ?`)
+    .get(promotionId, workspaceId) as { kind: string; status: string } | undefined;
+  if (!existing) return false;
+
+  if (existing.status === "promoted") {
+    // Clear preference so soft biases stop applying on subsequent decisions.
+    clearPromotedPolicy(workspaceId, existing.kind, reason, now);
+    return true;
+  }
+
+  const result = db
     .prepare(
       `update harness_promotions
        set status = 'rejected', rejected_at = ?, rejection_reason = ?, updated_at = ?
@@ -237,3 +261,5 @@ export function listHarnessPromotions(workspaceId: string, limit = 50): HarnessP
 export function newPromotionId(): string {
   return randomUUID();
 }
+
+export { clearPromotedPolicy };
