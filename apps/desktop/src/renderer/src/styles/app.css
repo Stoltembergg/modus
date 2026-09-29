@@ -2373,3 +2373,97 @@ body
     transform: none;
   }
 }
+
+/*
+ * AgentAvatar (A3): CSS-only motion keyed on data-state. idle blinks (per-agent
+ * period / offset from --agent-avatar-blink / --agent-avatar-delay) and floats;
+ * working looks side to side with a short bounce; waiting pulses its amber
+ * ring; archived is grey and still. Static under prefers-reduced-motion (the
+ * parts also carry Tailwind's motion-reduce:animate-none).
+ */
+.agent-avatar .agent-avatar-body,
+.agent-avatar .agent-avatar-eyes,
+.agent-avatar .agent-avatar-ring {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.agent-avatar[data-state="idle"] .agent-avatar-body {
+  animation: agent-avatar-float 3s ease-in-out var(--agent-avatar-delay, 0s) infinite;
+}
+.agent-avatar[data-state="idle"] .agent-avatar-eyes {
+  animation: agent-avatar-blink var(--agent-avatar-blink, 4s) ease-in-out
+    var(--agent-avatar-delay, 0s) infinite;
+}
+.agent-avatar[data-state="working"] .agent-avatar-eyes {
+  animation: agent-avatar-look 1.4s ease-in-out infinite;
+}
+.agent-avatar[data-state="working"] .agent-avatar-body {
+  animation: agent-avatar-bounce 0.7s ease-in-out infinite;
+}
+.agent-avatar[data-state="waiting"] .agent-avatar-ring {
+  animation: agent-avatar-pulse 1.6s ease-in-out infinite;
+}
+@keyframes agent-avatar-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4%);
+  }
+}
+@keyframes agent-avatar-blink {
+  0%,
+  92%,
+  100% {
+    transform: scaleY(1);
+  }
+  96% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes agent-avatar-look {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-12%);
+  }
+  75% {
+    transform: translateX(12%);
+  }
+}
+@keyframes agent-avatar-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-6%);
+  }
+}
+@keyframes agent-avatar-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.94);
+  }
+}
+.agent-avatar[data-animated="false"] .agent-avatar-body,
+.agent-avatar[data-animated="false"] .agent-avatar-eyes,
+.agent-avatar[data-animated="false"] .agent-avatar-ring {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-avatar .agent-avatar-body,
+  .agent-avatar .agent-avatar-eyes,
+  .agent-avatar .agent-avatar-ring {
+    animation: none;
+  }
+}

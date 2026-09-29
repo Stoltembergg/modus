@@ -8,6 +8,7 @@ import {
   IconPencil,
   IconTrash,
   IconUserMinus,
+  IconUserPlus,
   IconUsers,
   IconUsersGroup,
   IconUsersPlus,
@@ -20,15 +21,22 @@ import type {
   WorkspaceInfo,
 } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
-import { SessionStatusDot } from "../features/agent/SessionStatusDot";
+import { AgentAvatar } from "../features/agents/AgentAvatar";
 import {
   CreateGroupDialog,
   type GroupDialogModel,
   type GroupMembersChange,
 } from "../features/groups/CreateGroupDialog";
-import { groupDeleteConfirmLabel, isGroupWorkingStub } from "../features/groups/groupSidebarModel";
+import {
+  agentChatSessions,
+  type GroupAgentRow,
+  groupAgentRows,
+  groupDeleteConfirmLabel,
+  isGroupWorkingStub,
+} from "../features/groups/groupSidebarModel";
 import { MemberName } from "../features/groups/MemberName";
 import { type MemberLabel, memberLabels } from "../features/groups/memberLabels";
+import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 
@@ -54,7 +62,10 @@ export type SidebarGroupsProps = {
   /** Project preselected in the create dialog (usually the active one). */
   defaultWorkspaceId?: string | null;
   activeSessionId?: string | undefined;
+  /** Session activity (the agents' 1:1 chats light their avatars). */
   activityBySession: Record<string, SessionActivity>;
+  /** Room member states: each agent's avatar shows working / waiting (A3). */
+  memberStates?: GroupMemberStatesById | undefined;
   /**
    * Group-row activity dot. Always false until the group runtime (PR 3)
    * exists; replace the stub with a real selector to light the dot.
@@ -75,12 +86,23 @@ export type SidebarGroupsProps = {
   onDeleteGroup(groupId: string): void;
   onRemoveMember(groupId: string, sessionId: string): void;
   onSetLead(groupId: string, sessionId: string | null): void;
+  /**
+   * Open an agent's 1:1 chat (A3; created on first open). Without it a member
+   * row opens its room session, or the room (legacy).
+   */
+  onOpenAgentChat?: ((agentId: string) => void) | undefined;
+  /** "Edit agent" on a member row (the agent dialog). */
+  onEditAgent?: ((agentId: string) => void) | undefined;
+  /** "Add agent" in the group menu (the agent dialog, create mode). */
+  onAddAgent?: ((groupId: string) => void) | undefined;
 };
 
 /**
  * Sidebar "Groups" section body (the header lives in Sidebar.tsx). Each group
  * row shows its name, member count and an activity-dot slot; expanding a group
- * lists its member chats, which are hidden from Pinned / Projects / Chats.
+ * lists its agents (avatar, name, role). Clicking one opens its 1:1 chat, which
+ * (like the room sessions) is hidden from Pinned / Projects / Chats. A blocked
+ * group lists its agents the same way.
  */
 export function SidebarGroups({
   groups,
@@ -91,6 +113,7 @@ export function SidebarGroups({
   defaultWorkspaceId = null,
   activeSessionId,
   activityBySession,
+  memberStates,
   isGroupWorking = isGroupWorkingStub,
   isGroupWaiting,
   activeGroupId,
@@ -103,6 +126,9 @@ export function SidebarGroups({
   onDeleteGroup,
   onRemoveMember,
   onSetLead,
+  onOpenAgentChat,
+  onEditAgent,
+  onAddAgent,
 }: SidebarGroupsProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [managingId, setManagingId] = useState<string | null>(null);
@@ -112,6 +138,7 @@ export function SidebarGroups({
     () => new Map(sessions.map((session) => [session.id, session])),
     [sessions],
   );
+  const chats = useMemo(() => agentChatSessions(sessions), [sessions]);
   const managingGroup = managingId ? groups.find((group) => group.id === managingId) : undefined;
 
   function toggle(groupId: string): void {
@@ -145,6 +172,7 @@ export function SidebarGroups({
                 if (next && next !== group.name) onRenameGroup(group.id, next);
               }}
               onDelete={() => onDeleteGroup(group.id)}
+              {...(onAddAgent ? { onAddAgent: () => onAddAgent(group.id) } : {})}
               onManageMembers={() => setManagingId(group.id)}
               onStartRename={() => setRenamingId(group.id)}
               onToggle={() => toggle(group.id)}
@@ -156,20 +184,25 @@ export function SidebarGroups({
             />
             {expanded && group.members.length > 0 ? (
               <div className={SB_NEST}>
-                {group.members.map((member) => {
-                  const isLead = group.leadSessionId === member.sessionId;
-                  const session = sessionsById.get(member.sessionId);
+                {groupAgentRows(group, chats, memberStates, activityBySession).map((row) => {
+                  const session = sessionsById.get(row.sessionId);
                   return (
                     <MemberRow
-                      activity={activityBySession[member.sessionId]}
-                      isActive={activeSessionId === member.sessionId}
-                      isLead={isLead}
-                      key={member.sessionId}
-                      onRemove={() => onRemoveMember(group.id, member.sessionId)}
-                      onSelect={() => (session ? onSelectSession(session) : onSelectGroup?.(group))}
-                      onToggleLead={() => onSetLead(group.id, isLead ? null : member.sessionId)}
-                      role={member.role ?? (member.agentRole || undefined)}
-                      label={labels.get(member.sessionId) ?? { title: member.name }}
+                      isActive={
+                        activeSessionId !== undefined &&
+                        (activeSessionId === row.chatSessionId || activeSessionId === row.sessionId)
+                      }
+                      key={row.sessionId}
+                      label={labels.get(row.sessionId) ?? { title: row.name }}
+                      onRemove={() => onRemoveMember(group.id, row.sessionId)}
+                      onSelect={() => {
+                        if (onOpenAgentChat) onOpenAgentChat(row.agentId);
+                        else if (session) onSelectSession(session);
+                        else onSelectGroup?.(group);
+                      }}
+                      onToggleLead={() => onSetLead(group.id, row.isLead ? null : row.sessionId)}
+                      row={row}
+                      {...(onEditAgent ? { onEdit: () => onEditAgent(row.agentId) } : {})}
                     />
                   );
                 })}
@@ -237,6 +270,7 @@ export function GroupRow({
   onCancelRename,
   onManageMembers,
   onDelete,
+  onAddAgent,
 }: {
   name: string;
   memberCount: number;
@@ -253,6 +287,7 @@ export function GroupRow({
   onCancelRename(): void;
   onManageMembers(): void;
   onDelete(): void;
+  onAddAgent?: (() => void) | undefined;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
@@ -265,6 +300,7 @@ export function GroupRow({
       onDelete={onDelete}
       onManageMembers={onManageMembers}
       onStartRename={onStartRename}
+      {...(onAddAgent ? { onAddAgent } : {})}
     />
   );
   return (
@@ -407,6 +443,7 @@ export function GroupMenuItems({
   onStartRename,
   onManageMembers,
   onDelete,
+  onAddAgent,
   coordinator,
 }: {
   /** The group's agents (deleted with it): for the delete confirmation. */
@@ -416,6 +453,8 @@ export function GroupMenuItems({
   onStartRename(): void;
   onManageMembers(): void;
   onDelete(): void;
+  /** "Add agent" (A3): a new custom agent in the group, via the agent dialog. */
+  onAddAgent?: (() => void) | undefined;
   /** The room's "Coordinator mode" toggle (PR 7); disabled while the group has no Lead. */
   coordinator?: { checked: boolean; disabled: boolean; onToggle(): void } | undefined;
 }) {
@@ -427,6 +466,14 @@ export function GroupMenuItems({
       >
         Rename
       </GroupMenuItem>
+      {onAddAgent ? (
+        <GroupMenuItem
+          icon={<IconUserPlus size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
+          onClick={onAddAgent}
+        >
+          Add agent
+        </GroupMenuItem>
+      ) : null}
       <GroupMenuItem
         icon={<IconUsers size={SB_ACTION} stroke={SB_ACTION_STROKE} />}
         onClick={onManageMembers}
@@ -471,40 +518,48 @@ export function GroupMenuItems({
 }
 
 function MemberRow({
+  row,
   label,
-  role,
-  isLead,
   isActive,
-  activity,
   onSelect,
+  onEdit,
   onToggleLead,
   onRemove,
 }: {
+  row: GroupAgentRow;
   label: MemberLabel;
-  role: string | undefined;
-  isLead: boolean;
   isActive: boolean;
-  activity: SessionActivity | undefined;
   onSelect(): void;
+  onEdit?: (() => void) | undefined;
   onToggleLead(): void;
   onRemove(): void;
 }) {
+  const { isLead, role } = row;
   return (
     <div
       className={cn(
         SB_ROW,
         "group",
         isActive ? "row-selected" : "text-fg-subtle hover:bg-hover hover:text-fg-muted",
+        row.state === "archived" && "opacity-70",
       )}
+      data-agent-id={row.agentId}
+      data-state={row.state}
       data-testid="group-member-row"
     >
       <span className={SB_RAIL}>
-        <SessionStatusDot activity={activity} />
+        <AgentAvatar
+          color={row.color}
+          face={row.face}
+          seed={row.agentId}
+          size={16}
+          state={row.state}
+        />
       </span>
       <button
         className="flex min-w-0 flex-1 items-center gap-1 pr-1 text-left"
         onClick={onSelect}
-        title="Open"
+        title="Open chat"
         type="button"
       >
         <span className="min-w-0 flex-1 truncate-fade">
@@ -516,9 +571,16 @@ function MemberRow({
             <span className="sr-only">Lead</span>
           </span>
         ) : null}
-        {role ? <span className="shrink-0 text-2xs text-fg-faint">{role}</span> : null}
+        {role ? (
+          <span className="max-w-[45%] shrink-0 truncate text-2xs text-fg-faint">{role}</span>
+        ) : null}
       </button>
       <span className="ml-0.5 hidden shrink-0 items-center group-hover:flex group-focus-within:flex">
+        {onEdit ? (
+          <RowIconButton label="Edit agent" onClick={onEdit}>
+            <IconPencil size={SB_ACTION} stroke={SB_ACTION_STROKE} />
+          </RowIconButton>
+        ) : null}
         <RowIconButton label={isLead ? "Remove as lead" : "Make lead"} onClick={onToggleLead}>
           {isLead ? (
             <IconCrownOff size={SB_ACTION} stroke={SB_ACTION_STROKE} />

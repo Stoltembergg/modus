@@ -31,6 +31,7 @@ import type { SecurityState } from "../../../preload/types";
 import type {
   AgentEvent,
   AgentGroupWithMembers,
+  AgentInfo,
   AgentMode,
   AgentSessionInfo,
   BrowserEvent,
@@ -69,6 +70,7 @@ import {
 import type { ChatComposerDraft, ChatComposerDraftUpdate } from "../features/agent/ChatPane";
 import { addContextItemToDraft } from "../features/agent/ChatPane";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
+import { AgentDialog } from "../features/agents/AgentDialog";
 import {
   Composer,
   type ComposerDraft,
@@ -152,6 +154,10 @@ export function App() {
     ? agentGroups.find((group) => group.id === activeGroupId)
     : undefined;
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
+  /** The agent dialog (A3): create in a group, or edit an agent. */
+  const [agentDialog, setAgentDialog] = useState<{ groupId: string; agent?: AgentInfo } | null>(
+    null,
+  );
   const [initialEventsBySession, setInitialEventsBySession] = useState<
     Record<string, AgentEventItem[]>
   >({});
@@ -850,6 +856,27 @@ export function App() {
     if (session) selectSession(session);
   }
 
+  /** An agent in the sidebar: open its 1:1 chat (created on first open, in the group's Project). */
+  async function openAgentChat(agentId: string): Promise<void> {
+    try {
+      const session = await window.modus.agents.openChat(agentId);
+      selectSession(session);
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+    }
+  }
+
+  async function editAgent(agentId: string): Promise<void> {
+    try {
+      const agent = (await window.modus.agents.list()).find(
+        (item: AgentInfo) => item.id === agentId,
+      );
+      if (agent?.groupId) setAgentDialog({ groupId: agent.groupId, agent });
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+    }
+  }
+
   /** "Choose folder" on a group without a Project: pick a folder, then move the group there. */
   async function chooseGroupFolder(groupId: string): Promise<void> {
     const workspace = await window.modus.workspace.open();
@@ -859,6 +886,10 @@ export function App() {
       window.modus.group.setWorkspace({ groupId, workspaceId: workspace.id }),
     );
   }
+
+  const agentDialogGroup = agentDialog
+    ? agentGroups.find((group) => group.id === agentDialog.groupId)
+    : undefined;
 
   const groupModels = useMemo(
     () =>
@@ -1212,7 +1243,33 @@ export function App() {
                             window.modus.group.setLead({ groupId, sessionId }),
                           )
                         }
+                        groupMemberStates={groupMemberStates}
+                        onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
+                        onEditAgent={(agentId) => void editAgent(agentId)}
+                        onAddAgent={(groupId) => setAgentDialog({ groupId })}
                       />
+                      {agentDialogGroup && agentDialog ? (
+                        <AgentDialog
+                          agent={agentDialog.agent}
+                          defaultModelId={model || undefined}
+                          group={agentDialogGroup}
+                          models={groupModels}
+                          onCreate={async (input) => {
+                            await window.modus.agents.create(input);
+                            await refreshGroups();
+                          }}
+                          onGenerate={(input) => window.modus.agents.generateProfile(input)}
+                          onOpenChange={(open) => {
+                            if (!open) setAgentDialog(null);
+                          }}
+                          onUpdate={async (input) => {
+                            await window.modus.agents.update(input);
+                            // The 1:1 chat is titled after the agent.
+                            await refreshSessions();
+                          }}
+                          open
+                        />
+                      ) : null}
 
                       <m.main
                         className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0 bg-canvas"
@@ -1309,6 +1366,7 @@ export function App() {
                                 }}
                                 onOpenFile={openWorkspaceFile}
                                 onOpenMember={(sessionId) => void openGroupMember(sessionId)}
+                                onAddAgent={() => setAgentDialog({ groupId: activeGroup.id })}
                                 onRename={(name) =>
                                   void runGroupAction(() =>
                                     window.modus.group.rename({ id: activeGroup.id, name }),

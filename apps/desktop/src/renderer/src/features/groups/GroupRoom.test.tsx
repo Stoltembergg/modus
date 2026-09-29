@@ -227,7 +227,10 @@ describe("GroupRoom", () => {
     expect(userRow?.className).toContain("justify-end");
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
-    expect(within(memberRow as HTMLElement).getByText("P")).toBeTruthy();
+    // The author's avatar (A3): still in a list, the member's face and color.
+    const authorAvatar = within(memberRow as HTMLElement).getByTestId("agent-avatar");
+    expect(authorAvatar.dataset.size).toBe("20");
+    expect(authorAvatar.dataset.animated).toBe("false");
     // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });
     expect(memberRow?.textContent).not.toContain("**");
@@ -297,6 +300,56 @@ describe("GroupRoom", () => {
     const rows = screen.getAllByTestId("group-message");
     expect(rows).toHaveLength(61);
     expect(rows.at(-1)?.textContent).toBe("live one");
+  });
+
+  it("join / leave lines arrive live through group.message, without a reload (A3)", async () => {
+    pages = [[message("1", { body: "hello" })]];
+    renderRoom();
+    expect(await screen.findAllByTestId("group-message")).toHaveLength(1);
+    const joined = message("2", {
+      authorKind: "system",
+      kind: "status",
+      body: "Cy joined as Scribe",
+    });
+    const left = message("3", { authorKind: "system", kind: "status", body: "Cy left the group" });
+    emit({ type: "group.message", groupId: "g-1", message: joined });
+    emit({ type: "group.message", groupId: "g-1", message: left });
+    const rows = screen.getAllByTestId("group-message");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "hello",
+      "Cy joined as Scribe",
+      "Cy left the group",
+    ]);
+    expect(rows.slice(1).map((row) => row.dataset.kind)).toEqual(["status", "status"]);
+    // Only the first page was fetched: the lines came from the push.
+    expect(group.listMessages).toHaveBeenCalledTimes(1);
+  });
+
+  it("chips carry each agent's avatar (20 px) in its room state; archived is grey (A3)", () => {
+    const roomGroup: AgentGroupWithMembers = {
+      ...GROUP,
+      members: GROUP.members.map((member, index) =>
+        index === 1
+          ? { ...member, avatarFace: "wink", avatarColor: "lime", archived: true }
+          : { ...member, avatarFace: "happy", avatarColor: "sky" },
+      ),
+    };
+    renderRoom(
+      states({ runningSessionIds: ["s-lead"], waitingSessionIds: ["s-rev-2"] }),
+      vi.fn(),
+      roomGroup,
+    );
+    const avatars = screen
+      .getAllByTestId("group-member-chip")
+      .map((chip) => within(chip).getByTestId("agent-avatar"));
+    expect(avatars.map((avatar) => avatar.dataset.state)).toEqual([
+      "working",
+      "archived",
+      "waiting",
+    ]);
+    expect(avatars.map((avatar) => avatar.dataset.size)).toEqual(["20", "20", "20"]);
+    expect(avatars[1]?.dataset.face).toBe("wink");
+    expect(avatars[0]?.dataset.color).toBe("sky");
   });
 
   it("chip dots follow member states; clicking a chip opens that member's chat", async () => {

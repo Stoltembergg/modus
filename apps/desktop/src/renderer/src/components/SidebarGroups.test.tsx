@@ -335,6 +335,46 @@ describe("Sidebar with groups", () => {
     expect(screen.getAllByText("Chat inbox-chat")).toHaveLength(1);
   });
 
+  it("an agent's 1:1 chat is not listed under its Project (only under its agent)", () => {
+    const noop = vi.fn();
+    render(
+      <Sidebar
+        activityBySession={{}}
+        agentSessions={[
+          ...SESSIONS,
+          session("dm-a", { title: "Direct with Ana", agentId: "agent-member-a" }),
+        ]}
+        canCreateSession
+        groups={GROUPS}
+        maxWidth={480}
+        onArchiveProjectChats={noop}
+        onArchiveSession={noop}
+        onCreateGroup={vi.fn(async () => undefined)}
+        onDeleteProjectChats={noop}
+        onDeleteSession={noop}
+        onListArchivedSessions={vi.fn(async () => [])}
+        onNewSession={noop}
+        onNewWorkspaceSession={noop}
+        onOpenLimits={noop}
+        onOpenSettings={noop}
+        onOpenWorkspace={noop}
+        onPinProject={noop}
+        onPinSession={noop}
+        onRemoveProject={noop}
+        onRenameProject={noop}
+        onRestoreSession={noop}
+        onRevealProject={noop}
+        onSelectSession={noop}
+        onWidthChange={noop}
+        open
+        width={280}
+        workspaces={WORKSPACES}
+      />,
+    );
+    expect(screen.getByText("Chat project-chat")).toBeTruthy();
+    expect(screen.queryByText("Direct with Ana")).toBeNull();
+  });
+
   it("room sessions (kind group_member) never show outside the Groups section, even pinned", () => {
     renderSidebar();
     const pinned = screen.getByTestId("sidebar-pinned");
@@ -534,5 +574,116 @@ describe("SidebarGroups duplicate member titles", () => {
       "Reviewer · 8b01",
       "Planner",
     ]);
+  });
+});
+
+describe("SidebarGroups agents (A3)", () => {
+  const DM = session("dm-a", { title: "Chat member-a", agentId: "agent-member-a" });
+
+  it("each agent row shows a 16 px avatar, name and role; clicking opens its 1:1 chat", async () => {
+    const user = userEvent.setup();
+    const onOpenAgentChat = vi.fn();
+    const onSelectGroup = vi.fn();
+    const groups: AgentGroupWithMembers[] = [
+      {
+        ...(GROUPS[0] as AgentGroupWithMembers),
+        members: [
+          {
+            ...member("g-project", "member-a"),
+            agentRole: "Reviewer",
+            avatarFace: "wink",
+            avatarColor: "teal",
+          },
+          member("g-project", "member-b"),
+        ],
+      },
+    ];
+    render(
+      <SidebarGroups
+        activeSessionId="dm-a"
+        activityBySession={{}}
+        groups={groups}
+        memberStates={
+          new Map([
+            [
+              "g-project",
+              {
+                groupId: "g-project",
+                runningSessionIds: ["member-b"],
+                queuedSessionIds: [],
+                waitingSessionIds: [],
+              },
+            ],
+          ])
+        }
+        onOpenAgentChat={onOpenAgentChat}
+        onSelectGroup={onSelectGroup}
+        sessions={[...SESSIONS, DM]}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const rows = screen.getAllByTestId("group-member-row");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Chat member-aLeadReviewer",
+      "Chat member-b",
+    ]);
+    const avatars = rows.map((row) => within(row).getByTestId("agent-avatar"));
+    expect(avatars.map((avatar) => avatar.dataset.size)).toEqual(["16", "16"]);
+    expect(avatars[0]?.dataset.face).toBe("wink");
+    expect(avatars.map((avatar) => avatar.dataset.state)).toEqual(["idle", "working"]);
+    // The open 1:1 chat selects its agent's row.
+    expect(rows.map((row) => row.className.includes("row-selected"))).toEqual([true, false]);
+
+    await user.click(within(rows[1] as HTMLElement).getByRole("button", { name: /Chat member-b/ }));
+    expect(onOpenAgentChat).toHaveBeenCalledWith("agent-member-b");
+    expect(onSelectGroup).not.toHaveBeenCalled();
+  });
+
+  it("Edit agent on a row and Add agent in the group menu open the agent dialog", async () => {
+    const user = userEvent.setup();
+    const onEditAgent = vi.fn();
+    const onAddAgent = vi.fn();
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        onAddAgent={onAddAgent}
+        onEditAgent={onEditAgent}
+        onOpenAgentChat={vi.fn()}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const row = screen.getAllByTestId("group-member-row")[1] as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: "Edit agent" }));
+    expect(onEditAgent).toHaveBeenCalledWith("agent-member-b");
+
+    const groupRow = screen.getAllByTestId("group-row")[0] as HTMLElement;
+    await user.click(within(groupRow).getByRole("button", { name: "Group actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Add agent" }));
+    expect(onAddAgent).toHaveBeenCalledWith("g-project");
+  });
+
+  it("a blocked group (no Project, one agent) still lists its agents, clickable", async () => {
+    const user = userEvent.setup();
+    const onOpenAgentChat = vi.fn();
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={[GROUPS[1] as AgentGroupWithMembers]}
+        onOpenAgentChat={onOpenAgentChat}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const rows = screen.getAllByTestId("group-member-row");
+    expect(rows).toHaveLength(1);
+    await user.click(
+      within(rows[0] as HTMLElement).getByRole("button", { name: /Chat inbox-member/ }),
+    );
+    expect(onOpenAgentChat).toHaveBeenCalledWith("agent-inbox-member");
   });
 });

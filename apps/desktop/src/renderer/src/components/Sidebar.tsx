@@ -42,6 +42,7 @@ import {
   projectGroupNames,
   removeProjectGroupsWarning,
 } from "../features/groups/groupSidebarModel";
+import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
@@ -126,6 +127,14 @@ type SidebarProps = {
   onDeleteGroup?(groupId: string): void;
   onRemoveGroupMember?(groupId: string, sessionId: string): void;
   onSetGroupLead?(groupId: string, sessionId: string | null): void;
+  /** Room member states (the agents' avatars show working / waiting). */
+  groupMemberStates?: GroupMemberStatesById | undefined;
+  /** Open an agent's 1:1 chat (A3, created on first open). */
+  onOpenAgentChat?(agentId: string): void;
+  /** Edit an agent (the agent dialog). */
+  onEditAgent?(agentId: string): void;
+  /** Add a custom agent to a group (the agent dialog). */
+  onAddAgent?(groupId: string): void;
 };
 
 const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
@@ -173,6 +182,10 @@ export function Sidebar({
   onDeleteGroup,
   onRemoveGroupMember,
   onSetGroupLead,
+  groupMemberStates,
+  onOpenAgentChat,
+  onEditAgent,
+  onAddAgent,
 }: SidebarProps) {
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -385,6 +398,10 @@ export function Sidebar({
                   {...(isGroupWorking ? { isGroupWorking } : {})}
                   {...(isGroupWaiting ? { isGroupWaiting } : {})}
                   {...(onSelectGroup ? { onSelectGroup, activeGroupId } : {})}
+                  memberStates={groupMemberStates}
+                  onAddAgent={onAddAgent}
+                  onEditAgent={onEditAgent}
+                  onOpenAgentChat={onOpenAgentChat}
                 />
               </CollapsibleMotion>
             </>
