@@ -27,6 +27,8 @@ export const GROUP_ERROR_CODES = [
   "invalid-transition",
   "self-review",
   "ambiguous-member",
+  // Member worktrees: the group has no Project, or its Project is not a Git repository.
+  "no-git-project",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

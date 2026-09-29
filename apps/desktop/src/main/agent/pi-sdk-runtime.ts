@@ -1680,7 +1680,12 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<SdkRuntimeSession | undefined> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
-      return existing;
+      if (!this.storedCwdMoved(sessionId, existing)) {
+        return existing;
+      }
+      // The stored cwd moved (an Agent Group member entered or left its
+      // worktree): rebuild the SDK session so its tools run in the new cwd.
+      await this.disposeSessionOnly(sessionId);
     }
 
     const pending = this.resumePromises.get(sessionId);
@@ -1693,6 +1698,20 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     this.resumePromises.set(sessionId, next);
     return await next;
+  }
+
+  /** True when the persisted cwd differs from the cached SDK session's and it is idle. */
+  private storedCwdMoved(sessionId: string, runtimeSession: SdkRuntimeSession): boolean {
+    const stored = getAgentSession(sessionId)?.cwd;
+    return (
+      stored !== undefined &&
+      stored !== runtimeSession.info.cwd &&
+      !runtimeSession.session.isStreaming &&
+      !runtimeSession.session.isCompacting &&
+      !this.runOutputTrackers.has(sessionId) &&
+      !this.pendingIntentGates.has(sessionId) &&
+      !getActiveAgentRun(sessionId)
+    );
   }
 
   async ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo> {

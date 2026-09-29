@@ -356,6 +356,7 @@ describe("group member tools", () => {
         ["group_release_task", { id }],
         ["group_request_review", { id, reviewer: "Beta" }],
         ["group_review_task", { id, verdict: "approve" }],
+        ["group_start_worktree", {}],
       ] as const) {
         expect(await call(name, params)).toMatch(/^\[group-error:not-a-member\] /);
       }

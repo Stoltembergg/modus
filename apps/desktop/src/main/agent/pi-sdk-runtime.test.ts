@@ -4113,6 +4113,26 @@ describe("PiSdkRuntime", () => {
     expect(row.updated_at).toBe("2026-01-01T00:00:00.000Z");
   });
 
+  it("rebuilds an idle cached SDK session when the stored cwd moved (member worktree)", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    expect((await runtime.ensure(window, sessionId)).cwd).toBe(cwd);
+    const creates = mocks.createAgentSession.mock.calls.length;
+    // Same cwd: the cached session is reused.
+    await runtime.ensure(window, sessionId);
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates);
+
+    const moved = await mkdtemp(join(tmpdir(), "modus-pi-runtime-moved-"));
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(moved, sessionId);
+    expect((await runtime.ensure(window, sessionId)).cwd).toBe(moved);
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates + 1);
+    await rm(moved, { recursive: true, force: true });
+  });
+
   it("releaseRuntime drops the SDK session without cancelling descendant DB rows", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const childSessionId = `session-${crypto.randomUUID()}`;

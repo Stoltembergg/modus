@@ -202,9 +202,15 @@ export function createAgentSessionRecord(input: {
   return session;
 }
 
+/**
+ * Writes the session's worktree info. `options.cwd` also moves the session's
+ * working directory in the same update (Agent Group member worktrees; a live
+ * runtime picks it up on its next turn, see PiSdkRuntime.getOrResume).
+ */
 export function updateAgentSessionWorktree(
   sessionId: string,
   worktree: SubagentWorktreeInfo | undefined,
+  options: { cwd?: string } = {},
 ): AgentSessionInfo | undefined {
   const existing = getAgentSession(sessionId);
   if (!existing) {
@@ -214,7 +220,8 @@ export function updateAgentSessionWorktree(
   getDatabase()
     .prepare(
       `update agent_sessions
-       set subagent_worktree_path = ?,
+       set cwd = ?,
+           subagent_worktree_path = ?,
            subagent_worktree_branch = ?,
            subagent_worktree_base_sha = ?,
            subagent_integration_status = ?,
@@ -223,6 +230,7 @@ export function updateAgentSessionWorktree(
        where id = ?`,
     )
     .run(
+      options.cwd ?? existing.cwd,
       worktree?.path ?? null,
       worktree?.branch ?? null,
       worktree?.baseSha ?? null,

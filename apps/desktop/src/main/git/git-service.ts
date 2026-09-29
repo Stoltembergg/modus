@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { createTwoFilesPatch } from "diff";
@@ -1249,6 +1249,100 @@ export async function createSubagentWorktree(
   await excludeManagedWorktrees(repo.commonGitDir);
   await git(repo.root, ["worktree", "add", "-b", branch, worktreePath, baseSha]);
   return { path: worktreePath, branch, baseSha, integrationStatus: "running" };
+}
+
+/** Why createMemberWorktree refused before touching git. */
+export class MemberWorktreeUnavailableError extends Error {}
+
+async function worktreePathForBranch(
+  repoRoot: string,
+  branch: string,
+): Promise<string | undefined> {
+  const listing = await gitSafe(repoRoot, ["worktree", "list", "--porcelain"]);
+  let path: string | undefined;
+  for (const line of listing.split(/\r?\n/)) {
+    if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+    else if (line === `branch refs/heads/${branch}` && path) return path;
+  }
+  return undefined;
+}
+
+/**
+ * The persistent worktree of an Agent Group member (PR 4b): branch
+ * `group/<groupId>/<memberSlug>` checked out under the same managed base dir as
+ * subagent worktrees (`<repo>/.modus/worktrees`). Idempotent: the branch's
+ * existing worktree is reused, an existing branch is checked out as-is (never
+ * reset or overwritten) and only a missing branch is created, from the Project
+ * root's HEAD. Nothing is ever merged back into the root. `memberKey` (a stable
+ * id suffix of the slug) finds the member's branch again when the readable
+ * part of the slug changed (e.g. the chat was renamed). `cwd` is the Project
+ * root's counterpart inside the worktree (differs from `path` when the Project
+ * is a subdirectory of its repository).
+ */
+export async function createMemberWorktree(
+  projectRoot: string,
+  input: { groupId: string; memberSlug: string; memberKey?: string },
+): Promise<SubagentWorktreeInfo & { cwd: string; created: boolean }> {
+  const repo = resolveRepo(projectRoot);
+  if (!repo) {
+    throw new MemberWorktreeUnavailableError("The Project is not a Git repository.");
+  }
+  const head = await gitSafe(repo.root, ["rev-parse", "--verify", "HEAD"]);
+  if (!head) {
+    throw new MemberWorktreeUnavailableError("The Project repository has no commit yet.");
+  }
+  const prefix = `group/${input.groupId}/`;
+  let slug = subagentSlug(input.memberSlug);
+  let branch = `${prefix}${slug}`;
+  const hasBranch = async (name: string) =>
+    Boolean(await gitSafe(repo.root, ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`]));
+  let branchExists = await hasBranch(branch);
+  if (!branchExists && input.memberKey) {
+    const key = `-${subagentSlug(input.memberKey)}`;
+    const known = (
+      await gitSafe(repo.root, [
+        "for-each-ref",
+        "--format=%(refname:short)",
+        `refs/heads/${prefix}`,
+      ])
+    )
+      .split(/\r?\n/)
+      .find((name) => name.startsWith(prefix) && name.endsWith(key));
+    if (known) {
+      branch = known;
+      slug = known.slice(prefix.length);
+      branchExists = true;
+    }
+  }
+  const worktreeRoot = join(repo.root, ".modus", "worktrees");
+  const expectedPath = join(
+    worktreeRoot,
+    `group-${subagentSlug(input.groupId).slice(0, 8)}-${slug}`,
+  );
+  await mkdir(worktreeRoot, { recursive: true });
+  await excludeManagedWorktrees(repo.commonGitDir);
+  // Forget registrations whose directory was deleted by hand.
+  await gitSafe(repo.root, ["worktree", "prune"]);
+
+  const checkedOutAt = branchExists ? await worktreePathForBranch(repo.root, branch) : undefined;
+  let path = expectedPath;
+  let created = false;
+  if (checkedOutAt) {
+    // git reports real paths (e.g. /private/var on macOS); compare like with like.
+    assertManagedWorktreePath(realpathSync(repo.root), realpathSync(checkedOutAt));
+    path = checkedOutAt;
+  } else if (branchExists) {
+    await git(repo.root, ["worktree", "add", expectedPath, branch]);
+    created = true;
+  } else {
+    await git(repo.root, ["worktree", "add", "-b", branch, expectedPath, head]);
+    created = true;
+  }
+  const baseSha = branchExists
+    ? (await gitSafe(repo.root, ["merge-base", head, branch])) || head
+    : head;
+  const cwd = join(path, relative(repo.root, resolve(projectRoot)));
+  return { path, branch, baseSha, integrationStatus: "running", cwd, created };
 }
 
 export async function finishSubagentWorktree(

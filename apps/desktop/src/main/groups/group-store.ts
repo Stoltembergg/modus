@@ -507,7 +507,47 @@ export function setAgentGroupLead(groupId: string, sessionId: string | null): Ag
  * normal workspace listing.
  */
 export function deleteAgentGroup(groupId: string): void {
-  getDatabase().prepare("delete from agent_groups where id = ?").run(groupId);
+  const db = getDatabase();
+  inTransaction(db, () => {
+    restoreMemberWorktreeCwdRows(groupId);
+    db.prepare("delete from agent_groups where id = ?").run(groupId);
+  });
+}
+
+/** Branch prefix of every member worktree of `groupId` (`group/<groupId>/<memberSlug>`). */
+export function memberWorktreeBranchPrefix(groupId: string): string {
+  return `group/${groupId}/`;
+}
+
+/**
+ * NON-transactional: a member leaving (or the group going away) keeps its
+ * worktree and branch on disk; only the session forgets it and its `cwd`
+ * goes back to the Project root. Scoped to `sessionId` when given, else to
+ * every member of the group. Sessions whose worktree is not this group's
+ * (e.g. subagent worktrees) are untouched.
+ */
+function restoreMemberWorktreeCwdRows(groupId: string, sessionId?: string): void {
+  const prefix = memberWorktreeBranchPrefix(groupId);
+  const scope =
+    sessionId === undefined
+      ? "id in (select session_id from agent_group_members where group_id = :groupId)"
+      : "id = :sessionId";
+  getDatabase()
+    .prepare(
+      `update agent_sessions
+       set cwd = coalesce(
+             (select w.root_path from workspaces w where w.id = agent_sessions.workspace_id),
+             cwd
+           ),
+           subagent_worktree_path = null,
+           subagent_worktree_branch = null,
+           subagent_worktree_base_sha = null,
+           subagent_integration_status = null,
+           subagent_changed_files_json = null,
+           subagent_conflict_files_json = null
+       where substr(subagent_worktree_branch, 1, length(:prefix)) = :prefix and ${scope}`,
+    )
+    .run({ prefix, ...(sessionId === undefined ? { groupId } : { sessionId }) });
 }
 
 /* ── Members ───────────────────────────────────────────────────────────── */
@@ -562,6 +602,7 @@ function detachMemberRows(groupId: string, sessionId: string): boolean {
   if (Number(result.changes) === 0) {
     return false;
   }
+  restoreMemberWorktreeCwdRows(groupId, sessionId);
   db.prepare(
     `update agent_groups set lead_session_id = null
      where id = ? and lead_session_id = ?`,
@@ -1033,7 +1074,12 @@ function invalidTransition(task: GroupTask, action: string): GroupStoreError {
 
 function writeTaskTransition(
   taskId: string,
-  fields: { status: GroupTaskStatus; owner?: string | null; reviewer?: string | null },
+  fields: {
+    status: GroupTaskStatus;
+    owner?: string | null;
+    reviewer?: string | null;
+    branch?: string;
+  },
 ): GroupTask {
   const sets = ["status = ?"];
   const params: Array<string | null> = [fields.status];
@@ -1044,6 +1090,11 @@ function writeTaskTransition(
   if (fields.reviewer !== undefined) {
     sets.push("reviewer_session_id = ?");
     params.push(fields.reviewer);
+  }
+  if (fields.branch !== undefined) {
+    // Fills a missing branch only; an existing value is never overwritten.
+    sets.push("branch = coalesce(branch, ?)");
+    params.push(fields.branch);
   }
   sets.push("updated_at = ?");
   params.push(new Date().toISOString());
@@ -1076,9 +1127,15 @@ export function createMemberGroupTask(input: {
 /**
  * Claim an unowned `open` task: the caller becomes owner, status `in_progress`.
  * A suggested reviewer may claim it; the claim then clears the reviewer in the
- * same update (an owner never reviews their own task).
+ * same update (an owner never reviews their own task). `options.branch` (the
+ * claimer's member worktree branch) fills the task's branch when it has none.
  */
-export function claimGroupTask(groupId: string, taskId: string, actorSessionId: string): GroupTask {
+export function claimGroupTask(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+  options: { branch?: string } = {},
+): GroupTask {
   const db = getDatabase();
   return inTransaction(db, () => {
     requireMember(groupId, actorSessionId, "claimer");
@@ -1091,7 +1148,34 @@ export function claimGroupTask(groupId: string, taskId: string, actorSessionId: 
       status: IN_PROGRESS_TASK_STATUS,
       owner: actorSessionId,
       ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
+      ...(options.branch ? { branch: options.branch } : {}),
     });
+  });
+}
+
+/**
+ * Sets `branch` on the member's `in_progress` tasks that have none (never
+ * overwrites). Returns the updated tasks.
+ */
+export function fillMemberTaskBranches(
+  groupId: string,
+  sessionId: string,
+  branch: string,
+): GroupTask[] {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const rows = db
+      .prepare(
+        `select id from group_tasks
+         where group_id = ? and owner_session_id = ? and status = ? and branch is null`,
+      )
+      .all(groupId, sessionId, IN_PROGRESS_TASK_STATUS) as Array<{ id: string }>;
+    const now = new Date().toISOString();
+    const update = db.prepare(
+      "update group_tasks set branch = ?, updated_at = ? where id = ? and branch is null",
+    );
+    for (const row of rows) update.run(branch, now, row.id);
+    return rows.map((row) => requireTask(row.id));
   });
 }
 
