@@ -8,6 +8,8 @@ import { subscribeToUpdateState, type UpdateApi } from "./UpdateToast";
 
 /** Coalesces bursts (typing, panel drags) into one push to main. */
 export const UI_STATE_PUSH_DEBOUNCE_MS = 500;
+/** Constant typing still reaches main at least this often. */
+export const UI_STATE_PUSH_MAX_WAIT_MS = 2000;
 
 const INSPECTOR_TABS: readonly UpdateRestoreInspectorTab[] = [
   "changes",
@@ -83,19 +85,25 @@ export type UiStatePusher = {
 
 /**
  * While a downloaded update is pending, keeps main's copy of the UI state current: one
- * push right when the update becomes pending, then one per burst of changes, debounced.
+ * push right when the update becomes pending, then one per burst of changes, debounced,
+ * and at least every `maxWaitMs` while changes keep coming.
  * Main writes its latest copy in before-quit, so nothing is requested at shutdown.
  */
 export function createUiStatePusher(
   api: Pick<UpdateApi, "getState" | "onStateChange" | "saveUiState">,
   delayMs = UI_STATE_PUSH_DEBOUNCE_MS,
+  maxWaitMs = UI_STATE_PUSH_MAX_WAIT_MS,
 ): UiStatePusher {
   let latest: UpdateRestoreUiState | null = null;
   let pending = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  // Started by the first change after a push; not reset by later changes.
+  let maxWaitTimer: ReturnType<typeof setTimeout> | undefined;
   const cancel = () => {
     if (timer !== undefined) clearTimeout(timer);
+    if (maxWaitTimer !== undefined) clearTimeout(maxWaitTimer);
     timer = undefined;
+    maxWaitTimer = undefined;
   };
   const push = () => {
     cancel();
@@ -112,8 +120,9 @@ export function createUiStatePusher(
     update(state) {
       latest = state;
       if (!pending) return;
-      cancel();
+      if (timer !== undefined) clearTimeout(timer);
       timer = setTimeout(push, delayMs);
+      maxWaitTimer ??= setTimeout(push, maxWaitMs);
     },
     dispose() {
       cancel();

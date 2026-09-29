@@ -5,6 +5,7 @@ import {
   restorableUiState,
   snapshotUiState,
   UI_STATE_PUSH_DEBOUNCE_MS,
+  UI_STATE_PUSH_MAX_WAIT_MS,
 } from "./restoreUiState";
 
 const STATE: UpdateRestoreUiState = {
@@ -119,6 +120,36 @@ describe("createUiStatePusher", () => {
     // Staying pending (ready -> installing) does not re-send.
     push({ status: "installing", version: "1.3.0" });
     expect(api.saveUiState).toHaveBeenCalledTimes(2);
+    pusher.dispose();
+  });
+
+  it("still pushes at least every 2 s while changes keep coming", async () => {
+    expect(UI_STATE_PUSH_MAX_WAIT_MS).toBe(2000);
+    const { api, push } = fakeApi({ status: "idle" });
+    const pusher = createUiStatePusher(api);
+    pusher.update(STATE);
+    push({ status: "ready", version: "1.3.0" });
+    expect(api.saveUiState).toHaveBeenCalledTimes(1);
+
+    const typed = (n: number) => ({
+      ...STATE,
+      drafts: { "s-1": { text: `t${n}`, mode: "build" as const } },
+    });
+    // A keystroke every 100 ms for 4.5 s never leaves a 500 ms gap.
+    for (let n = 1; n <= 45; n += 1) {
+      pusher.update(typed(n));
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    // Pushes at 2 s and 4 s (each with the latest text at that moment).
+    expect(api.saveUiState).toHaveBeenCalledTimes(3);
+    expect(api.saveUiState.mock.calls[1]?.[0]).toEqual(typed(20));
+    expect(api.saveUiState.mock.calls[2]?.[0]).toEqual(typed(40));
+    // Typing stops: the trailing debounce sends the final text.
+    await vi.advanceTimersByTimeAsync(UI_STATE_PUSH_DEBOUNCE_MS);
+    expect(api.saveUiState).toHaveBeenCalledTimes(4);
+    expect(api.saveUiState).toHaveBeenLastCalledWith(typed(45));
+    await vi.advanceTimersByTimeAsync(UI_STATE_PUSH_MAX_WAIT_MS * 2);
+    expect(api.saveUiState).toHaveBeenCalledTimes(4);
     pusher.dispose();
   });
 
