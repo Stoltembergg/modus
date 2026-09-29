@@ -110,6 +110,12 @@ type SidebarProps = {
   activeWorkspaceId?: string | null;
   /** Group-row activity dot selector; defaults to an always-false stub until PR 3. */
   isGroupWorking?: (group: AgentGroupWithMembers) => boolean;
+  /** Group-row amber "waiting for you" dot (wins over working). */
+  isGroupWaiting?: (group: AgentGroupWithMembers) => boolean;
+  /** The group whose room is open in the main panel. */
+  activeGroupId?: string | undefined;
+  /** Open a group's room (clicking the group name). */
+  onSelectGroup?(group: AgentGroupWithMembers): void;
   onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
   onRenameGroup?(groupId: string, name: string): void;
   /** "Manage members" (atomic); rejects so the dialog can show the error. */
@@ -152,6 +158,9 @@ export function Sidebar({
   groups = NO_GROUPS,
   activeWorkspaceId = null,
   isGroupWorking,
+  isGroupWaiting,
+  activeGroupId,
+  onSelectGroup,
   onCreateGroup,
   onRenameGroup,
   onUpdateGroupMembers,
@@ -373,6 +382,8 @@ export function Sidebar({
                   sessions={agentSessions}
                   workspaces={workspaces}
                   {...(isGroupWorking ? { isGroupWorking } : {})}
+                  {...(isGroupWaiting ? { isGroupWaiting } : {})}
+                  {...(onSelectGroup ? { onSelectGroup, activeGroupId } : {})}
                 />
               </CollapsibleMotion>
             </>

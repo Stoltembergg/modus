@@ -528,3 +528,101 @@ describe("Sidebar with groups", () => {
     });
   });
 });
+
+describe("SidebarGroups room selection and states", () => {
+  it("clicking a group opens its room and selects the row; the rail toggles members", async () => {
+    const user = userEvent.setup();
+    const onSelectGroup = vi.fn();
+    const view = render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        onSelectGroup={onSelectGroup}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const row = screen.getAllByTestId("group-row")[0] as HTMLElement;
+    await user.click(within(row).getByRole("button", { name: /Release squad/ }));
+    expect(onSelectGroup).toHaveBeenCalledWith(GROUPS[0]);
+    // Members stay listed; the rail button hides them.
+    const squad = row.parentElement as HTMLElement;
+    expect(within(squad).getAllByTestId("group-member-row")).toHaveLength(2);
+    await user.click(within(row).getByRole("button", { name: "Hide members" }));
+    expect(within(squad).queryAllByTestId("group-member-row")).toHaveLength(0);
+
+    view.rerender(
+      <SidebarGroups
+        activeGroupId="g-project"
+        activityBySession={{}}
+        groups={GROUPS}
+        onSelectGroup={onSelectGroup}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const rows = screen.getAllByTestId("group-row");
+    expect(rows.map((item) => item.className.includes("row-selected"))).toEqual([true, false]);
+    expect(
+      within(rows[0] as HTMLElement)
+        .getByRole("button", { name: /Release squad/ })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+  });
+
+  it("the amber waiting dot takes priority over the working dot", () => {
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        isGroupWaiting={(group) => group.id === "g-project"}
+        isGroupWorking={() => true}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    const [squad, inbox] = screen.getAllByTestId("group-row") as HTMLElement[];
+    expect(within(squad as HTMLElement).getByTestId("group-waiting-dot").className).toContain(
+      "bg-amber-400",
+    );
+    expect(within(squad as HTMLElement).queryByTestId("group-activity-dot")).toBeNull();
+    expect(within(inbox as HTMLElement).getByTestId("group-activity-dot")).toBeTruthy();
+    expect(within(inbox as HTMLElement).queryByTestId("group-waiting-dot")).toBeNull();
+  });
+});
+
+describe("SidebarGroups duplicate member titles", () => {
+  it("labels repeated titles with a muted short id; unique titles stay plain", () => {
+    const sessions = [
+      session("3f2a91c0", { title: "Reviewer" }),
+      session("8b01d2e3", { title: "Reviewer" }),
+      session("c0ffee00", { title: "Planner" }),
+    ];
+    const group: AgentGroupWithMembers = {
+      id: "g-dup",
+      name: "Dup squad",
+      workspaceId: "ws-1",
+      mode: "free",
+      members: sessions.map((s) => member("g-dup", s.id)),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={[group]}
+        sessions={sessions}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    expect(screen.getAllByTestId("group-member-row").map((row) => row.textContent)).toEqual([
+      "Reviewer · 3f2a",
+      "Reviewer · 8b01",
+      "Planner",
+    ]);
+  });
+});

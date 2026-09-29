@@ -24,6 +24,8 @@ import {
 } from "streamdown";
 import { cn } from "../../lib/cn";
 import { type ThemeMode, useTheme } from "../../lib/theme";
+import { isMentionHref } from "../groups/groupMentions";
+import { MentionChip } from "../groups/MentionChip";
 import { FileRefChip, MarkdownFileCode } from "./FileRefChip";
 import { useMarkdownFileNav } from "./markdownFileNav";
 import { normalizeMathDelimiters } from "./normalizeMathDelimiters";
@@ -246,6 +248,8 @@ function MarkdownAnchor({
   ...props
 }: ComponentProps<"a"> & { node?: unknown }) {
   const { onOpenFile } = useMarkdownFileNav();
+  // Group room `@member` sentinel: a chip, never a link.
+  if (isMentionHref(href)) return <MentionChip>{children}</MentionChip>;
   const path = parseModusFileHref(href);
   if (path) {
     if (onOpenFile) {

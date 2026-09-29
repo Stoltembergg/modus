@@ -104,6 +104,8 @@ export type PostGroupMessageInput = {
 /** Why a group chain stopped waking members (it waits for the user). */
 export type GroupChainEndReason =
   | "blocked"
+  /** The user pressed Stop in the room (running turns are aborted). */
+  | "stopped"
   | "max-hops"
   | "max-agent-messages"
   | "max-member-wakes"
@@ -123,5 +125,15 @@ export type GroupRuntimeEvent =
       runningSessionIds: string[];
       /** Members woken and waiting for a slot (or for the window/update/streaming gate). */
       queuedSessionIds: string[];
+      /** Members waiting for the user (intent gate open, or a HyperPlan choice pending). */
+      waitingSessionIds: string[];
     }
   | { type: "group.chain-ended"; groupId: string; chainId: string; reason: GroupChainEndReason };
+
+/** One group's member states (`group:member-states` snapshot; same fields as `group.activity`). */
+export type GroupMemberStates = {
+  groupId: string;
+  runningSessionIds: string[];
+  queuedSessionIds: string[];
+  waitingSessionIds: string[];
+};

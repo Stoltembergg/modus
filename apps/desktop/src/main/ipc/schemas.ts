@@ -970,6 +970,8 @@ const groupMessageCursorSchema = z
   .object({ createdAt: nonEmptyString.max(64), id: groupIdString })
   .strict();
 
+export const groupStopSchema = z.object({ groupId: groupIdString }).strict();
+
 export const groupListMessagesSchema = z
   .object({
     groupId: groupIdString,

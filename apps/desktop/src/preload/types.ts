@@ -38,6 +38,7 @@ import type {
   GitCommit,
   GitCommitResult,
   GitStatusSummary,
+  GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
   GroupRuntimeEvent,
@@ -189,6 +190,10 @@ export type ModusApi = {
     }): Promise<GroupMessage[]>;
     /** Groups with a member turn running or queued right now. */
     workingGroupIds(): Promise<string[]>;
+    /** Running / queued / waiting-for-you members of every active group. */
+    memberStates(): Promise<GroupMemberStates[]>;
+    /** Stop the room: end its chains and abort running member turns ("Turn stopped"). */
+    stop(groupId: string): Promise<void>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   file: {
