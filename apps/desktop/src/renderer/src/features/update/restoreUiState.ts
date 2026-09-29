@@ -129,25 +129,46 @@ export function fitUiStateToCap(state: UpdateRestoreUiState): UpdateRestoreUiSta
   return next;
 }
 
+export type UiRestorePlan = {
+  /** null when the project or the session no longer exists: the app keeps its default. */
+  navigation: { activeWorkspaceId: string | null; activeSessionId: string | null } | null;
+  /** Only drafts whose session still exists. */
+  drafts: UpdateRestoreUiState["drafts"];
+  /** null when the start-screen composer was empty. */
+  hero: UpdateRestoreUiState["hero"] | null;
+  /** Sizes, open state, inspector tab and settingsOpen: always applied (already validated). */
+  layout: Pick<UpdateRestoreUiState, "sidebar" | "inspector" | "settingsOpen">;
+};
+
 /**
- * All or nothing: a snapshot that names a project or session that no longer exists
- * (active project, active session or any draft) is dropped whole, so a partial restore
- * never mixes the old layout with a different selection.
+ * Splits a snapshot into parts that apply on their own, each checked against what exists
+ * now: a missing project or session drops only the navigation, a missing session drops
+ * only its draft, and the layout always applies.
  */
-export function restorableUiState(
+export function planUiRestore(
   state: UpdateRestoreUiState,
   known: { workspaceIds: ReadonlySet<string>; sessionIds: ReadonlySet<string> },
-): UpdateRestoreUiState | null {
-  if (state.activeWorkspaceId !== null && !known.workspaceIds.has(state.activeWorkspaceId)) {
-    return null;
+): UiRestorePlan {
+  const workspaceOk =
+    state.activeWorkspaceId === null || known.workspaceIds.has(state.activeWorkspaceId);
+  const sessionOk = state.activeSessionId === null || known.sessionIds.has(state.activeSessionId);
+  const drafts: UpdateRestoreUiState["drafts"] = {};
+  for (const [sessionId, draft] of Object.entries(state.drafts)) {
+    if (known.sessionIds.has(sessionId)) drafts[sessionId] = draft;
   }
-  if (state.activeSessionId !== null && !known.sessionIds.has(state.activeSessionId)) {
-    return null;
-  }
-  if (Object.keys(state.drafts).some((sessionId) => !known.sessionIds.has(sessionId))) {
-    return null;
-  }
-  return state;
+  return {
+    navigation:
+      workspaceOk && sessionOk
+        ? { activeWorkspaceId: state.activeWorkspaceId, activeSessionId: state.activeSessionId }
+        : null,
+    drafts,
+    hero: state.hero.text ? state.hero : null,
+    layout: {
+      sidebar: state.sidebar,
+      inspector: state.inspector,
+      settingsOpen: state.settingsOpen,
+    },
+  };
 }
 
 export type UiStatePusher = {

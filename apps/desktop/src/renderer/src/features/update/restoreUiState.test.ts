@@ -9,7 +9,7 @@ import {
   createUiStatePusher,
   fitUiStateToCap,
   isComposerDraftEmpty,
-  restorableUiState,
+  planUiRestore,
   snapshotUiState,
   UI_STATE_PUSH_DEBOUNCE_MS,
   UI_STATE_PUSH_MAX_WAIT_MS,
@@ -197,24 +197,72 @@ describe("isComposerDraftEmpty", () => {
   });
 });
 
-describe("restorableUiState", () => {
-  const known = { workspaceIds: new Set(["ws-1"]), sessionIds: new Set(["s-1"]) };
+describe("planUiRestore", () => {
+  const known = { workspaceIds: new Set(["ws-1"]), sessionIds: new Set(["s-1", "s-2"]) };
+  const layout = { sidebar: STATE.sidebar, inspector: STATE.inspector, settingsOpen: false };
 
-  it("keeps a snapshot whose ids all exist", () => {
-    expect(restorableUiState(STATE, known)).toBe(STATE);
-    const chats = { ...STATE, activeWorkspaceId: null, activeSessionId: null, drafts: {} };
-    expect(restorableUiState(chats, known)).toBe(chats);
+  it("keeps every part when all ids exist", () => {
+    const state = { ...STATE, hero: { text: "idea", mode: "plan" as const } };
+    expect(planUiRestore(state, known)).toEqual({
+      navigation: { activeWorkspaceId: "ws-1", activeSessionId: "s-1" },
+      drafts: STATE.drafts,
+      hero: { text: "idea", mode: "plan" },
+      layout,
+    });
+    const chats = { ...STATE, activeWorkspaceId: null, activeSessionId: null };
+    expect(planUiRestore(chats, known).navigation).toEqual({
+      activeWorkspaceId: null,
+      activeSessionId: null,
+    });
   });
 
   it.each([
     ["project", { ...STATE, activeWorkspaceId: "ws-gone" }],
     ["session", { ...STATE, activeSessionId: "s-gone" }],
-    [
-      "draft session",
-      { ...STATE, drafts: { ...STATE.drafts, "s-gone": { text: "x", mode: "build" as const } } },
-    ],
-  ])("drops the whole snapshot when a %s no longer exists", (_label, state) => {
-    expect(restorableUiState(state, known)).toBeNull();
+  ])("drops only the navigation when the %s no longer exists", (_label, state) => {
+    const plan = planUiRestore(state, known);
+    expect(plan.navigation).toBeNull();
+    expect(plan.drafts).toEqual(STATE.drafts);
+    expect(plan.layout).toEqual(layout);
+  });
+
+  it("keeps each draft only if its session still exists", () => {
+    const state = {
+      ...STATE,
+      drafts: {
+        "s-1": { text: "one", mode: "build" as const },
+        "s-gone": { text: "lost", mode: "plan" as const },
+        "s-2": { text: "two", mode: "spec" as const },
+      },
+    };
+    const plan = planUiRestore(state, known);
+    expect(plan.drafts).toEqual({
+      "s-1": { text: "one", mode: "build" },
+      "s-2": { text: "two", mode: "spec" },
+    });
+    expect(plan.navigation).not.toBeNull();
+  });
+
+  it("applies the layout on its own when nothing else survives", () => {
+    const state: UpdateRestoreUiState = {
+      activeWorkspaceId: "ws-gone",
+      activeSessionId: "s-gone",
+      drafts: { "s-gone": { text: "lost", mode: "build" } },
+      hero: { text: "", mode: "build" },
+      sidebar: { open: false, width: 410 },
+      inspector: { open: true, width: 700, tab: "terminal" },
+      settingsOpen: true,
+    };
+    expect(planUiRestore(state, { workspaceIds: new Set(), sessionIds: new Set() })).toEqual({
+      navigation: null,
+      drafts: {},
+      hero: null,
+      layout: {
+        sidebar: { open: false, width: 410 },
+        inspector: { open: true, width: 700, tab: "terminal" },
+        settingsOpen: true,
+      },
+    });
   });
 });
 

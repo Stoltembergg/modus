@@ -79,7 +79,7 @@ import { normalizePlan } from "../features/plan/planState";
 import {
   createUiStatePusher,
   isComposerDraftEmpty,
-  restorableUiState,
+  planUiRestore,
   snapshotUiState,
   type UiStatePusher,
 } from "../features/update/restoreUiState";
@@ -341,7 +341,8 @@ export function App() {
         }
       });
     // UI state saved by the previous version across an update restart (taken once by
-    // main). Applied after the lists load so every id can be checked against them.
+    // main). Applied after the lists load so every id can be checked against them; each
+    // part (navigation, drafts, hero, layout) stands on its own.
     let restored = restoredUiStateRef.current;
     if (!restored) {
       restored = window.modus.update.takeRestoredUiState().catch(() => null);
@@ -350,20 +351,24 @@ export function App() {
     void Promise.all([restored, hydration.workspaces, hydration.sessions])
       .then(([snapshot, items, sessions]) => {
         if (!active || !snapshot) return;
-        const state = restorableUiState(snapshot, {
+        const plan = planUiRestore(snapshot, {
           workspaceIds: new Set(items.map((item) => item.id)),
           sessionIds: new Set(sessions.map((session) => session.id)),
         });
-        if (!state) return;
-        setActiveWorkspace(items.find((item) => item.id === state.activeWorkspaceId) ?? null);
-        setActiveSessionId(state.activeSessionId ?? undefined);
-        if (state.hero.text) {
-          setHeroDraft({ ...createEmptyComposerDraft(), value: state.hero.text });
-          setHeroMode(state.hero.mode);
+        const { navigation, hero, layout } = plan;
+        if (navigation) {
+          setActiveWorkspace(
+            items.find((item) => item.id === navigation.activeWorkspaceId) ?? null,
+          );
+          setActiveSessionId(navigation.activeSessionId ?? undefined);
+        }
+        if (hero) {
+          setHeroDraft({ ...createEmptyComposerDraft(), value: hero.text });
+          setHeroMode(hero.mode);
         }
         setComposerDraftBySession((current) => {
           const next = { ...current };
-          for (const [sessionId, draft] of Object.entries(state.drafts)) {
+          for (const [sessionId, draft] of Object.entries(plan.drafts)) {
             next[sessionId] = {
               ...createEmptyComposerDraft(),
               value: draft.text,
@@ -373,12 +378,12 @@ export function App() {
           }
           return next;
         });
-        setSidebarOpen(state.sidebar.open);
-        setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, state.sidebar.width));
-        setInspectorOpen(state.inspector.open);
-        setInspectorWidth(Math.max(INSPECTOR_MIN_WIDTH, state.inspector.width));
-        setInspectorTab(state.inspector.tab);
-        setSettingsOpen(state.settingsOpen);
+        setSidebarOpen(layout.sidebar.open);
+        setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, layout.sidebar.width));
+        setInspectorOpen(layout.inspector.open);
+        setInspectorWidth(Math.max(INSPECTOR_MIN_WIDTH, layout.inspector.width));
+        setInspectorTab(layout.inspector.tab);
+        setSettingsOpen(layout.settingsOpen);
       })
       .catch(() => undefined);
     void hydration.settled.then(() => {
