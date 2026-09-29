@@ -71,6 +71,7 @@ import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
 import { useGitBranch } from "../lib/useGitBranch";
 import { beginInitialAppHydration, type InitialAppHydration } from "./initial-hydration";
@@ -1006,6 +1007,13 @@ export function App() {
                             {isMac ? null : <WindowControls />}
                           </div>
                         </header>
+
+                        {/* Top right, below the toolbar: clear of the composer (bottom of the
+                            chat, center of the hero). */}
+                        <UpdateToast
+                          api={window.modus.update}
+                          className="absolute top-11 right-3 z-30"
+                        />
 
                         {sessionCreateError ? (
                           <div className="mx-6 mb-2 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">

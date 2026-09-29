@@ -62,6 +62,19 @@ export function resolveUpdatePolicy(input: {
   return { enabled: false, reason: "unsupported-platform" };
 }
 
+/**
+ * Whether an in-place install handed off at restart still completes if the app quits
+ * later than expected, i.e. the install watchdog's "applied when Modus closes" notice.
+ * The single source of truth for both installers:
+ * - darwin: yes, the detached swap script waits up to 10 minutes for the app to exit;
+ * - linux: yes, in-place installs are AppImage only (deb gets the release page) and the
+ *   AppImage file is already replaced when the install hands off;
+ * - win32: no, the silent NSIS installer gives up when it cannot close the app.
+ */
+export function appliesOnQuitFor(platform: "win32" | "darwin" | "linux"): boolean {
+  return platform === "darwin" || platform === "linux";
+}
+
 export function releasePageUrl(version?: string): string {
   return version && parseStableVersion(version)
     ? `${RELEASES_URL}/tag/v${version}`

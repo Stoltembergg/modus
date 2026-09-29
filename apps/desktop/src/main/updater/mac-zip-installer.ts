@@ -8,6 +8,7 @@ import type { PlatformInstaller, UpdateCandidate, UpdateLogger } from "./update-
 import { UpdateInstallError } from "./update-errors";
 import {
   APP_BUNDLE_ID,
+  appliesOnQuitFor,
   isAllowedDownloadRedirect,
   isAllowedReleaseAssetUrl,
   macInstallBlocker,
@@ -255,6 +256,8 @@ export function createMacZipInstaller(deps: MacZipInstallerDeps): PlatformInstal
   };
 
   return {
+    // The detached script keeps waiting for the app to exit (MAC_INSTALL_WAIT_TICKS).
+    appliesOnQuit: appliesOnQuitFor("darwin"),
     async actionFor(candidate) {
       if (!zipFor(candidate)) {
         deps.logger.info(

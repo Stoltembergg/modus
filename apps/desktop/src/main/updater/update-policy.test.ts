@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RELEASE_REPO } from "../../shared/release-repo";
 import {
+  appliesOnQuitFor,
   isAllowedDownloadRedirect,
   isAllowedReleaseAssetUrl,
   isArm64Mac,
@@ -59,6 +60,24 @@ describe("resolveUpdatePolicy", () => {
   it("disables unsupported platforms", () => {
     expect(resolveUpdatePolicy({ ...packaged, platform: "freebsd" })).toMatchObject({
       enabled: false,
+    });
+  });
+});
+
+describe("appliesOnQuitFor", () => {
+  it("is false on Windows: the silent NSIS installer gives up if it cannot close the app", () => {
+    expect(appliesOnQuitFor("win32")).toBe(false);
+  });
+
+  it("is true on macOS: the swap script keeps waiting for the app to exit", () => {
+    expect(appliesOnQuitFor("darwin")).toBe(true);
+  });
+
+  it("is true on Linux: in-place installs are AppImage, already replaced at install", () => {
+    expect(appliesOnQuitFor("linux")).toBe(true);
+    // deb never installs in place, so the flag is never asked for there.
+    expect(resolveUpdatePolicy({ ...packaged, platform: "linux", env: {} })).toMatchObject({
+      installMode: "download-page",
     });
   });
 });

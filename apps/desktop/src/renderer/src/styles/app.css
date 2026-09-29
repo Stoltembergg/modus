@@ -193,6 +193,19 @@
 
   --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
 
+  /* Update toast offer: the ring around its primary button breathes in opacity only
+     (see .update-breathe-ring). ~2.5 s per breath, eased in and out. */
+  --animate-update-breathe: update-breathe 2.5s ease-in-out infinite;
+  @keyframes update-breathe {
+    0%,
+    100% {
+      opacity: 0;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
   /* Scrollbar — edge-flush floating pill; light theme overrides below. */
   --scrollbar-size: 10px;
   --scrollbar-thumb: rgba(255, 255, 255, 0.1);
@@ -613,6 +626,26 @@ body {
   .timeline-block {
     content-visibility: auto;
     contain-intrinsic-size: auto 120px;
+  }
+}
+
+@layer utilities {
+  /* Update toast offer: a soft ring on ::after around the primary button, hidden at
+     rest. `after:animate-update-breathe` fades it in and out; a box-shadow on a
+     pseudo-element never moves the layout. --color-build is shared by all themes. */
+  .update-breathe-ring {
+    position: relative;
+  }
+  .update-breathe-ring::after {
+    content: "";
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-build) 55%, transparent),
+      0 0 6px 0 color-mix(in srgb, var(--color-build) 40%, transparent);
   }
 }
 

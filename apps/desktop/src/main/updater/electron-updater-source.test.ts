@@ -155,6 +155,14 @@ describe("createElectronUpdaterInstaller", () => {
     expect(fake.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
+  it("says a late quit still installs only when asked (AppImage, not NSIS)", () => {
+    const fake = new FakeUpdater();
+    expect(createElectronUpdaterInstaller(asLike(fake)).appliesOnQuit).toBe(false);
+    expect(
+      createElectronUpdaterInstaller(asLike(fake), { appliesOnQuit: true }).appliesOnQuit,
+    ).toBe(true);
+  });
+
   it("refuses to download without an official asset", async () => {
     const fake = new FakeUpdater();
     const installer = createElectronUpdaterInstaller(asLike(fake));

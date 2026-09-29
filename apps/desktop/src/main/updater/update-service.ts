@@ -30,7 +30,7 @@ import {
   type UpdateLogger,
 } from "./update-controller";
 import { errorMessage } from "./update-errors";
-import { isArm64Mac, releasePageUrl, resolveUpdatePolicy } from "./update-policy";
+import { appliesOnQuitFor, isArm64Mac, releasePageUrl, resolveUpdatePolicy } from "./update-policy";
 import type { UpdateTimers } from "./update-scheduler";
 import { IDLE } from "./update-state-machine";
 
@@ -221,7 +221,9 @@ export async function startUpdateService(): Promise<void> {
       logger: updaterLogger,
     });
   } else {
-    installer = createElectronUpdaterInstaller(updater);
+    installer = createElectronUpdaterInstaller(updater, {
+      appliesOnQuit: appliesOnQuitFor(policy.platform),
+    });
   }
 
   controller = createUpdateController({

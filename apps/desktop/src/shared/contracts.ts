@@ -1954,4 +1954,16 @@ export type UpdateState =
   | { status: "waiting-for-agents"; version: string }
   | { status: "installing"; version: string }
   /** Only user-initiated downloads/installs fail visibly; background checks stay idle. */
-  | { status: "failed"; version: string; retryable: boolean; action: UpdateAction };
+  | {
+      status: "failed";
+      version: string;
+      retryable: boolean;
+      action: UpdateAction;
+      /**
+       * The install was handed off but the app did not quit (install watchdog), and the
+       * pending install still completes when Modus closes: AppImage already replaced
+       * the file; the macOS swap script waits up to 10 minutes from the handoff. Never
+       * set on Windows (the NSIS installer gives up when it cannot close the app).
+       */
+      appliesOnQuit?: true;
+    };

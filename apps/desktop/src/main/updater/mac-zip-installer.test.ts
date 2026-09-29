@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAC_INSTALL_WAIT_TICKS } from "./mac-install-script";
 import {
   cleanupMacUpdateArtifacts,
   createMacZipInstaller,
@@ -18,7 +19,11 @@ import {
   type HttpResponse,
   macBackupPath,
 } from "./mac-zip-installer";
-import { createUpdateController, type UpdateCandidate } from "./update-controller";
+import {
+  createUpdateController,
+  INSTALL_WATCHDOG_MS,
+  type UpdateCandidate,
+} from "./update-controller";
 import { UpdateInstallError } from "./update-errors";
 import { RELEASES_URL } from "./update-policy";
 
@@ -246,6 +251,11 @@ describe("mac zip installer", () => {
         candidate({ url: "https://evil.example/Modus-arm64.zip" }),
       ),
     ).toBe("download-page");
+  });
+
+  it("reports that a late quit still installs: the script outlives the service watchdog", () => {
+    expect(makeInstaller().installer.appliesOnQuit).toBe(true);
+    expect(MAC_INSTALL_WAIT_TICKS * 100).toBeGreaterThan(INSTALL_WATCHDOG_MS);
   });
 
   it("spawns the detached swap script and quits", async () => {
