@@ -8,6 +8,13 @@ import { type UpdateToastActionId, updateToastContent } from "./updateToastConte
 
 export type UpdateApi = ModusApi["update"];
 
+/**
+ * A new offer's primary button breathes: a soft ring (::after, opacity only, so nothing
+ * moves) that stops on hover and focus and never runs with reduced motion.
+ */
+export const BREATHE_CLASSES =
+  "update-breathe-ring after:animate-update-breathe hover:after:animate-none focus:after:animate-none focus-visible:after:animate-none motion-reduce:after:animate-none";
+
 const IDLE: UpdateState = { status: "idle" };
 
 /**
@@ -150,6 +157,7 @@ export function UpdateToastView({
                       index === 0
                         ? "border border-hairline-strong bg-chip text-fg hover:bg-chip-strong"
                         : "text-fg-muted hover:bg-hover hover:text-fg",
+                      index === 0 && content.breathe ? BREATHE_CLASSES : null,
                     )}
                     data-update-action={action.id}
                     key={action.id}

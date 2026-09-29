@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateState } from "../../../../shared/contracts";
 import {
+  BREATHE_CLASSES,
   runUpdateAction,
   subscribeToUpdateState,
   type UpdateApi,
@@ -11,7 +12,13 @@ import {
 } from "./UpdateToast";
 import { type UpdateToastActionId, updateToastContent } from "./updateToastContent";
 
-type ButtonProps = { children?: ReactNode; onClick?: () => void; "aria-label"?: string };
+type ButtonProps = {
+  children?: ReactNode;
+  onClick?: () => void;
+  "aria-label"?: string;
+  className?: string;
+  "data-update-action"?: string;
+};
 
 function fakeApi(initial: UpdateState = { status: "idle" }) {
   const listeners = new Set<(state: UpdateState) => void>();
@@ -270,5 +277,48 @@ describe("update state subscription", () => {
     expect(() => runUpdateAction(api, "install" satisfies UpdateToastActionId)).not.toThrow();
     await Promise.resolve();
     expect(api.install).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("breathing primary button", () => {
+  const renderButtons = (state: UpdateState) =>
+    buttons(UpdateToastView({ state, onAction: () => undefined, onDismiss: () => undefined }));
+
+  it.each([
+    { status: "available", version: "1.2.0", action: "install" },
+    { status: "available", version: "1.2.0", action: "download-page" },
+  ] as const)("breathes on the offer's primary button only ($action)", (state) => {
+    const found = renderButtons(state);
+    const primary = found.filter((b) => b.props["data-update-action"]);
+    expect(primary).toHaveLength(1);
+    const classes = primary[0]?.props.className?.split(" ") ?? [];
+    expect(classes).toEqual(expect.arrayContaining(BREATHE_CLASSES.split(" ")));
+    expect(classes).toContain("after:animate-update-breathe");
+    // Stops on hover and focus; never runs with reduced motion.
+    expect(classes).toContain("hover:after:animate-none");
+    expect(classes).toContain("focus:after:animate-none");
+    expect(classes).toContain("focus-visible:after:animate-none");
+    expect(classes).toContain("motion-reduce:after:animate-none");
+    // Not on the other controls (dismiss).
+    const others = found.filter((b) => !b.props["data-update-action"]);
+    expect(others.map((b) => b.props["aria-label"])).toEqual(["Dismiss update"]);
+    for (const other of others) expect(other.props.className).not.toContain("update-breathe");
+  });
+
+  it.each([
+    { status: "downloading", version: "1.2.0", percent: 40 },
+    { status: "ready", version: "1.2.0" },
+    { status: "installing", version: "1.2.0" },
+    { status: "waiting-for-agents", version: "1.2.0" },
+    { status: "failed", version: "1.2.0", retryable: true, action: "install" },
+    { status: "failed", version: "1.2.0", retryable: true, action: "download-page" },
+    { status: "failed", version: "1.2.0", retryable: false, action: "install" },
+    { status: "failed", version: "1.2.0", retryable: true, action: "install", appliesOnQuit: true },
+  ] as const)("never breathes while $status", (state) => {
+    for (const button of renderButtons(state)) {
+      expect(button.props.className).not.toContain("update-breathe");
+    }
+    const tree = UpdateToastView({ state, onAction: () => undefined, onDismiss: () => undefined });
+    expect(renderToStaticMarkup(tree)).not.toContain("update-breathe");
   });
 });

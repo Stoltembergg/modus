@@ -17,6 +17,8 @@ export type UpdateToastContent = {
   actions: UpdateToastAction[];
   /** Only offers and failures can be dismissed (the service hides that version). */
   dismissible: boolean;
+  /** The primary button gently breathes to draw the eye (only for a new offer). */
+  breathe?: boolean;
 };
 
 const DOWNLOAD: UpdateToastAction = { id: "openReleasePage", label: "Download" };
@@ -36,6 +38,7 @@ export function updateToastContent(state: UpdateState): UpdateToastContent | nul
         tone: "info",
         actions: [state.action === "install" ? { id: "install", label: "Install" } : DOWNLOAD],
         dismissible: true,
+        breathe: true,
       };
     case "downloading":
       return {
