@@ -857,6 +857,35 @@ describe("member task transitions", () => {
     );
   });
 
+  it("claim by the suggested reviewer clears the reviewer atomically; others keep it", () => {
+    const { a, b, c, group } = trio();
+    const suggested = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: a,
+      title: "T",
+      reviewerSessionId: b,
+    });
+    const claimed = claimGroupTask(group.id, suggested.id, b);
+    expect(claimed).toMatchObject({ status: "in_progress", ownerSessionId: b });
+    expect(claimed.reviewerSessionId).toBeUndefined();
+    expectStoreError(() => requestGroupTaskReview(group.id, suggested.id, b, b), "self-review");
+    expect(requestGroupTaskReview(group.id, suggested.id, b, c)).toMatchObject({
+      status: "in_review",
+      reviewerSessionId: c,
+    });
+
+    const other = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: a,
+      title: "U",
+      reviewerSessionId: b,
+    });
+    expect(claimGroupTask(group.id, other.id, c)).toMatchObject({
+      ownerSessionId: c,
+      reviewerSessionId: b,
+    });
+  });
+
   it("claim: task-taken when owned; invalid-transition when closed; members only", () => {
     const { a, b, group, stranger } = trio();
     const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });

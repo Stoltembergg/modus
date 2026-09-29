@@ -102,6 +102,11 @@ export type GroupTaskWake = {
   targetSessionId: string;
   /** Task status text posted as the acting member, e.g. "Review requested: …". */
   body: string;
+  /**
+   * false: post the status (mentioning the target) but wake nobody and count
+   * no hop, e.g. "Approved". Defaults to true.
+   */
+  wake?: boolean;
 };
 
 export type GroupRuntimeOptions = {
@@ -396,7 +401,8 @@ export class GroupRuntime {
    * the target) and routes it like a mention, so the wake counts hops, wakes
    * and budget in the chain. Inside a group turn it joins that turn's chain
    * (an ended chain wakes nobody); outside one (the member working in its own
-   * chat) it opens a new chain.
+   * chat) it opens a new chain. With `wake: false` the status only posts
+   * (no route, no hop, no new chain counters).
    */
   handleTaskWake(input: GroupTaskWake): GroupMessage | undefined {
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
@@ -419,6 +425,7 @@ export class GroupRuntime {
       return undefined;
     }
     this.emitMessage(message);
+    if (input.wake === false) return message;
     const chain = joined ?? this.openChain(input.groupId, message.id);
     this.route(chain, message, [input.targetSessionId]);
     this.retireIdleChains();

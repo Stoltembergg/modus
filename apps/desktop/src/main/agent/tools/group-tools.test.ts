@@ -9,8 +9,13 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../../db/database");
 const { ensureChatsWorkspace } = await import("../../workspace/workspace-store");
-const { appendGroupMessage, createAgentGroupWithMembers, listGroupTasks, removeAgentGroupMember } =
-  await import("../../groups/group-store");
+const {
+  appendGroupMessage,
+  createAgentGroupWithMembers,
+  listGroupMessages,
+  listGroupTasks,
+  removeAgentGroupMember,
+} = await import("../../groups/group-store");
 const {
   GROUP_READ_MESSAGES_MAX_LIMIT,
   GROUP_READ_MESSAGES_MAX_TOKENS,
@@ -127,14 +132,79 @@ describe("group member tools", () => {
     expect(runGroupTool("group_review_task", b, { id, verdict: "approve" })).toContain(
       "Approved: task",
     );
-    // Approve wakes nobody (3 wakes: review, changes, review).
-    expect(wakes).toHaveLength(3);
+    // Approve only records a status for the owner (wake: false), without a note just "Approved".
+    expect(wakes).toHaveLength(4);
+    expect(wakes.at(-1)).toEqual({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Approved",
+      wake: false,
+    });
     expect(listGroupTasks(group.id)[0]?.status).toBe("done");
 
     // Release path.
     const other = taskIdFrom(runGroupTool("group_create_task", b, { title: "Docs" }));
     runGroupTool("group_claim_task", b, { id: other });
     expect(runGroupTool("group_release_task", b, { id: other })).toContain("[open]");
+  });
+
+  it("approve with a note records the note in the status", () => {
+    const { group, alpha, beta } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const a = { sessionId: alpha, groupId: group.id };
+    const b = { sessionId: beta, groupId: group.id };
+    const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "T" }));
+    runGroupTool("group_claim_task", a, { id });
+    runGroupTool("group_request_review", a, { id, reviewer: "Beta" });
+    runGroupTool("group_review_task", b, { id, verdict: "approve", note: "  looks good " });
+    expect(wakes.at(-1)).toMatchObject({ body: "Approved: looks good", wake: false });
+  });
+
+  it("the suggested reviewer may claim; the claim clears the reviewer; self-review still applies", () => {
+    const { group, alpha, beta } = squad();
+    const a = { sessionId: alpha, groupId: group.id };
+    const b = { sessionId: beta, groupId: group.id };
+    const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "T", reviewer: "Beta" }));
+    expect(runGroupTool("group_claim_task", b, { id })).toMatch(
+      /\[in_progress\] "T" owner=@Beta reviewer=none$/,
+    );
+    expect(runGroupTool("group_request_review", b, { id, reviewer: "Beta" })).toMatch(
+      /^\[group-error:self-review\] /,
+    );
+    expect(runGroupTool("group_request_review", b, { id, reviewer: "Alpha" })).toContain(
+      "Review requested from @Alpha",
+    );
+  });
+
+  it("an ambiguous reviewer title returns ambiguous-member with the matching session ids", () => {
+    const ws = insertWorkspace();
+    const lead = insertSession(ws, "Lead");
+    const twinA = insertSession(ws, "Twin");
+    const twinB = insertSession(ws, "twin");
+    const group = createAgentGroupWithMembers({
+      name: "Twins",
+      workspaceId: ws,
+      members: [{ sessionId: lead }, { sessionId: twinA }, { sessionId: twinB }],
+      leadSessionId: lead,
+    });
+    const caller = { sessionId: lead, groupId: group.id };
+    const created = runGroupTool("group_create_task", caller, { title: "T", reviewer: "@Twin" });
+    expect(created).toMatch(/^\[group-error:ambiguous-member\] /);
+    expect(created).toContain(twinA);
+    expect(created).toContain(twinB);
+    expect(listGroupTasks(group.id)).toEqual([]);
+
+    const id = taskIdFrom(runGroupTool("group_create_task", caller, { title: "T" }));
+    runGroupTool("group_claim_task", caller, { id });
+    const review = runGroupTool("group_request_review", caller, { id, reviewer: "TWIN" });
+    expect(review).toMatch(/^\[group-error:ambiguous-member\] /);
+    expect(review).toContain(`${twinA}, ${twinB}`);
+    expect(listGroupTasks(group.id)[0]?.status).toBe("in_progress");
+    // The retry with a session id works.
+    expect(runGroupTool("group_request_review", caller, { id, reviewer: twinB })).toContain(
+      "Review requested from @twin",
+    );
   });
 
   it("returns store errors as [group-error:<code>] text and never throws", () => {
@@ -242,6 +312,57 @@ describe("group member tools", () => {
     expect(estimateGroupTokens(page)).toBeLessThanOrEqual(GROUP_READ_MESSAGES_MAX_TOKENS + 50);
     expect([...page.matchAll(/^\[/gm)].length).toBe(5);
     expect(page).toMatch(/older messages: call group_read_messages with before="/);
+  });
+
+  it("a non-member calling execute directly gets not-a-member and changes nothing", async () => {
+    const { ws, group, alpha, loner } = squad();
+    registerGroupTools();
+    const byName = new Map(
+      toolRegistry
+        .getCustomToolDefinitions("chat")
+        .map((definition) => [definition.name, definition]),
+    );
+    const call = async (name: string, params: unknown) => {
+      const execute = byName.get(name)?.execute as unknown as (
+        id: string,
+        params: unknown,
+        signal: undefined,
+        onUpdate: undefined,
+        ctx: { cwd: string },
+      ) => Promise<{ content: Array<{ text: string }> }>;
+      return (await execute("call", params, undefined, undefined, { cwd: "/tmp" })).content[0]
+        ?.text;
+    };
+    // Room and task state the loner could try to touch.
+    appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hello" });
+    const id = taskIdFrom(
+      runGroupTool("group_create_task", { sessionId: alpha, groupId: group.id }, { title: "T" }),
+    );
+    const tasksBefore = listGroupTasks(group.id);
+    const messagesBefore = listGroupMessages(group.id);
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+
+    // The loner even claims the group's id: membership is re-checked from the store.
+    for (const context of [
+      { workspaceId: ws, cwd: "/tmp", sessionId: loner },
+      { workspaceId: ws, cwd: "/tmp", sessionId: loner, groupId: group.id },
+    ]) {
+      setAgentToolContext(context);
+      for (const [name, params] of [
+        ["group_read_messages", {}],
+        ["group_list_tasks", {}],
+        ["group_create_task", { title: "Sneaky" }],
+        ["group_claim_task", { id }],
+        ["group_release_task", { id }],
+        ["group_request_review", { id, reviewer: "Beta" }],
+        ["group_review_task", { id, verdict: "approve" }],
+      ] as const) {
+        expect(await call(name, params)).toMatch(/^\[group-error:not-a-member\] /);
+      }
+    }
+    expect(listGroupTasks(group.id)).toEqual(tasksBefore);
+    expect(listGroupMessages(group.id)).toEqual(messagesBefore);
+    expect(wakes).toEqual([]);
   });
 
   it("registers PI definitions that read the owning session's groupId from the tool context", async () => {

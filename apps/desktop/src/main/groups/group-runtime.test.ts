@@ -847,6 +847,86 @@ describe("task tool wakes", () => {
     });
   });
 
+  it("approve (wake: false) posts a status for the owner in the chain, with no wake and no hop", () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Beta review it" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    const before = groups.chainSnapshot(user.id);
+    const status = groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Approved: ship it",
+      wake: false,
+    });
+    expect(status).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: beta,
+      kind: "status",
+      body: "Approved: ship it",
+      mentions: [alpha],
+      chainId: user.id,
+    });
+    expect(room(group.id).at(-1)?.id).toBe(status?.id);
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.started).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id)).toEqual(before);
+  });
+
+  it('approve outside a group turn posts "Approved" and opens no chain', () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const status = groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Approved",
+      wake: false,
+    });
+    expect(status).toMatchObject({ body: "Approved", mentions: [alpha], kind: "status" });
+    expect(status?.chainId).toBe(status?.id);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.liveChainIds()).toEqual([]);
+    expect(() => groups.chainSnapshot(status?.id ?? "")).toThrow(/Unknown chain/);
+  });
+
+  it("a review request from a turn stopped at the intent gate persists the task but wakes nobody", async () => {
+    const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
+    const { createMemberGroupTask, claimGroupTask, listGroupTasks } = await import("./group-store");
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const task = createMemberGroupTask({ groupId: group.id, actorSessionId: alpha, title: "T" });
+      claimGroupTask(group.id, task.id, alpha);
+      const user = groups.postUserMessage({ groupId: group.id, body: "finish it" });
+      runtime.openGate(alpha);
+      expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
+      // The user answers Proceed; the gated turn goes on and requests a review.
+      const text = runGroupTool(
+        "group_request_review",
+        { sessionId: alpha, groupId: group.id },
+        { id: task.id, reviewer: "Beta" },
+      );
+      expect(text).toContain("Review requested from @Beta");
+      expect(listGroupTasks(group.id)[0]).toMatchObject({
+        status: "in_review",
+        reviewerSessionId: beta,
+      });
+      expect(room(group.id).at(-1)).toMatchObject({
+        kind: "status",
+        authorSessionId: alpha,
+        mentions: [beta],
+        chainId: user.id,
+      });
+      expect(runtime.started).toEqual([alpha]);
+      expect(groups.chainSnapshot(user.id).hops).toBe(1);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  });
+
   it("in an ended chain the status posts but wakes nobody", async () => {
     const { group, alpha, beta, gamma } = squad();
     const { runtime, groups } = setup();

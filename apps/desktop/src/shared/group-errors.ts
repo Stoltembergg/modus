@@ -26,6 +26,7 @@ export const GROUP_ERROR_CODES = [
   "task-taken",
   "invalid-transition",
   "self-review",
+  "ambiguous-member",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

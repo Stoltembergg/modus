@@ -91,7 +91,7 @@ export type GroupToolParams = {
 
 class ToolInputError extends Error {
   constructor(
-    readonly code: "not-a-member" | "invalid-value" | "message-not-found",
+    readonly code: "not-a-member" | "invalid-value" | "message-not-found" | "ambiguous-member",
     message: string,
   ) {
     super(message);
@@ -107,7 +107,13 @@ function errorText(error: unknown): string {
   return `Group tool failed: ${error instanceof Error ? error.message : String(error)}`;
 }
 
-type Roster = { groupId: string; titles: Map<string, string>; handles: Map<string, string> };
+type Roster = {
+  groupId: string;
+  titles: Map<string, string>;
+  handles: Map<string, string>;
+  /** Normalized titles shared by several members → their session ids. */
+  ambiguous: Map<string, string[]>;
+};
 
 function roster(groupId: string): Roster {
   const titles = new Map<string, string>();
@@ -123,14 +129,25 @@ function roster(groupId: string): Roster {
     const key = title.trim().replace(/^@/, "").toLowerCase();
     byTitle.set(key, [...(byTitle.get(key) ?? []), sessionId]);
   }
-  for (const [key, ids] of byTitle) if (ids.length === 1 && ids[0]) handles.set(key, ids[0]);
-  return { groupId, titles, handles };
+  const ambiguous = new Map<string, string[]>();
+  for (const [key, ids] of byTitle) {
+    if (ids.length === 1 && ids[0]) handles.set(key, ids[0]);
+    else if (!handles.has(key)) ambiguous.set(key, ids);
+  }
+  return { groupId, titles, handles, ambiguous };
 }
 
 /** A member by session id or unique title (with or without a leading @). */
 function resolveMember(members: Roster, handle: string): string {
   const key = handle.trim().replace(/^@/, "").toLowerCase();
   const id = members.handles.get(key);
+  const matches = id ? undefined : members.ambiguous.get(key);
+  if (matches) {
+    throw new ToolInputError(
+      "ambiguous-member",
+      `"${handle}" matches ${matches.length} members (${matches.join(", ")}); retry with one of these session ids.`,
+    );
+  }
   if (!id) {
     throw new ToolInputError(
       "not-a-member",
@@ -283,6 +300,16 @@ export function runGroupTool<N extends GroupToolName>(
         }
         const task = reviewGroupTask(groupId, input.id, actor, input.verdict);
         const note = input.note?.trim().slice(0, MAX_NOTE_CHARS);
+        if (input.verdict === "approve" && task.ownerSessionId) {
+          // Recorded in the room for the owner, but wakes nobody.
+          taskWakeSink?.({
+            groupId,
+            actorSessionId: actor,
+            targetSessionId: task.ownerSessionId,
+            body: note ? `Approved: ${note}` : "Approved",
+            wake: false,
+          });
+        }
         if (input.verdict === "changes" && task.ownerSessionId) {
           taskWakeSink?.({
             groupId,

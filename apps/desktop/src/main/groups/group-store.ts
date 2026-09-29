@@ -1073,7 +1073,11 @@ export function createMemberGroupTask(input: {
   });
 }
 
-/** Claim an unowned `open` task: the caller becomes owner, status `in_progress`. */
+/**
+ * Claim an unowned `open` task: the caller becomes owner, status `in_progress`.
+ * A suggested reviewer may claim it; the claim then clears the reviewer in the
+ * same update (an owner never reviews their own task).
+ */
 export function claimGroupTask(groupId: string, taskId: string, actorSessionId: string): GroupTask {
   const db = getDatabase();
   return inTransaction(db, () => {
@@ -1083,7 +1087,11 @@ export function claimGroupTask(groupId: string, taskId: string, actorSessionId: 
       throw new GroupStoreError("task-taken", `Task ${taskId} is already owned.`);
     }
     if (effectiveTaskStatus(task) !== INITIAL_TASK_STATUS) throw invalidTransition(task, "claim");
-    return writeTaskTransition(taskId, { status: IN_PROGRESS_TASK_STATUS, owner: actorSessionId });
+    return writeTaskTransition(taskId, {
+      status: IN_PROGRESS_TASK_STATUS,
+      owner: actorSessionId,
+      ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
+    });
   });
 }
 

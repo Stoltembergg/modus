@@ -20,6 +20,7 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "task-taken": "That task already has an owner.",
   "invalid-transition": "That task can't move to that status from where it is.",
   "self-review": "A task's owner can't review their own task.",
+  "ambiguous-member": "More than one member has that name. Pick the chat by its id.",
 };
 
 /**
