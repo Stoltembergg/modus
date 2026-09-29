@@ -593,3 +593,36 @@ describe("SidebarGroups room selection and states", () => {
     expect(within(inbox as HTMLElement).queryByTestId("group-waiting-dot")).toBeNull();
   });
 });
+
+describe("SidebarGroups duplicate member titles", () => {
+  it("labels repeated titles with a muted short id; unique titles stay plain", () => {
+    const sessions = [
+      session("3f2a91c0", { title: "Reviewer" }),
+      session("8b01d2e3", { title: "Reviewer" }),
+      session("c0ffee00", { title: "Planner" }),
+    ];
+    const group: AgentGroupWithMembers = {
+      id: "g-dup",
+      name: "Dup squad",
+      workspaceId: "ws-1",
+      mode: "free",
+      members: sessions.map((s) => member("g-dup", s.id)),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={[group]}
+        sessions={sessions}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+    expect(screen.getAllByTestId("group-member-row").map((row) => row.textContent)).toEqual([
+      "Reviewer · 3f2a",
+      "Reviewer · 8b01",
+      "Planner",
+    ]);
+  });
+});

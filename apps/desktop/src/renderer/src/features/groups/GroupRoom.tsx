@@ -14,7 +14,9 @@ import { SessionStatusDot } from "../agent/SessionStatusDot";
 import { CreateGroupDialog, type GroupMembersChange } from "./CreateGroupDialog";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
+import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
+import { type MemberLabel, memberLabels, memberLabelText } from "./memberLabels";
 import { useGroupMessages } from "./useGroupMessages";
 import {
   type GroupActivityState,
@@ -166,6 +168,7 @@ function RoomHeader({
   onDelete(): void;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const labels = useMemo(() => memberLabels(members), [members]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   return (
@@ -235,9 +238,9 @@ function RoomHeader({
           <MemberChip
             isLead={group.leadSessionId === member.sessionId}
             key={member.sessionId}
+            label={labels.get(member.sessionId) ?? { title: member.title }}
             onOpen={() => onOpenMember(member.sessionId)}
             state={memberActivityState(memberStates, group.id, member.sessionId)}
-            title={member.title}
           />
         ))}
       </div>
@@ -270,12 +273,12 @@ export function GroupStateDot({ state }: { state: GroupActivityState }) {
 }
 
 function MemberChip({
-  title,
+  label,
   isLead,
   state,
   onOpen,
 }: {
-  title: string;
+  label: MemberLabel;
   isLead: boolean;
   state: GroupActivityState;
   onOpen(): void;
@@ -286,11 +289,13 @@ function MemberChip({
       data-state={state}
       data-testid="group-member-chip"
       onClick={onOpen}
-      title={`Open ${title}`}
+      title={`Open ${memberLabelText(label)}`}
       type="button"
     >
       <GroupStateDot state={state} />
-      <span className="min-w-0 truncate">{title}</span>
+      <span className="min-w-0 truncate">
+        <MemberName label={label} />
+      </span>
       {isLead ? (
         <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-accent/12 px-1 text-2xs text-accent">
           <IconCrown aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />
@@ -319,10 +324,7 @@ function MessageList({
     height: 0,
     nearBottom: true,
   });
-  const titles = useMemo(
-    () => new Map(members.map((member) => [member.sessionId, member.title])),
-    [members],
-  );
+  const labels = useMemo(() => memberLabels(members), [members]);
 
   // Older page prepended: keep the view where it was. New message at the bottom:
   // follow it when the user was already at the bottom.
@@ -375,7 +377,7 @@ function MessageList({
             members={members}
             message={message}
             onOpenFile={onOpenFile}
-            titles={titles}
+            labels={labels}
           />
         ))}
       </div>
@@ -429,18 +431,18 @@ export function isWaitingStatus(body: string): boolean {
 export function GroupMessageRow({
   message,
   members,
-  titles,
+  labels,
   cwd,
   onOpenFile,
 }: {
   message: GroupMessage;
   members: readonly MentionMember[];
-  titles: ReadonlyMap<string, string>;
+  labels: ReadonlyMap<string, MemberLabel>;
   cwd?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
 }) {
-  const author = message.authorSessionId
-    ? (titles.get(message.authorSessionId) ?? message.authorSessionId)
+  const author: MemberLabel | undefined = message.authorSessionId
+    ? (labels.get(message.authorSessionId) ?? { title: message.authorSessionId })
     : undefined;
   if (message.kind === "status") {
     const waiting = isWaitingStatus(message.body);
@@ -451,7 +453,9 @@ export function GroupMessageRow({
         data-testid="group-message"
       >
         {author && message.authorKind === "agent" ? (
-          <span className="text-fg-subtle">{author} · </span>
+          <span className="text-fg-subtle">
+            <MemberName label={author} /> ·{" "}
+          </span>
         ) : null}
         <span
           className={waiting ? "text-amber-400" : undefined}
@@ -472,7 +476,8 @@ export function GroupMessageRow({
     );
   }
   const sessionId = message.authorSessionId ?? "";
-  const title = author ?? "Member";
+  const label = author ?? { title: "Member" };
+  const title = label.title;
   return (
     <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
       <span
@@ -483,7 +488,9 @@ export function GroupMessageRow({
         {title.trim().charAt(0).toLocaleUpperCase() || "?"}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="mb-0.5 font-medium text-fg-muted text-xs">{title}</div>
+        <div className="mb-0.5 font-medium text-fg-muted text-xs">
+          <MemberName label={label} />
+        </div>
         <div className="text-fg text-sm">
           <MarkdownMessage
             content={linkMentionsInMarkdown(message.body, members)}

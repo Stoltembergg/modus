@@ -22,6 +22,8 @@ import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import { CreateGroupDialog, type GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { groupMemberSessionIds, isGroupWorkingStub } from "../features/groups/groupSidebarModel";
+import { MemberName } from "../features/groups/MemberName";
+import { type MemberLabel, memberLabels } from "../features/groups/memberLabels";
 import { cn } from "../lib/cn";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
 
@@ -119,6 +121,9 @@ export function SidebarGroups({
         const memberSessions = group.members
           .map((member) => sessionsById.get(member.sessionId))
           .filter((session): session is AgentSessionInfo => Boolean(session));
+        const labels = memberLabels(
+          memberSessions.map((session) => ({ sessionId: session.id, title: session.title })),
+        );
         return (
           <div data-group-id={group.id} key={group.id}>
             <GroupRow
@@ -155,7 +160,7 @@ export function SidebarGroups({
                       onSelect={() => onSelectSession(session)}
                       onToggleLead={() => onSetLead(group.id, isLead ? null : session.id)}
                       role={group.members.find((m) => m.sessionId === session.id)?.role}
-                      title={session.title}
+                      label={labels.get(session.id) ?? { title: session.title }}
                     />
                   );
                 })}
@@ -434,7 +439,7 @@ export function GroupMenuItems({
 }
 
 function MemberRow({
-  title,
+  label,
   role,
   isLead,
   isActive,
@@ -443,7 +448,7 @@ function MemberRow({
   onToggleLead,
   onRemove,
 }: {
-  title: string;
+  label: MemberLabel;
   role: string | undefined;
   isLead: boolean;
   isActive: boolean;
@@ -470,7 +475,9 @@ function MemberRow({
         title="Open"
         type="button"
       >
-        <span className="min-w-0 flex-1 truncate-fade">{title}</span>
+        <span className="min-w-0 flex-1 truncate-fade">
+          <MemberName label={label} />
+        </span>
         {isLead ? (
           <span className="shrink-0 text-fg-faint" title="Lead">
             <IconCrown aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />

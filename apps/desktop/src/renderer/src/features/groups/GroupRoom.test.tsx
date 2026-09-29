@@ -154,7 +154,16 @@ describe("GroupRoom", () => {
     expect(within(header).getByText("Release squad")).toBeTruthy();
     expect(screen.getByTestId("group-project-badge").textContent).toBe("Repo");
     const chips = screen.getAllByTestId("group-member-chip");
-    expect(chips.map((chip) => chip.textContent)).toEqual(["PlannerLead", "Reviewer", "Reviewer"]);
+    // A repeated title gets the muted short id suffix; unique titles stay plain.
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      "PlannerLead",
+      "Reviewer · srev1",
+      "Reviewer · srev2",
+    ]);
+    expect(within(chips[1] as HTMLElement).getByTestId("member-id-suffix").className).toContain(
+      "text-fg-faint",
+    );
+    expect(within(chips[0] as HTMLElement).queryByTestId("member-id-suffix")).toBeNull();
     expect(group.listMessages).toHaveBeenCalledWith({ groupId: "g-1", limit: GROUP_MESSAGE_PAGE });
     // No member running: no Stop button.
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
@@ -192,7 +201,7 @@ describe("GroupRoom", () => {
     expect(within(memberRow as HTMLElement).getByTestId("mention-chip").textContent).toBe(
       "@Reviewer",
     );
-    expect(memberStatus?.textContent).toBe("Reviewer · Waiting for you");
+    expect(memberStatus?.textContent).toBe("Reviewer · srev1 · Waiting for you");
     expect(systemStatus?.textContent).toBe("Turn failed");
     // The lazy markdown renderer can take a few seconds to load under a full run.
   }, 30_000);
