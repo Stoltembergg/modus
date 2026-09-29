@@ -1,4 +1,5 @@
-/** Gap 4 contracts split part 2/7 — do not edit by hand */
+import type { PermissionAction } from "./contracts-part-04";
+
 export type CheckpointInfo = {
   id: string;
   sessionId: string;
