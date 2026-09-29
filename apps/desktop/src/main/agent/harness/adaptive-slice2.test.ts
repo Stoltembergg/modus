@@ -141,6 +141,16 @@ describe("adaptive slice 2 persistence", () => {
       .prepare(`select value from app_settings where key = ?`)
       .get("harness.promotion.repeated_failures:ws2") as { value: string } | undefined;
     expect(setting?.value).toContain("insight-1");
+    const parsed = JSON.parse(setting?.value ?? "{}") as {
+      policy?: { effects?: Array<{ op: string; codes?: string[] }> };
+    };
+    expect(parsed.policy?.effects?.[0]?.op).toBe("add_avoid_strategies");
+    expect(parsed.policy?.effects?.[0]?.codes).toEqual(["same_edit_retry", "blind_retry"]);
+
+    const { loadPromotedPolicies } = await import("./promoted-policy-store");
+    const loaded = loadPromotedPolicies("ws2");
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.kind).toBe("repeated_failures");
   });
 
   it("persists project model edges and uses them for impact", async () => {
