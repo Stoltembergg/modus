@@ -35,6 +35,7 @@ import {
 import { getWorkspace } from "../../workspace/workspace-store";
 import { getAgentSession, updateAgentSessionWorktree } from "../agent-store";
 import { toolRegistry } from "./registry";
+import { lastAssistantToolCallCount } from "./tool-batch";
 import { resolveAgentToolContext } from "./tool-context";
 
 /**
@@ -125,7 +126,8 @@ class ToolInputError extends Error {
       | "message-not-found"
       | "ambiguous-member"
       | "no-git-project"
-      | "branch-checked-out",
+      | "branch-checked-out"
+      | "call-alone",
     message: string,
   ) {
     super(message);
@@ -397,6 +399,19 @@ export async function startMemberWorktree(caller: GroupToolCaller): Promise<Star
   try {
     const groupId = requireCallerGroup(caller);
     const actor = caller.sessionId;
+    // PI ends the turn only when every call of the batch terminates: refuse
+    // before touching anything unless this call is alone (count unknown = refuse).
+    const batch = lastAssistantToolCallCount(actor);
+    if (batch !== 1) {
+      throw new ToolInputError(
+        "call-alone",
+        `${
+          batch === undefined
+            ? "Could not tell how many tool calls your message made."
+            : `Your message made ${batch} tool calls.`
+        } Nothing was changed: call group_start_worktree alone in its own message.`,
+      );
+    }
     const workspaceId = getAgentGroupForSession(actor)?.workspaceId;
     const project = workspaceId ? getWorkspace(workspaceId) : undefined;
     if (!project) {

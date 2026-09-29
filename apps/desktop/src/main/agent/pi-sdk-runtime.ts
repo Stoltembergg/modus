@@ -180,6 +180,7 @@ import { toolRegistry } from "./tools/registry";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
 import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
+import { clearAssistantToolCallCount, noteAssistantMessageToolCalls } from "./tools/tool-batch";
 import {
   type AgentToolContext,
   runWithAgentToolContext,
@@ -1840,6 +1841,9 @@ export class PiSdkRuntime implements AgentRuntime {
     };
     const sessionUnsubscribe = session.subscribe((event) => {
       this.noteAssistantResponseUsage(params.info.id, event);
+      // Before PI runs this message's tool calls: group_start_worktree must be alone.
+      if (event.type === "message_end")
+        noteAssistantMessageToolCalls(params.info.id, event.message);
       for (const normalized of normalizePiEvent(event)) {
         if (normalized.type === "tool.delta" || normalized.type === "tool.started") {
           const hiddenProfiles = toolRegistry.getEntry(normalized.toolName)?.ui
@@ -3871,6 +3875,7 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     if (!options.keepTodos) clearTodoSessionCache(sessionId);
+    clearAssistantToolCallCount(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     if (activeRun) clearMcpCitationRun(sessionId, activeRun.id);
     // Settle any in-flight resume first: it would otherwise re-cache a live

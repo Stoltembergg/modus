@@ -31,6 +31,8 @@ export const GROUP_ERROR_CODES = [
   "no-git-project",
   // The member branch is checked out outside .modus/worktrees (e.g. the Project root).
   "branch-checked-out",
+  // group_start_worktree was not the only tool call of its message.
+  "call-alone",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

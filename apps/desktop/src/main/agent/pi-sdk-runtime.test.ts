@@ -1699,6 +1699,52 @@ describe("PiSdkRuntime", () => {
     expect(markers[0]?.payload_json).not.toContain("Implement the feature");
   });
 
+  it("records the tool-call count of each assistant message_end (group_start_worktree must be alone)", async () => {
+    const { lastAssistantToolCallCount } = await import("./tools/tool-batch");
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const seen: Array<number | undefined> = [];
+    const toolCall = (id: string) => ({ type: "toolCall", id, name: "bash", arguments: {} });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "assistant", content: [toolCall("a"), toolCall("b")] },
+        });
+        // What a tool of that batch would read while it executes.
+        seen.push(lastAssistantToolCallCount(sessionId));
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "toolResult", content: [{ type: "text", text: "ok" }] },
+        });
+        mocks.emitPiEvent({
+          type: "message_end",
+          message: { role: "assistant", content: [toolCall("c")] },
+        });
+        seen.push(lastAssistantToolCallCount(sessionId));
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "done" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "tool-batch-user",
+    });
+
+    expect(seen).toEqual([2, 1]);
+    await runtime.releaseRuntime(sessionId);
+    expect(lastAssistantToolCallCount(sessionId)).toBeUndefined();
+  });
+
   it("does not auto-continue a turn whose stored cwd moved (member worktree); the turn is ok", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));

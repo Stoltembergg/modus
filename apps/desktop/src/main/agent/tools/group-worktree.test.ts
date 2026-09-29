@@ -28,10 +28,29 @@ const {
   startMemberWorktree: startWorktree,
 } = await import("./group-tools");
 const { toolRegistry } = await import("./registry");
+const { clearAssistantToolCallCount, noteAssistantMessageToolCalls } = await import("./tool-batch");
+
+/** PI's assistant `message_end` for a message with `calls` tool calls (what the runtime records). */
+function assistantMessage(sessionId: string, calls: string[]): void {
+  noteAssistantMessageToolCalls(sessionId, {
+    role: "assistant",
+    content: [
+      { type: "text", text: "On it." },
+      ...calls.map((name, index) => ({
+        type: "toolCall",
+        id: `call-${index}`,
+        name,
+        arguments: {},
+      })),
+    ],
+  });
+}
+const lone = (sessionId: string) => assistantMessage(sessionId, ["group_start_worktree"]);
 const { setAgentToolContext } = await import("./tool-context");
 
 /** The tool text (these tests run outside any group turn: no sink, no turn end). */
 async function startMemberWorktree(caller: { sessionId: string; groupId?: string }) {
+  lone(caller.sessionId);
   const result = await startWorktree(caller);
   expect(result.endTurn).toBe(false);
   return result.text;
@@ -339,6 +358,7 @@ describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
     ) => Promise<{ content: Array<{ text: string }>; terminate?: boolean }>;
     setAgentToolContext({ workspaceId: ws, cwd: root, sessionId: alpha, groupId: group.id });
 
+    lone(alpha);
     const result = await execute("call-1", {}, undefined, undefined, { cwd: root });
 
     const branch = getAgentSession(alpha)?.subagentWorktree?.branch;
@@ -349,6 +369,7 @@ describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
 
     // Idempotent call with the cwd already there: no turn end, no re-wake.
     sink.mockClear();
+    lone(alpha);
     const again = await execute("call-2", {}, undefined, undefined, { cwd: root });
     expect(sink).not.toHaveBeenCalled();
     expect(again.terminate).toBeUndefined();
@@ -360,6 +381,7 @@ describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
     const sink = vi.fn(() => false);
     setGroupWorktreeReadySink(sink);
 
+    lone(alpha);
     const result = await startWorktree(a);
 
     expect(sink).toHaveBeenCalledTimes(1);
@@ -375,6 +397,7 @@ describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
     const branch = `group/${group.id}/alpha-${alpha.replace(/-/g, "").slice(0, 8)}`;
     git(root, "checkout", "-q", "-b", branch);
 
+    lone(alpha);
     const result = await startWorktree(a);
 
     expect(result.endTurn).toBe(false);
@@ -385,5 +408,69 @@ describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
     expect(getAgentSession(alpha)?.cwd).toBe(root);
     expect(getAgentSession(alpha)?.subagentWorktree).toBeUndefined();
     expect(git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
+  });
+});
+
+describe("group_start_worktree must be called alone", () => {
+  async function untouched(input: Awaited<ReturnType<typeof squad>>, taskId: string) {
+    const session = getAgentSession(input.alpha);
+    expect(session?.cwd).toBe(input.root);
+    expect(session?.subagentWorktree).toBeUndefined();
+    const row = getDatabase()
+      .prepare(
+        "select subagent_worktree_path, subagent_worktree_branch from agent_sessions where id = ?",
+      )
+      .get(input.alpha) as Record<string, unknown>;
+    expect(row).toEqual({ subagent_worktree_path: null, subagent_worktree_branch: null });
+    expect(
+      listGroupTasks(input.group.id).find((task) => task.id === taskId)?.branch,
+    ).toBeUndefined();
+    expect(git(input.root, "branch", "--list", "group/*")).toBe("");
+    expect(existsSync(join(input.root, ".modus", "worktrees"))).toBe(false);
+    expect(git(input.root, "worktree", "list", "--porcelain").match(/^worktree /gm)).toHaveLength(
+      1,
+    );
+  }
+
+  it("a batch with two tool calls is refused with no effect; a lone call right after works", async () => {
+    const input = await squad();
+    const { alpha, a } = input;
+    const taskId = taskIdFrom(runGroupTool("group_create_task", a, { title: "Mine" }));
+    runGroupTool("group_claim_task", a, { id: taskId });
+    const sink = vi.fn(() => true);
+    setGroupWorktreeReadySink(sink);
+
+    assistantMessage(alpha, ["group_start_worktree", "bash"]);
+    const refused = await startWorktree(a);
+
+    expect(refused.endTurn).toBe(false);
+    expect(refused.text).toMatch(/^\[group-error:call-alone\] /);
+    expect(refused.text).toContain("call group_start_worktree alone in its own message");
+    expect(sink).not.toHaveBeenCalled();
+    await untouched(input, taskId);
+
+    lone(alpha);
+    const accepted = await startWorktree(a);
+    expect(accepted.endTurn).toBe(true);
+    expect(sink).toHaveBeenCalledTimes(1);
+    const worktree = getAgentSession(alpha)?.subagentWorktree;
+    expect(getAgentSession(alpha)?.cwd).toBe(worktree?.path);
+    expect(listGroupTasks(input.group.id).find((task) => task.id === taskId)?.branch).toBe(
+      worktree?.branch,
+    );
+  });
+
+  it("refuses with call-alone when no assistant message was recorded for the session", async () => {
+    const input = await squad();
+    const taskId = taskIdFrom(runGroupTool("group_create_task", input.a, { title: "Mine" }));
+    runGroupTool("group_claim_task", input.a, { id: taskId });
+    clearAssistantToolCallCount(input.alpha);
+
+    const refused = await startWorktree(input.a);
+
+    expect(refused).toMatchObject({ endTurn: false });
+    expect(refused.text).toMatch(/^\[group-error:call-alone\] /);
+    expect(refused.text).toContain("call group_start_worktree alone in its own message");
+    await untouched(input, taskId);
   });
 });
