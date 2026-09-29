@@ -22,7 +22,12 @@ const {
   addAgentGroupMember,
   addGroupDecision,
   appendGroupMessage,
+  claimGroupTask,
+  createMemberGroupTask,
   getGroupMessage,
+  releaseGroupTask,
+  requestGroupTaskReview,
+  reviewGroupTask,
   createAgentGroup,
   createAgentGroupWithMembers,
   createGroupTask,
@@ -759,6 +764,234 @@ describe("tasks", () => {
     expectStoreError(() => updateGroupTask(task.id, { ownerSessionId: outsider }), "not-a-member");
     expectStoreError(() => updateGroupTask("missing", { status: "done" }), "task-not-found");
     expect(listGroupTasks(group.id)[0]?.status).toBe("open");
+  });
+});
+
+/* ── member task transitions (PR 4a) ─────────────────────────────────── */
+
+describe("member task transitions", () => {
+  /** Squad with a third member c and a stranger from the same Project. */
+  function trio() {
+    const fixture = projectGroupFixture();
+    const c = insertSession(fixture.workspaceId);
+    addAgentGroupMember({ groupId: fixture.group.id, sessionId: c });
+    const stranger = insertSession(fixture.workspaceId);
+    return { ...fixture, c, stranger };
+  }
+
+  it("valid path: create → claim → request review → changes → review → approve (done)", () => {
+    const { a, b, c, group } = trio();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: c,
+      title: "  Parser  ",
+      description: "grammar v2",
+      reviewerSessionId: b,
+    });
+    expect(task).toMatchObject({
+      status: "open",
+      title: "Parser",
+      createdBySessionId: c,
+      reviewerSessionId: b,
+    });
+    expect(task.ownerSessionId).toBeUndefined();
+
+    expect(claimGroupTask(group.id, task.id, a)).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: a,
+    });
+    expect(requestGroupTaskReview(group.id, task.id, a, b)).toMatchObject({
+      status: "in_review",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+    });
+    expect(reviewGroupTask(group.id, task.id, b, "changes")).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: a,
+      reviewerSessionId: b,
+    });
+    // A new review may go to another member.
+    expect(requestGroupTaskReview(group.id, task.id, a, c)).toMatchObject({
+      status: "in_review",
+      reviewerSessionId: c,
+    });
+    expect(reviewGroupTask(group.id, task.id, c, "approve")).toMatchObject({
+      status: "done",
+      ownerSessionId: a,
+    });
+  });
+
+  it("release: the owner gives an in_progress task back (open, no owner); anyone may claim it", () => {
+    const { a, b, group } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    claimGroupTask(group.id, task.id, a);
+    const released = releaseGroupTask(group.id, task.id, a);
+    expect(released.status).toBe("open");
+    expect(released.ownerSessionId).toBeUndefined();
+    expect(claimGroupTask(group.id, task.id, b)).toMatchObject({ ownerSessionId: b });
+  });
+
+  it("create: members only; the reviewer must be a member", () => {
+    const { a, group, stranger } = trio();
+    expectStoreError(
+      () => createMemberGroupTask({ groupId: group.id, actorSessionId: stranger, title: "T" }),
+      "not-a-member",
+    );
+    expectStoreError(
+      () =>
+        createMemberGroupTask({
+          groupId: group.id,
+          actorSessionId: a,
+          title: "T",
+          reviewerSessionId: stranger,
+        }),
+      "not-a-member",
+    );
+    expectStoreError(
+      () => createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "  " }),
+      "invalid-value",
+    );
+    expectStoreError(
+      () => createMemberGroupTask({ groupId: "missing", actorSessionId: a, title: "T" }),
+      "group-not-found",
+    );
+  });
+
+  it("claim by the suggested reviewer clears the reviewer atomically; others keep it", () => {
+    const { a, b, c, group } = trio();
+    const suggested = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: a,
+      title: "T",
+      reviewerSessionId: b,
+    });
+    const claimed = claimGroupTask(group.id, suggested.id, b);
+    expect(claimed).toMatchObject({ status: "in_progress", ownerSessionId: b });
+    expect(claimed.reviewerSessionId).toBeUndefined();
+    expectStoreError(() => requestGroupTaskReview(group.id, suggested.id, b, b), "self-review");
+    expect(requestGroupTaskReview(group.id, suggested.id, b, c)).toMatchObject({
+      status: "in_review",
+      reviewerSessionId: c,
+    });
+
+    const other = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: a,
+      title: "U",
+      reviewerSessionId: b,
+    });
+    expect(claimGroupTask(group.id, other.id, c)).toMatchObject({
+      ownerSessionId: c,
+      reviewerSessionId: b,
+    });
+  });
+
+  it("claim: task-taken when owned; invalid-transition when closed; members only", () => {
+    const { a, b, group, stranger } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    claimGroupTask(group.id, task.id, a);
+    expectStoreError(() => claimGroupTask(group.id, task.id, b), "task-taken");
+    expectStoreError(() => claimGroupTask(group.id, task.id, a), "task-taken");
+    const cancelled = createGroupTask({ groupId: group.id, title: "Old", status: "cancelled" });
+    expectStoreError(() => claimGroupTask(group.id, cancelled.id, b), "invalid-transition");
+    const done = createGroupTask({ groupId: group.id, title: "Shipped", status: "done" });
+    expectStoreError(() => claimGroupTask(group.id, done.id, b), "invalid-transition");
+    const open = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "U" });
+    expectStoreError(() => claimGroupTask(group.id, open.id, stranger), "not-a-member");
+    expectStoreError(() => claimGroupTask(group.id, "missing", a), "task-not-found");
+    // A task of another group is not found from this one.
+    const other = createAgentGroup({ name: "Other", workspaceId: insertWorkspace() });
+    const foreign = createGroupTask({ groupId: other.id, title: "Foreign" });
+    expectStoreError(() => claimGroupTask(group.id, foreign.id, a), "task-not-found");
+    // A non-closed task whose owner vanished (FK null) reads as open: claimable.
+    const orphan = createGroupTask({ groupId: group.id, title: "Orphan", status: "in_progress" });
+    expect(claimGroupTask(group.id, orphan.id, b)).toMatchObject({
+      status: "in_progress",
+      ownerSessionId: b,
+    });
+  });
+
+  it("release: owner only, and only from in_progress", () => {
+    const { a, b, group } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    expectStoreError(() => releaseGroupTask(group.id, task.id, a), "not-owner");
+    claimGroupTask(group.id, task.id, a);
+    expectStoreError(() => releaseGroupTask(group.id, task.id, b), "not-owner");
+    requestGroupTaskReview(group.id, task.id, a, b);
+    expectStoreError(() => releaseGroupTask(group.id, task.id, a), "invalid-transition");
+    reviewGroupTask(group.id, task.id, b, "approve");
+    expectStoreError(() => releaseGroupTask(group.id, task.id, a), "invalid-transition");
+  });
+
+  it("request review: owner only, another member (self-review), only from in_progress", () => {
+    const { a, b, c, group, stranger } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, a, b), "not-owner");
+    claimGroupTask(group.id, task.id, a);
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, b, c), "not-owner");
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, a, a), "self-review");
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, a, stranger), "not-a-member");
+    requestGroupTaskReview(group.id, task.id, a, b);
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, a, c), "invalid-transition");
+    reviewGroupTask(group.id, task.id, b, "approve");
+    expectStoreError(() => requestGroupTaskReview(group.id, task.id, a, b), "invalid-transition");
+  });
+
+  it("review: the pending review's reviewer only; closed tasks are invalid-transition", () => {
+    const { a, b, c, group } = trio();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: a,
+      title: "T",
+      reviewerSessionId: b,
+    });
+    // A suggested reviewer has no rights before a review is requested.
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "not-reviewer");
+    claimGroupTask(group.id, task.id, a);
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "not-reviewer");
+    requestGroupTaskReview(group.id, task.id, a, b);
+    expectStoreError(() => reviewGroupTask(group.id, task.id, a, "approve"), "not-reviewer");
+    expectStoreError(() => reviewGroupTask(group.id, task.id, c, "changes"), "not-reviewer");
+    expectStoreError(
+      () => reviewGroupTask(group.id, task.id, b, "close" as "approve"),
+      "invalid-value",
+    );
+    reviewGroupTask(group.id, task.id, b, "changes");
+    // After changes the review is no longer pending.
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "not-reviewer");
+    requestGroupTaskReview(group.id, task.id, a, b);
+    reviewGroupTask(group.id, task.id, b, "approve");
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "invalid-transition");
+    // `cancelled` is never produced by these transitions.
+    expect(listGroupTasks(group.id, { status: "cancelled" })).toEqual([]);
+  });
+
+  it("the reviewer leaving during in_review drops the task to in_progress (existing rule)", () => {
+    const { a, b, group } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: a, title: "T" });
+    claimGroupTask(group.id, task.id, a);
+    requestGroupTaskReview(group.id, task.id, a, b);
+    removeAgentGroupMember(group.id, b);
+    const [stored] = listGroupTasks(group.id);
+    expect(stored).toMatchObject({ id: task.id, status: "in_progress", ownerSessionId: a });
+    expect(stored?.reviewerSessionId).toBeUndefined();
+    // The owner can ask someone else.
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "not-reviewer");
+  });
+
+  it("the owner leaving during review sends it back to open; the old reviewer then gets not-reviewer", () => {
+    const { a, b, c, group } = trio();
+    const task = createMemberGroupTask({ groupId: group.id, actorSessionId: c, title: "T" });
+    claimGroupTask(group.id, task.id, a);
+    requestGroupTaskReview(group.id, task.id, a, b);
+    removeAgentGroupMember(group.id, a);
+    const [stored] = listGroupTasks(group.id);
+    expect(stored).toMatchObject({ id: task.id, status: "open" });
+    expect(stored?.ownerSessionId).toBeUndefined();
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "approve"), "not-reviewer");
+    expectStoreError(() => reviewGroupTask(group.id, task.id, b, "changes"), "not-reviewer");
+    // It is claimable again.
+    expect(claimGroupTask(group.id, task.id, c)).toMatchObject({ ownerSessionId: c });
   });
 });
 

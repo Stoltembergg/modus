@@ -20,6 +20,13 @@ export const GROUP_ERROR_CODES = [
   "archived-session",
   "not-a-member",
   "invalid-value",
+  // Member task tools (transition rules enforced by the store).
+  "not-owner",
+  "not-reviewer",
+  "task-taken",
+  "invalid-transition",
+  "self-review",
+  "ambiguous-member",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

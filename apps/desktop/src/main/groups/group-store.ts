@@ -995,6 +995,181 @@ export function listGroupTasks(
   return rows.map(toTask);
 }
 
+/* ── Member task transitions (the rules the member tools rely on) ───────── */
+/*
+ * open ──claim──▶ in_progress ──request review──▶ in_review ──approve──▶ done
+ *   ▲                │   ▲                            │
+ *   └────release─────┘   └──────────changes───────────┘
+ *
+ * `cancelled` is not reachable here (only through updateGroupTask). A member
+ * leaving reuses detachMemberRows: owner leaves → open with no owner; reviewer
+ * leaves during in_review → in_progress.
+ */
+
+function requireTaskInGroup(taskId: string, groupId: string): GroupTask {
+  const task = requireTask(taskId);
+  if (task.groupId !== groupId) {
+    throw new GroupStoreError("task-not-found", `Group task not found: ${taskId}`);
+  }
+  return task;
+}
+
+/**
+ * The status the rules act on, per the reading convention on
+ * removeAgentGroupMember: a non-closed task with no owner counts as `open`
+ * (e.g. its owner's session was deleted and the FK nulled the owner).
+ */
+function effectiveTaskStatus(task: GroupTask): GroupTaskStatus {
+  if (CLOSED_TASK_STATUSES.includes(task.status)) return task.status;
+  return task.ownerSessionId ? task.status : INITIAL_TASK_STATUS;
+}
+
+function invalidTransition(task: GroupTask, action: string): GroupStoreError {
+  return new GroupStoreError(
+    "invalid-transition",
+    `Cannot ${action} task ${task.id}: it is ${effectiveTaskStatus(task)}.`,
+  );
+}
+
+function writeTaskTransition(
+  taskId: string,
+  fields: { status: GroupTaskStatus; owner?: string | null; reviewer?: string | null },
+): GroupTask {
+  const sets = ["status = ?"];
+  const params: Array<string | null> = [fields.status];
+  if (fields.owner !== undefined) {
+    sets.push("owner_session_id = ?");
+    params.push(fields.owner);
+  }
+  if (fields.reviewer !== undefined) {
+    sets.push("reviewer_session_id = ?");
+    params.push(fields.reviewer);
+  }
+  sets.push("updated_at = ?");
+  params.push(new Date().toISOString());
+  getDatabase()
+    .prepare(`update group_tasks set ${sets.join(", ")} where id = ?`)
+    .run(...params, taskId);
+  return requireTask(taskId);
+}
+
+/** Any member creates a task; it starts `open` with no owner. */
+export function createMemberGroupTask(input: {
+  groupId: string;
+  actorSessionId: string;
+  title: string;
+  description?: string;
+  reviewerSessionId?: string;
+}): GroupTask {
+  requireGroupRow(input.groupId);
+  requireMember(input.groupId, input.actorSessionId, "task creator");
+  return createGroupTask({
+    groupId: input.groupId,
+    title: input.title,
+    status: INITIAL_TASK_STATUS,
+    createdBySessionId: input.actorSessionId,
+    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+    ...(input.reviewerSessionId ? { reviewerSessionId: input.reviewerSessionId } : {}),
+  });
+}
+
+/**
+ * Claim an unowned `open` task: the caller becomes owner, status `in_progress`.
+ * A suggested reviewer may claim it; the claim then clears the reviewer in the
+ * same update (an owner never reviews their own task).
+ */
+export function claimGroupTask(groupId: string, taskId: string, actorSessionId: string): GroupTask {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    requireMember(groupId, actorSessionId, "claimer");
+    const task = requireTaskInGroup(taskId, groupId);
+    if (task.ownerSessionId) {
+      throw new GroupStoreError("task-taken", `Task ${taskId} is already owned.`);
+    }
+    if (effectiveTaskStatus(task) !== INITIAL_TASK_STATUS) throw invalidTransition(task, "claim");
+    return writeTaskTransition(taskId, {
+      status: IN_PROGRESS_TASK_STATUS,
+      owner: actorSessionId,
+      ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
+    });
+  });
+}
+
+/** The owner gives an `in_progress` task back: `open`, no owner. */
+export function releaseGroupTask(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+): GroupTask {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const task = requireTaskInGroup(taskId, groupId);
+    if (task.ownerSessionId !== actorSessionId) {
+      throw new GroupStoreError("not-owner", `Only the owner can release task ${taskId}.`);
+    }
+    if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "release");
+    return writeTaskTransition(taskId, { status: INITIAL_TASK_STATUS, owner: null });
+  });
+}
+
+/** The owner asks another member to review an `in_progress` task: `in_review`. */
+export function requestGroupTaskReview(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+  reviewerSessionId: string,
+): GroupTask {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const task = requireTaskInGroup(taskId, groupId);
+    if (task.ownerSessionId !== actorSessionId) {
+      throw new GroupStoreError("not-owner", `Only the owner can request review of ${taskId}.`);
+    }
+    if (reviewerSessionId === actorSessionId) {
+      throw new GroupStoreError("self-review", `The owner cannot review task ${taskId}.`);
+    }
+    requireMember(groupId, reviewerSessionId, "reviewer");
+    if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "request review of");
+    return writeTaskTransition(taskId, {
+      status: IN_REVIEW_TASK_STATUS,
+      reviewer: reviewerSessionId,
+    });
+  });
+}
+
+export type GroupTaskReviewVerdict = "approve" | "changes";
+
+/**
+ * The reviewer decides an `in_review` task: approve → `done` (the schema has no
+ * `closed`), changes → `in_progress`. Review rights exist only while the review
+ * is pending: anyone else, or the recorded reviewer of a task that is no
+ * longer in review (e.g. its owner left, so it went back to `open`), gets
+ * `not-reviewer`; a closed task gets `invalid-transition`.
+ */
+export function reviewGroupTask(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+  verdict: GroupTaskReviewVerdict,
+): GroupTask {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const task = requireTaskInGroup(taskId, groupId);
+    const next = requireOneOf(verdict, ["approve", "changes"], "review verdict");
+    const status = effectiveTaskStatus(task);
+    if (CLOSED_TASK_STATUSES.includes(status)) throw invalidTransition(task, "review");
+    if (status !== IN_REVIEW_TASK_STATUS || task.reviewerSessionId !== actorSessionId) {
+      throw new GroupStoreError(
+        "not-reviewer",
+        `Only the reviewer of a pending review can review task ${taskId}.`,
+      );
+    }
+    return writeTaskTransition(taskId, {
+      status: next === "approve" ? "done" : IN_PROGRESS_TASK_STATUS,
+    });
+  });
+}
+
 /* ── Decisions ─────────────────────────────────────────────────────────── */
 
 function insertDecision(input: {

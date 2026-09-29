@@ -770,6 +770,176 @@ describe("dispose", () => {
   });
 });
 
+/* ── member task tools: review / changes wakes go through route ─────── */
+
+describe("task tool wakes", () => {
+  const review = (groupId: string, actor: string, target: string) => ({
+    groupId,
+    actorSessionId: actor,
+    targetSessionId: target,
+    body: `Review requested: "Parser" (task t1) @${target}`,
+  });
+
+  it("inside a group turn: joins its chain, posts a task status and counts the hop", () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "build the parser" });
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    const status = groups.handleTaskWake(review(group.id, alpha, beta));
+    expect(status).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: alpha,
+      kind: "status",
+      mentions: [beta],
+      chainId: user.id,
+    });
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    expect(runtime.calls[1]?.input.message).toContain("Review requested");
+    expect(groups.chainSnapshot(user.id)).toMatchObject({
+      hops: 2,
+      agentMessages: 0,
+      wakesByMember: { [alpha]: 1, [beta]: 1 },
+    });
+  });
+
+  it("respects the hop limit", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup({ limits: { maxHops: 1 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
+    groups.handleTaskWake(review(group.id, alpha, beta));
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 1, ended: "max-hops" });
+    expect(room(group.id).at(-1)?.body).toBe(GROUP_STATUS_TEXT.limit["max-hops"]);
+  });
+
+  it("a changes wake of the owner respects the per-member wake limit", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup({ limits: { maxWakesPerMember: 1 } });
+    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
+    // Alpha (woken once) asks Beta to review, then finishes.
+    groups.handleTaskWake(review(group.id, alpha, beta));
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    // Beta requests changes: waking Alpha a 2nd time exceeds the limit.
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: `Changes requested on "Parser" (task t1) @Alpha`,
+    });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({
+      hops: 2,
+      ended: "max-member-wakes",
+      wakesByMember: { [alpha]: 1, [beta]: 1 },
+    });
+  });
+
+  it("outside a chain (the member working in its own chat) opens a new chain", () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const status = groups.handleTaskWake(review(group.id, alpha, beta));
+    expect(status?.chainId).toBe(status?.id);
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.chainSnapshot(status?.id ?? "")).toMatchObject({
+      hops: 1,
+      wakesByMember: { [beta]: 1 },
+    });
+  });
+
+  it("approve (wake: false) posts a status for the owner in the chain, with no wake and no hop", () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Beta review it" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    const before = groups.chainSnapshot(user.id);
+    const status = groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Approved: ship it",
+      wake: false,
+    });
+    expect(status).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: beta,
+      kind: "status",
+      body: "Approved: ship it",
+      mentions: [alpha],
+      chainId: user.id,
+    });
+    expect(room(group.id).at(-1)?.id).toBe(status?.id);
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.started).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id)).toEqual(before);
+  });
+
+  it('approve outside a group turn posts "Approved" and opens no chain', () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    const status = groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Approved",
+      wake: false,
+    });
+    expect(status).toMatchObject({ body: "Approved", mentions: [alpha], kind: "status" });
+    expect(status?.chainId).toBe(status?.id);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.liveChainIds()).toEqual([]);
+    expect(() => groups.chainSnapshot(status?.id ?? "")).toThrow(/Unknown chain/);
+  });
+
+  it("a review request from a turn stopped at the intent gate persists the task but wakes nobody", async () => {
+    const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
+    const { createMemberGroupTask, claimGroupTask, listGroupTasks } = await import("./group-store");
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const task = createMemberGroupTask({ groupId: group.id, actorSessionId: alpha, title: "T" });
+      claimGroupTask(group.id, task.id, alpha);
+      const user = groups.postUserMessage({ groupId: group.id, body: "finish it" });
+      runtime.openGate(alpha);
+      expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
+      // The user answers Proceed; the gated turn goes on and requests a review.
+      const text = runGroupTool(
+        "group_request_review",
+        { sessionId: alpha, groupId: group.id },
+        { id: task.id, reviewer: "Beta" },
+      );
+      expect(text).toContain("Review requested from @Beta");
+      expect(listGroupTasks(group.id)[0]).toMatchObject({
+        status: "in_review",
+        reviewerSessionId: beta,
+      });
+      expect(room(group.id).at(-1)).toMatchObject({
+        kind: "status",
+        authorSessionId: alpha,
+        mentions: [beta],
+        chainId: user.id,
+      });
+      expect(runtime.started).toEqual([alpha]);
+      expect(groups.chainSnapshot(user.id).hops).toBe(1);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  });
+
+  it("in an ended chain the status posts but wakes nobody", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const { runtime, groups } = setup();
+    const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    runtime.take(beta).resolve({ outcome: "blocked" });
+    await flush();
+    const status = groups.handleTaskWake(review(group.id, alpha, gamma));
+    expect(status?.chainId).toBe(user.id);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(runtime.started).not.toContain(gamma);
+  });
+});
+
 /* ── chain bookkeeping ───────────────────────────────────────────────── */
 
 describe("chain cleanup", () => {
