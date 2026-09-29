@@ -5,6 +5,8 @@ import type {
 } from "../../../shared/contracts";
 import { selectExecutionPolicy } from "./execution-policy";
 import { listAvoidedStrategyCodes } from "./failure-intelligence";
+import { mergePolicyEffects } from "./policy-dsl";
+import { loadPromotedPolicies } from "./promoted-policy-store";
 
 function unresolvedCriteria(snapshot: AdaptiveDecisionSnapshot): number {
   if (snapshot.unresolvedCriterionCount > 0) return snapshot.unresolvedCriterionCount;
@@ -26,27 +28,43 @@ function budgetFor(level: AdaptiveVerificationLevel, complex: boolean): number {
 }
 
 /**
- * Pure Meta Controller. Returns one next action with reason codes.
+ * Meta Controller. Returns one next action with reason codes.
  * Does not execute tools or bypass permissions — runtime adapters interpret.
+ * Loads promoted policies from storage when the snapshot omits them (Gap 4).
  */
 export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision {
+  // Gap 4: hydrate promoted policies when the adapter omitted them (pi-sdk parity).
+  // Fail-closed if storage/Electron is unavailable (unit tests, early boot).
+  if (snapshot.promotedPolicies === undefined) {
+    try {
+      const loaded = loadPromotedPolicies(snapshot.workspaceId);
+      if (loaded.length > 0) {
+        snapshot = { ...snapshot, promotedPolicies: loaded };
+      }
+    } catch {
+      // leave promotedPolicies undefined → treated as []
+    }
+  }
   const unresolved = unresolvedCriteria(snapshot);
   const openQuestions = Math.max(
     snapshot.openQuestionCount,
     snapshot.taskState?.openQuestionRefs.length ?? 0,
   );
+  const promoted = mergePolicyEffects(snapshot.promotedPolicies ?? []);
+  const failureAvoided = listAvoidedStrategyCodes(
+    snapshot.failureAttempts,
+    snapshot.impact?.revision,
+  );
+  const avoided = [...new Set([...failureAvoided, ...promoted.avoidStrategyCodes])].slice(0, 24);
   const policy = selectExecutionPolicy({
     classification: snapshot.classification,
     ...(snapshot.impact ? { impact: snapshot.impact } : {}),
     unresolvedCriterionCount: unresolved,
     openQuestionCount: openQuestions,
-    avoidedStrategyCodes: listAvoidedStrategyCodes(
-      snapshot.failureAttempts,
-      snapshot.impact?.revision,
-    ),
+    avoidedStrategyCodes: avoided,
     enabledModelIds: snapshot.enabledModelIds,
+    ...(promoted.effects.length > 0 ? { promotedEffects: promoted.effects } : {}),
   });
-  const avoided = listAvoidedStrategyCodes(snapshot.failureAttempts, snapshot.impact?.revision);
   const verification = snapshot.taskState?.verificationStatus;
   const qa = snapshot.qaStatus;
   const mode = snapshot.decisionMode;
@@ -96,9 +114,26 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       return {
         ...base,
         action: "avoid_retry",
-        reasonCodes: ["duplicate_failed_strategy", "failure_intelligence_block"],
+        reasonCodes: [
+          "duplicate_failed_strategy",
+          "failure_intelligence_block",
+          ...promoted.reasonCodes.filter((code) => code.includes("avoid")),
+        ].slice(0, 8),
         confidence: "high",
         expectedUncertaintyReduction: 8,
+      };
+    }
+    if (promoted.preferReplanOnQaFail) {
+      return {
+        ...base,
+        action: "replan",
+        reasonCodes: [
+          "verification_failed",
+          "replan_after_failure",
+          "promoted_policy_prefer_replan_on_qa_fail",
+        ],
+        confidence: "medium",
+        expectedUncertaintyReduction: 10,
       };
     }
     if (complex || snapshot.impact?.blastRadius === "cross_module") {
@@ -137,7 +172,11 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     return {
       ...base,
       action: "verify",
-      reasonCodes: ["evidence_required", `verification_${policy.verificationLevel}`],
+      reasonCodes: [
+        "evidence_required",
+        `verification_${policy.verificationLevel}`,
+        ...promoted.reasonCodes.filter((code) => code.includes("verification")),
+      ].slice(0, 8),
       confidence: "high",
       expectedUncertaintyReduction: 14,
     };
@@ -147,6 +186,21 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
     snapshot.impact?.confidence === "unknown" ||
     snapshot.impact?.unknownReasons.includes("no_typed_paths") === true ||
     unresolved > 0;
+
+  // Promoted context-pressure bias: prefer local retrieve before plan/spawn (still allowlisted).
+  if (promoted.preferRetrieveLocal && uncertain) {
+    return {
+      ...base,
+      action: "retrieve_local",
+      reasonCodes: [
+        "uncertainty_high",
+        "local_preflight_candidate",
+        "promoted_policy_prefer_retrieve_local",
+      ],
+      confidence: "medium",
+      expectedUncertaintyReduction: 11,
+    };
+  }
 
   // Gap 1: explicit read-only research roles beat HyperPlan suggestion in active mode.
   if (mode === "active" && uncertain && complex) {
@@ -237,7 +291,7 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
     case "suggest_oracle":
       return "Adaptive policy: high uncertainty or failed verification. Prefer read-only Oracle/reviewer advice before repeating the same edit strategy.";
     case "spawn_readonly_specialist":
-      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before repeating edits.`;
+      return `Adaptive policy: a read-only ${decision.specialistRole ?? "oracle"} specialist was auto-dispatched (Intent Gate + ToolRegistry permissions still apply). Wait for its findings before continuing edits.`;
     case "mcp_preflight":
       return "Adaptive policy: a read-only librarian MCP preflight was auto-dispatched. Allowlisted MCP tools run only through ToolRegistry + the permission broker; do not call non-allowlisted MCP tools.";
     case "verify":

@@ -1,6 +1,6 @@
 # Modus Adaptive Intelligence Core
 
-**Status:** Slice 2 landed (PR #50). **Gap 1 shipped** — safe Meta Controller children/MCP dispatch (PR #54). **Gap 2 shipped** — automatic CodeGraph binary sync/index. Gaps 3–5 remain open.  
+**Status:** Slice 2 landed (PR #50). **Gaps 1–4 shipped** — safe children/MCP dispatch (#54); automatic CodeGraph sync (#55); blacklist management UI (#58); policy DSL for promoted learning (this change). Gap 5 remains open.  
 **Fork:** [Stoltembergg/modus](https://github.com/Stoltembergg/modus)  
 **PR:** [#50](https://github.com/Stoltembergg/modus/pull/50) (merged); Gap 1: [#54](https://github.com/Stoltembergg/modus/pull/54); Gap 2: (this change)  
 **Prior art:** `docs/superpowers/specs/2026-09-27-modus-adaptive-harness-core-design.md` (approved) + PR #46 (Task State) + slice 1 Meta Controller
@@ -104,16 +104,17 @@ Events (unchanged types, now surfaced in UI):
 
 **Gap 3 (blacklist management UI):** Settings gains a dedicated **Failure blacklist** panel (beyond Harness Insights clear-all): lists active soft-blacklist entries with TTL/expiry, clear per strategy or all, wired to existing `harness_failure_blacklist` / Settings APIs. Soft-discourage semantics preserved (not a hard permanent block).
 
+**Gap 4 (policy DSL for promoted learning):** User-confirmed harness insight promotions compile to a versioned `HarnessPolicyDocument` of allowlisted soft effects (`raise_min_verification`, `add_avoid_strategies`, `prefer_retrieve_local`, `cap_parallel_children`, `prefer_replan_on_qa_fail`). Effects persist beside the preference blob, load into `AdaptiveDecisionSnapshot.promotedPolicies`, and bias `selectExecutionPolicy` / `decideNext` without widening permissions, raising hard parallel caps, mutating skills/prompts, or auto-dispatching non-readonly paths. Unknown ops fail closed at parse time. Reject/clear removes the preference so subsequent decisions stop applying the bias.
+
 **Remaining gaps / follow-ups**
 
-- Promoted preferences are stored but not yet a full policy DSL consumer beyond Meta Controller avoidance signals
-- Additional orchestration polish beyond Gap 1 allowlist
+- Additional orchestration polish beyond Gap 1 allowlist (`suggest_oracle` stays advisory unless expanded under Intent Gate + broker)
 
 ## How to verify
 
 ```bash
 npm install
-npm run test --workspace @modus/desktop -- harness/meta-controller harness/safe-dispatch harness/adaptive-slice2 harness/failure-intelligence harness/execution-policy harness/project-model harness/context-engine fast-codebase/codegraph-auto-sync fast-codebase/fast-codebase-service
+npm run test --workspace @modus/desktop -- harness/meta-controller harness/safe-dispatch harness/adaptive-slice2 harness/failure-intelligence harness/execution-policy harness/policy-dsl harness/promoted-policy-store harness/project-model harness/context-engine fast-codebase/codegraph-auto-sync fast-codebase/fast-codebase-service
 npm run typecheck --workspace @modus/desktop
 npm run check
 ```
