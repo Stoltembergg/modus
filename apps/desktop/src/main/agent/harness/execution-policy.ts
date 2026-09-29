@@ -2,9 +2,11 @@ import type {
   AdaptiveExecutionPolicy,
   AdaptiveVerificationLevel,
   BuiltinAgentRole,
+  HarnessPolicyEffect,
   HarnessTaskClassification,
   ProjectImpactEstimate,
 } from "../../../shared/contracts";
+import { applyPolicyToExecutionInput, foldEffects } from "./policy-dsl";
 
 export type SelectExecutionPolicyInput = {
   classification: HarnessTaskClassification;
@@ -16,6 +18,8 @@ export type SelectExecutionPolicyInput = {
   preferredModelId?: string;
   activeChildCount?: number;
   maxParallelChildrenCap?: number;
+  /** Soft biases from user-confirmed promoted learning (Gap 4). */
+  promotedEffects?: HarnessPolicyEffect[];
 };
 
 const MAX_PARALLEL_CAP = 6;
@@ -58,7 +62,7 @@ function verificationLevelFor(
  */
 export function selectExecutionPolicy(input: SelectExecutionPolicyInput): AdaptiveExecutionPolicy {
   const reasonCodes: string[] = [...input.classification.reasons];
-  const verificationLevel = verificationLevelFor(
+  let verificationLevel = verificationLevelFor(
     input.classification,
     input.unresolvedCriterionCount,
     input.impact,
@@ -118,6 +122,18 @@ export function selectExecutionPolicy(input: SelectExecutionPolicyInput): Adapti
     reasonCodes.push("prior_failure_bias");
   }
   if (input.openQuestionCount > 0) reasonCodes.push("open_questions_present");
+
+  if (input.promotedEffects && input.promotedEffects.length > 0) {
+    const merged = foldEffects(input.promotedEffects);
+    const applied = applyPolicyToExecutionInput(
+      { verificationLevel, maxParallelChildren, reasonCodes },
+      merged,
+    );
+    verificationLevel = applied.verificationLevel;
+    maxParallelChildren = applied.maxParallelChildren;
+    reasonCodes.length = 0;
+    reasonCodes.push(...applied.reasonCodes);
+  }
 
   return {
     version: 1,
