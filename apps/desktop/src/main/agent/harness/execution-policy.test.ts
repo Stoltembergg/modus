@@ -72,4 +72,33 @@ describe("execution-policy", () => {
     expect(policy.maxParallelChildren).toBe(0);
     expect(policy.reasonCodes).toContain("parallelism_at_cap");
   });
+
+  it("raises verification floor from promoted missing_verification policy", () => {
+    const policy = selectExecutionPolicy({
+      classification: base,
+      unresolvedCriterionCount: 0,
+      openQuestionCount: 0,
+      promotedEffects: [{ op: "raise_min_verification", level: "standard" }],
+    });
+    expect(policy.verificationLevel).toBe("standard");
+    expect(policy.reasonCodes).toContain("promoted_policy_raise_min_verification");
+  });
+
+  it("caps parallel children from promoted delegation_mismatch without raising hard cap", () => {
+    const policy = selectExecutionPolicy({
+      classification: { ...base, complexity: "complex", risk: "low" },
+      unresolvedCriterionCount: 0,
+      openQuestionCount: 0,
+      impact: {
+        blastRadius: "module",
+        impactedPathCount: 4,
+        confidence: "high",
+        unknownReasons: [],
+        reasonCodes: [],
+      },
+      promotedEffects: [{ op: "cap_parallel_children", max: 1 }],
+    });
+    expect(policy.maxParallelChildren).toBe(1);
+    expect(policy.reasonCodes).toContain("promoted_policy_cap_parallel_children");
+  });
 });
