@@ -686,6 +686,54 @@ export const limitsCodexEnabledSchema = z.object({ enabled: z.boolean() }).stric
 export const limitsNoInputSchema = z.undefined();
 export const updateNoInputSchema = z.undefined();
 
+const restoreIdSchema = z.string().min(1).max(256);
+const restorePanelSchema = { open: z.boolean(), width: z.number().finite().min(0).max(4096) };
+export const MAX_RESTORE_DRAFTS = 200;
+
+/** UI state the renderer pushes while an update is pending (and read back from disk). */
+export const updateRestoreUiStateSchema = z
+  .object({
+    activeWorkspaceId: restoreIdSchema.nullable(),
+    activeSessionId: restoreIdSchema.nullable(),
+    drafts: z
+      .record(
+        restoreIdSchema,
+        z
+          .object({ text: z.string().max(100_000), mode: z.enum(["build", "plan", "spec"]) })
+          .strict(),
+      )
+      .refine((drafts) => Object.keys(drafts).length <= MAX_RESTORE_DRAFTS, {
+        message: "too many drafts",
+      }),
+    sidebar: z.object(restorePanelSchema).strict(),
+    inspector: z
+      .object({
+        ...restorePanelSchema,
+        tab: z.enum(["changes", "plan", "files", "subagents", "browser", "terminal", "security"]),
+      })
+      .strict(),
+    settingsOpen: z.boolean(),
+  })
+  .strict();
+
+/** Byte cap for the renderer payload and for the snapshot file read back from disk. */
+export const MAX_RESTORE_UI_STATE_BYTES = 512 * 1024;
+
+function jsonByteLength(value: unknown): number {
+  try {
+    return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+export const updateSaveUiStateSchema = z
+  .unknown()
+  .refine((value) => jsonByteLength(value) <= MAX_RESTORE_UI_STATE_BYTES, {
+    message: "UI state too large",
+  })
+  .pipe(updateRestoreUiStateSchema);
+
 export const reviewStartSchema = z.object({
   cwd: nonEmptyString,
   sessionId: optionalNonEmptyString,

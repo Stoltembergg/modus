@@ -1968,3 +1968,26 @@ export type UpdateState =
        */
       appliesOnQuit?: true;
     };
+
+/**
+ * In-memory UI state carried across an update restart (userData/updater/restore-snapshot.json).
+ * Drafts keep the text and mode only: images, context chips and inline mentions are dropped.
+ */
+export type UpdateRestoreUiState = {
+  activeWorkspaceId: string | null;
+  activeSessionId: string | null;
+  /** Keyed by session id; only sessions with a non-empty draft. */
+  drafts: Record<string, { text: string; mode: AgentMode }>;
+  sidebar: { open: boolean; width: number };
+  inspector: { open: boolean; width: number; tab: UpdateRestoreInspectorTab };
+  settingsOpen: boolean;
+};
+
+export type UpdateRestoreInspectorTab =
+  | "changes"
+  | "plan"
+  | "files"
+  | "subagents"
+  | "browser"
+  | "terminal"
+  | "security";
