@@ -10,7 +10,12 @@ import { registerAppIpc } from "./ipc/register-app-ipc";
 import { disposeAllMcp } from "./mcp/mcp-service";
 import { createStartupTimeline } from "./startup/startup-timeline";
 import { shutdownTerminals } from "./terminal/terminal-service";
-import { startUpdateServiceInBackground, stopUpdateService } from "./updater/update-service";
+import {
+  saveRestoreSnapshotOnQuit,
+  startUpdateServiceInBackground,
+  stopUpdateService,
+  takeRestoreSnapshotAtStartup,
+} from "./updater/update-service";
 import { installApplicationMenu } from "./windows/application-menu";
 import { createMainWindow } from "./windows/main-window";
 
@@ -67,6 +72,8 @@ if (!app.requestSingleInstanceLock()) {
     .then(() => {
       startupTimeline.mark("main.electron-ready");
       installApplicationMenu();
+      // Before the window asks for it and before the update service cleans its dir.
+      takeRestoreSnapshotAtStartup();
       startRemoteModelCatalog(() => {
         for (const window of BrowserWindow.getAllWindows()) {
           window.webContents.send(IPC_CHANNELS.modelCatalogChanged);
@@ -104,6 +111,8 @@ if (!app.requestSingleInstanceLock()) {
     event.preventDefault();
     if (shutdownStarted) return;
     shutdownStarted = true;
+    // Sync, before anything stops: the renderer already pushed its state (no IPC here).
+    saveRestoreSnapshotOnQuit();
     // Close MCP transports on quit so stdio servers never outlive the app.
     // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
     stopUpdateService();

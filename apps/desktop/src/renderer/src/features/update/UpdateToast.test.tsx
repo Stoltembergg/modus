@@ -30,6 +30,8 @@ function fakeApi(initial: UpdateState = { status: "idle" }) {
     restartNow: vi.fn(async () => undefined),
     dismiss: vi.fn(async () => undefined),
     openReleasePage: vi.fn(async () => undefined),
+    saveUiState: vi.fn(async () => undefined),
+    takeRestoredUiState: vi.fn(async () => null),
     onStateChange: vi.fn((listener: (state: UpdateState) => void) => {
       listeners.add(listener);
       return () => {

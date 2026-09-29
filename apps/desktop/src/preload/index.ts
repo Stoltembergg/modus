@@ -7,6 +7,7 @@ import type {
   GitChangeEvent,
   HarnessInsightsQuery,
   TerminalEvent,
+  UpdateRestoreUiState,
   UpdateState,
 } from "../shared/contracts";
 import type { ModusApi, SecurityState } from "./types";
@@ -292,6 +293,9 @@ const api: ModusApi = {
     restartNow: () => ipcRenderer.invoke("update:restart-now") as Promise<void>,
     dismiss: () => ipcRenderer.invoke("update:dismiss") as Promise<void>,
     openReleasePage: () => ipcRenderer.invoke("update:open-release-page") as Promise<void>,
+    saveUiState: (state) => ipcRenderer.invoke("update:save-ui-state", state) as Promise<void>,
+    takeRestoredUiState: () =>
+      ipcRenderer.invoke("update:take-restored-ui-state") as Promise<UpdateRestoreUiState | null>,
     onStateChange: (callback) => {
       const listener = (_event: IpcRendererEvent, payload: unknown) =>
         callback(payload as UpdateState);

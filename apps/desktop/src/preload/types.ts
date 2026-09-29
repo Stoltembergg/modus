@@ -75,6 +75,7 @@ import type {
   TestCustomProviderResult,
   ThinkingLevel,
   UpdateModelConfigInput,
+  UpdateRestoreUiState,
   UpdateState,
   UpsertCustomProviderInput,
   WorkingChangeStats,
@@ -532,6 +533,10 @@ export type ModusApi = {
     /** Hides the notice for this version until a newer one appears (in memory only). */
     dismiss(): Promise<void>;
     openReleasePage(): Promise<void>;
+    /** While a downloaded update is pending: the latest UI state, written by main on quit. */
+    saveUiState(state: UpdateRestoreUiState): Promise<void>;
+    /** Once per start: the UI state saved by the previous version, or null. */
+    takeRestoredUiState(): Promise<UpdateRestoreUiState | null>;
     onStateChange(listener: (state: UpdateState) => void): () => void;
   };
   clipboard: {
