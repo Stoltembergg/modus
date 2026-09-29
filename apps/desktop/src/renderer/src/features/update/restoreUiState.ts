@@ -171,6 +171,41 @@ export function planUiRestore(
   };
 }
 
+type ComposerDraftLike = Parameters<typeof isComposerDraftEmpty>[0];
+
+/**
+ * Fills restored drafts only into composers that are still empty, so anything typed or
+ * attached since startup wins. Returns `current` itself when nothing changes.
+ */
+export function mergeRestoredDrafts<T extends ComposerDraftLike>(
+  current: Record<string, T>,
+  drafts: UpdateRestoreUiState["drafts"],
+  toDraft: (draft: UpdateRestoreUiState["drafts"][string]) => T,
+): Record<string, T> {
+  let next = current;
+  for (const [sessionId, draft] of Object.entries(drafts)) {
+    const existing = current[sessionId];
+    if (existing && !isComposerDraftEmpty(existing)) continue;
+    if (next === current) next = { ...current };
+    next[sessionId] = toDraft(draft);
+  }
+  return next;
+}
+
+/**
+ * True while the selection is still the startup default (no session, the first project
+ * or none yet): the user has not switched project or session, so restoring is safe.
+ */
+export function isNavigationUntouched(
+  current: { workspaceId: string | undefined; sessionId: string | undefined },
+  defaultWorkspaceId: string | undefined,
+): boolean {
+  return (
+    current.sessionId === undefined &&
+    (current.workspaceId === undefined || current.workspaceId === defaultWorkspaceId)
+  );
+}
+
 export type UiStatePusher = {
   /** Record the current UI state; pushed (debounced) only while an update is pending. */
   update(state: UpdateRestoreUiState): void;

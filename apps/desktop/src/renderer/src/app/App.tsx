@@ -79,6 +79,8 @@ import { normalizePlan } from "../features/plan/planState";
 import {
   createUiStatePusher,
   isComposerDraftEmpty,
+  isNavigationUntouched,
+  mergeRestoredDrafts,
   planUiRestore,
   snapshotUiState,
   type UiStatePusher,
@@ -174,6 +176,7 @@ export function App() {
   const initialHydrationRef = useRef<InitialAppHydration | null>(null);
   const restoredUiStateRef = useRef<Promise<UpdateRestoreUiState | null> | null>(null);
   const uiStatePusherRef = useRef<UiStatePusher | null>(null);
+  const heroComposerRef = useRef({ draft: heroDraft, contextItems: heroContextItems });
 
   // Track the panel row's live width so side-panel widths can be clamped to keep
   // the main column at least MAIN_MIN_WIDTH (responsive to window + panel state).
@@ -200,6 +203,10 @@ export function App() {
   useEffect(() => {
     activeWorkspaceRef.current = activeWorkspace;
   }, [activeWorkspace]);
+
+  useEffect(() => {
+    heroComposerRef.current = { draft: heroDraft, contextItems: heroContextItems };
+  }, [heroDraft, heroContextItems]);
 
   const requestedWorkspaceId =
     activeWorkspace && !activeWorkspace.inbox ? activeWorkspace.id : undefined;
@@ -356,28 +363,36 @@ export function App() {
           sessionIds: new Set(sessions.map((session) => session.id)),
         });
         const { navigation, hero, layout } = plan;
-        if (navigation) {
+        // Never undo what the user already did since startup.
+        const navigationUntouched = isNavigationUntouched(
+          {
+            workspaceId: activeWorkspaceRef.current?.id,
+            sessionId: activeSessionIdRef.current,
+          },
+          items[0]?.id,
+        );
+        if (navigation && navigationUntouched) {
           setActiveWorkspace(
             items.find((item) => item.id === navigation.activeWorkspaceId) ?? null,
           );
           setActiveSessionId(navigation.activeSessionId ?? undefined);
         }
-        if (hero) {
+        const heroComposer = heroComposerRef.current;
+        if (
+          hero &&
+          isComposerDraftEmpty({ ...heroComposer.draft, contextItems: heroComposer.contextItems })
+        ) {
           setHeroDraft({ ...createEmptyComposerDraft(), value: hero.text });
           setHeroMode(hero.mode);
         }
-        setComposerDraftBySession((current) => {
-          const next = { ...current };
-          for (const [sessionId, draft] of Object.entries(plan.drafts)) {
-            next[sessionId] = {
-              ...createEmptyComposerDraft(),
-              value: draft.text,
-              contextItems: [],
-              mode: draft.mode,
-            };
-          }
-          return next;
-        });
+        setComposerDraftBySession((current) =>
+          mergeRestoredDrafts(current, plan.drafts, (draft) => ({
+            ...createEmptyComposerDraft(),
+            value: draft.text,
+            contextItems: [],
+            mode: draft.mode,
+          })),
+        );
         setSidebarOpen(layout.sidebar.open);
         setSidebarWidth(Math.max(SIDEBAR_MIN_WIDTH, layout.sidebar.width));
         setInspectorOpen(layout.inspector.open);

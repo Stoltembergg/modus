@@ -9,6 +9,8 @@ import {
   createUiStatePusher,
   fitUiStateToCap,
   isComposerDraftEmpty,
+  isNavigationUntouched,
+  mergeRestoredDrafts,
   planUiRestore,
   snapshotUiState,
   UI_STATE_PUSH_DEBOUNCE_MS,
@@ -263,6 +265,74 @@ describe("planUiRestore", () => {
         settingsOpen: true,
       },
     });
+  });
+});
+
+describe("mergeRestoredDrafts", () => {
+  type Draft = { value: string; images: unknown[]; selectedSkills: unknown[]; mode: string };
+  const toDraft = (draft: { text: string; mode: string }): Draft => ({
+    value: draft.text,
+    images: [],
+    selectedSkills: [],
+    mode: draft.mode,
+  });
+  const empty = (value = ""): Draft => ({ value, images: [], selectedSkills: [], mode: "build" });
+
+  it("fills missing and empty composers only", () => {
+    const current: Record<string, Draft> = {
+      typed: empty("user text"),
+      blank: empty("  "),
+      image: { ...empty(), images: [{ id: "img" }] },
+    };
+    const merged = mergeRestoredDrafts(
+      current,
+      {
+        typed: { text: "old", mode: "plan" },
+        blank: { text: "restored", mode: "plan" },
+        image: { text: "old", mode: "plan" },
+        fresh: { text: "new", mode: "spec" },
+      },
+      toDraft,
+    );
+    expect(merged.typed).toBe(current.typed);
+    expect(merged.image).toBe(current.image);
+    expect(merged.blank).toEqual(toDraft({ text: "restored", mode: "plan" }));
+    expect(merged.fresh).toEqual(toDraft({ text: "new", mode: "spec" }));
+  });
+
+  it("returns the same object when nothing applies", () => {
+    const current = { typed: empty("mine") };
+    expect(mergeRestoredDrafts(current, { typed: { text: "old", mode: "build" } }, toDraft)).toBe(
+      current,
+    );
+    expect(mergeRestoredDrafts(current, {}, toDraft)).toBe(current);
+  });
+
+  it("treats a hero composer with context chips as not empty", () => {
+    const hero = { value: "", images: [], selectedSkills: [] };
+    expect(isComposerDraftEmpty({ ...hero, contextItems: [] })).toBe(true);
+    expect(isComposerDraftEmpty({ ...hero, contextItems: [{ type: "file" }] })).toBe(false);
+    expect(isComposerDraftEmpty({ ...hero, value: "typed on the start screen" })).toBe(false);
+  });
+});
+
+describe("isNavigationUntouched", () => {
+  it("is true at the startup default", () => {
+    expect(isNavigationUntouched({ workspaceId: undefined, sessionId: undefined }, "ws-1")).toBe(
+      true,
+    );
+    expect(isNavigationUntouched({ workspaceId: "ws-1", sessionId: undefined }, "ws-1")).toBe(true);
+    expect(isNavigationUntouched({ workspaceId: undefined, sessionId: undefined }, undefined)).toBe(
+      true,
+    );
+  });
+
+  it("is false once the user picked another project or opened a session", () => {
+    expect(isNavigationUntouched({ workspaceId: "ws-2", sessionId: undefined }, "ws-1")).toBe(
+      false,
+    );
+    expect(isNavigationUntouched({ workspaceId: "ws-1", sessionId: "s-1" }, "ws-1")).toBe(false);
+    expect(isNavigationUntouched({ workspaceId: undefined, sessionId: "s-1" }, "ws-1")).toBe(false);
   });
 });
 
