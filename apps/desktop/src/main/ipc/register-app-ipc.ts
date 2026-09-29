@@ -89,7 +89,7 @@ import {
   listSubagents,
   updateSubagent,
 } from "../agent/subagents-config";
-import { setGroupTaskWakeSink } from "../agent/tools/group-tools";
+import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import { plansRoot } from "../agent/tools/plan-tools";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
@@ -1802,6 +1802,7 @@ export function registerAppIpc({
   });
   // Member task tools (review / changes) wake members through the GroupRuntime.
   setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));
+  setGroupWorktreeReadySink((ready) => getGroupRuntime().handleWorktreeReady(ready));
   // Resolved lazily: the GroupRuntime subscribes to the agent runtime on first use.
   registerGroupRuntimeIpcHandlers(ipcMain, assertTrustedSender, {
     postUserMessage: (input) => getGroupRuntime().postUserMessage(input),

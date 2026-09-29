@@ -29,6 +29,8 @@ export const GROUP_ERROR_CODES = [
   "ambiguous-member",
   // Member worktrees: the group has no Project, or its Project is not a Git repository.
   "no-git-project",
+  // The member branch is checked out outside .modus/worktrees (e.g. the Project root).
+  "branch-checked-out",
 ] as const;
 
 export type GroupErrorCode = (typeof GROUP_ERROR_CODES)[number];

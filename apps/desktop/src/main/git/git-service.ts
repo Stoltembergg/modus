@@ -1254,6 +1254,16 @@ export async function createSubagentWorktree(
 /** Why createMemberWorktree refused before touching git. */
 export class MemberWorktreeUnavailableError extends Error {}
 
+/** The member branch is checked out outside `.modus/worktrees` (e.g. in the Project root). */
+export class MemberBranchCheckedOutError extends Error {
+  constructor(
+    readonly branch: string,
+    readonly checkoutPath: string,
+  ) {
+    super(`Branch ${branch} is checked out at ${checkoutPath}, outside .modus/worktrees.`);
+  }
+}
+
 async function worktreePathForBranch(
   repoRoot: string,
   branch: string,
@@ -1329,7 +1339,11 @@ export async function createMemberWorktree(
   let created = false;
   if (checkedOutAt) {
     // git reports real paths (e.g. /private/var on macOS); compare like with like.
-    assertManagedWorktreePath(realpathSync(repo.root), realpathSync(checkedOutAt));
+    try {
+      assertManagedWorktreePath(realpathSync(repo.root), realpathSync(checkedOutAt));
+    } catch {
+      throw new MemberBranchCheckedOutError(branch, checkedOutAt);
+    }
     path = checkedOutAt;
   } else if (branchExists) {
     await git(repo.root, ["worktree", "add", expectedPath, branch]);

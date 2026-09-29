@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 
 let userData: string;
@@ -21,7 +21,21 @@ const {
   updateAgentGroupMembers,
 } = await import("../../groups/group-store");
 const { getAgentSession, setAgentSessionArchived } = await import("../agent-store");
-const { runGroupTool, startMemberWorktree } = await import("./group-tools");
+const {
+  registerGroupTools,
+  runGroupTool,
+  setGroupWorktreeReadySink,
+  startMemberWorktree: startWorktree,
+} = await import("./group-tools");
+const { toolRegistry } = await import("./registry");
+const { setAgentToolContext } = await import("./tool-context");
+
+/** The tool text (these tests run outside any group turn: no sink, no turn end). */
+async function startMemberWorktree(caller: { sessionId: string; groupId?: string }) {
+  const result = await startWorktree(caller);
+  expect(result.endTurn).toBe(false);
+  return result.text;
+}
 
 const temps: string[] = [];
 
@@ -98,6 +112,8 @@ beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), "modus-group-worktree-test-"));
   ensureChatsWorkspace();
 });
+
+afterEach(() => setGroupWorktreeReadySink(undefined));
 
 afterAll(async () => {
   await rm(userData, { recursive: true, force: true }).catch(() => undefined);
@@ -302,5 +318,72 @@ describe("group_start_worktree", () => {
     expect(byId.get(fresh)?.branch).toBe(branch);
     expect(byId.get(preset.id)?.branch).toBe("feature/preset");
     expect(byId.get(other)?.branch).toBeUndefined();
+  });
+});
+
+describe("group_start_worktree in a group turn (turn end + re-wake)", () => {
+  it("moving the cwd inside the member's group turn ends the turn (PI terminate)", async () => {
+    const { group, alpha, ws, root } = await squad();
+    const sink = vi.fn(() => true);
+    setGroupWorktreeReadySink(sink);
+    registerGroupTools();
+    const definition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((candidate) => candidate.name === "group_start_worktree");
+    const execute = definition?.execute as unknown as (
+      id: string,
+      params: unknown,
+      signal: undefined,
+      onUpdate: undefined,
+      ctx: { cwd: string },
+    ) => Promise<{ content: Array<{ text: string }>; terminate?: boolean }>;
+    setAgentToolContext({ workspaceId: ws, cwd: root, sessionId: alpha, groupId: group.id });
+
+    const result = await execute("call-1", {}, undefined, undefined, { cwd: root });
+
+    const branch = getAgentSession(alpha)?.subagentWorktree?.branch;
+    expect(sink).toHaveBeenCalledWith({ groupId: group.id, sessionId: alpha, branch });
+    expect(result.terminate).toBe(true);
+    expect(result.content[0]?.text).toContain("Your turn ends now");
+    expect(getAgentSession(alpha)?.cwd).toBe(getAgentSession(alpha)?.subagentWorktree?.path);
+
+    // Idempotent call with the cwd already there: no turn end, no re-wake.
+    sink.mockClear();
+    const again = await execute("call-2", {}, undefined, undefined, { cwd: root });
+    expect(sink).not.toHaveBeenCalled();
+    expect(again.terminate).toBeUndefined();
+    expect(again.content[0]?.text).toContain("You are already working in it.");
+  });
+
+  it("outside a group turn the cwd is saved, nothing ends and it applies from the next message", async () => {
+    const { alpha, a } = await squad();
+    const sink = vi.fn(() => false);
+    setGroupWorktreeReadySink(sink);
+
+    const result = await startWorktree(a);
+
+    expect(sink).toHaveBeenCalledTimes(1);
+    expect(result.endTurn).toBe(false);
+    expect(result.text).toContain("from your next message");
+    expect(getAgentSession(alpha)?.cwd).toBe(getAgentSession(alpha)?.subagentWorktree?.path);
+  });
+
+  it("refuses with branch-checked-out when the member branch is checked out outside .modus/worktrees", async () => {
+    const { root, group, alpha, a } = await squad();
+    const sink = vi.fn(() => true);
+    setGroupWorktreeReadySink(sink);
+    const branch = `group/${group.id}/alpha-${alpha.replace(/-/g, "").slice(0, 8)}`;
+    git(root, "checkout", "-q", "-b", branch);
+
+    const result = await startWorktree(a);
+
+    expect(result.endTurn).toBe(false);
+    expect(result.text).toMatch(/^\[group-error:branch-checked-out\] /);
+    expect(result.text).toContain(root);
+    expect(result.text).toContain("Do not retry");
+    expect(sink).not.toHaveBeenCalled();
+    expect(getAgentSession(alpha)?.cwd).toBe(root);
+    expect(getAgentSession(alpha)?.subagentWorktree).toBeUndefined();
+    expect(git(root, "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
   });
 });

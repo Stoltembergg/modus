@@ -63,6 +63,8 @@ export const GROUP_STATUS_TEXT = {
   waitingForYou: "Waiting for you",
   failed: "Turn failed",
   aborted: "Turn stopped",
+  /** A member's turn ended to move into its worktree (then it is re-woken there). */
+  worktreeReady: (branch: string) => `Worktree ready: \`${branch}\``,
   limit: {
     "max-hops": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxHops} turns.`,
     "max-agent-messages": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxAgentMessages} agent messages.`,
@@ -109,6 +111,9 @@ export type GroupTaskWake = {
   wake?: boolean;
 };
 
+/** group_start_worktree moved a member's cwd (see GroupRuntime.handleWorktreeReady). */
+export type GroupWorktreeReady = { groupId: string; sessionId: string; branch: string };
+
 export type GroupRuntimeOptions = {
   runtime: GroupAgentRuntime;
   host: GroupRuntimeHost;
@@ -137,6 +142,8 @@ type Wake = {
   prompt: string;
   /** The turn opened the intent gate: its chain ended and it no longer holds a slot. */
   gated?: boolean;
+  /** group_start_worktree moved the member's cwd during this turn: re-wake it there. */
+  worktreeBranch?: string;
 };
 
 /** Ended/finished chains kept for chainSnapshot diagnostics (bounded). */
@@ -432,6 +439,22 @@ export class GroupRuntime {
     return message;
   }
 
+  /**
+   * group_start_worktree moved `sessionId`'s cwd. Inside that member's running
+   * group turn: mark it for a re-wake and return true (the tool then ends the
+   * turn after its result). Outside one (its own chat, another group's turn,
+   * a turn waiting at the intent gate, or a chain that already ended) return
+   * false: nothing is re-woken and the cwd applies from the next message.
+   */
+  handleWorktreeReady(input: GroupWorktreeReady): boolean {
+    const turn = this.running.get(input.sessionId);
+    if (!turn || turn.groupId !== input.groupId) return false;
+    // An already ended chain could not re-wake it: let the turn go on.
+    if (this.chains.get(turn.chainId)?.ended) return false;
+    turn.worktreeBranch = input.branch;
+    return true;
+  }
+
   isGroupWorking(groupId: string): boolean {
     return this.activityOf(groupId).working;
   }
@@ -542,11 +565,12 @@ export class GroupRuntime {
     group: AgentGroupInfo,
     message: GroupMessage,
     explicitTargets?: readonly string[],
+    allowSelf = false,
   ): string[] {
     if (explicitTargets) {
       const memberIds = new Set(listAgentGroupMembers(group.id).map((member) => member.sessionId));
       return [...new Set(explicitTargets)].filter(
-        (id) => memberIds.has(id) && id !== message.authorSessionId,
+        (id) => memberIds.has(id) && (allowSelf || id !== message.authorSessionId),
       );
     }
     if (message.kind !== "message") return [];
@@ -575,15 +599,20 @@ export class GroupRuntime {
     );
   }
 
+  /**
+   * `allowSelf` (with explicit targets) is the one exception to "an author
+   * never wakes itself": the worktree re-wake (see applyWorktreeRewake).
+   */
   private route(
     chain: ChainState,
     message: GroupMessage,
     explicitTargets?: readonly string[],
+    allowSelf = false,
   ): void {
     if (chain.ended) return;
     const group = getAgentGroup(chain.groupId);
     if (!group) return;
-    const targets = this.wakeTargets(group, message, explicitTargets);
+    const targets = this.wakeTargets(group, message, explicitTargets, allowSelf);
     if (targets.length === 0) return;
     const members = membersOf(group.id);
     const history = listGroupMessages(group.id, {
@@ -770,7 +799,9 @@ export class GroupRuntime {
     if (chain && stillMember) {
       try {
         if (wake.gated) this.applyGatedTurnResult(chain, wake, result);
-        else this.applyTurnResult(chain, wake, result);
+        else if (wake.worktreeBranch && result.outcome === "ok") {
+          this.applyWorktreeRewake(chain, wake, wake.worktreeBranch);
+        } else this.applyTurnResult(chain, wake, result);
       } catch (error) {
         console.warn("[modus] group turn post failed:", error);
       }
@@ -825,6 +856,21 @@ export class GroupRuntime {
       this.awaitingUser.set(wake.sessionId, chain.chainId);
       this.endChain(chain, "blocked");
     }
+  }
+
+  /**
+   * The turn ended after group_start_worktree moved the member's cwd (PI
+   * `terminate`, so outcome `ok`, never "Turn stopped"). Posts "Worktree
+   * ready" as the member (a status: wakes nobody) and re-wakes the SAME member
+   * in the SAME chain with the SAME trigger message, counting a hop and the
+   * member's wakes like any wake. An ended chain or a hit limit wakes nobody;
+   * the cwd stays saved either way. The ended turn's own text is not posted:
+   * the re-woken turn gives the reply.
+   */
+  private applyWorktreeRewake(chain: ChainState, wake: Wake, branch: string): void {
+    this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.worktreeReady(branch));
+    const trigger = getGroupMessage(wake.triggerMessageId);
+    if (trigger) this.route(chain, trigger, [wake.sessionId], true);
   }
 
   /**

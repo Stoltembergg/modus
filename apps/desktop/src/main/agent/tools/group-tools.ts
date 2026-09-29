@@ -7,11 +7,16 @@ import { type Static, Type } from "typebox";
 import type { GroupMessage, GroupTask, GroupTaskStatus } from "../../../shared/contracts";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
 import type { ToolProfileName } from "../../../shared/tools";
-import { createMemberWorktree, MemberWorktreeUnavailableError } from "../../git/git-service";
+import {
+  createMemberWorktree,
+  MemberBranchCheckedOutError,
+  MemberWorktreeUnavailableError,
+} from "../../git/git-service";
 import {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
   estimateGroupTokens,
   type GroupTaskWake,
+  type GroupWorktreeReady,
 } from "../../groups/group-runtime";
 import {
   claimGroupTask,
@@ -82,6 +87,19 @@ export function setGroupTaskWakeSink(sink: ((wake: GroupTaskWake) => void) | und
   taskWakeSink = sink;
 }
 
+let worktreeReadySink: ((ready: GroupWorktreeReady) => boolean) | undefined;
+
+/**
+ * Told when group_start_worktree moved a member's cwd (GroupRuntime.handleWorktreeReady
+ * in the app). Returns true when the call ran inside the member's group turn:
+ * that turn then ends after the tool result and the runtime re-wakes the member.
+ */
+export function setGroupWorktreeReadySink(
+  sink: ((ready: GroupWorktreeReady) => boolean) | undefined,
+): void {
+  worktreeReadySink = sink;
+}
+
 /* ── core (pure of PI; tested directly) ──────────────────────────────── */
 
 export type GroupToolCaller = { sessionId: string; groupId?: string | undefined };
@@ -106,7 +124,8 @@ class ToolInputError extends Error {
       | "invalid-value"
       | "message-not-found"
       | "ambiguous-member"
-      | "no-git-project",
+      | "no-git-project"
+      | "branch-checked-out",
     message: string,
   ) {
     super(message);
@@ -358,14 +377,23 @@ function memberWorktreeBranch(groupId: string, sessionId: string): string | unde
   return branch?.startsWith(memberWorktreeBranchPrefix(groupId)) ? branch : undefined;
 }
 
+/** What group_start_worktree returns: the tool text, and whether the turn ends after it. */
+export type StartWorktreeResult = { text: string; endTurn: boolean };
+
 /**
  * group_start_worktree: gives the caller its own worktree of the group's
  * Project (created once, then reused across tasks) and moves the session's
  * cwd into it. Fills `branch` on the caller's in_progress tasks that have
- * none. Never merges anything back into the Project root. Returns text like
- * runGroupTool (errors as `[group-error:<code>] …`).
+ * none. Never merges anything back into the Project root. Errors come back as
+ * `[group-error:<code>] …` text like runGroupTool.
+ *
+ * PI fixes a session's cwd (tools, permission extension, Project rules) when
+ * the session is built, so a moved cwd only applies to the next turn. Inside
+ * the member's group turn (the sink says so) the turn ends right after this
+ * result (`endTurn` → PI `terminate`) and the GroupRuntime re-wakes the member
+ * in the worktree. Outside one, or when the cwd did not move, nothing stops.
  */
-export async function startMemberWorktree(caller: GroupToolCaller): Promise<string> {
+export async function startMemberWorktree(caller: GroupToolCaller): Promise<StartWorktreeResult> {
   try {
     const groupId = requireCallerGroup(caller);
     const actor = caller.sessionId;
@@ -391,24 +419,39 @@ export async function startMemberWorktree(caller: GroupToolCaller): Promise<stri
       if (error instanceof MemberWorktreeUnavailableError) {
         throw new ToolInputError("no-git-project", error.message);
       }
+      if (error instanceof MemberBranchCheckedOutError) {
+        throw new ToolInputError(
+          "branch-checked-out",
+          `${error.message} Do not retry: the user must switch that checkout to another branch first.`,
+        );
+      }
       throw error;
     }
     // Re-check after git ran: a member removed meanwhile must not get its cwd moved back.
     requireCallerGroup({ sessionId: actor, groupId });
     const { cwd, created, ...info } = worktree;
+    const moved = getAgentSession(actor)?.cwd !== cwd;
     updateAgentSessionWorktree(actor, info, { cwd });
     const tagged = fillMemberTaskBranches(groupId, actor, info.branch);
-    return [
+    const endTurn =
+      moved && (worktreeReadySink?.({ groupId, sessionId: actor, branch: info.branch }) ?? false);
+    const next = !moved
+      ? "You are already working in it."
+      : endTurn
+        ? "Your turn ends now; you will be woken again in the worktree to continue the same message. Do not call more tools."
+        : "It becomes your working directory from your next message; until then use absolute paths under it.";
+    const text = [
       `Worktree ${created ? "created" : "reused"}: ${cwd}`,
       `branch=${info.branch} base=${info.baseSha.slice(0, 12)}`,
       tagged.length > 0
         ? `Branch set on your in_progress task(s): ${tagged.map((task) => task.id).join(", ")}.`
         : "No in_progress task of yours needed a branch.",
-      "It becomes your working directory from your next turn; until then use absolute paths under it.",
+      next,
       "Nothing is merged back into the Project automatically.",
     ].join("\n");
+    return { text, endTurn };
   } catch (error) {
-    return errorText(error);
+    return { text: errorText(error), endTurn: false };
   }
 }
 
@@ -516,13 +559,17 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
     group_start_worktree: {
       label: "Start member worktree",
       description:
-        "Get your own Git worktree of the group's Project (branch group/<groupId>/<you>), created once and reused for all your tasks; it becomes your working directory from your next turn. Nothing is merged back automatically.",
+        "Get your own Git worktree of the group's Project (branch group/<groupId>/<you>), created once and reused for all your tasks. Call it on its own: in a group turn your turn ends after it and you are woken again, working inside the worktree. Nothing is merged back automatically.",
       snippet: "group_start_worktree() — work in your own branch/worktree.",
     },
   };
 
-function toResult(text: string): AgentToolResult<{ text: string }> {
-  return { content: [{ type: "text", text }], details: { text } };
+function toResult(text: string, terminate = false): AgentToolResult<{ text: string }> {
+  return {
+    content: [{ type: "text", text }],
+    details: { text },
+    ...(terminate ? { terminate } : {}),
+  };
 }
 
 function defineGroupTool(name: GroupToolName): ToolDefinition {
@@ -536,7 +583,11 @@ function defineGroupTool(name: GroupToolName): ToolDefinition {
     execute: async (_toolCallId, params: Static<(typeof schemas)[typeof name]>, _s, _u, ctx) => {
       const context = resolveAgentToolContext(ctx.cwd);
       const caller = { sessionId: context.sessionId, groupId: context.groupId };
-      if (name === GROUP_START_WORKTREE_TOOL) return toResult(await startMemberWorktree(caller));
+      if (name === GROUP_START_WORKTREE_TOOL) {
+        // `terminate`: PI stops after this tool batch (when every call in it asks to).
+        const result = await startMemberWorktree(caller);
+        return toResult(result.text, result.endTurn);
+      }
       return toResult(runGroupTool(name, caller, params as never));
     },
   }) as ToolDefinition;
