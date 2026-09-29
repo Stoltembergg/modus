@@ -16,12 +16,19 @@ import {
   type UpdateAgentGroupMembersInput,
   type UpdateAgentInput,
 } from "../../shared/contracts";
-import { groupMembersUpdateCountError } from "../../shared/group-blocked";
+import {
+  GROUP_BLOCKED_TEXT,
+  type GroupBlockedReason,
+  groupBlockedErrorCode,
+  groupBlockedReason,
+  groupMembersUpdateCountError,
+} from "../../shared/group-blocked";
 import { getAgentSession } from "../agent/agent-store";
 import { getDatabase, uniqueAgentName } from "../db/database";
 import {
   agentChatSessionIds,
   GroupStoreError,
+  getAgentGroup,
   getAgentGroupWithMembers,
   insertGroupWithProject,
   joinGroupRows,
@@ -374,8 +381,9 @@ export function setAgentArchived(agentId: string, archived: boolean): AgentInfo 
  * Deletes the agent. For a group agent this IS removing the member (one
  * operation): refused with `group-min-members` when only 2 are left, otherwise
  * the member-removal rules (lead cleared, open tasks released owner-first), its
- * hidden room session deleted and "X left the group" posted, in one
- * transaction. Returns the room session ids: the caller stops their runtime.
+ * "X left the group" posted, in one transaction. Returns the room session and
+ * 1:1 chat ids, still on disk: the caller tears them down after the commit
+ * (agents/agent-teardown).
  */
 export function deleteAgent(agentId: string): string[] {
   const row = requireAgentRow(agentId);
@@ -389,8 +397,6 @@ export function deleteAgent(agentId: string): string[] {
   }
   return withGroupTransaction(() => {
     const chatIds = agentChatSessionIds([row.id]);
-    const drop = getDatabase().prepare("delete from agent_sessions where id = ? and kind = 'chat'");
-    for (const id of chatIds) drop.run(id);
     getDatabase().prepare("delete from agents where id = ?").run(row.id);
     return chatIds;
   });
@@ -407,6 +413,34 @@ export function openAgentChat(agentId: string): AgentSessionInfo {
   const session = getAgentSession(sessionId);
   if (!session) throw new GroupStoreError("session-not-found", `Session not found: ${sessionId}`);
   return session;
+}
+
+/**
+ * Why an agent's 1:1 chat is read-only (A3): its group is blocked
+ * (groupBlockedReason, e.g. no Project). Null for a working group and for any
+ * other session. The renderer shows the room's banner; IPC and runtime refuse
+ * to send.
+ */
+export function agentChatBlockedReason(sessionId: string): GroupBlockedReason | null {
+  const row = getDatabase()
+    .prepare(
+      `select a.group_id from agent_sessions s join agents a on a.id = s.agent_id
+       where s.id = ? and s.kind = 'chat'`,
+    )
+    .get(sessionId) as { group_id: string | null } | undefined;
+  if (!row?.group_id) return null;
+  const group = getAgentGroup(row.group_id);
+  if (!group) return null;
+  const members = getDatabase()
+    .prepare("select count(*) as count from agent_group_members where group_id = ?")
+    .get(group.id) as { count: number };
+  return groupBlockedReason(group, Number(members.count));
+}
+
+/** Refuses a send to a read-only 1:1 chat (`group-project-required` / `group-min-members`). */
+export function requireAgentChatWritable(sessionId: string): void {
+  const reason = agentChatBlockedReason(sessionId);
+  if (reason) throw new GroupStoreError(groupBlockedErrorCode(reason), GROUP_BLOCKED_TEXT[reason]);
 }
 
 /**

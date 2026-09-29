@@ -138,7 +138,10 @@ describe("agents IPC", () => {
         AGENT,
       ]);
       expect(service.setAgentArchived).toHaveBeenCalledWith("a-1", true);
-      expect(handlers.get("agents:delete")?.(trusted, { id: "a-1" })).toEqual([AGENT]);
+      // Resolves after the agent's sessions are torn down.
+      await expect(handlers.get("agents:delete")?.(trusted, { id: "a-1" })).resolves.toEqual([
+        AGENT,
+      ]);
       expect(service.deleteAgent).toHaveBeenCalledWith("a-1");
     } finally {
       unregister();

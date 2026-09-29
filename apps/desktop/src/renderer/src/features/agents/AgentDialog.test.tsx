@@ -152,7 +152,7 @@ describe("AgentDialog", () => {
   it("a custom agent needs a name (unique in the group) and a model", async () => {
     const user = userEvent.setup();
     const { dialog, generate, create } = renderDialog({ models: [] });
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     expect(within(dialog).getByRole("alert").textContent).toBe(AGENT_NAME_REQUIRED);
     await user.type(field(dialog, "Name"), "ANA");
     expect(within(dialog).getByRole("alert").textContent).toBe(
@@ -171,12 +171,13 @@ describe("AgentDialog", () => {
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("Create with an empty role and instructions generates them, editable, then the next Create saves", async () => {
+  it("with an empty role and instructions the button reads Generate; after generating it reads Create and saves", async () => {
     const user = userEvent.setup();
     const { dialog, generate, create, onOpenChange } = renderDialog();
+    expect(within(dialog).queryByRole("button", { name: "Create" })).toBeNull();
     await user.type(field(dialog, "Name"), "Cy");
     await user.type(field(dialog, /What should it help with/), "release notes");
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     expect(generate).toHaveBeenCalledWith({
       groupId: "g-1",
       modelId: "m-2",
@@ -189,6 +190,8 @@ describe("AgentDialog", () => {
       AGENT_GENERATED_HINT,
     );
     expect(create).not.toHaveBeenCalled();
+    expect(within(dialog).queryByRole("button", { name: "Generate" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeTruthy();
 
     await user.clear(field(dialog, "Role"));
     await user.type(field(dialog, "Role"), "Scribe");
@@ -209,6 +212,7 @@ describe("AgentDialog", () => {
     const user = userEvent.setup();
     const { dialog, generate, create } = renderDialog();
     await user.type(field(dialog, "Name"), "Cy");
+    expect(within(dialog).getByRole("button", { name: "Generate" })).toBeTruthy();
     await user.type(field(dialog, "Role"), "Scribe");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
@@ -225,13 +229,14 @@ describe("AgentDialog", () => {
     }));
     const { dialog, create } = renderDialog({ generate });
     await user.type(field(dialog, "Name"), "Cy");
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     await waitFor(() => expect(field(dialog, "Role").value).toBe(AGENT_FALLBACK_ROLE));
     expect(field(dialog, "Instructions").value).toBe(AGENT_FALLBACK_INSTRUCTIONS);
     const notice = within(dialog).getByTestId("agent-dialog-notice");
     expect(notice.textContent).toBe(AGENT_GENERATION_WARNING);
     expect(notice.dataset.warning).toBe("true");
     expect(create).not.toHaveBeenCalled();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeTruthy();
   });
 
   it("a rejected generation (model validation) shows the group error", async () => {
@@ -241,13 +246,15 @@ describe("AgentDialog", () => {
     });
     const { dialog } = renderDialog({ generate });
     await user.type(field(dialog, "Name"), "Cy");
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
     await waitFor(() =>
       expect(within(dialog).getByRole("alert").textContent).toBe(
         GROUP_ERROR_MESSAGES["agent-model-unavailable"],
       ),
     );
     expect(field(dialog, "Role").value).toBe("");
+    // Nothing was generated: the button still offers Generate.
+    expect(within(dialog).getByRole("button", { name: "Generate" })).toBeTruthy();
   });
 
   it("edit: Regenerate replaces role + instructions (excluding itself); Save sends the changes", async () => {

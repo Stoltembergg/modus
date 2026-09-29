@@ -3,6 +3,7 @@ import { agentAvatarForId } from "../../../../shared/agent-templates";
 import type { AgentGroupWithMembers, AgentSessionInfo } from "../../../../shared/contracts";
 import { groupBlockedReason } from "../../../../shared/group-blocked";
 import {
+  agentChatBlocked,
   agentChatSessions,
   groupAgentRows,
   groupDeleteConfirmLabel,
@@ -58,10 +59,10 @@ describe("delete confirmations", () => {
     expect(projectGroupNames(groups, "ws-1")).toEqual(["Group a", "Group b"]);
     expect(projectGroupNames(groups, "ws-3")).toEqual([]);
     expect(removeProjectGroupsWarning(["Group a"])).toBe(
-      "This also deletes 1 group with their agents, chats and messages: Group a",
+      "This also deletes 1 group, its agents and chats: Group a",
     );
     expect(removeProjectGroupsWarning(["Group a", "Group b"])).toBe(
-      "This also deletes 2 groups with their agents, chats and messages: Group a, Group b",
+      "This also deletes 2 groups, their agents and chats: Group a, Group b",
     );
   });
 
@@ -147,5 +148,46 @@ describe("group agent rows (A3)", () => {
     const blocked: AgentGroupWithMembers = { ...noProject, members: squad.members.slice(0, 1) };
     expect(groupBlockedReason(blocked, blocked.members)).not.toBeNull();
     expect(groupAgentRows(blocked, new Map(), undefined).map((row) => row.name)).toEqual(["Ana"]);
+  });
+});
+
+describe("agentChatBlocked (A3: a blocked group's 1:1 chat is read-only)", () => {
+  const member = (groupId: string, agentId: string) => ({
+    groupId,
+    sessionId: `room-${agentId}`,
+    agentId,
+    name: agentId,
+    agentRole: "",
+    joinedAt: "2026-01-01T00:00:00.000Z",
+  });
+  const working: AgentGroupWithMembers = {
+    ...group("w", "ws-1"),
+    members: [member("w", "a"), member("w", "b")],
+  };
+  const noProject: AgentGroupWithMembers = {
+    ...group("n"),
+    members: [member("n", "c"), member("n", "d")],
+  };
+  const tooSmall: AgentGroupWithMembers = { ...group("s", "ws-1"), members: [member("s", "e")] };
+  const groups = [working, noProject, tooSmall];
+
+  it("blocks the chat of an agent whose group has no Project, with the room's reason", () => {
+    const blocked = agentChatBlocked(session("dm-c", { agentId: "c" }), groups);
+    expect(blocked?.group.id).toBe("n");
+    expect(blocked?.reason).toBe("project-required");
+    expect(blocked?.reason).toBe(groupBlockedReason(noProject, noProject.members));
+  });
+
+  it("blocks any groupBlockedReason (too few members too)", () => {
+    expect(agentChatBlocked(session("dm-e", { agentId: "e" }), groups)?.reason).toBe("min-members");
+  });
+
+  it("leaves a working group's chat, a plain chat and room sessions writable", () => {
+    expect(agentChatBlocked(session("dm-a", { agentId: "a" }), groups)).toBeNull();
+    expect(agentChatBlocked(session("plain"), groups)).toBeNull();
+    expect(
+      agentChatBlocked(session("room-c", { agentId: "c", kind: "group_member" }), groups),
+    ).toBeNull();
+    expect(agentChatBlocked(undefined, groups)).toBeNull();
   });
 });

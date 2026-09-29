@@ -47,7 +47,7 @@ export type AgentDialogProps = {
  * Create / edit an agent (A3): name, role, instructions, model, face and color
  * with an animated 48 px preview. A custom agent (no template) needs a name and
  * a model. Creating one with an empty role AND empty instructions first asks
- * the model for them (shown here, editable; the next Create saves); "Regenerate"
+ * the model for them (shown here, editable; the button reads "Generate", then "Create" saves); "Regenerate"
  * asks again. The profile is saved once, never regenerated per wake. Render
  * it only while open: each open starts from a fresh draft.
  */
@@ -135,7 +135,7 @@ export function AgentDialog({
     setTouched(true);
     if (problem || busy) return;
     if (!agent && needsProfileGeneration(draft, custom)) {
-      // First Create: fill role + instructions, let the user review; the next Create saves.
+      // "Generate": fill role + instructions, let the user review; the button then reads "Create".
       await generate();
       return;
     }
@@ -181,7 +181,9 @@ export function AgentDialog({
       ? "Creating…"
       : busy === "generate"
         ? "Generating…"
-        : "Create";
+        : needsProfileGeneration(draft, custom)
+          ? "Generate"
+          : "Create";
 
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>

@@ -9,7 +9,7 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase, migrateDatabase } = await import("../db/database");
-const { getAgentSession } = await import("../agent/agent-store");
+const { deleteAgentSession, getAgentSession } = await import("../agent/agent-store");
 const {
   appendGroupMessage,
   listGroupMessages,
@@ -246,7 +246,7 @@ describe("agents store", () => {
       body: "hi",
     });
 
-    deleteAgent(agent.id);
+    expect(deleteAgent(agent.id)).toEqual([jennie]);
 
     expect(getAgent(agent.id)).toBeUndefined();
     expect(listAgentGroupMembers(group.id).map((member) => member.sessionId)).toEqual([bob, cara]);
@@ -255,7 +255,10 @@ describe("agents store", () => {
       status: "open",
     });
     expect(listGroupTasks(group.id)[0]?.ownerSessionId).toBeUndefined();
-    // One group per agent: its hidden room session goes with it; the room says so.
+    // One group per agent: its hidden room session is detached (returned above)
+    // and goes in the caller's teardown after the commit (agents/agent-teardown).
+    expect(getAgentSession(jennie)?.kind).toBe("group_member");
+    deleteAgentSession(jennie);
     expect(getAgentSession(jennie)).toBeUndefined();
     expect(listGroupMessages(group.id, { limit: 10 }).at(-1)).toMatchObject({
       authorKind: "system",

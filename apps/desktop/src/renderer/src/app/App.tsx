@@ -79,8 +79,9 @@ import {
 import { contextItemKey } from "../features/composer/composerTokens";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
-import { GroupRoom } from "../features/groups/GroupRoom";
+import { BlockedBanner, GroupRoom } from "../features/groups/GroupRoom";
 import { describeGroupError } from "../features/groups/groupErrors";
+import { agentChatBlocked } from "../features/groups/groupSidebarModel";
 import {
   groupActivityState,
   isGroupRunning,
@@ -887,6 +888,9 @@ export function App() {
     );
   }
 
+  /** A 1:1 chat of a blocked group opens read-only, with the room's banner (A3). */
+  const activeChatBlocked = agentChatBlocked(activeSession, agentGroups);
+
   const agentDialogGroup = agentDialog
     ? agentGroups.find((group) => group.id === agentDialog.groupId)
     : undefined;
@@ -1401,6 +1405,21 @@ export function App() {
                               <Suspense fallback={<ModusLoadingFallback />}>
                                 <ChatPane
                                   composerDraft={composerDraftBySession[activeSession.id]}
+                                  composerReplacement={
+                                    activeChatBlocked ? (
+                                      <BlockedBanner
+                                        onAction={() => {
+                                          const blocked = activeChatBlocked;
+                                          if (blocked.reason === "project-required") {
+                                            void chooseGroupFolder(blocked.group.id);
+                                          } else {
+                                            selectGroup(blocked.group);
+                                          }
+                                        }}
+                                        reason={activeChatBlocked.reason}
+                                      />
+                                    ) : undefined
+                                  }
                                   contextUsage={contextUsageBySession[activeSession.id]}
                                   defaultModel={model}
                                   hub={hubRef.current}

@@ -30,7 +30,8 @@ export type AgentsIpcService = {
   updateAgent(agentId: string, input: UpdateAgentInput): unknown;
   setAgentArchived(agentId: string, archived: boolean): unknown;
   /** Same operation as removing the member: `group-min-members` when 2 are left. */
-  deleteAgent(agentId: string): void;
+  /** Resolves once the agent's sessions are torn down (after the store commit). */
+  deleteAgent(agentId: string): void | Promise<void>;
   /** The agent's 1:1 chat, made on first open (`group-project-required` without a Project). */
   openAgentChat(agentId: string): AgentSessionInfo;
   /** Role + instructions from the chosen model; never rejects (falls back instead). */
@@ -145,7 +146,7 @@ export function registerAgentsIpcHandlers(
   ipc.handle(IPC_CHANNELS.agentsDelete, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentsIdSchema, input, IPC_CHANNELS.agentsDelete);
-    service.deleteAgent(parsed.id);
-    return list();
+    // The store call throws synchronously (error format kept); then await the teardown.
+    return Promise.resolve(service.deleteAgent(parsed.id)).then(list);
   });
 }

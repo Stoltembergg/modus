@@ -34,7 +34,7 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
-import { agentChatPersonaPrompt } from "../agents/agents-store";
+import { agentChatPersonaPrompt, requireAgentChatWritable } from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -748,6 +748,8 @@ type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
   private sessions = new Map<string, SdkRuntimeSession>();
+  /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
+  private personaPrompts = new Map<string, string | undefined>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
   private questionPendingListeners = new Set<(sessionId: string) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
@@ -1682,12 +1684,13 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<SdkRuntimeSession | undefined> {
     const existing = this.sessions.get(sessionId);
     if (existing) {
-      if (!this.storedCwdMoved(sessionId, existing)) {
+      if (!this.storedCwdMoved(sessionId, existing) && !this.personaChanged(sessionId, existing)) {
         return existing;
       }
       // The stored cwd moved (an Agent Group member entered or left its
-      // worktree): rebuild the SDK session so its tools, permission extension
-      // and Project rules use the new cwd. The in-memory to-dos stay.
+      // worktree), or a 1:1 chat's agent was edited (A3): rebuild the SDK
+      // session so its tools, permission extension, Project rules and persona
+      // are current for this turn. The in-memory to-dos stay.
       await this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
@@ -1701,6 +1704,29 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     this.resumePromises.set(sessionId, next);
     return await next;
+  }
+
+  /**
+   * True when an idle cached 1:1 chat was built with another persona than its
+   * agent's current one (role / instructions / name edited): the next turn
+   * uses the new system prompt without a manual resume.
+   */
+  private personaChanged(sessionId: string, runtimeSession: SdkRuntimeSession): boolean {
+    if (!this.personaPrompts.has(sessionId)) return false;
+    return (
+      this.personaPrompts.get(sessionId) !== agentChatPersonaPrompt(sessionId) &&
+      this.isIdleForRebuild(sessionId, runtimeSession)
+    );
+  }
+
+  private isIdleForRebuild(sessionId: string, runtimeSession: SdkRuntimeSession): boolean {
+    return (
+      !runtimeSession.session.isStreaming &&
+      !runtimeSession.session.isCompacting &&
+      !this.runOutputTrackers.has(sessionId) &&
+      !this.pendingIntentGates.has(sessionId) &&
+      !getActiveAgentRun(sessionId)
+    );
   }
 
   /** True when the persisted cwd differs from the cached SDK session's and it is idle. */
@@ -1747,6 +1773,7 @@ export class PiSdkRuntime implements AgentRuntime {
     const rulesPrompt = rulesBudget > 0 ? resolveAlwaysRulesPrompt(cwd, rulesBudget) : undefined;
     // An agent's 1:1 chat (A3) carries its persona, like its turns in the room.
     const personaPrompt = agentChatPersonaPrompt(sessionId);
+    this.personaPrompts.set(sessionId, personaPrompt);
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -2164,6 +2191,8 @@ export class PiSdkRuntime implements AgentRuntime {
     exclusiveStart?: ExclusiveStartHooks,
     probe?: PromptProbe,
   ): Promise<void> {
+    // A 1:1 chat of a blocked group (e.g. no Project) is read-only (A3).
+    requireAgentChatWritable(input.sessionId);
     const startInput = exclusiveStart?.input;
     if (
       isHyperPlanSessionReserved(input.sessionId) &&
@@ -3892,6 +3921,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const runtimeSession = this.sessions.get(sessionId);
     this.parentSessionByChild.delete(sessionId);
+    this.personaPrompts.delete(sessionId);
     if (!runtimeSession) {
       return;
     }

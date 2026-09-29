@@ -449,7 +449,7 @@ describe("Sidebar with groups", () => {
       await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
       expect(onRemoveProject).not.toHaveBeenCalled();
       const confirm = within(menu).getByRole("menuitem", {
-        name: "This also deletes 1 group with their agents, chats and messages: Release squad",
+        name: "This also deletes 1 group, its agents and chats: Release squad",
       });
       await user.click(confirm);
       expect(onRemoveProject).toHaveBeenCalledWith("ws-1");
@@ -462,7 +462,7 @@ describe("Sidebar with groups", () => {
       await user.click(within(menu).getByRole("menuitem", { name: "Remove" }));
       expect(
         within(menu).getByRole("menuitem", {
-          name: "This also deletes 2 groups with their agents, chats and messages: Release squad, Second",
+          name: "This also deletes 2 groups, their agents and chats: Release squad, Second",
         }),
       ).toBeTruthy();
       expect(onRemoveProject).not.toHaveBeenCalled();

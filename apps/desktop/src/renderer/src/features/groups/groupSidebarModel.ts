@@ -4,6 +4,7 @@ import type {
   AgentGroupWithMembers,
   AgentSessionInfo,
 } from "../../../../shared/contracts";
+import { type GroupBlockedReason, groupBlockedReason } from "../../../../shared/group-blocked";
 import type { SessionActivity } from "../agent/agentEventHub";
 import { type AgentAvatarState, agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import { type GroupMemberStatesById, memberActivityState } from "./useWorkingGroups";
@@ -42,6 +43,23 @@ export function agentChatSessions(
     if (session.agentId && session.kind !== "group_member") chats.set(session.agentId, session);
   }
   return chats;
+}
+
+/**
+ * A 1:1 agent chat whose group is blocked (no Project, too few members) opens
+ * READ-ONLY with the room's banner; the main process refuses sends too.
+ * Null for any other session or a working group.
+ */
+export function agentChatBlocked(
+  session: Pick<AgentSessionInfo, "agentId" | "kind"> | undefined,
+  groups: readonly AgentGroupWithMembers[],
+): { group: AgentGroupWithMembers; reason: GroupBlockedReason } | null {
+  const agentId = session?.agentId;
+  if (!agentId || session.kind === "group_member") return null;
+  const group = groups.find((item) => item.members.some((member) => member.agentId === agentId));
+  if (!group) return null;
+  const reason = groupBlockedReason(group, group.members);
+  return reason ? { group, reason } : null;
 }
 
 /**
@@ -94,8 +112,9 @@ export function projectGroupNames(
 /** Remove-project confirmation when the Project owns groups (at least one name). */
 export function removeProjectGroupsWarning(names: readonly string[]): string {
   const count = names.length;
-  const groups = count === 1 ? "1 group" : `${count} groups`;
-  return `This also deletes ${groups} with their agents, chats and messages: ${names.join(", ")}`;
+  const groups =
+    count === 1 ? "1 group, its agents and chats" : `${count} groups, their agents and chats`;
+  return `This also deletes ${groups}: ${names.join(", ")}`;
 }
 
 /** Delete-group confirmation: an agent belongs to one group, so it goes with it. */

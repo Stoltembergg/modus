@@ -771,10 +771,12 @@ export function addAgentToGroup(input: {
  * NON-transactional: removing a member IS deleting its agent (one group per
  * agent). Refused with `group-min-members` when only 2 are left (unless
  * `checkMinimum` is false: update-members checks the target count once);
- * then the member-removal rules, the agent row and its room session row, and
- * "X left the group". The agent's 1:1 chat row goes too (A3). Returns the
- * removed session ids (room session first, then the 1:1 chat; [] when the
- * session was not a member): the caller stops their runtime.
+ * then the member-removal rules, the agent row and "X left the group". The
+ * room session and the agent's 1:1 chat (A3) are NOT deleted here: they stay
+ * (hidden / unlinked) so that, after the commit, the caller tears each tree
+ * down with its subagents, runtimes and checkpoints (deleteAgentSessionTree,
+ * see agents/agent-teardown). Returns those session ids (room session first,
+ * then the 1:1 chat; [] when the session was not a member).
  */
 export function removeAgentFromGroupRows(
   groupId: string,
@@ -789,11 +791,8 @@ export function removeAgentFromGroupRows(
   }
   const chatIds = agentChatSessionIds([member.agentId]);
   detachMemberRows(groupId, sessionId);
-  const db = getDatabase();
-  const dropChat = db.prepare("delete from agent_sessions where id = ? and kind = 'chat'");
-  for (const id of chatIds) dropChat.run(id);
-  db.prepare("delete from agents where id = ?").run(member.agentId);
-  db.prepare("delete from agent_sessions where id = ? and kind = 'group_member'").run(sessionId);
+  // agent_sessions.agent_id is ON DELETE SET NULL: the 1:1 chat is unlinked.
+  getDatabase().prepare("delete from agents where id = ?").run(member.agentId);
   postMembershipEvent(groupId, GROUP_MEMBERSHIP_TEXT.left(member.name));
   touchGroup(groupId);
   return [sessionId, ...chatIds];
@@ -922,10 +921,10 @@ export function setAgentGroupLead(groupId: string, sessionId: string | null): Ag
 
 /**
  * Deletes the group and (via cascade) its agents (one group per agent),
- * members, messages, tasks and decisions, plus the members' hidden room
- * sessions and the agents' 1:1 chats (A3), in one transaction. Returns those
- * session ids: the caller stops their runtime (deleteAgentSessionTree
- * tolerates the missing record).
+ * members, messages, tasks and decisions, in one transaction. The members'
+ * hidden room sessions and the agents' 1:1 chats (A3) stay until the caller
+ * tears each tree down after the commit (agents/agent-teardown), with the
+ * records still there for subagents and checkpoints. Returns those ids.
  */
 export function deleteAgentGroup(groupId: string): string[] {
   const db = getDatabase();
@@ -934,14 +933,9 @@ export function deleteAgentGroup(groupId: string): string[] {
     const sessionIds = members.map((member) => member.sessionId);
     const chatIds = agentChatSessionIds(members.map((member) => member.agentId));
     restoreMemberWorktreeCwdRows(groupId);
-    // Cascades: its agents (agents.group_id), members, messages, tasks, decisions.
+    // Cascades: its agents (agents.group_id), members, messages, tasks, decisions;
+    // the 1:1 chats are unlinked (agent_id set null), not deleted.
     db.prepare("delete from agent_groups where id = ?").run(groupId);
-    // Their hidden room sessions and 1:1 chats go in the same step: nothing is
-    // left orphaned (agent_sessions.agent_id also cascades, as a backstop).
-    const drop = db.prepare(
-      "delete from agent_sessions where id = ? and kind in ('group_member', 'chat')",
-    );
-    for (const id of [...sessionIds, ...chatIds]) drop.run(id);
     return [...sessionIds, ...chatIds];
   });
 }
