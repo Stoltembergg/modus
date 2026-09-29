@@ -1,1 +1,1 @@
-PLACEHOLDER
+{{INCLUDE_FROM_FILE:/tmp/restore-content-raw.ts}}
