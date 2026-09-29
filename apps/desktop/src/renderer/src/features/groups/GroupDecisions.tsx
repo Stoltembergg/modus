@@ -11,6 +11,7 @@ import type { MemberLabel } from "./memberLabels";
 export const DECISIONS_EMPTY_TEXT = "No decisions yet";
 /** Second-click label of the two-step "Delete" (like "Cancel task"). */
 export const DELETE_DECISION_CONFIRM_LABEL = "Click again to delete";
+export const FORMER_MEMBER_TEXT = "Former member";
 
 /**
  * The group's decisions (`group:list-decisions`, newest first), refetched when
@@ -100,7 +101,9 @@ function DecisionCard({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const author = decision.authorSessionId;
+  // Only members record decisions: no author (session deleted) or an author who
+  // left the group shows as a former member, never as the user.
+  const authorLabel = decision.authorSessionId ? labels.get(decision.authorSessionId) : undefined;
   const createdAt = Date.parse(decision.createdAt);
 
   async function remove(): Promise<void> {
@@ -129,7 +132,11 @@ function DecisionCard({
       <div className="whitespace-pre-wrap break-words text-fg">{decision.text}</div>
       <div className="mt-1 flex min-w-0 items-center gap-1 text-2xs text-fg-faint">
         <span className="min-w-0 truncate text-fg-muted" data-testid="decision-author">
-          {author ? <MemberName label={labels.get(author) ?? { title: author }} /> : "You"}
+          {authorLabel ? (
+            <MemberName label={authorLabel} />
+          ) : (
+            <span className="text-fg-faint">{FORMER_MEMBER_TEXT}</span>
+          )}
         </span>
         <span aria-hidden>·</span>
         <time

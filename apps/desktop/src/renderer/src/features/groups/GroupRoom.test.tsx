@@ -14,7 +14,11 @@ import type {
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { formatClock } from "../../lib/formatClock";
-import { DECISIONS_EMPTY_TEXT, DELETE_DECISION_CONFIRM_LABEL } from "./GroupDecisions";
+import {
+  DECISIONS_EMPTY_TEXT,
+  DELETE_DECISION_CONFIRM_LABEL,
+  FORMER_MEMBER_TEXT,
+} from "./GroupDecisions";
 import { GROUP_ROOM_EMPTY_TEXT, GroupRoom } from "./GroupRoom";
 import { CANCEL_TASK_CONFIRM_LABEL } from "./GroupTaskPanel";
 import { GROUP_MESSAGE_PAGE } from "./useGroupMessages";
@@ -461,6 +465,7 @@ describe("GroupRoom decisions", () => {
       decision("3", "Ship on Fridays", { authorSessionId: "s-rev-1" }),
       decision("2", "Use SQLite", { authorSessionId: "s-lead" }),
       decision("1", "Keep the API stable"),
+      decision("0", "Pin deps", { authorSessionId: "s-gone" }),
     ];
     tasks = [
       {
@@ -479,7 +484,7 @@ describe("GroupRoom decisions", () => {
     const panel = await openPanel(user);
     expect(screen.getByRole("button", { name: "Tasks (1 active)" }).textContent).toBe("Tasks1");
     await vi.waitFor(() =>
-      expect(within(panel).getByTestId("decision-count").textContent).toBe("3"),
+      expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
     );
     expect(group.listDecisions).toHaveBeenCalledWith("g-1");
     // The section comes first, above the tasks.
@@ -494,14 +499,20 @@ describe("GroupRoom decisions", () => {
       "Ship on Fridays",
       "Use SQLite",
       "Keep the API stable",
+      "Pin deps",
     ]);
     const authors = within(section).getAllByTestId("decision-author");
-    // A repeated title keeps its short id suffix; no author = the user.
+    // A repeated title keeps its short id suffix; no author (session deleted) or an
+    // author no longer in the group is a former member, faded, never "You".
     expect(authors.map((author) => author.textContent)).toEqual([
       "Reviewer · srev1",
       "Planner",
-      "You",
+      FORMER_MEMBER_TEXT,
+      FORMER_MEMBER_TEXT,
     ]);
+    for (const author of authors.slice(2)) {
+      expect(author.querySelector(".text-fg-faint")?.textContent).toBe(FORMER_MEMBER_TEXT);
+    }
     expect(within(authors[0] as HTMLElement).getByTestId("member-id-suffix")).toBeTruthy();
     const time = cards[1]?.querySelector("time");
     expect(time?.getAttribute("datetime")).toBe("2026-01-02T10:00:00.000Z");
@@ -513,9 +524,9 @@ describe("GroupRoom decisions", () => {
     await user.click(toggle);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
     expect(within(section).queryAllByTestId("group-decision")).toHaveLength(0);
-    expect(within(section).getByTestId("decision-count").textContent).toBe("3");
+    expect(within(section).getByTestId("decision-count").textContent).toBe("4");
     await user.click(toggle);
-    expect(within(section).getAllByTestId("group-decision")).toHaveLength(3);
+    expect(within(section).getAllByTestId("group-decision")).toHaveLength(4);
   });
 
   it(`shows "${DECISIONS_EMPTY_TEXT}" when the group has none`, async () => {

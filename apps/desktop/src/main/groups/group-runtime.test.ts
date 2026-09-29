@@ -576,9 +576,14 @@ describe("group decisions in the wake prompt", () => {
     ["b", "Beta"],
   ]);
 
-  it("lists decisions newest first with their author, escaped", () => {
+  it("lists decisions newest first with their author, escaped; a deleted or departed author is a former member, never the user", () => {
     const section = composeGroupDecisionsSection(
-      [decision("3", "Use <WAL>", "a"), decision("2", "Ship weekly"), decision("1", "Old", "b")],
+      [
+        decision("4", "Use <WAL>", "a"),
+        decision("3", "Ship weekly"),
+        decision("2", "Pin deps", "gone"),
+        decision("1", "Old", "b"),
+      ],
       titles,
     );
     expect(section).toBe(
@@ -586,7 +591,8 @@ describe("group decisions in the wake prompt", () => {
         "<group_decisions>",
         "Group decisions (newest first; the group agreed on these, keep to them):",
         "- Use &lt;WAL&gt; (@Alpha)",
-        "- Ship weekly (user)",
+        "- Ship weekly (former member)",
+        "- Pin deps (former member)",
         "- Old (@Beta)",
         "</group_decisions>",
       ].join("\n"),
@@ -664,7 +670,9 @@ describe("group decisions in the wake prompt", () => {
     expect(runtime.pendingSessions()).toEqual([alpha, beta]);
     const prompts = runtime.calls.map((call) => call.input.message);
     for (const prompt of prompts) {
-      expect(prompt).toContain("- Ship weekly (user)\n- Use SQLite (@Alpha)\n</group_decisions>");
+      expect(prompt).toContain(
+        "- Ship weekly (former member)\n- Use SQLite (@Alpha)\n</group_decisions>",
+      );
     }
     expect(groups.chainSnapshot(user.id).inputTokens).toBe(
       prompts.reduce((sum, prompt) => sum + estimateGroupTokens(prompt), 0),

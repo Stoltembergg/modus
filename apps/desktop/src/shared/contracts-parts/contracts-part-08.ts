@@ -88,7 +88,7 @@ export type GroupDecision = {
   id: string;
   groupId: string;
   text: string;
-  /** Absent when the user is the author (or the author session was deleted). */
+  /** Absent when the author session was deleted (shown as a former member, never the user). */
   authorSessionId?: string;
   sourceMessageId?: string;
   createdAt: string;

@@ -246,9 +246,10 @@ export function composeGroupDecisionsSection(
   const lines: string[] = [];
   for (const decision of decisions) {
     if (lines.length >= GROUP_PROMPT_DECISIONS_MAX_ITEMS) break;
-    const author = decision.authorSessionId
-      ? `@${titles.get(decision.authorSessionId) ?? decision.authorSessionId}`
-      : "user";
+    // Only members record decisions: no author (session deleted, `on delete set null`)
+    // or an author no longer in the group is a former member, never the user.
+    const title = decision.authorSessionId ? titles.get(decision.authorSessionId) : undefined;
+    const author = title !== undefined ? `@${title}` : "former member";
     const line = `- ${escapeText(decision.text)} (${escapeText(author)})`;
     const cost = estimateGroupTokens(`${line}\n`);
     if (used + cost > GROUP_PROMPT_DECISIONS_MAX_TOKENS) break;
