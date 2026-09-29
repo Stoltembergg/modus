@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   MAC_INSTALL_EXIT_REASONS,
+  MAC_INSTALL_SCRIPT,
+  MAC_INSTALL_TICK_MS,
+  MAC_INSTALL_WAIT_MS,
   MAC_INSTALL_WAIT_TICKS,
   macInstallScriptArgs,
 } from "./mac-install-script";
@@ -279,8 +282,13 @@ describePosix("mac install script", () => {
     }
   });
 
-  it("waits about 10 minutes for the app to quit by default", () => {
+  it("waits 10 minutes for the app to quit by default, all from one constant", () => {
+    expect(MAC_INSTALL_WAIT_MS).toBe(10 * 60_000);
+    expect(MAC_INSTALL_TICK_MS).toBe(100);
     expect(MAC_INSTALL_WAIT_TICKS).toBe(6000);
+    expect(MAC_INSTALL_WAIT_TICKS * MAC_INSTALL_TICK_MS).toBe(MAC_INSTALL_WAIT_MS);
+    // The script sleeps one tick per poll.
+    expect(MAC_INSTALL_SCRIPT).toContain("    sleep 0.1\n");
     const args = macInstallScriptArgs({
       pid: 1,
       bundlePath: "/Applications/Modus.app",
