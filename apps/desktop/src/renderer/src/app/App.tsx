@@ -1286,6 +1286,11 @@ export function App() {
                                     window.modus.group.rename({ id: activeGroup.id, name }),
                                   )
                                 }
+                                onSetMode={(mode) =>
+                                  void runGroupAction(() =>
+                                    window.modus.group.setMode({ groupId: activeGroup.id, mode }),
+                                  )
+                                }
                                 onUpdateMembers={(change) =>
                                   updateGroupMembers(activeGroup.id, change)
                                 }

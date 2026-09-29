@@ -24,6 +24,7 @@ export const IPC_CHANNELS = {
   groupCancelTask: "group:cancel-task",
   groupListDecisions: "group:list-decisions",
   groupDeleteDecision: "group:delete-decision",
+  groupSetMode: "group:set-mode",
   groupPostMessage: "group:post-message",
   groupListMessages: "group:list-messages",
   groupWorking: "group:working",

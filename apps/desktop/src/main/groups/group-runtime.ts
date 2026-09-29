@@ -6,9 +6,11 @@ import type {
   GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
+  GroupTask,
   PostGroupMessageInput,
   UpdateState,
 } from "../../shared/contracts";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { getAgentSession } from "../agent/agent-store";
 import type {
   PromptAgentInput,
@@ -24,6 +26,8 @@ import {
   listAgentGroupMembers,
   listGroupDecisions,
   listGroupMessages,
+  listGroupTasks,
+  memberWorktreeBranchPrefix,
 } from "./group-store";
 
 /**
@@ -44,6 +48,8 @@ export const ESTIMATED_CONTEXT_TOKENS_PER_WAKE = 8_000;
 /** The "Group decisions" prompt section (PR 6): newest first, at most 20 items and ~2k estimated tokens. */
 export const GROUP_PROMPT_DECISIONS_MAX_ITEMS = 20;
 export const GROUP_PROMPT_DECISIONS_MAX_TOKENS = 2_000;
+/** The Lead's "Group snapshot" in coordinator mode (PR 7): ~1.5k estimated tokens. */
+export const GROUP_PROMPT_SNAPSHOT_MAX_TOKENS = 1_500;
 
 export const GROUP_CHAIN_LIMITS = {
   /** Member turns per chain (every woken turn, and an unblocked member's result, is one hop). */
@@ -261,6 +267,72 @@ export function composeGroupDecisionsSection(
   return [open, ...lines, close].join("\n");
 }
 
+export type GroupSnapshotMember = {
+  sessionId: string;
+  title: string;
+  state: "working" | "waiting" | "idle";
+  branch?: string;
+};
+
+const SNAPSHOT_TASK_STATUSES: readonly GroupTask["status"][] = ["open", "in_progress", "in_review"];
+
+/**
+ * Coordinator mode (PR 7): what the Lead sees of its group. Every member (title
+ * and session id, so repeated titles stay distinct; state; worktree branch),
+ * then the open / in progress / in review tasks until ~1.5k estimated tokens,
+ * then "(N more tasks omitted)".
+ */
+export function composeGroupSnapshotSection(input: {
+  sessionId: string;
+  leadSessionId: string;
+  members: readonly GroupSnapshotMember[];
+  tasks: readonly GroupTask[];
+}): string {
+  const who = (id: string | undefined) => {
+    if (!id) return "none";
+    const title = input.members.find((member) => member.sessionId === id)?.title ?? id;
+    return `@${title} (id ${id})`;
+  };
+  const memberLines = input.members.map((member) => {
+    const tags = [
+      member.sessionId === input.leadSessionId ? "lead" : "",
+      member.sessionId === input.sessionId ? "you" : "",
+    ].filter(Boolean);
+    const state = [member.state, member.branch ? `branch ${member.branch}` : ""]
+      .filter(Boolean)
+      .join(", ");
+    return escapeText(
+      `- ${who(member.sessionId)}${tags.length > 0 ? ` ${tags.join(", ")}` : ""}: ${state}`,
+    );
+  });
+  const head = [
+    "<group_snapshot>",
+    "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
+    "Members:",
+    ...memberLines,
+    "Tasks (open, in progress, in review):",
+  ];
+  const close = "</group_snapshot>";
+  const tasks = input.tasks.filter((task) => SNAPSHOT_TASK_STATUSES.includes(task.status));
+  const omittedLine = (count: number) => `(${count} more tasks omitted)`;
+  let used =
+    estimateGroupTokens(`${head.join("\n")}\n${close}`) +
+    estimateGroupTokens(`${omittedLine(tasks.length)}\n`);
+  const lines: string[] = [];
+  for (const task of tasks) {
+    const line = escapeText(
+      `- task ${task.id} [${task.status}] "${task.title}" owner=${who(task.ownerSessionId)} reviewer=${who(task.reviewerSessionId)}`,
+    );
+    const cost = estimateGroupTokens(`${line}\n`);
+    if (used + cost > GROUP_PROMPT_SNAPSHOT_MAX_TOKENS) break;
+    used += cost;
+    lines.push(line);
+  }
+  if (tasks.length === 0) lines.push("- none");
+  else if (lines.length < tasks.length) lines.push(omittedLine(tasks.length - lines.length));
+  return [...head, ...lines, close].join("\n");
+}
+
 /**
  * The prompt a woken member receives: who it is, the recent room history (newest
  * first until the per-wake budget is spent, shown oldest first) and the message
@@ -274,6 +346,8 @@ export function composeGroupWakePrompt(input: {
   history: readonly GroupMessage[];
   /** The group's decisions, newest first ("Group decisions" section, see composeGroupDecisionsSection). */
   decisions?: readonly GroupDecision[];
+  /** Coordinator mode: the Lead's "Group snapshot" (composeGroupSnapshotSection), Lead only. */
+  snapshot?: string;
   maxContextTokens: number;
 }): string | undefined {
   const titles = new Map(input.members.map((member) => [member.sessionId, member.title]));
@@ -294,8 +368,9 @@ export function composeGroupWakePrompt(input: {
   const triggerBlock = `<group_message from="${escapeText(authorLabel(input.trigger, titles))}">\n${escapeText(input.trigger.body)}\n</group_message>`;
   const footer = "</group_room>";
   const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
+  const snapshot = input.snapshot ?? "";
   let used = estimateGroupTokens(
-    `${header}\n${decisions ? `${decisions}\n` : ""}${triggerBlock}\n${footer}`,
+    [header, snapshot, decisions, triggerBlock, footer].filter(Boolean).join("\n"),
   );
   if (used > input.maxContextTokens) return undefined;
   const lines: string[] = [];
@@ -310,7 +385,7 @@ export function composeGroupWakePrompt(input: {
   }
   const history =
     lines.length > 0 ? `<recent_messages>\n${lines.join("\n")}\n</recent_messages>` : "";
-  return [header, decisions, history, triggerBlock, footer].filter(Boolean).join("\n");
+  return [header, snapshot, decisions, history, triggerBlock, footer].filter(Boolean).join("\n");
 }
 
 export class GroupRuntime {
@@ -725,6 +800,8 @@ export class GroupRuntime {
     });
     // Shared context (PR 6): part of every member's prompt, so of the chain budget too.
     const decisions = listGroupDecisions(group.id);
+    const leadSessionId = group.leadSessionId;
+    const coordinating = isCoordinatorModeActive(group) && leadSessionId !== undefined;
     for (const sessionId of targets) {
       if (chain.agentMessages >= this.limits.maxAgentMessages) {
         this.endChain(chain, "max-agent-messages");
@@ -745,6 +822,9 @@ export class GroupRuntime {
         trigger: message,
         history,
         decisions,
+        ...(coordinating && sessionId === leadSessionId
+          ? { snapshot: this.snapshotFor(group.id, leadSessionId, members) }
+          : {}),
         maxContextTokens: this.limits.maxEstimatedContextTokensPerWake,
       });
       if (prompt === undefined) {
@@ -997,6 +1077,33 @@ export class GroupRuntime {
       wake,
       result.outcome === "blocked" ? GROUP_STATUS_TEXT.aborted : statusText(result.outcome),
     );
+  }
+
+  /** The coordinating Lead's "Group snapshot" (the Lead itself counts as working: it is being woken). */
+  private snapshotFor(groupId: string, leadSessionId: string, members: readonly MemberRef[]) {
+    const activity = this.activityOf(groupId);
+    const working = new Set([...activity.runningSessionIds, ...activity.queuedSessionIds]);
+    const waiting = new Set(activity.waitingSessionIds);
+    const prefix = memberWorktreeBranchPrefix(groupId);
+    return composeGroupSnapshotSection({
+      sessionId: leadSessionId,
+      leadSessionId,
+      members: members.map((member) => {
+        const branch = getAgentSession(member.sessionId)?.subagentWorktree?.branch;
+        return {
+          sessionId: member.sessionId,
+          title: member.title,
+          state:
+            member.sessionId === leadSessionId || working.has(member.sessionId)
+              ? "working"
+              : waiting.has(member.sessionId)
+                ? "waiting"
+                : "idle",
+          ...(branch?.startsWith(prefix) ? { branch } : {}),
+        };
+      }),
+      tasks: listGroupTasks(groupId),
+    });
   }
 
   private activityOf(groupId: string): {

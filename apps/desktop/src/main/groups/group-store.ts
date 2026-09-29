@@ -14,6 +14,7 @@ import type {
   GroupTaskStatus,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import type { GroupErrorCode } from "../../shared/group-errors";
 import { getDatabase } from "../db/database";
 
@@ -1160,6 +1161,65 @@ export function claimGroupTask(
       ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
       ...(options.branch ? { branch: options.branch } : {}),
     });
+  });
+}
+
+/**
+ * Coordinator mode (PR 7): the Lead hands a task to a member (itself included).
+ * `open` → `in_progress` with the assignee; `in_progress` with another owner is
+ * a reassignment (returns the previous owner; the branch is kept on purpose, as
+ * the record of where the earlier work is); in_review / done / cancelled
+ * (and the current owner again) are invalid-transition. Only while the mode is
+ * in effect (coordinator-off) and only by the Lead (not-coordinator).
+ */
+export function assignGroupTask(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+  assigneeSessionId: string,
+  options: { branch?: string } = {},
+): { task: GroupTask; previousOwnerSessionId?: string } {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    const group = toGroup(requireGroupRow(groupId));
+    if (!isCoordinatorModeActive(group)) {
+      throw new GroupStoreError(
+        "coordinator-off",
+        `Coordinator mode is not in effect in group ${groupId} (it needs the mode on and a Lead).`,
+      );
+    }
+    if (group.leadSessionId !== actorSessionId) {
+      throw new GroupStoreError("not-coordinator", "Only the group's Lead assigns tasks.");
+    }
+    requireMember(groupId, assigneeSessionId, "assignee");
+    const task = requireTaskInGroup(taskId, groupId);
+    const status = effectiveTaskStatus(task);
+    const reviewer = task.reviewerSessionId === assigneeSessionId ? { reviewer: null } : {};
+    if (status === INITIAL_TASK_STATUS) {
+      return {
+        task: writeTaskTransition(taskId, {
+          status: IN_PROGRESS_TASK_STATUS,
+          owner: assigneeSessionId,
+          ...reviewer,
+          ...(options.branch ? { branch: options.branch } : {}),
+        }),
+      };
+    }
+    if (
+      status !== IN_PROGRESS_TASK_STATUS ||
+      !task.ownerSessionId ||
+      task.ownerSessionId === assigneeSessionId
+    ) {
+      throw invalidTransition(task, "assign");
+    }
+    return {
+      task: writeTaskTransition(taskId, {
+        status: IN_PROGRESS_TASK_STATUS,
+        owner: assigneeSessionId,
+        ...reviewer,
+      }),
+      previousOwnerSessionId: task.ownerSessionId,
+    };
   });
 }
 

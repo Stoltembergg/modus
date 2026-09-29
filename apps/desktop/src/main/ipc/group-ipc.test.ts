@@ -27,6 +27,7 @@ const GROUP_CHANNELS = [
   "group:cancel-task",
   "group:list-decisions",
   "group:delete-decision",
+  "group:set-mode",
 ];
 
 const GROUP: AgentGroupWithMembers = {
@@ -66,6 +67,9 @@ function mockService() {
     addAgentGroupMember: vi.fn((_input: unknown): unknown => undefined),
     removeAgentGroupMember: vi.fn((_groupId: string, _sessionId: string): void => undefined),
     setAgentGroupLead: vi.fn((_groupId: string, _sessionId: string | null): unknown => undefined),
+    setAgentGroupMode: vi.fn(
+      (_groupId: string, _mode: "free" | "coordinator"): unknown => undefined,
+    ),
     updateAgentGroupMembers: vi.fn(
       (_groupId: string, _input: unknown): AgentGroupWithMembers => GROUP,
     ),
@@ -154,6 +158,10 @@ describe("group IPC", () => {
       handlers.get("group:set-lead")?.(trusted, { groupId: "g-1", sessionId: null });
       expect(service.setAgentGroupLead).toHaveBeenCalledWith("g-1", null);
       expect(
+        handlers.get("group:set-mode")?.(trusted, { groupId: "g-1", mode: "coordinator" }),
+      ).toEqual([GROUP]);
+      expect(service.setAgentGroupMode).toHaveBeenCalledWith("g-1", "coordinator");
+      expect(
         handlers.get("group:update-members")?.(trusted, {
           groupId: "g-1",
           members: [{ sessionId: "s-1" }, { sessionId: "s-4", role: "verify" }],
@@ -214,6 +222,10 @@ describe("group IPC", () => {
         /Invalid IPC payload/,
       );
       expect(call("group:set-lead", { groupId: "g-1" })).toThrow(/Invalid IPC payload/);
+      expect(call("group:set-mode", { groupId: "g-1", mode: "chaos" })).toThrow(
+        /Invalid IPC payload/,
+      );
+      expect(call("group:set-mode", { groupId: "g-1" })).toThrow(/Invalid IPC payload/);
       expect(call("group:update-members", { groupId: "g-1", members: [] })).toThrow(
         /Invalid IPC payload/,
       );
@@ -299,6 +311,7 @@ describe("group IPC", () => {
       addAgentGroupMember: store.addAgentGroupMember,
       removeAgentGroupMember: store.removeAgentGroupMember,
       setAgentGroupLead: store.setAgentGroupLead,
+      setAgentGroupMode: store.setAgentGroupMode,
       updateAgentGroupMembers: store.updateAgentGroupMembers,
       listGroupTasks: (groupId) => store.listGroupTasks(groupId),
       cancelGroupTask: store.cancelGroupTask,
