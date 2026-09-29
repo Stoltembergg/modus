@@ -242,7 +242,7 @@ export const DESIGN_ACCENT_COLOR = "#1D9BFF";
  * carried verbatim into the chat composer as a removable chip + thumbnail.
  */
 export type DesignElementPart = {
-  /** Chip label, e.g. `MDXContent · span "Kimi K2.7 Co…"`. */
+  /** Chip label, e.g. `MDXContent · span "Kimi K2.7 Co…". */
   label: string;
   /** Lowercased tag name, e.g. "span". */
   tagName: string;
