@@ -102,9 +102,10 @@ Events (unchanged types, now surfaced in UI):
 
 **Gap 2 (automatic CodeGraph sync):** Project workspace selection schedules a non-blocking CodeGraph binary `init`/`sync` via `scheduleCodeGraphAutoSync` → `ensureCodeGraphIndex`. Does not query, does not block prompt submission, and does not change Meta Controller preflight (still no sync on the critical path). Project Model continues to persist discovery hits when Fast Codebase / `codegraph.discoveries` produce them.
 
+**Gap 3 (blacklist management UI):** Settings gains a dedicated **Failure blacklist** panel (beyond Harness Insights clear-all): lists active soft-blacklist entries with TTL/expiry, clear per strategy or all, wired to existing `harness_failure_blacklist` / Settings APIs. Soft-discourage semantics preserved (not a hard permanent block).
+
 **Remaining gaps / follow-ups**
 
-- No dedicated blacklist management panel beyond Settings clear-all
 - Promoted preferences are stored but not yet a full policy DSL consumer beyond Meta Controller avoidance signals
 - Additional orchestration polish beyond Gap 1 allowlist
 
