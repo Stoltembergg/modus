@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AgentInfo } from "../../shared/contracts";
+import type {
+  AgentInfo,
+  AgentSessionInfo,
+  GenerateAgentProfileInput,
+  GeneratedAgentProfile,
+} from "../../shared/contracts";
 import type { AgentsIpcService } from "./agents-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
@@ -12,6 +17,8 @@ const AGENTS_CHANNELS = [
   "agents:update",
   "agents:archive",
   "agents:delete",
+  "agents:open-chat",
+  "agents:generate-profile",
 ];
 
 const AGENT: AgentInfo = {
@@ -27,6 +34,17 @@ const AGENT: AgentInfo = {
 
 type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
 
+const CHAT: AgentSessionInfo = {
+  id: "chat-1",
+  workspaceId: "ws-1",
+  title: "Jennie",
+  cwd: "/repo",
+  status: "idle",
+  agentId: "a-1",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  updatedAt: "2026-01-01T00:00:00.000Z",
+};
+
 const MODEL = "openai/gpt-5";
 
 function mockService() {
@@ -38,6 +56,14 @@ function mockService() {
     updateAgent: vi.fn((_id: string, _input: unknown): AgentInfo => AGENT),
     setAgentArchived: vi.fn((_id: string, _archived: boolean): AgentInfo => AGENT),
     deleteAgent: vi.fn((_id: string): void => undefined),
+    openAgentChat: vi.fn((_id: string): AgentSessionInfo => CHAT),
+    generateAgentProfile: vi.fn(
+      async (_input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile> => ({
+        role: "Tester",
+        instructions: "You test.",
+        generated: true,
+      }),
+    ),
   } satisfies AgentsIpcService;
 }
 
@@ -207,6 +233,52 @@ describe("agents IPC", () => {
       service.getAgent.mockReturnValue({ ...AGENT, templateId: "planner" });
       update({ modelId: null })();
       expect(service.updateAgent).toHaveBeenCalledTimes(2);
+    } finally {
+      unregister();
+    }
+  });
+
+  it("agents:open-chat returns the agent's 1:1 chat", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      expect(handlers.get("agents:open-chat")?.(trusted, { id: "a-1" })).toEqual(CHAT);
+      expect(service.openAgentChat).toHaveBeenCalledWith("a-1");
+      expect(() => handlers.get("agents:open-chat")?.(trusted, { id: "" })).toThrow();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("agents:generate-profile applies the model rule, then forwards name, description and agent", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    const generate = (input: Record<string, unknown>) => () =>
+      handlers.get("agents:generate-profile")?.(trusted, {
+        groupId: "g-1",
+        modelId: MODEL,
+        name: "Cy",
+        ...input,
+      });
+    try {
+      expect(generate({ modelId: "gone/x" })).toThrow(/^\[group-error:agent-model-unavailable\] /);
+      expect(generate({ modelId: "" })).toThrow();
+      expect(generate({ name: " " })).toThrow();
+      expect(service.generateAgentProfile).not.toHaveBeenCalled();
+      await expect(generate({ description: "Tests things", agentId: "a-1" })()).resolves.toEqual({
+        role: "Tester",
+        instructions: "You test.",
+        generated: true,
+      });
+      expect(service.generateAgentProfile).toHaveBeenCalledWith({
+        groupId: "g-1",
+        modelId: MODEL,
+        name: "Cy",
+        description: "Tests things",
+        agentId: "a-1",
+      });
     } finally {
       unregister();
     }

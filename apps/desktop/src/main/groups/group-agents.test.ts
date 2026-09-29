@@ -20,6 +20,9 @@ const {
   createGroupWithNewAgents,
   deleteAgent,
   getAgent,
+  agentChatPersonaPrompt,
+  openAgentChat,
+  updateAgent,
   updateGroupMembers,
 } = await import("../agents/agents-store");
 const {
@@ -32,6 +35,7 @@ const {
   listGroupMessages,
   removeAgentFromGroup,
   setAgentGroupWorkspace,
+  setGroupMembershipMessageSink,
 } = await import("./group-store");
 const { groupBlockedReason } = await import("../../shared/group-blocked");
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
@@ -109,6 +113,17 @@ function countRows(table: string, column: string, value: string): number {
   const row = getDatabase()
     .prepare(`select count(*) as count from ${table} where ${column} = ?`)
     .get(value) as { count: number };
+  return Number(row.count);
+}
+
+/** 1:1 chats (A3) whose agent is gone, and agent chats with no agent link: both must be 0. */
+function orphanAgentChats(): number {
+  const row = getDatabase()
+    .prepare(
+      `select count(*) as count from agent_sessions
+       where agent_id is not null and agent_id not in (select id from agents)`,
+    )
+    .get() as { count: number };
   return Number(row.count);
 }
 
@@ -294,17 +309,22 @@ describe("one group per agent", () => {
     expect(getAgentSession(sessionId)?.workspaceId).toBe(to);
   });
 
-  it("deleting a group deletes its agents, their room sessions and all messages: no orphans", () => {
+  it("deleting a group deletes its agents, their room sessions, 1:1 chats and all messages: no orphans", () => {
     const group = newGroup(3);
     appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hi" });
+    const chats = group.members.slice(0, 2).map((member) => openAgentChat(member.agentId).id);
     const ids = deleteAgentGroup(group.id);
-    expect(ids.sort()).toEqual(group.members.map((member) => member.sessionId).sort());
+    expect(ids.sort()).toEqual(
+      [...group.members.map((member) => member.sessionId), ...chats].sort(),
+    );
     for (const member of group.members) {
       expect(getAgent(member.agentId)).toBeUndefined();
       expect(getAgentSession(member.sessionId)).toBeUndefined();
     }
+    for (const chat of chats) expect(getAgentSession(chat)).toBeUndefined();
     expect(listGroupMessages(group.id, { limit: 10 })).toEqual([]);
     expect(orphanRoomSessions()).toBe(0);
+    expect(orphanAgentChats()).toBe(0);
   });
 
   it("deleting a Project deletes its groups, their agents and sessions; other chats stay", () => {
@@ -313,7 +333,10 @@ describe("one group per agent", () => {
     const ungrouped = createAgent({ name: uid("Loose") });
     const group = newGroup(2, ws);
     appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hi" });
+    const oneToOne = openAgentChat(group.members[0]?.agentId ?? "").id;
     removeWorkspace(ws);
+    expect(getAgentSession(oneToOne)).toBeUndefined();
+    expect(orphanAgentChats()).toBe(0);
     expect(getAgentGroup(group.id)).toBeUndefined();
     expect(countRows("agents", "group_id", group.id)).toBe(0);
     for (const member of group.members) {
@@ -324,6 +347,160 @@ describe("one group per agent", () => {
     expect(orphanRoomSessions()).toBe(0);
     expect(getAgentSession(chat)).toBeDefined();
     expect(getAgent(ungrouped.id)).toBeDefined();
+  });
+});
+
+describe("an agent's 1:1 chat (A3)", () => {
+  it("is made on first open: a normal chat in the group's Project, linked to the agent, reused", () => {
+    const ws = insertWorkspace();
+    const group = newGroup(2, ws);
+    const agentId = group.members[0]?.agentId ?? "";
+    const chat = openAgentChat(agentId);
+    expect(chat).toMatchObject({
+      workspaceId: ws,
+      cwd: `/root/${ws}`,
+      title: "Agent 1",
+      model: MODEL,
+      agentId,
+      status: "idle",
+    });
+    expect(chat.kind).toBeUndefined();
+    expect(listAgentSessions().map((session) => session.id)).toContain(chat.id);
+    expect(openAgentChat(agentId).id).toBe(chat.id);
+    expect(countRows("agent_sessions", "agent_id", agentId)).toBe(1);
+    // Renaming the agent renames its chat; moving the group moves the chat with it.
+    updateAgent(agentId, { name: "Renamed" });
+    expect(getAgentSession(chat.id)?.title).toBe("Renamed");
+    const to = insertWorkspace();
+    setAgentGroupWorkspace(group.id, to);
+    expect(getAgentSession(chat.id)).toMatchObject({ workspaceId: to, cwd: `/root/${to}` });
+  });
+
+  it("a group without a Project lists its agents but cannot make a new chat", () => {
+    const group = newGroup(2);
+    const [first, second] = group.members;
+    const existing = openAgentChat(first?.agentId ?? "").id;
+    getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
+    expect(listAgentGroupMembers(group.id)).toHaveLength(2);
+    expect(openAgentChat(first?.agentId ?? "").id).toBe(existing);
+    expectCode(() => openAgentChat(second?.agentId ?? ""), "group-project-required");
+  });
+
+  it("removing a member (deleting its agent) deletes its 1:1 chat too", () => {
+    const group = newGroup(3);
+    const leaving = group.members[2];
+    const chat = openAgentChat(leaving?.agentId ?? "").id;
+    expect(removeAgentFromGroup(group.id, leaving?.sessionId ?? "")).toEqual([
+      leaving?.sessionId,
+      chat,
+    ]);
+    expect(getAgentSession(chat)).toBeUndefined();
+    const other = group.members[1];
+    const otherChat = openAgentChat(other?.agentId ?? "").id;
+    const result = updateGroupMembers({
+      groupId: group.id,
+      add: newAgents(1, "New"),
+      removeAgentIds: [other?.agentId ?? ""],
+      lead: null,
+    });
+    expect(result.removedSessionIds).toEqual([other?.sessionId, otherChat]);
+    expect(getAgentSession(otherChat)).toBeUndefined();
+    expect(orphanAgentChats()).toBe(0);
+  });
+});
+
+describe("A3 migration and persona", () => {
+  it("agent_sessions.agent_id: one 1:1 chat per agent, cascading with the agent; idempotent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "modus-a3-migrate-"));
+    const db = new DatabaseSync(join(dir, "modus.sqlite"));
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(db);
+      migrateDatabase(db);
+      const columns = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.filter((column) => column.name === "agent_id")).toHaveLength(1);
+      const ws = insertWorkspace(db);
+      const now = new Date().toISOString();
+      db.prepare(
+        `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
+         values ('a1', 'Ana', 'happy', 'blue', ?, ?)`,
+      ).run(now, now);
+      const first = insertSession(ws, "Ana", db);
+      const second = insertSession(ws, "Ana again", db);
+      db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(first);
+      expect(() =>
+        db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(second),
+      ).toThrow(/UNIQUE/);
+      db.prepare("delete from agents where id = 'a1'").run();
+      expect(db.prepare("select 1 from agent_sessions where id = ?").get(first)).toBeUndefined();
+      expect(db.prepare("select 1 from agent_sessions where id = ?").get(second)).toBeDefined();
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("the 1:1 chat carries the agent's persona; other sessions do not", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Persona"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Ana", role: "Reviewer", instructions: "Review every diff.", modelId: MODEL },
+        { name: "Bo", modelId: MODEL },
+      ],
+    });
+    const [ana, bo] = group.members;
+    const chat = openAgentChat(ana?.agentId ?? "").id;
+    expect(agentChatPersonaPrompt(chat)).toBe(
+      "<agent_instructions>\nYou are Ana, the Reviewer.\nReview every diff.\n</agent_instructions>",
+    );
+    expect(agentChatPersonaPrompt(openAgentChat(bo?.agentId ?? "").id)).toBeUndefined();
+    expect(agentChatPersonaPrompt(ana?.sessionId ?? "")).toBeUndefined();
+  });
+});
+
+describe("live membership lines (A3)", () => {
+  it("joined / left lines reach the sink once committed; a rolled-back change sends nothing", () => {
+    const sent: Array<{ groupId: string; body: string; kind: string }> = [];
+    setGroupMembershipMessageSink((message) => sent.push(message));
+    try {
+      const group = newGroup(2);
+      // Creating a group posts no join lines.
+      expect(sent).toEqual([]);
+      createAgentInGroup({ groupId: group.id, name: "Rita", role: "Reviewer", modelId: MODEL });
+      expect(sent).toEqual([
+        expect.objectContaining({
+          groupId: group.id,
+          kind: "status",
+          body: "Rita joined as Reviewer",
+        }),
+      ]);
+      // Saved and sent are the same message.
+      expect(listGroupMessages(group.id, { limit: 10 }).map((m) => m.id)).toContain(
+        (sent[0] as { id?: string }).id,
+      );
+      sent.length = 0;
+      expectCode(
+        () =>
+          updateGroupMembers({
+            groupId: group.id,
+            add: [
+              { name: "Fresh", modelId: MODEL },
+              { name: "Rita", modelId: MODEL },
+            ],
+            removeAgentIds: [group.members[0]?.agentId ?? ""],
+            lead: null,
+          }),
+        "agent-name-taken",
+      );
+      expect(sent).toEqual([]);
+      removeAgentFromGroup(group.id, group.members[0]?.sessionId ?? "");
+      expect(sent.map((message) => message.body)).toEqual(["Agent 1 left the group"]);
+    } finally {
+      setGroupMembershipMessageSink(undefined);
+    }
   });
 });
 

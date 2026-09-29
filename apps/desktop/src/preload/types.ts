@@ -35,6 +35,8 @@ import type {
   FileReadResult,
   FilesChangeEvent,
   FileWriteResult,
+  GenerateAgentProfileInput,
+  GeneratedAgentProfile,
   GitActionResult,
   GitBranchSummary,
   GitChangeEvent,
@@ -236,6 +238,16 @@ export type ModusApi = {
     setArchived(input: { id: string; archived: boolean }): Promise<AgentInfo[]>;
     /** Delete the agent = remove the member (refused at 2: `group-min-members`); returns the list. */
     remove(id: string): Promise<AgentInfo[]>;
+    /**
+     * The agent's 1:1 chat (A3): a normal `kind='chat'` session in the group's
+     * Project, created on first open; rejects `group-project-required`.
+     */
+    openChat(id: string): Promise<AgentSessionInfo>;
+    /**
+     * One LLM call for a custom agent's `{ role, instructions }` (A3). Never
+     * rejects on a model failure: `generated: false` is the Generalist fallback.
+     */
+    generateProfile(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
   };
   file: {
     /** Open a workspace file in the OS default app. Path may be relative to cwd or absolute. */

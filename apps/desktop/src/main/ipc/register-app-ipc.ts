@@ -31,6 +31,7 @@ import {
 import { getHarnessInsights } from "../agent/harness/harness-insights-service";
 import {
   cancelProviderAuth,
+  completeWithModel,
   configureProvider,
   deleteCustomProvider,
   disconnectProvider,
@@ -67,12 +68,14 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
+import { AGENT_PROFILE_TIMEOUT_MS, generateAgentProfile } from "../agents/agent-profile-generator";
 import {
   createAgentInGroup,
   createGroupWithNewAgents,
   deleteAgent,
   getAgent,
   listAgents,
+  openAgentChat,
   setAgentArchived,
   updateAgent,
   updateGroupMembers,
@@ -123,12 +126,13 @@ import {
   unstageFile,
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
-import { getGroupRuntime } from "../groups/group-runtime-service";
+import { emitGroupRuntimeEvent, getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentToGroup,
   cancelGroupTask,
   deleteAgentGroup,
   deleteGroupDecision,
+  listAgentGroupMembers,
   listAgentGroupsWithMembers,
   listGroupDecisions,
   listGroupMessages,
@@ -138,6 +142,7 @@ import {
   setAgentGroupLead,
   setAgentGroupMode,
   setAgentGroupWorkspace,
+  setGroupMembershipMessageSink,
 } from "../groups/group-store";
 import {
   ensurePersonalizationFile,
@@ -1389,6 +1394,20 @@ export function registerAppIpc({
     updateAgent,
     setAgentArchived,
     deleteAgent: (agentId) => teardownRoomSessions(deleteAgent(agentId)),
+    openAgentChat,
+    generateAgentProfile: (input) =>
+      generateAgentProfile(
+        {
+          modelId: input.modelId,
+          name: input.name,
+          description: input.description,
+          otherRoles: listAgentGroupMembers(input.groupId)
+            .filter((member) => member.agentId !== input.agentId)
+            .map((member) => member.role?.trim() || member.agentRole.trim())
+            .filter(Boolean),
+        },
+        (request) => completeWithModel({ ...request, timeoutMs: AGENT_PROFILE_TIMEOUT_MS }),
+      ),
   });
   registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
     listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
@@ -1398,8 +1417,7 @@ export function registerAppIpc({
     deleteAgentGroup: (groupId) => teardownRoomSessions(deleteAgentGroup(groupId)),
     addAgentGroupMember: (input) => addAgentToGroup(input),
     removeAgentGroupMember: (groupId, sessionId) => {
-      removeAgentFromGroup(groupId, sessionId);
-      teardownRoomSessions([sessionId]);
+      teardownRoomSessions(removeAgentFromGroup(groupId, sessionId));
     },
     setAgentGroupLead,
     setAgentGroupMode,
@@ -1414,6 +1432,11 @@ export function registerAppIpc({
     listGroupDecisions: (groupId) => listGroupDecisions(groupId),
     deleteGroupDecision,
   });
+  // "X joined as <role>" / "X left the group" reach the room live (A3), through
+  // the same broadcast as room messages, once their transaction commits.
+  setGroupMembershipMessageSink((message) =>
+    emitGroupRuntimeEvent({ type: "group.message", groupId: message.groupId, message }),
+  );
   // Member task tools (review / changes) wake members through the GroupRuntime.
   setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));
   setGroupWorktreeReadySink((ready) => getGroupRuntime().handleWorktreeReady(ready));

@@ -34,6 +34,7 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
+import { agentChatPersonaPrompt } from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -1744,6 +1745,8 @@ export class PiSdkRuntime implements AgentRuntime {
     const rulesBudget =
       RULES_MAX_TOTAL_BYTES - Buffer.byteLength(globalGuidancePrompt ?? "", "utf8");
     const rulesPrompt = rulesBudget > 0 ? resolveAlwaysRulesPrompt(cwd, rulesBudget) : undefined;
+    // An agent's 1:1 chat (A3) carries its persona, like its turns in the room.
+    const personaPrompt = agentChatPersonaPrompt(sessionId);
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -1754,6 +1757,7 @@ export class PiSdkRuntime implements AgentRuntime {
         RESPONSE_FORMAT_BASE,
         ...(globalGuidancePrompt ? [globalGuidancePrompt] : []),
         ...(rulesPrompt ? [rulesPrompt] : []),
+        ...(personaPrompt ? [personaPrompt] : []),
       ],
     });
     await loader.reload();

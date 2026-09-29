@@ -26,6 +26,7 @@ type AgentSessionRow = {
   pinned_at: string | null;
   archived_at: string | null;
   kind: "chat" | "group_member";
+  agent_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -34,7 +35,7 @@ const SESSION_COLUMNS = `id, workspace_id, title, cwd, status, runtime, model, p
   pi_session_file, parent_session_id, subagent_task, subagent_type, subagent_readonly,
   subagent_worktree_path, subagent_worktree_branch, subagent_worktree_base_sha,
   subagent_integration_status, subagent_changed_files_json, subagent_conflict_files_json,
-  pinned_at, archived_at, kind, created_at, updated_at`;
+  pinned_at, archived_at, kind, agent_id, created_at, updated_at`;
 
 function parseJsonArray(text: string | null): string[] | undefined {
   if (!text) return undefined;
@@ -80,6 +81,9 @@ function toSession(row: AgentSessionRow): AgentSessionInfo {
   }
   if (row.kind === "group_member") {
     session.kind = "group_member";
+  }
+  if (row.agent_id !== null) {
+    session.agentId = row.agent_id;
   }
   if (row.subagent_task !== null) {
     session.subagentTask = row.subagent_task;
