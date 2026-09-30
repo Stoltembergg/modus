@@ -1,11 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentEvent,
-  GroupMemberStates,
-  GroupRuntimeEvent,
-} from "../../../../shared/contracts";
+import type { AgentEvent, GroupMemberStates, GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageList } from "./GroupMessageList";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
@@ -19,6 +15,16 @@ const avatars = new Map<string, WorkingMemberAvatar>([
   ["s-lead", { agentId: "a-lead", face: "happy", color: "violet", archived: false }],
   ["s-build", { agentId: "a-build", face: "wink", color: "sky", archived: false }],
 ]);
+
+const hello: GroupMessage = {
+  id: "m1",
+  groupId: "g-1",
+  authorKind: "user",
+  kind: "message",
+  body: "olá",
+  mentions: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+};
 
 function states(entry: Partial<GroupMemberStates>): GroupMemberStatesById {
   return new Map([
@@ -37,24 +43,32 @@ function states(entry: Partial<GroupMemberStates>): GroupMemberStatesById {
 
 let agentListeners: Array<(event: AgentEvent) => void>;
 
+function renderList(
+  memberStates: GroupMemberStatesById,
+  messages: readonly GroupMessage[] = [hello],
+) {
+  return render(
+    <GroupMessageList
+      avatars={avatars}
+      cwd="/repo"
+      error={undefined}
+      groupId="g-1"
+      hasOlder={false}
+      loadOlder={async () => undefined}
+      loaded
+      loadingOlder={false}
+      memberStates={memberStates}
+      members={members}
+      messages={messages}
+      onOpenFile={undefined}
+    />,
+  );
+}
+
 beforeEach(() => {
   agentListeners = [];
   Object.assign(window, {
     modus: {
-      group: {
-        listMessages: vi.fn(async () => [
-          {
-            id: "m1",
-            groupId: "g-1",
-            authorKind: "user",
-            kind: "message",
-            body: "olá",
-            mentions: [],
-            createdAt: "2026-01-01T00:00:00.000Z",
-          },
-        ]),
-        onEvent: vi.fn((_listener: (event: GroupRuntimeEvent) => void) => () => undefined),
-      },
       agent: {
         listEvents: vi.fn(async () => []),
         onEvent: vi.fn((listener: (event: AgentEvent) => void) => {
@@ -72,16 +86,7 @@ afterEach(() => cleanup());
 
 describe("GroupMessageList working strip", () => {
   it("shows Thinking for a running member while Stop-worthy activity is live", async () => {
-    render(
-      <GroupMessageList
-        avatars={avatars}
-        cwd="/repo"
-        groupId="g-1"
-        memberStates={states({ runningSessionIds: ["s-lead"] })}
-        members={members}
-        onOpenFile={undefined}
-      />,
-    );
+    renderList(states({ runningSessionIds: ["s-lead"] }));
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
     const row = screen.getByTestId("group-member-working");
     expect(row.dataset.mode).toBe("running");
@@ -91,16 +96,7 @@ describe("GroupMessageList working strip", () => {
   });
 
   it("streams agent events into the live turn in the room", async () => {
-    render(
-      <GroupMessageList
-        avatars={avatars}
-        cwd="/repo"
-        groupId="g-1"
-        memberStates={states({ runningSessionIds: ["s-lead"] })}
-        members={members}
-        onOpenFile={undefined}
-      />,
-    );
+    renderList(states({ runningSessionIds: ["s-lead"] }));
     await screen.findByTestId("group-working-status");
     act(() => {
       for (const listener of agentListeners) {
@@ -123,16 +119,7 @@ describe("GroupMessageList working strip", () => {
   });
 
   it("shows Queued for members waiting on a wake slot", async () => {
-    render(
-      <GroupMessageList
-        avatars={avatars}
-        cwd="/repo"
-        groupId="g-1"
-        memberStates={states({ queuedSessionIds: ["s-build"] })}
-        members={members}
-        onOpenFile={undefined}
-      />,
-    );
+    renderList(states({ queuedSessionIds: ["s-build"] }));
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
     const row = screen.getByTestId("group-member-working");
     expect(row.dataset.mode).toBe("queued");
@@ -140,16 +127,7 @@ describe("GroupMessageList working strip", () => {
   });
 
   it("hides the strip when the group is idle", async () => {
-    render(
-      <GroupMessageList
-        avatars={avatars}
-        cwd="/repo"
-        groupId="g-1"
-        memberStates={new Map()}
-        members={members}
-        onOpenFile={undefined}
-      />,
-    );
+    renderList(new Map());
     expect(await screen.findByText("olá")).toBeTruthy();
     expect(screen.queryByTestId("group-working-status")).toBeNull();
   });
