@@ -21,6 +21,11 @@ export type GroupLiveTurnSnapshot = {
   writingPreview: string;
   /** Epoch ms of the last event that updated this snapshot (0 if none). */
   lastEventAt: number;
+  /**
+   * True after `run.completed` (or failed/cancelled/blocked): hide thought/tools/writing
+   * previews so the fold collapses before the strip leaves the room (final reply is in the transcript).
+   */
+  collapsed: boolean;
 };
 
 const PREVIEW_MAX = 160;
@@ -54,18 +59,16 @@ export function buildGroupLiveTurn(
       tools: [],
       writingPreview: "",
       lastEventAt: 0,
+      collapsed: false,
     };
   }
-
-  const phase = groupMemberWorkingPhase(
-    events.map(({ event }) => ({ event })),
-    mode,
-  );
 
   let thought = "";
   let writing = "";
   const tools = new Map<string, GroupLiveToolLine>();
   let lastEventAt = 0;
+  let collapsed = false;
+  let terminalPhase: GroupMemberWorkingPhase | undefined;
 
   for (const item of events) {
     const { event } = item;
@@ -109,14 +112,51 @@ export function buildGroupLiveTurn(
         thought = "";
         writing = "";
         tools.clear();
+        collapsed = false;
+        terminalPhase = undefined;
+        break;
+      case "run.completed":
+        collapsed = true;
+        terminalPhase = "Done";
+        break;
+      case "run.failed":
+        collapsed = true;
+        terminalPhase = "Failed";
+        break;
+      case "run.cancelled":
+        collapsed = true;
+        terminalPhase = "Stopped";
+        break;
+      case "run.blocked":
+        collapsed = true;
+        terminalPhase = "Waiting for you";
         break;
       default:
         break;
     }
   }
 
+  const phase =
+    terminalPhase ??
+    groupMemberWorkingPhase(
+      events.map(({ event }) => ({ event })),
+      mode,
+    );
+
   const toolList = [...tools.values()];
   const recentTools = toolList.length > TOOLS_MAX ? toolList.slice(-TOOLS_MAX) : toolList;
+
+  // Collapsed folds keep only the phase label — previews belong to the open live turn.
+  if (collapsed) {
+    return {
+      phase,
+      thoughtPreview: "",
+      tools: [],
+      writingPreview: "",
+      lastEventAt,
+      collapsed: true,
+    };
+  }
 
   return {
     phase,
@@ -124,6 +164,7 @@ export function buildGroupLiveTurn(
     tools: recentTools,
     writingPreview: truncate(writing),
     lastEventAt,
+    collapsed: false,
   };
 }
 
