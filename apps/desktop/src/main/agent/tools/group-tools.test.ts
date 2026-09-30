@@ -360,6 +360,10 @@ describe("group member tools", () => {
         ["group_start_worktree", {}],
         ["group_record_decision", { text: "Sneaky decision" }],
         ["group_assign_task", { taskId: id, memberId: "Beta" }],
+        ["group_propose_agreement", { summary: "Ship it" }],
+        ["group_agree", { note: "ok" }],
+        ["group_block", { reason: "gap" }],
+        ["group_handoff", { memberId: "Beta", objective: "do it" }],
       ] as const) {
         expect(await call(name, params)).toMatch(/^\[group-error:not-a-member\] /);
       }
@@ -593,6 +597,128 @@ describe("group_assign_task (coordinator mode)", () => {
     expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: "Beta" })).toMatch(
       /^\[group-error:coordinator-off\] /,
     );
+    expect(wakes).toEqual([]);
+  });
+});
+
+describe("agreement tools (P1b)", () => {
+  it("group_handoff posts typed status, wakes the target, and optionally creates a task", () => {
+    const { group, alpha, beta } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool(
+      "group_handoff",
+      { sessionId: alpha, groupId: group.id },
+      { memberId: "@Beta", objective: "toggle + tests", taskTitle: "Dark mode" },
+    );
+    expect(text).toMatch(/^Handed off to @Beta: toggle \+ tests\. Created task \S+ \[open\]/);
+    const id = taskIdFrom(text);
+    expect(listGroupTasks(group.id)[0]).toMatchObject({
+      id,
+      title: "Dark mode",
+      description: "toggle + tests",
+      status: "open",
+    });
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: beta,
+        body: "Handoff → @Beta · toggle + tests",
+      },
+    ]);
+  });
+
+  it("group_propose_agreement posts Proposed and can request review from confirmer", () => {
+    const { group, alpha, beta } = squad();
+    const a = { sessionId: alpha, groupId: group.id };
+    const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
+    runGroupTool("group_claim_task", a, { id });
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool("group_propose_agreement", a, {
+      summary: "dark mode ready",
+      taskId: id,
+      confirmer: "Beta",
+    });
+    expect(text).toMatch(/^Proposed agreement: dark mode ready\. Task task \S+ \[in_review\]/);
+    expect(listGroupTasks(group.id)[0]).toMatchObject({
+      status: "in_review",
+      reviewerSessionId: beta,
+    });
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: beta,
+        body: "Proposed · dark mode ready",
+      },
+    ]);
+  });
+
+  it("group_agree closes the task, records a decision, and posts Agreed without waking", () => {
+    const { group, alpha, beta } = squad();
+    const a = { sessionId: alpha, groupId: group.id };
+    const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
+    runGroupTool("group_claim_task", a, { id });
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool(
+      "group_agree",
+      { sessionId: beta, groupId: group.id },
+      { note: "looks good", taskId: id, decision: "Ship dark mode" },
+    );
+    expect(text).toMatch(/^Agreed\. Closed task \S+ \[done\] "Ship"/);
+    expect(text).toMatch(/Recorded decision \S+: Ship dark mode$/);
+    expect(listGroupTasks(group.id)[0]?.status).toBe("done");
+    expect(listGroupDecisions(group.id)).toEqual([
+      expect.objectContaining({ text: "Ship dark mode", authorSessionId: beta }),
+    ]);
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: beta,
+        body: "Agreed · looks good",
+        wake: false,
+      },
+    ]);
+  });
+
+  it("group_block posts Blocked and wakes returnTo when set", () => {
+    const { group, alpha, beta } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool(
+      "group_block",
+      { sessionId: beta, groupId: group.id },
+      { reason: "missing tests", returnTo: "Alpha" },
+    );
+    expect(text).toBe("Blocked: missing tests");
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: beta,
+        targetSessionId: alpha,
+        body: "Blocked · missing tests",
+      },
+    ]);
+  });
+
+  it("refuses empty propose/block/handoff inputs and unknown tasks", () => {
+    const { group, alpha } = squad();
+    const caller = { sessionId: alpha, groupId: group.id };
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    expect(runGroupTool("group_propose_agreement", caller, { summary: "  " })).toMatch(
+      /^\[group-error:invalid-value\] /,
+    );
+    expect(runGroupTool("group_block", caller, { reason: "" })).toMatch(
+      /^\[group-error:invalid-value\] /,
+    );
+    expect(runGroupTool("group_handoff", caller, { memberId: "Beta", objective: "   " })).toMatch(
+      /^\[group-error:invalid-value\] /,
+    );
+    expect(
+      runGroupTool("group_propose_agreement", caller, {
+        summary: "x",
+        taskId: "missing-task",
+      }),
+    ).toMatch(/^\[group-error:invalid-value\] /);
     expect(wakes).toEqual([]);
   });
 });
