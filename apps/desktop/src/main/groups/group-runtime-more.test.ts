@@ -199,7 +199,6 @@ afterAll(async () => {
 
 /* ── constants ────────────────────────────────────────────────────────── */
 
-
 describe("dispose", () => {
   it("unsubscribes: a later ok plan-build or gate question does nothing", async () => {
     const { group, alpha, beta } = squad();
