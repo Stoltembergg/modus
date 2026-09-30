@@ -68,6 +68,14 @@ export function isGroupRunning(states: GroupMemberStatesById, groupId: string): 
   );
 }
 
+/** Session ids currently waiting for the user in this group (empty when idle). */
+export function waitingSessionIdsOf(
+  states: GroupMemberStatesById,
+  groupId: string,
+): readonly string[] {
+  return states.get(groupId)?.waitingSessionIds ?? [];
+}
+
 /**
  * Member states of every group from the main-process GroupRuntime
  * (`group:member-states` snapshot, then `group:event` activity pushes, which
