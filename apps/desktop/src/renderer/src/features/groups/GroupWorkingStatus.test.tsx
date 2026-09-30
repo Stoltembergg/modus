@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { act, cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
+import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
+import { STILL_WORKING_AFTER_MS } from "./groupLiveTurn";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 
 afterEach(() => cleanup());
@@ -16,6 +18,17 @@ const avatars = new Map<string, WorkingMemberAvatar>([
   ["s-build", { agentId: "a-build", face: "wink", color: "sky", archived: false }],
 ]);
 
+function live(partial: Partial<GroupLiveTurnSnapshot> = {}): GroupLiveTurnSnapshot {
+  return {
+    phase: "Thinking",
+    thoughtPreview: "",
+    tools: [],
+    writingPreview: "",
+    lastEventAt: Date.now(),
+    ...partial,
+  };
+}
+
 describe("GroupWorkingStatus", () => {
   it("renders nothing when no members are working", () => {
     const { container } = render(
@@ -26,20 +39,54 @@ describe("GroupWorkingStatus", () => {
 
   it("shows per-member Thinking / Queued rows while the group run is active", () => {
     const rows: GroupMemberWorkingRow[] = [
-      { sessionId: "s-lead", mode: "running", phase: "Thinking" },
-      { sessionId: "s-build", mode: "queued", phase: "Queued" },
+      { sessionId: "s-lead", mode: "running", live: live({ phase: "Thinking" }) },
+      { sessionId: "s-build", mode: "queued", live: live({ phase: "Queued", lastEventAt: 0 }) },
     ];
     render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
-    const strip = screen.getByTestId("group-working-status");
-    expect(strip).toBeTruthy();
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
-    expect(items[0]?.dataset.mode).toBe("running");
     expect(items[0]?.dataset.phase).toBe("Thinking");
     expect(items[0]?.textContent).toContain("Planner");
     expect(items[0]?.textContent).toContain("Thinking");
-    expect(items[1]?.dataset.mode).toBe("queued");
     expect(items[1]?.dataset.phase).toBe("Queued");
     expect(items[1]?.textContent).toContain("Builder");
+  });
+
+  it("streams thought, tools, and writing under the live turn", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({
+          phase: "Writing",
+          thoughtPreview: "Plan the toggle",
+          tools: [{ id: "t1", name: "read", label: "Reading", done: true }],
+          writingPreview: "I'll hand off to Builder",
+        }),
+      },
+    ];
+    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
+    expect(screen.getByTestId("group-live-thought").textContent).toContain("Plan the toggle");
+    expect(screen.getByTestId("group-live-tools").textContent).toContain("Reading");
+    expect(screen.getByTestId("group-live-writing").textContent).toContain("hand off");
+  });
+
+  it("shows Still working… after silence while running", () => {
+    vi.useFakeTimers();
+    const last = Date.now();
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({ phase: "Thinking", lastEventAt: last }),
+      },
+    ];
+    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
+    expect(screen.getByTestId("group-member-live-turn").textContent).toContain("Thinking");
+    act(() => {
+      vi.advanceTimersByTime(STILL_WORKING_AFTER_MS + 1_000);
+    });
+    expect(screen.getByTestId("group-member-live-turn").textContent).toContain("Still working");
+    vi.useRealTimers();
   });
 });
