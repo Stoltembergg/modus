@@ -127,7 +127,6 @@ export function GroupRoomHeader({
   memberStates,
   projectName,
   running,
-  stage,
   tasksButton,
   onOpenMember,
   onStop,
@@ -143,8 +142,6 @@ export function GroupRoomHeader({
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
   running: boolean;
-  /** Latest collaboration stage from the transcript (P0b). */
-  stage?: GroupCollabStageSnapshot | undefined;
   tasksButton: ReactNode;
   onOpenMember(sessionId: string): void;
   onStop(): void;
@@ -181,16 +178,6 @@ export function GroupRoomHeader({
         >
           {projectName ?? "No project"}
         </span>
-        {stage ? <GroupStageChip labels={labels} stage={stage} /> : null}
-        {coordinating ? (
-          <span
-            className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
-            data-testid="group-coordinator-badge"
-            title="The Lead coordinates: messages with no mention go to the Lead"
-          >
-            Coordinator
-          </span>
-        ) : null}
         <span className="flex-1" />
         {running ? (
           <button

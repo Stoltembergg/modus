@@ -11,6 +11,7 @@ import {
   groupBlockedReason,
 } from "../../../../shared/group-blocked";
 import { deriveGroupCollabStage } from "../../../../shared/group-collab-status";
+import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { memberAvatar } from "../agents/agentAvatarModel";
@@ -19,8 +20,8 @@ import {
   type GroupDialogModel,
   type GroupMembersChange,
 } from "./CreateGroupDialog";
+import { activityButtonMeta, GroupActivityPanel } from "./GroupActivityPanel";
 import { GroupComposer, useUpdatePending } from "./GroupComposer";
-import { GroupDecisionsSection } from "./GroupDecisions";
 import {
   GROUP_ROOM_EMPTY_TEXT,
   GroupMessageList,
@@ -30,10 +31,11 @@ import {
   StatusText,
 } from "./GroupMessageList";
 import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
-import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel";
+import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { memberLabels } from "./memberLabels";
+import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import { useGroupMessages } from "./useGroupMessages";
 import { type GroupMemberStatesById, isGroupRunning } from "./useWorkingGroups";
 
@@ -109,11 +111,12 @@ export function GroupRoom({
   const updatePending = useUpdatePending(window.modus.update);
   const [managing, setManaging] = useState(false);
   const running = isGroupRunning(memberStates, group.id);
-  const [tasksOpen, setTasksOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const { tasks, replace } = useGroupTasks(group.id);
   const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
+  const workingRows = useGroupMemberWorking(group.id, memberStates);
   const labels = useMemo(() => memberLabels(members), [members]);
-  const openTasks = activeTaskCount(tasks);
+  const { openCount, label: activityLabel } = activityButtonMeta(tasks);
   const titleToSessionId = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of members) map.set(member.title.toLocaleLowerCase(), member.sessionId);
@@ -126,6 +129,7 @@ export function GroupRoom({
       titleToSessionId,
     });
   }, [messages, memberStates, group.id, titleToSessionId]);
+  const coordinating = isCoordinatorModeActive(group);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
@@ -148,23 +152,22 @@ export function GroupRoom({
           }}
           projectName={workspace?.displayName}
           running={running}
-          stage={stage}
           tasksButton={
             <button
-              aria-expanded={tasksOpen}
-              aria-label={`Tasks (${openTasks} active)`}
+              aria-expanded={activityOpen}
+              aria-label={activityLabel}
               className={cn(
                 "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-muted",
-                tasksOpen && "bg-hover text-fg-muted",
+                activityOpen && "bg-hover text-fg-muted",
               )}
-              onClick={() => setTasksOpen((open) => !open)}
-              title={tasksOpen ? "Hide tasks" : "Show tasks"}
+              onClick={() => setActivityOpen((open) => !open)}
+              title={activityOpen ? "Hide activity" : "Show activity"}
               type="button"
             >
               <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
-              Tasks
+              Activity
               <span className="tabular-nums" data-testid="group-task-count">
-                {openTasks}
+                {openCount}
               </span>
             </button>
           }
@@ -183,6 +186,7 @@ export function GroupRoom({
           messages={messages}
           onHandoffClick={(targetName) => setComposerSeed(`@${targetName} `)}
           onOpenFile={onOpenFile}
+          workingRows={workingRows}
         />
         {blocked ? (
           <BlockedBanner
@@ -202,12 +206,17 @@ export function GroupRoom({
           />
         )}
       </div>
-      {tasksOpen ? (
-        <GroupTaskPanel
+      {activityOpen ? (
+        <GroupActivityPanel
+          coordinating={coordinating}
+          groupId={group.id}
+          hasLead={Boolean(group.leadSessionId)}
           labels={labels}
           onCancelled={replace}
+          onSetMode={onSetMode}
+          stage={stage}
           tasks={tasks}
-          top={<GroupDecisionsSection groupId={group.id} labels={labels} />}
+          workingRows={workingRows}
         />
       ) : null}
       {managing ? (

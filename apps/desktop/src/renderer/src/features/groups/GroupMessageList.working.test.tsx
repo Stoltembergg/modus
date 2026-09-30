@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, GroupMemberStates, GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageList } from "./GroupMessageList";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
+import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
 const members = [
@@ -43,11 +44,15 @@ function states(entry: Partial<GroupMemberStates>): GroupMemberStatesById {
 
 let agentListeners: Array<(event: AgentEvent) => void>;
 
-function renderList(
-  memberStates: GroupMemberStatesById,
-  messages: readonly GroupMessage[] = [hello],
-) {
-  return render(
+function ListHarness({
+  memberStates,
+  messages = [hello],
+}: {
+  memberStates: GroupMemberStatesById;
+  messages?: readonly GroupMessage[];
+}) {
+  const workingRows = useGroupMemberWorking("g-1", memberStates);
+  return (
     <GroupMessageList
       avatars={avatars}
       cwd="/repo"
@@ -61,8 +66,16 @@ function renderList(
       members={members}
       messages={messages}
       onOpenFile={undefined}
-    />,
+      workingRows={workingRows}
+    />
   );
+}
+
+function renderList(
+  memberStates: GroupMemberStatesById,
+  messages: readonly GroupMessage[] = [hello],
+) {
+  return render(<ListHarness memberStates={memberStates} messages={messages} />);
 }
 
 beforeEach(() => {

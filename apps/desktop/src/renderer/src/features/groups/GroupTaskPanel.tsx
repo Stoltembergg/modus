@@ -73,19 +73,24 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
 }
 
 /**
- * Right-hand side panel of the room: `top` (the Decisions section) above the
- * checklist. Agents mark done; the user can Cancel. Spring Check is display-only.
+ * Right-hand side panel of the room: `top` (Activity sections / Decisions)
+ * above the checklist. Agents mark done; the user can Cancel. Spring Check is
+ * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
  */
 export function GroupTaskPanel({
   tasks,
   labels,
   onCancelled,
   top,
+  ariaLabel = "Activity",
+  testId = "group-activity-panel",
 }: {
   tasks: readonly GroupTask[];
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
   top?: ReactNode;
+  ariaLabel?: string;
+  testId?: string;
 }) {
   const [showCancelled, setShowCancelled] = useState(false);
   const progress = checklistProgress(tasks);
@@ -94,9 +99,9 @@ export function GroupTaskPanel({
 
   return (
     <aside
-      aria-label="Tasks"
+      aria-label={ariaLabel}
       className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-hairline border-l px-3 py-3"
-      data-testid="group-task-panel"
+      data-testid={testId}
     >
       {top}
       {tasks.length === 0 ? (
@@ -208,6 +213,15 @@ function TaskCheckRow({
             ) : (
               <span>Unassigned</span>
             )}
+            {task.branch ? (
+              <span
+                className="min-w-0 truncate font-mono"
+                data-testid="task-branch"
+                title={task.branch}
+              >
+                {task.branch}
+              </span>
+            ) : null}
           </div>
           {error ? <div className="mt-1 text-danger">{error}</div> : null}
           {cancellable ? (
