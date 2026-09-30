@@ -17,26 +17,29 @@ jobs:
       - name: Strip trailing blanks that fail biome format
         run: |
           python3 <<'PY'
+          import re
           from pathlib import Path
 
           more = Path("apps/desktop/src/main/groups/group-runtime-more.test.ts")
           text = more.read_text()
-          needle = "/* ── constants ────────────────────────────────────────────────────────── */\n\n\ndescribe(\"dispose\""
-          repl = "/* ── constants ────────────────────────────────────────────────────────── */\n\ndescribe(\"dispose\""
-          if needle not in text:
-              raise SystemExit("group-runtime-more.test.ts: expected blank line not found")
-          more.write_text(text.replace(needle, repl, 1))
+          text2, n = re.subn(
+              r'(\*/\n)\n+(describe\("dispose")',
+              r"\1\n\2",
+              text,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f"group-runtime-more.test.ts: expected 1 replace, got {n}")
+          more.write_text(text2)
 
           runtime = Path("apps/desktop/src/main/groups/group-runtime.test.ts")
           rtext = runtime.read_text()
-          if not rtext.endswith("}\n\n"):
-              # tolerate already-fixed or single trailing newline
-              if rtext.endswith("}\n"):
-                  print("group-runtime.test.ts already formatted")
-              else:
-                  raise SystemExit("group-runtime.test.ts unexpected ending")
+          if rtext.endswith("}\n\n"):
+              runtime.write_text(rtext[:-1])
+          elif rtext.endswith("}\n"):
+              print("group-runtime.test.ts already single trailing newline")
           else:
-              runtime.write_text(rtext[:-1])  # drop extra trailing blank line
+              raise SystemExit(repr(rtext[-20:]))
           print("patched ok")
           PY
       - name: Commit fix and remove this workflow
@@ -45,5 +48,6 @@ jobs:
           git config user.email "stoltembergg@gmail.com"
           git rm -f .github/workflows/apply-p0b-biome-fix.yml
           git add apps/desktop/src/main/groups/group-runtime-more.test.ts apps/desktop/src/main/groups/group-runtime.test.ts
+          git status
           git commit -m "fix(groups): biome format for P0b runtime tests"
           git push origin HEAD:cursor/group-collab-p0b-cb29
