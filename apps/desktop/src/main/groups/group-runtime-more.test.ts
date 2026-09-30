@@ -446,9 +446,15 @@ describe("chain cleanup", () => {
     expect(groups.liveChainIds()).toEqual([first.id]);
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done." });
     await flush();
+    // N3: agent replies are threaded to the trigger → the parent author wakes.
+    expect(groups.liveChainIds()).toEqual([first.id]);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    // No finalText → no reply message → no further parent wake; chain can retire.
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
     expect(groups.liveChainIds()).toEqual([]);
     // Counters stay readable for a while after retirement.
-    expect(groups.chainSnapshot(first.id).hops).toBe(2);
+    expect(groups.chainSnapshot(first.id).hops).toBe(3);
 
     // An ended chain with a running turn stays until that turn settles.
     const second = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
@@ -459,14 +465,17 @@ describe("chain cleanup", () => {
     await flush();
     expect(groups.liveChainIds()).toEqual([]);
 
-    // A message that wakes nobody (a reply to the lead, no mention) never keeps a chain.
+    // A thread reply without @ wakes the replied-to author (N3) and keeps a chain.
     const leadStatus = room(group.id).findLast((m) => m.authorSessionId === alpha);
     groups.postUserMessage({
       groupId: group.id,
       body: "ok",
       replyToMessageId: leadStatus?.id ?? "",
     });
-    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(groups.liveChainIds()).toHaveLength(1);
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Noted." });
+    await flush();
     expect(groups.liveChainIds()).toEqual([]);
   });
 });

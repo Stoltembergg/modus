@@ -360,24 +360,17 @@ describe("wake rules", () => {
     expect(runtime.pendingSessions()).toEqual([beta]);
   });
 
-  it("a reply does not wake the replied-to author unless mentioned", async () => {
+  it("a thread reply wakes the replied-to author without requiring @mention", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "go" });
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "Done." });
     await flush();
     const lead = room(group.id).at(-1);
-    // The user replies to the lead's message without mentioning it: nobody wakes.
+    // Natural thread: reply continues the conversation with that author.
     groups.postUserMessage({
       groupId: group.id,
-      body: "thanks",
-      replyToMessageId: lead?.id ?? "",
-    });
-    expect(runtime.pendingSessions()).toEqual([]);
-    // Mentioning the author does wake it.
-    groups.postUserMessage({
-      groupId: group.id,
-      body: "@Alpha one more",
+      body: "thanks — one more detail",
       replyToMessageId: lead?.id ?? "",
     });
     expect(runtime.pendingSessions()).toEqual([alpha]);
