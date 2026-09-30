@@ -11,15 +11,38 @@ let userData: string;
 
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
+/* The session teardown's side effects (A3 review): runtime dispose and checkpoint refs. */
+const teardown = vi.hoisted(() => ({
+  disposed: [] as string[],
+  checkpoints: [] as Array<{ sessionId: string; cwd: string }>,
+}));
+vi.mock("../agent/runtime-registry", () => ({
+  getAgentRuntime: () => ({
+    dispose: async (sessionId: string) => {
+      teardown.disposed.push(sessionId);
+    },
+  }),
+}));
+vi.mock("../agent/checkpoint-service", () => ({
+  deleteSessionCheckpoints: async (sessionId: string, cwd: string) => {
+    teardown.checkpoints.push({ sessionId, cwd });
+  },
+}));
+
 const { getDatabase, migrateDatabase } = await import("../db/database");
 const { getAgentSession, listAgentSessions } = await import("../agent/agent-store");
-const { ensureChatsWorkspace, removeWorkspace } = await import("../workspace/workspace-store");
+const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
 const {
   createAgent,
   createAgentInGroup,
   createGroupWithNewAgents,
   deleteAgent,
   getAgent,
+  agentChatBlockedReason,
+  agentChatPersonaPrompt,
+  openAgentChat,
+  requireAgentChatWritable,
+  updateAgent,
   updateGroupMembers,
 } = await import("../agents/agents-store");
 const {
@@ -32,9 +55,27 @@ const {
   listGroupMessages,
   removeAgentFromGroup,
   setAgentGroupWorkspace,
+  setGroupMembershipMessageSink,
 } = await import("./group-store");
 const { groupBlockedReason } = await import("../../shared/group-blocked");
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
+const {
+  deleteAgentWithSessions,
+  deleteGroupWithSessions,
+  removeMemberWithSessions,
+  teardownDetachedSessions,
+} = await import("../agents/agent-teardown");
+const { removeProject } = await import("../workspace/workspace-service");
+
+/**
+ * The store detaches sessions; the caller tears them down after the commit.
+ * Tests that go through the store directly do the same (the argument is
+ * evaluated first, so a store error still throws synchronously).
+ */
+async function torn<T extends string[] | { removedSessionIds: string[] }>(result: T): Promise<T> {
+  await teardownDetachedSessions(Array.isArray(result) ? result : result.removedSessionIds);
+  return result;
+}
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -109,6 +150,17 @@ function countRows(table: string, column: string, value: string): number {
   const row = getDatabase()
     .prepare(`select count(*) as count from ${table} where ${column} = ?`)
     .get(value) as { count: number };
+  return Number(row.count);
+}
+
+/** 1:1 chats (A3) whose agent is gone, and agent chats with no agent link: both must be 0. */
+function orphanAgentChats(): number {
+  const row = getDatabase()
+    .prepare(
+      `select count(*) as count from agent_sessions
+       where agent_id is not null and agent_id not in (select id from agents)`,
+    )
+    .get() as { count: number };
   return Number(row.count);
 }
 
@@ -209,10 +261,10 @@ describe("one group per agent", () => {
     expect(listAgentGroupMembers(group.id)).toHaveLength(10);
   });
 
-  it("removing a member = deleting its agent; refused when only 2 are left", () => {
+  it("removing a member = deleting its agent; refused when only 2 are left", async () => {
     const group = newGroup(3);
     const [a, b, c] = group.members;
-    removeAgentFromGroup(group.id, c?.sessionId ?? "");
+    await torn(removeAgentFromGroup(group.id, c?.sessionId ?? ""));
     expect(getAgent(c?.agentId ?? "")).toBeUndefined();
     expect(getAgentSession(c?.sessionId ?? "")).toBeUndefined();
     expect(statusLines(group.id)).toEqual(["Agent 3 left the group"]);
@@ -251,7 +303,7 @@ describe("one group per agent", () => {
     expect(groupBlockedReason(group, listAgentGroupMembers(group.id))).toBeNull();
   });
 
-  it("a legacy group with 11 members is not blocked, but adding is refused", () => {
+  it("a legacy group with 11 members is not blocked, but adding is refused", async () => {
     const group = legacyGroup(11);
     expect(groupBlockedReason(group, listAgentGroupMembers(group.id))).toBeNull();
     expectCode(
@@ -259,7 +311,7 @@ describe("one group per agent", () => {
       "group-max-members",
     );
     // Shrinking stays allowed.
-    removeAgentFromGroup(group.id, group.members[0]?.sessionId ?? "");
+    await torn(removeAgentFromGroup(group.id, group.members[0]?.sessionId ?? ""));
     expect(listAgentGroupMembers(group.id)).toHaveLength(10);
   });
 
@@ -294,26 +346,35 @@ describe("one group per agent", () => {
     expect(getAgentSession(sessionId)?.workspaceId).toBe(to);
   });
 
-  it("deleting a group deletes its agents, their room sessions and all messages: no orphans", () => {
+  it("deleting a group deletes its agents, their room sessions, 1:1 chats and all messages: no orphans", async () => {
     const group = newGroup(3);
     appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hi" });
-    const ids = deleteAgentGroup(group.id);
-    expect(ids.sort()).toEqual(group.members.map((member) => member.sessionId).sort());
+    const chats = group.members.slice(0, 2).map((member) => openAgentChat(member.agentId).id);
+    const ids = await torn(deleteAgentGroup(group.id));
+    expect(ids.sort()).toEqual(
+      [...group.members.map((member) => member.sessionId), ...chats].sort(),
+    );
     for (const member of group.members) {
       expect(getAgent(member.agentId)).toBeUndefined();
       expect(getAgentSession(member.sessionId)).toBeUndefined();
     }
+    for (const chat of chats) expect(getAgentSession(chat)).toBeUndefined();
     expect(listGroupMessages(group.id, { limit: 10 })).toEqual([]);
     expect(orphanRoomSessions()).toBe(0);
+    expect(orphanAgentChats()).toBe(0);
   });
 
-  it("deleting a Project deletes its groups, their agents and sessions; other chats stay", () => {
+  it("deleting a Project deletes its groups, their agents and sessions; other chats stay", async () => {
     const ws = insertWorkspace();
     const chat = insertSession(CHATS_WORKSPACE_ID, "A chat elsewhere");
     const ungrouped = createAgent({ name: uid("Loose") });
     const group = newGroup(2, ws);
     appendGroupMessage({ groupId: group.id, authorKind: "user", body: "hi" });
-    removeWorkspace(ws);
+    const oneToOne = openAgentChat(group.members[0]?.agentId ?? "").id;
+    // "Remove project": tears its chats (the 1:1 included) and room sessions down, then the row.
+    await removeProject(ws);
+    expect(getAgentSession(oneToOne)).toBeUndefined();
+    expect(orphanAgentChats()).toBe(0);
     expect(getAgentGroup(group.id)).toBeUndefined();
     expect(countRows("agents", "group_id", group.id)).toBe(0);
     for (const member of group.members) {
@@ -327,18 +388,264 @@ describe("one group per agent", () => {
   });
 });
 
+describe("an agent's 1:1 chat (A3)", () => {
+  it("is made on first open: a normal chat in the group's Project, linked to the agent, reused", () => {
+    const ws = insertWorkspace();
+    const group = newGroup(2, ws);
+    const agentId = group.members[0]?.agentId ?? "";
+    const chat = openAgentChat(agentId);
+    expect(chat).toMatchObject({
+      workspaceId: ws,
+      cwd: `/root/${ws}`,
+      title: "Agent 1",
+      model: MODEL,
+      agentId,
+      status: "idle",
+    });
+    expect(chat.kind).toBeUndefined();
+    expect(listAgentSessions().map((session) => session.id)).toContain(chat.id);
+    expect(openAgentChat(agentId).id).toBe(chat.id);
+    expect(countRows("agent_sessions", "agent_id", agentId)).toBe(1);
+    // Renaming the agent renames its chat; moving the group moves the chat with it.
+    updateAgent(agentId, { name: "Renamed" });
+    expect(getAgentSession(chat.id)?.title).toBe("Renamed");
+    const to = insertWorkspace();
+    setAgentGroupWorkspace(group.id, to);
+    expect(getAgentSession(chat.id)).toMatchObject({ workspaceId: to, cwd: `/root/${to}` });
+  });
+
+  it("a group without a Project lists its agents but cannot make a new chat", () => {
+    const group = newGroup(2);
+    const [first, second] = group.members;
+    const existing = openAgentChat(first?.agentId ?? "").id;
+    expect(agentChatBlockedReason(existing)).toBeNull();
+    getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
+    expect(listAgentGroupMembers(group.id)).toHaveLength(2);
+    // The existing chat still opens, READ-ONLY: sending is refused like in the room.
+    expect(openAgentChat(first?.agentId ?? "").id).toBe(existing);
+    expect(agentChatBlockedReason(existing)).toBe("project-required");
+    expectCode(() => requireAgentChatWritable(existing), "group-project-required");
+    expectCode(() => openAgentChat(second?.agentId ?? ""), "group-project-required");
+    // Other sessions are never blocked by this rule.
+    expect(agentChatBlockedReason(group.members[0]?.sessionId ?? "")).toBeNull();
+  });
+
+  it("removing a member (deleting its agent) deletes its 1:1 chat too", async () => {
+    const group = newGroup(3);
+    const leaving = group.members[2];
+    const chat = openAgentChat(leaving?.agentId ?? "").id;
+    expect(await torn(removeAgentFromGroup(group.id, leaving?.sessionId ?? ""))).toEqual([
+      leaving?.sessionId,
+      chat,
+    ]);
+    expect(getAgentSession(chat)).toBeUndefined();
+    const other = group.members[1];
+    const otherChat = openAgentChat(other?.agentId ?? "").id;
+    const result = await torn(
+      updateGroupMembers({
+        groupId: group.id,
+        add: newAgents(1, "New"),
+        removeAgentIds: [other?.agentId ?? ""],
+        lead: null,
+      }),
+    );
+    expect(result.removedSessionIds).toEqual([other?.sessionId, otherChat]);
+    expect(getAgentSession(otherChat)).toBeUndefined();
+    expect(orphanAgentChats()).toBe(0);
+  });
+});
+
+describe("1:1 chat teardown keeps its tree (A3 review)", () => {
+  /** A subagent session under `parentId` (parent_session_id cascades in SQL). */
+  function insertSubagent(parentId: string): string {
+    const parent = getAgentSession(parentId);
+    const id = uid("sub");
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (id, workspace_id, title, cwd, status, parent_session_id, created_at, updated_at)
+         values (?, ?, 'child', ?, 'idle', ?, ?, ?)`,
+      )
+      .run(id, parent?.workspaceId ?? "", parent?.cwd ?? "", parentId, now, now);
+    return id;
+  }
+
+  function setup() {
+    teardown.disposed.length = 0;
+    teardown.checkpoints.length = 0;
+    const ws = insertWorkspace();
+    const group = newGroup(3, ws);
+    const member = group.members[2];
+    const chat = openAgentChat(member?.agentId ?? "").id;
+    const child = insertSubagent(chat);
+    const roomChild = insertSubagent(member?.sessionId ?? "");
+    return { ws, group, member, chat, child, roomChild, cwd: `/root/${ws}` };
+  }
+
+  function expectTornDown(ids: string[], cwd: string): void {
+    for (const id of ids) {
+      expect(teardown.disposed).toContain(id);
+      expect(teardown.checkpoints).toContainEqual({ sessionId: id, cwd });
+      expect(getAgentSession(id)).toBeUndefined();
+    }
+    // Children first: a subagent is disposed before its parent.
+    expect(orphanAgentChats()).toBe(0);
+    expect(orphanRoomSessions()).toBe(0);
+  }
+
+  it("deleting the agent disposes and cleans the chat, its subagent and the room session tree", async () => {
+    const { member, chat, child, roomChild, cwd } = setup();
+    await deleteAgentWithSessions(member?.agentId ?? "");
+    expectTornDown([chat, child, member?.sessionId ?? "", roomChild], cwd);
+    expect(teardown.disposed.indexOf(child)).toBeLessThan(teardown.disposed.indexOf(chat));
+    expect(teardown.disposed.indexOf(roomChild)).toBeLessThan(
+      teardown.disposed.indexOf(member?.sessionId ?? ""),
+    );
+  });
+
+  it("removing the member does the same", async () => {
+    const { group, member, chat, child, roomChild, cwd } = setup();
+    await removeMemberWithSessions(group.id, member?.sessionId ?? "");
+    expectTornDown([chat, child, member?.sessionId ?? "", roomChild], cwd);
+  });
+
+  it("deleting the group does the same for every member", async () => {
+    const { group, member, chat, child, roomChild, cwd } = setup();
+    await deleteGroupWithSessions(group.id);
+    const rooms = group.members.map((item) => item.sessionId);
+    expectTornDown([chat, child, roomChild, ...rooms], cwd);
+    expect(rooms).toContain(member?.sessionId);
+  });
+
+  it("deleting the Project does the same", async () => {
+    const { ws, group, chat, child, roomChild, cwd } = setup();
+    await removeProject(ws);
+    expectTornDown([chat, child, roomChild, ...group.members.map((item) => item.sessionId)], cwd);
+    expect(getAgentGroup(group.id)).toBeUndefined();
+  });
+
+  it("a refused removal tears nothing down (the store throws before any teardown)", () => {
+    teardown.disposed.length = 0;
+    const group = newGroup(2);
+    const chat = openAgentChat(group.members[0]?.agentId ?? "").id;
+    expectCode(() => deleteAgentWithSessions(group.members[0]?.agentId ?? ""), "group-min-members");
+    expect(teardown.disposed).toEqual([]);
+    expect(getAgentSession(chat)?.agentId).toBe(group.members[0]?.agentId);
+  });
+});
+
+describe("A3 migration and persona", () => {
+  it("agent_sessions.agent_id: one 1:1 chat per agent, unlinked (not deleted) with the agent; idempotent", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "modus-a3-migrate-"));
+    const db = new DatabaseSync(join(dir, "modus.sqlite"));
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(db);
+      migrateDatabase(db);
+      const columns = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+        name: string;
+      }>;
+      expect(columns.filter((column) => column.name === "agent_id")).toHaveLength(1);
+      const ws = insertWorkspace(db);
+      const now = new Date().toISOString();
+      db.prepare(
+        `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
+         values ('a1', 'Ana', 'happy', 'blue', ?, ?)`,
+      ).run(now, now);
+      const first = insertSession(ws, "Ana", db);
+      const second = insertSession(ws, "Ana again", db);
+      db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(first);
+      expect(() =>
+        db.prepare("update agent_sessions set agent_id = 'a1' where id = ?").run(second),
+      ).toThrow(/UNIQUE/);
+      // ON DELETE SET NULL: the row stays for the teardown (subagents, checkpoints).
+      db.prepare("delete from agents where id = 'a1'").run();
+      expect(db.prepare("select agent_id from agent_sessions where id = ?").get(first)).toEqual({
+        agent_id: null,
+      });
+      expect(db.prepare("select 1 from agent_sessions where id = ?").get(second)).toBeDefined();
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
+  it("the 1:1 chat carries the agent's persona; other sessions do not", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Persona"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Ana", role: "Reviewer", instructions: "Review every diff.", modelId: MODEL },
+        { name: "Bo", modelId: MODEL },
+      ],
+    });
+    const [ana, bo] = group.members;
+    const chat = openAgentChat(ana?.agentId ?? "").id;
+    expect(agentChatPersonaPrompt(chat)).toBe(
+      "<agent_instructions>\nYou are Ana, the Reviewer.\nReview every diff.\n</agent_instructions>",
+    );
+    expect(agentChatPersonaPrompt(openAgentChat(bo?.agentId ?? "").id)).toBeUndefined();
+    expect(agentChatPersonaPrompt(ana?.sessionId ?? "")).toBeUndefined();
+  });
+});
+
+describe("live membership lines (A3)", () => {
+  it("joined / left lines reach the sink once committed; a rolled-back change sends nothing", async () => {
+    const sent: Array<{ groupId: string; body: string; kind: string }> = [];
+    setGroupMembershipMessageSink((message) => sent.push(message));
+    try {
+      const group = newGroup(2);
+      // Creating a group posts no join lines.
+      expect(sent).toEqual([]);
+      createAgentInGroup({ groupId: group.id, name: "Rita", role: "Reviewer", modelId: MODEL });
+      expect(sent).toEqual([
+        expect.objectContaining({
+          groupId: group.id,
+          kind: "status",
+          body: "Rita joined as Reviewer",
+        }),
+      ]);
+      // Saved and sent are the same message.
+      expect(listGroupMessages(group.id, { limit: 10 }).map((m) => m.id)).toContain(
+        (sent[0] as { id?: string }).id,
+      );
+      sent.length = 0;
+      expectCode(
+        () =>
+          updateGroupMembers({
+            groupId: group.id,
+            add: [
+              { name: "Fresh", modelId: MODEL },
+              { name: "Rita", modelId: MODEL },
+            ],
+            removeAgentIds: [group.members[0]?.agentId ?? ""],
+            lead: null,
+          }),
+        "agent-name-taken",
+      );
+      expect(sent).toEqual([]);
+      await torn(removeAgentFromGroup(group.id, group.members[0]?.sessionId ?? ""));
+      expect(sent.map((message) => message.body)).toEqual(["Agent 1 left the group"]);
+    } finally {
+      setGroupMembershipMessageSink(undefined);
+    }
+  });
+});
+
 describe("group:update-members (one transaction, final-state rules)", () => {
   const ids = (group: { members: Array<{ agentId: string }> }) =>
     group.members.map((member) => member.agentId);
 
-  it("a 2-member group can replace both members at once (add 2, remove 2)", () => {
+  it("a 2-member group can replace both members at once (add 2, remove 2)", async () => {
     const group = newGroup(2);
-    const { group: after, removedSessionIds } = updateGroupMembers({
-      groupId: group.id,
-      add: newAgents(2, "New"),
-      removeAgentIds: ids(group),
-      lead: { name: "new 2" },
-    });
+    const { group: after, removedSessionIds } = await torn(
+      updateGroupMembers({
+        groupId: group.id,
+        add: newAgents(2, "New"),
+        removeAgentIds: ids(group),
+        lead: { name: "new 2" },
+      }),
+    );
     expect(after.members.map((member) => member.name)).toEqual(["New 1", "New 2"]);
     expect(after.leadSessionId).toBe(after.members[1]?.sessionId);
     expect(removedSessionIds.sort()).toEqual(group.members.map((m) => m.sessionId).sort());
@@ -350,12 +657,14 @@ describe("group:update-members (one transaction, final-state rules)", () => {
     expect(countRows("agents", "group_id", group.id)).toBe(2);
     expect(orphanRoomSessions()).toBe(0);
     // A removed name is free for a new agent in the same change.
-    const again = updateGroupMembers({
-      groupId: group.id,
-      add: [{ name: "New 1", modelId: MODEL }],
-      removeAgentIds: [after.members[0]?.agentId ?? ""],
-      lead: { agentId: after.members[1]?.agentId ?? "" },
-    });
+    const again = await torn(
+      updateGroupMembers({
+        groupId: group.id,
+        add: [{ name: "New 1", modelId: MODEL }],
+        removeAgentIds: [after.members[0]?.agentId ?? ""],
+        lead: { agentId: after.members[1]?.agentId ?? "" },
+      }),
+    );
     expect(again.group.members.map((member) => member.name)).toEqual(["New 2", "New 1"]);
     expect(again.group.leadSessionId).toBe(after.members[1]?.sessionId);
   });
@@ -436,7 +745,7 @@ describe("group:update-members (one transaction, final-state rules)", () => {
     expect(statusLines(group.id)).toEqual([]);
   });
 
-  it("an 11th member via update is refused; a legacy group of 11 may shrink but not swap", () => {
+  it("an 11th member via update is refused; a legacy group of 11 may shrink but not swap", async () => {
     const ten = newGroup(10);
     expectCode(
       () =>
@@ -459,12 +768,14 @@ describe("group:update-members (one transaction, final-state rules)", () => {
         }),
       "group-max-members",
     );
-    const shrunk = updateGroupMembers({
-      groupId: legacy.id,
-      add: [],
-      removeAgentIds: [ids(legacy)[0] ?? ""],
-      lead: null,
-    });
+    const shrunk = await torn(
+      updateGroupMembers({
+        groupId: legacy.id,
+        add: [],
+        removeAgentIds: [ids(legacy)[0] ?? ""],
+        lead: null,
+      }),
+    );
     expect(shrunk.group.members).toHaveLength(10);
   });
 });

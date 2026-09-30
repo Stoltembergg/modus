@@ -4243,6 +4243,68 @@ describe("PiSdkRuntime", () => {
     await rm(moved, { recursive: true, force: true });
   });
 
+  /** A 1:1 agent chat (A3): the test session linked to an agent of a group in its Project. */
+  async function agentChatSession(instructions: string) {
+    const { createGroupWithNewAgents } = await import("../agents/agents-store");
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Ana");
+    const group = createGroupWithNewAgents({
+      name: `Crew ${crypto.randomUUID()}`,
+      workspaceId,
+      members: [
+        { name: "Ana", role: "Reviewer", instructions, modelId: "mock/model" },
+        { name: "Bo", modelId: "mock/model" },
+      ],
+    });
+    const agentId = group.members[0]?.agentId ?? "";
+    getDatabase()
+      .prepare("update agent_sessions set agent_id = ?, kind = 'chat' where id = ?")
+      .run(agentId, sessionId);
+    return { sessionId, agentId, group };
+  }
+
+  const lastSystemPrompt = () =>
+    (
+      mocks.resourceLoaderOptions.at(-1) as { appendSystemPrompt: string[] }
+    ).appendSystemPrompt.join("\n");
+
+  it("a 1:1 chat picks up edited agent instructions on its next turn, without a manual resume (A3)", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Persona marker one.");
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    expect(lastSystemPrompt()).toContain("Persona marker one.");
+    const creates = mocks.createAgentSession.mock.calls.length;
+    // Unchanged agent: the cached session is reused.
+    await runtime.ensure(window, sessionId);
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates);
+
+    updateAgent(agentId, { instructions: "Persona marker two." });
+    await runtime.ensure(window, sessionId);
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates + 1);
+    expect(lastSystemPrompt()).toContain("Persona marker two.");
+    expect(lastSystemPrompt()).not.toContain("Persona marker one.");
+  });
+
+  it("refuses a turn in a 1:1 chat whose group is blocked (no Project), before any session work (A3)", async () => {
+    const { sessionId, group } = await agentChatSession("Be terse.");
+    getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
+    const runtime = new PiSdkRuntime();
+    const creates = mocks.createAgentSession.mock.calls.length;
+    await expect(
+      runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "hello",
+        sessionId,
+      }),
+    ).rejects.toMatchObject({ code: "group-project-required" });
+    expect(mocks.createAgentSession.mock.calls.length).toBe(creates);
+    expect(getAgentSession(sessionId)?.status).toBe("idle");
+  });
+
   it("releaseRuntime drops the SDK session without cancelling descendant DB rows", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const childSessionId = `session-${crypto.randomUUID()}`;

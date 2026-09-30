@@ -64,6 +64,8 @@ const api: ModusApi = {
     update: (input) => ipcRenderer.invoke("agents:update", input),
     setArchived: (input) => ipcRenderer.invoke("agents:archive", input),
     remove: (id) => ipcRenderer.invoke("agents:delete", { id }),
+    openChat: (id) => ipcRenderer.invoke("agents:open-chat", { id }),
+    generateProfile: (input) => ipcRenderer.invoke("agents:generate-profile", input),
   },
   file: {
     open: (input) => ipcRenderer.invoke("file:open", input),

@@ -18,6 +18,8 @@ import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
+import { AgentAvatar } from "../agents/AgentAvatar";
+import { agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import {
   CreateGroupDialog,
   type GroupDialogModel,
@@ -75,7 +77,14 @@ export type GroupRoomProps = {
   onUpdateMembers(change: GroupMembersChange): Promise<void>;
   onDelete(): void;
   onOpenFile?: ((path: string) => void) | undefined;
+  /** "Add agent" in the room menu (the agent dialog; A3). */
+  onAddAgent?: (() => void) | undefined;
 };
+
+/** A member's avatar in the room (chips and message authors; A3). */
+export type RoomAvatar = { agentId: string } & ReturnType<typeof memberAvatar> & {
+    archived: boolean;
+  };
 
 /** The group room (main panel): header with members, the message list and the composer. */
 export function GroupRoom({
@@ -91,10 +100,21 @@ export function GroupRoom({
   onUpdateMembers,
   onDelete,
   onOpenFile,
+  onAddAgent,
 }: GroupRoomProps) {
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
+    [group.members],
+  );
+  const avatars = useMemo(
+    () =>
+      new Map<string, RoomAvatar>(
+        group.members.map((member) => [
+          member.sessionId,
+          { agentId: member.agentId, ...memberAvatar(member), archived: member.archived === true },
+        ]),
+      ),
     [group.members],
   );
   const blocked = groupBlockedReason(group, group.members);
@@ -113,10 +133,12 @@ export function GroupRoom({
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <RoomHeader
+          avatars={avatars}
           group={group}
           members={members}
           memberStates={memberStates}
           onDelete={onDelete}
+          onAddAgent={onAddAgent}
           onManageMembers={() => setManaging(true)}
           onOpenMember={onOpenMember}
           onRename={onRename}
@@ -149,6 +171,7 @@ export function GroupRoom({
           }
         />
         <MessageList
+          avatars={avatars}
           cwd={workspace?.rootPath}
           groupId={group.id}
           members={members}
@@ -227,6 +250,7 @@ export function BlockedBanner({
 }
 
 function RoomHeader({
+  avatars,
   group,
   members,
   memberStates,
@@ -239,7 +263,9 @@ function RoomHeader({
   onSetMode,
   onManageMembers,
   onDelete,
+  onAddAgent,
 }: {
+  avatars: ReadonlyMap<string, RoomAvatar>;
   group: AgentGroupWithMembers;
   members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
@@ -252,6 +278,7 @@ function RoomHeader({
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onManageMembers(): void;
   onDelete(): void;
+  onAddAgent?: (() => void) | undefined;
 }) {
   const [renaming, setRenaming] = useState(false);
   // Without a Lead the stored mode is ignored: no badge, toggle off and disabled.
@@ -335,6 +362,7 @@ function RoomHeader({
                   onDelete={onDelete}
                   onManageMembers={onManageMembers}
                   onStartRename={() => setRenaming(true)}
+                  {...(onAddAgent ? { onAddAgent } : {})}
                 />
               </Menu.Popup>
             </Menu.Positioner>
@@ -344,6 +372,7 @@ function RoomHeader({
       <div className="mt-2 flex flex-wrap gap-1.5">
         {members.map((member) => (
           <MemberChip
+            avatar={avatars.get(member.sessionId)}
             isLead={group.leadSessionId === member.sessionId}
             key={member.sessionId}
             label={labels.get(member.sessionId) ?? { title: member.title }}
@@ -381,11 +410,13 @@ export function GroupStateDot({ state }: { state: GroupActivityState }) {
 }
 
 function MemberChip({
+  avatar,
   label,
   isLead,
   state,
   onOpen,
 }: {
+  avatar: RoomAvatar | undefined;
   label: MemberLabel;
   isLead: boolean;
   state: GroupActivityState;
@@ -400,6 +431,16 @@ function MemberChip({
       title={`Open ${memberLabelText(label)}`}
       type="button"
     >
+      {avatar ? (
+        <AgentAvatar
+          className="-ml-1"
+          color={avatar.color}
+          face={avatar.face}
+          seed={avatar.agentId}
+          size={20}
+          state={agentAvatarState(state, avatar.archived)}
+        />
+      ) : null}
       <GroupStateDot state={state} />
       <span className="min-w-0 truncate">
         <MemberName label={label} />
@@ -415,11 +456,13 @@ function MemberChip({
 }
 
 function MessageList({
+  avatars,
   groupId,
   members,
   cwd,
   onOpenFile,
 }: {
+  avatars: ReadonlyMap<string, RoomAvatar>;
   groupId: string;
   members: readonly MentionMember[];
   cwd: string | undefined;
@@ -480,6 +523,7 @@ function MessageList({
         ) : null}
         {messages.map((message) => (
           <GroupMessageRow
+            avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
             cwd={cwd}
             key={message.id}
             members={members}
@@ -537,6 +581,7 @@ export function isWaitingStatus(body: string): boolean {
 }
 
 export function GroupMessageRow({
+  avatar,
   message,
   members,
   labels,
@@ -548,6 +593,8 @@ export function GroupMessageRow({
   labels: ReadonlyMap<string, MemberLabel>;
   cwd?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
+  /** The author's avatar (a current member); a former member keeps the initial badge. */
+  avatar?: RoomAvatar | undefined;
 }) {
   const author: MemberLabel | undefined = message.authorSessionId
     ? (labels.get(message.authorSessionId) ?? { title: message.authorSessionId })
@@ -588,13 +635,25 @@ export function GroupMessageRow({
   const title = label.title;
   return (
     <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
-      <span
-        aria-hidden
-        className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
-        style={{ backgroundColor: memberColor(sessionId) }}
-      >
-        {title.trim().charAt(0).toLocaleUpperCase() || "?"}
-      </span>
+      {avatar ? (
+        <AgentAvatar
+          animated={false}
+          className="mt-0.5"
+          color={avatar.color}
+          face={avatar.face}
+          seed={avatar.agentId}
+          size={20}
+          state={avatar.archived ? "archived" : "idle"}
+        />
+      ) : (
+        <span
+          aria-hidden
+          className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
+          style={{ backgroundColor: memberColor(sessionId) }}
+        >
+          {title.trim().charAt(0).toLocaleUpperCase() || "?"}
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="mb-0.5 font-medium text-fg-muted text-xs">
           <MemberName label={label} />

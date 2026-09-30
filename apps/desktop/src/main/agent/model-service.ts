@@ -6,7 +6,7 @@ import {
   type Model,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+import { completeSimple, streamSimple } from "@earendil-works/pi-ai/compat";
 import {
   AuthStorage,
   FileAuthStorageBackend,
@@ -2386,4 +2386,45 @@ export async function testCustomProvider(
       sawThinking: false,
     };
   }
+}
+
+/**
+ * One plain text completion with a configured model (agents' generated
+ * profile, A3): the same registry, auth and driver chats use, no tools, no
+ * retries. Throws when the model is unknown, auth fails or the provider errors.
+ */
+export async function completeWithModel(request: {
+  modelId: string;
+  systemPrompt: string;
+  prompt: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}): Promise<string> {
+  const model = findModel(request.modelId);
+  if (!model) throw new Error(`Model not available: ${request.modelId}`);
+  const auth = await getModelRegistry().getApiKeyAndHeaders(model);
+  if (!auth.ok) throw new Error(auth.error);
+  const message = await completeSimple(
+    model,
+    {
+      systemPrompt: request.systemPrompt,
+      messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
+    },
+    {
+      ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+      ...(auth.headers ? { headers: auth.headers } : {}),
+      ...(request.signal ? { signal: request.signal } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+      maxRetries: 0,
+    },
+  );
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    throw new Error(message.errorMessage ?? "The provider returned an error.");
+  }
+  return message.content
+    .filter((item): item is Extract<(typeof message.content)[number], { type: "text" }> =>
+      Boolean(item.type === "text"),
+    )
+    .map((item) => item.text)
+    .join("");
 }

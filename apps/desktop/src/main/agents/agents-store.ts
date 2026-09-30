@@ -9,19 +9,30 @@ import {
   type AgentGroupMode,
   type AgentGroupWithMembers,
   type AgentInfo,
+  type AgentSessionInfo,
   type CreateAgentInput,
   type CreateGroupAgentInput,
   type NewGroupAgentInput,
   type UpdateAgentGroupMembersInput,
   type UpdateAgentInput,
 } from "../../shared/contracts";
-import { groupMembersUpdateCountError } from "../../shared/group-blocked";
+import {
+  GROUP_BLOCKED_TEXT,
+  type GroupBlockedReason,
+  groupBlockedErrorCode,
+  groupBlockedReason,
+  groupMembersUpdateCountError,
+} from "../../shared/group-blocked";
+import { getAgentSession } from "../agent/agent-store";
 import { getDatabase, uniqueAgentName } from "../db/database";
 import {
+  agentChatSessionIds,
   GroupStoreError,
+  getAgentGroup,
   getAgentGroupWithMembers,
   insertGroupWithProject,
   joinGroupRows,
+  openAgentChatRow,
   removeAgentFromGroupRows,
   setGroupLeadRow,
   throwCountError,
@@ -304,7 +315,9 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
       throw new GroupStoreError("not-a-member", `The lead "${lead.name}" must be a new member.`);
     }
     // Removes first: their names are free for the new agents.
-    for (const member of removed) removeAgentFromGroupRows(groupId, member.sessionId, false);
+    const removedSessionIds = removed.flatMap((member) =>
+      removeAgentFromGroupRows(groupId, member.sessionId, false),
+    );
     for (const member of add) {
       const agent = createAgent(newAgentFields(member, groupId));
       const row = joinGroupRows(groupId, agent.id, undefined, { cap: false });
@@ -315,7 +328,7 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
     setGroupLeadRow(groupId, leadSessionId);
     return {
       group: getAgentGroupWithMembers(groupId),
-      removedSessionIds: removed.map((member) => member.sessionId),
+      removedSessionIds,
     };
   });
 }
@@ -343,6 +356,12 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
       new Date().toISOString(),
       agentId,
     );
+  // The agent's 1:1 chat (A3) is titled after it.
+  if (input.name !== undefined) {
+    getDatabase()
+      .prepare("update agent_sessions set title = ? where agent_id = ? and kind = 'chat'")
+      .run(requireAgentRow(agentId).name, agentId);
+  }
   return toAgent(requireAgentRow(agentId));
 }
 
@@ -362,8 +381,9 @@ export function setAgentArchived(agentId: string, archived: boolean): AgentInfo 
  * Deletes the agent. For a group agent this IS removing the member (one
  * operation): refused with `group-min-members` when only 2 are left, otherwise
  * the member-removal rules (lead cleared, open tasks released owner-first), its
- * hidden room session deleted and "X left the group" posted, in one
- * transaction. Returns the room session ids: the caller stops their runtime.
+ * "X left the group" posted, in one transaction. Returns the room session and
+ * 1:1 chat ids, still on disk: the caller tears them down after the commit
+ * (agents/agent-teardown).
  */
 export function deleteAgent(agentId: string): string[] {
   const row = requireAgentRow(agentId);
@@ -371,11 +391,75 @@ export function deleteAgent(agentId: string): string[] {
     .prepare("select group_id, session_id from agent_group_members where agent_id = ?")
     .get(agentId) as { group_id: string; session_id: string } | undefined;
   if (membership) {
-    return withGroupTransaction(() => {
-      removeAgentFromGroupRows(membership.group_id, membership.session_id);
-      return [membership.session_id];
-    });
+    return withGroupTransaction(() =>
+      removeAgentFromGroupRows(membership.group_id, membership.session_id),
+    );
   }
-  getDatabase().prepare("delete from agents where id = ?").run(row.id);
-  return [];
+  return withGroupTransaction(() => {
+    const chatIds = agentChatSessionIds([row.id]);
+    getDatabase().prepare("delete from agents where id = ?").run(row.id);
+    return chatIds;
+  });
+}
+
+/**
+ * The agent's 1:1 chat (A3), made on first open: a normal chat in its group's
+ * Project, linked to the agent. `group-project-required` when the group has
+ * no Project yet.
+ */
+export function openAgentChat(agentId: string): AgentSessionInfo {
+  requireAgentRow(agentId);
+  const sessionId = openAgentChatRow(agentId);
+  const session = getAgentSession(sessionId);
+  if (!session) throw new GroupStoreError("session-not-found", `Session not found: ${sessionId}`);
+  return session;
+}
+
+/**
+ * Why an agent's 1:1 chat is read-only (A3): its group is blocked
+ * (groupBlockedReason, e.g. no Project). Null for a working group and for any
+ * other session. The renderer shows the room's banner; IPC and runtime refuse
+ * to send.
+ */
+export function agentChatBlockedReason(sessionId: string): GroupBlockedReason | null {
+  const row = getDatabase()
+    .prepare(
+      `select a.group_id from agent_sessions s join agents a on a.id = s.agent_id
+       where s.id = ? and s.kind = 'chat'`,
+    )
+    .get(sessionId) as { group_id: string | null } | undefined;
+  if (!row?.group_id) return null;
+  const group = getAgentGroup(row.group_id);
+  if (!group) return null;
+  const members = getDatabase()
+    .prepare("select count(*) as count from agent_group_members where group_id = ?")
+    .get(group.id) as { count: number };
+  return groupBlockedReason(group, Number(members.count));
+}
+
+/** Refuses a send to a read-only 1:1 chat (`group-project-required` / `group-min-members`). */
+export function requireAgentChatWritable(sessionId: string): void {
+  const reason = agentChatBlockedReason(sessionId);
+  if (reason) throw new GroupStoreError(groupBlockedErrorCode(reason), GROUP_BLOCKED_TEXT[reason]);
+}
+
+/**
+ * The persona block for an agent's 1:1 chat (its system prompt): who it is
+ * and its instructions. Undefined for any other session, or an agent with
+ * neither role nor instructions.
+ */
+export function agentChatPersonaPrompt(sessionId: string): string | undefined {
+  const row = getDatabase()
+    .prepare(
+      `select a.name, a.role, a.instructions from agent_sessions s
+       join agents a on a.id = s.agent_id
+       where s.id = ? and s.kind = 'chat'`,
+    )
+    .get(sessionId) as { name: string; role: string; instructions: string } | undefined;
+  if (!row || (!row.role.trim() && !row.instructions.trim())) return undefined;
+  const who = row.role.trim()
+    ? `You are ${row.name}, the ${row.role.trim()}.`
+    : `You are ${row.name}.`;
+  const body = row.instructions.trim();
+  return ["<agent_instructions>", who, ...(body ? [body] : []), "</agent_instructions>"].join("\n");
 }

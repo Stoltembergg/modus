@@ -940,6 +940,16 @@ export const agentsArchiveSchema = z.object({ id: agentIdString, archived: z.boo
 
 export const agentsIdSchema = z.object({ id: agentIdString }).strict();
 
+export const agentsGenerateProfileSchema = z
+  .object({
+    groupId: agentIdString,
+    modelId: z.string().trim().min(1).max(256),
+    name: agentFields.name,
+    description: z.string().trim().max(500).optional(),
+    agentId: agentIdString.optional(),
+  })
+  .strict();
+
 /* ── Agent Groups (group:*) ─────────────────────────────────────────────── */
 
 const groupIdString = nonEmptyString.max(128);

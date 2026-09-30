@@ -28,6 +28,9 @@ export type AgentGroupMember = {
   agentRole: string;
   /** The agent is archived: still a member, never woken. */
   archived?: true;
+  /** The agent's avatar (A3); the renderer falls back to agentAvatarForId(agentId). */
+  avatarFace?: AgentAvatarFace;
+  avatarColor?: AgentAvatarColor;
   joinedAt: string;
 };
 
@@ -104,6 +107,29 @@ export type NewGroupAgentInput = CreateAgentInput & { templateId?: string };
 
 /** `agents:create` payload: the agent joins `groupId` (its only group). */
 export type CreateGroupAgentInput = NewGroupAgentInput & { groupId: string };
+
+/**
+ * `agents:generate-profile` (A3): one LLM call to `modelId` for a custom
+ * agent's `{ role, instructions }`. The other members' roles of `groupId`
+ * (minus `agentId`, when regenerating an existing agent) are sent so the new
+ * role complements them.
+ */
+export type GenerateAgentProfileInput = {
+  groupId: string;
+  modelId: string;
+  name: string;
+  /** "What should it help with?" (optional, short). */
+  description?: string;
+  agentId?: string;
+};
+
+/** The generated profile; `generated: false` is the fallback (with `warning`). */
+export type GeneratedAgentProfile = {
+  role: string;
+  instructions: string;
+  generated: boolean;
+  warning?: string;
+};
 
 /** `agents:update` payload: only the given fields change; null clears model / Project. */
 export type UpdateAgentInput = Partial<CreateAgentInput>;

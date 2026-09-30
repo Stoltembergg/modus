@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { agentAvatarForId } from "../../shared/agent-templates";
 import type {
+  AgentAvatarColor,
+  AgentAvatarFace,
   AgentGroupInfo,
   AgentGroupMember,
   AgentGroupMode,
@@ -81,6 +83,8 @@ type MemberRow = {
   agent_name: string;
   agent_role: string;
   agent_archived_at: string | null;
+  agent_avatar_face: AgentAvatarFace;
+  agent_avatar_color: AgentAvatarColor;
 };
 
 type MessageRow = {
@@ -123,7 +127,8 @@ type DecisionRow = {
 const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at, updated_at";
 /** Member rows joined with their agent (`from agent_group_members m join agents a`). */
 const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.joined_at,
-    a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at
+    a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at,
+    a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, created_at`;
@@ -152,6 +157,8 @@ function toMember(row: MemberRow): AgentGroupMember {
     name: row.agent_name,
     agentRole: row.agent_role,
     ...(row.agent_archived_at !== null ? { archived: true as const } : {}),
+    avatarFace: row.agent_avatar_face,
+    avatarColor: row.agent_avatar_color,
     joinedAt: row.joined_at,
   };
 }
@@ -212,13 +219,44 @@ function toDecision(row: DecisionRow): GroupDecision {
   };
 }
 
+/*
+ * Live membership lines (A3): "X joined as <role>" / "X left the group" reach
+ * the renderer through the same `group.message` broadcast as room messages.
+ * Lines posted inside a transaction are held until it commits (a rollback
+ * drops them), so the renderer never sees a line that was not saved.
+ */
+let membershipSink: ((message: GroupMessage) => void) | undefined;
+let pendingMembershipMessages: GroupMessage[] | undefined;
+
+/** Where committed membership lines go (the app wires the group event broadcast). */
+export function setGroupMembershipMessageSink(
+  sink: ((message: GroupMessage) => void) | undefined,
+): void {
+  membershipSink = sink;
+}
+
+function publishMembershipMessages(messages: readonly GroupMessage[]): void {
+  for (const message of messages) {
+    try {
+      membershipSink?.(message);
+    } catch (error) {
+      console.warn("[modus] membership event broadcast failed:", error);
+    }
+  }
+}
+
 function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
   db.exec("begin");
+  pendingMembershipMessages = [];
   try {
     const result = fn();
     db.exec("commit");
+    const committed = pendingMembershipMessages;
+    pendingMembershipMessages = undefined;
+    publishMembershipMessages(committed);
     return result;
   } catch (error) {
+    pendingMembershipMessages = undefined;
     db.exec("rollback");
     throw error;
   }
@@ -505,9 +543,51 @@ export function throwCountError(code: "group-min-members" | "group-max-members" 
   }
 }
 
-/** Appends a membership status line (the caller owns the transaction). */
+/**
+ * Appends a membership status line (the caller owns the transaction); it is
+ * broadcast live once the transaction commits.
+ */
 export function postMembershipEvent(groupId: string, body: string): void {
-  appendGroupMessage({ groupId, authorKind: "system", kind: "status", body });
+  const message = appendGroupMessage({ groupId, authorKind: "system", kind: "status", body });
+  if (pendingMembershipMessages) pendingMembershipMessages.push(message);
+  else publishMembershipMessages([message]);
+}
+
+/** The 1:1 chat session ids of these agents (A3; kind 'chat', linked by agent_id). */
+export function agentChatSessionIds(agentIds: readonly string[]): string[] {
+  const select = getDatabase().prepare(
+    "select id from agent_sessions where agent_id = ? and kind = 'chat'",
+  );
+  return agentIds.flatMap((agentId) =>
+    (select.all(agentId) as Array<{ id: string }>).map((row) => row.id),
+  );
+}
+
+/**
+ * The agent's 1:1 chat (A3): a normal `kind='chat'` session in its group's
+ * Project (cwd = the Project root), linked by `agent_id` and made on first
+ * open. The existing one is returned as is. A group without a Project cannot
+ * make one (`group-project-required`); its agents are still listed.
+ */
+export function openAgentChatRow(agentId: string): string {
+  const db = getDatabase();
+  const existing = db
+    .prepare("select id from agent_sessions where agent_id = ? and kind = 'chat'")
+    .get(agentId) as { id: string } | undefined;
+  if (existing) return existing.id;
+  const agent = requireAgentRef(agentId);
+  if (agent.group_id === null) {
+    throw new GroupStoreError("not-a-member", `Agent ${agentId} has no group.`);
+  }
+  const project = requireGroupProject(requireGroupRow(agent.group_id).workspace_id);
+  const sessionId = randomUUID();
+  const now = new Date().toISOString();
+  db.prepare(
+    `insert into agent_sessions
+       (id, workspace_id, title, cwd, status, runtime, model, kind, agent_id, created_at, updated_at)
+     values (?, ?, ?, ?, 'idle', 'pi-sdk', ?, 'chat', ?, ?, ?)`,
+  ).run(sessionId, project.id, agent.name, project.root, agent.model_id, agentId, now, now);
+  return sessionId;
 }
 
 /**
@@ -691,35 +771,40 @@ export function addAgentToGroup(input: {
  * NON-transactional: removing a member IS deleting its agent (one group per
  * agent). Refused with `group-min-members` when only 2 are left (unless
  * `checkMinimum` is false: update-members checks the target count once);
- * then the member-removal rules, the agent row and its room session row, and
- * "X left the group". The caller stops the session's runtime.
+ * then the member-removal rules, the agent row and "X left the group". The
+ * room session and the agent's 1:1 chat (A3) are NOT deleted here: they stay
+ * (hidden / unlinked) so that, after the commit, the caller tears each tree
+ * down with its subagents, runtimes and checkpoints (deleteAgentSessionTree,
+ * see agents/agent-teardown). Returns those session ids (room session first,
+ * then the 1:1 chat; [] when the session was not a member).
  */
 export function removeAgentFromGroupRows(
   groupId: string,
   sessionId: string,
   checkMinimum = true,
-): boolean {
+): string[] {
   const member = listAgentGroupMembers(groupId).find((row) => row.sessionId === sessionId);
-  if (!member) return false;
+  if (!member) return [];
   if (checkMinimum) {
     const count = countGroupMembers(groupId);
     requireMemberCount(count, count - 1);
   }
+  const chatIds = agentChatSessionIds([member.agentId]);
   detachMemberRows(groupId, sessionId);
-  const db = getDatabase();
-  db.prepare("delete from agents where id = ?").run(member.agentId);
-  db.prepare("delete from agent_sessions where id = ? and kind = 'group_member'").run(sessionId);
+  // agent_sessions.agent_id is ON DELETE SET NULL: the 1:1 chat is unlinked.
+  getDatabase().prepare("delete from agents where id = ?").run(member.agentId);
   postMembershipEvent(groupId, GROUP_MEMBERSHIP_TEXT.left(member.name));
   touchGroup(groupId);
-  return true;
+  return [sessionId, ...chatIds];
 }
 
-/** removeAgentFromGroupRows in its own transaction (IPC `group:remove-member`). */
-export function removeAgentFromGroup(groupId: string, sessionId: string): void {
+/**
+ * removeAgentFromGroupRows in its own transaction (IPC `group:remove-member`).
+ * Returns the removed session ids (room session and 1:1 chat).
+ */
+export function removeAgentFromGroup(groupId: string, sessionId: string): string[] {
   requireGroupRow(groupId);
-  withGroupTransaction(() => {
-    removeAgentFromGroupRows(groupId, sessionId);
-  });
+  return withGroupTransaction(() => removeAgentFromGroupRows(groupId, sessionId));
 }
 
 /**
@@ -741,6 +826,11 @@ export function setAgentGroupWorkspace(
       `update agent_sessions set workspace_id = ?, cwd = ?
        where kind = 'group_member'
          and id in (select session_id from agent_group_members where group_id = ?)`,
+    ).run(project.id, project.root, groupId);
+    // The agents' 1:1 chats (A3) live in the group's Project too.
+    db.prepare(
+      `update agent_sessions set workspace_id = ?, cwd = ?
+       where kind = 'chat' and agent_id in (select id from agents where group_id = ?)`,
     ).run(project.id, project.root, groupId);
     db.prepare("update agent_groups set workspace_id = ?, updated_at = ? where id = ?").run(
       project.id,
@@ -831,21 +921,22 @@ export function setAgentGroupLead(groupId: string, sessionId: string | null): Ag
 
 /**
  * Deletes the group and (via cascade) its agents (one group per agent),
- * members, messages, tasks and decisions, plus the members' hidden room
- * sessions, in one transaction. Returns those session ids: the caller stops
- * their runtime (deleteAgentSessionTree tolerates the missing record).
+ * members, messages, tasks and decisions, in one transaction. The members'
+ * hidden room sessions and the agents' 1:1 chats (A3) stay until the caller
+ * tears each tree down after the commit (agents/agent-teardown), with the
+ * records still there for subagents and checkpoints. Returns those ids.
  */
 export function deleteAgentGroup(groupId: string): string[] {
   const db = getDatabase();
   return inTransaction(db, () => {
-    const sessionIds = listAgentGroupMembers(groupId).map((member) => member.sessionId);
+    const members = listAgentGroupMembers(groupId);
+    const sessionIds = members.map((member) => member.sessionId);
+    const chatIds = agentChatSessionIds(members.map((member) => member.agentId));
     restoreMemberWorktreeCwdRows(groupId);
-    // Cascades: its agents (agents.group_id), members, messages, tasks, decisions.
+    // Cascades: its agents (agents.group_id), members, messages, tasks, decisions;
+    // the 1:1 chats are unlinked (agent_id set null), not deleted.
     db.prepare("delete from agent_groups where id = ?").run(groupId);
-    // Their hidden room sessions go in the same step: nothing is left orphaned.
-    const drop = db.prepare("delete from agent_sessions where id = ? and kind = 'group_member'");
-    for (const id of sessionIds) drop.run(id);
-    return sessionIds;
+    return [...sessionIds, ...chatIds];
   });
 }
 

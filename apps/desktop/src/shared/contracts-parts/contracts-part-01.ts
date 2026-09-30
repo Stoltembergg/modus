@@ -111,6 +111,8 @@ export type AgentSessionInfo = {
   archivedAt?: string;
   /** Set only for an agent's hidden group room session (never listed as a chat). */
   kind?: "group_member";
+  /** Set on an agent's 1:1 chat (A3): a normal chat in its group's Project. */
+  agentId?: string;
   createdAt: string;
   updatedAt: string;
 };

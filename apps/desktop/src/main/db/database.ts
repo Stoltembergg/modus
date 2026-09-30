@@ -490,6 +490,13 @@ export function migrateDatabase(db: DatabaseSync): void {
   migrateGroupMembersToAgents(db);
   migrateMembershipByAgent(db);
   migrateAgentsToOneGroup(db);
+  // A3: an agent's 1:1 chat is a normal 'chat' session in its group's Project,
+  // linked by agent_id (at most one per agent, made on first open). Deleting
+  // the agent (with its group) only unlinks the row: the caller then runs the
+  // full session teardown (runtime, subagents, checkpoints) after the commit.
+  addColumn(db, "agent_sessions", "agent_id", "text references agents(id) on delete set null");
+  db.exec(`create unique index if not exists idx_agent_sessions_agent_chat
+    on agent_sessions(agent_id) where agent_id is not null`);
 }
 
 /**

@@ -147,3 +147,19 @@ export function agentAvatarForId(id: string): {
       ] ?? "blue",
   };
 }
+
+/*
+ * Generated role and instructions (A3): a custom agent created with both
+ * empty gets `{ role, instructions }` from one LLM call to its model. On any
+ * failure the dialog falls back to these defaults and shows the warning. The
+ * result is saved once; it is never regenerated per wake.
+ */
+export const AGENT_GENERATED_ROLE_MAX_CHARS = 40;
+export const AGENT_GENERATED_INSTRUCTIONS_MAX_CHARS = 1500;
+export const AGENT_FALLBACK_ROLE = "Generalist";
+export const AGENT_FALLBACK_INSTRUCTIONS = [
+  "You are a generalist member of this group. Help with whatever the group needs: read the request, ask one short question when something important is unclear, then do the work.",
+  "Keep changes small and safe, check your work (tests, a quick review of the diff), and report what you did, what you checked and what is left.",
+  "Leave specialised work to the member whose role fits it better, and say so in the room.",
+].join("\n\n");
+export const AGENT_GENERATION_WARNING = "Couldn't generate — using a default. You can edit it.";

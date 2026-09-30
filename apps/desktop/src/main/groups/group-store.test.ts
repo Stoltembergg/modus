@@ -1334,9 +1334,11 @@ describe("deletion semantics", () => {
     ]) {
       expect(countRows(table, "group_id", group.id)).toBe(0);
     }
-    // One group per agent (A2): the group takes its agents and their hidden
-    // room sessions with it, in the same transaction (the caller then stops
-    // their runtime). Nothing is left orphaned.
+    // One group per agent (A2): the group takes its agents with it; their hidden
+    // room sessions are detached and returned, and the caller tears each tree
+    // down after the commit (agents/agent-teardown), which ends with the row.
+    expect(getAgentSession(a)?.kind).toBe("group_member");
+    for (const id of [a, b]) deleteAgentSession(id);
     expect(getAgentSession(a)).toBeUndefined();
     expect(getAgentSession(b)).toBeUndefined();
     expect(countRows("agents", "group_id", group.id)).toBe(0);

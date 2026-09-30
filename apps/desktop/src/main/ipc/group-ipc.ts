@@ -42,18 +42,21 @@ export type GroupIpcService = {
   /** Whether `modelId` belongs to a configured provider (the agent model rule). */
   isModelAvailable(modelId: string): boolean;
   renameAgentGroup(groupId: string, name: string): unknown;
-  deleteAgentGroup(groupId: string): void;
+  /** Resolves once the sessions are torn down (after the store commit). */
+  deleteAgentGroup(groupId: string): void | Promise<void>;
   /** Adds an ungrouped (legacy) agent; new agents join with `agents:create`. */
   addAgentGroupMember(input: { groupId: string; agentId: string; role?: string }): unknown;
   /** Removing a member deletes its agent (`group-min-members` when 2 are left). */
-  removeAgentGroupMember(groupId: string, sessionId: string): void;
+  removeAgentGroupMember(groupId: string, sessionId: string): void | Promise<void>;
   setAgentGroupLead(groupId: string, sessionId: string | null): unknown;
   /** The room menu's "Coordinator mode" toggle (PR 7). */
   setAgentGroupMode(groupId: string, mode: AgentGroupMode): unknown;
   /** Moves the group (and its room sessions) to another Project; never to none. */
   setAgentGroupWorkspace(groupId: string, workspaceId: string | null): unknown;
   /** "Manage members": adds, removes and lead in ONE transaction (final-state rules). */
-  updateAgentGroupMembers(input: UpdateAgentGroupMembersInput): AgentGroupWithMembers;
+  updateAgentGroupMembers(
+    input: UpdateAgentGroupMembersInput,
+  ): AgentGroupWithMembers | Promise<AgentGroupWithMembers>;
   listGroupTasks(groupId: string): GroupTask[];
   /** The room's "Cancel task" (the only path to `cancelled`). */
   cancelGroupTask(taskId: string): GroupTask;
@@ -183,8 +186,7 @@ export function registerGroupIpcHandlers(
   ipc.handle(IPC_CHANNELS.groupDelete, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupIdInputSchema, input, IPC_CHANNELS.groupDelete);
-    service.deleteAgentGroup(parsed.id);
-    return list();
+    return Promise.resolve(service.deleteAgentGroup(parsed.id)).then(list);
   });
 
   ipc.handle(IPC_CHANNELS.groupAddMember, (event, input) => {
@@ -207,8 +209,9 @@ export function registerGroupIpcHandlers(
     if (group?.members.some((member) => member.sessionId === parsed.sessionId)) {
       requireMemberCount(group.members.length, group.members.length - 1);
     }
-    service.removeAgentGroupMember(parsed.groupId, parsed.sessionId);
-    return list();
+    return Promise.resolve(service.removeAgentGroupMember(parsed.groupId, parsed.sessionId)).then(
+      list,
+    );
   });
 
   ipc.handle(IPC_CHANNELS.groupUpdateMembers, (event, input) => {
@@ -222,13 +225,13 @@ export function registerGroupIpcHandlers(
       );
     }
     for (const member of parsed.add) requireAgentModel(service.isModelAvailable, member);
-    service.updateAgentGroupMembers({
+    const done = service.updateAgentGroupMembers({
       groupId: parsed.groupId,
       add: parsed.add.map((member) => definedMemberFields(member)),
       removeAgentIds: parsed.removeAgentIds,
       lead: parsed.lead,
     });
-    return list();
+    return Promise.resolve(done).then(list);
   });
 
   // The room's task panel: list a group's tasks; "Cancel task" returns the task.

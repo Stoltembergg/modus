@@ -22,7 +22,9 @@ const {
   setAgentGroupMode,
   updateAgentGroupMembers,
 } = await import("../../groups/group-store");
-const { getAgentSession, setAgentSessionArchived } = await import("../agent-store");
+const { deleteAgentSession, getAgentSession, setAgentSessionArchived } = await import(
+  "../agent-store"
+);
 const {
   registerGroupTools,
   runGroupTool,
@@ -286,9 +288,13 @@ describe("group_start_worktree", () => {
     await startMemberWorktree(deleted.a);
     await startMemberWorktree({ sessionId: deleted.beta, groupId: deleted.group.id });
     const kept = [deleted.alpha, deleted.beta].map((id) => getAgentSession(id)?.subagentWorktree);
-    deleteAgentGroup(deleted.group.id);
+    const detached = deleteAgentGroup(deleted.group.id);
     for (const [index, id] of [deleted.alpha, deleted.beta].entries()) {
-      // The room sessions go with the group (A2); the worktree and branch stay on disk.
+      // The room sessions are detached with their cwd back on the root; the
+      // caller's teardown then deletes them. The worktree and branch stay on disk.
+      expect(detached).toContain(id);
+      expect(getAgentSession(id)?.cwd).toBe(deleted.root);
+      deleteAgentSession(id);
       expect(getAgentSession(id)).toBeUndefined();
       expect(existsSync(kept[index]?.path ?? "")).toBe(true);
       expect(git(deleted.root, "rev-parse", "--verify", kept[index]?.branch ?? "")).not.toBe("");

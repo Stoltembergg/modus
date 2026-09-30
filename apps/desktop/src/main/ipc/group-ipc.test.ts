@@ -172,14 +172,14 @@ describe("group IPC", () => {
         handlers.get("group:set-mode")?.(trusted, { groupId: "g-1", mode: "coordinator" }),
       ).toEqual([GROUP]);
       expect(service.setAgentGroupMode).toHaveBeenCalledWith("g-1", "coordinator");
-      expect(
+      await expect(
         handlers.get("group:update-members")?.(trusted, {
           groupId: "g-1",
           add: [agentSpec("Cy"), { ...agentSpec("Di"), role: "verify" }],
           removeAgentIds: [],
           lead: { name: "Cy" },
         }),
-      ).toEqual([GROUP]);
+      ).resolves.toEqual([GROUP]);
       expect(service.updateAgentGroupMembers).toHaveBeenCalledWith({
         groupId: "g-1",
         add: [agentSpec("Cy"), { ...agentSpec("Di"), role: "verify" }],
@@ -400,11 +400,11 @@ describe("group IPC", () => {
       );
       expect(update({ add: [{ name: "Cy" }] })).toThrow(/^\[group-error:agent-model-required\] /);
       // Replace both members at once: add 2 new, remove the 2 old, lead a new one.
-      const listed = update({
+      const listed = (await update({
         add: [agentSpec("Cy"), agentSpec("Di")],
         removeAgentIds: oldIds,
         lead: { name: "Di" },
-      })() as AgentGroupWithMembers[];
+      })()) as AgentGroupWithMembers[];
       const after = listed.find((row) => row.id === group.id);
       expect(after?.members.map((member) => member.name)).toEqual(["Cy", "Di"]);
       expect(after?.leadSessionId).toBe(after?.members[1]?.sessionId);

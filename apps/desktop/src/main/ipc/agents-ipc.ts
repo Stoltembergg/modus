@@ -1,10 +1,18 @@
-import type { AgentInfo, CreateGroupAgentInput, UpdateAgentInput } from "../../shared/contracts";
+import type {
+  AgentInfo,
+  AgentSessionInfo,
+  CreateGroupAgentInput,
+  GenerateAgentProfileInput,
+  GeneratedAgentProfile,
+  UpdateAgentInput,
+} from "../../shared/contracts";
 import { requireAgentModel } from "./agent-model-rule";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
 import {
   agentsArchiveSchema,
   agentsCreateSchema,
+  agentsGenerateProfileSchema,
   agentsIdSchema,
   agentsUpdateSchema,
   parseIpcInput,
@@ -22,7 +30,12 @@ export type AgentsIpcService = {
   updateAgent(agentId: string, input: UpdateAgentInput): unknown;
   setAgentArchived(agentId: string, archived: boolean): unknown;
   /** Same operation as removing the member: `group-min-members` when 2 are left. */
-  deleteAgent(agentId: string): void;
+  /** Resolves once the agent's sessions are torn down (after the store commit). */
+  deleteAgent(agentId: string): void | Promise<void>;
+  /** The agent's 1:1 chat, made on first open (`group-project-required` without a Project). */
+  openAgentChat(agentId: string): AgentSessionInfo;
+  /** Role + instructions from the chosen model; never rejects (falls back instead). */
+  generateAgentProfile(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
 };
 
 type HandlerRegistration = {
@@ -105,10 +118,35 @@ export function registerAgentsIpcHandlers(
     return list();
   });
 
+  ipc.handle(IPC_CHANNELS.agentsOpenChat, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(agentsIdSchema, input, IPC_CHANNELS.agentsOpenChat);
+    return service.openAgentChat(parsed.id);
+  });
+
+  // Only a custom agent needs this, so its model rule applies (a model of a
+  // configured provider) before any call is made.
+  ipc.handle(IPC_CHANNELS.agentsGenerateProfile, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      agentsGenerateProfileSchema,
+      input,
+      IPC_CHANNELS.agentsGenerateProfile,
+    );
+    requireAgentModel(service.isModelAvailable, { modelId: parsed.modelId });
+    return service.generateAgentProfile({
+      groupId: parsed.groupId,
+      modelId: parsed.modelId,
+      name: parsed.name,
+      ...(parsed.description ? { description: parsed.description } : {}),
+      ...(parsed.agentId ? { agentId: parsed.agentId } : {}),
+    });
+  });
+
   ipc.handle(IPC_CHANNELS.agentsDelete, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(agentsIdSchema, input, IPC_CHANNELS.agentsDelete);
-    service.deleteAgent(parsed.id);
-    return list();
+    // The store call throws synchronously (error format kept); then await the teardown.
+    return Promise.resolve(service.deleteAgent(parsed.id)).then(list);
   });
 }
