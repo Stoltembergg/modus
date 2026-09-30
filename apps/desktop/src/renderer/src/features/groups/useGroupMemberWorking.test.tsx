@@ -2,23 +2,17 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, GroupMemberStates } from "../../../../shared/contracts";
-import { GroupWorkingStatus } from "./GroupWorkingStatus";
+import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
 const members = [{ sessionId: "s-lead", title: "Planner" }];
 const labels = memberLabels(members);
-const avatars = new Map([
+const avatars = new Map<string, WorkingMemberAvatar>([
   [
     "s-lead",
-    {
-      agentId: "a-lead",
-      face: "happy" as const,
-      color: "violet",
-      shape: "circle" as const,
-      archived: false,
-    },
+    { agentId: "a-lead", face: "happy", color: "violet", shape: "circle", archived: false },
   ],
 ]);
 
