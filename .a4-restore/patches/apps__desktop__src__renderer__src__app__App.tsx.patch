@@ -1,0 +1,39 @@
+diff --git a/apps/desktop/src/renderer/src/app/App.tsx b/apps/desktop/src/renderer/src/app/App.tsx
+index b710c43..5edb9e0 100644
+--- a/apps/desktop/src/renderer/src/app/App.tsx
++++ b/apps/desktop/src/renderer/src/app/App.tsx
+@@ -82,6 +82,7 @@ import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
+ import { BlockedBanner, GroupRoom } from "../features/groups/GroupRoom";
+ import { describeGroupError } from "../features/groups/groupErrors";
+ import { agentChatBlocked } from "../features/groups/groupSidebarModel";
++import type { NewGroupServices } from "../features/groups/NewGroupModal";
+ import {
+   groupActivityState,
+   isGroupRunning,
+@@ -844,6 +845,18 @@ export function App() {
+     await refreshGroups();
+   }
+ 
++  /** The create-group modal (A4): existing IPC only (no new channel). */
++  const newGroupServices: NewGroupServices = {
++    listAgents: () => window.modus.agents.list(),
++    addFolder: async () => {
++      // The same "Add folder…" flow as the sidebar: pick a folder, it becomes a Project.
++      const workspace = await window.modus.workspace.open();
++      if (workspace) setWorkspaces(await window.modus.workspace.list());
++      return workspace;
++    },
++    generateProfile: (input) => window.modus.agents.generateProfile(input),
++  };
++
+   async function updateGroupMembers(groupId: string, change: GroupMembersChange): Promise<void> {
+     // ONE all-or-nothing call (adds, removes and lead in one transaction); errors
+     // propagate so the "Manage members" dialog can show them and stay open.
+@@ -1230,6 +1243,7 @@ export function App() {
+                           activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
+                         }
+                         onCreateGroup={createGroup}
++                        newGroupServices={newGroupServices}
+                         onUpdateGroupMembers={updateGroupMembers}
+                         onRenameGroup={(id, name) =>
+                           void runGroupAction(() => window.modus.group.rename({ id, name }))

@@ -1,0 +1,23 @@
+name: a4-assemble
+on:
+  push:
+    branches: ["cursor/agents-create-modal-a79e"]
+    paths: [".a4-restore/TRIGGER"]
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/agents-create-modal-a79e
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19"
+      - name: Assemble A4 files
+        run: node .a4-restore/assemble.mjs
+      - name: Push assembled commit
+        run: |
+          git push origin HEAD:cursor/agents-create-modal-a79e
