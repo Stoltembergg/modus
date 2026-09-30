@@ -10,6 +10,7 @@ import {
   groupBlockedErrorCode,
   groupBlockedReason,
 } from "../../../shared/group-blocked";
+import { formatGroupCollabStatus } from "../../../shared/group-collab-status";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
 import type { ToolProfileName } from "../../../shared/tools";
 import {
@@ -26,6 +27,7 @@ import {
 import {
   assignGroupTask,
   claimGroupTask,
+  completeGroupTaskForAgreement,
   createMemberGroupTask,
   fillMemberTaskBranches,
   getAgentGroup,
@@ -68,6 +70,10 @@ export const GROUP_REVIEW_TASK_TOOL = "group_review_task";
 export const GROUP_START_WORKTREE_TOOL = "group_start_worktree";
 export const GROUP_RECORD_DECISION_TOOL = "group_record_decision";
 export const GROUP_ASSIGN_TASK_TOOL = "group_assign_task";
+export const GROUP_PROPOSE_AGREEMENT_TOOL = "group_propose_agreement";
+export const GROUP_AGREE_TOOL = "group_agree";
+export const GROUP_BLOCK_TOOL = "group_block";
+export const GROUP_HANDOFF_TOOL = "group_handoff";
 
 export const GROUP_TOOL_NAMES = [
   GROUP_READ_MESSAGES_TOOL,
@@ -80,6 +86,10 @@ export const GROUP_TOOL_NAMES = [
   GROUP_START_WORKTREE_TOOL,
   GROUP_RECORD_DECISION_TOOL,
   GROUP_ASSIGN_TASK_TOOL,
+  GROUP_PROPOSE_AGREEMENT_TOOL,
+  GROUP_AGREE_TOOL,
+  GROUP_BLOCK_TOOL,
+  GROUP_HANDOFF_TOOL,
 ] as const;
 
 export type GroupToolName = (typeof GROUP_TOOL_NAMES)[number];
@@ -132,6 +142,10 @@ export type GroupToolParams = {
   group_start_worktree: Record<string, never>;
   group_record_decision: { text: string };
   group_assign_task: { taskId: string; memberId: string; note?: string };
+  group_propose_agreement: { summary: string; taskId?: string; confirmer?: string };
+  group_agree: { note?: string; taskId?: string; decision?: string };
+  group_block: { reason: string; taskId?: string; returnTo?: string };
+  group_handoff: { memberId: string; objective: string; taskTitle?: string };
 };
 
 class ToolInputError extends Error {
@@ -443,6 +457,124 @@ export function runGroupTool<N extends SyncGroupToolName>(
         });
         return `${previousOwnerSessionId ? "Reassigned" : "Assigned"} ${formatTask(members, task)}`;
       }
+      case "group_propose_agreement": {
+        const input = params as GroupToolParams["group_propose_agreement"];
+        const summary = input.summary.trim();
+        if (!summary) {
+          throw new ToolInputError("invalid-value", "summary is required.");
+        }
+        let taskLine = "";
+        if (input.taskId) {
+          if (input.confirmer) {
+            const confirmer = resolveMember(members, input.confirmer);
+            const task = requestGroupTaskReview(groupId, input.taskId, actor, confirmer);
+            taskWakeSink?.({
+              groupId,
+              actorSessionId: actor,
+              targetSessionId: confirmer,
+              body: formatGroupCollabStatus({ kind: "proposed", summary }),
+            });
+            taskLine = ` Task ${formatTask(members, task)}.`;
+          } else {
+            const tasks = listGroupTasks(groupId);
+            const task = tasks.find((item) => item.id === input.taskId);
+            if (!task) {
+              throw new ToolInputError("invalid-value", `Unknown task ${input.taskId}.`);
+            }
+            taskWakeSink?.({
+              groupId,
+              actorSessionId: actor,
+              body: formatGroupCollabStatus({ kind: "proposed", summary }),
+              wake: false,
+            });
+            taskLine = ` Task ${formatTask(members, task)}.`;
+          }
+        } else {
+          taskWakeSink?.({
+            groupId,
+            actorSessionId: actor,
+            body: formatGroupCollabStatus({ kind: "proposed", summary }),
+            wake: false,
+          });
+        }
+        return `Proposed agreement: ${summary}.${taskLine}`;
+      }
+      case "group_agree": {
+        const input = params as GroupToolParams["group_agree"];
+        const note = input.note?.trim().slice(0, MAX_NOTE_CHARS) ?? "";
+        const decisionText = (input.decision?.trim() || note || "Agreed").slice(0, MAX_NOTE_CHARS);
+        let taskLine = "";
+        if (input.taskId) {
+          const task = completeGroupTaskForAgreement(groupId, input.taskId, actor);
+          taskLine = ` Closed ${formatTask(members, task)}.`;
+        }
+        const decision = recordGroupDecision({
+          groupId,
+          text: decisionText,
+          authorSessionId: actor,
+        });
+        taskWakeSink?.({
+          groupId,
+          actorSessionId: actor,
+          body: formatGroupCollabStatus({ kind: "agreed", note }),
+          wake: false,
+        });
+        return `Agreed.${taskLine} Recorded decision ${decision.id}: ${decision.text}`;
+      }
+      case "group_block": {
+        const input = params as GroupToolParams["group_block"];
+        const reason = input.reason.trim();
+        if (!reason) {
+          throw new ToolInputError("invalid-value", "reason is required.");
+        }
+        const body = formatGroupCollabStatus({ kind: "blocked", reason });
+        const returnTo = input.returnTo ? resolveMember(members, input.returnTo) : undefined;
+        taskWakeSink?.({
+          groupId,
+          actorSessionId: actor,
+          body,
+          ...(returnTo ? { targetSessionId: returnTo } : { wake: false }),
+        });
+        const taskNote = input.taskId ? ` (task ${input.taskId})` : "";
+        return `Blocked${taskNote}: ${reason}`;
+      }
+      case "group_handoff": {
+        const input = params as GroupToolParams["group_handoff"];
+        const objective = input.objective.trim();
+        if (!objective) {
+          throw new ToolInputError("invalid-value", "objective is required.");
+        }
+        const target = resolveMember(members, input.memberId);
+        if (members.archived.has(target)) {
+          throw new ToolInputError(
+            "member-archived",
+            `${label(members, target)} is archived and cannot take handoffs.`,
+          );
+        }
+        const targetName = members.titles.get(target) ?? target;
+        let taskLine = "";
+        if (input.taskTitle?.trim()) {
+          const task = createMemberGroupTask({
+            groupId,
+            actorSessionId: actor,
+            title: input.taskTitle.trim(),
+            description: objective,
+          });
+          taskLine = ` Created ${formatTask(members, task)}.`;
+        }
+        const body = formatGroupCollabStatus({
+          kind: "handoff",
+          targetName,
+          objective,
+        });
+        taskWakeSink?.({
+          groupId,
+          actorSessionId: actor,
+          targetSessionId: target,
+          body,
+        });
+        return `Handed off to ${label(members, target)}: ${objective}.${taskLine}`;
+      }
       default:
         throw new ToolInputError("invalid-value", `Unknown group tool ${String(name)}.`);
     }
@@ -618,6 +750,50 @@ const schemas = {
     },
     { additionalProperties: false },
   ),
+  group_propose_agreement: Type.Object(
+    {
+      summary: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
+      taskId: Type.Optional(idParam),
+      confirmer: Type.Optional(
+        Type.String({ description: "Member who should confirm (title or session id)." }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  group_agree: Type.Object(
+    {
+      note: Type.Optional(Type.String({ maxLength: MAX_NOTE_CHARS })),
+      taskId: Type.Optional(idParam),
+      decision: Type.Optional(
+        Type.String({ description: "Decision text to persist (defaults to note / Agreed)." }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  group_block: Type.Object(
+    {
+      reason: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
+      taskId: Type.Optional(idParam),
+      returnTo: Type.Optional(
+        Type.String({ description: "Member to wake with the block (title or session id)." }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
+  group_handoff: Type.Object(
+    {
+      memberId: Type.String({ minLength: 1, description: "Next owner's title or session id." }),
+      objective: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
+      taskTitle: Type.Optional(
+        Type.String({
+          minLength: 1,
+          maxLength: 200,
+          description: "When set, creates an open group task for this handoff.",
+        }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
 } satisfies Record<GroupToolName, unknown>;
 
 const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; snippet: string }> =
@@ -681,6 +857,30 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
       snippet:
         "group_assign_task(taskId, memberId, note?) — as coordinator, hand a task to a member.",
     },
+    group_propose_agreement: {
+      label: "Propose agreement",
+      description:
+        'Post a "Proposed · …" status in the room. Optionally attach a task and wake a confirmer (moves your in_progress task to in_review).',
+      snippet: "group_propose_agreement(summary, taskId?, confirmer?) — propose closing the loop.",
+    },
+    group_agree: {
+      label: "Agree",
+      description:
+        'Post "Agreed" in the room, record a group decision, and optionally mark a task done.',
+      snippet: "group_agree(note?, taskId?, decision?) — agree and close the task/decision.",
+    },
+    group_block: {
+      label: "Block agreement",
+      description:
+        'Post "Blocked · …" in the room. Optionally wake the previous owner (returnTo) to fix gaps.',
+      snippet: "group_block(reason, taskId?, returnTo?) — block with a reason.",
+    },
+    group_handoff: {
+      label: "Handoff to member",
+      description:
+        'Post "Handoff → @Name · …", wake the next owner, and optionally create an open task for the work.',
+      snippet: "group_handoff(memberId, objective, taskTitle?) — hand work to the next owner.",
+    },
   };
 
 function toResult(text: string, terminate = false): AgentToolResult<{ text: string }> {
@@ -736,11 +936,16 @@ export function registerGroupTools(): void {
             ? {}
             : {
                 primaryArgKey:
-                  name === GROUP_RECORD_DECISION_TOOL
-                    ? "text"
-                    : name === GROUP_ASSIGN_TASK_TOOL
-                      ? "taskId"
-                      : "id",
+                  (
+                    {
+                      [GROUP_RECORD_DECISION_TOOL]: "text",
+                      [GROUP_ASSIGN_TASK_TOOL]: "taskId",
+                      [GROUP_PROPOSE_AGREEMENT_TOOL]: "summary",
+                      [GROUP_AGREE_TOOL]: "note",
+                      [GROUP_BLOCK_TOOL]: "reason",
+                      [GROUP_HANDOFF_TOOL]: "memberId",
+                    } as Partial<Record<GroupToolName, string>>
+                  )[name] ?? "id",
               }),
         },
       },

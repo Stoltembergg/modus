@@ -915,6 +915,28 @@ describe("coordinator mode", () => {
       setGroupTaskWakeSink(undefined);
     }
   });
+
+  it("P1b: silence with an open unowned task wakes the Lead after the no-next-owner nudge", async () => {
+    const { group, alpha, beta } = squad();
+    setAgentGroupMode(group.id, "coordinator");
+    createMemberGroupTask({ groupId: group.id, actorSessionId: alpha, title: "Parser" });
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta do the work" });
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Finished the draft." });
+    await flush();
+    const messages = room(group.id);
+    expect(messages.at(-2)).toMatchObject({
+      kind: "status",
+      authorSessionId: beta,
+      body: GROUP_STATUS_TEXT.noNextOwner,
+    });
+    expect(messages.at(-1)).toMatchObject({
+      kind: "status",
+      authorSessionId: beta,
+      body: 'Open task needs an owner: "Parser" — Lead, assign or @mention',
+    });
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+  });
 });
 
 /* ── intent gate: the question opens inside prompt(); the slot is released ── */

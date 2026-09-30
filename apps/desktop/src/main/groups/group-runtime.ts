@@ -780,6 +780,8 @@ export class GroupRuntime {
       // P0b: silence (no @mention, no Agreed/Blocked/Proposed/Ready) → nudge in the room.
       if (!chain.ended && needsNextOwnerNudge(text, reply.mentions.length)) {
         this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.noNextOwner);
+        // P1b: coordinator Lead wakes when an open/unowned task still needs an owner.
+        this.maybeRouteLeadForOpenTask(chain, wake);
       }
       return;
     }
@@ -804,6 +806,32 @@ export class GroupRuntime {
     this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.worktreeReady(branch));
     const trigger = getGroupMessage(wake.triggerMessageId);
     if (trigger) this.route(chain, trigger, [wake.sessionId], true);
+  }
+
+  /**
+   * P1b: after a no-next-owner nudge, if coordinator mode is on and an open
+   * unowned task remains, wake the Lead to assign/route it.
+   */
+  private maybeRouteLeadForOpenTask(chain: ChainState, wake: Wake): void {
+    const group = getAgentGroup(chain.groupId);
+    if (!group?.leadSessionId || !isCoordinatorModeActive(group)) return;
+    if (wake.sessionId === group.leadSessionId) return;
+    const open = listGroupTasks(group.id, { status: "open" }).filter(
+      (task) => !task.ownerSessionId,
+    );
+    if (open.length === 0) return;
+    const titles = open
+      .slice(0, 3)
+      .map((task) => `"${task.title}"`)
+      .join(", ");
+    const more = open.length > 3 ? ` (+${open.length - 3} more)` : "";
+    this.postMemberStatus(
+      chain,
+      wake,
+      `Open task needs an owner: ${titles}${more} — Lead, assign or @mention`,
+    );
+    const trigger = getGroupMessage(wake.triggerMessageId);
+    if (trigger) this.route(chain, trigger, [group.leadSessionId]);
   }
 
   /**
