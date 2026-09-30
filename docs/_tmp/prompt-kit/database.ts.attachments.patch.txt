@@ -1,0 +1,23 @@
+# Surgical patch for apps/desktop/src/main/db/database.ts
+# Insert after the agent_sessions unique index create in migrateDatabase():
+#
+#   // Group room Prompt Kit file upload: image + context payloads on user messages.
+#   addColumn(db, "group_messages", "attachments_json", "text");
+#   addColumn(db, "group_messages", "context_items_json", "text");
+#
+# local_blob after apply: dc48f2a0f5237140142fba212eab83bf5ae085df
+# remote_blob before:     b39b67d98f77d880c0fe02ee2171649ceced6471
+# delta: +211 bytes (3 lines)
+
+CONTEXT_BEFORE:
+  addColumn(db, "agent_sessions", "agent_id", "text references agents(id) on delete set null");
+  db.exec(`create unique index if not exists idx_agent_sessions_agent_chat
+    on agent_sessions(agent_id) where agent_id is not null`);
+
+INSERT:
+  // Group room Prompt Kit file upload: image + context payloads on user messages.
+  addColumn(db, "group_messages", "attachments_json", "text");
+  addColumn(db, "group_messages", "context_items_json", "text");
+
+CONTEXT_AFTER:
+}
