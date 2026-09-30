@@ -23,10 +23,12 @@ jobs:
           mkdir -p /tmp/natural-rebase
           cp docs/_tmp/nr-*.b64 /tmp/natural-rebase/
           git fetch origin main
-          git checkout -f origin/main -- .
+          # Wipe branch files, materialize main tip, then apply the rebased diff.
+          git rm -rf .
+          git checkout origin/main -- .
           cat /tmp/natural-rebase/nr-*.b64 | tr -d '\n' | base64 -d | gzip -dc > /tmp/natural.patch
           git apply /tmp/natural.patch
-          rm -rf docs/_tmp .github/workflows/apply-natural-groups-rebase.yml
+          rm -rf docs/_tmp
           git add -A
           git status --short
           git commit -m "feat(groups): natural presence + autonomous no-@ routing (rebased on main)"
