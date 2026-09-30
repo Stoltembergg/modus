@@ -5,6 +5,11 @@ import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
 import {
+  COLLAB_PIPELINE_APPROVAL,
+  COLLAB_PIPELINE_NEXT,
+  formatGroupKickoffDraft,
+} from "./groupKickoff";
+import {
   activeMentionQuery,
   type MentionMember,
   type MentionSuggestion,
@@ -54,10 +59,18 @@ export function GroupComposer({
   members,
   updatePending,
   onSend,
+  showKickoff = false,
+  seed,
+  onSeedConsumed,
 }: {
   members: readonly MentionMember[];
   updatePending: boolean;
   onSend(body: string): Promise<void>;
+  /** Empty room: show the guided Outcome + first-owner kickoff (P2). */
+  showKickoff?: boolean;
+  /** External insert (e.g. clickable Handoff card) — applied once then cleared. */
+  seed?: string | undefined;
+  onSeedConsumed?: (() => void) | undefined;
 }) {
   const [value, setValue] = useState("");
   const [caret, setCaret] = useState(0);
@@ -65,6 +78,8 @@ export function GroupComposer({
   const [highlight, setHighlight] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [kickoffOutcome, setKickoffOutcome] = useState("");
+  const [kickoffOwner, setKickoffOwner] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const memberStates = useGroupMemberStates();
   const labels = useMemo(() => memberLabels(members), [members]);
@@ -78,6 +93,24 @@ export function GroupComposer({
     }
     return waiting;
   }, [memberStates, members]);
+
+  useEffect(() => {
+    if (!seed) return;
+    setValue(seed);
+    setCaret(seed.length);
+    onSeedConsumed?.();
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(seed.length, seed.length);
+    });
+  }, [seed, onSeedConsumed]);
+
+  useEffect(() => {
+    if (!showKickoff || kickoffOwner || members.length === 0) return;
+    // Prefer a Planner-named member, else the first roster entry.
+    const planner = members.find((member) => /^planner$/i.test(member.title.trim()));
+    setKickoffOwner((planner ?? members[0])?.title ?? "");
+  }, [showKickoff, members, kickoffOwner]);
 
   const query = activeMentionQuery(value, caret);
   const suggestions =
@@ -132,6 +165,64 @@ export function GroupComposer({
       ) : null}
       <GroupMemberQuestions labels={labels} waitingSessionIds={waitingSessionIds} />
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
+      {showKickoff && !value.trim() ? (
+        <div
+          className="mb-2 space-y-2 rounded-xl border border-hairline bg-elevated/80 px-3 py-2.5"
+          data-testid="group-kickoff"
+        >
+          <p className="font-medium text-fg text-xs">Kick off the group</p>
+          <p className="text-2xs text-fg-faint">
+            Outcome + first owner — the room stays the source of truth.
+          </p>
+          <label className="block text-2xs text-fg-muted">
+            Outcome
+            <input
+              className="mt-1 h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none placeholder:text-fg-faint"
+              data-testid="group-kickoff-outcome"
+              onChange={(event) => setKickoffOutcome(event.currentTarget.value)}
+              placeholder="What should the group deliver?"
+              value={kickoffOutcome}
+            />
+          </label>
+          <label className="block text-2xs text-fg-muted">
+            First owner
+            <select
+              className="mt-1 h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none"
+              data-testid="group-kickoff-owner"
+              onChange={(event) => setKickoffOwner(event.currentTarget.value)}
+              value={kickoffOwner}
+            >
+              {members.map((member) => (
+                <option key={member.sessionId} value={member.title}>
+                  {member.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="rounded-lg bg-accent px-2.5 py-1.5 font-medium text-2xs text-white disabled:opacity-40"
+            data-testid="group-kickoff-insert"
+            disabled={!kickoffOwner.trim()}
+            onClick={() => {
+              const draft = formatGroupKickoffDraft({
+                outcome: kickoffOutcome,
+                firstOwner: kickoffOwner,
+                nextSteps: COLLAB_PIPELINE_NEXT,
+                approval: COLLAB_PIPELINE_APPROVAL,
+              });
+              setValue(draft);
+              setCaret(draft.length);
+              requestAnimationFrame(() => {
+                inputRef.current?.focus();
+                inputRef.current?.setSelectionRange(draft.length, draft.length);
+              });
+            }}
+            type="button"
+          >
+            Insert kickoff
+          </button>
+        </div>
+      ) : null}
       <div className="relative rounded-xl border border-composer-border bg-elevated">
         {open ? (
           <div

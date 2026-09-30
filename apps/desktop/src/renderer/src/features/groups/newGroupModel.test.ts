@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_TEMPLATES, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
+  applyCollabPipeline,
   copyMember,
   NEW_GROUP_DEFAULT_NAME,
   NEW_GROUP_HINTS,
@@ -122,5 +123,18 @@ describe("newGroupModel (A4)", () => {
       ],
       leadName: "Boss",
     });
+  });
+
+  it("applyCollabPipeline adds Planner → Builder → Reviewer without duplicating", () => {
+    let n = 0;
+    const nextKey = () => {
+      n += 1;
+      return `k${n}`;
+    };
+    const first = applyCollabPipeline(AGENT_TEMPLATES, [], nextKey);
+    expect(first.map((member) => member.templateId)).toEqual(["planner", "builder", "reviewer"]);
+    expect(first.map((member) => member.name)).toEqual(["Planner", "Builder", "Reviewer"]);
+    const again = applyCollabPipeline(AGENT_TEMPLATES, first, nextKey);
+    expect(again).toHaveLength(3);
   });
 });

@@ -51,11 +51,38 @@ describe("buildGroupLiveTurn", () => {
     ];
     const snap = buildGroupLiveTurn(events, "running");
     expect(snap.phase).toBe("Writing");
+    expect(snap.collapsed).toBe(false);
     expect(snap.presence.state).toBe("writing");
     expect(snap.thoughtPreview).toContain("Plan the toggle");
     expect(snap.tools).toEqual([{ id: "t1", name: "read", label: "Reading", done: true }]);
     expect(snap.writingPreview).toContain("hand off");
     expect(snap.lastEventAt).toBe(Date.parse("2026-01-01T00:00:04.000Z"));
+  });
+
+  it("collapses previews when run.completed arrives (final reply is in the transcript)", () => {
+    const events = [
+      ev(runStarted, "2026-01-01T00:00:00.000Z"),
+      ev(
+        { type: "thinking.delta", sessionId: "s", messageId: "m1", delta: "Plan the toggle" },
+        "2026-01-01T00:00:01.000Z",
+      ),
+      ev(
+        {
+          type: "message.delta",
+          sessionId: "s",
+          messageId: "m2",
+          delta: "I'll hand off to Builder",
+        },
+        "2026-01-01T00:00:02.000Z",
+      ),
+      ev({ type: "run.completed", sessionId: "s", runId: "r" }, "2026-01-01T00:00:03.000Z"),
+    ];
+    const snap = buildGroupLiveTurn(events, "running");
+    expect(snap.collapsed).toBe(true);
+    expect(snap.phase).toBe("Done");
+    expect(snap.thoughtPreview).toBe("");
+    expect(snap.tools).toEqual([]);
+    expect(snap.writingPreview).toBe("");
   });
 
   it("keeps open tools as not done and caps the list", () => {

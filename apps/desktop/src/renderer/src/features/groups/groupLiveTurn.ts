@@ -25,6 +25,11 @@ export type GroupLiveTurnSnapshot = {
   writingPreview: string;
   /** Epoch ms of the last event that updated this snapshot (0 if none). */
   lastEventAt: number;
+  /**
+   * True after `run.completed` (or failed/cancelled/blocked): hide writing
+   * previews so the fold collapses before the strip leaves the room.
+   */
+  collapsed: boolean;
   /** Semantic heartbeat (startedAt / lastProgressAt / activity). */
   presence: GroupSemanticPresence;
 };
@@ -47,7 +52,7 @@ function toolLabel(name: string): string {
 
 /**
  * Fold agent events into a compact live turn for the group room.
- * Mirrors ChatPane WorkFold data at a glance — no Timeline dependency.
+ * Semantic phase labels (N0) + collapse-on-complete (P0a).
  */
 export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
@@ -61,16 +66,17 @@ export function buildGroupLiveTurn(
       tools: [],
       writingPreview: "",
       lastEventAt: 0,
+      collapsed: false,
       presence,
     };
   }
-
-  const phase = presence.label;
 
   let thought = "";
   let writing = "";
   const tools = new Map<string, GroupLiveToolLine>();
   let lastEventAt = presence.lastProgressAt > 0 ? presence.lastProgressAt : 0;
+  let collapsed = false;
+  let terminalPhase: GroupMemberWorkingPhase | undefined;
 
   for (const item of events) {
     const { event } = item;
@@ -114,14 +120,45 @@ export function buildGroupLiveTurn(
         thought = "";
         writing = "";
         tools.clear();
+        collapsed = false;
+        terminalPhase = undefined;
+        break;
+      case "run.completed":
+        collapsed = true;
+        terminalPhase = "Done";
+        break;
+      case "run.failed":
+        collapsed = true;
+        terminalPhase = "Failed";
+        break;
+      case "run.cancelled":
+        collapsed = true;
+        terminalPhase = "Stopped";
+        break;
+      case "run.blocked":
+        collapsed = true;
+        terminalPhase = "Waiting for you";
         break;
       default:
         break;
     }
   }
 
+  const phase = terminalPhase ?? presence.label;
   const toolList = [...tools.values()];
   const recentTools = toolList.length > TOOLS_MAX ? toolList.slice(-TOOLS_MAX) : toolList;
+
+  if (collapsed) {
+    return {
+      phase,
+      thoughtPreview: "",
+      tools: [],
+      writingPreview: "",
+      lastEventAt: lastEventAt || presence.lastProgressAt,
+      collapsed: true,
+      presence,
+    };
+  }
 
   return {
     phase,
@@ -129,6 +166,7 @@ export function buildGroupLiveTurn(
     tools: recentTools,
     writingPreview: truncate(writing),
     lastEventAt: lastEventAt || presence.lastProgressAt,
+    collapsed: false,
     presence,
   };
 }

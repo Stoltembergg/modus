@@ -10,7 +10,7 @@ import {
 
 /**
  * Compact live turn under a group member: semantic phase + writing preview.
- * Tool spam stays out of the primary room (Activity); "Still working…" on silence.
+ * Tool spam stays out of the primary room (Activity); collapses on run end.
  */
 export function GroupMemberLiveTurn({
   mode,
@@ -31,14 +31,20 @@ export function GroupMemberLiveTurn({
   }, [mode]);
 
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
-  const still = live.presence
-    ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
-    : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS);
+  const still =
+    !live.collapsed &&
+    (live.presence
+      ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
+      : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS));
   const phaseLabel = still ? "Still working…" : String(live.phase);
-  const working = mode === "running";
+  const working = mode === "running" && !live.collapsed;
 
   return (
-    <div className="min-w-0 space-y-1" data-testid="group-member-live-turn">
+    <div
+      className="min-w-0 space-y-1"
+      data-collapsed={live.collapsed || undefined}
+      data-testid="group-member-live-turn"
+    >
       <div className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm">
         {working ? (
           <SessionStatusDot
@@ -49,7 +55,7 @@ export function GroupMemberLiveTurn({
         <span className="sr-only">{phaseLabel}</span>
         <ThinkingStates className="text-fg-subtle" label={phaseLabel} />
       </div>
-      {live.writingPreview ? (
+      {!live.collapsed && live.writingPreview ? (
         <p className="line-clamp-3 text-2xs text-fg-muted" data-testid="group-live-writing">
           {live.writingPreview}
         </p>

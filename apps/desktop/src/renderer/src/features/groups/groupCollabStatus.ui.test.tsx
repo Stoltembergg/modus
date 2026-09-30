@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageRow, splitTrailingCollabStatuses } from "./GroupMessageList";
 import { GroupStageChip } from "./GroupRoomHeader";
@@ -45,6 +45,37 @@ describe("GroupMessageRow collab lines", () => {
     );
     expect(screen.getByTestId("group-collab-status").textContent).toContain("Handoff");
     expect(screen.getByTestId("group-collab-status").textContent).toContain("Builder");
+    // Without onHandoffClick the status stays a non-interactive line.
+    expect(screen.getByTestId("group-collab-status").tagName).toBe("DIV");
+  });
+
+  it("handoff status is a button that reports the target when onHandoffClick is set", () => {
+    const onHandoffClick = vi.fn();
+    const message: GroupMessage = {
+      id: "m2",
+      groupId: "g-1",
+      authorKind: "agent",
+      authorSessionId: "s-lead",
+      kind: "message",
+      body: "Handoff → @Builder · toggle",
+      mentions: ["s-build"],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+    render(
+      <GroupMessageRow
+        labels={new Map([["s-lead", { title: "Planner" }]])}
+        members={[
+          { sessionId: "s-lead", title: "Planner" },
+          { sessionId: "s-build", title: "Builder" },
+        ]}
+        message={message}
+        onHandoffClick={onHandoffClick}
+      />,
+    );
+    const card = screen.getByTestId("group-collab-status");
+    expect(card.tagName).toBe("BUTTON");
+    fireEvent.click(card);
+    expect(onHandoffClick).toHaveBeenCalledWith("Builder");
   });
 });
 

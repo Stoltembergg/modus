@@ -86,6 +86,7 @@ export function GroupRoom({
   onOpenFile,
   onAddAgent,
 }: GroupRoomProps) {
+  const [composerSeed, setComposerSeed] = useState<string | undefined>();
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
@@ -180,6 +181,7 @@ export function GroupRoom({
           memberStates={memberStates}
           members={members}
           messages={messages}
+          onHandoffClick={(targetName) => setComposerSeed(`@${targetName} `)}
           onOpenFile={onOpenFile}
         />
         {blocked ? (
@@ -190,9 +192,12 @@ export function GroupRoom({
         ) : (
           <GroupComposer
             members={members}
+            onSeedConsumed={() => setComposerSeed(undefined)}
             onSend={async (body) => {
               await window.modus.group.postMessage({ groupId: group.id, body });
             }}
+            seed={composerSeed}
+            showKickoff={loaded && messages.length === 0}
             updatePending={updatePending}
           />
         )}
