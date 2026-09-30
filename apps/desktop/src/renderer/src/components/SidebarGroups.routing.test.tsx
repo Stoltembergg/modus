@@ -2,7 +2,11 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentGroupWithMembers, AgentSessionInfo, WorkspaceInfo } from "../../../../shared/contracts";
+import type {
+  AgentGroupWithMembers,
+  AgentSessionInfo,
+  WorkspaceInfo,
+} from "../../../shared/contracts";
 import { SidebarGroups } from "./SidebarGroups";
 
 function session(id: string, overrides: Partial<AgentSessionInfo> = {}): AgentSessionInfo {
