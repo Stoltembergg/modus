@@ -65,6 +65,7 @@ export function GroupMessageList({
   loadOlder,
   cwd,
   onOpenFile,
+  onHandoffClick,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   groupId: string;
@@ -79,6 +80,8 @@ export function GroupMessageList({
   loadOlder(): Promise<void>;
   cwd: string | undefined;
   onOpenFile: ((path: string) => void) | undefined;
+  /** P2: click a Handoff card to seed `@Name` in the composer. */
+  onHandoffClick?: ((targetName: string) => void) | undefined;
 }) {
   const workingRows = useGroupMemberWorking(groupId, memberStates);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -143,6 +146,7 @@ export function GroupMessageList({
             labels={labels}
             members={members}
             message={message}
+            onHandoffClick={onHandoffClick}
             onOpenFile={onOpenFile}
           />
         ))}
@@ -202,11 +206,26 @@ export function isNoNextOwnerStatus(body: string): boolean {
 function CollabStatusLine({
   status,
   members,
+  onHandoffClick,
 }: {
   status: GroupCollabStatus;
   members: readonly MentionMember[];
+  onHandoffClick?: ((targetName: string) => void) | undefined;
 }) {
   const text = formatGroupCollabStatus(status);
+  if (status.kind === "handoff" && onHandoffClick && status.targetName.trim()) {
+    return (
+      <button
+        className="block max-w-full rounded-md border border-hairline bg-elevated/60 px-2 py-1 text-left text-2xs text-fg-subtle transition-colors hover:border-hairline-strong hover:text-fg"
+        data-collab={status.kind}
+        data-testid="group-collab-status"
+        onClick={() => onHandoffClick(status.targetName.trim())}
+        type="button"
+      >
+        <StatusText members={members} text={text} />
+      </button>
+    );
+  }
   return (
     <div
       className="text-2xs text-fg-subtle"
@@ -225,12 +244,14 @@ export function GroupMessageRow({
   labels,
   cwd,
   onOpenFile,
+  onHandoffClick,
 }: {
   message: GroupMessage;
   members: readonly MentionMember[];
   labels: ReadonlyMap<string, MemberLabel>;
   cwd?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
+  onHandoffClick?: ((targetName: string) => void) | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
 }) {
@@ -311,8 +332,13 @@ export function GroupMessageRow({
           </div>
         ) : null}
         {statuses.map((status, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
-          <CollabStatusLine key={index} members={members} status={status} />
+          <CollabStatusLine
+            // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
+            key={`${status.kind}-${index}`}
+            members={members}
+            onHandoffClick={onHandoffClick}
+            status={status}
+          />
         ))}
       </div>
     </div>

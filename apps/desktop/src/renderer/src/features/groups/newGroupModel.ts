@@ -78,6 +78,30 @@ export function templateMember(
   };
 }
 
+/** Template ids for the default collab pipeline (Planner → Builder → Reviewer). */
+export const COLLAB_PIPELINE_IDS = ["planner", "builder", "reviewer"] as const;
+
+/**
+ * P2: build (or extend) the member list with Planner → Builder → Reviewer in
+ * that order from the catalog. Skips ids already present; Lead stays Planner
+ * when it is among the result (caller sets leadKey from suggestedLead).
+ */
+export function applyCollabPipeline(
+  templates: readonly AgentTemplate[],
+  members: readonly NewGroupMember[],
+  nextKey: () => string,
+): NewGroupMember[] {
+  const byId = new Map(templates.map((template) => [template.id, template]));
+  let next = [...members];
+  for (const id of COLLAB_PIPELINE_IDS) {
+    if (next.some((member) => member.templateId === id)) continue;
+    const template = byId.get(id);
+    if (!template) continue;
+    next = [...next, templateMember(template, next, nextKey())];
+  }
+  return next;
+}
+
 /**
  * "Copy from another group": an independent copy (name, role, instructions,
  * model, face, color) that becomes a normal member: no templateId, no
