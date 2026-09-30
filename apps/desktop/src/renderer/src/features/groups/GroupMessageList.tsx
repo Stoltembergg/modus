@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
 import { isNearBottom, shouldShowInFlightRow } from "../../../../shared/group-room-transcript";
+import { cn } from "../../lib/cn";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
@@ -175,50 +176,59 @@ export function GroupMessageList({
             {GROUP_ROOM_EMPTY_TEXT}
           </div>
         ) : null}
-        {threads.map((thread) => (
-          <div className="flex flex-col gap-1.5" data-testid="group-thread" key={thread.root.id}>
-            <GroupMessageRow
-              activeWaitingSessionIds={activeWaiting}
-              avatar={
-                thread.root.authorSessionId ? avatars.get(thread.root.authorSessionId) : undefined
-              }
-              cwd={cwd}
-              labels={labels}
-              members={members}
-              message={thread.root}
-              onHandoffClick={onHandoffClick}
-              onOpenFile={onOpenFile}
-              onReply={onReply}
-              role={
-                thread.root.authorSessionId ? roles?.get(thread.root.authorSessionId) : undefined
-              }
-            />
-            {thread.replies.length > 0 ? (
-              <div
-                className="ml-4 flex flex-col gap-1.5 border-hairline border-l pl-3"
-                data-testid="group-thread-replies"
-              >
-                {thread.replies.map((message) => (
-                  <GroupMessageRow
-                    activeWaitingSessionIds={activeWaiting}
-                    avatar={
-                      message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
-                    }
-                    cwd={cwd}
-                    key={message.id}
-                    labels={labels}
-                    members={members}
-                    message={message}
-                    onHandoffClick={onHandoffClick}
-                    onOpenFile={onOpenFile}
-                    onReply={onReply}
-                    role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ))}
+        {threads.map((thread) => {
+          const hasReplies = thread.replies.length > 0;
+          return (
+            <div
+              className={cn("flex flex-col", hasReplies ? "gap-1.5" : "gap-0")}
+              data-testid={hasReplies ? "group-thread" : "group-message-flat"}
+              key={thread.root.id}
+            >
+              <GroupMessageRow
+                activeWaitingSessionIds={activeWaiting}
+                avatar={
+                  thread.root.authorSessionId ? avatars.get(thread.root.authorSessionId) : undefined
+                }
+                cwd={cwd}
+                labels={labels}
+                members={members}
+                message={thread.root}
+                onHandoffClick={onHandoffClick}
+                onOpenFile={onOpenFile}
+                onReply={onReply}
+                role={
+                  thread.root.authorSessionId ? roles?.get(thread.root.authorSessionId) : undefined
+                }
+              />
+              {hasReplies ? (
+                <div
+                  className="ml-4 flex flex-col gap-1.5 border-hairline border-l pl-3"
+                  data-testid="group-thread-replies"
+                >
+                  {thread.replies.map((message) => (
+                    <GroupMessageRow
+                      activeWaitingSessionIds={activeWaiting}
+                      avatar={
+                        message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
+                      }
+                      cwd={cwd}
+                      key={message.id}
+                      labels={labels}
+                      members={members}
+                      message={message}
+                      onHandoffClick={onHandoffClick}
+                      onOpenFile={onOpenFile}
+                      onReply={onReply}
+                      role={
+                        message.authorSessionId ? roles?.get(message.authorSessionId) : undefined
+                      }
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
         <GroupWorkingStatus
           avatars={avatars}
           groupId={groupId}

@@ -5,6 +5,11 @@
 
 import type { GroupCollabStatus } from "./group-collab-status";
 import { parseGroupCollabStatusLine } from "./group-collab-status";
+import {
+  groupRoomLabel,
+  groupWaitingForAgentLabel,
+  thinkingStateKeyFromLive,
+} from "./group-room-locale";
 
 /** Rigid handoff-packet keys moved out of the main timeline into Activity/Details. */
 export const HANDOFF_PACKET_KEYS = [
@@ -96,8 +101,12 @@ export function collectRoomMessageDetails(
 /**
  * Natural handoff / agree phrases for the room (hide typed prefixes and IDs).
  * Structured lines remain in the body for parsers; this is display-only.
+ * `ready` is ephemeral (avatar / composer) — not a transcript line.
  */
-export function formatNaturalCollabStatus(status: GroupCollabStatus): string {
+export function formatNaturalCollabStatus(
+  status: GroupCollabStatus,
+  locale?: string | null,
+): string {
   switch (status.kind) {
     case "handoff": {
       const objective = status.objective.trim();
@@ -111,8 +120,54 @@ export function formatNaturalCollabStatus(status: GroupCollabStatus): string {
     case "agreed":
       return status.note.trim() ? `Agreed — ${status.note.trim()}` : "Agreed";
     case "ready":
-      return "Ready for you";
+      return groupRoomLabel("ready", locale);
   }
+}
+
+/** Ready is shown as an ephemeral chip — never a lasting transcript row. */
+export function shouldPersistCollabStatusInTranscript(status: GroupCollabStatus): boolean {
+  return status.kind !== "ready";
+}
+
+/**
+ * Strip redundant self-intros ("Aqui é o @Planner", "Here is @Builder…") —
+ * avatar, name, and role already identify the speaker.
+ */
+export function stripAgentSelfIntro(prose: string): string {
+  const text = prose.replace(/^\s+|\s+$/gu, "");
+  if (!text) return text;
+  const lines = text.split("\n");
+  const first = lines[0] ?? "";
+  const intro =
+    /^(?:aqui\s+(?:é|e)\s+o|here(?:'s|\s+is)|i(?:'m|\s+am)|this\s+is)\s+@?[^\s,:.!?—–-]+(?:\s*[—–,:!.-]+\s*|\s+)/iu;
+  if (!intro.test(first.trim())) return text;
+  const restFirst = first.trim().replace(intro, "").trim();
+  const next = [restFirst, ...lines.slice(1)].filter((line, index) => Boolean(line) || index > 0);
+  return next.join("\n").replace(/^\s+|\s+$/gu, "");
+}
+
+/** Extract http(s) URLs that are useful as Prompt Kit Source chips on the final reply. */
+export function extractUsefulSources(prose: string): { href: string; label: string }[] {
+  const found: { href: string; label: string }[] = [];
+  const seen = new Set<string>();
+  const re = /\bhttps?:\/\/[^\s)\]>'"]+/gi;
+  for (const match of prose.matchAll(re)) {
+    let href = match[0] ?? "";
+    href = href.replace(/[.,;:!?)]+$/u, "");
+    if (!href || seen.has(href)) continue;
+    // Skip internal / localhost noise — only user-useful references.
+    if (/localhost|127\.0\.0\.1|0\.0\.0\.0|file:\/\//i.test(href)) continue;
+    seen.add(href);
+    let label = href;
+    try {
+      label = new URL(href).hostname.replace(/^www\./, "");
+    } catch {
+      // keep raw
+    }
+    found.push({ href, label });
+    if (found.length >= 5) break;
+  }
+  return found;
 }
 
 /** Visual tone for light differentiation (no heavy cards). */
@@ -132,8 +187,9 @@ export function collabStatusTone(status: GroupCollabStatus): RoomMessageTone {
 }
 
 /**
- * Living inline status inside an in-flight agent message.
- * Replaced by streamed writing as soon as tokens arrive.
+ * Living inline Thinking State under the agent name.
+ * Ephemeral — replaced by streamed writing as soon as tokens arrive.
+ * Labels follow the current app/renderer locale.
  */
 export function inlineLiveStatusLabel(input: {
   phase: string;
@@ -141,56 +197,18 @@ export function inlineLiveStatusLabel(input: {
   activity?: string | undefined;
   waitingFor?: string | undefined;
   stillWorking?: boolean;
+  locale?: string | null;
 }): string {
-  if (input.stillWorking) return "Still working…";
-
   const waitingFor = input.waitingFor?.trim();
-  if (input.presenceState === "waiting_for_agent" || /^waiting$/i.test(input.phase)) {
-    if (waitingFor) {
-      const name = waitingFor.replace(/^@/, "");
-      return `Waiting for @${name}…`;
-    }
-    return "Waiting…";
-  }
-
-  const activity = (input.activity ?? "").toLocaleLowerCase();
-  if (/test|vitest|jest|pytest|spec/.test(activity) || /test/i.test(input.phase)) {
-    return "Running tests…";
-  }
-  if (input.presenceState === "exploring" || /^explor/i.test(input.phase)) {
-    return "Exploring…";
-  }
-  if (input.presenceState === "reviewing" || /^review/i.test(input.phase)) {
-    return "Reviewing…";
-  }
   if (
-    input.presenceState === "running_tool" ||
-    /^implement/i.test(input.phase) ||
-    /^working$/i.test(input.phase)
+    !input.stillWorking &&
+    (input.presenceState === "waiting_for_agent" || /^waiting$/i.test(input.phase)) &&
+    waitingFor
   ) {
-    if (/read|search|list|find|grep|glob/.test(activity)) return "Exploring…";
-    if (/edit|writ|patch|bash|run|implement/.test(activity)) return "Implementing…";
-    return activity ? `${capitalizeVerb(activity)}…` : "Working…";
+    return groupWaitingForAgentLabel(waitingFor, input.locale);
   }
-  if (input.presenceState === "writing" || /^writ/i.test(input.phase)) {
-    return "Writing…";
-  }
-  if (input.presenceState === "queued" || /^queued$/i.test(input.phase)) {
-    return "Queued…";
-  }
-  if (input.presenceState === "blocked" || /waiting for you/i.test(input.phase)) {
-    return "Waiting for you…";
-  }
-
-  const phase = input.phase.trim();
-  if (!phase) return "Thinking…";
-  return /…$|\.\.\.$/.test(phase) ? phase : `${phase}…`;
-}
-
-function capitalizeVerb(text: string): string {
-  const trimmed = text.trim();
-  if (!trimmed) return "Working";
-  return trimmed.charAt(0).toLocaleUpperCase() + trimmed.slice(1);
+  const key = thinkingStateKeyFromLive(input);
+  return groupRoomLabel(key, input.locale);
 }
 
 /** Auto-follow only when the user is already near the bottom. */

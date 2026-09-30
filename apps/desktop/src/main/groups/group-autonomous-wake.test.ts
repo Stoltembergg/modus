@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type MemberRef, selectAutonomousWakeTargets } from "./group-runtime-lib";
+import {
+  isSimpleSocialMessage,
+  type MemberRef,
+  selectAutonomousWakeTargets,
+} from "./group-runtime-lib";
 
 const members: MemberRef[] = [
   { sessionId: "lead", title: "Alpha", role: "Lead", description: "Coordinates the room" },
@@ -16,6 +20,30 @@ describe("selectAutonomousWakeTargets", () => {
         leadSessionId: "lead",
       }),
     ).toEqual(["lead"]);
+  });
+
+  it("wakes only the lead for social greetings — Builder/Reviewer stay silent", () => {
+    expect(
+      selectAutonomousWakeTargets({
+        body: "oi, tudo bem?",
+        members,
+        leadSessionId: "lead",
+      }),
+    ).toEqual(["lead"]);
+    expect(
+      selectAutonomousWakeTargets({
+        body: "hey!",
+        members,
+        leadSessionId: "lead",
+      }),
+    ).toEqual(["lead"]);
+  });
+
+  it("detects simple social messages", () => {
+    expect(isSimpleSocialMessage("hi")).toBe(true);
+    expect(isSimpleSocialMessage("olá")).toBe(true);
+    expect(isSimpleSocialMessage("please review the auth PR")).toBe(false);
+    expect(isSimpleSocialMessage("implement the toggle")).toBe(false);
   });
 
   it("wakes a specialty match without requiring a Lead", () => {

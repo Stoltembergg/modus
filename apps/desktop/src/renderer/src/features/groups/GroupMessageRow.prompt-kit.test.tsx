@@ -72,13 +72,13 @@ describe("GroupMessageRow Prompt Kit", () => {
     expect(container.querySelector("[data-testid=group-message]")).toBeNull();
   });
 
-  it("shows Steps and CoT inside a streaming agent message", () => {
-    const live: GroupLiveTurnSnapshot = {
+  it("shows ephemeral Thinking/Tool and streams only the definitive message", () => {
+    const thinking: GroupLiveTurnSnapshot = {
       phase: "Exploring",
       thoughtPreview: "raw secret thought should not appear",
       tools: [{ id: "t1", name: "read", label: "Reading", done: false }],
-      streamText: "Looking at the composer next.",
-      writingPreview: "Looking at the composer next.",
+      streamText: "",
+      writingPreview: "",
       lastEventAt: Date.now(),
       collapsed: false,
       presence: {
@@ -89,21 +89,61 @@ describe("GroupMessageRow Prompt Kit", () => {
         activity: "reading files",
       },
     };
-    render(
+    const { rerender } = render(
       <GroupMessageRow
         labels={labels}
-        liveTurn={{ mode: "running", live }}
+        liveTurn={{ mode: "running", live: thinking }}
         members={members}
         message={agentMessage("")}
         streaming
       />,
     );
-    expect(screen.getByTestId("group-prompt-steps")).toBeTruthy();
-    expect(screen.getByTestId("group-prompt-cot")).toBeTruthy();
+    expect(screen.getByTestId("group-live-status")).toBeTruthy();
+    expect(screen.getByTestId("group-prompt-tool")).toBeTruthy();
+    expect(screen.queryByTestId("group-prompt-steps")).toBeNull();
+    expect(screen.queryByTestId("group-prompt-cot")).toBeNull();
+    expect(screen.queryByText(/raw secret thought/i)).toBeNull();
+
+    const writing: GroupLiveTurnSnapshot = {
+      ...thinking,
+      streamText: "Looking at the composer next.",
+      writingPreview: "Looking at the composer next.",
+      presence: { ...thinking.presence, state: "writing", label: "Writing" },
+    };
+    rerender(
+      <GroupMessageRow
+        labels={labels}
+        liveTurn={{ mode: "running", live: writing }}
+        members={members}
+        message={agentMessage("")}
+        streaming
+      />,
+    );
+    expect(screen.queryByTestId("group-live-status")).toBeNull();
+    expect(screen.queryByTestId("group-prompt-tool")).toBeNull();
     expect(screen.getByTestId("group-live-writing").textContent).toContain(
       "Looking at the composer",
     );
-    expect(screen.queryByText(/raw secret thought/i)).toBeNull();
+  });
+
+  it("shows Ready for you as an ephemeral chip, not a transcript status line", () => {
+    render(
+      <GroupMessageRow labels={labels} members={members} message={agentMessage("Ready for you")} />,
+    );
+    expect(screen.getByTestId("group-ready-ephemeral")).toBeTruthy();
+    expect(screen.queryByTestId("group-collab-status")).toBeNull();
+  });
+
+  it("strips redundant self-intros from agent prose", () => {
+    render(
+      <GroupMessageRow
+        labels={labels}
+        members={members}
+        message={agentMessage("Aqui é o @Planner, vamos revisar o fluxo.")}
+      />,
+    );
+    expect(screen.queryByText(/Aqui é o/i)).toBeNull();
+    expect(screen.getByText(/vamos revisar o fluxo/i)).toBeTruthy();
   });
 
   it("renders user attachment chips on the message", () => {

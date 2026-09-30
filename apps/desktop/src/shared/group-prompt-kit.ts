@@ -49,7 +49,17 @@ export function classifyGroupSystemStatus(body: string): {
   if (/ is archived$/i.test(text)) {
     return { show: "faint", variant: "warning" };
   }
-  if (/^Ready for you$/i.test(text) || /^No next owner/i.test(text)) {
+  // Ready / Queued / Still working are ephemeral UI — never transcript rows.
+  if (
+    /^Ready for you\.?$/i.test(text) ||
+    /^Pronto para você\.?$/i.test(text) ||
+    /^Queued…?$/i.test(text) ||
+    /^Na fila…?$/i.test(text) ||
+    /^Still working…?$/i.test(text)
+  ) {
+    return { show: "hide", variant: "action" };
+  }
+  if (/^No next owner/i.test(text)) {
     return { show: "system", variant: "action" };
   }
   return { show: "faint", variant: "action" };

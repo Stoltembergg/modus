@@ -74,6 +74,7 @@ export {
   type GroupSnapshotMember,
   type GroupTaskWake,
   type GroupWorktreeReady,
+  isSimpleSocialMessage,
   isUpdatePendingState,
   parseGroupMentions,
   selectAutonomousWakeTargets,
@@ -801,7 +802,7 @@ export class GroupRuntime {
   private applyTurnResult(chain: ChainState, wake: Wake, result: PromptTurnResult): void {
     const text = result.finalText?.trim();
     if (result.outcome === "ok") {
-      if (!text) return; // An empty turn posts nothing.
+      if (!text) return; // An empty turn posts nothing (smart silence).
       // An ended chain (blocked / limit) still shows the reply but wakes nobody.
       const reply = this.postReply(chain, wake, text);
       this.route(chain, reply);
@@ -810,6 +811,7 @@ export class GroupRuntime {
       // N4 interrupt: Ready/Blocked are for the user — do not proactive-wake peers.
       if (closing?.kind === "ready" || closing?.kind === "blocked") return;
       // N4: Agreed/Proposed with an owned in-progress task + reviewer → wake reviewer.
+      // Proactivity only for real review handoffs — not idle exploration.
       if (closing?.kind === "agreed" || closing?.kind === "proposed") {
         this.maybeRouteReviewerForOwnedTask(chain, wake);
         return;
@@ -820,6 +822,7 @@ export class GroupRuntime {
         // P1b: coordinator Lead wakes when an open/unowned task still needs an owner.
         this.maybeRouteLeadForOpenTask(chain, wake);
         // N4: resume an owned open/in_progress task when the room went silent.
+        // Only when there is real pending owned work — never wake Builder/Reviewer to stay busy.
         this.maybeResumeOwnedTask(chain, wake);
       }
       return;

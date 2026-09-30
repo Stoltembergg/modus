@@ -7,10 +7,12 @@ import {
   isStillWorking,
   STILL_WORKING_AFTER_MS,
 } from "./groupLiveTurn";
+import { PromptTool } from "./prompt-kit/PromptKit";
 
 /**
- * Inline ephemeral status on an in-flight GroupMessageRow (Thinking… / Exploring…).
- * Hidden once `message.delta` has produced stream text on the same row.
+ * Ephemeral Thinking State + active Tool under the agent name.
+ * Hidden once `message.delta` has produced stream text, and dismantled on run end.
+ * Never persists into the transcript.
  */
 export function GroupMemberLiveTurn({
   mode,
@@ -30,12 +32,14 @@ export function GroupMemberLiveTurn({
     return () => window.clearInterval(id);
   }, [mode]);
 
+  // Terminal runs and streamed text dismantle all transients immediately.
+  if (live.collapsed) return null;
   const stream = live.streamText.trim();
   if (stream) return null;
 
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
   const still =
-    !live.collapsed &&
+    mode === "running" &&
     (live.presence
       ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
       : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS));
@@ -46,15 +50,12 @@ export function GroupMemberLiveTurn({
     waitingFor: live.presence?.waitingFor,
     stillWorking: still,
   });
-  const working = mode === "running" && !live.collapsed;
+  const working = mode === "running";
+  // Only the active (not-done) tool — disappears as soon as it finishes.
+  const activeTool = live.tools.find((tool) => !tool.done);
 
   return (
-    <div
-      className="min-w-0"
-      data-collapsed={live.collapsed || undefined}
-      data-testid="group-member-live-turn"
-      data-tone="temporary"
-    >
+    <div className="min-w-0 space-y-1" data-testid="group-member-live-turn" data-tone="temporary">
       <div
         className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm"
         data-testid="group-live-status"
@@ -69,6 +70,9 @@ export function GroupMemberLiveTurn({
         <span className="sr-only">{statusLabel}</span>
         <ThinkingStates className="text-fg-subtle" label={statusLabel} />
       </div>
+      {activeTool ? (
+        <PromptTool name={activeTool.label || activeTool.name} state="running" />
+      ) : null}
     </div>
   );
 }

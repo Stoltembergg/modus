@@ -427,7 +427,45 @@ const STOP_WORDS = new Set([
   "hey",
   "thanks",
   "thank",
+  "ola",
+  "olá",
+  "oi",
+  "bom",
+  "dia",
+  "tarde",
+  "noite",
+  "tudo",
+  "bem",
 ]);
+
+/**
+ * True for short social / greeting messages with no actionable objective.
+ * These wake at most the single most relevant member (usually Lead) — others stay silent.
+ */
+export function isSimpleSocialMessage(body: string): boolean {
+  const text = body
+    .replace(/@[\p{L}\p{N}_.-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return true;
+  if (text.length > 80) return false;
+  const lower = text.toLocaleLowerCase();
+  // Explicit work / routing cues → not social-only.
+  if (
+    /\b(fix|build|implement|review|plan|test|ship|deploy|debug|investigate|refactor|write|create|add|remove|delete|block|handoff|task|pr|pull\s*request|bug|issue)\b/i.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+  if (/[?/]|https?:\/\//i.test(text) && text.length > 24) return false;
+  const socialOnly =
+    /^(hi|hello|hey|yo|sup|thanks|thank you|thx|cheers|gm|good\s+(morning|afternoon|evening)|howdy|hola|oi|ol[aá]|bom\s+dia|boa\s+(tarde|noite)|tudo\s+bem|e\s+a[ií]|fala|salve)([!.\s].*)?$/iu;
+  if (socialOnly.test(lower)) return true;
+  const tokens = tokenizeForWake(text);
+  // No content tokens left after stop-words → social / empty ask.
+  return tokens.length === 0;
+}
 
 /** Soft specialty cues in the user message → role/title/description patterns. */
 const SPECIALTY_CUES: ReadonlyArray<{ message: RegExp; member: RegExp; weight: number }> = [
@@ -474,6 +512,8 @@ function memberHaystack(member: MemberRef): string {
  * Pick who should wake for a user message with no @mentions (natural groups N1).
  * Scores role/description/title against the body, open-task ownership, and a soft
  * Lead bias. Lead is optional: if absent or not best-fit, another member may wake.
+ * Simple/social greetings wake at most one member (Lead preferred) — Builder/Reviewer
+ * stay silent unless there is a real specialty cue or open task.
  * Never returns empty when at least one non-archived, non-excluded member exists.
  */
 export function selectAutonomousWakeTargets(input: {
@@ -491,8 +531,22 @@ export function selectAutonomousWakeTargets(input: {
   );
   if (eligible.length === 0) return [];
 
+  const social = isSimpleSocialMessage(input.body);
+  const maxTargets = social ? 1 : Math.max(1, input.maxTargets ?? 1);
+  const hasOpenWork = (input.openTasks ?? []).some(
+    (task) =>
+      task.status === "open" || task.status === "in_progress" || task.status === "in_review",
+  );
+
+  // Social / greeting with no pending work → Lead only (or first eligible). Others stay quiet.
+  if (social && !hasOpenWork) {
+    if (input.leadSessionId && eligible.some((m) => m.sessionId === input.leadSessionId)) {
+      return [input.leadSessionId];
+    }
+    return eligible[0] ? [eligible[0].sessionId] : [];
+  }
+
   const tokens = tokenizeForWake(input.body);
-  const maxTargets = Math.max(1, input.maxTargets ?? 1);
   const scores = new Map<string, number>();
 
   for (const member of eligible) {
@@ -520,6 +574,23 @@ export function selectAutonomousWakeTargets(input: {
       }
     }
     if (member.sessionId === input.leadSessionId) score += 1;
+    // Social + open work: do not let specialty roles wake just to stay busy.
+    if (social && score > 0) {
+      const role = (member.role ?? member.title).toLocaleLowerCase();
+      if (
+        /build|review|dev|engineer|qa|test/.test(role) &&
+        member.sessionId !== input.leadSessionId
+      ) {
+        // Only keep them if they own / review an open task.
+        const owns = (input.openTasks ?? []).some(
+          (task) =>
+            (task.ownerSessionId === member.sessionId &&
+              (task.status === "open" || task.status === "in_progress")) ||
+            (task.reviewerSessionId === member.sessionId && task.status === "in_review"),
+        );
+        if (!owns) score = 0;
+      }
+    }
     scores.set(member.sessionId, score);
   }
 
@@ -583,7 +654,8 @@ export function composeGroupWakePrompt(input: {
     `<group_room name="${escapeText(input.group.name)}">`,
     `You are @${escapeText(self)}, a member of this group. Members right now:`,
     ...roster.map((line) => escapeText(line)),
-    "Reply with what the group should read. Mention @Name to hand work to a member; without a mention, the room routes by specialty.",
+    "Reply with what the group should read — short and natural. Mention @Name to hand work to a member; without a mention, the room routes by specialty.",
+    "If the trigger is a greeting or social ping and you have nothing useful to add, reply empty and stay silent. Do not explore files or start tools without a real objective.",
     GROUP_COLLAB_WAKE_PROTOCOL,
   ].join("\n");
   const triggerBlock = `<group_message from="${escapeText(authorLabel(input.trigger, titles))}">\n${escapeText(input.trigger.body)}\n</group_message>`;

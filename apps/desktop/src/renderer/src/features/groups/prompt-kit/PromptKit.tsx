@@ -1,4 +1,4 @@
-import { IconAlertTriangle, IconInfoCircle, IconX } from "@tabler/icons-react";
+import { IconAlertTriangle, IconInfoCircle, IconLoader2, IconX } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
 import type { GroupSystemVariant } from "../../../../../shared/group-prompt-kit";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
@@ -85,7 +85,77 @@ export function PromptSystemMessage({
   );
 }
 
-/** Prompt Kit Steps — compact expandable action list inside an agent message. */
+/**
+ * Prompt Kit Tool — compact ephemeral tool row (name + state).
+ * Removed from the room as soon as the tool ends or streaming starts.
+ */
+export function PromptTool({
+  name,
+  state = "running",
+  className,
+}: {
+  name: string;
+  state?: "pending" | "running" | "completed" | "error";
+  className?: string;
+}) {
+  const badge =
+    state === "completed"
+      ? "Completed"
+      : state === "error"
+        ? "Error"
+        : state === "pending"
+          ? "Ready"
+          : "Running";
+  return (
+    <div
+      className={cn(
+        "mt-0.5 flex max-w-full items-center gap-2 rounded-md border border-hairline bg-elevated/40 px-2 py-1 text-2xs text-fg-subtle",
+        className,
+      )}
+      data-prompt-kit="tool"
+      data-state={state}
+      data-testid="group-prompt-tool"
+    >
+      {state === "running" || state === "pending" ? (
+        <IconLoader2
+          aria-hidden
+          className="size-3 shrink-0 animate-spin text-fg-faint"
+          stroke={ICON_STROKE.sm}
+        />
+      ) : null}
+      <span className="min-w-0 truncate font-medium text-fg-muted">{name}</span>
+      <span className="shrink-0 text-fg-faint">{badge}</span>
+    </div>
+  );
+}
+
+/**
+ * Prompt Kit Source — discreet citation chip on the final reply only.
+ * Shown when the agent included a genuinely useful URL for the user.
+ */
+export function PromptSource({ href, label }: { href: string; label?: string }) {
+  let domain = label ?? href;
+  try {
+    domain = label ?? new URL(href).hostname.replace(/^www\./, "");
+  } catch {
+    // keep fallback
+  }
+  return (
+    <a
+      className="inline-flex h-5 max-w-[10rem] items-center truncate rounded-md bg-elevated px-1.5 text-[10px] text-fg-faint no-underline transition-colors hover:text-fg-muted"
+      data-prompt-kit="source"
+      data-testid="group-prompt-source"
+      href={href}
+      rel="noopener noreferrer"
+      target="_blank"
+      title={href}
+    >
+      {domain}
+    </a>
+  );
+}
+
+/** @deprecated Room no longer persists Steps — kept for Activity/tests. */
 export function PromptSteps({
   title = "Steps",
   items,
@@ -120,7 +190,7 @@ export function PromptSteps({
   );
 }
 
-/** Prompt Kit Chain of Thought — safe progress only. */
+/** @deprecated Room uses a single Thinking line — kept for Activity/tests. */
 export function PromptChainOfThought({
   items,
   defaultOpen = false,

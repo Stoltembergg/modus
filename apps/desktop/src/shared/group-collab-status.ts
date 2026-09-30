@@ -184,5 +184,8 @@ export const GROUP_COLLAB_WAKE_PROTOCOL = [
   "Constraints: …",
   "Approval: …",
   "Speak naturally in the main reply; keep IDs and task ids out of the conversation.",
+  'Do not introduce yourself (avatar, name, and role already identify you — never say "Here is @Name" / "Aqui é o @Name").',
+  "Prefer short natural replies. Stay silent (empty reply) when you have nothing useful to add.",
+  "Do not explore the workspace, run tools, or start work just to stay busy — only act on a real objective, pending task, handoff, review, or blockage.",
   "If you finish with no @mention and no Agreed/Blocked/Proposed/Ready line, the room will nudge you.",
 ].join("\n");
