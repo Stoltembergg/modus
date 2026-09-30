@@ -10,6 +10,7 @@ import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
+import { buildGroupThreads } from "./groupThreads";
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import { type MemberLabel, memberLabels } from "./memberLabels";
@@ -65,6 +66,7 @@ export function GroupMessageList({
   cwd,
   onOpenFile,
   onHandoffClick,
+  onReply,
   workingRows,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
@@ -84,6 +86,8 @@ export function GroupMessageList({
   onOpenFile: ((path: string) => void) | undefined;
   /** P2: click a Handoff card to seed `@Name` in the composer. */
   onHandoffClick?: ((targetName: string) => void) | undefined;
+  /** N3: start a thread reply from a room message. */
+  onReply?: ((message: GroupMessage) => void) | undefined;
   /** Shared live-turn rows from GroupRoom (also feeds Activity). */
   workingRows: readonly GroupMemberWorkingRow[];
 }) {
@@ -94,6 +98,7 @@ export function GroupMessageList({
     nearBottom: true,
   });
   const labels = useMemo(() => memberLabels(members), [members]);
+  const threads = useMemo(() => buildGroupThreads(messages), [messages]);
 
   // Older page prepended: keep the view where it was. New message / working strip:
   // follow the bottom when the user was already there.
@@ -141,17 +146,43 @@ export function GroupMessageList({
             {GROUP_ROOM_EMPTY_TEXT}
           </div>
         ) : null}
-        {messages.map((message) => (
-          <GroupMessageRow
-            avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
-            cwd={cwd}
-            key={message.id}
-            labels={labels}
-            members={members}
-            message={message}
-            onHandoffClick={onHandoffClick}
-            onOpenFile={onOpenFile}
-          />
+        {threads.map((thread) => (
+          <div className="flex flex-col gap-2" data-testid="group-thread" key={thread.root.id}>
+            <GroupMessageRow
+              avatar={
+                thread.root.authorSessionId ? avatars.get(thread.root.authorSessionId) : undefined
+              }
+              cwd={cwd}
+              labels={labels}
+              members={members}
+              message={thread.root}
+              onHandoffClick={onHandoffClick}
+              onOpenFile={onOpenFile}
+              onReply={onReply}
+            />
+            {thread.replies.length > 0 ? (
+              <div
+                className="ml-4 flex flex-col gap-2 border-hairline border-l pl-3"
+                data-testid="group-thread-replies"
+              >
+                {thread.replies.map((message) => (
+                  <GroupMessageRow
+                    avatar={
+                      message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
+                    }
+                    cwd={cwd}
+                    key={message.id}
+                    labels={labels}
+                    members={members}
+                    message={message}
+                    onHandoffClick={onHandoffClick}
+                    onOpenFile={onOpenFile}
+                    onReply={onReply}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
         ))}
         <GroupWorkingStatus avatars={avatars} labels={labels} rows={workingRows} />
       </div>
@@ -248,6 +279,7 @@ export function GroupMessageRow({
   cwd,
   onOpenFile,
   onHandoffClick,
+  onReply,
 }: {
   message: GroupMessage;
   members: readonly MentionMember[];
@@ -255,11 +287,15 @@ export function GroupMessageRow({
   cwd?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
   onHandoffClick?: ((targetName: string) => void) | undefined;
+  onReply?: ((message: GroupMessage) => void) | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
 }) {
   const author: MemberLabel | undefined = message.authorSessionId
     ? (labels.get(message.authorSessionId) ?? { title: message.authorSessionId })
+    : undefined;
+  const toLabel = message.toSessionId
+    ? (labels.get(message.toSessionId) ?? { title: message.toSessionId })
     : undefined;
   if (message.kind === "status") {
     const waiting = isWaitingStatus(message.body);
@@ -289,10 +325,23 @@ export function GroupMessageRow({
   }
   if (message.authorKind === "user") {
     return (
-      <div className="flex justify-end" data-kind="user" data-testid="group-message">
-        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl bg-elevated px-3.5 py-2 text-fg text-sm">
-          <MentionText members={members} text={message.body} />
+      <div className="group/msg flex flex-col items-end gap-1">
+        <div className="flex max-w-[80%] justify-end" data-kind="user" data-testid="group-message">
+          <div className="whitespace-pre-wrap rounded-2xl bg-elevated px-3.5 py-2 text-fg text-sm">
+            <MentionText members={members} text={message.body} />
+          </div>
         </div>
+        {onReply ? (
+          <button
+            aria-label="Reply in thread"
+            className="text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
+            data-testid="group-message-reply"
+            onClick={() => onReply(message)}
+            type="button"
+          >
+            Reply
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -301,49 +350,67 @@ export function GroupMessageRow({
   const title = label.title;
   const { prose, statuses } = splitTrailingCollabStatuses(message.body);
   return (
-    <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
-      {avatar ? (
-        <AgentAvatar
-          animated={false}
-          className="mt-0.5"
-          color={avatar.color}
-          face={avatar.face}
-          seed={avatar.agentId}
-          size={20}
-          state={avatar.archived ? "archived" : "idle"}
-        />
-      ) : (
-        <span
-          aria-hidden
-          className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
-          style={{ backgroundColor: memberColor(sessionId) }}
-        >
-          {title.trim().charAt(0).toLocaleUpperCase() || "?"}
-        </span>
-      )}
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="mb-0.5 font-medium text-fg-muted text-xs">
-          <MemberName label={label} />
-        </div>
-        {prose ? (
-          <div className="text-fg text-sm">
-            <MarkdownMessage
-              content={linkMentionsInMarkdown(prose, members)}
-              cwd={cwd}
-              onOpenFile={onOpenFile}
-            />
-          </div>
-        ) : null}
-        {statuses.map((status, index) => (
-          <CollabStatusLine
-            // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
-            key={`${status.kind}-${index}`}
-            members={members}
-            onHandoffClick={onHandoffClick}
-            status={status}
+    <div className="group/msg flex flex-col gap-1" data-to={message.toSessionId || undefined}>
+      <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
+        {avatar ? (
+          <AgentAvatar
+            animated={false}
+            className="mt-0.5"
+            color={avatar.color}
+            face={avatar.face}
+            seed={avatar.agentId}
+            size={20}
+            state={avatar.archived ? "archived" : "idle"}
           />
-        ))}
+        ) : (
+          <span
+            aria-hidden
+            className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
+            style={{ backgroundColor: memberColor(sessionId) }}
+          >
+            {title.trim().charAt(0).toLocaleUpperCase() || "?"}
+          </span>
+        )}
+        <div className="min-w-0 flex-1 space-y-1">
+          <div className="mb-0.5 flex flex-wrap items-baseline gap-x-1.5 font-medium text-fg-muted text-xs">
+            <MemberName label={label} />
+            {toLabel ? (
+              <span className="font-normal text-fg-faint" data-testid="group-message-to">
+                → <MemberName label={toLabel} />
+              </span>
+            ) : null}
+          </div>
+          {prose ? (
+            <div className="text-fg text-sm">
+              <MarkdownMessage
+                content={linkMentionsInMarkdown(prose, members)}
+                cwd={cwd}
+                onOpenFile={onOpenFile}
+              />
+            </div>
+          ) : null}
+          {statuses.map((status, index) => (
+            <CollabStatusLine
+              // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
+              key={`${status.kind}-${index}`}
+              members={members}
+              onHandoffClick={onHandoffClick}
+              status={status}
+            />
+          ))}
+        </div>
       </div>
+      {onReply ? (
+        <button
+          aria-label="Reply in thread"
+          className="ml-8 self-start text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
+          data-testid="group-message-reply"
+          onClick={() => onReply(message)}
+          type="button"
+        >
+          Reply
+        </button>
+      ) : null}
     </div>
   );
 }
