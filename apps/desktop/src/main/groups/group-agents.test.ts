@@ -549,8 +549,8 @@ describe("A3 migration and persona", () => {
       const ws = insertWorkspace(db);
       const now = new Date().toISOString();
       db.prepare(
-        `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
-         values ('a1', 'Ana', 'happy', 'blue', ?, ?)`,
+        `insert into agents (id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+         values ('a1', 'Ana', 'happy', 'blue', 'circle', ?, ?)`,
       ).run(now, now);
       const first = insertSession(ws, "Ana", db);
       const second = insertSession(ws, "Ana again", db);
@@ -822,6 +822,7 @@ describe("A2 migration (on an A1-shaped database)", () => {
       );
       group.run("g1", "One", ws, now, now);
       group.run("g2", "Two", ws, now, now);
+      // A1 table has no avatar_shape (N5 adds it during migrateDatabase below).
       const agent = db.prepare(
         `insert into agents (id, name, role, instructions, model_id, avatar_face, avatar_color, created_at, updated_at)
          values (?, ?, ?, ?, ?, 'happy', 'blue', ?, ?)`,
@@ -899,6 +900,7 @@ describe("A2 migration (on an A1-shaped database)", () => {
         "default_workspace_id",
         "avatar_face",
         "avatar_color",
+        "avatar_shape",
         "template_id",
         "created_at",
         "updated_at",
@@ -915,8 +917,8 @@ describe("A2 migration (on an A1-shaped database)", () => {
       const insertAgent = (id: string, groupId: string | null, name: string) =>
         db
           .prepare(
-            `insert into agents (id, group_id, name, avatar_face, avatar_color, created_at, updated_at)
-             values (?, ?, ?, 'happy', 'blue', ?, ?)`,
+            `insert into agents (id, group_id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+             values (?, ?, ?, 'happy', 'blue', 'circle', ?, ?)`,
           )
           .run(id, groupId, name, now, now);
       expect(() => insertAgent("dup", "g1", "shared")).toThrow(/UNIQUE/);

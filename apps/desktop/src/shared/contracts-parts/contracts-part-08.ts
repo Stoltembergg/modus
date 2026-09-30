@@ -31,6 +31,7 @@ export type AgentGroupMember = {
   /** The agent's avatar (A3); the renderer falls back to agentAvatarForId(agentId). */
   avatarFace?: AgentAvatarFace;
   avatarColor?: AgentAvatarColor;
+  avatarShape?: AgentAvatarShape;
   joinedAt: string;
 };
 
@@ -49,7 +50,10 @@ export const AGENT_AVATAR_FACES = [
 ] as const;
 export type AgentAvatarFace = (typeof AGENT_AVATAR_FACES)[number];
 
-/** The 10 avatar colors (theme palette names; the renderer maps them to tokens). */
+/**
+ * Avatar fill tokens (N5). Each maps to a bg/ink pair in the renderer for
+ * accessible contrast; names stay stable for deterministic id-derivation.
+ */
 export const AGENT_AVATAR_COLORS = [
   "red",
   "orange",
@@ -61,8 +65,33 @@ export const AGENT_AVATAR_COLORS = [
   "blue",
   "violet",
   "pink",
+  "rose",
+  "fuchsia",
+  "indigo",
+  "cyan",
+  "emerald",
+  "yellow",
+  "stone",
+  "slate",
+  "coral",
+  "mint",
+  "grape",
+  "navy",
 ] as const;
 export type AgentAvatarColor = (typeof AGENT_AVATAR_COLORS)[number];
+
+/** Silhouette shapes for AgentAvatar (N5) — not limited to circles. */
+export const AGENT_AVATAR_SHAPES = [
+  "circle",
+  "squircle",
+  "roundedSquare",
+  "hexagon",
+  "capsule",
+  "blob",
+  "diamond",
+  "shield",
+] as const;
+export type AgentAvatarShape = (typeof AGENT_AVATAR_SHAPES)[number];
 
 /** An agent: belongs to ONE group, name unique in it (case-insensitive), persona and defaults. */
 export type AgentInfo = {
@@ -79,6 +108,7 @@ export type AgentInfo = {
   defaultWorkspaceId?: string;
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
+  avatarShape: AgentAvatarShape;
   /** The template this agent was copied from (shared/agent-templates.ts), if any. */
   templateId?: string;
   createdAt: string;
@@ -96,6 +126,7 @@ export type CreateAgentInput = {
   /** Default: derived from the agent id (see agentAvatarForId). */
   avatarFace?: AgentAvatarFace;
   avatarColor?: AgentAvatarColor;
+  avatarShape?: AgentAvatarShape;
 };
 
 /**

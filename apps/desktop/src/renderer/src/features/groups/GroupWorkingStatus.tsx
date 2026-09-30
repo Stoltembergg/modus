@@ -1,4 +1,8 @@
-import type { AgentAvatarColor, AgentAvatarFace } from "../../../../shared/contracts";
+import type {
+  AgentAvatarColor,
+  AgentAvatarFace,
+  AgentAvatarShape,
+} from "../../../../shared/contracts";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { agentAvatarState } from "../agents/agentAvatarModel";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
@@ -12,6 +16,7 @@ export type WorkingMemberAvatar = {
   agentId: string;
   face: AgentAvatarFace;
   color: AgentAvatarColor;
+  shape: AgentAvatarShape;
   archived: boolean;
 };
 
@@ -57,6 +62,7 @@ export function GroupWorkingStatus({
                 color={avatar.color}
                 face={avatar.face}
                 seed={avatar.agentId}
+                shape={avatar.shape}
                 size={20}
                 state={agentAvatarState(working ? "working" : "idle", avatar.archived)}
               />

@@ -2,6 +2,7 @@ import type { AgentTemplate } from "../../../../shared/agent-templates";
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
+  AgentAvatarShape,
   AgentInfo,
   CreateAgentGroupInput,
   NewGroupAgentInput,
@@ -29,6 +30,7 @@ export type NewGroupMember = {
   modelId: string;
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
+  avatarShape?: AgentAvatarShape;
 };
 
 /** Group name used when the name field is left empty. */
@@ -137,7 +139,11 @@ export function dialogMember(
   input: NewGroupAgentInput,
   members: readonly NewGroupMember[],
   key: string,
-  fallback: { avatarFace: AgentAvatarFace; avatarColor: AgentAvatarColor },
+  fallback: {
+    avatarFace: AgentAvatarFace;
+    avatarColor: AgentAvatarColor;
+    avatarShape?: AgentAvatarShape;
+  },
 ): NewGroupMember {
   return {
     key,
@@ -152,6 +158,9 @@ export function dialogMember(
     modelId: input.modelId ?? "",
     avatarFace: input.avatarFace ?? fallback.avatarFace,
     avatarColor: input.avatarColor ?? fallback.avatarColor,
+    ...(input.avatarShape || fallback.avatarShape
+      ? { avatarShape: input.avatarShape ?? fallback.avatarShape }
+      : {}),
   };
 }
 
@@ -193,6 +202,7 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
     ...(modelId ? { modelId } : {}),
     avatarFace: member.avatarFace,
     avatarColor: member.avatarColor,
+    ...(member.avatarShape ? { avatarShape: member.avatarShape } : {}),
   };
 }
 

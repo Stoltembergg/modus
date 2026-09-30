@@ -57,8 +57,8 @@ const GROUP: AgentGroupWithMembers = {
 
 afterEach(() => cleanup());
 
-describe("SidebarGroups waiting member opens group", () => {
-  it("a waiting room member opens the group instead of a private chat", async () => {
+describe("SidebarGroups waiting opens group (N5)", () => {
+  it("waiting activity is on the group row; opening the row selects the group", async () => {
     const user = userEvent.setup();
     const onOpenAgentChat = vi.fn();
     const onSelectGroup = vi.fn();
@@ -66,6 +66,7 @@ describe("SidebarGroups waiting member opens group", () => {
       <SidebarGroups
         activityBySession={{}}
         groups={[GROUP]}
+        isGroupWaiting={() => true}
         memberStates={
           new Map([
             [
@@ -92,8 +93,10 @@ describe("SidebarGroups waiting member opens group", () => {
         workspaces={WORKSPACES}
       />,
     );
-    const row = screen.getAllByTestId("group-member-row")[0] as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: /Chat member-a/ }));
+    expect(screen.queryAllByTestId("group-member-row")).toHaveLength(0);
+    const row = screen.getByTestId("group-row");
+    expect(within(row).getByTestId("group-waiting-dot")).toBeTruthy();
+    await user.click(within(row).getByRole("button", { name: /Squad/ }));
     expect(onSelectGroup).toHaveBeenCalledWith(GROUP);
     expect(onOpenAgentChat).not.toHaveBeenCalled();
   });

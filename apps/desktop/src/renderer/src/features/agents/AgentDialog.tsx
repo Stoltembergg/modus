@@ -5,8 +5,10 @@ import { agentAvatarForId } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
   type AgentAvatarColor,
   type AgentAvatarFace,
+  type AgentAvatarShape,
   type AgentGroupWithMembers,
   type AgentInfo,
   type CreateGroupAgentInput,
@@ -56,6 +58,11 @@ type AgentDialogCommonProps = {
   defaultModelId?: string | undefined;
   /** `agents:generate-profile`: resolves the Generalist fallback on a model failure. */
   onGenerate(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
+  /**
+   * `dialog` (default): Base UI modal. `plain`: form only, for Morphing Dialog
+   * hosts that already provide chrome and focus trap.
+   */
+  surface?: "dialog" | "plain";
 };
 
 type AgentDialogGroupProps = {
@@ -101,13 +108,24 @@ export function AgentDialog(props: AgentDialogProps) {
   const initial = target?.initial;
   const custom = !(agent?.templateId ?? initial?.templateId);
   // Mounted per open (the parent renders it only while open): state starts from the agent.
-  const [initialAvatar] = useState(() =>
-    agent
-      ? { avatarFace: agent.avatarFace, avatarColor: agent.avatarColor }
-      : initial?.avatarFace && initial.avatarColor
-        ? { avatarFace: initial.avatarFace, avatarColor: initial.avatarColor }
-        : agentAvatarForId(target ? target.seed : `${group?.id}:${group?.members.length}`),
-  );
+  const surface = props.surface ?? "dialog";
+  const [initialAvatar] = useState(() => {
+    if (agent) {
+      return {
+        avatarFace: agent.avatarFace,
+        avatarColor: agent.avatarColor,
+        avatarShape: agent.avatarShape,
+      };
+    }
+    if (initial?.avatarFace && initial.avatarColor) {
+      return {
+        avatarFace: initial.avatarFace,
+        avatarColor: initial.avatarColor,
+        avatarShape: initial.avatarShape ?? agentAvatarForId(target?.seed ?? "draft").avatarShape,
+      };
+    }
+    return agentAvatarForId(target ? target.seed : `${group?.id}:${group?.members.length}`);
+  });
   const [name, setName] = useState(agent?.name ?? initial?.name ?? "");
   const [role, setRole] = useState(agent?.role ?? initial?.role ?? "");
   const [instructions, setInstructions] = useState(
@@ -125,6 +143,7 @@ export function AgentDialog(props: AgentDialogProps) {
   });
   const [face, setFace] = useState<AgentAvatarFace>(initialAvatar.avatarFace);
   const [color, setColor] = useState<AgentAvatarColor>(initialAvatar.avatarColor);
+  const [shape, setShape] = useState<AgentAvatarShape>(initialAvatar.avatarShape);
   const [busy, setBusy] = useState<"save" | "generate" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; warning: boolean } | null>(null);
@@ -201,6 +220,7 @@ export function AgentDialog(props: AgentDialogProps) {
         ...(trimmedModel ? { modelId: trimmedModel } : {}),
         avatarFace: face,
         avatarColor: color,
+        avatarShape: shape,
       });
       onOpenChange(false);
       return;
@@ -217,6 +237,7 @@ export function AgentDialog(props: AgentDialogProps) {
           ...(trimmedModel !== (agent.modelId ?? "") ? { modelId: trimmedModel || null } : {}),
           avatarFace: face,
           avatarColor: color,
+          avatarShape: shape,
         });
       } else if (group && props.onCreate) {
         await props.onCreate({
@@ -227,6 +248,7 @@ export function AgentDialog(props: AgentDialogProps) {
           modelId: trimmedModel,
           avatarFace: face,
           avatarColor: color,
+          avatarShape: shape,
         });
       }
       onOpenChange(false);
@@ -256,6 +278,254 @@ export function AgentDialog(props: AgentDialogProps) {
             ? "Generate"
             : "Create";
 
+  const title = agent ? "Edit agent" : initial?.templateId ? "Customize agent" : "New agent";
+  const subtitle = group?.name ?? target?.title;
+  const form = (
+    <form
+      data-testid="agent-dialog"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        void submit();
+      }}
+    >
+      <div className="flex items-center gap-3 px-4 pt-3.5 pb-1">
+        <AgentAvatar
+          color={color}
+          face={face}
+          seed={agent?.id ?? group?.id ?? target?.seed ?? "agent"}
+          shape={shape}
+          size={48}
+          state={busy === "generate" ? "working" : "idle"}
+        />
+        <div className="min-w-0">
+          {surface === "dialog" ? (
+            <>
+              <Dialog.Title className="font-medium text-fg text-sm">{title}</Dialog.Title>
+              <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
+                {subtitle}
+              </Dialog.Description>
+            </>
+          ) : (
+            <>
+              <p className="font-medium text-fg text-sm">{title}</p>
+              <p className="mt-0.5 truncate text-2xs text-fg-faint">{subtitle}</p>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className="scroll-thin flex max-h-[60vh] flex-col gap-3 overflow-y-auto px-4 pt-2">
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs text-fg-subtle">Name</span>
+            <input
+              className={FIELD}
+              maxLength={80}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="e.g. Ana"
+              ref={nameRef}
+              value={name}
+            />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs text-fg-subtle">Model</span>
+            <select
+              className={cn(FIELD, "px-2")}
+              onChange={(event) => setModelId(event.target.value)}
+              value={modelId}
+            >
+              {custom ? (
+                <option disabled value="">
+                  {models.length === 0 ? "No model configured" : "Choose a model"}
+                </option>
+              ) : (
+                <option value="">App default</option>
+              )}
+              {savedModelMissing && agent?.modelId ? (
+                <option value={agent.modelId}>{agent.modelId} (unavailable)</option>
+              ) : null}
+              {models.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {custom ? (
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs text-fg-subtle">What should it help with? (optional)</span>
+            <input
+              className={FIELD}
+              maxLength={500}
+              onChange={(event) => setDescription(event.target.value)}
+              placeholder="e.g. keep the release notes and changelog tidy"
+              value={description}
+            />
+          </label>
+        ) : null}
+
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <label className="text-2xs text-fg-subtle" htmlFor={roleId}>
+              Role
+            </label>
+            {custom ? (
+              <button
+                className="flex h-5 items-center gap-1 rounded px-1 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40"
+                disabled={!canGenerate}
+                onClick={() => void generate()}
+                title="Ask the model for a role and instructions"
+                type="button"
+              >
+                <IconRefresh size={12} />
+                {busy === "generate" ? "Generating…" : "Regenerate"}
+              </button>
+            ) : null}
+          </div>
+          <input
+            className={FIELD}
+            id={roleId}
+            maxLength={80}
+            onChange={(event) => setRole(event.target.value)}
+            placeholder={custom ? "Leave empty to generate" : "e.g. Reviewer"}
+            value={role}
+          />
+        </div>
+
+        <label className="flex flex-col gap-1">
+          <span className="text-2xs text-fg-subtle">Instructions</span>
+          <textarea
+            className={cn(FIELD, "h-28 resize-none py-1.5 leading-snug")}
+            maxLength={20_000}
+            onChange={(event) => setInstructions(event.target.value)}
+            placeholder={custom ? "Leave empty to generate" : "How this agent works"}
+            value={instructions}
+          />
+        </label>
+
+        <fieldset className="flex flex-col gap-1">
+          <legend className="mb-1 text-2xs text-fg-subtle">Face</legend>
+          <div className="flex flex-wrap gap-1">
+            {AGENT_AVATAR_FACES.map((option) => (
+              <button
+                aria-label={`Face ${option}`}
+                aria-pressed={face === option}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md border transition-colors",
+                  face === option
+                    ? "border-accent bg-accent/10"
+                    : "border-transparent hover:bg-hover",
+                )}
+                key={option}
+                onClick={() => setFace(option)}
+                type="button"
+              >
+                <AgentAvatar color={color} face={option} seed={option} shape={shape} size={20} />
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-1">
+          <legend className="mb-1 text-2xs text-fg-subtle">Shape</legend>
+          <div className="flex flex-wrap gap-1">
+            {AGENT_AVATAR_SHAPES.map((option) => (
+              <button
+                aria-label={`Shape ${option}`}
+                aria-pressed={shape === option}
+                className={cn(
+                  "flex size-8 items-center justify-center rounded-md border transition-colors",
+                  shape === option
+                    ? "border-accent bg-accent/10"
+                    : "border-transparent hover:bg-hover",
+                )}
+                key={option}
+                onClick={() => setShape(option)}
+                type="button"
+              >
+                <AgentAvatar color={color} face={face} seed={option} shape={option} size={20} />
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="flex flex-col gap-1">
+          <legend className="mb-1 text-2xs text-fg-subtle">Color</legend>
+          <div className="flex flex-wrap gap-1.5">
+            {AGENT_AVATAR_COLORS.map((option) => (
+              <button
+                aria-label={`Color ${option}`}
+                aria-pressed={color === option}
+                className={cn(
+                  "size-5 rounded-md ring-offset-1 ring-offset-canvas transition-shadow",
+                  color === option
+                    ? "ring-2 ring-accent"
+                    : "hover:ring-1 hover:ring-hairline-strong",
+                )}
+                key={option}
+                onClick={() => setColor(option)}
+                style={{ backgroundColor: AGENT_AVATAR_FILL[option] }}
+                type="button"
+              />
+            ))}
+          </div>
+        </fieldset>
+      </div>
+
+      {notice ? (
+        <p
+          className={cn(
+            "mx-4 mt-3 rounded-md px-2.5 py-1.5 text-xs",
+            notice.warning
+              ? "border border-amber-400/30 bg-amber-400/10 text-amber-400"
+              : "text-fg-faint",
+          )}
+          data-testid="agent-dialog-notice"
+          data-warning={notice.warning || undefined}
+          role="status"
+        >
+          {notice.text}
+        </p>
+      ) : null}
+
+      {shownError ? (
+        <div
+          className="mx-4 mt-3 max-h-24 overflow-y-auto whitespace-pre-wrap rounded-md border border-danger/30 bg-danger/8 px-2.5 py-2 text-xs text-danger"
+          role="alert"
+        >
+          {shownError}
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex items-center justify-end gap-2 border-hairline-soft border-t px-4 py-2.5">
+        <button
+          className="h-7 rounded-md px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+          onClick={() => onOpenChange(false)}
+          type="button"
+        >
+          Cancel
+        </button>
+        <button
+          className={cn(
+            "h-7 rounded-md px-3 text-xs transition-colors",
+            busy === null
+              ? "bg-accent text-white hover:opacity-90"
+              : "cursor-not-allowed bg-chip-strong text-fg-faint",
+          )}
+          disabled={busy !== null}
+          type="submit"
+        >
+          {submitLabel}
+        </button>
+      </div>
+    </form>
+  );
+
+  if (surface === "plain") return form;
+
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
       <Dialog.Portal>
@@ -273,220 +543,9 @@ export function AgentDialog(props: AgentDialogProps) {
             "data-ending-style:scale-[0.96] data-ending-style:opacity-0",
             "data-starting-style:scale-[0.96] data-starting-style:opacity-0",
           )}
-          data-testid="agent-dialog"
           initialFocus={nameRef}
         >
-          <form
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <div className="flex items-center gap-3 px-4 pt-3.5 pb-1">
-              <AgentAvatar
-                color={color}
-                face={face}
-                seed={agent?.id ?? group?.id ?? target?.seed ?? "agent"}
-                size={48}
-                state={busy === "generate" ? "working" : "idle"}
-              />
-              <div className="min-w-0">
-                <Dialog.Title className="font-medium text-fg text-sm">
-                  {agent ? "Edit agent" : initial?.templateId ? "Customize agent" : "New agent"}
-                </Dialog.Title>
-                <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
-                  {group?.name ?? target?.title}
-                </Dialog.Description>
-              </div>
-            </div>
-
-            <div className="scroll-thin flex max-h-[60vh] flex-col gap-3 overflow-y-auto px-4 pt-2">
-              <div className="grid grid-cols-2 gap-2">
-                <label className="flex flex-col gap-1">
-                  <span className="text-2xs text-fg-subtle">Name</span>
-                  <input
-                    className={FIELD}
-                    maxLength={80}
-                    onChange={(event) => setName(event.target.value)}
-                    placeholder="e.g. Ana"
-                    ref={nameRef}
-                    value={name}
-                  />
-                </label>
-                <label className="flex flex-col gap-1">
-                  <span className="text-2xs text-fg-subtle">Model</span>
-                  <select
-                    className={cn(FIELD, "px-2")}
-                    onChange={(event) => setModelId(event.target.value)}
-                    value={modelId}
-                  >
-                    {custom ? (
-                      <option disabled value="">
-                        {models.length === 0 ? "No model configured" : "Choose a model"}
-                      </option>
-                    ) : (
-                      <option value="">App default</option>
-                    )}
-                    {savedModelMissing && agent?.modelId ? (
-                      <option value={agent.modelId}>{agent.modelId} (unavailable)</option>
-                    ) : null}
-                    {models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-
-              {custom ? (
-                <label className="flex flex-col gap-1">
-                  <span className="text-2xs text-fg-subtle">
-                    What should it help with? (optional)
-                  </span>
-                  <input
-                    className={FIELD}
-                    maxLength={500}
-                    onChange={(event) => setDescription(event.target.value)}
-                    placeholder="e.g. keep the release notes and changelog tidy"
-                    value={description}
-                  />
-                </label>
-              ) : null}
-
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center justify-between">
-                  <label className="text-2xs text-fg-subtle" htmlFor={roleId}>
-                    Role
-                  </label>
-                  {custom ? (
-                    <button
-                      className="flex h-5 items-center gap-1 rounded px-1 text-2xs text-fg-subtle hover:bg-hover hover:text-fg disabled:opacity-40"
-                      disabled={!canGenerate}
-                      onClick={() => void generate()}
-                      title="Ask the model for a role and instructions"
-                      type="button"
-                    >
-                      <IconRefresh size={12} />
-                      {busy === "generate" ? "Generating…" : "Regenerate"}
-                    </button>
-                  ) : null}
-                </div>
-                <input
-                  className={FIELD}
-                  id={roleId}
-                  maxLength={80}
-                  onChange={(event) => setRole(event.target.value)}
-                  placeholder={custom ? "Leave empty to generate" : "e.g. Reviewer"}
-                  value={role}
-                />
-              </div>
-
-              <label className="flex flex-col gap-1">
-                <span className="text-2xs text-fg-subtle">Instructions</span>
-                <textarea
-                  className={cn(FIELD, "h-28 resize-none py-1.5 leading-snug")}
-                  maxLength={20_000}
-                  onChange={(event) => setInstructions(event.target.value)}
-                  placeholder={custom ? "Leave empty to generate" : "How this agent works"}
-                  value={instructions}
-                />
-              </label>
-
-              <fieldset className="flex flex-col gap-1">
-                <legend className="mb-1 text-2xs text-fg-subtle">Face</legend>
-                <div className="flex flex-wrap gap-1">
-                  {AGENT_AVATAR_FACES.map((option) => (
-                    <button
-                      aria-label={`Face ${option}`}
-                      aria-pressed={face === option}
-                      className={cn(
-                        "flex size-8 items-center justify-center rounded-md border transition-colors",
-                        face === option
-                          ? "border-accent bg-accent/10"
-                          : "border-transparent hover:bg-hover",
-                      )}
-                      key={option}
-                      onClick={() => setFace(option)}
-                      type="button"
-                    >
-                      <AgentAvatar color={color} face={option} seed={option} size={20} />
-                    </button>
-                  ))}
-                </div>
-              </fieldset>
-
-              <fieldset className="flex flex-col gap-1">
-                <legend className="mb-1 text-2xs text-fg-subtle">Color</legend>
-                <div className="flex flex-wrap gap-1.5">
-                  {AGENT_AVATAR_COLORS.map((option) => (
-                    <button
-                      aria-label={`Color ${option}`}
-                      aria-pressed={color === option}
-                      className={cn(
-                        "size-5 rounded-full ring-offset-1 ring-offset-canvas transition-shadow",
-                        color === option
-                          ? "ring-2 ring-accent"
-                          : "hover:ring-1 hover:ring-hairline-strong",
-                      )}
-                      key={option}
-                      onClick={() => setColor(option)}
-                      style={{ backgroundColor: AGENT_AVATAR_FILL[option] }}
-                      type="button"
-                    />
-                  ))}
-                </div>
-              </fieldset>
-            </div>
-
-            {notice ? (
-              <p
-                className={cn(
-                  "mx-4 mt-3 rounded-md px-2.5 py-1.5 text-xs",
-                  notice.warning
-                    ? "border border-amber-400/30 bg-amber-400/10 text-amber-400"
-                    : "text-fg-faint",
-                )}
-                data-testid="agent-dialog-notice"
-                data-warning={notice.warning || undefined}
-                role="status"
-              >
-                {notice.text}
-              </p>
-            ) : null}
-
-            {shownError ? (
-              <div
-                className="mx-4 mt-3 max-h-24 overflow-y-auto whitespace-pre-wrap rounded-md border border-danger/30 bg-danger/8 px-2.5 py-2 text-xs text-danger"
-                role="alert"
-              >
-                {shownError}
-              </div>
-            ) : null}
-
-            <div className="mt-4 flex items-center justify-end gap-2 border-hairline-soft border-t px-4 py-2.5">
-              <button
-                className="h-7 rounded-md px-3 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
-                onClick={() => onOpenChange(false)}
-                type="button"
-              >
-                Cancel
-              </button>
-              <button
-                className={cn(
-                  "h-7 rounded-md px-3 text-xs transition-colors",
-                  busy === null
-                    ? "bg-accent text-white hover:opacity-90"
-                    : "cursor-not-allowed bg-chip-strong text-fg-faint",
-                )}
-                disabled={busy !== null}
-                type="submit"
-              >
-                {submitLabel}
-              </button>
-            </div>
-          </form>
+          {form}
         </Dialog.Popup>
       </Dialog.Portal>
     </Dialog.Root>

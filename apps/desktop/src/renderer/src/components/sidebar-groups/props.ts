@@ -60,8 +60,6 @@ export type SidebarGroupsProps = {
 
 /**
  * Sidebar "Groups" section body (the header lives in Sidebar.tsx). Each group
- * row shows its name, member count and an activity-dot slot; expanding a group
- * lists its agents (avatar, name, role). Clicking one opens its 1:1 chat, which
- * (like the room sessions) is hidden from Pinned / Projects / Chats. A blocked
- * group lists its agents the same way.
+ * row shows its name, member count and an activity-dot slot. Agents are managed
+ * from the room's Agents panel (N5) — not nested permanently under the group.
  */

@@ -111,10 +111,15 @@ describe("SidebarGroups", () => {
       />,
     );
     const rows = screen.getAllByTestId("group-row");
+    expect(rows.map((row) => within(row).getByTestId("group-member-count").textContent)).toEqual([
+      "2 members",
+      "1 member",
+    ]);
     expect(
-      rows.map((row) => within(row).getByRole("button", { expanded: true }).textContent),
-    ).toEqual(["Release squad2 members", "Inbox crew1 member"]);
+      rows.map((row) => within(row).getByText(/Release squad|Inbox crew/).textContent),
+    ).toEqual(["Release squad", "Inbox crew"]);
     expect(screen.queryByTestId("group-activity-dot")).toBeNull();
+    expect(screen.queryAllByTestId("group-member-row")).toHaveLength(0);
   });
 
   it("New group opens the A4 modal with the app services (Copy lists the other groups' agents)", async () => {
@@ -158,40 +163,21 @@ describe("SidebarGroups", () => {
     expect(dots[0]?.closest("[data-group-id]")?.getAttribute("data-group-id")).toBe("g-inbox");
   });
 
-  it("lists members under their group, marks the lead, and wires member actions", async () => {
-    const user = userEvent.setup();
-    const handlers = groupHandlers();
+  it("does not nest permanent agent rows under groups (N5)", () => {
     render(
       <SidebarGroups
         activityBySession={{}}
         groups={GROUPS}
         sessions={SESSIONS}
         workspaces={WORKSPACES}
-        {...handlers}
+        {...groupHandlers()}
       />,
     );
-    const squad = screen.getAllByTestId("group-row")[0]?.parentElement as HTMLElement;
-    const members = within(squad).getAllByTestId("group-member-row");
-    expect(members.map((row) => row.textContent)).toEqual(["Chat member-aLead", "Chat member-b"]);
-
-    await user.click(
-      within(members[0] as HTMLElement).getByRole("button", { name: /Chat member-a/ }),
-    );
-    expect(handlers.onSelectSession).toHaveBeenCalledWith(SESSIONS[0]);
-    await user.click(
-      within(members[0] as HTMLElement).getByRole("button", { name: "Remove as lead" }),
-    );
-    expect(handlers.onSetLead).toHaveBeenCalledWith("g-project", null);
-    await user.click(within(members[1] as HTMLElement).getByRole("button", { name: "Make lead" }));
-    expect(handlers.onSetLead).toHaveBeenCalledWith("g-project", "member-b");
-    await user.click(
-      within(members[1] as HTMLElement).getByRole("button", { name: "Remove from group" }),
-    );
-    expect(handlers.onRemoveMember).toHaveBeenCalledWith("g-project", "member-b");
-
-    // Collapsing hides the members.
-    await user.click(within(squad).getByRole("button", { expanded: true }));
-    expect(within(squad).queryAllByTestId("group-member-row")).toHaveLength(0);
+    expect(screen.queryAllByTestId("group-member-row")).toHaveLength(0);
+    expect(screen.getAllByTestId("group-member-count").map((el) => el.textContent)).toEqual([
+      "2 members",
+      "1 member",
+    ]);
   });
 
   it("offers Rename, Manage members and Delete from the row's context menu", async () => {
@@ -346,12 +332,12 @@ describe("Sidebar with groups", () => {
     expect([...order].sort((x, y) => x - y)).toEqual(order);
   });
 
-  it("shows member chats only under their group", () => {
+  it("does not list member room sessions in the sidebar (N5)", () => {
     renderSidebar();
     const groups = screen.getByTestId("sidebar-groups");
     for (const title of ["Chat member-a", "Chat member-b", "Chat inbox-member"]) {
-      expect(screen.getAllByText(title)).toHaveLength(1);
-      expect(within(groups).getByText(title)).toBeTruthy();
+      expect(screen.queryByText(title)).toBeNull();
+      expect(within(groups).queryByText(title)).toBeNull();
     }
     // Non-members stay where they were.
     expect(within(groups).queryByText("Chat pinned-inbox")).toBeNull();
@@ -400,12 +386,12 @@ describe("Sidebar with groups", () => {
     expect(screen.queryByText("Direct with Ana")).toBeNull();
   });
 
-  it("room sessions (kind group_member) never show outside the Groups section, even pinned", () => {
+  it("room sessions (kind group_member) never show in the sidebar, even pinned", () => {
     renderSidebar();
     const pinned = screen.getByTestId("sidebar-pinned");
     expect(within(pinned).queryByText("Chat inbox-member")).toBeNull();
     expect(within(pinned).getByText("Chat pinned-inbox")).toBeTruthy();
-    expect(screen.getAllByText("Chat inbox-member")).toHaveLength(1);
+    expect(screen.queryByText("Chat inbox-member")).toBeNull();
   });
 
   describe("Remove project with groups", () => {
@@ -521,11 +507,11 @@ describe("SidebarGroups room selection and states", () => {
     const row = screen.getAllByTestId("group-row")[0] as HTMLElement;
     await user.click(within(row).getByRole("button", { name: /Release squad/ }));
     expect(onSelectGroup).toHaveBeenCalledWith(GROUPS[0]);
-    // Members stay listed; the rail button hides them.
-    const squad = row.parentElement as HTMLElement;
-    expect(within(squad).getAllByTestId("group-member-row")).toHaveLength(2);
-    await user.click(within(row).getByRole("button", { name: "Hide members" }));
-    expect(within(squad).queryAllByTestId("group-member-row")).toHaveLength(0);
+    expect(
+      within(row.parentElement as HTMLElement).queryAllByTestId("group-member-row"),
+    ).toHaveLength(0);
+    await user.click(within(row).getByRole("button", { name: "Open group" }));
+    expect(onSelectGroup).toHaveBeenCalledTimes(2);
 
     view.rerender(
       <SidebarGroups
@@ -594,121 +580,48 @@ describe("SidebarGroups duplicate member titles", () => {
         {...groupHandlers()}
       />,
     );
-    expect(screen.getAllByTestId("group-member-row").map((row) => row.textContent)).toEqual([
-      "Reviewer · 3f2a",
-      "Reviewer · 8b01",
-      "Planner",
-    ]);
+    expect(screen.queryAllByTestId("group-member-row")).toHaveLength(0);
+    expect(screen.getByTestId("group-member-count").textContent).toContain("3");
   });
 });
 
-describe("SidebarGroups agents (A3)", () => {
-  const DM = session("dm-a", { title: "Chat member-a", agentId: "agent-member-a" });
-
-  it("each agent row shows a 16 px avatar, name and role; clicking opens its 1:1 chat", async () => {
+describe("SidebarGroups agents (N5)", () => {
+  it("Add agent remains available from the group menu", async () => {
     const user = userEvent.setup();
-    const onOpenAgentChat = vi.fn();
-    const onSelectGroup = vi.fn();
-    const groups: AgentGroupWithMembers[] = [
-      {
-        ...(GROUPS[0] as AgentGroupWithMembers),
-        members: [
-          {
-            ...member("g-project", "member-a"),
-            agentRole: "Reviewer",
-            avatarFace: "wink",
-            avatarColor: "teal",
-          },
-          member("g-project", "member-b"),
-        ],
-      },
-    ];
-    render(
-      <SidebarGroups
-        activeSessionId="dm-a"
-        activityBySession={{}}
-        groups={groups}
-        memberStates={
-          new Map([
-            [
-              "g-project",
-              {
-                groupId: "g-project",
-                runningSessionIds: ["member-b"],
-                queuedSessionIds: [],
-                waitingSessionIds: [],
-              },
-            ],
-          ])
-        }
-        onOpenAgentChat={onOpenAgentChat}
-        onSelectGroup={onSelectGroup}
-        sessions={[...SESSIONS, DM]}
-        workspaces={WORKSPACES}
-        {...groupHandlers()}
-      />,
-    );
-    const rows = screen.getAllByTestId("group-member-row");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "Chat member-aLeadReviewer",
-      "Chat member-b",
-    ]);
-    const avatars = rows.map((row) => within(row).getByTestId("agent-avatar"));
-    expect(avatars.map((avatar) => avatar.dataset.size)).toEqual(["16", "16"]);
-    expect(avatars[0]?.dataset.face).toBe("wink");
-    expect(avatars.map((avatar) => avatar.dataset.state)).toEqual(["idle", "working"]);
-    // The open 1:1 chat selects its agent's row.
-    expect(rows.map((row) => row.className.includes("row-selected"))).toEqual([true, false]);
-
-    await user.click(within(rows[1] as HTMLElement).getByRole("button", { name: /Chat member-b/ }));
-    expect(onOpenAgentChat).toHaveBeenCalledWith("agent-member-b");
-    expect(onSelectGroup).not.toHaveBeenCalled();
-  });
-
-  it("Edit agent on a row and Add agent in the group menu open the agent dialog", async () => {
-    const user = userEvent.setup();
-    const onEditAgent = vi.fn();
     const onAddAgent = vi.fn();
     render(
       <SidebarGroups
         activityBySession={{}}
         groups={GROUPS}
         onAddAgent={onAddAgent}
-        onEditAgent={onEditAgent}
         onOpenAgentChat={vi.fn()}
         sessions={SESSIONS}
         workspaces={WORKSPACES}
         {...groupHandlers()}
       />,
     );
-    const row = screen.getAllByTestId("group-member-row")[1] as HTMLElement;
-    await user.click(within(row).getByRole("button", { name: "Edit agent" }));
-    expect(onEditAgent).toHaveBeenCalledWith("agent-member-b");
-
     const groupRow = screen.getAllByTestId("group-row")[0] as HTMLElement;
     await user.click(within(groupRow).getByRole("button", { name: "Group actions" }));
     await user.click(await screen.findByRole("menuitem", { name: "Add agent" }));
     expect(onAddAgent).toHaveBeenCalledWith("g-project");
   });
 
-  it("a blocked group (no Project, one agent) still lists its agents, clickable", async () => {
+  it("a blocked group still shows as a selectable row without nested agents", async () => {
     const user = userEvent.setup();
-    const onOpenAgentChat = vi.fn();
+    const onSelectGroup = vi.fn();
     render(
       <SidebarGroups
         activityBySession={{}}
         groups={[GROUPS[1] as AgentGroupWithMembers]}
-        onOpenAgentChat={onOpenAgentChat}
+        onOpenAgentChat={vi.fn()}
+        onSelectGroup={onSelectGroup}
         sessions={SESSIONS}
         workspaces={WORKSPACES}
         {...groupHandlers()}
       />,
     );
-    const rows = screen.getAllByTestId("group-member-row");
-    expect(rows).toHaveLength(1);
-    await user.click(
-      within(rows[0] as HTMLElement).getByRole("button", { name: /Chat inbox-member/ }),
-    );
-    expect(onOpenAgentChat).toHaveBeenCalledWith("agent-inbox-member");
+    expect(screen.queryAllByTestId("group-member-row")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: /Inbox squad|Open group/ }));
+    expect(onSelectGroup).toHaveBeenCalled();
   });
 });

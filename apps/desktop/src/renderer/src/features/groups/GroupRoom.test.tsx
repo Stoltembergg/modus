@@ -121,6 +121,28 @@ const update = {
     return () => undefined;
   }),
 };
+const agents = {
+  list: vi.fn(async () =>
+    GROUP.members.map((member) => ({
+      id: member.agentId,
+      groupId: GROUP.id,
+      name: member.name,
+      role: member.agentRole,
+      instructions: "",
+      avatarFace: "happy" as const,
+      avatarColor: "sky" as const,
+      avatarShape: "circle" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    })),
+  ),
+  update: vi.fn(async () => undefined),
+  generateProfile: vi.fn(async () => ({
+    role: "Generalist",
+    instructions: "Help.",
+    generated: false,
+  })),
+};
 
 beforeEach(() => {
   listeners = [];
@@ -129,8 +151,9 @@ beforeEach(() => {
   updateState = { status: "idle" };
   tasks = [];
   decisions = [];
-  for (const fn of [...Object.values(group), ...Object.values(update)]) fn.mockClear();
-  Object.assign(window, { modus: { group, update } });
+  for (const fn of [...Object.values(group), ...Object.values(update), ...Object.values(agents)])
+    fn.mockClear();
+  Object.assign(window, { modus: { group, update, agents } });
 });
 
 afterEach(() => cleanup());
@@ -180,23 +203,15 @@ const emit = (event: GroupRuntimeEvent) =>
   });
 
 describe("GroupRoom", () => {
-  it("shows the header (name, Project badge, chips with Lead) and the empty state", async () => {
+  it("shows the header (name, Project badge, Agents control) and the empty state", async () => {
     renderRoom();
     expect(await screen.findByText(GROUP_ROOM_EMPTY_TEXT)).toBeTruthy();
     const header = screen.getByTestId("group-room-header");
     expect(within(header).getByText("Release squad")).toBeTruthy();
     expect(screen.getByTestId("group-project-badge").textContent).toBe("Repo");
-    const chips = screen.getAllByTestId("group-member-chip");
-    // A repeated title gets the muted short id suffix; unique titles stay plain.
-    expect(chips.map((chip) => chip.textContent)).toEqual([
-      "PlannerLead",
-      "Reviewer · srev1",
-      "Reviewer · srev2",
-    ]);
-    expect(within(chips[1] as HTMLElement).getByTestId("member-id-suffix").className).toContain(
-      "text-fg-faint",
-    );
-    expect(within(chips[0] as HTMLElement).queryByTestId("member-id-suffix")).toBeNull();
+    expect(screen.getByTestId("group-agents-button").textContent).toContain("Agents");
+    expect(screen.getByTestId("group-agents-button").textContent).toContain("3");
+    expect(screen.queryByTestId("group-member-chip")).toBeNull();
     expect(group.listMessages).toHaveBeenCalledWith({ groupId: "g-1", limit: GROUP_MESSAGE_PAGE });
     // No member running: no Stop button.
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
@@ -325,45 +340,37 @@ describe("GroupRoom", () => {
     expect(group.listMessages).toHaveBeenCalledTimes(1);
   });
 
-  it("chips carry each agent's avatar (20 px) in its room state; archived is grey (A3)", () => {
-    const roomGroup: AgentGroupWithMembers = {
-      ...GROUP,
-      members: GROUP.members.map((member, index) =>
-        index === 1
-          ? { ...member, avatarFace: "wink", avatarColor: "lime", archived: true }
-          : { ...member, avatarFace: "happy", avatarColor: "sky" },
-      ),
-    };
-    renderRoom(
-      states({ runningSessionIds: ["s-lead"], waitingSessionIds: ["s-rev-2"] }),
-      vi.fn(),
-      roomGroup,
-    );
-    const avatars = screen
-      .getAllByTestId("group-member-chip")
-      .map((chip) => within(chip).getByTestId("agent-avatar"));
-    expect(avatars.map((avatar) => avatar.dataset.state)).toEqual([
-      "working",
-      "archived",
-      "waiting",
-    ]);
-    expect(avatars.map((avatar) => avatar.dataset.size)).toEqual(["20", "20", "20"]);
-    expect(avatars[1]?.dataset.face).toBe("wink");
-    expect(avatars[0]?.dataset.color).toBe("sky");
-  });
-
-  it("chip dots follow member states; clicking a chip opens that member's chat", async () => {
+  it("Agents popover lists members with Lead, status and open-chat action", async () => {
     const user = userEvent.setup();
-    const { onOpenMember } = renderRoom(
-      states({ runningSessionIds: ["s-lead"], waitingSessionIds: ["s-rev-2"] }),
+    const onOpenAgentChat = vi.fn();
+    render(
+      <GroupRoom
+        group={{
+          ...GROUP,
+          members: GROUP.members.map((member, index) =>
+            index === 1
+              ? { ...member, avatarFace: "wink", avatarColor: "lime", archived: true }
+              : { ...member, avatarFace: "happy", avatarColor: "sky" },
+          ),
+        }}
+        memberStates={states({ runningSessionIds: ["s-lead"], waitingSessionIds: ["s-rev-2"] })}
+        onDelete={vi.fn()}
+        onOpenAgentChat={onOpenAgentChat}
+        onOpenMember={vi.fn()}
+        onRename={vi.fn()}
+        onUpdateMembers={vi.fn(async () => undefined)}
+        workspaces={WORKSPACES}
+      />,
     );
-    const chips = screen.getAllByTestId("group-member-chip");
-    expect(chips.map((chip) => chip.dataset.state)).toEqual(["working", "idle", "waiting"]);
-    expect(within(chips[2] as HTMLElement).getByTestId("waiting-dot")).toBeTruthy();
-    expect(within(chips[0] as HTMLElement).getByTitle("Agent running")).toBeTruthy();
-    expect(within(chips[1] as HTMLElement).queryByTitle(/running|Waiting/)).toBeNull();
-    await user.click(chips[1] as HTMLElement);
-    expect(onOpenMember).toHaveBeenCalledWith("s-rev-1");
+    expect(screen.getByTestId("group-activity-dots")).toBeTruthy();
+    await user.click(screen.getByTestId("group-agents-button"));
+    const panel = await screen.findByTestId("group-agents-popover");
+    const rows = within(panel).getAllByTestId("group-agents-member");
+    expect(rows).toHaveLength(3);
+    expect(within(rows[0] as HTMLElement).getByText("Lead")).toBeTruthy();
+    expect(within(rows[1] as HTMLElement).getByText(/archived/)).toBeTruthy();
+    await user.click(within(rows[1] as HTMLElement).getByTestId("group-agent-open-chat"));
+    expect(onOpenAgentChat).toHaveBeenCalledWith("agent-s-rev-1");
   });
 
   it("shows Stop only while a member runs, and stops the group", async () => {

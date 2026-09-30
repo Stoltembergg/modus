@@ -3,8 +3,10 @@ import { agentAvatarForId, getAgentTemplate } from "../../shared/agent-templates
 import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
   type AgentAvatarColor,
   type AgentAvatarFace,
+  type AgentAvatarShape,
   type AgentGroupMember,
   type AgentGroupMode,
   type AgentGroupWithMembers,
@@ -56,6 +58,7 @@ type AgentRow = {
   default_workspace_id: string | null;
   avatar_face: AgentAvatarFace;
   avatar_color: AgentAvatarColor;
+  avatar_shape: AgentAvatarShape;
   template_id: string | null;
   created_at: string;
   updated_at: string;
@@ -63,7 +66,7 @@ type AgentRow = {
 };
 
 const AGENT_COLUMNS = `id, group_id, name, role, instructions, model_id, default_workspace_id,
-  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
+  avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at`;
 
 function toAgent(row: AgentRow): AgentInfo {
   return {
@@ -76,6 +79,7 @@ function toAgent(row: AgentRow): AgentInfo {
     ...(row.default_workspace_id !== null ? { defaultWorkspaceId: row.default_workspace_id } : {}),
     avatarFace: row.avatar_face,
     avatarColor: row.avatar_color,
+    avatarShape: row.avatar_shape,
     ...(row.template_id !== null ? { templateId: row.template_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -154,7 +158,7 @@ export function createAgent(
   const groupId = input.groupId ?? null;
   getDatabase()
     .prepare(
-      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`,
+      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`,
     )
     .run(
       id,
@@ -166,6 +170,7 @@ export function createAgent(
       requireWorkspace(input.defaultWorkspaceId ?? null),
       requireAvatar(input.avatarFace ?? avatar.avatarFace, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? avatar.avatarColor, AGENT_AVATAR_COLORS, "avatar color"),
+      requireAvatar(input.avatarShape ?? avatar.avatarShape, AGENT_AVATAR_SHAPES, "avatar shape"),
       input.templateId ?? null,
       now,
       now,
@@ -193,6 +198,7 @@ function newAgentFields(
     instructions: template.instructions,
     avatarFace: template.avatarFace,
     avatarColor: template.avatarColor,
+    avatarShape: agentAvatarForId(`${template.id}:${fields.name ?? template.name}`).avatarShape,
     ...base,
     name: fields.name?.trim()
       ? fields.name
@@ -340,7 +346,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
     .prepare(
       `update agents
        set name = ?, role = ?, instructions = ?, model_id = ?, default_workspace_id = ?,
-           avatar_face = ?, avatar_color = ?, updated_at = ?
+           avatar_face = ?, avatar_color = ?, avatar_shape = ?, updated_at = ?
        where id = ?`,
     )
     .run(
@@ -353,6 +359,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
         : row.default_workspace_id,
       requireAvatar(input.avatarFace ?? row.avatar_face, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? row.avatar_color, AGENT_AVATAR_COLORS, "avatar color"),
+      requireAvatar(input.avatarShape ?? row.avatar_shape, AGENT_AVATAR_SHAPES, "avatar shape"),
       new Date().toISOString(),
       agentId,
     );
