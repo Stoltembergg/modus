@@ -4,17 +4,22 @@
     "apps/desktop/src/renderer/src/features/groups/newGroupModel.test.ts",
     "apps/desktop/src/main/ipc/agents-ipc.ts",
     "apps/desktop/src/renderer/src/features/groups/CreateGroupDialog.test.tsx",
-    "apps/desktop/src/shared/contracts-parts/contracts-part-08.ts",
-    "apps/desktop/src/main/ipc/agents-ipc.test.ts"
+    "apps/desktop/src/shared/contracts-parts/contracts-part-08.ts"
   ],
   "new_b64": {
     "apps/desktop/src/renderer/src/features/groups/NewGroupModal.tsx": [
       ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.000",
-      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.001",
-      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.002",
-      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.003",
-      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.004",
-      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.005",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.000b",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.001a",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.001b",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.002a",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.002b",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.003a",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.003b",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.004a",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.004b",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.005a",
+      ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.005b",
       ".a4-restore/chunks/apps__desktop__src__renderer__src__features__groups__NewGroupModal.tsx.b64.006"
     ],
     "apps/desktop/src/renderer/src/features/groups/NewGroupModal.test.tsx": [
@@ -32,7 +37,8 @@
     "apps/desktop/src/main/ipc/schemas.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__schemas.ts.patch",
     "apps/desktop/src/renderer/src/components/Sidebar.tsx": ".a4-restore/patches/apps__desktop__src__renderer__src__components__Sidebar.tsx.patch",
     "apps/desktop/src/main/ipc/register-app-ipc.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__register-app-ipc.ts.patch",
-    "apps/desktop/src/renderer/src/app/App.tsx": ".a4-restore/patches/apps__desktop__src__renderer__src__app__App.tsx.patch"
+    "apps/desktop/src/renderer/src/app/App.tsx": ".a4-restore/patches/apps__desktop__src__renderer__src__app__App.tsx.patch",
+    "apps/desktop/src/main/ipc/agents-ipc.test.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__agents-ipc.test.ts.patch"
   },
   "expected": {
     "apps/desktop/src/renderer/src/features/groups/CreateGroupDialog.tsx": 14355,
