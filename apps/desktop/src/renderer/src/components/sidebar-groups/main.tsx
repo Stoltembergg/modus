@@ -1,17 +1,16 @@
 import { IconUsersPlus } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
-import type { AgentGroupWithMembers } from "../../../../shared/contracts";
-import { cn } from "../../lib/cn";
 import { CreateGroupDialog } from "../../features/groups/CreateGroupDialog";
+import { groupMemberOpenTarget } from "../../features/groups/groupMemberOpenTarget";
 import {
   agentChatSessions,
   groupAgentRows,
   isGroupWorkingStub,
 } from "../../features/groups/groupSidebarModel";
-import { groupMemberOpenTarget } from "../../features/groups/groupMemberOpenTarget";
 import { memberLabels } from "../../features/groups/memberLabels";
 import { NewGroupModal } from "../../features/groups/NewGroupModal";
 import { memberActivityState } from "../../features/groups/useWorkingGroups";
+import { cn } from "../../lib/cn";
 import { GroupRow } from "./group-row";
 import { MemberRow } from "./member-row";
 import type { SidebarGroupsProps } from "./props";
@@ -179,4 +178,3 @@ export function SidebarGroups({
     </div>
   );
 }
-

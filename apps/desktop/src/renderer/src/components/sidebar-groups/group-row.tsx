@@ -1,11 +1,7 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import {
-  IconDots,
-  IconUsers,
-  IconUsersGroup,
-} from "@tabler/icons-react";
-import { type ReactNode, useState } from "react";
+import { IconDots, IconUsersGroup } from "@tabler/icons-react";
+import { useState } from "react";
 import { cn } from "../../lib/cn";
 import { GroupMenuItems } from "./menu";
 import { GroupRenameInput } from "./rename";
