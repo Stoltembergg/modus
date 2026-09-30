@@ -9,16 +9,15 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
-import {
-  buildGroupStepsLabels,
-  buildSafeChainOfThought,
-  classifyGroupSystemStatus,
-} from "../../../../shared/group-prompt-kit";
+import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import {
   collabStatusTone,
+  extractUsefulSources,
   formatNaturalCollabStatus,
   type RoomMessageTone,
+  shouldPersistCollabStatusInTranscript,
   splitRoomMessageBody,
+  stripAgentSelfIntro,
 } from "../../../../shared/group-room-transcript";
 import { cn } from "../../lib/cn";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
@@ -31,11 +30,10 @@ import { MentionChip } from "./MentionChip";
 import type { MemberLabel } from "./memberLabels";
 import {
   AttachmentChip,
-  PromptChainOfThought,
   PromptMessage,
   PromptMessageBody,
   PromptMessageIdentity,
-  PromptSteps,
+  PromptSource,
   PromptSystemMessage,
 } from "./prompt-kit/PromptKit";
 
@@ -352,17 +350,15 @@ export function GroupMessageRow({
   const label = author ?? { title: "Member" };
   const title = label.title;
   const streamBody = liveTurn ? liveTurn.live.streamText : message.body;
-  const { prose, statuses } = splitRoomMessageBody(streamBody);
-  const showLiveStatus = Boolean(liveTurn && !prose.trim());
-  const stepItems = liveTurn ? buildGroupStepsLabels(liveTurn.live.tools) : [];
-  const cotItems = liveTurn
-    ? buildSafeChainOfThought({
-        phase: String(liveTurn.live.phase),
-        activity: liveTurn.live.presence?.activity,
-        tools: liveTurn.live.tools,
-        hasStream: Boolean(prose.trim()),
-      })
-    : [];
+  const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(streamBody);
+  const prose = stripAgentSelfIntro(rawProse);
+  const statuses = rawStatuses.filter(shouldPersistCollabStatusInTranscript);
+  const readyOnly =
+    !prose.trim() && rawStatuses.some((status) => status.kind === "ready") && statuses.length === 0;
+  const showLiveStatus = Boolean(
+    liveTurn && !prose.trim() && !readyOnly && !liveTurn.live.collapsed,
+  );
+  const sources = !streaming && !liveTurn ? extractUsefulSources(prose) : [];
   return (
     <div
       className="group/msg flex flex-col gap-0.5"
@@ -395,21 +391,25 @@ export function GroupMessageRow({
             name={<MemberName label={label} />}
             role={role?.trim()}
             trailing={
-              toLabel ? (
-                <span className="font-normal text-fg-faint" data-testid="group-message-to">
-                  → <MemberName label={toLabel} />
-                </span>
-              ) : null
+              <>
+                {toLabel ? (
+                  <span className="font-normal text-fg-faint" data-testid="group-message-to">
+                    → <MemberName label={toLabel} />
+                  </span>
+                ) : null}
+                {readyOnly ? (
+                  <span
+                    className="font-normal text-amber-400/90 text-2xs"
+                    data-testid="group-ready-ephemeral"
+                  >
+                    {formatNaturalCollabStatus({ kind: "ready" })}
+                  </span>
+                ) : null}
+              </>
             }
           />
           {showLiveStatus && liveTurn ? (
             <GroupMemberLiveTurn live={liveTurn.live} mode={liveTurn.mode} />
-          ) : null}
-          {cotItems.length > 0 && liveTurn && !liveTurn.live.collapsed && !showLiveStatus ? (
-            <PromptChainOfThought items={cotItems} />
-          ) : null}
-          {stepItems.length > 0 && liveTurn && !liveTurn.live.collapsed ? (
-            <PromptSteps defaultOpen={showLiveStatus} items={stepItems} />
           ) : null}
           {prose ? (
             <div
@@ -425,6 +425,13 @@ export function GroupMessageRow({
                   onOpenFile={onOpenFile}
                 />
               )}
+            </div>
+          ) : null}
+          {sources.length > 0 ? (
+            <div className="flex flex-wrap gap-1" data-testid="group-message-sources">
+              {sources.map((source) => (
+                <PromptSource href={source.href} key={source.href} label={source.label} />
+              ))}
             </div>
           ) : null}
           {statuses.map((status, index) => (

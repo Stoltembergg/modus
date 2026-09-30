@@ -5,6 +5,7 @@ import type {
   GroupMessageContextItem,
   UpdateState,
 } from "../../../../shared/contracts";
+import { groupRoomLabel } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
@@ -210,6 +211,23 @@ export function GroupComposer({
         </div>
       ) : null}
       <GroupMemberQuestions labels={labels} waitingSessionIds={waitingSessionIds} />
+      {waitingSessionIds.length > 0 ? (
+        <div
+          className="mb-2 text-2xs text-amber-400/90"
+          data-testid="group-composer-ready"
+          role="status"
+        >
+          {groupRoomLabel("ready")}
+          <span className="text-fg-faint">
+            {" · "}
+            {waitingSessionIds
+              .map((id) => labels.get(id)?.title ?? id)
+              .filter(Boolean)
+              .slice(0, 3)
+              .join(", ")}
+          </span>
+        </div>
+      ) : null}
       {replyTo ? (
         <div
           className="mb-2 flex items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
