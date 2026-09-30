@@ -1,69 +1,19 @@
 import type { AgentEvent } from "../../../../shared/contracts";
-import { getToolUiMeta } from "../../../../shared/tools";
+import { buildGroupSemanticPresence } from "../../../../shared/group-semantic-presence";
 
 /** Phase shown while a group member's turn is live (or queued). */
 export type GroupMemberWorkingPhase = "queued" | "thinking" | "writing" | "working" | string;
 
 /**
  * Derive a short phase label from the latest agent events for a member turn.
- * Mirrors ChatPane WorkFold: real events only — no timers, no fabricated phases.
+ * Uses semantic presence (N0) so the room shows Exploring / Implementing / …
+ * instead of sticking on a generic Thinking or raw tool verb.
  */
 export function groupMemberWorkingPhase(
-  events: readonly { event: AgentEvent }[],
+  events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
 ): GroupMemberWorkingPhase {
-  if (mode === "queued") return "Queued";
-
-  const openTools = new Set<string>();
-  let phase: GroupMemberWorkingPhase = "Thinking";
-
-  for (const { event } of events) {
-    switch (event.type) {
-      case "run.started":
-        openTools.clear();
-        phase = "Thinking";
-        break;
-      case "thinking.delta":
-        phase = "Thinking";
-        break;
-      case "thinking.completed":
-        if (openTools.size === 0) phase = "Thinking";
-        break;
-      case "message.delta":
-        phase = "Writing";
-        break;
-      case "message.started":
-        if (event.role === "assistant") phase = "Writing";
-        break;
-      case "tool.started":
-      case "tool.delta": {
-        openTools.add(event.toolCallId);
-        phase = getToolUiMeta(event.toolName)?.activeVerb ?? "Working";
-        break;
-      }
-      case "tool.ended":
-        openTools.delete(event.toolCallId);
-        phase = openTools.size > 0 ? phase : "Thinking";
-        break;
-      case "compaction.started":
-        phase = "Compacting context";
-        break;
-      case "compaction.ended":
-        phase = "Thinking";
-        break;
-      case "run.completed":
-      case "run.failed":
-      case "run.cancelled":
-      case "run.blocked":
-        openTools.clear();
-        phase = "Thinking";
-        break;
-      default:
-        break;
-    }
-  }
-
-  return phase;
+  return buildGroupSemanticPresence(events, mode).label;
 }
 
 /** Running members first (stable order), then queued — for the room working strip. */

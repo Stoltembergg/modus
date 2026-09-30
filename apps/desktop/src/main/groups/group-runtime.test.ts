@@ -303,11 +303,31 @@ describe("turn outcomes (fake runtime contract)", () => {
 /* ── wake rules ───────────────────────────────────────────────────────── */
 
 describe("wake rules", () => {
-  it("a user message without mentions wakes only the lead", () => {
+  it("a user message without mentions falls back to the lead when no specialty matches", () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "hello team" });
     expect(runtime.pendingSessions()).toEqual([alpha]);
+  });
+
+  it("a user message without mentions wakes the specialty member (Lead optional)", () => {
+    const ws = insertWorkspace();
+    const planner = insertSession(ws, "Planner");
+    const builder = insertSession(ws, "Builder");
+    const reviewer = insertSession(ws, "Reviewer");
+    const group = createAgentGroupWithMembers({
+      name: "Crew",
+      workspaceId: ws,
+      members: [
+        { sessionId: planner, role: "Planner" },
+        { sessionId: builder, role: "Builder" },
+        { sessionId: reviewer, role: "Reviewer" },
+      ],
+      leadSessionId: null,
+    });
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "please review the login PR" });
+    expect(runtime.pendingSessions()).toEqual([reviewer]);
   });
 
   it("an agent message without mentions wakes nobody (not even the lead)", async () => {
@@ -864,9 +884,14 @@ describe("coordinator mode", () => {
     setAgentGroupLead(group.id, null);
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "anyone?" });
-    expect(runtime.pendingSessions()).toEqual([]);
-    groups.postUserMessage({ groupId: group.id, body: "@Beta you then" });
+    // No Lead → free autonomous routing (someone wakes; never a coordinator snapshot).
+    expect(runtime.pendingSessions()).toHaveLength(1);
     expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
+    runtime.take(runtime.pendingSessions()[0] as string).resolve({ outcome: "ok" });
+    await flush();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta you then" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.calls.at(-1)?.input.message).not.toContain("<group_snapshot>");
     runtime.take(beta).resolve({ outcome: "ok" });
     await flush();
     setAgentGroupLead(group.id, beta);

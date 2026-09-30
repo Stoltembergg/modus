@@ -95,7 +95,7 @@ describe("GroupMessageList working strip", () => {
     expect(row.textContent).toContain("Thinking");
   });
 
-  it("streams agent events into the live turn in the room", async () => {
+  it("updates the room phase from semantic presence as tools run", async () => {
     renderList(states({ runningSessionIds: ["s-lead"] }));
     await screen.findByTestId("group-working-status");
     act(() => {
@@ -114,8 +114,11 @@ describe("GroupMessageList working strip", () => {
         });
       }
     });
-    expect((await screen.findByTestId("group-live-thought")).textContent).toContain("Sketching");
-    expect(screen.getByTestId("group-live-tools").textContent).toContain("Reading");
+    const row = await screen.findByTestId("group-member-working");
+    expect(row.dataset.phase).toBe("Exploring");
+    expect(row.textContent).toContain("Exploring");
+    expect(screen.queryByTestId("group-live-thought")).toBeNull();
+    expect(screen.queryByTestId("group-live-tools")).toBeNull();
   });
 
   it("shows Queued for members waiting on a wake slot", async () => {
