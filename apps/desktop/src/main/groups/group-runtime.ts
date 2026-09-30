@@ -11,7 +11,7 @@ import {
   groupBlockedErrorCode,
   groupBlockedReason,
 } from "../../shared/group-blocked";
-import { needsNextOwnerNudge } from "../../shared/group-collab-status";
+import { lastGroupCollabStatus, needsNextOwnerNudge } from "../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { getAgentSession } from "../agent/agent-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
@@ -793,17 +793,29 @@ export class GroupRuntime {
       // An ended chain (blocked / limit) still shows the reply but wakes nobody.
       const reply = this.postReply(chain, wake, text);
       this.route(chain, reply);
+      if (chain.ended) return;
+      const closing = lastGroupCollabStatus(text);
+      // N4 interrupt: Ready/Blocked are for the user — do not proactive-wake peers.
+      if (closing?.kind === "ready" || closing?.kind === "blocked") return;
+      // N4: Agreed/Proposed with an owned in-progress task + reviewer → wake reviewer.
+      if (closing?.kind === "agreed" || closing?.kind === "proposed") {
+        this.maybeRouteReviewerForOwnedTask(chain, wake);
+        return;
+      }
       // P0b: silence (no @mention, no Agreed/Blocked/Proposed/Ready) → nudge in the room.
-      if (!chain.ended && needsNextOwnerNudge(text, reply.mentions.length)) {
+      if (needsNextOwnerNudge(text, reply.mentions.length)) {
         this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.noNextOwner);
         // P1b: coordinator Lead wakes when an open/unowned task still needs an owner.
         this.maybeRouteLeadForOpenTask(chain, wake);
+        // N4: resume an owned open/in_progress task when the room went silent.
+        this.maybeResumeOwnedTask(chain, wake);
       }
       return;
     }
     this.postMemberStatus(chain, wake, statusText(result.outcome));
     if (result.outcome === "blocked") {
       // Not gated, so a HyperPlan choice is pending: plan-build unblocks it.
+      // N4 interrupt: blocked turns stop the chain for the user — no peer wakes.
       this.awaitingUser.set(wake.sessionId, chain.chainId);
       this.endChain(chain, "blocked");
     }
@@ -848,6 +860,51 @@ export class GroupRuntime {
     );
     const trigger = getGroupMessage(wake.triggerMessageId);
     if (trigger) this.route(chain, trigger, [group.leadSessionId]);
+  }
+
+  /**
+   * N4: after silence, wake one owner of an open/in_progress task so work resumes
+   * without waiting for the user. Skips the speaker and anyone already pending.
+   */
+  private maybeResumeOwnedTask(chain: ChainState, wake: Wake): void {
+    const activity = this.activityOf(chain.groupId);
+    const busy = new Set([...activity.runningSessionIds, ...activity.queuedSessionIds]);
+    const owned = listGroupTasks(chain.groupId).filter(
+      (task) =>
+        (task.status === "open" || task.status === "in_progress") &&
+        task.ownerSessionId &&
+        task.ownerSessionId !== wake.sessionId &&
+        !busy.has(task.ownerSessionId),
+    );
+    const owner = owned[0]?.ownerSessionId;
+    const title = owned[0]?.title;
+    if (!owner || !title) return;
+    this.postMemberStatus(chain, wake, `Resume: "${title}" — continue your owned work`);
+    const trigger = getGroupMessage(wake.triggerMessageId);
+    if (trigger) this.route(chain, trigger, [owner]);
+  }
+
+  /**
+   * N4: after Agreed/Proposed, wake the reviewer of the speaker's in_progress task
+   * (once) so review proceeds without an explicit @mention.
+   */
+  private maybeRouteReviewerForOwnedTask(chain: ChainState, wake: Wake): void {
+    const activity = this.activityOf(chain.groupId);
+    const busy = new Set([...activity.runningSessionIds, ...activity.queuedSessionIds]);
+    const ready = listGroupTasks(chain.groupId).filter(
+      (task) =>
+        task.status === "in_progress" &&
+        task.ownerSessionId === wake.sessionId &&
+        task.reviewerSessionId &&
+        task.reviewerSessionId !== wake.sessionId &&
+        !busy.has(task.reviewerSessionId),
+    );
+    const reviewer = ready[0]?.reviewerSessionId;
+    const title = ready[0]?.title;
+    if (!reviewer || !title) return;
+    this.postMemberStatus(chain, wake, `Review ready: "${title}" — please review`);
+    const trigger = getGroupMessage(wake.triggerMessageId);
+    if (trigger) this.route(chain, trigger, [reviewer]);
   }
 
   /**
