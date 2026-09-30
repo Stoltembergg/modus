@@ -47,3 +47,4 @@ jobs:
           git rm -rf .github/agent-staging/p1b-agreement .github/workflows/apply-p1b-agreement.yml
           git commit -m "feat(groups): agreement tools propose/agree/block/handoff (P1b)"
           git push origin HEAD:cursor/group-collab-p1b-cb29
+# retrigger
