@@ -53,11 +53,25 @@ export function registerGroupRuntimeIpcHandlers(
   handle(IPC_CHANNELS.groupPostMessage, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupPostMessageSchema, input, IPC_CHANNELS.groupPostMessage);
+    const contextItems = parsed.contextItems
+      ?.filter(
+        (item): item is { type: "file"; path: string } | { type: "folder"; path: string } =>
+          (item.type === "file" || item.type === "folder") && typeof item.path === "string",
+      )
+      .map((item) =>
+        item.type === "folder"
+          ? { type: "folder" as const, path: item.path }
+          : { type: "file" as const, path: item.path },
+      );
     return service.postUserMessage({
       groupId: parsed.groupId,
       body: parsed.body,
       ...(parsed.mentions ? { mentions: parsed.mentions } : {}),
       ...(parsed.replyToMessageId ? { replyToMessageId: parsed.replyToMessageId } : {}),
+      ...(parsed.attachments && parsed.attachments.length > 0
+        ? { attachments: parsed.attachments }
+        : {}),
+      ...(contextItems && contextItems.length > 0 ? { contextItems } : {}),
     });
   });
 
