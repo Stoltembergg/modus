@@ -1,0 +1,41 @@
+name: apply-p1a-panel
+on:
+  push:
+    branches: [cursor/group-tasks-spring-p1a-cb29]
+    paths: [.github/workflows/apply-p1a-panel.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-tasks-spring-p1a-cb29
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Materialize staged files
+        run: |
+          python3 <<'PY'
+          import base64, zlib, hashlib, pathlib, json
+          staging = pathlib.Path(".github/agent-staging/p1a-panel")
+          files = [
+            ("GroupTaskPanel.tsx.zlib.b64", "apps/desktop/src/renderer/src/features/groups/GroupTaskPanel.tsx", "1e3cdde73a190abe92231f5d49386c87ff6174ba"),
+            ("GroupRoom.test.tsx.zlib.b64", "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx", "3bc495b7bc5c5912d01d8ea0e8f08553e709bd02"),
+          ]
+          for name, dest, expect in files:
+            raw = zlib.decompress(base64.b64decode((staging / name).read_text().strip()))
+            digest = hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest()
+            if digest != expect:
+              raise SystemExit(f"blob mismatch {dest}: got {digest} want {expect}")
+            pathlib.Path(dest).write_bytes(raw)
+            print("wrote", dest, len(raw), digest)
+          PY
+      - name: Commit panel + tests and remove staging
+        run: |
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          git add apps/desktop/src/renderer/src/features/groups/GroupTaskPanel.tsx apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
+          git rm -rf .github/agent-staging/p1a-panel .github/workflows/apply-p1a-panel.yml
+          git commit -m "feat(groups): Spring Check checklist in Tasks panel (P1a)"
+          git push origin HEAD:cursor/group-tasks-spring-p1a-cb29
