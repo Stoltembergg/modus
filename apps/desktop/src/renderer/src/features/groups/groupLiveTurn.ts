@@ -60,6 +60,7 @@ function toolLabel(name: string): string {
 /**
  * Fold agent events into a compact live turn for the group room.
  * `message.delta` appends into `streamText` for the definitive in-flight row.
+ * Thinking / tools are ephemeral: cleared on terminal run events.
  */
 export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
@@ -103,6 +104,10 @@ export function buildGroupLiveTurn(
         break;
       case "message.delta":
         writing += event.delta;
+        // Streaming the definitive message — drop finished tools from the room strip.
+        for (const [id, tool] of [...tools]) {
+          if (tool.done) tools.delete(id);
+        }
         break;
       case "tool.started":
       case "tool.delta":
@@ -114,14 +119,8 @@ export function buildGroupLiveTurn(
         });
         break;
       case "tool.ended": {
-        const prev = tools.get(event.toolCallId);
-        const name = event.toolName ?? prev?.name ?? "tool";
-        tools.set(event.toolCallId, {
-          id: event.toolCallId,
-          name,
-          label: toolLabel(name),
-          done: true,
-        });
+        // Remove completed tools from the room immediately (Activity keeps history elsewhere).
+        tools.delete(event.toolCallId);
         break;
       }
       case "run.started":
@@ -132,20 +131,21 @@ export function buildGroupLiveTurn(
         terminalPhase = undefined;
         break;
       case "run.completed":
-        collapsed = true;
-        terminalPhase = "Done";
-        break;
       case "run.failed":
-        collapsed = true;
-        terminalPhase = "Failed";
-        break;
       case "run.cancelled":
-        collapsed = true;
-        terminalPhase = "Stopped";
-        break;
       case "run.blocked":
+        // Immediately dismantle every transient for this turn.
+        thought = "";
+        tools.clear();
         collapsed = true;
-        terminalPhase = "Waiting for you";
+        terminalPhase =
+          event.type === "run.completed"
+            ? "Done"
+            : event.type === "run.failed"
+              ? "Failed"
+              : event.type === "run.cancelled"
+                ? "Stopped"
+                : "Waiting for you";
         break;
       default:
         break;
@@ -173,6 +173,7 @@ export function buildGroupLiveTurn(
 
   return {
     phase,
+    // Room never shows thoughtPreview — Activity panel only.
     thoughtPreview: truncate(thought, THOUGHT_PREVIEW_MAX, true),
     tools: recentTools,
     streamText,
