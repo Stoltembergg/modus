@@ -1,6 +1,10 @@
 import type { AgentEvent } from "../../../../shared/contracts";
+import {
+  buildGroupSemanticPresence,
+  type GroupSemanticPresence,
+} from "../../../../shared/group-semantic-presence";
 import { getToolUiMeta } from "../../../../shared/tools";
-import { type GroupMemberWorkingPhase, groupMemberWorkingPhase } from "./groupWorkingPhase";
+import type { GroupMemberWorkingPhase } from "./groupWorkingPhase";
 
 /** Compact tool row shown under a live group member turn. */
 export type GroupLiveToolLine = {
@@ -15,12 +19,14 @@ export type GroupLiveTurnSnapshot = {
   phase: GroupMemberWorkingPhase;
   /** Latest thinking text (truncated for the room). */
   thoughtPreview: string;
-  /** Recent tools (oldest → newest; capped). */
+  /** Recent tools (oldest → newest; capped) — Activity detail; room shows phase. */
   tools: readonly GroupLiveToolLine[];
   /** Latest assistant text being written (truncated). */
   writingPreview: string;
   /** Epoch ms of the last event that updated this snapshot (0 if none). */
   lastEventAt: number;
+  /** Semantic heartbeat (startedAt / lastProgressAt / activity). */
+  presence: GroupSemanticPresence;
 };
 
 const PREVIEW_MAX = 160;
@@ -47,25 +53,24 @@ export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
 ): GroupLiveTurnSnapshot {
+  const presence = buildGroupSemanticPresence(events, mode);
   if (mode === "queued") {
     return {
-      phase: "Queued",
+      phase: presence.label,
       thoughtPreview: "",
       tools: [],
       writingPreview: "",
       lastEventAt: 0,
+      presence,
     };
   }
 
-  const phase = groupMemberWorkingPhase(
-    events.map(({ event }) => ({ event })),
-    mode,
-  );
+  const phase = presence.label;
 
   let thought = "";
   let writing = "";
   const tools = new Map<string, GroupLiveToolLine>();
-  let lastEventAt = 0;
+  let lastEventAt = presence.lastProgressAt > 0 ? presence.lastProgressAt : 0;
 
   for (const item of events) {
     const { event } = item;
@@ -123,7 +128,8 @@ export function buildGroupLiveTurn(
     thoughtPreview: truncate(thought),
     tools: recentTools,
     writingPreview: truncate(writing),
-    lastEventAt,
+    lastEventAt: lastEventAt || presence.lastProgressAt,
+    presence,
   };
 }
 

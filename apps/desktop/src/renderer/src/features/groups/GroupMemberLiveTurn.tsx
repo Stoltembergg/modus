@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { shouldShowStillWorking } from "../../../../shared/group-semantic-presence";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import {
@@ -8,8 +9,8 @@ import {
 } from "./groupLiveTurn";
 
 /**
- * Compact live turn under a group member: phase + thought/tools/writing previews.
- * ChatPane's WorkFold is heavier; this is the room-facing stream so Stop ≠ silence.
+ * Compact live turn under a group member: semantic phase + writing preview.
+ * Tool spam stays out of the primary room (Activity); "Still working…" on silence.
  */
 export function GroupMemberLiveTurn({
   mode,
@@ -30,7 +31,9 @@ export function GroupMemberLiveTurn({
   }, [mode]);
 
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
-  const still = isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS);
+  const still = live.presence
+    ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
+    : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS);
   const phaseLabel = still ? "Still working…" : String(live.phase);
   const working = mode === "running";
 
@@ -46,25 +49,6 @@ export function GroupMemberLiveTurn({
         <span className="sr-only">{phaseLabel}</span>
         <ThinkingStates className="text-fg-subtle" label={phaseLabel} />
       </div>
-      {live.thoughtPreview ? (
-        <p className="line-clamp-2 text-2xs text-fg-faint" data-testid="group-live-thought">
-          {live.thoughtPreview}
-        </p>
-      ) : null}
-      {live.tools.length > 0 ? (
-        <ul className="space-y-0.5" data-testid="group-live-tools">
-          {live.tools.map((tool) => (
-            <li
-              className="truncate font-mono text-2xs text-fg-faint"
-              data-done={tool.done || undefined}
-              key={tool.id}
-            >
-              {tool.done ? "✓" : "·"} {tool.label}
-              {tool.name !== tool.label ? ` · ${tool.name}` : ""}
-            </li>
-          ))}
-        </ul>
-      ) : null}
       {live.writingPreview ? (
         <p className="line-clamp-3 text-2xs text-fg-muted" data-testid="group-live-writing">
           {live.writingPreview}

@@ -381,6 +381,168 @@ export function composeGroupSnapshotSection(input: {
   return [...head, ...lines, close].join("\n");
 }
 
+/** Open/in-progress/in-review task hint for autonomous no-@ routing. */
+export type AutonomousWakeTaskHint = {
+  status: string;
+  title?: string;
+  ownerSessionId?: string;
+  reviewerSessionId?: string;
+};
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "and",
+  "or",
+  "of",
+  "in",
+  "on",
+  "at",
+  "is",
+  "are",
+  "be",
+  "this",
+  "that",
+  "it",
+  "we",
+  "you",
+  "please",
+  "can",
+  "could",
+  "should",
+  "would",
+  "with",
+  "from",
+  "into",
+  "our",
+  "your",
+  "team",
+  "group",
+  "hello",
+  "hi",
+  "hey",
+  "thanks",
+  "thank",
+]);
+
+/** Soft specialty cues in the user message → role/title/description patterns. */
+const SPECIALTY_CUES: ReadonlyArray<{ message: RegExp; member: RegExp; weight: number }> = [
+  { message: /\b(review|reviews|reviewer|lgtm|approve|feedback)\b/i, member: /review/i, weight: 5 },
+  {
+    message: /\b(implement|implementation|code|coding|build|builder|fix|patch|write|edit)\b/i,
+    member: /build|dev|engineer|implement|coder/i,
+    weight: 5,
+  },
+  {
+    message: /\b(plan|planning|planner|design|architect|spec|approach|strategy)\b/i,
+    member: /plan|architect|design/i,
+    weight: 5,
+  },
+  {
+    message: /\b(test|tests|testing|qa|verify|verification)\b/i,
+    member: /test|qa|verif/i,
+    weight: 5,
+  },
+  {
+    message: /\b(research|explore|investigate|find|search|look\s*into)\b/i,
+    member: /research|explor|scout|analyst/i,
+    weight: 4,
+  },
+];
+
+function tokenizeForWake(body: string): string[] {
+  return body
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+}
+
+function memberHaystack(member: MemberRef): string {
+  return [member.title, member.role, member.description]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+/**
+ * Pick who should wake for a user message with no @mentions (natural groups N1).
+ * Scores role/description/title against the body, open-task ownership, and a soft
+ * Lead bias. Lead is optional: if absent or not best-fit, another member may wake.
+ * Never returns empty when at least one non-archived, non-excluded member exists.
+ */
+export function selectAutonomousWakeTargets(input: {
+  body: string;
+  members: readonly MemberRef[];
+  leadSessionId?: string;
+  excludeSessionIds?: readonly string[];
+  openTasks?: readonly AutonomousWakeTaskHint[];
+  /** Cap simultaneous wakes from one untargeted user message (default 1). */
+  maxTargets?: number;
+}): string[] {
+  const excluded = new Set(input.excludeSessionIds ?? []);
+  const eligible = input.members.filter(
+    (member) => !member.archived && !excluded.has(member.sessionId),
+  );
+  if (eligible.length === 0) return [];
+
+  const tokens = tokenizeForWake(input.body);
+  const maxTargets = Math.max(1, input.maxTargets ?? 1);
+  const scores = new Map<string, number>();
+
+  for (const member of eligible) {
+    let score = 0;
+    const hay = memberHaystack(member);
+    for (const token of tokens) {
+      if (!hay.includes(token)) continue;
+      score += token.length >= 5 ? 3 : 2;
+      if (member.role?.toLocaleLowerCase().includes(token)) score += 2;
+    }
+    for (const cue of SPECIALTY_CUES) {
+      if (cue.message.test(input.body) && cue.member.test(hay)) score += cue.weight;
+    }
+    for (const task of input.openTasks ?? []) {
+      const title = (task.title ?? "").toLocaleLowerCase();
+      const titleHit = tokens.some((token) => title.includes(token));
+      if (
+        task.ownerSessionId === member.sessionId &&
+        (task.status === "open" || task.status === "in_progress")
+      ) {
+        score += titleHit ? 4 : 2;
+      }
+      if (task.reviewerSessionId === member.sessionId && task.status === "in_review") {
+        score += titleHit ? 4 : 2;
+      }
+    }
+    if (member.sessionId === input.leadSessionId) score += 1;
+    scores.set(member.sessionId, score);
+  }
+
+  const ranked = [...eligible].sort((a, b) => {
+    const diff = (scores.get(b.sessionId) ?? 0) - (scores.get(a.sessionId) ?? 0);
+    if (diff !== 0) return diff;
+    // Stable: lead before others, then membership order.
+    if (a.sessionId === input.leadSessionId) return -1;
+    if (b.sessionId === input.leadSessionId) return 1;
+    return eligible.indexOf(a) - eligible.indexOf(b);
+  });
+
+  const best = scores.get(ranked[0]?.sessionId ?? "") ?? 0;
+  if (best <= 0) {
+    if (input.leadSessionId && eligible.some((m) => m.sessionId === input.leadSessionId)) {
+      return [input.leadSessionId];
+    }
+    return ranked[0] ? [ranked[0].sessionId] : [];
+  }
+
+  const winners = ranked.filter((member) => (scores.get(member.sessionId) ?? 0) === best);
+  return winners.slice(0, maxTargets).map((member) => member.sessionId);
+}
+
 /**
  * The prompt a woken member receives: who it is, the recent room history (newest
  * first until the per-wake budget is spent, shown oldest first) and the message
@@ -420,7 +582,7 @@ export function composeGroupWakePrompt(input: {
     `<group_room name="${escapeText(input.group.name)}">`,
     `You are @${escapeText(self)}, a member of this group. Members right now:`,
     ...roster.map((line) => escapeText(line)),
-    "Reply with what the group should read. To hand work to a member, mention them as @Name; only mentioned members are woken.",
+    "Reply with what the group should read. Mention @Name to hand work to a member; without a mention, the room routes by specialty.",
     GROUP_COLLAB_WAKE_PROTOCOL,
   ].join("\n");
   const triggerBlock = `<group_message from="${escapeText(authorLabel(input.trigger, titles))}">\n${escapeText(input.trigger.body)}\n</group_message>`;

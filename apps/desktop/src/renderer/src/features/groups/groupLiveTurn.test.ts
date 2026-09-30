@@ -21,6 +21,7 @@ describe("buildGroupLiveTurn", () => {
     expect(snap.phase).toBe("Queued");
     expect(snap.thoughtPreview).toBe("");
     expect(snap.tools).toEqual([]);
+    expect(snap.presence.state).toBe("queued");
   });
 
   it("streams thought, tools, and writing into previews", () => {
@@ -50,6 +51,7 @@ describe("buildGroupLiveTurn", () => {
     ];
     const snap = buildGroupLiveTurn(events, "running");
     expect(snap.phase).toBe("Writing");
+    expect(snap.presence.state).toBe("writing");
     expect(snap.thoughtPreview).toContain("Plan the toggle");
     expect(snap.tools).toEqual([{ id: "t1", name: "read", label: "Reading", done: true }]);
     expect(snap.writingPreview).toContain("hand off");
@@ -72,6 +74,8 @@ describe("buildGroupLiveTurn", () => {
     expect(snap.tools).toHaveLength(4);
     expect(snap.tools.every((t) => t.done === false)).toBe(true);
     expect(snap.tools[0]?.id).toBe("t2");
+    expect(snap.phase).toBe("Implementing");
+    expect(snap.presence.state).toBe("running_tool");
   });
 });
 

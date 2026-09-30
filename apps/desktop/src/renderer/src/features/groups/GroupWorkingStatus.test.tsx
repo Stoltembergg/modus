@@ -19,12 +19,20 @@ const avatars = new Map<string, WorkingMemberAvatar>([
 ]);
 
 function live(partial: Partial<GroupLiveTurnSnapshot> = {}): GroupLiveTurnSnapshot {
+  const lastEventAt = partial.lastEventAt ?? Date.now();
+  const phase = partial.phase ?? "Thinking";
   return {
-    phase: "Thinking",
+    phase,
     thoughtPreview: "",
     tools: [],
     writingPreview: "",
-    lastEventAt: Date.now(),
+    lastEventAt,
+    presence: {
+      state: phase === "Queued" ? "queued" : phase === "Writing" ? "writing" : "thinking",
+      label: String(phase),
+      startedAt: lastEventAt || Date.now(),
+      lastProgressAt: lastEventAt || Date.now(),
+    },
     ...partial,
   };
 }
@@ -52,7 +60,7 @@ describe("GroupWorkingStatus", () => {
     expect(items[1]?.textContent).toContain("Builder");
   });
 
-  it("streams thought, tools, and writing under the live turn", () => {
+  it("shows writing preview under the live turn (tools stay for Activity)", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -66,8 +74,8 @@ describe("GroupWorkingStatus", () => {
       },
     ];
     render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
-    expect(screen.getByTestId("group-live-thought").textContent).toContain("Plan the toggle");
-    expect(screen.getByTestId("group-live-tools").textContent).toContain("Reading");
+    expect(screen.queryByTestId("group-live-thought")).toBeNull();
+    expect(screen.queryByTestId("group-live-tools")).toBeNull();
     expect(screen.getByTestId("group-live-writing").textContent).toContain("hand off");
   });
 
