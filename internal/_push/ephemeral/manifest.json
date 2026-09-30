@@ -28,14 +28,6 @@
     ]
   },
   {
-    "path": "apps/desktop/src/renderer/src/features/groups/GroupMemberLiveTurn.tsx",
-    "sha256": "722f6748c429a1fc2173ea46c4cb2301ae014186a5e400a328495ddfe17d9e3a",
-    "bytes": 2780,
-    "parts": [
-      "internal/_push/ephemeral/722f6748c429.00.b64"
-    ]
-  },
-  {
     "path": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
     "sha256": "9ccb7b2aad3cb46d46bdd9d0d1a103160ac384d6b2902816e4211c9824b8dfcf",
     "bytes": 16160,
@@ -58,30 +50,6 @@
     "parts": [
       "internal/_push/ephemeral/d38d8404f251.00.b64",
       "internal/_push/ephemeral/d38d8404f251.01.b64"
-    ]
-  },
-  {
-    "path": "apps/desktop/src/renderer/src/features/groups/groupLiveTurn.ts",
-    "sha256": "7252409e5dbf9915a1b533fb54a614bfbe6d3a7cfead8fa3f6ba8407b53c60d3",
-    "bytes": 6209,
-    "parts": [
-      "internal/_push/ephemeral/7252409e5dbf.00.b64"
-    ]
-  },
-  {
-    "path": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.prompt-kit.test.tsx",
-    "sha256": "1f940cec3bf8a94b3f489086a01dbd1b4964218fcfb9939d57a37ec9ee8d0f50",
-    "bytes": 5351,
-    "parts": [
-      "internal/_push/ephemeral/1f940cec3bf8.00.b64"
-    ]
-  },
-  {
-    "path": "apps/desktop/src/renderer/src/features/groups/groupLiveTurn.test.ts",
-    "sha256": "0851bad82f5bfe8c2d830c32ed9f4225104d4f8761bc7dab1e9422c5784c7044",
-    "bytes": 4564,
-    "parts": [
-      "internal/_push/ephemeral/0851bad82f5b.00.b64"
     ]
   }
 ]

@@ -38,15 +38,18 @@ jobs:
               path = entry["path"]
               expect_sha = entry["sha256"]
               expect_bytes = entry.get("bytes")
+              out = root / path
+              if out.exists() and hashlib.sha256(out.read_bytes()).hexdigest() == expect_sha:
+                  print(f"SKIP {path} (already matches)")
+                  continue
               parts = entry["parts"]
-              b64 = "".join((root / p).read_text() for p in parts)
+              b64 = "".join("".join((root / p).read_text().split()) for p in parts)
               raw = zlib.decompress(base64.b64decode(b64))
               if expect_bytes is not None and len(raw) != expect_bytes:
                   raise SystemExit(f"byte length mismatch for {path}: got {len(raw)} expected {expect_bytes}")
               got = hashlib.sha256(raw).hexdigest()
               if got != expect_sha:
                   raise SystemExit(f"sha256 mismatch for {path}: got {got} expected {expect_sha}")
-              out = root / path
               out.parent.mkdir(parents=True, exist_ok=True)
               out.write_bytes(raw)
               print(f"OK {path} ({len(raw)} bytes, sha256={got})")
@@ -58,7 +61,6 @@ jobs:
           set -euo pipefail
           rm -rf internal/_push/ephemeral
           rmdir internal/_push 2>/dev/null || true
-          # Keep repo internal/ if other content exists
           rmdir internal 2>/dev/null || true
           true
 
