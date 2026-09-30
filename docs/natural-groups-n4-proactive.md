@@ -2,7 +2,7 @@
 
 **Repo:** Stoltembergg/modus  
 **Depends on:** N0–N3, N5 on main  
-**Branch:** `cursor/natural-groups-n4-proactive-cb29`  
+**Status:** **merged (#97 → main @ `deaf687`)**  
 **Constraint:** stay inside Group Runtime budgets/loop guards; no parallel orchestrator.
 
 ## Behavior
