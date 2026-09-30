@@ -431,7 +431,7 @@ describe("GroupRoom", () => {
     expect(screen.queryByTestId("group-update-banner")).toBeNull();
   });
 
-  it("task panel: closed by default with a counter, grouped by status, Cancelled collapsed", async () => {
+  it("task panel: closed by default with a counter, checklist + Spring Check, cancelled hidden", async () => {
     const user = userEvent.setup();
     const task = (id: string, status: GroupTask["status"], extra: Partial<GroupTask> = {}) => ({
       id,
@@ -454,29 +454,24 @@ describe("GroupRoom", () => {
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("3"));
     await user.click(screen.getByRole("button", { name: "Tasks (3 active)" }));
     const panel = screen.getByTestId("group-task-panel");
-    expect(
-      within(panel)
-        .getAllByTestId("task-section")
-        .map((section) => section.dataset.status),
-    ).toEqual(["open", "in_progress", "in_review", "done", "cancelled"]);
-    // Cancelled starts collapsed.
+    expect(within(panel).getByTestId("task-checklist-progress").textContent).toContain("1/4 done");
+    expect(within(panel).getByTestId("task-checklist")).toBeTruthy();
+    // Cancelled starts hidden.
     expect(within(panel).queryByText("Task 5")).toBeNull();
-    await user.click(within(panel).getByRole("button", { name: /Cancelled/ }));
+    await user.click(within(panel).getByRole("button", { name: /Show cancelled/ }));
     expect(within(panel).getByText("Task 5")).toBeTruthy();
 
-    const cards = within(panel).getAllByTestId("group-task");
-    const review = cards.find((card) => card.textContent?.includes("Task 3")) as HTMLElement;
-    expect(review.textContent).toContain("OwnerPlanner");
-    // The reviewer title repeats in the group: short id suffix.
-    expect(review.textContent).toContain("ReviewerReviewer · srev1");
-    expect(within(review).getByTestId("member-id-suffix").textContent).toBe(" · srev1");
-    const working = cards.find((card) => card.textContent?.includes("Task 2")) as HTMLElement;
-    expect(within(working).getByText("modus/group/p1")).toBeTruthy();
-    expect(within(working).getByRole("button", { name: "Copy branch" })).toBeTruthy();
-    // Done and cancelled tasks have no action.
+    const rows = within(panel).getAllByTestId("group-task");
+    const review = rows.find((row) => row.textContent?.includes("Task 3")) as HTMLElement;
+    expect(review.dataset.status).toBe("in_review");
+    expect(within(review).getByTestId("task-status-badge").textContent).toBe("In review");
+    expect(review.textContent).toContain("Planner");
+    const done = rows.find((row) => row.textContent?.includes("Task 4")) as HTMLElement;
+    expect(within(done).getByTestId("spring-check").querySelector("input")?.checked).toBe(true);
+    // Done and cancelled tasks have no cancel action.
     for (const id of ["4", "5"]) {
-      const card = cards.find((item) => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
-      expect(within(card).queryByRole("button", { name: "Cancel task" })).toBeNull();
+      const row = rows.find((item) => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
+      expect(within(row).queryByRole("button", { name: "Cancel task" })).toBeNull();
     }
   });
 
@@ -500,8 +495,11 @@ describe("GroupRoom", () => {
     await user.click(screen.getByRole("button", { name: CANCEL_TASK_CONFIRM_LABEL }));
     expect(group.cancelTask).toHaveBeenCalledWith("t-1");
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("0"));
-    const section = screen.getByTestId("task-section");
-    expect(section.dataset.status).toBe("cancelled");
+    // Cancelled is hidden until expanded.
+    expect(screen.queryByText("Parser")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Show cancelled/ }));
+    const row = screen.getByTestId("group-task");
+    expect(row.dataset.status).toBe("cancelled");
   });
 });
 
@@ -551,7 +549,7 @@ describe("GroupRoom decisions", () => {
     const section = within(panel).getByTestId("decision-section");
     expect(panel.firstElementChild).toBe(section);
     expect(
-      section.compareDocumentPosition(within(panel).getByTestId("task-section")) &
+      section.compareDocumentPosition(within(panel).getByTestId("task-checklist")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     const cards = within(section).getAllByTestId("group-decision");
