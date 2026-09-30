@@ -34,6 +34,7 @@ import {
   membersOf,
   parseGroupMentions,
   RETIRED_CHAIN_HISTORY,
+  selectAutonomousWakeTargets,
   statusText,
   type Wake,
 } from "./group-runtime-lib";
@@ -74,6 +75,7 @@ export {
   type GroupWorktreeReady,
   isUpdatePendingState,
   parseGroupMentions,
+  selectAutonomousWakeTargets,
 } from "./group-runtime-lib";
 
 export class GroupRuntime {
@@ -429,10 +431,11 @@ export class GroupRuntime {
   }
 
   /**
-   * Wake rules: a user message with no mention wakes only the lead; @mentions
-   * wake the mentioned members; an author never wakes itself; a reply does not
-   * wake the replied-to author unless it is mentioned; agents without mentions
-   * wake nobody.
+   * Wake rules (natural groups): @mentions wake those members; a user message
+   * with no mention is routed by specialty (Lead optional bias). Coordinator
+   * mode still wakes only the Lead for untargeted user turns (snapshot). An
+   * author never wakes itself; a reply does not wake the replied-to author
+   * unless mentioned; agents without mentions wake nobody.
    */
   private wakeTargets(
     group: AgentGroupInfo,
@@ -447,15 +450,26 @@ export class GroupRuntime {
       );
     }
     if (message.kind !== "message") return [];
-    const memberIds = new Set(listAgentGroupMembers(group.id).map((member) => member.sessionId));
+    const members = membersOf(group.id);
+    const memberIds = new Set(members.map((member) => member.sessionId));
     let targets: string[];
     if (message.authorKind === "user") {
-      targets =
-        message.mentions.length > 0
-          ? message.mentions
-          : group.leadSessionId
-            ? [group.leadSessionId]
-            : [];
+      if (message.mentions.length > 0) {
+        targets = message.mentions;
+      } else if (isCoordinatorModeActive(group) && group.leadSessionId) {
+        targets = [group.leadSessionId];
+      } else {
+        const openTasks = listGroupTasks(group.id).filter(
+          (task) =>
+            task.status === "open" || task.status === "in_progress" || task.status === "in_review",
+        );
+        targets = selectAutonomousWakeTargets({
+          body: message.body,
+          members,
+          ...(group.leadSessionId ? { leadSessionId: group.leadSessionId } : {}),
+          openTasks,
+        });
+      }
     } else if (message.authorKind === "agent") {
       targets = message.mentions;
     } else {

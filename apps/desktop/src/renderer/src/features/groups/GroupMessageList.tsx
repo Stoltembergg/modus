@@ -13,7 +13,7 @@ import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./gro
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import { type MemberLabel, memberLabels } from "./memberLabels";
-import { useGroupMemberWorking } from "./useGroupMemberWorking";
+import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
 /** Peel trailing collab status lines off an agent reply for transcript rendering. */
@@ -32,7 +32,8 @@ export function splitTrailingCollabStatuses(body: string): {
   return { prose: lines.join("\n").replace(/\s+$/u, ""), statuses };
 }
 
-export const GROUP_ROOM_EMPTY_TEXT = "Write to the group. The lead answers, or @mention a member.";
+export const GROUP_ROOM_EMPTY_TEXT =
+  "Write to the group. Members pick up what fits — or @mention someone.";
 
 const MEMBER_COLORS = [
   "#e8784a",
@@ -54,9 +55,7 @@ export function memberColor(sessionId: string): string {
 
 export function GroupMessageList({
   avatars,
-  groupId,
   members,
-  memberStates,
   messages,
   loaded,
   hasOlder,
@@ -66,12 +65,15 @@ export function GroupMessageList({
   cwd,
   onOpenFile,
   onHandoffClick,
+  workingRows,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
+  /** Kept for callers / future room-scoped list behavior. */
   groupId: string;
   members: readonly MentionMember[];
+  /** Kept for callers; live rows come from `workingRows`. */
   memberStates: GroupMemberStatesById;
-  /** Owned by GroupRoom (shared with the stage chip). */
+  /** Owned by GroupRoom (shared with Activity). */
   messages: readonly GroupMessage[];
   loaded: boolean;
   hasOlder: boolean;
@@ -82,8 +84,9 @@ export function GroupMessageList({
   onOpenFile: ((path: string) => void) | undefined;
   /** P2: click a Handoff card to seed `@Name` in the composer. */
   onHandoffClick?: ((targetName: string) => void) | undefined;
+  /** Shared live-turn rows from GroupRoom (also feeds Activity). */
+  workingRows: readonly GroupMemberWorkingRow[];
 }) {
-  const workingRows = useGroupMemberWorking(groupId, memberStates);
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
     first: undefined,

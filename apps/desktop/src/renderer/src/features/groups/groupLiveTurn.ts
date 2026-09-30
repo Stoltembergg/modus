@@ -1,6 +1,10 @@
 import type { AgentEvent } from "../../../../shared/contracts";
+import {
+  buildGroupSemanticPresence,
+  type GroupSemanticPresence,
+} from "../../../../shared/group-semantic-presence";
 import { getToolUiMeta } from "../../../../shared/tools";
-import { type GroupMemberWorkingPhase, groupMemberWorkingPhase } from "./groupWorkingPhase";
+import type { GroupMemberWorkingPhase } from "./groupWorkingPhase";
 
 /** Compact tool row shown under a live group member turn. */
 export type GroupLiveToolLine = {
@@ -15,17 +19,19 @@ export type GroupLiveTurnSnapshot = {
   phase: GroupMemberWorkingPhase;
   /** Latest thinking text (truncated for the room). */
   thoughtPreview: string;
-  /** Recent tools (oldest → newest; capped). */
+  /** Recent tools (oldest → newest; capped) — Activity detail; room shows phase. */
   tools: readonly GroupLiveToolLine[];
   /** Latest assistant text being written (truncated). */
   writingPreview: string;
   /** Epoch ms of the last event that updated this snapshot (0 if none). */
   lastEventAt: number;
   /**
-   * True after `run.completed` (or failed/cancelled/blocked): hide thought/tools/writing
-   * previews so the fold collapses before the strip leaves the room (final reply is in the transcript).
+   * True after `run.completed` (or failed/cancelled/blocked): hide writing
+   * previews so the fold collapses before the strip leaves the room.
    */
   collapsed: boolean;
+  /** Semantic heartbeat (startedAt / lastProgressAt / activity). */
+  presence: GroupSemanticPresence;
 };
 
 const PREVIEW_MAX = 160;
@@ -46,27 +52,29 @@ function toolLabel(name: string): string {
 
 /**
  * Fold agent events into a compact live turn for the group room.
- * Mirrors ChatPane WorkFold data at a glance — no Timeline dependency.
+ * Semantic phase labels (N0) + collapse-on-complete (P0a).
  */
 export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
 ): GroupLiveTurnSnapshot {
+  const presence = buildGroupSemanticPresence(events, mode);
   if (mode === "queued") {
     return {
-      phase: "Queued",
+      phase: presence.label,
       thoughtPreview: "",
       tools: [],
       writingPreview: "",
       lastEventAt: 0,
       collapsed: false,
+      presence,
     };
   }
 
   let thought = "";
   let writing = "";
   const tools = new Map<string, GroupLiveToolLine>();
-  let lastEventAt = 0;
+  let lastEventAt = presence.lastProgressAt > 0 ? presence.lastProgressAt : 0;
   let collapsed = false;
   let terminalPhase: GroupMemberWorkingPhase | undefined;
 
@@ -136,25 +144,19 @@ export function buildGroupLiveTurn(
     }
   }
 
-  const phase =
-    terminalPhase ??
-    groupMemberWorkingPhase(
-      events.map(({ event }) => ({ event })),
-      mode,
-    );
-
+  const phase = terminalPhase ?? presence.label;
   const toolList = [...tools.values()];
   const recentTools = toolList.length > TOOLS_MAX ? toolList.slice(-TOOLS_MAX) : toolList;
 
-  // Collapsed folds keep only the phase label — previews belong to the open live turn.
   if (collapsed) {
     return {
       phase,
       thoughtPreview: "",
       tools: [],
       writingPreview: "",
-      lastEventAt,
+      lastEventAt: lastEventAt || presence.lastProgressAt,
       collapsed: true,
+      presence,
     };
   }
 
@@ -163,8 +165,9 @@ export function buildGroupLiveTurn(
     thoughtPreview: truncate(thought),
     tools: recentTools,
     writingPreview: truncate(writing),
-    lastEventAt,
+    lastEventAt: lastEventAt || presence.lastProgressAt,
     collapsed: false,
+    presence,
   };
 }
 

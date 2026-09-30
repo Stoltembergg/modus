@@ -450,10 +450,10 @@ describe("GroupRoom", () => {
       task("5", "cancelled"),
     ];
     renderRoom();
-    expect(screen.queryByTestId("group-task-panel")).toBeNull();
+    expect(screen.queryByTestId("group-activity-panel")).toBeNull();
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("3"));
-    await user.click(screen.getByRole("button", { name: "Tasks (3 active)" }));
-    const panel = screen.getByTestId("group-task-panel");
+    await user.click(screen.getByRole("button", { name: "Activity (3 active)" }));
+    const panel = screen.getByTestId("group-activity-panel");
     expect(within(panel).getByTestId("task-checklist-progress").textContent).toContain("1/4 done");
     expect(within(panel).getByTestId("task-checklist")).toBeTruthy();
     // Cancelled starts hidden.
@@ -489,7 +489,7 @@ describe("GroupRoom", () => {
     ];
     renderRoom();
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("1"));
-    await user.click(screen.getByRole("button", { name: /^Tasks/ }));
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
     await user.click(screen.getByRole("button", { name: "Cancel task" }));
     expect(group.cancelTask).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: CANCEL_TASK_CONFIRM_LABEL }));
@@ -513,11 +513,11 @@ describe("GroupRoom decisions", () => {
   });
 
   async function openPanel(user: ReturnType<typeof userEvent.setup>) {
-    await user.click(screen.getByRole("button", { name: /^Tasks/ }));
-    return screen.getByTestId("group-task-panel");
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
+    return screen.getByTestId("group-activity-panel");
   }
 
-  it("shows Decisions (newest first) with a counter above the tasks; the header stays Tasks N", async () => {
+  it("shows Decisions (newest first) with a counter above the checklist; the header stays Activity N", async () => {
     const user = userEvent.setup();
     decisions = [
       decision("3", "Ship on Fridays", { authorSessionId: "s-rev-1" }),
@@ -540,14 +540,20 @@ describe("GroupRoom decisions", () => {
     // Decisions load only with the panel.
     expect(group.listDecisions).not.toHaveBeenCalled();
     const panel = await openPanel(user);
-    expect(screen.getByRole("button", { name: "Tasks (1 active)" }).textContent).toBe("Tasks1");
+    expect(screen.getByRole("button", { name: "Activity (1 active)" }).textContent).toBe(
+      "Activity1",
+    );
     await vi.waitFor(() =>
       expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
     );
     expect(group.listDecisions).toHaveBeenCalledWith("g-1");
-    // The section comes first, above the tasks.
+    // Coordination precedes Decisions; Decisions precedes the checklist.
+    const coordination = within(panel).getByTestId("group-activity-coordination");
     const section = within(panel).getByTestId("decision-section");
-    expect(panel.firstElementChild).toBe(section);
+    expect(panel.firstElementChild).toBe(coordination);
+    expect(
+      coordination.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     expect(
       section.compareDocumentPosition(within(panel).getByTestId("task-checklist")) &
         Node.DOCUMENT_POSITION_FOLLOWING,
@@ -658,7 +664,7 @@ describe("GroupRoom coordinator mode", () => {
     return screen.findByRole("menuitemcheckbox", { name: /Coordinator mode/ });
   }
 
-  it("the menu toggle turns it on; no Coordinator badge while it is off", async () => {
+  it("the menu toggle turns it on; Coordinator stays out of the primary header", async () => {
     const user = userEvent.setup();
     const { onSetMode } = renderRoom();
     expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
@@ -669,23 +675,29 @@ describe("GroupRoom coordinator mode", () => {
     expect(onSetMode).toHaveBeenCalledWith("coordinator");
   });
 
-  it("with the mode on and a Lead: the Coordinator badge next to the Project badge; the toggle turns it off", async () => {
+  it("with the mode on and a Lead: Activity shows Coordinator; menu toggle turns it off", async () => {
     const user = userEvent.setup();
     const { onSetMode } = renderRoom(states(), vi.fn(), { ...GROUP, mode: "coordinator" });
-    const badge = screen.getByTestId("group-coordinator-badge");
-    expect(badge.textContent).toBe("Coordinator");
-    expect(screen.getByTestId("group-project-badge").nextElementSibling).toBe(badge);
+    expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
+    expect(screen.getByTestId("group-activity-coordinator-status").textContent).toBe(
+      "Coordinator on",
+    );
     const toggle = await openMenu(user);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     await user.click(toggle);
     expect(onSetMode).toHaveBeenCalledWith("free");
   });
 
-  it("without a Lead the stored flag is ignored: no badge, toggle off and disabled", async () => {
+  it("without a Lead the stored flag is ignored: Free in Activity, toggle off and disabled", async () => {
     const user = userEvent.setup();
     const { leadSessionId: _lead, ...leaderless } = GROUP;
     const { onSetMode } = renderRoom(states(), vi.fn(), { ...leaderless, mode: "coordinator" });
     expect(screen.queryByTestId("group-coordinator-badge")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^Activity/ }));
+    expect(screen.getByTestId("group-activity-coordinator-status").textContent).toBe(
+      "Free collaboration",
+    );
     const toggle = await openMenu(user);
     expect(toggle.getAttribute("aria-checked")).toBe("false");
     expect(toggle.getAttribute("aria-disabled")).toBe("true");

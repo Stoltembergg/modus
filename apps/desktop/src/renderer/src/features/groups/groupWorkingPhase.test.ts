@@ -26,7 +26,7 @@ describe("groupMemberWorkingPhase", () => {
     expect(groupMemberWorkingPhase([ev(runStarted)], "running")).toBe("Thinking");
   });
 
-  it("tracks Thinking → tool verb → Writing from real events", () => {
+  it("tracks Thinking → Exploring → Writing from semantic presence", () => {
     const events = [
       ev(runStarted),
       ev({ type: "thinking.delta", sessionId: "s", messageId: "m1", delta: "plan" }),
@@ -40,9 +40,21 @@ describe("groupMemberWorkingPhase", () => {
       ev({ type: "message.delta", sessionId: "s", messageId: "m2", delta: "hi" }),
     ];
     expect(groupMemberWorkingPhase(events.slice(0, 2), "running")).toBe("Thinking");
-    expect(groupMemberWorkingPhase(events.slice(0, 3), "running")).toBe("Reading");
+    expect(groupMemberWorkingPhase(events.slice(0, 3), "running")).toBe("Exploring");
     expect(groupMemberWorkingPhase(events.slice(0, 4), "running")).toBe("Thinking");
     expect(groupMemberWorkingPhase(events, "running")).toBe("Writing");
+  });
+
+  it("labels edit tools as Implementing", () => {
+    expect(
+      groupMemberWorkingPhase(
+        [
+          ev(runStarted),
+          ev({ type: "tool.started", sessionId: "s", toolCallId: "t", toolName: "edit" }),
+        ],
+        "running",
+      ),
+    ).toBe("Implementing");
   });
 });
 
