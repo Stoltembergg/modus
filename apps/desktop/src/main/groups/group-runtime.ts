@@ -431,11 +431,11 @@ export class GroupRuntime {
   }
 
   /**
-   * Wake rules (natural groups): @mentions wake those members; a user message
-   * with no mention is routed by specialty (Lead optional bias). Coordinator
-   * mode still wakes only the Lead for untargeted user turns (snapshot). An
-   * author never wakes itself; a reply does not wake the replied-to author
-   * unless mentioned; agents without mentions wake nobody.
+   * Wake rules (natural groups): @mentions wake those members; a reply wakes
+   * the replied-to author (thread continuation). Untargeted user messages are
+   * routed by specialty (Lead optional bias). Coordinator mode still wakes
+   * only the Lead for untargeted user turns (snapshot). Agent→agent directed
+   * messages (`toSessionId`) wake the recipient. An author never wakes itself.
    */
   private wakeTargets(
     group: AgentGroupInfo,
@@ -452,10 +452,16 @@ export class GroupRuntime {
     if (message.kind !== "message") return [];
     const members = membersOf(group.id);
     const memberIds = new Set(members.map((member) => member.sessionId));
+    const repliedAuthor = message.replyToMessageId
+      ? getGroupMessage(message.replyToMessageId)?.authorSessionId
+      : undefined;
     let targets: string[];
     if (message.authorKind === "user") {
       if (message.mentions.length > 0) {
-        targets = message.mentions;
+        targets = [...message.mentions];
+      } else if (repliedAuthor) {
+        // Thread reply without @ — continue with the person being answered.
+        targets = [repliedAuthor];
       } else if (isCoordinatorModeActive(group) && group.leadSessionId) {
         targets = [group.leadSessionId];
       } else {
@@ -471,18 +477,14 @@ export class GroupRuntime {
         });
       }
     } else if (message.authorKind === "agent") {
-      targets = message.mentions;
+      targets = [...message.mentions];
+      if (message.toSessionId) targets.push(message.toSessionId);
+      if (repliedAuthor) targets.push(repliedAuthor);
     } else {
       targets = [];
     }
-    const repliedAuthor = message.replyToMessageId
-      ? getGroupMessage(message.replyToMessageId)?.authorSessionId
-      : undefined;
     return [...new Set(targets)].filter(
-      (id) =>
-        memberIds.has(id) &&
-        id !== message.authorSessionId &&
-        (id !== repliedAuthor || message.mentions.includes(id)),
+      (id) => memberIds.has(id) && id !== message.authorSessionId,
     );
   }
 
