@@ -30,17 +30,12 @@ jobs:
           )
           if n != 1:
               raise SystemExit(f"group-runtime-more.test.ts: expected 1 replace, got {n}")
-          more.write_text(text2)
+          more.write_text(text2.rstrip("\n") + "\n")
 
           runtime = Path("apps/desktop/src/main/groups/group-runtime.test.ts")
           rtext = runtime.read_text()
-          if rtext.endswith("}\n\n"):
-              runtime.write_text(rtext[:-1])
-          elif rtext.endswith("}\n"):
-              print("group-runtime.test.ts already single trailing newline")
-          else:
-              raise SystemExit(repr(rtext[-20:]))
-          print("patched ok")
+          runtime.write_text(rtext.rstrip("\n") + "\n")
+          print("patched ok", more.stat().st_size, runtime.stat().st_size)
           PY
       - name: Commit fix and remove this workflow
         run: |
