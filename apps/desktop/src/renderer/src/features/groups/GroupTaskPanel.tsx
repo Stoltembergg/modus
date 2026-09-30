@@ -1,21 +1,10 @@
-import { IconChevronRight, IconGitBranch } from "@tabler/icons-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../shared/contracts";
-import { CopyButton } from "../../components/ui/CopyButton";
+import { SpringCheck } from "../../components/ui/SpringCheck";
 import { cn } from "../../lib/cn";
-import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { describeGroupError } from "./groupErrors";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
-
-/** Panel sections in order; Cancelled starts collapsed. */
-export const TASK_SECTIONS: ReadonlyArray<{ status: GroupTaskStatus; label: string }> = [
-  { status: "open", label: "Open" },
-  { status: "in_progress", label: "In progress" },
-  { status: "in_review", label: "In review" },
-  { status: "done", label: "Done" },
-  { status: "cancelled", label: "Cancelled" },
-];
 
 /** Second-click label of the two-step "Cancel task". */
 export const CANCEL_TASK_CONFIRM_LABEL = "Click again to cancel";
@@ -23,6 +12,22 @@ export const CANCEL_TASK_CONFIRM_LABEL = "Click again to cancel";
 /** Tasks still in play (the panel button's counter). */
 export function activeTaskCount(tasks: readonly GroupTask[]): number {
   return tasks.filter((task) => task.status !== "done" && task.status !== "cancelled").length;
+}
+
+/** Done vs total for the checklist header (excludes cancelled). */
+export function checklistProgress(tasks: readonly GroupTask[]): { done: number; total: number } {
+  const counted = tasks.filter((task) => task.status !== "cancelled");
+  return {
+    done: counted.filter((task) => task.status === "done").length,
+    total: counted.length,
+  };
+}
+
+function statusBadge(status: GroupTaskStatus): string | undefined {
+  if (status === "in_progress") return "In progress";
+  if (status === "in_review") return "In review";
+  if (status === "open") return "Open";
+  return undefined;
 }
 
 /**
@@ -52,9 +57,24 @@ export function useGroupTasks(groupId: string) {
   return { tasks, replace };
 }
 
+function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
+  const rank: Record<GroupTaskStatus, number> = {
+    in_progress: 0,
+    in_review: 1,
+    open: 2,
+    done: 3,
+    cancelled: 4,
+  };
+  return [...tasks].sort((a, b) => {
+    const byStatus = rank[a.status] - rank[b.status];
+    if (byStatus !== 0) return byStatus;
+    return a.createdAt.localeCompare(b.createdAt);
+  });
+}
+
 /**
  * Right-hand side panel of the room: `top` (the Decisions section) above the
- * tasks. The only task action is "Cancel task".
+ * checklist. Agents mark done; the user can Cancel. Spring Check is display-only.
  */
 export function GroupTaskPanel({
   tasks,
@@ -67,7 +87,11 @@ export function GroupTaskPanel({
   onCancelled(task: GroupTask): void;
   top?: ReactNode;
 }) {
-  const [cancelledOpen, setCancelledOpen] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false);
+  const progress = checklistProgress(tasks);
+  const visible = sortTasks(tasks.filter((task) => task.status !== "cancelled" || showCancelled));
+  const cancelledCount = tasks.filter((task) => task.status === "cancelled").length;
+
   return (
     <aside
       aria-label="Tasks"
@@ -79,46 +103,39 @@ export function GroupTaskPanel({
         <div className="px-1 py-6 text-center text-fg-faint text-xs">
           No tasks yet. Members create them as they work.
         </div>
-      ) : null}
-      {TASK_SECTIONS.map(({ status, label }) => {
-        const items = tasks.filter((task) => task.status === status);
-        if (items.length === 0) return null;
-        const collapsible = status === "cancelled";
-        const open = !collapsible || cancelledOpen;
-        return (
-          <section className="mb-3" data-status={status} data-testid="task-section" key={status}>
-            {collapsible ? (
-              <button
-                aria-expanded={open}
-                className="mb-1 flex w-full items-center gap-1 px-1 text-2xs text-fg-faint uppercase tracking-wide hover:text-fg-muted"
-                onClick={() => setCancelledOpen((value) => !value)}
-                type="button"
-              >
-                <IconChevronRight
-                  className={cn("transition-transform", open && "rotate-90")}
-                  size={ICON.xs}
-                  stroke={ICON_STROKE.xs}
-                />
-                {label} <span className="tabular-nums">{items.length}</span>
-              </button>
-            ) : (
-              <h3 className="mb-1 px-1 text-2xs text-fg-faint uppercase tracking-wide">
-                {label} <span className="tabular-nums">{items.length}</span>
-              </h3>
-            )}
-            {open
-              ? items.map((task) => (
-                  <TaskCard key={task.id} onCancelled={onCancelled} labels={labels} task={task} />
-                ))
-              : null}
-          </section>
-        );
-      })}
+      ) : (
+        <>
+          <div
+            className="mb-2 flex items-baseline justify-between gap-2 px-1"
+            data-testid="task-checklist-progress"
+          >
+            <h3 className="text-2xs text-fg-faint uppercase tracking-wide">Checklist</h3>
+            <span className="tabular-nums text-2xs text-fg-muted">
+              {progress.done}/{progress.total} done
+            </span>
+          </div>
+          <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
+            {visible.map((task) => (
+              <TaskCheckRow key={task.id} labels={labels} onCancelled={onCancelled} task={task} />
+            ))}
+          </ul>
+          {cancelledCount > 0 ? (
+            <button
+              aria-expanded={showCancelled}
+              className="mt-2 px-1 text-left text-2xs text-fg-faint hover:text-fg-muted"
+              onClick={() => setShowCancelled((value) => !value)}
+              type="button"
+            >
+              {showCancelled ? "Hide cancelled" : `Show cancelled (${cancelledCount})`}
+            </button>
+          ) : null}
+        </>
+      )}
     </aside>
   );
 }
 
-function TaskCard({
+function TaskCheckRow({
   task,
   labels,
   onCancelled,
@@ -130,13 +147,13 @@ function TaskCard({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
-  const name = (id: string | undefined, none: string) =>
-    id ? (
-      <MemberName label={labels.get(id) ?? { title: id }} />
-    ) : (
-      <span className="text-fg-faint">{none}</span>
-    );
-  const cancellable = task.status !== "done" && task.status !== "cancelled";
+  const done = task.status === "done";
+  const cancelled = task.status === "cancelled";
+  const badge = statusBadge(task.status);
+  const owner = task.ownerSessionId
+    ? (labels.get(task.ownerSessionId) ?? { title: task.ownerSessionId })
+    : undefined;
+  const cancellable = !done && !cancelled;
 
   async function cancel(): Promise<void> {
     if (!confirming) {
@@ -156,42 +173,61 @@ function TaskCard({
   }
 
   return (
-    <div
-      className="mb-1.5 rounded-md border border-hairline bg-elevated px-2.5 py-2 text-xs"
+    <li
+      className={cn("rounded-md px-1.5 py-1.5 text-xs", cancelled && "opacity-50")}
+      data-status={task.status}
       data-testid="group-task"
     >
-      <div className="mb-1 font-medium text-fg">{task.title}</div>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-fg-muted">
-        <dt className="text-fg-faint">Owner</dt>
-        <dd className="min-w-0 truncate">{name(task.ownerSessionId, "Unassigned")}</dd>
-        <dt className="text-fg-faint">Reviewer</dt>
-        <dd className="min-w-0 truncate">{name(task.reviewerSessionId, "None")}</dd>
-        {task.branch ? (
-          <>
-            <dt className="text-fg-faint">Branch</dt>
-            <dd className="flex min-w-0 items-center gap-1">
-              <IconGitBranch className="shrink-0" size={ICON.xs} stroke={ICON_STROKE.xs} />
-              <span className="min-w-0 truncate font-mono text-2xs">{task.branch}</span>
-              <CopyButton className="-my-1 size-5" label="Copy branch" text={task.branch} />
-            </dd>
-          </>
-        ) : null}
-      </dl>
-      {error ? <div className="mt-1 text-danger">{error}</div> : null}
-      {cancellable ? (
-        <button
-          className={cn(
-            "mt-1.5 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
-            confirming ? "bg-danger/10 text-danger" : "text-fg-faint hover:bg-hover hover:text-fg",
-          )}
-          disabled={busy}
-          onBlur={() => setConfirming(false)}
-          onClick={() => void cancel()}
-          type="button"
-        >
-          {confirming ? CANCEL_TASK_CONFIRM_LABEL : "Cancel task"}
-        </button>
-      ) : null}
-    </div>
+      <div className="flex items-start gap-2">
+        <SpringCheck
+          aria-label={done ? "Done" : "Not done"}
+          checked={done}
+          className="mt-0.5"
+          disabled
+        />
+        <div className="min-w-0 flex-1">
+          <div
+            className={cn(
+              "font-medium text-fg leading-snug",
+              done && "text-fg-muted line-through",
+              cancelled && "text-fg-faint line-through",
+            )}
+          >
+            {task.title}
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-2xs text-fg-faint">
+            {badge ? (
+              <span className="text-fg-muted" data-testid="task-status-badge">
+                {badge}
+              </span>
+            ) : null}
+            {owner ? (
+              <span className="min-w-0 truncate">
+                <MemberName label={owner} />
+              </span>
+            ) : (
+              <span>Unassigned</span>
+            )}
+          </div>
+          {error ? <div className="mt-1 text-danger">{error}</div> : null}
+          {cancellable ? (
+            <button
+              className={cn(
+                "mt-1 rounded-md px-1.5 py-0.5 text-2xs transition-colors",
+                confirming
+                  ? "bg-danger/10 text-danger"
+                  : "text-fg-faint hover:bg-hover hover:text-fg",
+              )}
+              disabled={busy}
+              onBlur={() => setConfirming(false)}
+              onClick={() => void cancel()}
+              type="button"
+            >
+              {confirming ? CANCEL_TASK_CONFIRM_LABEL : "Cancel task"}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </li>
   );
 }
