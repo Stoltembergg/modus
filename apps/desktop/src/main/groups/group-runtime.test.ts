@@ -17,6 +17,7 @@ const {
   createAgentGroupWithMembers,
   removeAgentFromGroup,
   listGroupMessages,
+  claimGroupTask,
   createMemberGroupTask,
   recordGroupDecision,
   removeAgentGroupMember,
@@ -1139,5 +1140,74 @@ describe("HyperPlan-blocked member", () => {
     expect(room(group.id)).toHaveLength(1);
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
+  });
+});
+
+/* ── N4 proactive resume / review + interrupt ─────────────────────────── */
+
+describe("N4 proactive follow-ups", () => {
+  it("silence with an owned in_progress task resumes the owner (not the speaker)", async () => {
+    const { group, alpha, beta } = squad();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: alpha,
+      title: "Parser",
+    });
+    claimGroupTask(group.id, task.id, alpha);
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta draft something" });
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Draft parked." });
+    await flush();
+    expect(room(group.id).at(-2)).toMatchObject({
+      kind: "status",
+      body: GROUP_STATUS_TEXT.noNextOwner,
+    });
+    expect(room(group.id).at(-1)).toMatchObject({
+      kind: "status",
+      body: 'Resume: "Parser" — continue your owned work',
+    });
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+  });
+
+  it("Agreed with an owned in_progress task + reviewer wakes the reviewer once", async () => {
+    const { group, alpha, beta, gamma } = squad();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: alpha,
+      title: "Toggle",
+      reviewerSessionId: gamma,
+    });
+    claimGroupTask(group.id, task.id, alpha);
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha finish it" });
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Looks good.\nAgreed" });
+    await flush();
+    expect(room(group.id).at(-1)).toMatchObject({
+      kind: "status",
+      authorSessionId: alpha,
+      body: 'Review ready: "Toggle" — please review',
+    });
+    expect(runtime.pendingSessions()).toEqual([gamma]);
+    expect(runtime.pendingSessions()).not.toContain(beta);
+  });
+
+  it("Ready for you does not proactive-wake peers (interrupt the user)", async () => {
+    const { group, alpha, beta } = squad();
+    const task = createMemberGroupTask({
+      groupId: group.id,
+      actorSessionId: alpha,
+      title: "Secret",
+    });
+    claimGroupTask(group.id, task.id, alpha);
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta check the key" });
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Ready for you" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).some((m) => m.body.startsWith("Resume:"))).toBe(false);
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorSessionId: beta,
+      body: "Ready for you",
+    });
   });
 });
