@@ -1,0 +1,34 @@
+diff --git a/apps/desktop/src/renderer/src/components/SidebarGroups.tsx b/apps/desktop/src/renderer/src/components/SidebarGroups.tsx
+index fe2ccc8..a785b11 100644
+--- a/apps/desktop/src/renderer/src/components/SidebarGroups.tsx
++++ b/apps/desktop/src/renderer/src/components/SidebarGroups.tsx
+@@ -27,6 +27,7 @@ import {
+   type GroupDialogModel,
+   type GroupMembersChange,
+ } from "../features/groups/CreateGroupDialog";
++import { groupMemberOpenTarget } from "../features/groups/groupMemberOpenTarget";
+ import {
+   agentChatSessions,
+   type GroupAgentRow,
+@@ -38,6 +39,7 @@ import { MemberName } from "../features/groups/MemberName";
+ import { type MemberLabel, memberLabels } from "../features/groups/memberLabels";
+ import { NewGroupModal, type NewGroupServices } from "../features/groups/NewGroupModal";
+ import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
++import { memberActivityState } from "../features/groups/useWorkingGroups";
+ import { cn } from "../lib/cn";
+ import { ICON, ICON_STROKE } from "../lib/uiDensity";
+ 
+@@ -209,6 +211,13 @@ export function SidebarGroups({
+                       label={labels.get(row.sessionId) ?? { title: row.name }}
+                       onRemove={() => onRemoveMember(group.id, row.sessionId)}
+                       onSelect={() => {
++                        const room = memberStates
++                          ? memberActivityState(memberStates, group.id, row.sessionId)
++                          : "idle";
++                        if (groupMemberOpenTarget(room) === "group") {
++                          onSelectGroup?.(group);
++                          return;
++                        }
+                         if (onOpenAgentChat) onOpenAgentChat(row.agentId);
+                         else if (session) onSelectSession(session);
+                         else onSelectGroup?.(group);
