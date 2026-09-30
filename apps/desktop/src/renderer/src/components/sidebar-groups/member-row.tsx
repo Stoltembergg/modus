@@ -1,21 +1,12 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
-import { Menu } from "@base-ui/react/menu";
-import {
-  IconCheck,
-  IconCrown,
-  IconCrownOff,
-  IconDots,
-  IconPencil,
-  IconUserMinus,
-} from "@tabler/icons-react";
-import { ICON, ICON_STROKE } from "../../lib/uiDensity";
-import { cn } from "../../lib/cn";
+import { IconCrown, IconCrownOff, IconPencil, IconUserMinus } from "@tabler/icons-react";
 import { AgentAvatar } from "../../features/agents/AgentAvatar";
 import type { GroupAgentRow } from "../../features/groups/groupSidebarModel";
 import { MemberName } from "../../features/groups/MemberName";
 import type { MemberLabel } from "../../features/groups/memberLabels";
-import { GroupMenuItem, RowIconButton } from "./helpers";
-import { SB_ACTION, SB_ACTION_STROKE, SB_ICON, SB_RAIL, SB_ROW, SB_STROKE } from "./shared";
+import { cn } from "../../lib/cn";
+import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { RowIconButton } from "./helpers";
+import { SB_ACTION, SB_ACTION_STROKE, SB_RAIL, SB_ROW } from "./shared";
 
 export function MemberRow({
   row,
@@ -95,4 +86,3 @@ export function MemberRow({
     </div>
   );
 }
-

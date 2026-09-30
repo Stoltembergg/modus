@@ -1,7 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
-import { SB_ACTION, SB_ACTION_STROKE } from "./shared";
 
 export function GroupMenuItem({
   icon,

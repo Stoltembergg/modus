@@ -1,12 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
-import {
-  IconCheck,
-  IconPencil,
-  IconTrash,
-  IconUserPlus,
-  IconUsers,
-} from "@tabler/icons-react";
-import type { ReactNode } from "react";
+import { IconCheck, IconPencil, IconTrash, IconUserPlus, IconUsers } from "@tabler/icons-react";
 import { groupDeleteConfirmLabel } from "../../features/groups/groupSidebarModel";
 import { GroupMenuItem } from "./helpers";
 import { SB_ACTION, SB_ACTION_STROKE } from "./shared";
@@ -91,4 +84,3 @@ export function GroupMenuItems({
     </>
   );
 }
-

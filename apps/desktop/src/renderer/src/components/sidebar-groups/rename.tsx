@@ -1,5 +1,4 @@
 import { useRef, useState } from "react";
-import { SB_ROW } from "./shared";
 
 export function GroupRenameInput({
   initial,
@@ -42,4 +41,3 @@ export function GroupRenameInput({
     />
   );
 }
-

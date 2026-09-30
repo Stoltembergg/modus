@@ -1,5 +1,5 @@
-import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import type { NewGroupServices } from "../../features/groups/NewGroupModal";
+import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 
 export const SB_RAIL = "pointer-events-none flex w-5 shrink-0 items-center justify-center";
 export const SB_ROW =
