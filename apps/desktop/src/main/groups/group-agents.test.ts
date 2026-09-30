@@ -822,9 +822,10 @@ describe("A2 migration (on an A1-shaped database)", () => {
       );
       group.run("g1", "One", ws, now, now);
       group.run("g2", "Two", ws, now, now);
+      // A1 table has no avatar_shape (N5 adds it during migrateDatabase below).
       const agent = db.prepare(
-        `insert into agents (id, name, role, instructions, model_id, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
-         values (?, ?, ?, ?, ?, 'happy', 'blue', 'circle', ?, ?)`,
+        `insert into agents (id, name, role, instructions, model_id, avatar_face, avatar_color, created_at, updated_at)
+         values (?, ?, ?, ?, ?, 'happy', 'blue', ?, ?)`,
       );
       agent.run("shared", "Shared", "Fixer", "Fix things.", MODEL, now, now);
       agent.run("loose", "Loose", "", "", null, now, now);
@@ -899,6 +900,7 @@ describe("A2 migration (on an A1-shaped database)", () => {
         "default_workspace_id",
         "avatar_face",
         "avatar_color",
+        "avatar_shape",
         "template_id",
         "created_at",
         "updated_at",
