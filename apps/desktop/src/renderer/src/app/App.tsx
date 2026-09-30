@@ -152,6 +152,7 @@ export function App() {
   );
   /** The group whose room fills the main panel (instead of a chat). */
   const [activeGroupId, setActiveGroupId] = useState<string | undefined>();
+  const [groupChromeHost, setGroupChromeHost] = useState<HTMLElement | null>(null);
   const activeGroup = activeGroupId
     ? agentGroups.find((group) => group.id === activeGroupId)
     : undefined;
@@ -1316,7 +1317,13 @@ export function App() {
                                 stroke={TOOLBAR_ICON.stroke}
                               />
                             </ToolbarButton>
-                            {activeSession ? (
+                            {activeGroup ? (
+                              <div
+                                className="app-no-drag flex min-w-0 flex-1 items-center"
+                                data-testid="group-chrome-host"
+                                ref={setGroupChromeHost}
+                              />
+                            ) : activeSession ? (
                               <SessionTitlePopover
                                 branch={branch}
                                 contextUsage={contextUsageBySession[activeSession.id]}
@@ -1329,20 +1336,27 @@ export function App() {
                               />
                             ) : null}
                           </div>
-                          <div className="flex h-full flex-1 items-center justify-end">
-                            <div className="pr-2">
-                              <HeaderActions
-                                activeWorkspace={activeWorkspace}
-                                branch={branch}
-                                environmentStats={environmentStats}
-                                inspectorOpen={responsiveInspectorOpen}
-                                onOpenSettings={() => {
-                                  setSettingsInitialSection(undefined);
-                                  setSettingsOpen(true);
-                                }}
-                                onToggleInspector={() => setInspectorOpen((open) => !open)}
-                              />
-                            </div>
+                          <div
+                            className={cn(
+                              "flex h-full items-center justify-end",
+                              !activeGroup && "flex-1",
+                            )}
+                          >
+                            {activeGroup ? null : (
+                              <div className="pr-2">
+                                <HeaderActions
+                                  activeWorkspace={activeWorkspace}
+                                  branch={branch}
+                                  environmentStats={environmentStats}
+                                  inspectorOpen={responsiveInspectorOpen}
+                                  onOpenSettings={() => {
+                                    setSettingsInitialSection(undefined);
+                                    setSettingsOpen(true);
+                                  }}
+                                  onToggleInspector={() => setInspectorOpen((open) => !open)}
+                                />
+                              </div>
+                            )}
                             {isMac ? null : <WindowControls />}
                           </div>
                         </header>
@@ -1371,6 +1385,7 @@ export function App() {
                               transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
                             >
                               <GroupRoom
+                                chromeHost={groupChromeHost}
                                 defaultModelId={model || undefined}
                                 group={activeGroup}
                                 key={activeGroup.id}

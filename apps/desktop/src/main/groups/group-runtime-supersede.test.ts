@@ -177,6 +177,8 @@ describe("group-runtime-supersede: clear sticky Waiting for you", () => {
 
   it("clears HyperPlan awaitingUser and can re-wake that member from the room", async () => {
     const { group, beta } = squad();
+    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
+    expect(reserveHyperPlanSession({ sessionId: beta, ownerId: 1 })).toBe(true);
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "@Beta plan" });
     runtime.take(beta).resolve({ outcome: "blocked" });

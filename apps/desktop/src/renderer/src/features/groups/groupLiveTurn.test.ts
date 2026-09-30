@@ -55,11 +55,12 @@ describe("buildGroupLiveTurn", () => {
     expect(snap.presence.state).toBe("writing");
     expect(snap.thoughtPreview).toContain("Plan the toggle");
     expect(snap.tools).toEqual([{ id: "t1", name: "read", label: "Reading", done: true }]);
+    expect(snap.streamText).toContain("hand off");
     expect(snap.writingPreview).toContain("hand off");
     expect(snap.lastEventAt).toBe(Date.parse("2026-01-01T00:00:04.000Z"));
   });
 
-  it("collapses previews when run.completed arrives (final reply is in the transcript)", () => {
+  it("keeps streamText after run.completed for persist reconcile", () => {
     const events = [
       ev(runStarted, "2026-01-01T00:00:00.000Z"),
       ev(
@@ -82,7 +83,8 @@ describe("buildGroupLiveTurn", () => {
     expect(snap.phase).toBe("Done");
     expect(snap.thoughtPreview).toBe("");
     expect(snap.tools).toEqual([]);
-    expect(snap.writingPreview).toBe("");
+    expect(snap.streamText).toContain("hand off");
+    expect(snap.writingPreview).toContain("hand off");
   });
 
   it("keeps open tools as not done and caps the list", () => {

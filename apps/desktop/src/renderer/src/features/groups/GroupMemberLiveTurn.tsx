@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import { inlineLiveStatusLabel } from "../../../../shared/group-room-transcript";
 import { shouldShowStillWorking } from "../../../../shared/group-semantic-presence";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
-import { SessionStatusDot } from "../agent/SessionStatusDot";
 import {
   type GroupLiveTurnSnapshot,
   isStillWorking,
@@ -9,8 +9,8 @@ import {
 } from "./groupLiveTurn";
 
 /**
- * Compact live turn under a group member: semantic phase + writing preview.
- * Tool spam stays out of the primary room (Activity); collapses on run end.
+ * Inline ephemeral status on an in-flight GroupMessageRow (Thinking… / Exploring…).
+ * Hidden once `message.delta` has produced stream text on the same row.
  */
 export function GroupMemberLiveTurn({
   mode,
@@ -30,36 +30,45 @@ export function GroupMemberLiveTurn({
     return () => window.clearInterval(id);
   }, [mode]);
 
+  const stream = live.streamText.trim();
+  if (stream) return null;
+
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
   const still =
     !live.collapsed &&
     (live.presence
       ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
       : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS));
-  const phaseLabel = still ? "Still working…" : String(live.phase);
+  const statusLabel = inlineLiveStatusLabel({
+    phase: String(live.phase),
+    presenceState: live.presence?.state,
+    activity: live.presence?.activity,
+    waitingFor: live.presence?.waitingFor,
+    stillWorking: still,
+  });
   const working = mode === "running" && !live.collapsed;
 
   return (
     <div
-      className="min-w-0 space-y-1"
+      className="min-w-0"
       data-collapsed={live.collapsed || undefined}
       data-testid="group-member-live-turn"
+      data-tone="temporary"
     >
-      <div className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm">
+      <div
+        className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm"
+        data-testid="group-live-status"
+      >
         {working ? (
-          <SessionStatusDot
-            activity={{ running: true, needsInput: false, unread: false, failed: false }}
-            className="-my-1"
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 animate-pulse rounded-full bg-fg-faint"
+            data-testid="group-live-pulse"
           />
         ) : null}
-        <span className="sr-only">{phaseLabel}</span>
-        <ThinkingStates className="text-fg-subtle" label={phaseLabel} />
+        <span className="sr-only">{statusLabel}</span>
+        <ThinkingStates className="text-fg-subtle" label={statusLabel} />
       </div>
-      {!live.collapsed && live.writingPreview ? (
-        <p className="line-clamp-3 text-2xs text-fg-muted" data-testid="group-live-writing">
-          {live.writingPreview}
-        </p>
-      ) : null}
     </div>
   );
 }

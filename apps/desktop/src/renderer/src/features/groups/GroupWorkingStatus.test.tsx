@@ -13,6 +13,11 @@ const labels = new Map([
   ["s-build", { title: "Builder" }],
 ]);
 
+const members = [
+  { sessionId: "s-lead", title: "Planner" },
+  { sessionId: "s-build", title: "Builder" },
+];
+
 const avatars = new Map<string, WorkingMemberAvatar>([
   [
     "s-lead",
@@ -27,28 +32,39 @@ const avatars = new Map<string, WorkingMemberAvatar>([
 function live(partial: Partial<GroupLiveTurnSnapshot> = {}): GroupLiveTurnSnapshot {
   const lastEventAt = partial.lastEventAt ?? Date.now();
   const phase = partial.phase ?? "Thinking";
+  const streamText = partial.streamText ?? partial.writingPreview ?? "";
   return {
     phase,
-    thoughtPreview: "",
-    tools: [],
-    writingPreview: "",
+    thoughtPreview: partial.thoughtPreview ?? "",
+    tools: partial.tools ?? [],
+    streamText,
+    writingPreview: streamText,
     lastEventAt,
-    collapsed: false,
-    presence: {
+    collapsed: partial.collapsed ?? false,
+    presence: partial.presence ?? {
       state: phase === "Queued" ? "queued" : phase === "Writing" ? "writing" : "thinking",
       label: String(phase),
       startedAt: lastEventAt || Date.now(),
       lastProgressAt: lastEventAt || Date.now(),
     },
-    ...partial,
   };
+}
+
+function renderStatus(rows: readonly GroupMemberWorkingRow[]) {
+  return render(
+    <GroupWorkingStatus
+      avatars={avatars}
+      groupId="g-1"
+      labels={labels}
+      members={members}
+      rows={rows}
+    />,
+  );
 }
 
 describe("GroupWorkingStatus", () => {
   it("renders nothing when no members are working", () => {
-    const { container } = render(
-      <GroupWorkingStatus avatars={avatars} labels={labels} rows={[]} />,
-    );
+    const { container } = renderStatus([]);
     expect(container.firstChild).toBeNull();
   });
 
@@ -57,7 +73,7 @@ describe("GroupWorkingStatus", () => {
       { sessionId: "s-lead", mode: "running", live: live({ phase: "Thinking" }) },
       { sessionId: "s-build", mode: "queued", live: live({ phase: "Queued", lastEventAt: 0 }) },
     ];
-    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
+    renderStatus(rows);
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
     expect(items[0]?.dataset.phase).toBe("Thinking");
@@ -67,7 +83,7 @@ describe("GroupWorkingStatus", () => {
     expect(items[1]?.textContent).toContain("Builder");
   });
 
-  it("shows writing preview under the live turn (tools stay for Activity)", () => {
+  it("streams into a definitive GroupMessageRow (not a preview strip)", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -76,17 +92,85 @@ describe("GroupWorkingStatus", () => {
           phase: "Writing",
           thoughtPreview: "Plan the toggle",
           tools: [{ id: "t1", name: "read", label: "Reading", done: true }],
-          writingPreview: "I'll hand off to Builder",
+          streamText: "I'll hand off to Builder",
         }),
       },
     ];
-    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
+    renderStatus(rows);
+    expect(screen.queryByTestId("group-live-status")).toBeNull();
     expect(screen.queryByTestId("group-live-thought")).toBeNull();
     expect(screen.queryByTestId("group-live-tools")).toBeNull();
     expect(screen.getByTestId("group-live-writing").textContent).toContain("hand off");
+    expect(screen.getByTestId("group-message").dataset.kind).toBe("member");
+    expect(screen.getByTestId("group-member-working").dataset.streaming).toBe("true");
   });
 
-  it("shows Still working… after silence while running", () => {
+  it("shows Exploring… inline before any writing arrives", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({
+          phase: "Exploring",
+          presence: {
+            state: "exploring",
+            label: "Exploring",
+            startedAt: Date.now(),
+            lastProgressAt: Date.now(),
+          },
+        }),
+      },
+    ];
+    renderStatus(rows);
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Exploring");
+    expect(screen.queryByTestId("group-live-writing")).toBeNull();
+  });
+
+  it("keeps concurrent agent streams independent", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({ phase: "Writing", streamText: "Planner draft A" }),
+      },
+      {
+        sessionId: "s-build",
+        mode: "running",
+        live: live({
+          phase: "Exploring",
+          streamText: "",
+          presence: {
+            state: "exploring",
+            label: "Exploring",
+            startedAt: Date.now(),
+            lastProgressAt: Date.now(),
+          },
+        }),
+      },
+    ];
+    renderStatus(rows);
+    const items = screen.getAllByTestId("group-member-working");
+    expect(items).toHaveLength(2);
+    expect(items[0]?.textContent).toContain("Planner draft A");
+    expect(items[0]?.textContent).not.toContain("Exploring");
+    expect(items[1]?.textContent).toContain("Exploring");
+    expect(items[1]?.textContent).not.toContain("Planner draft A");
+  });
+
+  it("hides collapsed empty streams", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({ phase: "Done", collapsed: true, streamText: "should not show" }),
+      },
+    ];
+    // Caller filters; component still renders what it is given.
+    renderStatus(rows);
+    expect(screen.getByTestId("group-live-writing").textContent).toContain("should not show");
+  });
+
+  it("shows Still working… after silence", () => {
     vi.useFakeTimers();
     const last = Date.now();
     const rows: GroupMemberWorkingRow[] = [
@@ -96,35 +180,12 @@ describe("GroupWorkingStatus", () => {
         live: live({ phase: "Thinking", lastEventAt: last }),
       },
     ];
-    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
-    expect(screen.getByTestId("group-member-live-turn").textContent).toContain("Thinking");
+    renderStatus(rows);
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Thinking");
     act(() => {
-      vi.advanceTimersByTime(STILL_WORKING_AFTER_MS + 1_000);
+      vi.advanceTimersByTime(STILL_WORKING_AFTER_MS + 50);
     });
-    expect(screen.getByTestId("group-member-live-turn").textContent).toContain("Still working");
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Still working");
     vi.useRealTimers();
-  });
-
-  it("hides thought/tools/writing when the live fold is collapsed after run.completed", () => {
-    const rows: GroupMemberWorkingRow[] = [
-      {
-        sessionId: "s-lead",
-        mode: "running",
-        live: live({
-          phase: "Done",
-          collapsed: true,
-          thoughtPreview: "should not show",
-          tools: [{ id: "t1", name: "read", label: "Reading", done: true }],
-          writingPreview: "should not show",
-        }),
-      },
-    ];
-    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
-    const turn = screen.getByTestId("group-member-live-turn");
-    expect(turn.dataset.collapsed).toBe("true");
-    expect(turn.textContent).toContain("Done");
-    expect(screen.queryByTestId("group-live-thought")).toBeNull();
-    expect(screen.queryByTestId("group-live-tools")).toBeNull();
-    expect(screen.queryByTestId("group-live-writing")).toBeNull();
   });
 });

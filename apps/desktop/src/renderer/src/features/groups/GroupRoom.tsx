@@ -1,5 +1,6 @@
 import { IconLayoutSidebarRight } from "@tabler/icons-react";
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
@@ -72,12 +73,17 @@ export type GroupRoomProps = {
   onAddAgent?: (() => void) | undefined;
   /** Refresh groups after an agent is edited from the Agents panel. */
   onAgentsChanged?(): void;
+  /**
+   * Host element in the desktop window chrome toolbar. When set, the room
+   * header portals into that strip (no second internal header bar).
+   */
+  chromeHost?: HTMLElement | null | undefined;
 };
 
 /** A member's avatar in the room (chips and message authors; A3). */
 export type RoomAvatar = WorkingMemberAvatar;
 
-/** The group room (main panel): header with members, the message list and the composer. */
+/** The group room (main panel): chrome header, message list, and composer. */
 export function GroupRoom({
   group,
   workspaces,
@@ -94,6 +100,7 @@ export function GroupRoom({
   onOpenFile,
   onAddAgent,
   onAgentsChanged,
+  chromeHost = null,
 }: GroupRoomProps) {
   const [composerSeed, setComposerSeed] = useState<string | undefined>();
   const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
@@ -124,6 +131,14 @@ export function GroupRoom({
   const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
   const workingRows = useGroupMemberWorking(group.id, memberStates);
   const labels = useMemo(() => memberLabels(members), [members]);
+  const roles = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of group.members) {
+      const role = (member.role ?? member.agentRole).trim();
+      if (role) map.set(member.sessionId, role);
+    }
+    return map;
+  }, [group.members]);
   const { openCount, label: activityLabel } = activityButtonMeta(tasks);
   const titleToSessionId = useMemo(() => {
     const map = new Map<string, string>();
@@ -139,56 +154,61 @@ export function GroupRoom({
   }, [messages, memberStates, group.id, titleToSessionId]);
   const coordinating = isCoordinatorModeActive(group);
 
+  const header = (
+    <GroupRoomHeader
+      avatars={avatars}
+      defaultModelId={defaultModelId}
+      group={group}
+      members={members}
+      memberStates={memberStates}
+      models={models}
+      onDelete={onDelete}
+      onAddAgent={onAddAgent}
+      {...(onAgentsChanged ? { onAgentsChanged } : {})}
+      onManageMembers={() => setManaging(true)}
+      onOpenAgentChat={(agentId) => {
+        if (onOpenAgentChat) onOpenAgentChat(agentId);
+        else {
+          const member = group.members.find((row) => row.agentId === agentId);
+          if (member) onOpenMember(member.sessionId);
+        }
+      }}
+      onRename={onRename}
+      onSetMode={onSetMode}
+      onStop={() => {
+        window.modus.group
+          .stop(group.id)
+          .catch((error: unknown) => console.warn("[groups] stop failed", error));
+      }}
+      projectName={workspace?.displayName}
+      running={running}
+      tasksButton={
+        <button
+          aria-expanded={activityOpen}
+          aria-label={activityLabel}
+          className={cn(
+            "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-muted",
+            activityOpen && "bg-hover text-fg-muted",
+          )}
+          onClick={() => setActivityOpen((open) => !open)}
+          title={activityOpen ? "Hide activity" : "Show activity"}
+          type="button"
+        >
+          <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
+          Activity
+          <span className="tabular-nums" data-testid="group-task-count">
+            {openCount}
+          </span>
+        </button>
+      }
+      variant={chromeHost ? "chrome" : "standalone"}
+    />
+  );
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <GroupRoomHeader
-          avatars={avatars}
-          defaultModelId={defaultModelId}
-          group={group}
-          members={members}
-          memberStates={memberStates}
-          models={models}
-          onDelete={onDelete}
-          onAddAgent={onAddAgent}
-          {...(onAgentsChanged ? { onAgentsChanged } : {})}
-          onManageMembers={() => setManaging(true)}
-          onOpenAgentChat={(agentId) => {
-            if (onOpenAgentChat) onOpenAgentChat(agentId);
-            else {
-              const member = group.members.find((row) => row.agentId === agentId);
-              if (member) onOpenMember(member.sessionId);
-            }
-          }}
-          onRename={onRename}
-          onSetMode={onSetMode}
-          onStop={() => {
-            window.modus.group
-              .stop(group.id)
-              .catch((error: unknown) => console.warn("[groups] stop failed", error));
-          }}
-          projectName={workspace?.displayName}
-          running={running}
-          tasksButton={
-            <button
-              aria-expanded={activityOpen}
-              aria-label={activityLabel}
-              className={cn(
-                "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-muted",
-                activityOpen && "bg-hover text-fg-muted",
-              )}
-              onClick={() => setActivityOpen((open) => !open)}
-              title={activityOpen ? "Hide activity" : "Show activity"}
-              type="button"
-            >
-              <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
-              Activity
-              <span className="tabular-nums" data-testid="group-task-count">
-                {openCount}
-              </span>
-            </button>
-          }
-        />
+        {chromeHost ? createPortal(header, chromeHost) : header}
         <GroupMessageList
           avatars={avatars}
           cwd={workspace?.rootPath}
@@ -206,6 +226,7 @@ export function GroupRoom({
           onReply={(message) =>
             setReplyTo({ messageId: message.id, preview: replyPreview(message.body) })
           }
+          roles={roles}
           workingRows={workingRows}
         />
         {blocked ? (
@@ -238,6 +259,7 @@ export function GroupRoom({
           groupId={group.id}
           hasLead={Boolean(group.leadSessionId)}
           labels={labels}
+          messages={messages}
           onCancelled={replace}
           onSetMode={onSetMode}
           stage={stage}

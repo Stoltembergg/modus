@@ -1,85 +1,76 @@
-import type {
-  AgentAvatarColor,
-  AgentAvatarFace,
-  AgentAvatarShape,
-} from "../../../../shared/contracts";
-import { AgentAvatar } from "../agents/AgentAvatar";
-import { agentAvatarState } from "../agents/agentAvatarModel";
-import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
-import { MemberName } from "./MemberName";
+import type { GroupMessage } from "../../../../shared/contracts";
+import {
+  GroupMessageRow,
+  type WorkingMemberAvatar,
+} from "./GroupMessageRow";
 import type { MemberLabel } from "./memberLabels";
-import { memberLabelText } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 
-/** Avatar fields the working strip needs (same shape as GroupRoom's RoomAvatar). */
-export type WorkingMemberAvatar = {
-  agentId: string;
-  face: AgentAvatarFace;
-  color: AgentAvatarColor;
-  shape: AgentAvatarShape;
-  archived: boolean;
-};
+export type { WorkingMemberAvatar } from "./GroupMessageRow";
+
+function syntheticInFlightMessage(row: GroupMemberWorkingRow, groupId: string): GroupMessage {
+  return {
+    id: `inflight:${row.sessionId}`,
+    groupId,
+    authorKind: "agent",
+    authorSessionId: row.sessionId,
+    kind: "message",
+    body: row.live.streamText,
+    mentions: [],
+    createdAt: new Date(row.live.lastEventAt || Date.now()).toISOString(),
+  };
+}
 
 /**
- * In-transcript working strip for group members whose turns are running or
- * queued. Binds `group.activity` + live agent events so Stop ≠ empty transcript:
- * phase, thought/tools/writing previews, and "Still working…" on silence.
+ * In-flight definitive GroupMessageRows for members whose turns are streaming.
+ * Each row updates independently from `message.delta`; inline status yields to text.
  */
 export function GroupWorkingStatus({
   rows,
   labels,
   avatars,
+  roles,
+  members,
+  groupId,
 }: {
   rows: readonly GroupMemberWorkingRow[];
   labels: ReadonlyMap<string, MemberLabel>;
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
+  /** Optional role label per session (discreet under the name). */
+  roles?: ReadonlyMap<string, string>;
+  members: readonly { sessionId: string; title: string }[];
+  groupId: string;
 }) {
   if (rows.length === 0) return null;
 
   return (
     <div
       aria-live="polite"
-      className="flex flex-col gap-3"
+      className="flex flex-col gap-2"
       data-testid="group-working-status"
       role="status"
     >
       {rows.map((row) => {
-        const label = labels.get(row.sessionId) ?? { title: row.sessionId };
         const avatar = avatars.get(row.sessionId);
-        const phase = row.live.phase;
-        const working = row.mode === "running";
+        const stream = row.live.streamText.trim();
+        const role = roles?.get(row.sessionId)?.trim();
         return (
           <div
-            className="flex gap-2.5"
             data-mode={row.mode}
-            data-phase={phase}
+            data-phase={row.live.phase}
+            data-streaming={stream ? "true" : undefined}
             data-testid="group-member-working"
             key={row.sessionId}
           >
-            {avatar ? (
-              <AgentAvatar
-                className="mt-0.5"
-                color={avatar.color}
-                face={avatar.face}
-                seed={avatar.agentId}
-                shape={avatar.shape}
-                size={20}
-                state={agentAvatarState(working ? "working" : "idle", avatar.archived)}
-              />
-            ) : (
-              <span
-                aria-hidden
-                className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-fg-muted text-xs"
-              >
-                {memberLabelText(label).trim().charAt(0).toLocaleUpperCase() || "?"}
-              </span>
-            )}
-            <div className="min-w-0 flex-1">
-              <div className="mb-0.5 font-medium text-fg-muted text-xs">
-                <MemberName label={label} />
-              </div>
-              <GroupMemberLiveTurn live={row.live} mode={row.mode} />
-            </div>
+            <GroupMessageRow
+              avatar={avatar}
+              labels={labels}
+              liveTurn={{ mode: row.mode, live: row.live }}
+              members={members}
+              message={syntheticInFlightMessage(row, groupId)}
+              role={role}
+              streaming
+            />
           </div>
         );
       })}

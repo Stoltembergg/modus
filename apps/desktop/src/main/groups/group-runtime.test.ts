@@ -279,6 +279,8 @@ describe("turn outcomes (fake runtime contract)", () => {
 
   it('blocked (HyperPlan choice pending) posts "Waiting for you" as the member and ends the chain', async () => {
     const { group, alpha } = squad();
+    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
+    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     const { runtime, groups, events } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
     runtime.take(alpha).resolve({ outcome: "blocked" });
@@ -298,6 +300,26 @@ describe("turn outcomes (fake runtime contract)", () => {
       chainId: user.id,
       reason: "blocked",
     });
+  });
+
+  it("non-HyperPlan blocked does not sticky-wait the user (peer handoffs stay open)", async () => {
+    const { group, alpha, beta } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Alpha go" });
+    runtime.take(alpha).resolve({ outcome: "blocked" });
+    await flush();
+    expect(groups.isAwaitingUser(alpha)).toBe(false);
+    expect(room(group.id).at(-1)).toMatchObject({
+      kind: "status",
+      body: "Turn stopped",
+      authorSessionId: alpha,
+    });
+    // Room can continue with another member without clearing a sticky wait.
+    groups.postUserMessage({ groupId: group.id, body: "@Beta continue" });
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds ?? []).toEqual(
+      [],
+    );
   });
 });
 
@@ -1051,6 +1073,8 @@ describe("intent gate on a group turn", () => {
 describe("HyperPlan-blocked member", () => {
   it("ends the chain: another member's in-flight reply posts but wakes nobody; queued wakes drop", async () => {
     const { group, alpha, beta, gamma } = squad();
+    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
+    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
     // Two run (concurrency 2), Gamma waits in the queue.
@@ -1075,6 +1099,8 @@ describe("HyperPlan-blocked member", () => {
 
   it("a successful plan-build opens a new chain with reset counters; the result follows the wake rules", async () => {
     const { group, alpha, beta } = squad();
+    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
+    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "plan the migration" });
     runtime.take(alpha).resolve({ outcome: "blocked" });
@@ -1106,6 +1132,8 @@ describe("HyperPlan-blocked member", () => {
 
   it("only an ok plan-build unblocks: failed, aborted and plain prompts do not", async () => {
     const { group, alpha } = squad();
+    const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
+    expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "plan it" });
     runtime.take(alpha).resolve({ outcome: "blocked" });
