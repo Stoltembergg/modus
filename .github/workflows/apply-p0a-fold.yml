@@ -1,0 +1,47 @@
+name: apply-p0a-fold
+on:
+  push:
+    branches: [cursor/group-collab-p0a-fold-cb29]
+    paths: [.github/workflows/apply-p0a-fold.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-collab-p0a-fold-cb29
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Materialize staged files
+        run: |
+          python3 <<'PY'
+          import base64, zlib, hashlib, pathlib
+          staging = pathlib.Path(".github/agent-staging/p0a-fold")
+          files = [
+            ("groupLiveTurn.ts.zlib.b64", "apps/desktop/src/renderer/src/features/groups/groupLiveTurn.ts", "2beeeec45a94303f35fa7d1da5575c3ba102b2af"),
+            ("groupLiveTurn.test.ts.zlib.b64", "apps/desktop/src/renderer/src/features/groups/groupLiveTurn.test.ts", "f0d24b7c750a5b44843c34c34035eeb322b83e89"),
+            ("GroupMemberLiveTurn.tsx.zlib.b64", "apps/desktop/src/renderer/src/features/groups/GroupMemberLiveTurn.tsx", "9d84590022f9c2e90007fab1e309e086763843ce"),
+            ("GroupWorkingStatus.test.tsx.zlib.b64", "apps/desktop/src/renderer/src/features/groups/GroupWorkingStatus.test.tsx", "bc6a965c407f55042456be81c120d5e7686bf6d9"),
+          ]
+          for name, dest, expect in files:
+            raw = zlib.decompress(base64.b64decode((staging / name).read_text().strip()))
+            digest = hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest()
+            if digest != expect:
+              raise SystemExit(f"blob mismatch {dest}: got {digest} want {expect}")
+            pathlib.Path(dest).write_bytes(raw)
+            print("wrote", dest, len(raw), digest)
+          PY
+      - name: Commit P0a sources and remove staging
+        run: |
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          git add \
+            apps/desktop/src/renderer/src/features/groups/groupLiveTurn.ts \
+            apps/desktop/src/renderer/src/features/groups/groupLiveTurn.test.ts \
+            apps/desktop/src/renderer/src/features/groups/GroupMemberLiveTurn.tsx \
+            apps/desktop/src/renderer/src/features/groups/GroupWorkingStatus.test.tsx
+          git rm -rf .github/agent-staging/p0a-fold .github/workflows/apply-p0a-fold.yml
+          git commit -m "fix(groups): collapse live fold on run.completed (P0a polish)"
+          git push origin HEAD:cursor/group-collab-p0a-fold-cb29
