@@ -2,8 +2,8 @@
 +++ b/apps/desktop/src/shared/contracts-parts/contracts-part-08.ts
 @@ -1,5 +1,5 @@
  /** Gap 4 contracts split part 8 — Agent Groups DTOs from #62 */
--/* ── Agent Groups (rooms of normal agent sessions) ─────────────────────── */
-+/* ── Agent Groups (rooms of normal agent sessions) ───────────────────────── */
+-/* ── Agent Groups (rooms of normal agent sessions) ────────────────────── */
++/* ── Agent Groups (rooms of normal agent sessions) ─────────────────────── */
  
  export type AgentGroupMode = "free" | "coordinator";
  
@@ -11,8 +11,8 @@
    joinedAt: string;
  };
  
--/* ── Agents (independent entities that meet in groups) ──────────────── */
-+/* ── Agents (independent entities that meet in groups) ───────────────────── */
+-/* ── Agents (independent entities that meet in groups) ─────────────── */
++/* ── Agents (independent entities that meet in groups) ──────────────────── */
  
  /** The 8 avatar faces (the SVG `AgentAvatar` draws them; A3). */
  export const AGENT_AVATAR_FACES = [
