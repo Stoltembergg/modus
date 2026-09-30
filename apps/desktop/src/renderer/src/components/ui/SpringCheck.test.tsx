@@ -22,3 +22,5 @@ describe("SpringCheck", () => {
     expect(onChange).toHaveBeenCalledWith(true);
   });
 });
+
+// ci-retrigger after Actions test patch
