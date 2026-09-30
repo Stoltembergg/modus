@@ -26,10 +26,16 @@ export function useGroupMemberQuestions(
     }
     let cancelled = false;
 
+    const agent = window.modus.agent;
+    if (!agent?.listEvents || !agent.onEvent) {
+      setEventsBySession(new Map());
+      return;
+    }
+
     void Promise.all(
       ids.map(async (sessionId) => {
         try {
-          const items = (await window.modus.agent.listEvents(sessionId)) as AgentEventItem[];
+          const items = (await agent.listEvents(sessionId)) as AgentEventItem[];
           const events: Array<{ event: AgentEvent }> = items.map((item) => ({ event: item.event }));
           return [sessionId, events] as const;
         } catch {
@@ -41,7 +47,7 @@ export function useGroupMemberQuestions(
       if (!cancelled) setEventsBySession(new Map(entries));
     });
 
-    const unsubscribe = window.modus.agent.onEvent((event: AgentEvent) => {
+    const unsubscribe = agent.onEvent((event: AgentEvent) => {
       if (event.type !== "question.requested" && event.type !== "question.resolved") return;
       if (!ids.includes(event.sessionId)) return;
       setEventsBySession((current) => {
