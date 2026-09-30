@@ -1,0 +1,60 @@
+name: fix-assemble-p1b-tools-test
+on:
+  push:
+    branches: [cursor/group-collab-p1b-cb29]
+    paths: [.github/workflows/fix-assemble-p1b-tools-test.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-collab-p1b-cb29
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Patch part00 and assemble blob
+        run: |
+          python3 <<'PY'
+          import hashlib, pathlib, zlib, base64
+          staging = pathlib.Path('.github/agent-staging/p1b-agreement')
+          p0 = staging / 'group-tools.test.ts.zlib.b64.part00'
+          c = p0.read_text()
+          if len(c) != 3500:
+            raise SystemExit(f'part00 len {len(c)}')
+          # known MCP transcription corruption: S->T at index 1449
+          if c[1449] == 'T' and c[1448] == 'L' and c[1450] == '6':
+            c = c[:1449] + 'S' + c[1450:]
+            print('patched part00[1449] T->S')
+          elif c[1449] == 'S':
+            print('part00 already correct at 1449')
+          else:
+            raise SystemExit(f'unexpected part00[1449]={c[1449]!r} ctx={c[1440:1460]!r}')
+          p0.write_text(c)
+          name = 'group-tools.test.ts.zlib.b64'
+          parts = sorted(staging.glob(name + '.part*'))
+          data = ''.join(p.read_text() for p in parts)
+          if len(data) != 8264:
+            raise SystemExit(f'len {len(data)} != 8264')
+          md5 = hashlib.md5(data.encode()).hexdigest()
+          if md5 != 'd1db75e73839b2c236cb50b4e7c61f63':
+            raise SystemExit(f'md5 {md5}')
+          raw = zlib.decompress(base64.b64decode(data.encode()))
+          git = hashlib.sha1(b'blob %d\0' % len(raw) + raw).hexdigest()
+          if git != '0095c1cb3402d044a309f34db06278d070c58407':
+            raise SystemExit(f'git {git}')
+          (staging / name).write_text(data)
+          for p in parts:
+            p.unlink()
+          print('OK', name, md5, git)
+          PY
+      - name: Commit fixed blob
+        run: |
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          git add -A .github/agent-staging/p1b-agreement
+          git rm -f .github/workflows/fix-assemble-p1b-tools-test.yml || true
+          git status
+          git commit -m "chore(groups): fix corrupt P1b group-tools.test staging blob"
+          git push origin HEAD:cursor/group-collab-p1b-cb29
