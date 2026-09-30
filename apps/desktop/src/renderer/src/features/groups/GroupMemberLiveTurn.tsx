@@ -30,12 +30,16 @@ export function GroupMemberLiveTurn({
   }, [mode]);
 
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
-  const still = isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS);
+  const still = !live.collapsed && isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS);
   const phaseLabel = still ? "Still working…" : String(live.phase);
-  const working = mode === "running";
+  const working = mode === "running" && !live.collapsed;
 
   return (
-    <div className="min-w-0 space-y-1" data-testid="group-member-live-turn">
+    <div
+      className="min-w-0 space-y-1"
+      data-collapsed={live.collapsed || undefined}
+      data-testid="group-member-live-turn"
+    >
       <div className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm">
         {working ? (
           <SessionStatusDot
@@ -46,12 +50,12 @@ export function GroupMemberLiveTurn({
         <span className="sr-only">{phaseLabel}</span>
         <ThinkingStates className="text-fg-subtle" label={phaseLabel} />
       </div>
-      {live.thoughtPreview ? (
+      {!live.collapsed && live.thoughtPreview ? (
         <p className="line-clamp-2 text-2xs text-fg-faint" data-testid="group-live-thought">
           {live.thoughtPreview}
         </p>
       ) : null}
-      {live.tools.length > 0 ? (
+      {!live.collapsed && live.tools.length > 0 ? (
         <ul className="space-y-0.5" data-testid="group-live-tools">
           {live.tools.map((tool) => (
             <li
@@ -65,7 +69,7 @@ export function GroupMemberLiveTurn({
           ))}
         </ul>
       ) : null}
-      {live.writingPreview ? (
+      {!live.collapsed && live.writingPreview ? (
         <p className="line-clamp-3 text-2xs text-fg-muted" data-testid="group-live-writing">
           {live.writingPreview}
         </p>

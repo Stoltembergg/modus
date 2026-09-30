@@ -25,6 +25,7 @@ function live(partial: Partial<GroupLiveTurnSnapshot> = {}): GroupLiveTurnSnapsh
     tools: [],
     writingPreview: "",
     lastEventAt: Date.now(),
+    collapsed: false,
     ...partial,
   };
 }
@@ -88,5 +89,28 @@ describe("GroupWorkingStatus", () => {
     });
     expect(screen.getByTestId("group-member-live-turn").textContent).toContain("Still working");
     vi.useRealTimers();
+  });
+
+  it("hides thought/tools/writing when the live fold is collapsed after run.completed", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: live({
+          phase: "Done",
+          collapsed: true,
+          thoughtPreview: "should not show",
+          tools: [{ id: "t1", name: "read", label: "Reading", done: true }],
+          writingPreview: "should not show",
+        }),
+      },
+    ];
+    render(<GroupWorkingStatus avatars={avatars} labels={labels} rows={rows} />);
+    const turn = screen.getByTestId("group-member-live-turn");
+    expect(turn.dataset.collapsed).toBe("true");
+    expect(turn.textContent).toContain("Done");
+    expect(screen.queryByTestId("group-live-thought")).toBeNull();
+    expect(screen.queryByTestId("group-live-tools")).toBeNull();
+    expect(screen.queryByTestId("group-live-writing")).toBeNull();
   });
 });
