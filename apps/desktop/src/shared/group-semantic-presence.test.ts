@@ -40,6 +40,24 @@ describe("buildGroupSemanticPresence", () => {
     expect(implementing.label).toBe("Implementing");
   });
 
+  it("keeps thinking on message.started until the first message.delta", () => {
+    const opened = buildGroupSemanticPresence(
+      [
+        ev(
+          { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" },
+          "2026-01-01T00:00:00.000Z",
+        ),
+        ev(
+          { type: "message.started", sessionId: "s", messageId: "m", role: "assistant" },
+          "2026-01-01T00:00:02.000Z",
+        ),
+      ],
+      "running",
+    );
+    expect(opened.state).toBe("thinking");
+    expect(opened.label).toBe("Thinking");
+  });
+
   it("marks writing and done, and queued mode", () => {
     const writing = buildGroupSemanticPresence(
       [

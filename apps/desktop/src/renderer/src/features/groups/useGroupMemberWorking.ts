@@ -14,6 +14,34 @@ export type GroupMemberWorkingRow = {
   live: GroupLiveTurnSnapshot;
 };
 
+function toTimedEvents(items: AgentEventItem[]): TimedEvent[] {
+  return items.map((item) => ({
+    event: item.event,
+    ...(item.createdAt || item.updatedAt ? { createdAt: item.updatedAt ?? item.createdAt } : {}),
+  }));
+}
+
+/** Bytes of assistant `message.delta` text — used to avoid wiping a richer live stream. */
+function assistantStreamBytes(events: readonly TimedEvent[]): number {
+  let total = 0;
+  for (const { event } of events) {
+    if (event.type === "message.delta") total += event.delta.length;
+  }
+  return total;
+}
+
+/**
+ * Prefer the event list that already carries more streamed assistant text.
+ * A slow `listEvents` seed must never replace an in-flight delta buffer with a
+ * stale/empty snapshot (that produced the "Escrevendo…" then final paste bug).
+ */
+export function preferRicherLiveEvents(
+  seeded: readonly TimedEvent[],
+  live: readonly TimedEvent[],
+): TimedEvent[] {
+  return assistantStreamBytes(live) > assistantStreamBytes(seeded) ? [...live] : [...seeded];
+}
+
 /**
  * Live turn snapshots for members currently running or queued in this group.
  * Subscribes to `agent.onEvent` for running sessions so the room can stream
@@ -24,13 +52,17 @@ export function useGroupMemberWorking(
   memberStates: GroupMemberStatesById,
 ): readonly GroupMemberWorkingRow[] {
   const entry = memberStates.get(groupId);
-  const working = useMemo(
-    () =>
-      entry
-        ? listGroupWorkingSessionIds(entry)
-        : ([] as Array<{ sessionId: string; mode: "running" | "queued" }>),
-    [entry],
-  );
+  // Stable key: activity pings rebuild the entry object with the same ids.
+  const workingKey = entry
+    ? `r:${entry.runningSessionIds.join(",")}|q:${entry.queuedSessionIds.join(",")}`
+    : "";
+  const working = useMemo((): Array<{ sessionId: string; mode: "running" | "queued" }> => {
+    if (!workingKey) return [];
+    const [runningPart = "", queuedPart = ""] = workingKey.split("|q:");
+    const runningSessionIds = runningPart.replace(/^r:/, "").split(",").filter(Boolean);
+    const queuedSessionIds = queuedPart.split(",").filter(Boolean);
+    return listGroupWorkingSessionIds({ runningSessionIds, queuedSessionIds });
+  }, [workingKey]);
 
   const [eventsBySession, setEventsBySession] = useState<ReadonlyMap<string, TimedEvent[]>>(
     () => new Map(),
@@ -49,28 +81,7 @@ export function useGroupMemberWorking(
       return;
     }
 
-    void Promise.all(
-      runningIds.map(async (sessionId) => {
-        try {
-          const items = (await agent.listEvents(sessionId)) as AgentEventItem[];
-          return [
-            sessionId,
-            items.map((item) => ({
-              event: item.event,
-              ...(item.createdAt || item.updatedAt
-                ? { createdAt: item.updatedAt ?? item.createdAt }
-                : {}),
-            })),
-          ] as const;
-        } catch {
-          const empty: TimedEvent[] = [];
-          return [sessionId, empty] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!cancelled) setEventsBySession(new Map(entries));
-    });
-
+    // Subscribe first so mid-seed deltas are never missed (same order as ChatPane).
     const unsubscribe = agent.onEvent((event: AgentEvent) => {
       if (!runningIds.includes(event.sessionId)) return;
       const createdAt = new Date().toISOString();
@@ -78,6 +89,29 @@ export function useGroupMemberWorking(
         const next = new Map(current);
         const list = next.get(event.sessionId) ?? [];
         next.set(event.sessionId, [...list, { event, createdAt }]);
+        return next;
+      });
+    });
+
+    // Seed from the store. Never clobber a richer in-flight delta buffer with a
+    // stale/empty snapshot (ChatPane re-fetches; we keep the richer stream).
+    void Promise.all(
+      runningIds.map(async (sessionId) => {
+        try {
+          const items = (await agent.listEvents(sessionId)) as AgentEventItem[];
+          return [sessionId, toTimedEvents(items)] as const;
+        } catch {
+          const empty: TimedEvent[] = [];
+          return [sessionId, empty] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setEventsBySession((current) => {
+        const next = new Map<string, TimedEvent[]>();
+        for (const [sessionId, seeded] of entries) {
+          next.set(sessionId, preferRicherLiveEvents(seeded, current.get(sessionId) ?? []));
+        }
         return next;
       });
     });
