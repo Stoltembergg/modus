@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
+import {
+  formatGroupCollabStatus,
+  GROUP_COLLAB_NO_NEXT_OWNER,
+  type GroupCollabStatus,
+  parseGroupCollabStatusLine,
+} from "../../../../shared/group-collab-status";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
@@ -8,8 +14,23 @@ import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import { type MemberLabel, memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
-import { useGroupMessages } from "./useGroupMessages";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
+
+/** Peel trailing collab status lines off an agent reply for transcript rendering. */
+export function splitTrailingCollabStatuses(body: string): {
+  prose: string;
+  statuses: GroupCollabStatus[];
+} {
+  const lines = body.split("\n");
+  const statuses: GroupCollabStatus[] = [];
+  while (lines.length > 0) {
+    const parsed = parseGroupCollabStatusLine(lines[lines.length - 1] ?? "");
+    if (!parsed) break;
+    statuses.unshift(parsed);
+    lines.pop();
+  }
+  return { prose: lines.join("\n").replace(/\s+$/u, ""), statuses };
+}
 
 export const GROUP_ROOM_EMPTY_TEXT = "Write to the group. The lead answers, or @mention a member.";
 
@@ -36,6 +57,12 @@ export function GroupMessageList({
   groupId,
   members,
   memberStates,
+  messages,
+  loaded,
+  hasOlder,
+  loadingOlder,
+  error,
+  loadOlder,
   cwd,
   onOpenFile,
 }: {
@@ -43,10 +70,16 @@ export function GroupMessageList({
   groupId: string;
   members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
+  /** Owned by GroupRoom (shared with the stage chip). */
+  messages: readonly GroupMessage[];
+  loaded: boolean;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  error: string | undefined;
+  loadOlder(): Promise<void>;
   cwd: string | undefined;
   onOpenFile: ((path: string) => void) | undefined;
 }) {
-  const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(groupId);
   const workingRows = useGroupMemberWorking(groupId, memberStates);
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
@@ -162,6 +195,29 @@ export function isWaitingStatus(body: string): boolean {
   return body.startsWith("Waiting for you");
 }
 
+export function isNoNextOwnerStatus(body: string): boolean {
+  return body === GROUP_COLLAB_NO_NEXT_OWNER;
+}
+
+function CollabStatusLine({
+  status,
+  members,
+}: {
+  status: GroupCollabStatus;
+  members: readonly MentionMember[];
+}) {
+  const text = formatGroupCollabStatus(status);
+  return (
+    <div
+      className="text-2xs text-fg-subtle"
+      data-collab={status.kind}
+      data-testid="group-collab-status"
+    >
+      <StatusText members={members} text={text} />
+    </div>
+  );
+}
+
 export function GroupMessageRow({
   avatar,
   message,
@@ -183,9 +239,12 @@ export function GroupMessageRow({
     : undefined;
   if (message.kind === "status") {
     const waiting = isWaitingStatus(message.body);
+    const nudge = isNoNextOwnerStatus(message.body);
+    const collab = parseGroupCollabStatusLine(message.body);
     return (
       <div
         className="text-center text-2xs text-fg-faint"
+        data-collab={collab?.kind}
         data-kind="status"
         data-testid="group-message"
       >
@@ -195,7 +254,8 @@ export function GroupMessageRow({
           </span>
         ) : null}
         <span
-          className={waiting ? "text-amber-400" : undefined}
+          className={waiting || nudge ? "text-amber-400" : undefined}
+          data-nudge={nudge || undefined}
           data-waiting={waiting || undefined}
         >
           <StatusText members={members} text={message.body} />
@@ -215,6 +275,7 @@ export function GroupMessageRow({
   const sessionId = message.authorSessionId ?? "";
   const label = author ?? { title: "Member" };
   const title = label.title;
+  const { prose, statuses } = splitTrailingCollabStatuses(message.body);
   return (
     <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
       {avatar ? (
@@ -236,17 +297,23 @@ export function GroupMessageRow({
           {title.trim().charAt(0).toLocaleUpperCase() || "?"}
         </span>
       )}
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1 space-y-1">
         <div className="mb-0.5 font-medium text-fg-muted text-xs">
           <MemberName label={label} />
         </div>
-        <div className="text-fg text-sm">
-          <MarkdownMessage
-            content={linkMentionsInMarkdown(message.body, members)}
-            cwd={cwd}
-            onOpenFile={onOpenFile}
-          />
-        </div>
+        {prose ? (
+          <div className="text-fg text-sm">
+            <MarkdownMessage
+              content={linkMentionsInMarkdown(prose, members)}
+              cwd={cwd}
+              onOpenFile={onOpenFile}
+            />
+          </div>
+        ) : null}
+        {statuses.map((status, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
+          <CollabStatusLine key={index} members={members} status={status} />
+        ))}
       </div>
     </div>
   );

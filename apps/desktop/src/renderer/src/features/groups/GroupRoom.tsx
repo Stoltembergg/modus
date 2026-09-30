@@ -10,6 +10,7 @@ import {
   type GroupBlockedReason,
   groupBlockedReason,
 } from "../../../../shared/group-blocked";
+import { deriveGroupCollabStage } from "../../../../shared/group-collab-status";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { memberAvatar } from "../agents/agentAvatarModel";
@@ -33,6 +34,7 @@ import { activeTaskCount, GroupTaskPanel, useGroupTasks } from "./GroupTaskPanel
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { memberLabels } from "./memberLabels";
+import { useGroupMessages } from "./useGroupMessages";
 import { type GroupMemberStatesById, isGroupRunning } from "./useWorkingGroups";
 
 export {
@@ -108,8 +110,21 @@ export function GroupRoom({
   const running = isGroupRunning(memberStates, group.id);
   const [tasksOpen, setTasksOpen] = useState(false);
   const { tasks, replace } = useGroupTasks(group.id);
+  const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
   const labels = useMemo(() => memberLabels(members), [members]);
   const openTasks = activeTaskCount(tasks);
+  const titleToSessionId = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const member of members) map.set(member.title.toLocaleLowerCase(), member.sessionId);
+    return map;
+  }, [members]);
+  const stage = useMemo(() => {
+    const entry = memberStates.get(group.id);
+    return deriveGroupCollabStage(messages, {
+      runningSessionIds: entry?.runningSessionIds ?? [],
+      titleToSessionId,
+    });
+  }, [messages, memberStates, group.id, titleToSessionId]);
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
@@ -132,6 +147,7 @@ export function GroupRoom({
           }}
           projectName={workspace?.displayName}
           running={running}
+          stage={stage}
           tasksButton={
             <button
               aria-expanded={tasksOpen}
@@ -155,9 +171,15 @@ export function GroupRoom({
         <GroupMessageList
           avatars={avatars}
           cwd={workspace?.rootPath}
+          error={error}
           groupId={group.id}
+          hasOlder={hasOlder}
+          loadOlder={loadOlder}
+          loaded={loaded}
+          loadingOlder={loadingOlder}
           memberStates={memberStates}
           members={members}
+          messages={messages}
           onOpenFile={onOpenFile}
         />
         {blocked ? (

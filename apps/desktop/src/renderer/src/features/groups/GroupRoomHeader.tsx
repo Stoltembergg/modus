@@ -2,6 +2,7 @@ import { Menu } from "@base-ui/react/menu";
 import { IconCrown, IconDots, IconPlayerStop } from "@tabler/icons-react";
 import { type ReactNode, useMemo, useState } from "react";
 import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
+import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
@@ -88,6 +89,37 @@ function MemberChip({
   );
 }
 
+export function GroupStageChip({
+  stage,
+  labels,
+}: {
+  stage: GroupCollabStageSnapshot;
+  labels: ReadonlyMap<string, MemberLabel>;
+}) {
+  const ownerLabel = stage.ownerSessionId
+    ? (labels.get(stage.ownerSessionId) ??
+      (stage.ownerName ? { title: stage.ownerName } : undefined))
+    : stage.ownerName
+      ? { title: stage.ownerName }
+      : undefined;
+  return (
+    <span
+      className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
+      data-stage={stage.stage}
+      data-testid="group-stage-chip"
+      title="Collaboration stage (from the room transcript)"
+    >
+      {ownerLabel ? (
+        <>
+          Owner: <MemberName label={ownerLabel} /> · {stage.stage}
+        </>
+      ) : (
+        <>Stage · {stage.stage}</>
+      )}
+    </span>
+  );
+}
+
 export function GroupRoomHeader({
   avatars,
   group,
@@ -95,6 +127,7 @@ export function GroupRoomHeader({
   memberStates,
   projectName,
   running,
+  stage,
   tasksButton,
   onOpenMember,
   onStop,
@@ -110,6 +143,8 @@ export function GroupRoomHeader({
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
   running: boolean;
+  /** Latest collaboration stage from the transcript (P0b). */
+  stage?: GroupCollabStageSnapshot | undefined;
   tasksButton: ReactNode;
   onOpenMember(sessionId: string): void;
   onStop(): void;
@@ -146,6 +181,7 @@ export function GroupRoomHeader({
         >
           {projectName ?? "No project"}
         </span>
+        {stage ? <GroupStageChip labels={labels} stage={stage} /> : null}
         {coordinating ? (
           <span
             className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
