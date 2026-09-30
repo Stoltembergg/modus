@@ -1,0 +1,12 @@
+{
+  "target_path": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
+  "local_blob": "e50f4b271cc67f67a289ba228bcf771222253d96",
+  "raw_bytes": 15746,
+  "encoding": "zlib+base64",
+  "parts": [
+    "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.000",
+    "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.001",
+    "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.002"
+  ],
+  "assemble": "python3 -c \"import pathlib,zlib,base64,sys; p=sys.argv[1:]; raw=zlib.decompress(base64.b64decode(''.join(pathlib.Path(x).read_text().strip() for x in p))); pathlib.Path('OUT').write_bytes(raw)\""
+}
