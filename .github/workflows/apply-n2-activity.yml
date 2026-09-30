@@ -13,27 +13,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: cursor/natural-groups-n2-activity-cb29
-          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Apply N2 Activity panel patch
         run: |
           set -euo pipefail
           git config user.name "Gabriel"
           git config user.email "stoltembergg@gmail.com"
-          # Preserve staged patch parts from the tip, then reset to N0/N1 feat tip.
           mkdir -p /tmp/n2
-          cp docs/_tmp/n2p-00.b64 docs/_tmp/n2p-01.b64 /tmp/n2/
-          git reset --hard c6f5f8d4c2d34414564d5827dbb482e84f181a26
+          SRC=https://raw.githubusercontent.com/Stoltembergg/modus/cursor/natural-groups-n2-activity-cb29/docs/_tmp
+          for i in 00 01; do
+            curl -fsSL "$SRC/n2p-${i}.b64" -o "/tmp/n2/n2p-${i}.b64"
+          done
           cat /tmp/n2/n2p-00.b64 /tmp/n2/n2p-01.b64 | tr -d '\n' | base64 -d | gzip -dc > /tmp/n2.patch
           git apply /tmp/n2.patch
+          git rm -f .github/workflows/apply-n2-activity.yml
+          rm -f docs/_tmp/n2p-00.b64 docs/_tmp/n2p-01.b64
           git add -A
           git status --short
-          git commit -m "$(cat <<'EOF'
-feat(groups): Activity panel demotes tasks and coordinator chrome (N2)
-
-Primary room keeps messages + natural presence; Tasks become Activity with
-live tool detail, coordination (stage/coordinator), decisions, and checklist.
-Stage and Coordinator badges leave the header; empty-state copy drops Lead-first wording.
-EOF
-)"
-          git push --force-with-lease origin HEAD:cursor/natural-groups-n2-activity-cb29
+          git commit -m "feat(groups): Activity panel demotes tasks and coordinator chrome (N2)"
+          git push origin HEAD:cursor/natural-groups-n2-activity-cb29
