@@ -1,0 +1,33 @@
+name: apply-natural-groups-clean
+on:
+  push:
+    branches: [cursor/natural-groups-n0n1-cb29]
+    paths: [.github/workflows/apply-natural-groups-clean.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/natural-groups-n0n1-cb29
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch verified patch parts and apply
+        run: |
+          set -euo pipefail
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          mkdir -p /tmp/nr
+          SRC=https://raw.githubusercontent.com/Stoltembergg/modus/670a256052c5a54d6871f6f14dc78e638ce01bee/docs/_tmp
+          for i in 00 01 02 03 04 05 06 07 08 09; do
+            curl -fsSL "$SRC/nr-${i}.b64" -o "/tmp/nr/nr-${i}.b64"
+          done
+          cat /tmp/nr/nr-*.b64 | tr -d '\n' | base64 -d | gzip -dc > /tmp/natural.patch
+          git apply /tmp/natural.patch
+          git rm -f .github/workflows/apply-natural-groups-clean.yml
+          git add -A
+          git status --short
+          git commit -m "feat(groups): natural presence + autonomous no-@ routing"
+          git push origin HEAD:cursor/natural-groups-n0n1-cb29
