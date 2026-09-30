@@ -1,0 +1,34 @@
+name: apply-n3-threads
+on:
+  push:
+    branches: [cursor/natural-groups-n3-threads-cb29]
+    paths: [.github/workflows/apply-n3-threads.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/natural-groups-n3-threads-cb29
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply N3 threads patch
+        run: |
+          set -euo pipefail
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          mkdir -p /tmp/n3
+          SRC=https://raw.githubusercontent.com/Stoltembergg/modus/cursor/natural-groups-n3-threads-cb29/docs/_tmp
+          for i in 00 01; do
+            curl -fsSL "$SRC/n3p-${i}.b64" -o "/tmp/n3/n3p-${i}.b64"
+          done
+          cat /tmp/n3/n3p-00.b64 /tmp/n3/n3p-01.b64 | tr -d '\n' | base64 -d | gzip -dc > /tmp/n3.patch
+          git apply /tmp/n3.patch
+          git rm -f .github/workflows/apply-n3-threads.yml
+          rm -f docs/_tmp/n3p-00.b64 docs/_tmp/n3p-01.b64
+          git add -A
+          git status --short
+          git commit -m "feat(groups): thread replies wake peers; nest secondary discussions (N3)"
+          git push origin HEAD:cursor/natural-groups-n3-threads-cb29
