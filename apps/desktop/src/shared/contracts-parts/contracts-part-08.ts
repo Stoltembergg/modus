@@ -203,6 +203,19 @@ export type CreateAgentGroupInput = {
 export type GroupMessageAuthorKind = "user" | "agent" | "system";
 export type GroupMessageKind = "message" | "status";
 
+/** Image payload attached to a group user message (reuses PromptImageAttachment). */
+export type GroupMessageAttachment = {
+  type: "image";
+  data: string;
+  mimeType: string;
+  name?: string | undefined;
+};
+
+/** File/folder context chip attached to a group user message. */
+export type GroupMessageContextItem =
+  | { type: "file"; path: string; range?: { fromLine?: number; toLine?: number } }
+  | { type: "folder"; path: string };
+
 export type GroupMessage = {
   id: string;
   groupId: string;
@@ -217,6 +230,10 @@ export type GroupMessage = {
   body: string;
   /** Mentioned member session ids. */
   mentions: string[];
+  /** Image attachments preserved for transcript + wake prompts. */
+  attachments?: GroupMessageAttachment[];
+  /** Path-backed context items available to woken agents. */
+  contextItems?: GroupMessageContextItem[];
   createdAt: string;
 };
 
@@ -256,6 +273,10 @@ export type PostGroupMessageInput = {
   /** Mentioned member session ids (in addition to `@Title` mentions parsed from the body). */
   mentions?: string[];
   replyToMessageId?: string;
+  /** Image attachments forwarded to agents selected by Group Runtime. */
+  attachments?: GroupMessageAttachment[];
+  /** Path-backed context items forwarded with the wake prompt. */
+  contextItems?: GroupMessageContextItem[];
 };
 
 /** Why a group chain stopped waking members (it waits for the user). */
