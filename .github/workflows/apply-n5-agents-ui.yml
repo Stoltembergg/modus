@@ -25,14 +25,14 @@ jobs:
           git rm -f docs/_tmp/n5a-* || true
           git add -A
           git status --short
-          git commit -m "$(cat <<'EOFMSG'
-feat(groups): Agents panel, morphing edit, multi-shape avatars (N5)
+          git commit -m "$(cat <<'EOFMSG' | sed 's/^          //'
+          feat(groups): Agents panel, morphing edit, multi-shape avatars (N5)
 
-Remove permanent agent lists from the sidebar and group room header.
-Expose members through a single Agents popover with Lead/status/role,
-explicit 1:1 chat, and Morphing Dialog edit. Expand avatar identity
-with shapes, a larger contrast-safe palette, and face/shape/color
-pickers with live preview.
-EOFMSG
-)"
+          Remove permanent agent lists from the sidebar and group room header.
+          Expose members through a single Agents popover with Lead/status/role,
+          explicit 1:1 chat, and Morphing Dialog edit. Expand avatar identity
+          with shapes, a larger contrast-safe palette, and face/shape/color
+          pickers with live preview.
+          EOFMSG
+          )"
           git push origin HEAD:cursor/natural-groups-n5-agents-ui-cb29
