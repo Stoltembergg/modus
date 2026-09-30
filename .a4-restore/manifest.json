@@ -38,7 +38,9 @@
     "apps/desktop/src/renderer/src/components/Sidebar.tsx": ".a4-restore/patches/apps__desktop__src__renderer__src__components__Sidebar.tsx.patch",
     "apps/desktop/src/main/ipc/register-app-ipc.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__register-app-ipc.ts.patch",
     "apps/desktop/src/renderer/src/app/App.tsx": ".a4-restore/patches/apps__desktop__src__renderer__src__app__App.tsx.patch",
-    "apps/desktop/src/main/ipc/agents-ipc.test.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__agents-ipc.test.ts.patch"
+    "apps/desktop/src/main/ipc/agents-ipc.test.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__agents-ipc.test.ts.patch",
+    "apps/desktop/src/main/ipc/agents-ipc.ts": ".a4-restore/patches/apps__desktop__src__main__ipc__agents-ipc.ts.content.patch",
+    "apps/desktop/src/shared/contracts-parts/contracts-part-08.ts": ".a4-restore/patches/apps__desktop__src__shared__contracts-parts__contracts-part-08.ts.content.patch"
   },
   "expected": {
     "apps/desktop/src/renderer/src/features/groups/CreateGroupDialog.tsx": 14355,
