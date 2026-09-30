@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentGroupWithMembers,
@@ -239,7 +240,9 @@ describe("GroupRoom", () => {
     const rows = await screen.findAllByTestId("group-message");
     expect(rows.map((row) => row.dataset.kind)).toEqual(["user", "member", "status", "status"]);
     const [userRow, memberRow, memberStatus, systemStatus] = rows as HTMLElement[];
-    expect(userRow?.className).toContain("justify-end");
+    expect(within(userRow as HTMLElement).getByText("You")).toBeTruthy();
+    expect(within(userRow as HTMLElement).getByText("Human")).toBeTruthy();
+    expect(within(userRow as HTMLElement).getByTestId("group-user-avatar")).toBeTruthy();
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
     // The author's avatar (A3): still in a list, the member's face and color.
@@ -257,7 +260,55 @@ describe("GroupRoom", () => {
     // The lazy markdown renderer can take a few seconds to load under a full run.
   }, 30_000);
 
-  it("status lines format inline code only; Waiting for you lines are amber", async () => {
+  it("keeps the room header on a single compact row", async () => {
+    renderRoom();
+    await screen.findByText(GROUP_ROOM_EMPTY_TEXT);
+    const header = screen.getByTestId("group-room-header");
+    expect(header.dataset.singleRow).toBe("true");
+    const row = screen.getByTestId("group-room-header-row");
+    expect(within(row).getByText("Release squad")).toBeTruthy();
+    expect(within(row).getByTestId("group-project-badge")).toBeTruthy();
+    expect(within(row).getByTestId("group-agents-button")).toBeTruthy();
+    expect(within(row).getByText("Activity")).toBeTruthy();
+    // No dedicated second header row for member chips / stage.
+    expect(header.querySelectorAll('[data-testid="group-room-header-row"]')).toHaveLength(1);
+    expect(screen.queryByTestId("group-member-chip")).toBeNull();
+    expect(screen.queryByTestId("group-stage-chip")).toBeNull();
+  });
+
+  it("portals the header into window chrome (no second internal bar)", async () => {
+    function Harness() {
+      const [host, setHost] = useState<HTMLElement | null>(null);
+      return (
+        <div>
+          <div data-testid="fake-window-chrome" ref={setHost} />
+          {host ? (
+            <GroupRoom
+              chromeHost={host}
+              group={GROUP}
+              memberStates={states()}
+              onDelete={vi.fn()}
+              onOpenMember={vi.fn()}
+              onRename={vi.fn()}
+              onSetMode={vi.fn()}
+              onChooseFolder={vi.fn()}
+              onUpdateMembers={vi.fn(async () => undefined)}
+              workspaces={WORKSPACES}
+            />
+          ) : null}
+        </div>
+      );
+    }
+    render(<Harness />);
+    await screen.findByText(GROUP_ROOM_EMPTY_TEXT);
+    const chrome = screen.getByTestId("fake-window-chrome");
+    const header = within(chrome).getByTestId("group-room-header");
+    expect(header.dataset.variant).toBe("chrome");
+    const room = screen.getByTestId("group-room");
+    expect(within(room).queryByTestId("group-room-header")).toBeNull();
+  });
+
+  it("status lines format inline code only; active Waiting for you lines are amber", async () => {
     pages = [
       [
         message("1", {
@@ -280,14 +331,35 @@ describe("GroupRoom", () => {
         message("4", { authorKind: "system", kind: "status", body: "Turn failed" }),
       ],
     ];
-    renderRoom();
+    // Only s-rev-1 is actively waiting — historical Waiting lines stay faint.
+    renderRoom(states({ waitingSessionIds: ["s-rev-1"] }));
     const rows = (await screen.findAllByTestId("group-message")) as HTMLElement[];
     const code = within(rows[0] as HTMLElement).getByText("modus/group/p1");
     expect(code.tagName).toBe("CODE");
     // Only inline code: the rest stays literal text.
     expect(rows[0]?.textContent).toBe("Planner · Worktree ready: modus/group/p1 **not bold**");
-    const amber = rows.map((row) => Boolean(row.querySelector(".text-amber-400")));
-    expect(amber).toEqual([false, true, true, false]);
+    expect(rows[1]?.dataset.waitingActive).toBe("true");
+    expect(rows[1]?.querySelector(".text-amber-400")).toBeTruthy();
+    // System limit line has no authorSessionId → not active amber from member wait.
+    expect(rows[2]?.dataset.waitingActive).toBeUndefined();
+    expect(rows[3]?.querySelector(".text-amber-400")).toBeNull();
+  });
+
+  it("does not amber-highlight stale Waiting for you when the member is idle", async () => {
+    pages = [
+      [
+        message("1", {
+          authorKind: "agent",
+          authorSessionId: "s-lead",
+          kind: "status",
+          body: "Waiting for you",
+        }),
+      ],
+    ];
+    renderRoom(states()); // no waitingSessionIds
+    const row = (await screen.findByTestId("group-message")) as HTMLElement;
+    expect(row.dataset.waitingStale).toBe("true");
+    expect(row.querySelector(".text-amber-400")).toBeNull();
   });
 
   it("loads older pages on scroll to top and merges live events without duplicates", async () => {
@@ -314,7 +386,8 @@ describe("GroupRoom", () => {
     emit({ type: "group.message", groupId: "g-other", message: message("901") });
     const rows = screen.getAllByTestId("group-message");
     expect(rows).toHaveLength(61);
-    expect(rows.at(-1)?.textContent).toBe("live one");
+    expect(rows.at(-1)?.textContent).toContain("live one");
+    expect(rows.at(-1)?.dataset.kind).toBe("user");
   });
 
   it("join / leave lines arrive live through group.message, without a reload (A3)", async () => {
@@ -331,11 +404,12 @@ describe("GroupRoom", () => {
     emit({ type: "group.message", groupId: "g-1", message: left });
     const rows = screen.getAllByTestId("group-message");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "hello",
+      "YYouHumanhello",
       "Cy joined as Scribe",
       "Cy left the group",
     ]);
     expect(rows.slice(1).map((row) => row.dataset.kind)).toEqual(["status", "status"]);
+    expect(rows[0]?.dataset.kind).toBe("user");
     // Only the first page was fetched: the lines came from the push.
     expect(group.listMessages).toHaveBeenCalledTimes(1);
   });

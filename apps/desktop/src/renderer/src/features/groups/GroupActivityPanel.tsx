@@ -1,5 +1,9 @@
-import type { AgentGroupMode, GroupTask } from "../../../../shared/contracts";
+import type { AgentGroupMode, GroupMessage, GroupTask } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
+import {
+  collectRoomMessageDetails,
+  type HandoffPacketField,
+} from "../../../../shared/group-room-transcript";
 import { cn } from "../../lib/cn";
 import { GroupDecisionsSection } from "./GroupDecisions";
 import { GroupStageChip } from "./GroupRoomHeader";
@@ -9,8 +13,8 @@ import type { MemberLabel } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 
 /**
- * Secondary room panel (N2): live tool detail, coordination, decisions, and
- * checklist — kept out of the primary chat surface.
+ * Secondary room panel (N2): live tool detail, coordination, decisions,
+ * handoff Details, and checklist — kept out of the primary chat surface.
  */
 export function GroupActivityPanel({
   groupId,
@@ -20,6 +24,7 @@ export function GroupActivityPanel({
   stage,
   coordinating,
   hasLead,
+  messages = [],
   onCancelled,
   onSetMode,
 }: {
@@ -30,9 +35,12 @@ export function GroupActivityPanel({
   stage: GroupCollabStageSnapshot | undefined;
   coordinating: boolean;
   hasLead: boolean;
+  /** Room transcript — ops packets surface under Details. */
+  messages?: readonly GroupMessage[];
   onCancelled(task: GroupTask): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
 }) {
+  const details = collectRoomMessageDetails(messages).slice(-12);
   return (
     <GroupTaskPanel
       ariaLabel="Activity"
@@ -50,6 +58,7 @@ export function GroupActivityPanel({
             onSetMode={onSetMode}
             stage={stage}
           />
+          <ActivityDetailsSection fields={details} />
           <GroupDecisionsSection groupId={groupId} labels={labels} />
         </>
       }
@@ -118,6 +127,27 @@ function ActivityLiveSection({
           );
         })}
       </ul>
+    </section>
+  );
+}
+
+function ActivityDetailsSection({ fields }: { fields: readonly HandoffPacketField[] }) {
+  if (fields.length === 0) return null;
+  return (
+    <section className="mb-3" data-testid="group-activity-details">
+      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">Details</h3>
+      <dl className="flex flex-col gap-1 px-1 text-2xs">
+        {fields.map((field, index) => (
+          <div
+            className="flex gap-2"
+            // biome-ignore lint/suspicious/noArrayIndexKey: packet fields can repeat keys
+            key={`${field.key}-${index}`}
+          >
+            <dt className="w-20 shrink-0 text-fg-faint">{field.key}</dt>
+            <dd className="min-w-0 flex-1 text-fg-muted">{field.value || "—"}</dd>
+          </div>
+        ))}
+      </dl>
     </section>
   );
 }

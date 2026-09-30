@@ -1663,18 +1663,31 @@ export class PiSdkRuntime implements AgentRuntime {
     profile: ToolProfileName,
     mode: PromptAgentInput["mode"],
   ): AgentToolContext {
+    const sessionId = runtimeSession.info.id;
+    const baseEmit = runtimeSession.emit;
+    // Real ask_user / approval on a group member must surface as Waiting for you
+    // (and free the concurrency slot). Intent-gate is skipped for group_member.
+    const emit: EmitAgentEvent =
+      runtimeSession.info.kind === "group_member"
+        ? (event) => {
+            baseEmit(event);
+            if (event.type === "question.requested") {
+              this.notifyQuestionPending(sessionId);
+            }
+          }
+        : baseEmit;
     return {
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
-      sessionId: runtimeSession.info.id,
+      sessionId,
       profile,
       ...(mode ? { mode } : {}),
       ...(runtimeSession.info.parentSessionId
         ? { parentSessionId: runtimeSession.info.parentSessionId }
         : {}),
-      ...groupIdFor(runtimeSession.info.id),
+      ...groupIdFor(sessionId),
       window,
-      emit: runtimeSession.emit,
+      emit,
     };
   }
 
@@ -2710,7 +2723,9 @@ export class PiSdkRuntime implements AgentRuntime {
     let settledChangedScopeKnown = false;
     try {
       const intentGate =
-        startInput || runtimeSession.info.parentSessionId
+        startInput ||
+        runtimeSession.info.parentSessionId ||
+        runtimeSession.info.kind === "group_member"
           ? ({ action: "proceed" } as const)
           : evaluateIntentGate({
               text: input.message,

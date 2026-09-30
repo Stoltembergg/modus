@@ -89,6 +89,7 @@ export function GroupRoomHeader({
   onAddAgent,
   onSetLead,
   onAgentsChanged,
+  variant = "standalone",
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
@@ -108,14 +109,29 @@ export function GroupRoomHeader({
   onAddAgent?: (() => void) | undefined;
   onSetLead?(sessionId: string | null): void;
   onAgentsChanged?(): void;
+  /** `chrome` = window toolbar strip; `standalone` = legacy internal bar (tests). */
+  variant?: "chrome" | "standalone";
 }) {
   const [renaming, setRenaming] = useState(false);
   const coordinating = isCoordinatorModeActive(group);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const chrome = variant === "chrome";
   return (
-    <div className="shrink-0 border-hairline border-b px-6 py-2.5" data-testid="group-room-header">
-      <div className="flex min-w-0 items-center gap-2">
+    <div
+      className={
+        chrome
+          ? "flex min-h-0 min-w-0 flex-1 items-center"
+          : "shrink-0 border-hairline border-b px-6 py-2"
+      }
+      data-single-row="true"
+      data-testid="group-room-header"
+      data-variant={variant}
+    >
+      <div
+        className="flex min-w-0 flex-1 flex-nowrap items-center gap-2"
+        data-testid="group-room-header-row"
+      >
         {renaming ? (
           <GroupRenameInput
             initial={group.name}
@@ -130,12 +146,12 @@ export function GroupRoomHeader({
           <h1 className="min-w-0 truncate font-medium text-fg text-sm">{group.name}</h1>
         )}
         <span
-          className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
+          className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
           data-testid="group-project-badge"
         >
           {projectName ?? "No project"}
         </span>
-        <span className="flex-1" />
+        <span className="min-w-2 flex-1" />
         <GroupAgentsPopover
           avatars={avatars}
           group={group}

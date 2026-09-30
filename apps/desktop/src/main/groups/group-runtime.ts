@@ -14,6 +14,7 @@ import {
 import { lastGroupCollabStatus, needsNextOwnerNudge } from "../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { getAgentSession } from "../agent/agent-store";
+import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import {
   type ChainState,
@@ -812,13 +813,20 @@ export class GroupRuntime {
       }
       return;
     }
-    this.postMemberStatus(chain, wake, statusText(result.outcome));
     if (result.outcome === "blocked") {
-      // Not gated, so a HyperPlan choice is pending: plan-build unblocks it.
-      // N4 interrupt: blocked turns stop the chain for the user — no peer wakes.
-      this.awaitingUser.set(wake.sessionId, chain.chainId);
-      this.endChain(chain, "blocked");
+      // Genuine ask_user / intent-gate waits go through handleQuestionPending (gated).
+      // Only a HyperPlan choice-pending may sticky-wait here. Anything else must not
+      // leave the member stuck on Waiting for you — peer handoffs stay unblocked.
+      if (isHyperPlanSessionReserved(wake.sessionId)) {
+        this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.waitingForYou);
+        this.awaitingUser.set(wake.sessionId, chain.chainId);
+        this.endChain(chain, "blocked");
+      } else {
+        this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.aborted);
+      }
+      return;
     }
+    this.postMemberStatus(chain, wake, statusText(result.outcome));
   }
 
   /**

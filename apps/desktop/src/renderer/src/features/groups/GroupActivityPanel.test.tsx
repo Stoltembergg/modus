@@ -32,6 +32,7 @@ function liveRow(partial: Partial<GroupMemberWorkingRow> = {}): GroupMemberWorki
       thoughtPreview: "Looking at the parser",
       tools: [{ id: "t1", name: "read", label: "Reading", done: false }],
       writingPreview: "",
+      streamText: "",
       lastEventAt: Date.now(),
       collapsed: false,
       presence: {
@@ -62,7 +63,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("GroupActivityPanel", () => {
-  it("shows live tool detail, coordination, and checklist branches", async () => {
+  it("shows live tool detail, coordination, details, and checklist branches", async () => {
     const onSetMode = vi.fn();
     render(
       <GroupActivityPanel
@@ -70,6 +71,18 @@ describe("GroupActivityPanel", () => {
         groupId="g-1"
         hasLead
         labels={labels}
+        messages={[
+          {
+            id: "m1",
+            groupId: "g-1",
+            authorKind: "agent",
+            authorSessionId: "s-lead",
+            kind: "message",
+            body: "Plan.\nOwner: @Builder\nObjective: wire toggle\nHandoff → @Builder · wire toggle",
+            mentions: ["s-build"],
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]}
         onCancelled={vi.fn()}
         onSetMode={onSetMode}
         stage={{ stage: "Handoff", ownerSessionId: "s-build", ownerName: "Builder" }}
@@ -82,6 +95,9 @@ describe("GroupActivityPanel", () => {
     expect(screen.getByTestId("group-activity-live").textContent).toContain("Reading");
     expect(screen.getByTestId("group-activity-coordination")).toBeTruthy();
     expect(screen.getByTestId("group-stage-chip").textContent).toContain("Handoff");
+    expect(screen.getByTestId("group-activity-details").textContent).toContain("Owner");
+    expect(screen.getByTestId("group-activity-details").textContent).toContain("@Builder");
+    expect(screen.getByTestId("group-activity-details").textContent).toContain("Objective");
     expect(screen.getByTestId("group-activity-coordinator-status").textContent).toBe(
       "Coordinator on",
     );
