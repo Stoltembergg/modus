@@ -2,10 +2,14 @@ name: apply-ephemeral-runtime
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - cursor/group-room-ephemeral-runtime-bbfe
+    paths:
+      - "internal/_push/ephemeral/TRIGGER"
 
 permissions:
   contents: write
-  actions: write
 
 jobs:
   apply:
@@ -27,7 +31,7 @@ jobs:
             exit 1
           fi
           python3 << 'PY'
-          import base64, hashlib, json, pathlib, zlib, sys
+          import base64, hashlib, json, pathlib, zlib
           root = pathlib.Path(".")
           manifest = json.loads((root / "internal/_push/ephemeral/manifest.json").read_text())
           for entry in manifest:
@@ -48,17 +52,17 @@ jobs:
               print(f"OK {path} ({len(raw)} bytes, sha256={got})")
           PY
 
-      - name: Remove staging directory
+      - name: Remove staging directory and trigger marker
         shell: bash
         run: |
           set -euo pipefail
           rm -rf internal/_push/ephemeral
-          # clean empty parents if any
           rmdir internal/_push 2>/dev/null || true
+          # Keep repo internal/ if other content exists
           rmdir internal 2>/dev/null || true
           true
 
-      - name: Commit and push applied payloads
+      - name: Commit applied payloads
         shell: bash
         run: |
           set -euo pipefail
@@ -66,7 +70,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           if git diff --cached --quiet; then
-            echo "No changes to commit"
+            echo "Nothing to commit"
             exit 0
           fi
           git commit -m "feat(groups): apply ephemeral runtime payloads"
