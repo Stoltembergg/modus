@@ -1,8 +1,9 @@
 import { IconArrowUp, IconClockPause } from "@tabler/icons-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { UpdateState } from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { GroupMemberQuestions } from "./GroupMemberQuestions";
 import {
   activeMentionQuery,
   type MentionMember,
@@ -10,6 +11,8 @@ import {
   mentionSuggestions,
 } from "./groupMentions";
 import { MemberName } from "./MemberName";
+import { memberLabels } from "./memberLabels";
+import { useGroupMemberStates } from "./useWorkingGroups";
 
 /** Same rule as the main process: new group turns wait while an update restarts the app. */
 export function isUpdatePending(state: UpdateState | undefined): boolean {
@@ -44,7 +47,8 @@ export function useUpdatePending(api: UpdateApi | undefined): boolean {
 /**
  * Room composer: Enter sends, Shift+Enter adds a line. Typing `@` opens member
  * suggestions by title; a title shared by several members inserts
- * `@<session id>` (the list still shows the title).
+ * `@<session id>` (the list still shows the title). Pending ask_user questions
+ * for waiting members of this room render above the field (group-scoped).
  */
 export function GroupComposer({
   members,
@@ -62,6 +66,18 @@ export function GroupComposer({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const memberStates = useGroupMemberStates();
+  const labels = useMemo(() => memberLabels(members), [members]);
+  const waitingSessionIds = useMemo(() => {
+    const memberIds = new Set(members.map((member) => member.sessionId));
+    const waiting: string[] = [];
+    for (const entry of memberStates.values()) {
+      for (const sessionId of entry.waitingSessionIds) {
+        if (memberIds.has(sessionId) && !waiting.includes(sessionId)) waiting.push(sessionId);
+      }
+    }
+    return waiting;
+  }, [memberStates, members]);
 
   const query = activeMentionQuery(value, caret);
   const suggestions =
@@ -114,6 +130,7 @@ export function GroupComposer({
           </span>
         </div>
       ) : null}
+      <GroupMemberQuestions labels={labels} waitingSessionIds={waitingSessionIds} />
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       <div className="relative rounded-xl border border-composer-border bg-elevated">
         {open ? (

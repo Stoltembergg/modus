@@ -335,10 +335,12 @@ export function listAgentSessions(options: { includeSessionId?: string } = {}): 
     options.includeSessionId &&
     !sessions.some((session) => session.id === options.includeSessionId)
   ) {
-    // The active session is kept even when it is a hidden room session opened
-    // from the room (marked `kind: "group_member"`; the sidebar never lists it).
+    // Group room turns stay in the group pane: never hand the renderer a
+    // hidden `group_member` session to open as a private chat (Waiting for
+    // you / ask_user are answered in the room). Other non-listed sessions
+    // (e.g. an archived chat kept open) can still be included.
     const included = getAgentSession(options.includeSessionId);
-    if (included) {
+    if (included && included.kind !== "group_member") {
       sessions.push(included);
     }
   }

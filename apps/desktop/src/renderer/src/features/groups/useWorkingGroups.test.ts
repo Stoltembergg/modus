@@ -6,6 +6,7 @@ import {
   groupActivityState,
   isGroupRunning,
   memberActivityState,
+  waitingSessionIdsOf,
 } from "./useWorkingGroups";
 
 const activity = (
@@ -43,6 +44,8 @@ describe("applyGroupActivityEvent", () => {
     expect(memberActivityState(states, "g1", "s1")).toBe("working");
     expect(memberActivityState(states, "g1", "s2")).toBe("waiting");
     expect(memberActivityState(states, "g1", "s3")).toBe("idle");
+    expect(waitingSessionIdsOf(states, "g1")).toEqual(["s2"]);
+    expect(waitingSessionIdsOf(states, "missing")).toEqual([]);
     // Waiting alone: the group is not running (no Stop button).
     const waitingOnly = applyGroupActivityEvent(states, activity("g1", [], [], ["s2"]));
     expect(isGroupRunning(waitingOnly, "g1")).toBe(false);

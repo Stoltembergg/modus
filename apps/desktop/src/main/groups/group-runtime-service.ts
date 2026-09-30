@@ -4,6 +4,7 @@ import { getAgentRuntime } from "../agent/runtime-registry";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { getUpdateService } from "../updater/update-service";
 import { GroupRuntime, isUpdatePendingState } from "./group-runtime";
+import "./group-runtime-supersede";
 
 export function emitGroupRuntimeEvent(event: GroupRuntimeEvent): void {
   for (const window of BrowserWindow.getAllWindows()) {

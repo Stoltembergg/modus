@@ -21,6 +21,14 @@ export function applyGroupActivityEvent(
   event: GroupRuntimeEvent,
 ): GroupMemberStatesById {
   if (event.type !== "group.activity") return states;
+  // Incomplete activity payloads (tests / non-state pings) must not crash.
+  if (
+    !Array.isArray(event.runningSessionIds) ||
+    !Array.isArray(event.queuedSessionIds) ||
+    !Array.isArray(event.waitingSessionIds)
+  ) {
+    return states;
+  }
   const next = new Map(states);
   const entry: GroupMemberStates = {
     groupId: event.groupId,
@@ -68,6 +76,14 @@ export function isGroupRunning(states: GroupMemberStatesById, groupId: string): 
   );
 }
 
+/** Session ids currently waiting for the user in this group (empty when idle). */
+export function waitingSessionIdsOf(
+  states: GroupMemberStatesById,
+  groupId: string,
+): readonly string[] {
+  return states.get(groupId)?.waitingSessionIds ?? [];
+}
+
 /**
  * Member states of every group from the main-process GroupRuntime
  * (`group:member-states` snapshot, then `group:event` activity pushes, which
@@ -78,23 +94,34 @@ export function useGroupMemberStates(): GroupMemberStatesById {
   useEffect(() => {
     let disposed = false;
     const pushed = new Set<string>();
-    const unsubscribe = window.modus.group.onEvent((event: GroupRuntimeEvent) => {
-      if (event.type === "group.activity") pushed.add(event.groupId);
-      setStates((current) => applyGroupActivityEvent(current, event));
-    });
-    window.modus.group
-      .memberStates()
-      .then((snapshot: GroupMemberStates[]) => {
-        if (disposed) return;
-        setStates((current) => {
-          const fresh = snapshot.filter((entry) => !pushed.has(entry.groupId));
-          if (fresh.length === 0) return current;
-          const next = new Map(current);
-          for (const entry of fresh) next.set(entry.groupId, entry);
-          return next;
-        });
-      })
-      .catch((error: unknown) => console.warn("[groups] failed to load group activity", error));
+    const onEvent = window.modus.group.onEvent?.bind(window.modus.group);
+    const unsubscribe =
+      onEvent?.((event: GroupRuntimeEvent) => {
+        if (
+          event.type === "group.activity" &&
+          Array.isArray(event.runningSessionIds) &&
+          Array.isArray(event.queuedSessionIds) &&
+          Array.isArray(event.waitingSessionIds)
+        ) {
+          pushed.add(event.groupId);
+        }
+        setStates((current) => applyGroupActivityEvent(current, event));
+      }) ?? (() => undefined);
+    const load = window.modus.group.memberStates?.();
+    if (load) {
+      load
+        .then((snapshot: GroupMemberStates[]) => {
+          if (disposed) return;
+          setStates((current) => {
+            const fresh = snapshot.filter((entry) => !pushed.has(entry.groupId));
+            if (fresh.length === 0) return current;
+            const next = new Map(current);
+            for (const entry of fresh) next.set(entry.groupId, entry);
+            return next;
+          });
+        })
+        .catch((error: unknown) => console.warn("[groups] failed to load group activity", error));
+    }
     return () => {
       disposed = true;
       unsubscribe();

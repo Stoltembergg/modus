@@ -98,14 +98,14 @@ describe("session listings only list kind = 'chat'", () => {
     expect(getAgentSession(`${workspaceId}-room`)?.title).toBe("Jennie room");
   });
 
-  it("sidebar: includeSessionId keeps the active room session, marked group_member", () => {
+  it("sidebar: includeSessionId does not surface a group_member room session", () => {
+    // Group-scoped turns stay in the group pane: the renderer must not open the
+    // hidden room session as a private chat for Waiting for you / ask_user.
     const room = listAgentSessions({ includeSessionId: `${workspaceId}-room` }).find(
       (session) => session.id === `${workspaceId}-room`,
     );
-    expect(room?.kind).toBe("group_member");
-    expect(
-      listAgentSessions().find((session) => session.id === `${workspaceId}-chat`)?.kind,
-    ).toBeUndefined();
+    expect(room).toBeUndefined();
+    expect(getAgentSession(`${workspaceId}-room`)?.kind).toBe("group_member");
   });
 
   it("Project archive: listArchivedAgentSessions", () => {
