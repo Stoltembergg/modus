@@ -54,10 +54,23 @@ describe("buildGroupLiveTurn", () => {
     expect(snap.collapsed).toBe(false);
     expect(snap.presence.state).toBe("writing");
     expect(snap.thoughtPreview).toContain("Plan the toggle");
-    expect(snap.tools).toEqual([{ id: "t1", name: "read", label: "Reading", done: true }]);
+    // Completed tools are dismantled from the room strip immediately.
+    expect(snap.tools).toEqual([]);
     expect(snap.streamText).toContain("hand off");
     expect(snap.writingPreview).toContain("hand off");
     expect(snap.lastEventAt).toBe(Date.parse("2026-01-01T00:00:04.000Z"));
+  });
+
+  it("keeps only active tools while a tool is running", () => {
+    const events = [
+      ev(runStarted, "2026-01-01T00:00:00.000Z"),
+      ev(
+        { type: "tool.started", sessionId: "s", toolCallId: "t1", toolName: "read" },
+        "2026-01-01T00:00:01.000Z",
+      ),
+    ];
+    const snap = buildGroupLiveTurn(events, "running");
+    expect(snap.tools).toEqual([{ id: "t1", name: "read", label: "Reading", done: false }]);
   });
 
   it("keeps streamText after run.completed for persist reconcile", () => {
