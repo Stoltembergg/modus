@@ -3,7 +3,7 @@ on:
   push:
     branches: [cursor/natural-groups-room-ux]
     paths:
-      - "docs/_tmp/roomux-fix-*.b64"
+      - "docs/_tmp/roomux-biome.patch"
       - "docs/_tmp/roomux-fix-apply.py"
       - ".github/workflows/apply-roomux-fix.yml"
   workflow_dispatch:
