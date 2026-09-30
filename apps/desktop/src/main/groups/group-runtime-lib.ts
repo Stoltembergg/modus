@@ -255,7 +255,8 @@ export function parseGroupMentions(text: string, members: readonly MemberRef[]):
     })),
     ...members.map((member) => ({ handle: member.sessionId, sessionIds: [member.sessionId] })),
   ].sort((a, b) => b.handle.length - a.handle.length);
-  let rest = text;
+  // P2: `@everyone` stays in the transcript (broadcast) but never mass-wakes.
+  let rest = text.replace(/@everyone(?![\p{L}\p{N}_-])/giu, " ");
   for (const { handle, sessionIds } of handles) {
     if (!handle.trim()) continue;
     const pattern = new RegExp(`@${escapeRegExp(handle)}(?![\\p{L}\\p{N}_-])`, "giu");

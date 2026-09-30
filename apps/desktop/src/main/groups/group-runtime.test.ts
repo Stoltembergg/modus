@@ -372,6 +372,9 @@ describe("wake rules", () => {
     expect(parseGroupMentions("ping @dev and @Dev Lead", members)).toEqual(["a", "b"]);
     expect(parseGroupMentions("mail dev@Devx", members)).toEqual([]);
     expect(parseGroupMentions("@b by id", members)).toEqual(["b"]);
+    // @everyone is transcript-only: never expands to a mass wake.
+    expect(parseGroupMentions("@everyone please read", members)).toEqual([]);
+    expect(parseGroupMentions("@everyone and @Dev", members)).toEqual(["a"]);
   });
 
   it("@Title wakes every member sharing that title (case-insensitive)", async () => {

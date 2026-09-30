@@ -22,6 +22,7 @@ import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog"
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { describeGroupError } from "./groupErrors";
 import {
+  applyCollabPipeline,
   copyMember,
   dialogMember,
   NEW_GROUP_DEFAULT_NAME,
@@ -163,6 +164,16 @@ export function NewGroupModal({
 
   function addTemplate(template: AgentTemplate): void {
     add(templateMember(template, members, nextKey()), template.suggestedLead === true);
+  }
+
+  function addCollabPipeline(): void {
+    setMembers((current) => {
+      const next = applyCollabPipeline(AGENT_TEMPLATES, current, nextKey);
+      const planner = next.find((member) => member.templateId === "planner");
+      if (planner) setLeadKey((lead) => lead ?? planner.key);
+      return next;
+    });
+    setError(undefined);
   }
 
   function remove(key: string): void {
@@ -347,86 +358,96 @@ export function NewGroupModal({
             <div className="grid min-h-0 flex-1 grid-cols-[1fr_260px]">
               <div className="scroll-thin min-h-0 overflow-y-auto p-3" role="tabpanel">
                 {tab === "templates" ? (
-                  <ul className="grid grid-cols-2 gap-2">
-                    {AGENT_TEMPLATES.map((template) => {
-                      const count = countByTemplate.get(template.id) ?? 0;
-                      return (
-                        <li
-                          aria-label={template.name}
-                          className={cn(
-                            "flex flex-col gap-2 rounded-lg border p-2.5 transition-colors",
-                            count > 0 ? "border-accent bg-accent/5" : "border-hairline",
-                          )}
-                          data-selected={count > 0 || undefined}
-                          data-testid={`template-card-${template.id}`}
-                          key={template.id}
-                        >
-                          <div className="flex items-start gap-2.5">
-                            <AgentAvatar
-                              color={template.avatarColor}
-                              face={template.avatarFace}
-                              seed={template.id}
-                              size={48}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-1.5">
-                                <span className="truncate font-medium text-fg text-xs">
-                                  {template.name}
-                                </span>
-                                {template.suggestedLead ? (
-                                  <IconCrown
-                                    aria-label="Suggested lead"
-                                    className="text-amber-400"
-                                    size={12}
-                                  />
-                                ) : null}
-                                {count > 0 ? (
-                                  <span className="ml-auto rounded bg-accent/15 px-1 text-2xs text-accent">
-                                    ×{count}
+                  <div className="space-y-2">
+                    <button
+                      className="h-7 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-left text-2xs text-fg-muted transition-colors hover:border-hairline-strong hover:text-fg"
+                      data-testid="collab-pipeline"
+                      onClick={() => addCollabPipeline()}
+                      type="button"
+                    >
+                      Collab pipeline · Planner → Builder → Reviewer
+                    </button>
+                    <ul className="grid grid-cols-2 gap-2">
+                      {AGENT_TEMPLATES.map((template) => {
+                        const count = countByTemplate.get(template.id) ?? 0;
+                        return (
+                          <li
+                            aria-label={template.name}
+                            className={cn(
+                              "flex flex-col gap-2 rounded-lg border p-2.5 transition-colors",
+                              count > 0 ? "border-accent bg-accent/5" : "border-hairline",
+                            )}
+                            data-selected={count > 0 || undefined}
+                            data-testid={`template-card-${template.id}`}
+                            key={template.id}
+                          >
+                            <div className="flex items-start gap-2.5">
+                              <AgentAvatar
+                                color={template.avatarColor}
+                                face={template.avatarFace}
+                                seed={template.id}
+                                size={48}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="truncate font-medium text-fg text-xs">
+                                    {template.name}
                                   </span>
-                                ) : null}
+                                  {template.suggestedLead ? (
+                                    <IconCrown
+                                      aria-label="Suggested lead"
+                                      className="text-amber-400"
+                                      size={12}
+                                    />
+                                  ) : null}
+                                  {count > 0 ? (
+                                    <span className="ml-auto rounded bg-accent/15 px-1 text-2xs text-accent">
+                                      ×{count}
+                                    </span>
+                                  ) : null}
+                                </div>
+                                <div className="text-2xs text-fg-subtle">{template.role}</div>
+                                <p className="mt-0.5 line-clamp-2 text-2xs text-fg-faint">
+                                  {template.description}
+                                </p>
                               </div>
-                              <div className="text-2xs text-fg-subtle">{template.role}</div>
-                              <p className="mt-0.5 line-clamp-2 text-2xs text-fg-faint">
-                                {template.description}
-                              </p>
                             </div>
-                          </div>
-                          <div className="flex justify-end gap-1">
-                            <button
-                              aria-label={`Customize ${template.name}`}
-                              className="h-6 rounded-md px-2 text-2xs text-fg-subtle hover:bg-hover hover:text-fg"
-                              onClick={() =>
-                                setAgentDialog({
-                                  initial: {
-                                    templateId: template.id,
-                                    name: templateMember(template, members, "preview").name,
-                                    role: template.role,
-                                    instructions: template.instructions,
-                                    avatarFace: template.avatarFace,
-                                    avatarColor: template.avatarColor,
-                                  },
-                                  lead: template.suggestedLead === true,
-                                })
-                              }
-                              type="button"
-                            >
-                              Customize
-                            </button>
-                            <button
-                              aria-label={`Add ${template.name}`}
-                              className="flex h-6 items-center gap-1 rounded-md bg-chip px-2 text-2xs text-fg hover:bg-chip-strong"
-                              onClick={() => addTemplate(template)}
-                              type="button"
-                            >
-                              <IconPlus size={11} />
-                              Add
-                            </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
+                            <div className="flex justify-end gap-1">
+                              <button
+                                aria-label={`Customize ${template.name}`}
+                                className="h-6 rounded-md px-2 text-2xs text-fg-subtle hover:bg-hover hover:text-fg"
+                                onClick={() =>
+                                  setAgentDialog({
+                                    initial: {
+                                      templateId: template.id,
+                                      name: templateMember(template, members, "preview").name,
+                                      role: template.role,
+                                      instructions: template.instructions,
+                                      avatarFace: template.avatarFace,
+                                      avatarColor: template.avatarColor,
+                                    },
+                                    lead: template.suggestedLead === true,
+                                  })
+                                }
+                                type="button"
+                              >
+                                Customize
+                              </button>
+                              <button
+                                aria-label={`Add ${template.name}`}
+                                className="flex h-6 items-center gap-1 rounded-md bg-chip px-2 text-2xs text-fg hover:bg-chip-strong"
+                                onClick={() => addTemplate(template)}
+                                type="button"
+                              >
+                                <IconPlus size={11} />
+                                Add
+                              </button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 ) : tab === "copy" ? (
                   <div className="flex flex-col gap-1">
                     <p className="mb-1 text-2xs text-fg-faint">
