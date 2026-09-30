@@ -195,9 +195,9 @@ describe("GroupMessageList working strip", () => {
     expect(screen.queryByTestId("group-live-status")).toBeNull();
     expect(screen.getByTestId("group-live-writing").textContent).toContain("Now writing");
     const streaming = screen.getByTestId("group-member-working");
-    expect(streaming.querySelector('[data-testid="group-message"]')?.getAttribute("data-kind")).toBe(
-      "member",
-    );
+    expect(
+      streaming.querySelector('[data-testid="group-message"]')?.getAttribute("data-kind"),
+    ).toBe("member");
   });
 
   it("reconciles the in-flight stream away once the persisted message arrives", async () => {
@@ -234,9 +234,9 @@ describe("GroupMessageList working strip", () => {
     );
     expect(screen.queryByTestId("group-working-status")).toBeNull();
     expect(screen.queryByTestId("group-live-writing")).toBeNull();
-    expect(screen.getAllByTestId("group-message").some((n) => n.textContent?.includes("Final reply"))).toBe(
-      true,
-    );
+    expect(
+      screen.getAllByTestId("group-message").some((n) => n.textContent?.includes("Final reply")),
+    ).toBe(true);
   });
 
   it("only auto-follows when the scroll position is near the bottom", () => {

@@ -1,8 +1,8 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentGroupWithMembers,
   AgentSessionInfo,

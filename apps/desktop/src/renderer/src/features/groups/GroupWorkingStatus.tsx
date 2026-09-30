@@ -1,8 +1,5 @@
 import type { GroupMessage } from "../../../../shared/contracts";
-import {
-  GroupMessageRow,
-  type WorkingMemberAvatar,
-} from "./GroupMessageRow";
+import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import type { MemberLabel } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 

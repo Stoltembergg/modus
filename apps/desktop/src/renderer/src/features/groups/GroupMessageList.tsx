@@ -1,11 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
-import {
-  isNearBottom,
-  shouldShowInFlightRow,
-} from "../../../../shared/group-room-transcript";
-import { GroupWorkingStatus } from "./GroupWorkingStatus";
+import { isNearBottom, shouldShowInFlightRow } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
+import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { buildGroupThreads } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
@@ -21,8 +18,8 @@ export {
   isNoNextOwnerStatus,
   isWaitingStatus,
   memberColor,
-  splitTrailingCollabStatuses,
   StatusText,
+  splitTrailingCollabStatuses,
 } from "./GroupMessageRow";
 
 export function GroupMessageList({
@@ -193,9 +190,7 @@ export function GroupMessageList({
               onOpenFile={onOpenFile}
               onReply={onReply}
               role={
-                thread.root.authorSessionId
-                  ? roles?.get(thread.root.authorSessionId)
-                  : undefined
+                thread.root.authorSessionId ? roles?.get(thread.root.authorSessionId) : undefined
               }
             />
             {thread.replies.length > 0 ? (
@@ -217,9 +212,7 @@ export function GroupMessageList({
                     onHandoffClick={onHandoffClick}
                     onOpenFile={onOpenFile}
                     onReply={onReply}
-                    role={
-                      message.authorSessionId ? roles?.get(message.authorSessionId) : undefined
-                    }
+                    role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
                   />
                 ))}
               </div>
@@ -238,4 +231,3 @@ export function GroupMessageList({
     </div>
   );
 }
-

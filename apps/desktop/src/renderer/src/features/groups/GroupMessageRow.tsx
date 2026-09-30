@@ -224,11 +224,12 @@ export function GroupMessageRow({
     const waiting = isWaitingStatus(message.body);
     const nudge = isNoNextOwnerStatus(message.body);
     const collab = parseGroupCollabStatusLine(message.body);
-    const tone: RoomMessageTone = activeWaiting || nudge || collab?.kind === "ready"
-      ? "ask"
-      : collab?.kind === "blocked"
-        ? "block"
-        : "normal";
+    const tone: RoomMessageTone =
+      activeWaiting || nudge || collab?.kind === "ready"
+        ? "ask"
+        : collab?.kind === "blocked"
+          ? "block"
+          : "normal";
     const display = collab ? formatNaturalCollabStatus(collab) : message.body;
     return (
       <div
@@ -326,9 +327,7 @@ export function GroupMessageRow({
         <div className="min-w-0 flex-1 space-y-0.5">
           <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-fg-muted text-xs">
             <MemberName label={label} />
-            {role?.trim() ? (
-              <span className="font-normal text-fg-faint">{role.trim()}</span>
-            ) : null}
+            {role?.trim() ? <span className="font-normal text-fg-faint">{role.trim()}</span> : null}
             {toLabel ? (
               <span className="font-normal text-fg-faint" data-testid="group-message-to">
                 → <MemberName label={toLabel} />

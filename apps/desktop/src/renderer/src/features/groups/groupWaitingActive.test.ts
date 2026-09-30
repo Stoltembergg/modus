@@ -8,9 +8,11 @@ describe("isActiveWaitingStatus", () => {
     expect(isActiveWaitingStatus("Waiting for you", "s-build", [])).toBe(false);
     expect(isActiveWaitingStatus("Turn stopped", "s-build", ["s-build"])).toBe(false);
     expect(
-      isActiveWaitingStatus("Waiting for you: this chain reached its limit of 6 turns.", undefined, [
-        "s-build",
-      ]),
+      isActiveWaitingStatus(
+        "Waiting for you: this chain reached its limit of 6 turns.",
+        undefined,
+        ["s-build"],
+      ),
     ).toBe(false);
   });
 });

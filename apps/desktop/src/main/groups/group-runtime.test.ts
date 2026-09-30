@@ -317,9 +317,9 @@ describe("turn outcomes (fake runtime contract)", () => {
     // Room can continue with another member without clearing a sticky wait.
     groups.postUserMessage({ groupId: group.id, body: "@Beta continue" });
     expect(runtime.pendingSessions()).toEqual([beta]);
-    expect(groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds ?? []).toEqual(
-      [],
-    );
+    expect(
+      groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds ?? [],
+    ).toEqual([]);
   });
 });
 
