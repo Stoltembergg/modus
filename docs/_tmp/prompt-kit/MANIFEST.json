@@ -1,4 +1,20 @@
 {
+  "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx": {
+    "wanted_blob": "e50f4b271cc67f67a289ba228bcf771222253d96",
+    "parts": [
+      "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.000",
+      "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.001",
+      "docs/_tmp/prompt-kit/GroupMessageRow.tsx.zlib.b64.002"
+    ]
+  },
+  "apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx": {
+    "wanted_blob": "82eec6b10b35c2aea864b45da2e4a5ea002d5548",
+    "parts": [
+      "docs/_tmp/prompt-kit/GroupComposer.tsx.zlib.b64.000",
+      "docs/_tmp/prompt-kit/GroupComposer.tsx.zlib.b64.001",
+      "docs/_tmp/prompt-kit/GroupComposer.tsx.zlib.b64.002"
+    ]
+  },
   "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx": {
     "wanted_blob": "7a5b8d8fede4e0e79686a00298a8a31972cd1e03",
     "parts": [
