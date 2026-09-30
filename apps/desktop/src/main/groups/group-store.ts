@@ -1754,6 +1754,27 @@ export function reviewGroupTask(
   });
 }
 
+/**
+ * P1b agreement loop: any member may mark an active task done when the room
+ * reaches Agree (owner/reviewer formal review is still available via
+ * group_review_task). Cancelled/done tasks are rejected.
+ */
+export function completeGroupTaskForAgreement(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+): GroupTask {
+  const db = getDatabase();
+  return inTransaction(db, () => {
+    requireMember(groupId, actorSessionId, "agreement actor");
+    const task = requireTaskInGroup(taskId, groupId);
+    const status = effectiveTaskStatus(task);
+    if (CLOSED_TASK_STATUSES.includes(status))
+      throw invalidTransition(task, "complete by agreement");
+    return writeTaskTransition(taskId, { status: "done" });
+  });
+}
+
 /* ── Decisions (PR 6: shared context) ─────────────────────────────────── */
 
 /** Most decisions a group keeps; the next record fails with limit-reached. */
