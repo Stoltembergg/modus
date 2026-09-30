@@ -502,6 +502,9 @@ export function migrateDatabase(db: DatabaseSync): void {
   addColumn(db, "agent_sessions", "agent_id", "text references agents(id) on delete set null");
   db.exec(`create unique index if not exists idx_agent_sessions_agent_chat
     on agent_sessions(agent_id) where agent_id is not null`);
+  // Group room Prompt Kit file upload: image + context payloads on user messages.
+  addColumn(db, "group_messages", "attachments_json", "text");
+  addColumn(db, "group_messages", "context_items_json", "text");
 }
 
 /**

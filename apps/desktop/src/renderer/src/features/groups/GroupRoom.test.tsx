@@ -332,17 +332,17 @@ describe("GroupRoom", () => {
       ],
     ];
     // Only s-rev-1 is actively waiting — historical Waiting lines stay faint.
+    // Worktree ops stay off the main transcript (Activity / Details).
     renderRoom(states({ waitingSessionIds: ["s-rev-1"] }));
     const rows = (await screen.findAllByTestId("group-message")) as HTMLElement[];
-    const code = within(rows[0] as HTMLElement).getByText("modus/group/p1");
-    expect(code.tagName).toBe("CODE");
-    // Only inline code: the rest stays literal text.
-    expect(rows[0]?.textContent).toBe("Planner · Worktree ready: modus/group/p1 **not bold**");
-    expect(rows[1]?.dataset.waitingActive).toBe("true");
-    expect(rows[1]?.querySelector(".text-amber-400")).toBeTruthy();
+    expect(rows).toHaveLength(3);
+    expect(screen.queryByText("modus/group/p1")).toBeNull();
+    expect(rows[0]?.dataset.waitingActive).toBe("true");
+    expect(rows[0]?.querySelector(".text-amber-400")).toBeTruthy();
+    expect(rows[0]?.getAttribute("data-prompt-kit")).toBe("system-message");
     // System limit line has no authorSessionId → not active amber from member wait.
-    expect(rows[2]?.dataset.waitingActive).toBeUndefined();
-    expect(rows[3]?.querySelector(".text-amber-400")).toBeNull();
+    expect(rows[1]?.dataset.waitingActive).toBeUndefined();
+    expect(rows[2]?.querySelector(".text-amber-400")).toBeNull();
   });
 
   it("does not amber-highlight stale Waiting for you when the member is idle", async () => {

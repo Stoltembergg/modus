@@ -11,7 +11,9 @@ import type {
   AgentGroupWithMembers,
   GroupDecision,
   GroupMessage,
+  GroupMessageAttachment,
   GroupMessageAuthorKind,
+  GroupMessageContextItem,
   GroupMessageCursor,
   GroupMessageKind,
   GroupTask,
@@ -100,6 +102,8 @@ type MessageRow = {
   kind: GroupMessageKind;
   body: string;
   mentions_json: string;
+  attachments_json: string | null;
+  context_items_json: string | null;
   created_at: string;
 };
 
@@ -134,7 +138,7 @@ const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.jo
     a.avatar_shape as agent_avatar_shape
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
-  to_session_id, chain_id, kind, body, mentions_json, created_at`;
+  to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at`;
 const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
   created_by_session_id, reviewer_session_id, branch, created_at, updated_at`;
 const DECISION_COLUMNS = "id, group_id, text, author_session_id, source_message_id, created_at";
@@ -178,7 +182,61 @@ function parseMentions(text: string): string[] {
   }
 }
 
+function parseAttachmentsJson(text: string | null): GroupMessageAttachment[] | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    const out: GroupMessageAttachment[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      if (
+        row.type !== "image" ||
+        typeof row.data !== "string" ||
+        typeof row.mimeType !== "string"
+      ) {
+        continue;
+      }
+      out.push({
+        type: "image",
+        data: row.data,
+        mimeType: row.mimeType,
+        ...(typeof row.name === "string" ? { name: row.name } : {}),
+      });
+    }
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseContextItemsJson(text: string | null): GroupMessageContextItem[] | undefined {
+  if (!text) return undefined;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    const out: GroupMessageContextItem[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
+      const row = item as Record<string, unknown>;
+      if ((row.type === "file" || row.type === "folder") && typeof row.path === "string") {
+        if (row.type === "folder") {
+          out.push({ type: "folder", path: row.path });
+        } else {
+          out.push({ type: "file", path: row.path });
+        }
+      }
+    }
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function toMessage(row: MessageRow): GroupMessage {
+  const attachments = parseAttachmentsJson(row.attachments_json);
+  const contextItems = parseContextItemsJson(row.context_items_json);
   return {
     id: row.id,
     groupId: row.group_id,
@@ -190,6 +248,8 @@ function toMessage(row: MessageRow): GroupMessage {
     kind: row.kind,
     body: row.body,
     mentions: parseMentions(row.mentions_json),
+    ...(attachments ? { attachments } : {}),
+    ...(contextItems ? { contextItems } : {}),
     createdAt: row.created_at,
   };
 }
@@ -1212,13 +1272,18 @@ export function appendGroupMessage(input: {
   kind?: GroupMessageKind;
   body: string;
   mentions?: string[];
+  attachments?: GroupMessageAttachment[];
+  contextItems?: GroupMessageContextItem[];
   createdAt?: string;
 }): GroupMessage {
   const db = getDatabase();
   requireGroupRow(input.groupId);
   const authorKind = requireOneOf(input.authorKind, AUTHOR_KINDS, "message author kind");
   const kind = requireOneOf(input.kind ?? "message", MESSAGE_KINDS, "message kind");
-  if (typeof input.body !== "string" || input.body.trim() === "") {
+  const attachments = input.attachments?.slice(0, 6) ?? [];
+  const contextItems = input.contextItems?.slice(0, 20) ?? [];
+  const hasPayload = attachments.length > 0 || contextItems.length > 0;
+  if (typeof input.body !== "string" || (input.body.trim() === "" && !hasPayload)) {
     throw new GroupStoreError("invalid-value", "Group message body must not be empty.");
   }
   if (authorKind === "agent") {
@@ -1277,7 +1342,7 @@ export function appendGroupMessage(input: {
   const createdAt = input.createdAt ?? new Date().toISOString();
   db.prepare(
     `insert into group_messages (${MESSAGE_COLUMNS})
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.groupId,
@@ -1289,6 +1354,8 @@ export function appendGroupMessage(input: {
     kind,
     input.body,
     JSON.stringify(mentions),
+    attachments.length > 0 ? JSON.stringify(attachments) : null,
+    contextItems.length > 0 ? JSON.stringify(contextItems) : null,
     createdAt,
   );
   const row = db

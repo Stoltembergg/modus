@@ -138,6 +138,12 @@ export class GroupRuntime {
       mentions,
       startsChain: true,
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+      ...(input.attachments && input.attachments.length > 0
+        ? { attachments: input.attachments }
+        : {}),
+      ...(input.contextItems && input.contextItems.length > 0
+        ? { contextItems: input.contextItems }
+        : {}),
     });
     this.emitMessage(message);
     const chain = this.openChain(input.groupId, message.id);
@@ -709,11 +715,16 @@ export class GroupRuntime {
     this.emitActivity(wake.groupId);
     let turn: Promise<PromptTurnResult>;
     try {
+      const trigger = getGroupMessage(wake.triggerMessageId);
+      const attachments = trigger?.attachments;
+      const contextItems = (trigger?.contextItems ??
+        []) as import("../../shared/contracts").ContextItem[];
       turn = this.runtime.prompt(window, {
         sessionId: wake.sessionId,
         message: this.freshPrompt(wake),
-        context: [],
+        context: contextItems,
         delivery: "normal",
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
     } catch (error) {
       turn = Promise.reject(error);
