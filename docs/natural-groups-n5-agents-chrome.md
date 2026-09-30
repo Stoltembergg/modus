@@ -1,8 +1,8 @@
 # N5 — Clean room chrome + avatar identity
 
 **Repo:** Stoltembergg/modus  
-**Depends on:** N0–N2 on main; N3 (#94) optional parallel  
-**Status:** Implemented on `cursor/natural-groups-n5-agents-ui-cb29`  
+**Depends on:** N0–N2 on main  
+**Status:** **merged (#95 → main @ `d61f73f`)**  
 **Constraint:** Agents / Groups / Lead / Coordinator / models / permissions stay intact — presentation only.
 
 ## Goals
