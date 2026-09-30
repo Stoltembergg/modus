@@ -1,23 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AgentEventItem } from "../../../../shared/agent-events";
 import type { AgentEvent } from "../../../../shared/contracts";
-import {
-  type GroupMemberWorkingPhase,
-  groupMemberWorkingPhase,
-  listGroupWorkingSessionIds,
-} from "./groupWorkingPhase";
+import { buildGroupLiveTurn, type GroupLiveTurnSnapshot } from "./groupLiveTurn";
+import { listGroupWorkingSessionIds } from "./groupWorkingPhase";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
+
+type TimedEvent = { event: AgentEvent; createdAt?: string };
 
 export type GroupMemberWorkingRow = {
   sessionId: string;
   mode: "running" | "queued";
-  phase: GroupMemberWorkingPhase;
+  /** Live turn snapshot (phase + thought/tools/writing previews). */
+  live: GroupLiveTurnSnapshot;
 };
 
 /**
- * Live phase labels for members currently running or queued in this group.
- * Subscribes to `agent.onEvent` for running sessions (same pattern as
- * GroupMemberQuestions) so the room strip tracks Thinking / tools / Writing.
+ * Live turn snapshots for members currently running or queued in this group.
+ * Subscribes to `agent.onEvent` for running sessions so the room can stream
+ * Thinking / tools / Writing (same event source as ChatPane, compact fold).
  */
 export function useGroupMemberWorking(
   groupId: string,
@@ -32,9 +32,9 @@ export function useGroupMemberWorking(
     [entry],
   );
 
-  const [eventsBySession, setEventsBySession] = useState<
-    ReadonlyMap<string, Array<{ event: AgentEvent }>>
-  >(() => new Map());
+  const [eventsBySession, setEventsBySession] = useState<ReadonlyMap<string, TimedEvent[]>>(
+    () => new Map(),
+  );
 
   useEffect(() => {
     const runningIds = working.filter((row) => row.mode === "running").map((row) => row.sessionId);
@@ -53,9 +53,17 @@ export function useGroupMemberWorking(
       runningIds.map(async (sessionId) => {
         try {
           const items = (await agent.listEvents(sessionId)) as AgentEventItem[];
-          return [sessionId, items.map((item) => ({ event: item.event }))] as const;
+          return [
+            sessionId,
+            items.map((item) => ({
+              event: item.event,
+              ...(item.createdAt || item.updatedAt
+                ? { createdAt: item.updatedAt ?? item.createdAt }
+                : {}),
+            })),
+          ] as const;
         } catch {
-          const empty: Array<{ event: AgentEvent }> = [];
+          const empty: TimedEvent[] = [];
           return [sessionId, empty] as const;
         }
       }),
@@ -65,10 +73,11 @@ export function useGroupMemberWorking(
 
     const unsubscribe = agent.onEvent((event: AgentEvent) => {
       if (!runningIds.includes(event.sessionId)) return;
+      const createdAt = new Date().toISOString();
       setEventsBySession((current) => {
         const next = new Map(current);
         const list = next.get(event.sessionId) ?? [];
-        next.set(event.sessionId, [...list, { event }]);
+        next.set(event.sessionId, [...list, { event, createdAt }]);
         return next;
       });
     });
@@ -83,7 +92,7 @@ export function useGroupMemberWorking(
     () =>
       working.map((row) => ({
         ...row,
-        phase: groupMemberWorkingPhase(eventsBySession.get(row.sessionId) ?? [], row.mode),
+        live: buildGroupLiveTurn(eventsBySession.get(row.sessionId) ?? [], row.mode),
       })),
     [working, eventsBySession],
   );

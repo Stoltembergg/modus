@@ -1,8 +1,7 @@
 import type { AgentAvatarColor, AgentAvatarFace } from "../../../../shared/contracts";
-import { ThinkingStates } from "../../components/ui/ThinkingStates";
-import { SessionStatusDot } from "../agent/SessionStatusDot";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { agentAvatarState } from "../agents/agentAvatarModel";
+import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 import { memberLabelText } from "./memberLabels";
@@ -18,9 +17,8 @@ export type WorkingMemberAvatar = {
 
 /**
  * In-transcript working strip for group members whose turns are running or
- * queued. ChatPane shows WorkFold/ThinkingStates on the single-agent stream;
- * the group room only gets finished posts — this binds `group.activity` (+ live
- * agent events for phase) so Stop ≠ empty black transcript.
+ * queued. Binds `group.activity` + live agent events so Stop ≠ empty transcript:
+ * phase, thought/tools/writing previews, and "Still working…" on silence.
  */
 export function GroupWorkingStatus({
   rows,
@@ -43,7 +41,7 @@ export function GroupWorkingStatus({
       {rows.map((row) => {
         const label = labels.get(row.sessionId) ?? { title: row.sessionId };
         const avatar = avatars.get(row.sessionId);
-        const phase = row.phase;
+        const phase = row.live.phase;
         const working = row.mode === "running";
         return (
           <div
@@ -74,18 +72,7 @@ export function GroupWorkingStatus({
               <div className="mb-0.5 font-medium text-fg-muted text-xs">
                 <MemberName label={label} />
               </div>
-              <div className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm">
-                {working ? (
-                  <SessionStatusDot
-                    activity={{ running: true, needsInput: false, unread: false, failed: false }}
-                    className="-my-1"
-                  />
-                ) : null}
-                <span className="sr-only">
-                  {memberLabelText(label)} {phase}
-                </span>
-                <ThinkingStates className="text-fg-subtle" label={String(phase)} />
-              </div>
+              <GroupMemberLiveTurn live={row.live} mode={row.mode} />
             </div>
           </div>
         );
