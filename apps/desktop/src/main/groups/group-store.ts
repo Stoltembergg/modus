@@ -4,6 +4,7 @@ import { agentAvatarForId } from "../../shared/agent-templates";
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
+  AgentAvatarShape,
   AgentGroupInfo,
   AgentGroupMember,
   AgentGroupMode,
@@ -85,6 +86,7 @@ type MemberRow = {
   agent_archived_at: string | null;
   agent_avatar_face: AgentAvatarFace;
   agent_avatar_color: AgentAvatarColor;
+  agent_avatar_shape: AgentAvatarShape;
 };
 
 type MessageRow = {
@@ -128,7 +130,8 @@ const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at
 /** Member rows joined with their agent (`from agent_group_members m join agents a`). */
 const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.joined_at,
     a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at,
-    a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color
+    a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color,
+    a.avatar_shape as agent_avatar_shape
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, created_at`;
@@ -159,6 +162,7 @@ function toMember(row: MemberRow): AgentGroupMember {
     ...(row.agent_archived_at !== null ? { archived: true as const } : {}),
     avatarFace: row.agent_avatar_face,
     avatarColor: row.agent_avatar_color,
+    avatarShape: row.agent_avatar_shape,
     joinedAt: row.joined_at,
   };
 }
@@ -475,12 +479,21 @@ function adoptSessionAgent(groupId: string, sessionId: string): string {
         | undefined
     )?.title?.trim() || "Agent";
   const id = randomUUID();
-  const { avatarFace, avatarColor } = agentAvatarForId(id);
+  const { avatarFace, avatarColor, avatarShape } = agentAvatarForId(id);
   const now = new Date().toISOString();
   db.prepare(
-    `insert into agents (id, group_id, name, avatar_face, avatar_color, created_at, updated_at)
-     values (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, groupId, uniqueAgentName(db, title, groupId), avatarFace, avatarColor, now, now);
+    `insert into agents (id, group_id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+     values (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    groupId,
+    uniqueAgentName(db, title, groupId),
+    avatarFace,
+    avatarColor,
+    avatarShape,
+    now,
+    now,
+  );
   return id;
 }
 

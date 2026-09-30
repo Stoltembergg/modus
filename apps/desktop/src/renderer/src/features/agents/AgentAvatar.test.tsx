@@ -4,7 +4,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES } from "../../../../shared/contracts";
+import {
+  AGENT_AVATAR_COLORS,
+  AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
+} from "../../../../shared/contracts";
 import { AgentAvatar } from "./AgentAvatar";
 import {
   AGENT_AVATAR_ARCHIVED_FILL,
@@ -17,7 +21,7 @@ import {
 afterEach(cleanup);
 
 const avatar = () => screen.getByTestId("agent-avatar");
-const bodyFill = () => avatar().querySelector(".agent-avatar-body > circle")?.getAttribute("fill");
+const bodyFill = () => avatar().querySelector(".agent-avatar-fill")?.getAttribute("fill");
 
 describe("AgentAvatar", () => {
   it("draws every face in every color at 16, 20 and 48 px", () => {
@@ -37,6 +41,15 @@ describe("AgentAvatar", () => {
       }
     }
     expect(new Set(Object.values(AGENT_AVATAR_FILL)).size).toBe(AGENT_AVATAR_COLORS.length);
+  });
+
+  it("renders every silhouette shape", () => {
+    for (const shape of AGENT_AVATAR_SHAPES) {
+      const { unmount } = render(<AgentAvatar color="blue" face="happy" shape={shape} size={20} />);
+      expect(avatar().dataset.shape).toBe(shape);
+      expect(avatar().querySelector(".agent-avatar-fill")).not.toBeNull();
+      unmount();
+    }
   });
 
   it("idle and working animate; waiting adds the amber ring and brow; archived is grey", () => {
@@ -99,14 +112,23 @@ describe("agentAvatarModel", () => {
     expect(agentAvatarState("waiting", true)).toBe("archived");
   });
 
-  it("uses the stored face / color, else the id-derived default", () => {
-    expect(memberAvatar({ agentId: "a", avatarFace: "wink", avatarColor: "lime" })).toEqual({
+  it("uses the stored face / color / shape, else the id-derived default", () => {
+    expect(
+      memberAvatar({
+        agentId: "a",
+        avatarFace: "wink",
+        avatarColor: "lime",
+        avatarShape: "hexagon",
+      }),
+    ).toEqual({
       face: "wink",
       color: "lime",
+      shape: "hexagon",
     });
     const derived = memberAvatar({ agentId: "a" });
     expect(AGENT_AVATAR_FACES).toContain(derived.face);
     expect(AGENT_AVATAR_COLORS).toContain(derived.color);
+    expect(AGENT_AVATAR_SHAPES).toContain(derived.shape);
   });
 
   it("varies timing per seed within 0..-3.9 s and 3.6..4.4 s", () => {

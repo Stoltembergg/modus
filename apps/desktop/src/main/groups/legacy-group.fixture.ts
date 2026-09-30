@@ -22,12 +22,12 @@ export function insertLegacyGroup(input: {
       | { title: string }
       | undefined;
     const agentId = randomUUID();
-    const { avatarFace, avatarColor } = agentAvatarForId(agentId);
+    const { avatarFace, avatarColor, avatarShape } = agentAvatarForId(agentId);
     const now = new Date().toISOString();
     db.prepare(
-      `insert into agents (id, group_id, name, avatar_face, avatar_color, created_at, updated_at)
-       values (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(agentId, group.id, row?.title || "Agent", avatarFace, avatarColor, now, now);
+      `insert into agents (id, group_id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(agentId, group.id, row?.title || "Agent", avatarFace, avatarColor, avatarShape, now, now);
     db.prepare(
       `insert into agent_group_members (group_id, session_id, role, joined_at, agent_id)
        values (?, ?, null, ?, ?)`,

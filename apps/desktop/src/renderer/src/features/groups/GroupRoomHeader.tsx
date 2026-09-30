@@ -1,23 +1,19 @@
 import { Menu } from "@base-ui/react/menu";
-import { IconCrown, IconDots, IconPlayerStop } from "@tabler/icons-react";
-import { type ReactNode, useMemo, useState } from "react";
+import { IconDots, IconPlayerStop } from "@tabler/icons-react";
+import { type ReactNode, useState } from "react";
 import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
-import { AgentAvatar } from "../agents/AgentAvatar";
-import { agentAvatarState } from "../agents/agentAvatarModel";
+import type { GroupDialogModel } from "./CreateGroupDialog";
+import { GroupAgentsPopover } from "./GroupAgentsPopover";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
-import { type MemberLabel, memberLabels, memberLabelText } from "./memberLabels";
-import {
-  type GroupActivityState,
-  type GroupMemberStatesById,
-  memberActivityState,
-} from "./useWorkingGroups";
+import type { MemberLabel } from "./memberLabels";
+import type { GroupActivityState, GroupMemberStatesById } from "./useWorkingGroups";
 
 /** Member state dot: working orb, amber for waiting for you, nothing when idle. */
 export function GroupStateDot({ state }: { state: GroupActivityState }) {
@@ -41,52 +37,6 @@ export function GroupStateDot({ state }: { state: GroupActivityState }) {
     );
   }
   return null;
-}
-
-function MemberChip({
-  avatar,
-  label,
-  isLead,
-  state,
-  onOpen,
-}: {
-  avatar: WorkingMemberAvatar | undefined;
-  label: MemberLabel;
-  isLead: boolean;
-  state: GroupActivityState;
-  onOpen(): void;
-}) {
-  return (
-    <button
-      className="flex h-6 max-w-[220px] items-center gap-1.5 rounded-full border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
-      data-state={state}
-      data-testid="group-member-chip"
-      onClick={onOpen}
-      title={`Open ${memberLabelText(label)}`}
-      type="button"
-    >
-      {avatar ? (
-        <AgentAvatar
-          className="-ml-1"
-          color={avatar.color}
-          face={avatar.face}
-          seed={avatar.agentId}
-          size={20}
-          state={agentAvatarState(state, avatar.archived)}
-        />
-      ) : null}
-      <GroupStateDot state={state} />
-      <span className="min-w-0 truncate">
-        <MemberName label={label} />
-      </span>
-      {isLead ? (
-        <span className="flex shrink-0 items-center gap-0.5 rounded-sm bg-accent/12 px-1 text-2xs text-accent">
-          <IconCrown aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />
-          Lead
-        </span>
-      ) : null}
-    </button>
-  );
 }
 
 export function GroupStageChip({
@@ -128,13 +78,17 @@ export function GroupRoomHeader({
   projectName,
   running,
   tasksButton,
-  onOpenMember,
+  models,
+  defaultModelId,
+  onOpenAgentChat,
   onStop,
   onRename,
   onSetMode,
   onManageMembers,
   onDelete,
   onAddAgent,
+  onSetLead,
+  onAgentsChanged,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
@@ -143,17 +97,20 @@ export function GroupRoomHeader({
   projectName: string | undefined;
   running: boolean;
   tasksButton: ReactNode;
-  onOpenMember(sessionId: string): void;
+  models?: readonly GroupDialogModel[];
+  defaultModelId?: string | undefined;
+  onOpenAgentChat(agentId: string): void;
   onStop(): void;
   onRename(name: string): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onManageMembers(): void;
   onDelete(): void;
   onAddAgent?: (() => void) | undefined;
+  onSetLead?(sessionId: string | null): void;
+  onAgentsChanged?(): void;
 }) {
   const [renaming, setRenaming] = useState(false);
   const coordinating = isCoordinatorModeActive(group);
-  const labels = useMemo(() => memberLabels(members), [members]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   return (
@@ -179,6 +136,18 @@ export function GroupRoomHeader({
           {projectName ?? "No project"}
         </span>
         <span className="flex-1" />
+        <GroupAgentsPopover
+          avatars={avatars}
+          group={group}
+          memberStates={memberStates}
+          members={members}
+          onManageMembers={onManageMembers}
+          onOpenAgentChat={onOpenAgentChat}
+          {...(defaultModelId !== undefined ? { defaultModelId } : {})}
+          {...(models !== undefined ? { models } : {})}
+          {...(onAgentsChanged ? { onAgentsChanged } : {})}
+          {...(onSetLead ? { onSetLead } : {})}
+        />
         {running ? (
           <button
             className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
@@ -229,18 +198,6 @@ export function GroupRoomHeader({
             </Menu.Positioner>
           </Menu.Portal>
         </Menu.Root>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {members.map((member) => (
-          <MemberChip
-            avatar={avatars.get(member.sessionId)}
-            isLead={group.leadSessionId === member.sessionId}
-            key={member.sessionId}
-            label={labels.get(member.sessionId) ?? { title: member.title }}
-            onOpen={() => onOpenMember(member.sessionId)}
-            state={memberActivityState(memberStates, group.id, member.sessionId)}
-          />
-        ))}
       </div>
     </div>
   );

@@ -1,8 +1,10 @@
 import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
   type AgentAvatarColor,
   type AgentAvatarFace,
+  type AgentAvatarShape,
 } from "./contracts";
 
 /*
@@ -129,22 +131,26 @@ export function getAgentTemplate(templateId: string): AgentTemplate | undefined 
   return AGENT_TEMPLATES.find((template) => template.id === templateId);
 }
 
-/** Deterministic face and color from an id (32-bit FNV-1a), e.g. for migrated agents. */
+/** Deterministic face, color and shape from an id (32-bit FNV-1a). */
 export function agentAvatarForId(id: string): {
   avatarFace: AgentAvatarFace;
   avatarColor: AgentAvatarColor;
+  avatarShape: AgentAvatarShape;
 } {
   let hash = 0x811c9dc5;
   for (let index = 0; index < id.length; index += 1) {
     hash ^= id.charCodeAt(index);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
+  const faceIndex = hash % AGENT_AVATAR_FACES.length;
+  const colorIndex = Math.floor(hash / AGENT_AVATAR_FACES.length) % AGENT_AVATAR_COLORS.length;
+  const shapeIndex =
+    Math.floor(hash / (AGENT_AVATAR_FACES.length * AGENT_AVATAR_COLORS.length)) %
+    AGENT_AVATAR_SHAPES.length;
   return {
-    avatarFace: AGENT_AVATAR_FACES[hash % AGENT_AVATAR_FACES.length] ?? "happy",
-    avatarColor:
-      AGENT_AVATAR_COLORS[
-        Math.floor(hash / AGENT_AVATAR_FACES.length) % AGENT_AVATAR_COLORS.length
-      ] ?? "blue",
+    avatarFace: AGENT_AVATAR_FACES[faceIndex] ?? "happy",
+    avatarColor: AGENT_AVATAR_COLORS[colorIndex] ?? "blue",
+    avatarShape: AGENT_AVATAR_SHAPES[shapeIndex] ?? "circle",
   };
 }
 

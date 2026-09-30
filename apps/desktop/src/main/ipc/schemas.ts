@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES, type ContextItem } from "../../shared/contracts";
+import {
+  AGENT_AVATAR_COLORS,
+  AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
+  type ContextItem,
+} from "../../shared/contracts";
 import { STARTUP_RENDERER_MILESTONES } from "../../shared/startup";
 import {
   MAX_RESTORE_DRAFT_CHARS,
@@ -905,6 +910,7 @@ const agentFields = {
   defaultWorkspaceId: z.string().min(1).max(128).nullable(),
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
+  avatarShape: z.enum(AGENT_AVATAR_SHAPES),
 };
 
 export const agentsCreateSchema = z
@@ -920,6 +926,7 @@ export const agentsCreateSchema = z
     defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
+    avatarShape: agentFields.avatarShape.optional(),
   })
   .strict();
 
@@ -933,6 +940,7 @@ export const agentsUpdateSchema = z
     defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
+    avatarShape: agentFields.avatarShape.optional(),
   })
   .strict();
 
@@ -972,6 +980,7 @@ const newGroupAgentSchema = z
     defaultWorkspaceId: agentFields.defaultWorkspaceId.optional(),
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
+    avatarShape: agentFields.avatarShape.optional(),
     templateId: z.string().min(1).max(128).optional(),
   })
   .strict();

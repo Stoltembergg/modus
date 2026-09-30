@@ -57,6 +57,8 @@ export type GroupRoomProps = {
   memberStates: GroupMemberStatesById;
   /** Opens a member's hidden room session (to answer "Waiting for you"). */
   onOpenMember(sessionId: string): void;
+  /** Opens a member's 1:1 chat from the Agents panel (explicit action). */
+  onOpenAgentChat?(agentId: string): void;
   /** "Choose folder" on a group without a Project: pick one and move the group. */
   onChooseFolder?: (() => void) | undefined;
   onRename(name: string): void;
@@ -67,6 +69,8 @@ export type GroupRoomProps = {
   onOpenFile?: ((path: string) => void) | undefined;
   /** "Add agent" in the room menu (the agent dialog; A3). */
   onAddAgent?: (() => void) | undefined;
+  /** Refresh groups after an agent is edited from the Agents panel. */
+  onAgentsChanged?(): void;
 };
 
 /** A member's avatar in the room (chips and message authors; A3). */
@@ -80,6 +84,7 @@ export function GroupRoom({
   defaultModelId,
   memberStates,
   onOpenMember,
+  onOpenAgentChat,
   onChooseFolder,
   onRename,
   onSetMode,
@@ -87,6 +92,7 @@ export function GroupRoom({
   onDelete,
   onOpenFile,
   onAddAgent,
+  onAgentsChanged,
 }: GroupRoomProps) {
   const [composerSeed, setComposerSeed] = useState<string | undefined>();
   // Titles come from the members' agents (current name): their room sessions are hidden.
@@ -136,13 +142,22 @@ export function GroupRoom({
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <GroupRoomHeader
           avatars={avatars}
+          defaultModelId={defaultModelId}
           group={group}
           members={members}
           memberStates={memberStates}
+          models={models}
           onDelete={onDelete}
           onAddAgent={onAddAgent}
+          {...(onAgentsChanged ? { onAgentsChanged } : {})}
           onManageMembers={() => setManaging(true)}
-          onOpenMember={onOpenMember}
+          onOpenAgentChat={(agentId) => {
+            if (onOpenAgentChat) onOpenAgentChat(agentId);
+            else {
+              const member = group.members.find((row) => row.agentId === agentId);
+              if (member) onOpenMember(member.sessionId);
+            }
+          }}
           onRename={onRename}
           onSetMode={onSetMode}
           onStop={() => {

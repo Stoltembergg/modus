@@ -14,8 +14,14 @@ const labels = new Map([
 ]);
 
 const avatars = new Map<string, WorkingMemberAvatar>([
-  ["s-lead", { agentId: "a-lead", face: "happy", color: "violet", archived: false }],
-  ["s-build", { agentId: "a-build", face: "wink", color: "sky", archived: false }],
+  [
+    "s-lead",
+    { agentId: "a-lead", face: "happy", color: "violet", shape: "circle", archived: false },
+  ],
+  [
+    "s-build",
+    { agentId: "a-build", face: "wink", color: "sky", shape: "squircle", archived: false },
+  ],
 ]);
 
 function live(partial: Partial<GroupLiveTurnSnapshot> = {}): GroupLiveTurnSnapshot {

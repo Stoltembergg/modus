@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AGENT_TEMPLATES, agentAvatarForId, getAgentTemplate } from "./agent-templates";
-import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES } from "./contracts";
+import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES, AGENT_AVATAR_SHAPES } from "./contracts";
 
 describe("agent templates", () => {
   it("ships the 7 v1 templates, Planner as the suggested Lead", () => {
@@ -35,18 +35,22 @@ describe("agent templates", () => {
     }
   });
 
-  it("derives a stable, valid avatar from an id and spreads ids over faces and colors", () => {
+  it("derives a stable, valid avatar from an id and spreads ids over faces, colors and shapes", () => {
     expect(agentAvatarForId("agent-1")).toEqual(agentAvatarForId("agent-1"));
     const faces = new Set<string>();
     const colors = new Set<string>();
-    for (let index = 0; index < 200; index += 1) {
+    const shapes = new Set<string>();
+    for (let index = 0; index < 400; index += 1) {
       const avatar = agentAvatarForId(`agent-${index}`);
       expect(AGENT_AVATAR_FACES).toContain(avatar.avatarFace);
       expect(AGENT_AVATAR_COLORS).toContain(avatar.avatarColor);
+      expect(AGENT_AVATAR_SHAPES).toContain(avatar.avatarShape);
       faces.add(avatar.avatarFace);
       colors.add(avatar.avatarColor);
+      shapes.add(avatar.avatarShape);
     }
     expect(faces.size).toBe(AGENT_AVATAR_FACES.length);
     expect(colors.size).toBe(AGENT_AVATAR_COLORS.length);
+    expect(shapes.size).toBe(AGENT_AVATAR_SHAPES.length);
   });
 });

@@ -31,8 +31,9 @@ export function GroupRow({
   selected?: boolean;
   expanded: boolean;
   renaming: boolean;
-  /** Opens the room; the rail icon then toggles the member list. */
+  /** Opens the room. */
   onSelect?: () => void;
+  /** Rail click: opens the room (member list lives in the room Agents panel). */
   onToggle(): void;
   onStartRename(): void;
   onCommitRename(name: string): void;
@@ -75,10 +76,9 @@ export function GroupRow({
       >
         {onSelect ? (
           <button
-            aria-expanded={expanded}
-            aria-label={expanded ? "Hide members" : "Show members"}
+            aria-label="Open group"
             className={cn(SB_RAIL, "pointer-events-auto relative text-current")}
-            onClick={onToggle}
+            onClick={onSelect}
             type="button"
           >
             <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
@@ -94,11 +94,7 @@ export function GroupRow({
           <GroupRenameInput initial={name} onCancel={onCancelRename} onCommit={onCommitRename} />
         ) : (
           <button
-            {...(onSelect
-              ? selected
-                ? { "aria-current": "page" as const }
-                : {}
-              : { "aria-expanded": expanded })}
+            {...(onSelect && selected ? { "aria-current": "page" as const } : {})}
             className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
             onClick={onSelect ?? onToggle}
             type="button"

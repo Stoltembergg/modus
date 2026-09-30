@@ -89,9 +89,11 @@ describe("agents store", () => {
 
   it("defaults the avatar from the id; an explicit or updated avatar is validated", () => {
     const agent = createAgent({ name: uid("Avatar") });
-    expect({ avatarFace: agent.avatarFace, avatarColor: agent.avatarColor }).toEqual(
-      agentAvatarForId(agent.id),
-    );
+    expect({
+      avatarFace: agent.avatarFace,
+      avatarColor: agent.avatarColor,
+      avatarShape: agent.avatarShape,
+    }).toEqual(agentAvatarForId(agent.id));
     expect(agent.templateId).toBeUndefined();
     const picked = createAgent({ name: uid("Pick"), avatarFace: "wink", avatarColor: "teal" });
     expect(picked).toMatchObject({ avatarFace: "wink", avatarColor: "teal" });
@@ -330,17 +332,20 @@ describe("migration: group members become agents", () => {
       ]);
       expect(rows.every((row) => row.role === "" && row.instructions === "")).toBe(true);
       const avatars = db
-        .prepare("select id, avatar_face, avatar_color, template_id from agents")
+        .prepare("select id, avatar_face, avatar_color, avatar_shape, template_id from agents")
         .all() as Array<{
         id: string;
         avatar_face: string;
         avatar_color: string;
+        avatar_shape: string;
         template_id: string | null;
       }>;
       for (const row of avatars) {
-        expect({ avatarFace: row.avatar_face, avatarColor: row.avatar_color }).toEqual(
-          agentAvatarForId(row.id),
-        );
+        expect({
+          avatarFace: row.avatar_face,
+          avatarColor: row.avatar_color,
+          avatarShape: row.avatar_shape,
+        }).toEqual(agentAvatarForId(row.id));
         expect(row.template_id).toBeNull();
       }
       expect((db.prepare("select count(*) as n from agents").get() as { n: number }).n).toBe(4);

@@ -51,6 +51,7 @@ const ANA: AgentInfo = {
   modelId: "m-1",
   avatarFace: "wink",
   avatarColor: "teal",
+  avatarShape: "squircle",
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -146,7 +147,8 @@ describe("AgentDialog", () => {
     expect(preview?.dataset.face).toBe("sleepy");
     expect(preview?.dataset.color).toBe("violet");
     expect(within(dialog).getAllByRole("button", { name: /^Face / })).toHaveLength(8);
-    expect(within(dialog).getAllByRole("button", { name: /^Color / })).toHaveLength(10);
+    expect(within(dialog).getAllByRole("button", { name: /^Shape / })).toHaveLength(8);
+    expect(within(dialog).getAllByRole("button", { name: /^Color / })).toHaveLength(22);
   });
 
   it("a custom agent needs a name (unique in the group) and a model", async () => {
@@ -284,6 +286,7 @@ describe("AgentDialog", () => {
       instructions: GENERATED.instructions,
       avatarFace: "wink",
       avatarColor: "pink",
+      avatarShape: "squircle",
     });
   });
 

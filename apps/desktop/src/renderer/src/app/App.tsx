@@ -1384,6 +1384,8 @@ export function App() {
                                 }}
                                 onOpenFile={openWorkspaceFile}
                                 onOpenMember={(sessionId) => void openGroupMember(sessionId)}
+                                onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
+                                onAgentsChanged={() => void refreshGroups()}
                                 onAddAgent={() => setAgentDialog({ groupId: activeGroup.id })}
                                 onRename={(name) =>
                                   void runGroupAction(() =>

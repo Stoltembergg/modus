@@ -4,7 +4,11 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { app } from "electron";
 import { agentAvatarForId } from "../../shared/agent-templates";
-import { AGENT_AVATAR_COLORS, AGENT_AVATAR_FACES } from "../../shared/contracts";
+import {
+  AGENT_AVATAR_COLORS,
+  AGENT_AVATAR_FACES,
+  AGENT_AVATAR_SHAPES,
+} from "../../shared/contracts";
 
 let database: DatabaseSync | undefined;
 
@@ -490,6 +494,7 @@ export function migrateDatabase(db: DatabaseSync): void {
   migrateGroupMembersToAgents(db);
   migrateMembershipByAgent(db);
   migrateAgentsToOneGroup(db);
+  migrateAgentAvatarsN5(db);
   // A3: an agent's 1:1 chat is a normal 'chat' session in its group's Project,
   // linked by agent_id (at most one per agent, made on first open). Deleting
   // the agent (with its group) only unlinks the row: the caller then runs the
@@ -514,13 +519,15 @@ const AGENTS_TABLE_BODY = `
       default_workspace_id text references workspaces(id) on delete set null,
       avatar_face text not null check (avatar_face in (${sqlList(AGENT_AVATAR_FACES)})),
       avatar_color text not null check (avatar_color in (${sqlList(AGENT_AVATAR_COLORS)})),
+      avatar_shape text not null check (avatar_shape in (${sqlList(AGENT_AVATAR_SHAPES)})),
       template_id text,
       created_at text not null,
       updated_at text not null,
       archived_at text,
       unique (group_id, name)
     `;
-const AGENT_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
+/** Columns copied during agents rebuilds (group_id is filled by assignAgentGroups). */
+const AGENT_COPY_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
   avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
 
 /**
@@ -551,10 +558,18 @@ function migrateAgentsToOneGroup(db: DatabaseSync): void {
     db.exec("begin");
     try {
       if (rebuild) {
-        db.exec(`create table agents_replacement (${AGENTS_TABLE_BODY});
-          insert into agents_replacement (${AGENT_COLUMNS}) select ${AGENT_COLUMNS} from agents;
-          drop table agents;
+        const hasShape = hasColumn(db, "agents", "avatar_shape");
+        db.exec(`create table agents_replacement (${AGENTS_TABLE_BODY});`);
+        if (hasShape) {
+          db.exec(`insert into agents_replacement (${AGENT_COPY_COLUMNS}, avatar_shape)
+            select ${AGENT_COPY_COLUMNS}, avatar_shape from agents;`);
+        } else {
+          db.exec(`insert into agents_replacement (${AGENT_COPY_COLUMNS}, avatar_shape)
+            select ${AGENT_COPY_COLUMNS}, 'circle' from agents;`);
+        }
+        db.exec(`drop table agents;
           alter table agents_replacement rename to agents;`);
+        if (!hasShape) assignDeterministicAvatarShapes(db);
       }
       assignAgentGroups(db);
       db.exec(`create unique index if not exists idx_agent_group_members_agent
@@ -569,6 +584,47 @@ function migrateAgentsToOneGroup(db: DatabaseSync): void {
     }
   } finally {
     if (rebuild && foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+/**
+ * N5: add `avatar_shape` and expand `avatar_color` CHECK. Rebuilds the agents
+ * table when the shape column is missing (SQLite cannot widen CHECK in place).
+ */
+function migrateAgentAvatarsN5(db: DatabaseSync): void {
+  if (hasColumn(db, "agents", "avatar_shape")) return;
+  const foreignKeys = (db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number })
+    .foreign_keys;
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("begin");
+    try {
+      db.exec(`create table agents_replacement (${AGENTS_TABLE_BODY});
+        insert into agents_replacement (
+          id, group_id, ${AGENT_COPY_COLUMNS}, avatar_shape
+        )
+        select id, group_id, ${AGENT_COPY_COLUMNS}, 'circle' from agents;
+        drop table agents;
+        alter table agents_replacement rename to agents;`);
+      assignDeterministicAvatarShapes(db);
+      if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+        throw new Error("agent avatar migration left dangling foreign keys");
+      }
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function assignDeterministicAvatarShapes(db: DatabaseSync): void {
+  const rows = db.prepare("select id from agents").all() as Array<{ id: string }>;
+  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  for (const row of rows) {
+    update.run(agentAvatarForId(row.id).avatarShape, row.id);
   }
 }
 
@@ -590,12 +646,19 @@ function assignAgentGroups(db: DatabaseSync): void {
     byAgent.set(row.agent_id, list);
   }
   const setGroup = db.prepare("update agents set group_id = ? where id = ?");
+  const hasShape = hasColumn(db, "agents", "avatar_shape");
   const copy = db.prepare(
-    `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
-       avatar_face, avatar_color, template_id, created_at, updated_at, archived_at)
-     select ?, ?, name, role, instructions, model_id, default_workspace_id,
-       avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
-     from agents where id = ?`,
+    hasShape
+      ? `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at)
+         select ?, ?, name, role, instructions, model_id, default_workspace_id,
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at
+         from agents where id = ?`
+      : `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at)
+         select ?, ?, name, role, instructions, model_id, default_workspace_id,
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+         from agents where id = ?`,
   );
   const repoint = db.prepare(
     "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
@@ -662,9 +725,13 @@ function backfillMemberAgents(db: DatabaseSync): void {
        order by m.joined_at, m.rowid`,
     )
     .all() as Array<{ group_id: string; session_id: string; title: string }>;
+  const hasShape = hasColumn(db, "agents", "avatar_shape");
   const insertAgent = db.prepare(
-    `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
-     values (?, ?, ?, ?, ?, ?)`,
+    hasShape
+      ? `insert into agents (id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`
+      : `insert into agents (id, name, avatar_face, avatar_color, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?)`,
   );
   const link = db.prepare(
     "update agent_group_members set agent_id = ? where group_id = ? and session_id = ?",
@@ -672,9 +739,10 @@ function backfillMemberAgents(db: DatabaseSync): void {
   const now = new Date().toISOString();
   for (const member of members) {
     const id = randomUUID();
-    const { avatarFace, avatarColor } = agentAvatarForId(id);
+    const { avatarFace, avatarColor, avatarShape } = agentAvatarForId(id);
     const name = uniqueAgentName(db, member.title || "Agent");
-    insertAgent.run(id, name, avatarFace, avatarColor, now, now);
+    if (hasShape) insertAgent.run(id, name, avatarFace, avatarColor, avatarShape, now, now);
+    else insertAgent.run(id, name, avatarFace, avatarColor, now, now);
     link.run(id, member.group_id, member.session_id);
   }
 }

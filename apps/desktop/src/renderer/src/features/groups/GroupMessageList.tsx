@@ -309,6 +309,7 @@ export function GroupMessageRow({
           color={avatar.color}
           face={avatar.face}
           seed={avatar.agentId}
+          shape={avatar.shape}
           size={20}
           state={avatar.archived ? "archived" : "idle"}
         />
