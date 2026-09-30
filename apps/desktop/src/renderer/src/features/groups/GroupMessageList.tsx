@@ -165,7 +165,7 @@ export function GroupMessageList({
       }}
       ref={scrollRef}
     >
-      <div className="mx-auto flex w-full max-w-[760px] flex-col gap-2 px-6 py-4">
+      <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-6 py-5">
         {loadingOlder ? (
           <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
         ) : null}
