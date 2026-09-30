@@ -1,4 +1,5 @@
 name: apply-p1a-panel
+# staging present: GroupTaskPanel + GroupRoom.test zlib.b64
 on:
   push:
     branches: [cursor/group-tasks-spring-p1a-cb29]
@@ -17,7 +18,7 @@ jobs:
       - name: Materialize staged files
         run: |
           python3 <<'PY'
-          import base64, zlib, hashlib, pathlib, json
+          import base64, zlib, hashlib, pathlib
           staging = pathlib.Path(".github/agent-staging/p1a-panel")
           files = [
             ("GroupTaskPanel.tsx.zlib.b64", "apps/desktop/src/renderer/src/features/groups/GroupTaskPanel.tsx", "1e3cdde73a190abe92231f5d49386c87ff6174ba"),
