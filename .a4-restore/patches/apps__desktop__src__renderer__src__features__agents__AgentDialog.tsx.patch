@@ -1,0 +1,242 @@
+diff --git a/apps/desktop/src/renderer/src/features/agents/AgentDialog.tsx b/apps/desktop/src/renderer/src/features/agents/AgentDialog.tsx
+index 3420df3..489cf0b 100644
+--- a/apps/desktop/src/renderer/src/features/agents/AgentDialog.tsx
++++ b/apps/desktop/src/renderer/src/features/agents/AgentDialog.tsx
+@@ -12,6 +12,7 @@ import {
+   type CreateGroupAgentInput,
+   type GenerateAgentProfileInput,
+   type GeneratedAgentProfile,
++  type NewGroupAgentInput,
+   type UpdateAgentInput,
+ } from "../../../../shared/contracts";
+ import { cn } from "../../lib/cn";
+@@ -28,21 +29,56 @@ const FIELD = cn(
+   "transition-colors placeholder:text-fg-faint focus:border-hairline-strong",
+ );
+ 
+-export type AgentDialogProps = {
++/**
++ * The create-group modal (A4): the agent is not created here but added to the
++ * modal's member list (the group and its agents are created in ONE
++ * `group:create`). No group exists yet, so names are checked against the
++ * modal's members and generation gets their roles.
++ */
++export type AgentDialogDraftTarget = {
++  /** Subtitle (the group being created). */
++  title: string;
++  /** Names already in the modal (unique per group, case-insensitive). */
++  takenNames: readonly string[];
++  /** Roles already chosen in the modal (generation complements them). */
++  roles: readonly string[];
++  /** Avatar seed for a fresh custom agent. */
++  seed: string;
++  /** Prefill ("Customize" on a template card carries its `templateId`). */
++  initial?: NewGroupAgentInput | undefined;
++  onAdd(member: NewGroupAgentInput): void;
++};
++
++type AgentDialogCommonProps = {
+   open: boolean;
+   onOpenChange(open: boolean): void;
++  models: readonly GroupDialogModel[];
++  defaultModelId?: string | undefined;
++  /** `agents:generate-profile`: resolves the Generalist fallback on a model failure. */
++  onGenerate(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
++};
++
++type AgentDialogGroupProps = {
+   /** The agent's group: its other members' names must differ (roles feed generation). */
+   group: AgentGroupWithMembers;
+   /** Edit this agent; without it the dialog creates a custom agent in `group`. */
+   agent?: AgentInfo | undefined;
+-  models: readonly GroupDialogModel[];
+-  defaultModelId?: string | undefined;
+   onCreate(input: CreateGroupAgentInput): Promise<void>;
+   onUpdate(input: UpdateAgentInput & { id: string }): Promise<void>;
+-  /** `agents:generate-profile`: resolves the Generalist fallback on a model failure. */
+-  onGenerate(input: GenerateAgentProfileInput): Promise<GeneratedAgentProfile>;
++  draft?: undefined;
++};
++
++type AgentDialogDraftProps = {
++  draft: AgentDialogDraftTarget;
++  group?: undefined;
++  agent?: undefined;
++  onCreate?: undefined;
++  onUpdate?: undefined;
+ };
+ 
++export type AgentDialogProps = AgentDialogCommonProps &
++  (AgentDialogGroupProps | AgentDialogDraftProps);
++
+ /**
+  * Create / edit an agent (A3): name, role, instructions, model, face and color
+  * with an animated 48 px preview. A custom agent (no template) needs a name and
+@@ -51,30 +87,38 @@ export type AgentDialogProps = {
+  * asks again. The profile is saved once, never regenerated per wake. Render
+  * it only while open: each open starts from a fresh draft.
+  */
+-export function AgentDialog({
+-  open,
+-  onOpenChange,
+-  group,
+-  agent,
+-  models,
+-  defaultModelId,
+-  onCreate,
+-  onUpdate,
+-  onGenerate,
+-}: AgentDialogProps) {
+-  const custom = !agent?.templateId;
++export function AgentDialog(props: AgentDialogProps) {
++  const {
++    open,
++    onOpenChange,
++    group,
++    agent,
++    models,
++    defaultModelId,
++    onGenerate,
++    draft: target,
++  } = props;
++  const initial = target?.initial;
++  const custom = !(agent?.templateId ?? initial?.templateId);
+   // Mounted per open (the parent renders it only while open): state starts from the agent.
+   const [initialAvatar] = useState(() =>
+     agent
+       ? { avatarFace: agent.avatarFace, avatarColor: agent.avatarColor }
+-      : agentAvatarForId(`${group.id}:${group.members.length}`),
++      : initial?.avatarFace && initial.avatarColor
++        ? { avatarFace: initial.avatarFace, avatarColor: initial.avatarColor }
++        : agentAvatarForId(target ? target.seed : `${group?.id}:${group?.members.length}`),
++  );
++  const [name, setName] = useState(agent?.name ?? initial?.name ?? "");
++  const [role, setRole] = useState(agent?.role ?? initial?.role ?? "");
++  const [instructions, setInstructions] = useState(
++    agent?.instructions ?? initial?.instructions ?? "",
+   );
+-  const [name, setName] = useState(agent?.name ?? "");
+-  const [role, setRole] = useState(agent?.role ?? "");
+-  const [instructions, setInstructions] = useState(agent?.instructions ?? "");
+   const [description, setDescription] = useState("");
+   const [modelId, setModelId] = useState(() => {
+     if (agent) return agent.modelId ?? "";
++    if (initial?.modelId !== undefined) return initial.modelId ?? "";
++    // A template starts on the app default model (null), like a picked card.
++    if (!custom) return "";
+     return models.some((model) => model.id === defaultModelId)
+       ? (defaultModelId ?? "")
+       : (models[0]?.id ?? "");
+@@ -89,8 +133,13 @@ export function AgentDialog({
+   const roleId = useId();
+ 
+   const takenNames = useMemo(
+-    () => group.members.filter((member) => member.agentId !== agent?.id).map((m) => m.name),
+-    [group.members, agent?.id],
++    () =>
++      target
++        ? target.takenNames
++        : (group?.members ?? [])
++            .filter((member) => member.agentId !== agent?.id)
++            .map((m) => m.name),
++    [target, group?.members, agent?.id],
+   );
+   const draft = { name, role, instructions, modelId };
+   const problem = agentDialogError(draft, {
+@@ -107,8 +156,10 @@ export function AgentDialog({
+     setBusy("generate");
+     setError(null);
+     try {
++      const roles = target?.roles.map((item) => item.trim()).filter(Boolean) ?? [];
+       const profile = await onGenerate({
+-        groupId: group.id,
++        ...(group ? { groupId: group.id } : {}),
++        ...(roles.length > 0 ? { roles } : {}),
+         modelId: modelId.trim(),
+         name: name.trim(),
+         ...(description.trim() ? { description: description.trim() } : {}),
+@@ -139,12 +190,26 @@ export function AgentDialog({
+       await generate();
+       return;
+     }
++    const trimmedModel = modelId.trim();
++    if (target) {
++      // A4: added to the modal's member list; the group:create call creates it.
++      target.onAdd({
++        ...(initial?.templateId ? { templateId: initial.templateId } : {}),
++        name: name.trim(),
++        role: role.trim(),
++        instructions,
++        ...(trimmedModel ? { modelId: trimmedModel } : {}),
++        avatarFace: face,
++        avatarColor: color,
++      });
++      onOpenChange(false);
++      return;
++    }
+     setBusy("save");
+     setError(null);
+     try {
+-      const trimmedModel = modelId.trim();
+-      if (agent) {
+-        await onUpdate({
++      if (agent && props.onUpdate) {
++        await props.onUpdate({
+           id: agent.id,
+           name: name.trim(),
+           role: role.trim(),
+@@ -153,8 +218,8 @@ export function AgentDialog({
+           avatarFace: face,
+           avatarColor: color,
+         });
+-      } else {
+-        await onCreate({
++      } else if (group && props.onCreate) {
++        await props.onCreate({
+           groupId: group.id,
+           name: name.trim(),
+           role: role.trim(),
+@@ -177,13 +242,19 @@ export function AgentDialog({
+     ? busy === "save"
+       ? "Saving…"
+       : "Save"
+-    : busy === "save"
+-      ? "Creating…"
+-      : busy === "generate"
++    : target
++      ? busy === "generate"
+         ? "Generating…"
+         : needsProfileGeneration(draft, custom)
+           ? "Generate"
+-          : "Create";
++          : "Add"
++      : busy === "save"
++        ? "Creating…"
++        : busy === "generate"
++          ? "Generating…"
++          : needsProfileGeneration(draft, custom)
++            ? "Generate"
++            : "Create";
+ 
+   return (
+     <Dialog.Root onOpenChange={onOpenChange} open={open}>
+@@ -216,16 +287,16 @@ export function AgentDialog({
+               <AgentAvatar
+                 color={color}
+                 face={face}
+-                seed={agent?.id ?? group.id}
++                seed={agent?.id ?? group?.id ?? target?.seed ?? "agent"}
+                 size={48}
+                 state={busy === "generate" ? "working" : "idle"}
+               />
+               <div className="min-w-0">
+                 <Dialog.Title className="font-medium text-fg text-sm">
+-                  {agent ? "Edit agent" : "New agent"}
++                  {agent ? "Edit agent" : initial?.templateId ? "Customize agent" : "New agent"}
+                 </Dialog.Title>
+                 <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
+-                  {group.name}
++                  {group?.name ?? target?.title}
+                 </Dialog.Description>
+               </div>
+             </div>
