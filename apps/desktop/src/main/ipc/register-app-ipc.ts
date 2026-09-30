@@ -1404,10 +1404,13 @@ export function registerAppIpc({
           modelId: input.modelId,
           name: input.name,
           description: input.description,
-          otherRoles: listAgentGroupMembers(input.groupId)
-            .filter((member) => member.agentId !== input.agentId)
-            .map((member) => member.role?.trim() || member.agentRole.trim())
-            .filter(Boolean),
+          otherRoles: [
+            ...(input.groupId ? listAgentGroupMembers(input.groupId) : [])
+              .filter((member) => member.agentId !== input.agentId)
+              .map((member) => member.role?.trim() || member.agentRole.trim())
+              .filter(Boolean),
+            ...(input.roles ?? []),
+          ],
         },
         (request) => completeWithModel({ ...request, timeoutMs: AGENT_PROFILE_TIMEOUT_MS }),
       ),

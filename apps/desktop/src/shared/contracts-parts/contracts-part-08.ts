@@ -112,10 +112,13 @@ export type CreateGroupAgentInput = NewGroupAgentInput & { groupId: string };
  * `agents:generate-profile` (A3): one LLM call to `modelId` for a custom
  * agent's `{ role, instructions }`. The other members' roles of `groupId`
  * (minus `agentId`, when regenerating an existing agent) are sent so the new
- * role complements them.
+ * role complements them. The create-group modal (A4) has no group yet: it
+ * omits `groupId` and sends the roles already chosen in the modal as `roles`.
  */
 export type GenerateAgentProfileInput = {
-  groupId: string;
+  groupId?: string;
+  /** Roles already chosen for the group being created (A4), added to the group's. */
+  roles?: string[];
   modelId: string;
   name: string;
   /** "What should it help with?" (optional, short). */

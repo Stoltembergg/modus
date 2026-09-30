@@ -286,4 +286,31 @@ describe("agents IPC", () => {
       unregister();
     }
   });
+
+  it("agents:generate-profile without a group (A4 create modal) forwards the chosen roles", async () => {
+    const service = mockService();
+    const handlers = await register(service);
+    const { trusted, unregister } = await trustedEvent();
+    try {
+      await handlers.get("agents:generate-profile")?.(trusted, {
+        modelId: MODEL,
+        name: "Cy",
+        roles: ["Lead", " Builder ", ""],
+      });
+      expect(service.generateAgentProfile).toHaveBeenCalledWith({
+        modelId: MODEL,
+        name: "Cy",
+        roles: ["Lead", "Builder"],
+      });
+      expect(() =>
+        handlers.get("agents:generate-profile")?.(trusted, {
+          modelId: MODEL,
+          name: "Cy",
+          roles: ["x".repeat(81)],
+        }),
+      ).toThrow();
+    } finally {
+      unregister();
+    }
+  });
 });

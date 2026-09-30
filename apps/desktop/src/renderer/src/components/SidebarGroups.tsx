@@ -36,6 +36,7 @@ import {
 } from "../features/groups/groupSidebarModel";
 import { MemberName } from "../features/groups/MemberName";
 import { type MemberLabel, memberLabels } from "../features/groups/memberLabels";
+import { NewGroupModal, type NewGroupServices } from "../features/groups/NewGroupModal";
 import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { ICON, ICON_STROKE } from "../lib/uiDensity";
@@ -49,6 +50,15 @@ const SB_ICON = ICON.lg;
 const SB_STROKE = ICON_STROKE.lg;
 const SB_ACTION = ICON.sm;
 const SB_ACTION_STROKE = ICON_STROKE.sm;
+
+/** Without app services: no agents to copy, no folder picker, generation falls back. */
+const NO_NEW_GROUP_SERVICES: NewGroupServices = {
+  listAgents: async () => [],
+  addFolder: async () => null,
+  generateProfile: async () => {
+    throw new Error("Profile generation is not available here.");
+  },
+};
 
 export type SidebarGroupsProps = {
   groups: readonly AgentGroupWithMembers[];
@@ -80,6 +90,8 @@ export type SidebarGroupsProps = {
   canCreateGroup?: boolean;
   onSelectSession(session: AgentSessionInfo): void;
   onCreateGroup(input: CreateAgentGroupInput): Promise<void>;
+  /** The create modal's app services (agents list, Add folder…, profile generation). */
+  newGroupServices?: NewGroupServices | undefined;
   onRenameGroup(groupId: string, name: string): void;
   /** Apply "Manage members" (atomic; rejects so the dialog can show the error). */
   onUpdateMembers(groupId: string, change: GroupMembersChange): Promise<void>;
@@ -121,6 +133,7 @@ export function SidebarGroups({
   canCreateGroup = true,
   onSelectSession,
   onCreateGroup,
+  newGroupServices = NO_NEW_GROUP_SERVICES,
   onRenameGroup,
   onUpdateMembers,
   onDeleteGroup,
@@ -228,15 +241,19 @@ export function SidebarGroups({
         <span className="min-w-0 flex-1 truncate">New group</span>
       </button>
 
-      <CreateGroupDialog
-        defaultModelId={defaultModelId}
-        defaultWorkspaceId={defaultWorkspaceId}
-        models={models}
-        onCreate={onCreateGroup}
-        onOpenChange={setDialogOpen}
-        open={dialogOpen}
-        workspaces={workspaces}
-      />
+      {dialogOpen ? (
+        <NewGroupModal
+          defaultModelId={defaultModelId}
+          defaultWorkspaceId={defaultWorkspaceId}
+          groups={groups}
+          models={models}
+          onCreate={onCreateGroup}
+          onOpenChange={setDialogOpen}
+          open
+          services={newGroupServices}
+          workspaces={workspaces}
+        />
+      ) : null}
       {managingGroup ? (
         <CreateGroupDialog
           defaultModelId={defaultModelId}
