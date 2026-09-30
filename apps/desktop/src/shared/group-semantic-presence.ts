@@ -114,9 +114,13 @@ export function buildGroupSemanticPresence(
         break;
       case "thinking.completed":
         break;
-      case "message.delta":
       case "message.started":
-        if (event.type === "message.started" && event.role !== "assistant") break;
+        // Assistant message open ≠ streamed text yet. Keep thinking/tool labels
+        // until the first `message.delta` so the room does not stick on
+        // "Escrevendo…" / "Writing…" with an empty bubble.
+        if (event.role !== "assistant") break;
+        break;
+      case "message.delta":
         state = "writing";
         activity = "Writing";
         break;
