@@ -28,5 +28,5 @@ jobs:
             echo "nothing to commit"
             exit 0
           fi
-          git commit -m "feat(groups): natural room UX + no sticky Waiting for you"
+          git commit -m "feat(groups): natural room UX — chrome header + message.delta rows"
           git push origin HEAD:cursor/natural-groups-room-ux
