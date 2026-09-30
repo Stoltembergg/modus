@@ -12,6 +12,8 @@ describe("group-prompt-kit", () => {
     expect(classifyGroupSystemStatus("Blocked — needs approval")?.variant).toBe("error");
     expect(classifyGroupSystemStatus("Worktree ready: `feat/x`")?.show).toBe("hide");
     expect(classifyGroupSystemStatus("Builder is archived")?.show).toBe("faint");
+    expect(classifyGroupSystemStatus("Ready for you")?.show).toBe("hide");
+    expect(classifyGroupSystemStatus("Queued…")?.show).toBe("hide");
   });
 
   it("builds Steps labels from tools", () => {
