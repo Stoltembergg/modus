@@ -3,11 +3,15 @@
     "wanted_blob": "7a5b8d8fede4e0e79686a00298a8a31972cd1e03",
     "parts": [
       "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.000",
-      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.001"
+      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.001",
+      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.002",
+      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.003",
+      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.004",
+      "docs/_tmp/prompt-kit/GroupRoom.test.tsx.zlib.b64.005"
     ],
     "size": 34299,
     "b64_size": 10264,
-    "part_count": 2
+    "part_count": 6
   },
   "apps/desktop/src/main/ipc/schemas.ts": {
     "wanted_blob": "e6d4e1280a845aaef5991bcd2087e751e1a89acf",
@@ -43,10 +47,14 @@
     "wanted_blob": "dc48f2a0f5237140142fba212eab83bf5ae085df",
     "parts": [
       "docs/_tmp/prompt-kit/database.ts.zlib.b64.000",
-      "docs/_tmp/prompt-kit/database.ts.zlib.b64.001"
+      "docs/_tmp/prompt-kit/database.ts.zlib.b64.001",
+      "docs/_tmp/prompt-kit/database.ts.zlib.b64.002",
+      "docs/_tmp/prompt-kit/database.ts.zlib.b64.003",
+      "docs/_tmp/prompt-kit/database.ts.zlib.b64.004",
+      "docs/_tmp/prompt-kit/database.ts.zlib.b64.005"
     ],
     "size": 35521,
     "b64_size": 10260,
-    "part_count": 2
+    "part_count": 6
   }
 }
