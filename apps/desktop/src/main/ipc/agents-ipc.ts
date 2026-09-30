@@ -134,8 +134,10 @@ export function registerAgentsIpcHandlers(
       IPC_CHANNELS.agentsGenerateProfile,
     );
     requireAgentModel(service.isModelAvailable, { modelId: parsed.modelId });
+    const roles = parsed.roles?.map((role) => role.trim()).filter(Boolean);
     return service.generateAgentProfile({
-      groupId: parsed.groupId,
+      ...(parsed.groupId ? { groupId: parsed.groupId } : {}),
+      ...(roles?.length ? { roles } : {}),
       modelId: parsed.modelId,
       name: parsed.name,
       ...(parsed.description ? { description: parsed.description } : {}),

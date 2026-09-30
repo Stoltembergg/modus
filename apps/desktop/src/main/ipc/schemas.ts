@@ -940,9 +940,14 @@ export const agentsArchiveSchema = z.object({ id: agentIdString, archived: z.boo
 
 export const agentsIdSchema = z.object({ id: agentIdString }).strict();
 
+/** Cap on `roles` (the modal holds at most a few more than the 10-member limit). */
+const MAX_PROFILE_ROLES = 32;
+
 export const agentsGenerateProfileSchema = z
   .object({
-    groupId: agentIdString,
+    // Absent in the create-group modal (A4): no group yet, `roles` carries the chosen ones.
+    groupId: agentIdString.optional(),
+    roles: z.array(agentFields.role).max(MAX_PROFILE_ROLES).optional(),
     modelId: z.string().trim().min(1).max(256),
     name: agentFields.name,
     description: z.string().trim().max(500).optional(),

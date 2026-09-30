@@ -42,6 +42,7 @@ import {
   projectGroupNames,
   removeProjectGroupsWarning,
 } from "../features/groups/groupSidebarModel";
+import type { NewGroupServices } from "../features/groups/NewGroupModal";
 import type { GroupMemberStatesById } from "../features/groups/useWorkingGroups";
 import { cn } from "../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../lib/resizeGesture";
@@ -121,6 +122,8 @@ type SidebarProps = {
   /** Open a group's room (clicking the group name). */
   onSelectGroup?(group: AgentGroupWithMembers): void;
   onCreateGroup?(input: CreateAgentGroupInput): Promise<void>;
+  /** The create-group modal's app services (A4). */
+  newGroupServices?: NewGroupServices | undefined;
   onRenameGroup?(groupId: string, name: string): void;
   /** "Manage members" (atomic); rejects so the dialog can show the error. */
   onUpdateGroupMembers?(groupId: string, change: GroupMembersChange): Promise<void>;
@@ -177,6 +180,7 @@ export function Sidebar({
   activeGroupId,
   onSelectGroup,
   onCreateGroup,
+  newGroupServices,
   onRenameGroup,
   onUpdateGroupMembers,
   onDeleteGroup,
@@ -383,6 +387,7 @@ export function Sidebar({
                   defaultWorkspaceId={activeWorkspaceId}
                   groups={groups}
                   onCreateGroup={onCreateGroup}
+                  newGroupServices={newGroupServices}
                   onDeleteGroup={(id) => onDeleteGroup?.(id)}
                   onRemoveMember={(groupId, sessionId) => onRemoveGroupMember?.(groupId, sessionId)}
                   onRenameGroup={(id, name) => onRenameGroup?.(id, name)}
