@@ -1,0 +1,73 @@
+name: apply-ephemeral-runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: cursor/group-room-ephemeral-runtime-bbfe
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble zlib payloads from staged parts
+        shell: bash
+        run: |
+          set -euo pipefail
+          MANIFEST="internal/_push/ephemeral/manifest.json"
+          if [[ ! -f "$MANIFEST" ]]; then
+            echo "Missing $MANIFEST"
+            exit 1
+          fi
+          python3 << 'PY'
+          import base64, hashlib, json, pathlib, zlib, sys
+          root = pathlib.Path(".")
+          manifest = json.loads((root / "internal/_push/ephemeral/manifest.json").read_text())
+          for entry in manifest:
+              path = entry["path"]
+              expect_sha = entry["sha256"]
+              expect_bytes = entry.get("bytes")
+              parts = entry["parts"]
+              b64 = "".join((root / p).read_text() for p in parts)
+              raw = zlib.decompress(base64.b64decode(b64))
+              if expect_bytes is not None and len(raw) != expect_bytes:
+                  raise SystemExit(f"byte length mismatch for {path}: got {len(raw)} expected {expect_bytes}")
+              got = hashlib.sha256(raw).hexdigest()
+              if got != expect_sha:
+                  raise SystemExit(f"sha256 mismatch for {path}: got {got} expected {expect_sha}")
+              out = root / path
+              out.parent.mkdir(parents=True, exist_ok=True)
+              out.write_bytes(raw)
+              print(f"OK {path} ({len(raw)} bytes, sha256={got})")
+          PY
+
+      - name: Remove staging directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf internal/_push/ephemeral
+          # clean empty parents if any
+          rmdir internal/_push 2>/dev/null || true
+          rmdir internal 2>/dev/null || true
+          true
+
+      - name: Commit and push applied payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git commit -m "feat(groups): apply ephemeral runtime payloads"
+          git push origin HEAD:cursor/group-room-ephemeral-runtime-bbfe
