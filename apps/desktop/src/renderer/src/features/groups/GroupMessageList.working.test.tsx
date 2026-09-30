@@ -1,7 +1,11 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GroupMemberStates, GroupRuntimeEvent } from "../../../../shared/contracts";
+import type {
+  AgentEvent,
+  GroupMemberStates,
+  GroupRuntimeEvent,
+} from "../../../../shared/contracts";
 import { GroupMessageList } from "./GroupMessageList";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
@@ -31,7 +35,10 @@ function states(entry: Partial<GroupMemberStates>): GroupMemberStatesById {
   ]);
 }
 
+let agentListeners: Array<(event: AgentEvent) => void>;
+
 beforeEach(() => {
+  agentListeners = [];
   Object.assign(window, {
     modus: {
       group: {
@@ -50,7 +57,12 @@ beforeEach(() => {
       },
       agent: {
         listEvents: vi.fn(async () => []),
-        onEvent: vi.fn(() => () => undefined),
+        onEvent: vi.fn((listener: (event: AgentEvent) => void) => {
+          agentListeners.push(listener);
+          return () => {
+            agentListeners = agentListeners.filter((item) => item !== listener);
+          };
+        }),
       },
     },
   });
@@ -76,6 +88,38 @@ describe("GroupMessageList working strip", () => {
     expect(row.dataset.phase).toBe("Thinking");
     expect(row.textContent).toContain("Planner");
     expect(row.textContent).toContain("Thinking");
+  });
+
+  it("streams agent events into the live turn in the room", async () => {
+    render(
+      <GroupMessageList
+        avatars={avatars}
+        cwd="/repo"
+        groupId="g-1"
+        memberStates={states({ runningSessionIds: ["s-lead"] })}
+        members={members}
+        onOpenFile={undefined}
+      />,
+    );
+    await screen.findByTestId("group-working-status");
+    act(() => {
+      for (const listener of agentListeners) {
+        listener({
+          type: "thinking.delta",
+          sessionId: "s-lead",
+          messageId: "m-think",
+          delta: "Sketching the handoff",
+        });
+        listener({
+          type: "tool.started",
+          sessionId: "s-lead",
+          toolCallId: "t1",
+          toolName: "read",
+        });
+      }
+    });
+    expect((await screen.findByTestId("group-live-thought")).textContent).toContain("Sketching");
+    expect(screen.getByTestId("group-live-tools").textContent).toContain("Reading");
   });
 
   it("shows Queued for members waiting on a wake slot", async () => {
