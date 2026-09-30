@@ -1,6 +1,10 @@
-import { IconArrowUp, IconClockPause } from "@tabler/icons-react";
+import { IconArrowUp, IconClockPause, IconPaperclip } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { UpdateState } from "../../../../shared/contracts";
+import type {
+  GroupMessageAttachment,
+  GroupMessageContextItem,
+  UpdateState,
+} from "../../../../shared/contracts";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
@@ -17,6 +21,8 @@ import {
 } from "./groupMentions";
 import { MemberName } from "./MemberName";
 import { memberLabels } from "./memberLabels";
+import { AttachmentChip } from "./prompt-kit/PromptKit";
+import { MAX_GROUP_ATTACHMENTS, useGroupComposerAttachments } from "./useGroupComposerAttachments";
 import { useGroupMemberStates } from "./useWorkingGroups";
 
 /** Same rule as the main process: new group turns wait while an update restarts the app. */
@@ -54,10 +60,18 @@ export function useUpdatePending(api: UpdateApi | undefined): boolean {
  * suggestions by title; a title shared by several members inserts
  * `@<session id>` (the list still shows the title). Pending ask_user questions
  * for waiting members of this room render above the field (group-scoped).
+ * Native multi-file upload chips reuse Modus attachments / context items.
  */
 export type GroupComposerReply = {
   messageId: string;
   preview: string;
+};
+
+export type GroupComposerSendPayload = {
+  body: string;
+  replyToMessageId?: string;
+  attachments?: GroupMessageAttachment[];
+  contextItems?: GroupMessageContextItem[];
 };
 
 export function GroupComposer({
@@ -72,7 +86,7 @@ export function GroupComposer({
 }: {
   members: readonly MentionMember[];
   updatePending: boolean;
-  onSend(body: string, replyToMessageId?: string): Promise<void>;
+  onSend(payload: GroupComposerSendPayload): Promise<void>;
   /** Empty room: show the guided Outcome + first-owner kickoff (P2). */
   showKickoff?: boolean;
   /** External insert (e.g. clickable Handoff card) — applied once then cleared. */
@@ -88,10 +102,22 @@ export function GroupComposer({
   const [highlight, setHighlight] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [dragOver, setDragOver] = useState(false);
   const [kickoffOutcome, setKickoffOutcome] = useState("");
   const [kickoffOwner, setKickoffOwner] = useState("");
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const memberStates = useGroupMemberStates();
+  const {
+    addFiles,
+    attachments,
+    clear,
+    formatSize,
+    hasReady,
+    remove,
+    toContextItems,
+    toPromptAttachments,
+  } = useGroupComposerAttachments();
   const labels = useMemo(() => memberLabels(members), [members]);
   const waitingSessionIds = useMemo(() => {
     const memberIds = new Set(members.map((member) => member.sessionId));
@@ -127,6 +153,7 @@ export function GroupComposer({
     query && query.start !== dismissedAt ? mentionSuggestions(query.query, members) : [];
   const open = suggestions.length > 0;
   const active = Math.min(highlight, Math.max(0, suggestions.length - 1));
+  const canSend = Boolean(value.trim() || hasReady) && !sending;
 
   function pick(suggestion: MentionSuggestion): void {
     if (!query) return;
@@ -144,13 +171,21 @@ export function GroupComposer({
 
   async function send(): Promise<void> {
     const body = value.trim();
-    if (!body || sending) return;
+    if ((!body && !hasReady) || sending) return;
     setSending(true);
     setError(undefined);
     try {
-      await onSend(body, replyTo?.messageId);
+      const imageAttachments = toPromptAttachments();
+      const contextItems = toContextItems();
+      await onSend({
+        body,
+        ...(replyTo?.messageId ? { replyToMessageId: replyTo.messageId } : {}),
+        ...(imageAttachments.length > 0 ? { attachments: imageAttachments } : {}),
+        ...(contextItems.length > 0 ? { contextItems } : {}),
+      });
       setValue("");
       setCaret(0);
+      clear();
       onClearReply?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -193,7 +228,7 @@ export function GroupComposer({
         </div>
       ) : null}
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
-      {showKickoff && !value.trim() ? (
+      {showKickoff && !value.trim() && attachments.length === 0 ? (
         <div
           className="mb-2 space-y-2 rounded-xl border border-hairline bg-elevated/80 px-3 py-2.5"
           data-testid="group-kickoff"
@@ -251,7 +286,28 @@ export function GroupComposer({
           </button>
         </div>
       ) : null}
-      <div className="relative rounded-xl border border-composer-border bg-elevated">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach via the paperclip button or paste. */}
+      <div
+        className={cn(
+          "relative rounded-xl border border-composer-border bg-elevated transition-colors",
+          dragOver && "border-accent/60 bg-accent/5",
+        )}
+        data-testid="group-composer-dropzone"
+        onDragEnter={(event) => {
+          event.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+          setDragOver(false);
+        }}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          setDragOver(false);
+          void addFiles(event.dataTransfer.files);
+        }}
+      >
         {open ? (
           <div
             className="absolute bottom-full left-2 mb-1 max-h-56 min-w-[220px] overflow-auto popup-chrome p-1"
@@ -286,9 +342,27 @@ export function GroupComposer({
             ))}
           </div>
         ) : null}
+        {attachments.length > 0 ? (
+          <div
+            className="flex flex-wrap gap-1.5 px-3 pt-3"
+            data-testid="group-composer-attachments"
+          >
+            {attachments.map((item) => (
+              <AttachmentChip
+                error={item.error}
+                key={item.id}
+                mimeType={item.mimeType}
+                name={item.name}
+                onRemove={() => remove(item.id)}
+                previewUrl={item.dataUrl}
+                sizeLabel={formatSize(item.size)}
+              />
+            ))}
+          </div>
+        ) : null}
         <textarea
           aria-label="Message the group"
-          className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 pr-12 text-fg text-sm outline-none placeholder:text-fg-faint"
+          className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 pr-20 text-fg text-sm outline-none placeholder:text-fg-faint"
           onChange={(event) => {
             setValue(event.currentTarget.value);
             setCaret(event.currentTarget.selectionStart);
@@ -320,16 +394,45 @@ export function GroupComposer({
               void send();
             }
           }}
+          onPaste={(event) => {
+            const files = event.clipboardData?.files;
+            if (files && files.length > 0) {
+              event.preventDefault();
+              void addFiles(files);
+            }
+          }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-          placeholder="Message the group, @ to mention a member"
+          placeholder="Message the group, @ to mention, attach files"
           ref={inputRef}
           rows={1}
           value={value}
         />
+        <input
+          accept="image/png,image/jpeg,image/gif,image/webp,*/*"
+          className="hidden"
+          data-testid="group-composer-file-input"
+          multiple
+          onChange={(event) => {
+            if (event.currentTarget.files) void addFiles(event.currentTarget.files);
+            event.currentTarget.value = "";
+          }}
+          ref={fileInputRef}
+          type="file"
+        />
+        <button
+          aria-label="Attach files"
+          className="absolute right-10 bottom-2 flex size-7 items-center justify-center rounded-full text-fg-faint transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+          data-testid="group-composer-attach"
+          disabled={attachments.length >= MAX_GROUP_ATTACHMENTS || sending}
+          onClick={() => fileInputRef.current?.click()}
+          type="button"
+        >
+          <IconPaperclip size={ICON.sm} stroke={ICON_STROKE.sm} />
+        </button>
         <button
           aria-label="Send"
           className="absolute right-2 bottom-2 flex size-7 items-center justify-center rounded-full bg-accent text-white transition-opacity disabled:opacity-40"
-          disabled={!value.trim() || sending}
+          disabled={!canSend}
           onClick={() => void send()}
           type="button"
         >

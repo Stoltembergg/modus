@@ -239,11 +239,13 @@ export function GroupRoom({
             members={members}
             onClearReply={() => setReplyTo(undefined)}
             onSeedConsumed={() => setComposerSeed(undefined)}
-            onSend={async (body, replyToMessageId) => {
+            onSend={async (payload) => {
               await window.modus.group.postMessage({
                 groupId: group.id,
-                body,
-                ...(replyToMessageId ? { replyToMessageId } : {}),
+                body: payload.body,
+                ...(payload.replyToMessageId ? { replyToMessageId: payload.replyToMessageId } : {}),
+                ...(payload.attachments ? { attachments: payload.attachments } : {}),
+                ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
               });
             }}
             replyTo={replyTo}

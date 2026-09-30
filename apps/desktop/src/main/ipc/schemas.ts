@@ -1056,11 +1056,25 @@ export const MAX_GROUP_MESSAGE_BODY = 20_000;
 export const groupPostMessageSchema = z
   .object({
     groupId: groupIdString,
-    body: z.string().trim().min(1).max(MAX_GROUP_MESSAGE_BODY),
+    body: z.string().max(MAX_GROUP_MESSAGE_BODY),
     mentions: z.array(groupSessionIdString).max(MAX_GROUP_MEMBERS).optional(),
     replyToMessageId: groupIdString.optional(),
+    attachments: z.array(promptImageAttachmentSchema).max(6).optional(),
+    contextItems: z
+      .array(z.unknown())
+      .max(20)
+      .transform((items) => items as ContextItem[])
+      .optional(),
   })
-  .strict();
+  .strict()
+  .transform((value) => ({ ...value, body: value.body.trim() }))
+  .refine(
+    (value) =>
+      value.body.length > 0 ||
+      (value.attachments?.length ?? 0) > 0 ||
+      (value.contextItems?.length ?? 0) > 0,
+    { message: "Group message needs text or attachments." },
+  );
 
 const groupMessageCursorSchema = z
   .object({ createdAt: nonEmptyString.max(64), id: groupIdString })

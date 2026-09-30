@@ -10,6 +10,11 @@ import {
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
 import {
+  buildGroupStepsLabels,
+  buildSafeChainOfThought,
+  classifyGroupSystemStatus,
+} from "../../../../shared/group-prompt-kit";
+import {
   collabStatusTone,
   formatNaturalCollabStatus,
   type RoomMessageTone,
@@ -24,6 +29,15 @@ import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./gro
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import type { MemberLabel } from "./memberLabels";
+import {
+  AttachmentChip,
+  PromptChainOfThought,
+  PromptMessage,
+  PromptMessageBody,
+  PromptMessageIdentity,
+  PromptSteps,
+  PromptSystemMessage,
+} from "./prompt-kit/PromptKit";
 
 /** Avatar fields shared by room messages and in-flight rows. */
 export type WorkingMemberAvatar = {
@@ -177,6 +191,34 @@ function CollabStatusLine({
   );
 }
 
+function MessageAttachments({ message }: { message: GroupMessage }) {
+  const images = message.attachments ?? [];
+  const files = message.contextItems ?? [];
+  if (images.length === 0 && files.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5" data-testid="group-message-attachments">
+      {images.map((attachment, index) => (
+        <AttachmentChip
+          key={`img-${attachment.name ?? index}-${attachment.data.slice(-12)}`}
+          mimeType={attachment.mimeType}
+          name={attachment.name ?? `image-${index + 1}`}
+          previewUrl={`data:${attachment.mimeType};base64,${attachment.data}`}
+        />
+      ))}
+      {files.map((item) => {
+        const name = item.path.split(/[/\\]/).pop() ?? item.path;
+        return (
+          <AttachmentChip
+            key={`${item.type}:${item.path}`}
+            mimeType={item.type === "folder" ? "inode/directory" : "application/octet-stream"}
+            name={name}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 export function GroupMessageRow({
   avatar,
   message,
@@ -224,21 +266,42 @@ export function GroupMessageRow({
     const waiting = isWaitingStatus(message.body);
     const nudge = isNoNextOwnerStatus(message.body);
     const collab = parseGroupCollabStatusLine(message.body);
-    const tone: RoomMessageTone =
-      activeWaiting || nudge || collab?.kind === "ready"
-        ? "ask"
-        : collab?.kind === "blocked"
-          ? "block"
-          : "normal";
     const display = collab ? formatNaturalCollabStatus(collab) : message.body;
+    const classified = classifyGroupSystemStatus(display);
+    if (classified?.show === "hide") return null;
+    if (classified?.show === "system" || activeWaiting || nudge) {
+      const variant =
+        activeWaiting || nudge
+          ? "action"
+          : (classified?.variant ?? (collab?.kind === "blocked" ? "error" : "action"));
+      return (
+        <PromptSystemMessage
+          {...(activeWaiting || nudge ? { className: "text-amber-400" } : {})}
+          data-collab={collab?.kind}
+          data-kind="status"
+          data-testid="group-message"
+          data-waiting-active={activeWaiting || undefined}
+          data-waiting-stale={waiting && !activeWaiting ? true : undefined}
+          variant={variant}
+        >
+          {author && message.authorKind === "agent" ? (
+            <span className="text-fg-subtle">
+              <MemberName label={author} /> ·{" "}
+            </span>
+          ) : null}
+          <span className={activeWaiting || nudge ? "text-amber-400" : undefined}>
+            <StatusText members={members} text={display} />
+          </span>
+        </PromptSystemMessage>
+      );
+    }
     return (
       <div
-        className={cn("text-center text-2xs text-fg-faint", toneClass(tone))}
+        className="text-center text-2xs text-fg-faint"
         data-collab={collab?.kind}
         data-kind="status"
         data-testid="group-message"
-        data-tone={tone}
-        data-waiting-active={activeWaiting || undefined}
+        data-tone="temporary"
         data-waiting-stale={waiting && !activeWaiting ? true : undefined}
       >
         {author && message.authorKind === "agent" ? (
@@ -246,20 +309,14 @@ export function GroupMessageRow({
             <MemberName label={author} /> ·{" "}
           </span>
         ) : null}
-        <span
-          className={activeWaiting || nudge ? "text-amber-400" : undefined}
-          data-nudge={nudge || undefined}
-          data-waiting={activeWaiting || undefined}
-        >
-          <StatusText members={members} text={display} />
-        </span>
+        <StatusText members={members} text={display} />
       </div>
     );
   }
   if (message.authorKind === "user") {
     return (
       <div className="group/msg flex flex-col gap-0.5" data-tone="normal">
-        <div className="flex gap-2.5" data-kind="user" data-testid="group-message">
+        <PromptMessage data-kind="user" data-testid="group-message">
           <span
             aria-hidden
             className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-fg-muted text-2xs"
@@ -267,16 +324,16 @@ export function GroupMessageRow({
           >
             Y
           </span>
-          <div className="min-w-0 flex-1 space-y-0.5">
-            <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-fg-muted text-xs">
-              <span>You</span>
-              <span className="font-normal text-fg-faint">{role?.trim() || "Human"}</span>
-            </div>
-            <div className="whitespace-pre-wrap text-fg text-sm">
-              <MentionText members={members} text={message.body} />
-            </div>
-          </div>
-        </div>
+          <PromptMessageBody>
+            <PromptMessageIdentity name="You" role={role?.trim() || "Human"} />
+            {message.body.trim() ? (
+              <div className="whitespace-pre-wrap text-fg text-sm leading-relaxed">
+                <MentionText members={members} text={message.body} />
+              </div>
+            ) : null}
+            <MessageAttachments message={message} />
+          </PromptMessageBody>
+        </PromptMessage>
         {onReply ? (
           <button
             aria-label="Reply in thread"
@@ -297,13 +354,22 @@ export function GroupMessageRow({
   const streamBody = liveTurn ? liveTurn.live.streamText : message.body;
   const { prose, statuses } = splitRoomMessageBody(streamBody);
   const showLiveStatus = Boolean(liveTurn && !prose.trim());
+  const stepItems = liveTurn ? buildGroupStepsLabels(liveTurn.live.tools) : [];
+  const cotItems = liveTurn
+    ? buildSafeChainOfThought({
+        phase: String(liveTurn.live.phase),
+        activity: liveTurn.live.presence?.activity,
+        tools: liveTurn.live.tools,
+        hasStream: Boolean(prose.trim()),
+      })
+    : [];
   return (
     <div
       className="group/msg flex flex-col gap-0.5"
       data-streaming={streaming || undefined}
       data-to={message.toSessionId || undefined}
     >
-      <div className="flex gap-2.5" data-kind="member" data-testid="group-message">
+      <PromptMessage data-kind="member" data-testid="group-message">
         {avatar ? (
           <AgentAvatar
             animated={false}
@@ -324,19 +390,30 @@ export function GroupMessageRow({
             {title.trim().charAt(0).toLocaleUpperCase() || "?"}
           </span>
         )}
-        <div className="min-w-0 flex-1 space-y-0.5">
-          <div className="flex flex-wrap items-baseline gap-x-1.5 font-medium text-fg-muted text-xs">
-            <MemberName label={label} />
-            {role?.trim() ? <span className="font-normal text-fg-faint">{role.trim()}</span> : null}
-            {toLabel ? (
-              <span className="font-normal text-fg-faint" data-testid="group-message-to">
-                → <MemberName label={toLabel} />
-              </span>
-            ) : null}
-          </div>
+        <PromptMessageBody>
+          <PromptMessageIdentity
+            name={<MemberName label={label} />}
+            role={role?.trim()}
+            trailing={
+              toLabel ? (
+                <span className="font-normal text-fg-faint" data-testid="group-message-to">
+                  → <MemberName label={toLabel} />
+                </span>
+              ) : null
+            }
+          />
+          {showLiveStatus && liveTurn ? (
+            <GroupMemberLiveTurn live={liveTurn.live} mode={liveTurn.mode} />
+          ) : null}
+          {cotItems.length > 0 && liveTurn && !liveTurn.live.collapsed && !showLiveStatus ? (
+            <PromptChainOfThought items={cotItems} />
+          ) : null}
+          {stepItems.length > 0 && liveTurn && !liveTurn.live.collapsed ? (
+            <PromptSteps defaultOpen={showLiveStatus} items={stepItems} />
+          ) : null}
           {prose ? (
             <div
-              className="text-fg text-sm"
+              className="text-fg text-sm leading-relaxed"
               data-testid={streaming ? "group-live-writing" : undefined}
             >
               {streaming ? (
@@ -350,9 +427,6 @@ export function GroupMessageRow({
               )}
             </div>
           ) : null}
-          {showLiveStatus && liveTurn ? (
-            <GroupMemberLiveTurn live={liveTurn.live} mode={liveTurn.mode} />
-          ) : null}
           {statuses.map((status, index) => (
             <CollabStatusLine
               // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
@@ -362,8 +436,8 @@ export function GroupMessageRow({
               status={status}
             />
           ))}
-        </div>
-      </div>
+        </PromptMessageBody>
+      </PromptMessage>
       {onReply && !streaming ? (
         <button
           aria-label="Reply in thread"
