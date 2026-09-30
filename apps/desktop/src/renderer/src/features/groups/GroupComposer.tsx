@@ -55,6 +55,11 @@ export function useUpdatePending(api: UpdateApi | undefined): boolean {
  * `@<session id>` (the list still shows the title). Pending ask_user questions
  * for waiting members of this room render above the field (group-scoped).
  */
+export type GroupComposerReply = {
+  messageId: string;
+  preview: string;
+};
+
 export function GroupComposer({
   members,
   updatePending,
@@ -62,15 +67,20 @@ export function GroupComposer({
   showKickoff = false,
   seed,
   onSeedConsumed,
+  replyTo,
+  onClearReply,
 }: {
   members: readonly MentionMember[];
   updatePending: boolean;
-  onSend(body: string): Promise<void>;
+  onSend(body: string, replyToMessageId?: string): Promise<void>;
   /** Empty room: show the guided Outcome + first-owner kickoff (P2). */
   showKickoff?: boolean;
   /** External insert (e.g. clickable Handoff card) — applied once then cleared. */
   seed?: string | undefined;
   onSeedConsumed?: (() => void) | undefined;
+  /** N3: active thread reply target. */
+  replyTo?: GroupComposerReply | undefined;
+  onClearReply?: (() => void) | undefined;
 }) {
   const [value, setValue] = useState("");
   const [caret, setCaret] = useState(0);
@@ -138,9 +148,10 @@ export function GroupComposer({
     setSending(true);
     setError(undefined);
     try {
-      await onSend(body);
+      await onSend(body, replyTo?.messageId);
       setValue("");
       setCaret(0);
+      onClearReply?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -164,6 +175,23 @@ export function GroupComposer({
         </div>
       ) : null}
       <GroupMemberQuestions labels={labels} waitingSessionIds={waitingSessionIds} />
+      {replyTo ? (
+        <div
+          className="mb-2 flex items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
+          data-testid="group-composer-reply"
+        >
+          <span className="min-w-0 flex-1 truncate">
+            Replying · <span className="text-fg-faint">{replyTo.preview}</span>
+          </span>
+          <button
+            className="shrink-0 text-fg-faint hover:text-fg"
+            onClick={() => onClearReply?.()}
+            type="button"
+          >
+            Cancel
+          </button>
+        </div>
+      ) : null}
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       {showKickoff && !value.trim() ? (
         <div

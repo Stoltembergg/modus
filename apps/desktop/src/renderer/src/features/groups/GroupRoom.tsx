@@ -21,7 +21,7 @@ import {
   type GroupMembersChange,
 } from "./CreateGroupDialog";
 import { activityButtonMeta, GroupActivityPanel } from "./GroupActivityPanel";
-import { GroupComposer, useUpdatePending } from "./GroupComposer";
+import { GroupComposer, type GroupComposerReply, useUpdatePending } from "./GroupComposer";
 import {
   GROUP_ROOM_EMPTY_TEXT,
   GroupMessageList,
@@ -34,6 +34,7 @@ import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
+import { replyPreview } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import { useGroupMessages } from "./useGroupMessages";
@@ -95,6 +96,7 @@ export function GroupRoom({
   onAgentsChanged,
 }: GroupRoomProps) {
   const [composerSeed, setComposerSeed] = useState<string | undefined>();
+  const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
@@ -201,6 +203,9 @@ export function GroupRoom({
           messages={messages}
           onHandoffClick={(targetName) => setComposerSeed(`@${targetName} `)}
           onOpenFile={onOpenFile}
+          onReply={(message) =>
+            setReplyTo({ messageId: message.id, preview: replyPreview(message.body) })
+          }
           workingRows={workingRows}
         />
         {blocked ? (
@@ -211,12 +216,18 @@ export function GroupRoom({
         ) : (
           <GroupComposer
             members={members}
+            onClearReply={() => setReplyTo(undefined)}
             onSeedConsumed={() => setComposerSeed(undefined)}
-            onSend={async (body) => {
-              await window.modus.group.postMessage({ groupId: group.id, body });
+            onSend={async (body, replyToMessageId) => {
+              await window.modus.group.postMessage({
+                groupId: group.id,
+                body,
+                ...(replyToMessageId ? { replyToMessageId } : {}),
+              });
             }}
+            replyTo={replyTo}
             seed={composerSeed}
-            showKickoff={loaded && messages.length === 0}
+            showKickoff={loaded && messages.length === 0 && !replyTo}
             updatePending={updatePending}
           />
         )}
