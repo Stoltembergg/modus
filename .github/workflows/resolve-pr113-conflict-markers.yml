@@ -1,0 +1,66 @@
+name: resolve-pr113-conflict-markers
+# Clears leftover <<<<<<< markers in GroupRoom / IPC tests after incomplete merges.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/resolve-pr113-conflict-markers.yml
+permissions:
+  contents: write
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve known conflict hunks
+        run: |
+          set -euo pipefail
+          if ! grep -R --include='*.ts' --include='*.tsx' -n '^<<<<<<<' apps/desktop/src; then
+            echo no conflict markers
+            exit 0
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def must_replace(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              if "<<<<<<<" not in text:
+                  print(path, "already clean")
+                  return
+              if old not in text:
+                  raise SystemExit(f"pattern mismatch in {path}")
+              text = text.replace(old, new, 1)
+              if "<<<<<<<" in text or ">>>>>>>" in text:
+                  raise SystemExit(f"markers remain in {path}")
+              p.write_text(text)
+              print("resolved", path)
+
+          must_replace(
+              "apps/desktop/src/renderer/src/features/groups/GroupRoom.tsx",
+              '''<<<<<<< HEAD\n              body: "Resume this task.",\n              replyToMessageId: message.id,\n              executionMode: "complement",\n              executionId: messageExecutionId(message),\n=======\n              executionId: message.turnId,\n>>>>>>> origin/main\n''',
+              '''              executionId: message.turnId,\n''',
+          )
+          must_replace(
+              "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx",
+              '''<<<<<<< HEAD\n      body: "Resume this task.",\n      replyToMessageId: "interrupted",\n      executionMode: "complement",\n      executionId: "interrupted",\n=======\n      executionId: "exec-1",\n>>>>>>> origin/main\n''',
+              '''      executionId: "exec-1",\n''',
+          )
+          must_replace(
+              "apps/desktop/src/main/ipc/group-runtime-ipc.test.ts",
+              '''<<<<<<< HEAD\n        handlers.get("group:post-message")?.(trusted, {\n          groupId: "g-1",\n          body: "continue",\n          executionMode: "complement",\n          executionId: "m-1",\n        }),\n      ).toEqual(MESSAGE);\n      expect(service.postUserMessage).toHaveBeenLastCalledWith({\n        groupId: "g-1",\n        body: "continue",\n        executionMode: "complement",\n        executionId: "m-1",\n=======\n        handlers.get("group:resume-execution")?.(trusted, {\n          groupId: "g-1",\n          executionId: "exec-1",\n        }),\n      ).toBeUndefined();\n      expect(service.resumeExecution).toHaveBeenCalledWith({\n        groupId: "g-1",\n        executionId: "exec-1",\n>>>>>>> origin/main\n''',
+              '''        handlers.get("group:post-message")?.(trusted, {\n          groupId: "g-1",\n          body: "continue",\n          executionMode: "complement",\n          executionId: "m-1",\n        }),\n      ).toEqual(MESSAGE);\n      expect(service.postUserMessage).toHaveBeenLastCalledWith({\n        groupId: "g-1",\n        body: "continue",\n        executionMode: "complement",\n        executionId: "m-1",\n      });\n      expect(\n        handlers.get("group:resume-execution")?.(trusted, {\n          groupId: "g-1",\n          executionId: "exec-1",\n        }),\n      ).toBeUndefined();\n      expect(service.resumeExecution).toHaveBeenCalledWith({\n        groupId: "g-1",\n        executionId: "exec-1",\n''',
+          )
+          PY
+          ! grep -R --include='*.ts' --include='*.tsx' -n '^<<<<<<<\|^=======\|^>>>>>>>' apps/desktop/src
+          ! grep -R --include='*.ts' --include='*.tsx' -n 'PLACEHOLDER_WILL_REPLACE\|LOAD_FROM_FILE' apps/desktop/src || exit 1
+          git config user.email "stoltembergg@gmail.com"
+          git config user.name "Gabriel"
+          git add -A
+          git commit -m "fix(groups): resolve leftover merge conflict markers (resume + IPC tests)"
+          git push origin HEAD:cursor/group-execution-linking-c747
