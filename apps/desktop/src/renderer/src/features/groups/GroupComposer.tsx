@@ -272,10 +272,9 @@ export function GroupComposer({
         </div>
       ) : null}
       {activeExecutionId ? (
-        <div
-          className="mb-2 flex flex-wrap items-center gap-1.5 text-2xs"
+        <fieldset
+          className="mb-2 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
           data-testid="group-composer-execution-mode"
-          role="group"
           aria-label="Execution mode"
         >
           <button
@@ -309,7 +308,7 @@ export function GroupComposer({
               · {activeExecutionTitle ?? activeExecutionId.slice(0, 8)}
             </span>
           ) : null}
-        </div>
+        </fieldset>
       ) : null}
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       {showKickoff && !value.trim() && attachments.length === 0 ? (
