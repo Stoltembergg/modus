@@ -131,6 +131,96 @@ export function upsertProjectModelChangedPaths(input: {
   return written;
 }
 
+/** Persist Setup / manifest dependency edges (fromPath → toPath) for a revision. */
+export function upsertProjectModelDepends(input: {
+  workspaceId: string;
+  revision: string;
+  edges: Array<{ fromPath: string; toPath: string }>;
+  source?: ProjectModelEdge["source"];
+  now?: string;
+}): number {
+  if (
+    !SAFE_WORKSPACE.test(input.workspaceId) ||
+    input.workspaceId === CHATS_WORKSPACE_ID ||
+    !SAFE_WORKSPACE.test(input.revision)
+  ) {
+    return 0;
+  }
+  const now = input.now ?? new Date().toISOString();
+  const source = input.source ?? "checkpoint";
+  const db = getDatabase();
+  const insert = db.prepare(
+    `insert into project_model_edges
+      (id, workspace_id, revision, from_path, to_path, kind, source, updated_at)
+     values (?, ?, ?, ?, ?, 'depends', ?, ?)
+     on conflict(id) do update set updated_at = excluded.updated_at`,
+  );
+  let written = 0;
+  for (const edge of input.edges.slice(0, 500)) {
+    const fromPath = normalizePath(edge.fromPath);
+    const toPath = normalizePath(edge.toPath);
+    if (!fromPath || !toPath) continue;
+    const id = edgeKey({
+      workspaceId: input.workspaceId,
+      revision: input.revision,
+      fromPath,
+      toPath,
+      kind: "depends",
+      source,
+    });
+    insert.run(id, input.workspaceId, input.revision, fromPath, toPath, source, now);
+    written += 1;
+  }
+  return written;
+}
+
+/**
+ * Selective invalidation: drop Project Model edges whose paths intersect the
+ * changed set (exact match or prefix). Unrelated edges stay intact.
+ */
+export function invalidateProjectModelPaths(workspaceId: string, paths: string[]): number {
+  if (!SAFE_WORKSPACE.test(workspaceId) || workspaceId === CHATS_WORKSPACE_ID) return 0;
+  const normalized = [
+    ...new Set(
+      paths
+        .map((path) => normalizePath(path))
+        .filter((path): path is string => typeof path === "string" && path.length > 0),
+    ),
+  ].slice(0, 500);
+  if (normalized.length === 0) return 0;
+  const db = getDatabase();
+  const edges = listProjectModelEdges(workspaceId, undefined, MAX_PROJECT_MODEL_EDGES);
+  const doomed = edges.filter((edge) =>
+    normalized.some(
+      (path) =>
+        edge.fromPath === path ||
+        edge.toPath === path ||
+        edge.fromPath.startsWith(`${path}/`) ||
+        edge.toPath.startsWith(`${path}/`) ||
+        path.startsWith(`${edge.fromPath}/`) ||
+        path.startsWith(`${edge.toPath}/`),
+    ),
+  );
+  if (doomed.length === 0) return 0;
+  const del = db.prepare(
+    `delete from project_model_edges
+     where workspace_id = ? and revision = ? and from_path = ? and to_path = ? and kind = ? and source = ?`,
+  );
+  let removed = 0;
+  for (const edge of doomed) {
+    const result = del.run(
+      edge.workspaceId,
+      edge.revision,
+      edge.fromPath,
+      edge.toPath,
+      edge.kind,
+      edge.source,
+    );
+    removed += Number(result.changes ?? 0);
+  }
+  return removed;
+}
+
 export function listProjectModelEdges(
   workspaceId: string,
   revision?: string,
