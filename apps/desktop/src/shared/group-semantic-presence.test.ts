@@ -55,7 +55,7 @@ describe("buildGroupSemanticPresence", () => {
       "running",
     );
     expect(opened.state).toBe("thinking");
-    expect(opened.label).toBe("Thinking");
+    expect(opened.label).toBe("Waiting on model");
   });
 
   it("marks writing and done, and queued mode", () => {

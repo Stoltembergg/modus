@@ -10,7 +10,9 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
+import { messageExecutionId, shortExecutionLabel } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
+import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
 import {
   collabStatusTone,
   extractUsefulSources,
@@ -25,6 +27,7 @@ import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
@@ -222,23 +225,49 @@ function MessageAttachments({ message }: { message: GroupMessage }) {
   );
 }
 
-function MessageMeta({ message }: { message: GroupMessage }) {
+function MessageMeta({
+  message,
+  onExecutionFilter,
+}: {
+  message: GroupMessage;
+  onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
+}) {
   const status = message.status;
-  const label = status
-    ? {
-        queued: "Queued",
-        running: "Working",
-        writing: "Writing",
-        awaiting_user: "Waiting for you",
-        completed: "Completed",
-        failed: "Failed",
-        cancelled: "Cancelled",
-        interrupted: "Interrupted",
-      }[status]
-    : undefined;
+  // Live turns already show concrete phases — do not stamp opaque "Working".
+  if (!status || status === "running" || status === "writing")
+    return (
+      <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+        <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
+          {formatClock(Date.parse(message.createdAt))}
+        </time>
+      </span>
+    );
+  const label = {
+    queued: "Queued",
+    awaiting_user: "Waiting for you",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    interrupted: "Interrupted",
+  }[status];
   const warning = status === "failed" || status === "interrupted";
+  const executionId = messageExecutionId(message);
+  const showChip = message.authorKind === "user" || Boolean(message.chainId);
+  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
   return (
     <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+      {showChip ? (
+        <button
+          className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
+          data-execution-id={executionId}
+          data-testid="group-execution-chip"
+          onClick={() => onExecutionFilter?.(executionId)}
+          title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
+          type="button"
+        >
+          #{shortExecutionLabel(executionId)}
+        </button>
+      ) : null}
       <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
         {formatClock(Date.parse(message.createdAt))}
       </time>
@@ -327,6 +356,7 @@ export function GroupMessageRow({
   onHandoffClick,
   onReply,
   onRetry,
+  onExecutionFilter,
   role,
   activeWaitingSessionIds,
   liveTurn,
@@ -342,6 +372,8 @@ export function GroupMessageRow({
   onHandoffClick?: ((targetName: string) => void) | undefined;
   onReply?: ((message: GroupMessage) => void) | undefined;
   onRetry?: ((message: GroupMessage) => Promise<void>) | undefined;
+  /** Click the execution chip to filter the transcript. */
+  onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
   /** Discreet role under the name (agent role or "You"). */
@@ -460,7 +492,7 @@ export function GroupMessageRow({
             <PromptMessageIdentity
               name="You"
               role={role?.trim() || "Human"}
-              trailing={<MessageMeta message={message} />}
+              trailing={<MessageMeta message={message} onExecutionFilter={onExecutionFilter} />}
             />
             <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
             {message.body.trim() ? (
@@ -493,10 +525,14 @@ export function GroupMessageRow({
   const body = message.body.trim() ? message.body : liveText;
   const writing = message.status === "writing" || Boolean(streaming) || Boolean(liveText.trim());
   const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(body);
-  const prose = stripAgentSelfIntro(rawProse);
+  const resultParsed = !writing ? parseGroupFinalResultCard(rawProse) : undefined;
+  const prose = stripAgentSelfIntro(resultParsed?.prose ?? rawProse);
   const statuses = rawStatuses.filter(shouldPersistCollabStatusInTranscript);
   const readyOnly =
-    !prose.trim() && rawStatuses.some((status) => status.kind === "ready") && statuses.length === 0;
+    !prose.trim() &&
+    !resultParsed &&
+    rawStatuses.some((status) => status.kind === "ready") &&
+    statuses.length === 0;
   const fallbackProgress =
     !liveTurn && message.authorKind === "agent" ? fallbackProgressLabel(message.status) : undefined;
   // Hide Planner→peer handoff dumps that have no user-facing prose.
@@ -555,7 +591,7 @@ export function GroupMessageRow({
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}
-                <MessageMeta message={message} />
+                <MessageMeta message={message} onExecutionFilter={onExecutionFilter} />
                 {readyOnly ? (
                   <span
                     className="font-normal text-amber-400/90 text-2xs"
@@ -589,6 +625,7 @@ export function GroupMessageRow({
               )}
             </div>
           ) : null}
+          {resultParsed ? <GroupFinalResultCard card={resultParsed.card} /> : null}
           {sources.length > 0 ? (
             <div className="flex flex-wrap gap-1" data-testid="group-message-sources">
               {sources.map((source) => (

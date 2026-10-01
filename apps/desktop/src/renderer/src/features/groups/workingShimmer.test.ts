@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { groupWorkingShimmerNames, shouldShowGroupWorkingShimmer } from "./workingShimmer";
+import {
+  groupWorkingShimmerNames,
+  groupWorkingShimmerText,
+  shouldShowGroupWorkingShimmer,
+} from "./workingShimmer";
 
 describe("workingShimmer", () => {
   const labels = new Map([
@@ -77,5 +81,27 @@ describe("workingShimmer", () => {
         },
       ]),
     ).toBe(false);
+  });
+
+  it("builds concrete phase shimmer text with queued age", () => {
+    expect(
+      groupWorkingShimmerText(
+        [
+          {
+            sessionId: "s-build",
+            mode: "queued",
+            live: {
+              streamText: "",
+              collapsed: false,
+              phase: "Queued",
+              presence: { state: "queued", startedAt: 1_000 },
+            },
+          },
+        ],
+        labels,
+        "en",
+        9_000,
+      ),
+    ).toBe("Builder · Queued · 8s");
   });
 });

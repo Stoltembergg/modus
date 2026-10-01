@@ -234,7 +234,11 @@ export type GroupMessage = {
   replyToMessageId?: string;
   /** Directed message recipient; absent means addressed to the whole group. */
   toSessionId?: string;
-  /** The user message that opened this chain. */
+  /**
+   * Ask-spanning execution id (chain root). Shared by user + agent messages,
+   * tasks, and decisions for one Nova tarefa / Complementar thread. Same value
+   * as the opener message id when `startsChain` opened the chain.
+   */
   chainId?: string;
   kind: GroupMessageKind;
   body: string;
@@ -245,7 +249,10 @@ export type GroupMessage = {
   /** Path-backed context items available to woken agents. */
   contextItems?: GroupMessageContextItem[];
   createdAt: string;
-  /** Stable execution identity, shared by distinct public messages of a turn. */
+  /**
+   * Per-member turn / job id (`group_jobs.id`). Distinct from `chainId`
+   * (ask-spanning execution). Used by resume-by-id.
+   */
   turnId?: string;
   runId?: string;
   sdkMessageId?: string;
@@ -272,6 +279,11 @@ export type GroupTask = {
   createdBySessionId?: string;
   reviewerSessionId?: string;
   branch?: string;
+  /**
+   * Ask-spanning execution id (`GroupMessage.chainId`). Links the checklist
+   * row to the same Nova tarefa / Complementar thread as room messages.
+   */
+  executionId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -284,8 +296,13 @@ export type GroupDecision = {
   /** Absent when the author session was deleted (shown as a former member, never the user). */
   authorSessionId?: string;
   sourceMessageId?: string;
+  /** Ask-spanning execution id (`GroupMessage.chainId`) when recorded inside a turn. */
+  executionId?: string;
   createdAt: string;
 };
+
+/** Composer intent: open a new execution, or append to the active one. */
+export type GroupExecutionMode = "new" | "complement";
 
 export type PostGroupMessageInput = {
   groupId: string;
@@ -297,6 +314,13 @@ export type PostGroupMessageInput = {
   attachments?: GroupMessageAttachment[];
   /** Path-backed context items forwarded with the wake prompt. */
   contextItems?: GroupMessageContextItem[];
+  /**
+   * `new` (default) opens a fresh execution (`startsChain`).
+   * `complement` joins `executionId` or the group's latest user execution.
+   */
+  executionMode?: GroupExecutionMode;
+  /** Explicit execution to complement; ignored when `executionMode` is `new`. */
+  executionId?: string;
 };
 
 /**

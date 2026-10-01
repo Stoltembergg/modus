@@ -79,9 +79,18 @@ describe("stripAgentSelfIntro / sources / ready persistence", () => {
   it("localizes inline live status", () => {
     expect(
       inlineLiveStatusLabel({ phase: "Thinking", presenceState: "thinking", locale: "pt-BR" }),
-    ).toBe("Pensando…");
+    ).toBe("Aguardando o modelo…");
     expect(inlineLiveStatusLabel({ phase: "Queued", presenceState: "queued", locale: "pt" })).toBe(
       "Na fila…",
     );
+    expect(
+      inlineLiveStatusLabel({
+        phase: "Queued",
+        presenceState: "queued",
+        startedAt: 0,
+        nowMs: 5_000,
+        locale: "en",
+      }),
+    ).toBe("Queued · 5s");
   });
 });

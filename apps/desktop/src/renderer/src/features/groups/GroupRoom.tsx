@@ -15,6 +15,11 @@ import {
 } from "../../../../shared/group-blocked";
 import { deriveGroupCollabStage } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
+import {
+  latestExecutionId,
+  messageExecutionId,
+  shortExecutionLabel,
+} from "../../../../shared/group-execution-link";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { memberAvatar } from "../agents/agentAvatarModel";
@@ -110,8 +115,6 @@ function GroupRoomContent({
   onAgentsChanged,
   chromeHost = null,
 }: GroupRoomProps) {
-  const [composerSeed, setComposerSeed] = useState<string | undefined>();
-  const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
@@ -135,10 +138,29 @@ function GroupRoomContent({
   const [managing, setManaging] = useState(false);
   const running = isGroupRunning(memberStates, group.id);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [composerSeed, setComposerSeed] = useState<string | undefined>();
+  const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
+  const [executionFilter, setExecutionFilter] = useState<string | undefined>();
+  const [filterGroupId, setFilterGroupId] = useState(group.id);
+  if (filterGroupId !== group.id) {
+    setFilterGroupId(group.id);
+    setExecutionFilter(undefined);
+  }
   const { tasks, replace } = useGroupTasks(group.id);
   const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
   const workingRows = useGroupMemberWorking(group.id, memberStates);
   const labels = useMemo(() => memberLabels(members), [members]);
+  const activeExecutionId = useMemo(() => latestExecutionId(messages), [messages]);
+  const activeExecutionTitle = useMemo(() => {
+    if (!activeExecutionId) return undefined;
+    const root = messages.find((message) => message.id === activeExecutionId);
+    return shortExecutionLabel(activeExecutionId, root?.body);
+  }, [activeExecutionId, messages]);
+  useEffect(() => {
+    if (executionFilter && !messages.some((m) => messageExecutionId(m) === executionFilter)) {
+      setExecutionFilter(undefined);
+    }
+  }, [executionFilter, messages]);
   const roles = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of group.members) {
@@ -252,6 +274,7 @@ function GroupRoomContent({
           avatars={avatars}
           cwd={workspace?.rootPath}
           error={error}
+          executionFilter={executionFilter}
           groupId={group.id}
           hasOlder={hasOlder}
           loadOlder={loadOlder}
@@ -260,6 +283,7 @@ function GroupRoomContent({
           memberStates={memberStates}
           members={members}
           messages={messages}
+          onExecutionFilterChange={setExecutionFilter}
           onHandoffClick={(targetName) => setComposerSeed(`@${targetName} `)}
           onOpenFile={onOpenFile}
           onReply={(message) =>
@@ -282,6 +306,8 @@ function GroupRoomContent({
           />
         ) : (
           <GroupComposer
+            activeExecutionId={activeExecutionId}
+            activeExecutionTitle={activeExecutionTitle}
             groupId={group.id}
             members={members}
             onClearReply={() => setReplyTo(undefined)}
@@ -293,6 +319,8 @@ function GroupRoomContent({
                 ...(payload.replyToMessageId ? { replyToMessageId: payload.replyToMessageId } : {}),
                 ...(payload.attachments ? { attachments: payload.attachments } : {}),
                 ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
+                ...(payload.executionMode ? { executionMode: payload.executionMode } : {}),
+                ...(payload.executionId ? { executionId: payload.executionId } : {}),
               });
             }}
             replyTo={replyTo}

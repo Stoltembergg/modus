@@ -93,6 +93,20 @@ describe("group runtime IPC", () => {
         replyToMessageId: "m-0",
       });
       expect(
+        handlers.get("group:post-message")?.(trusted, {
+          groupId: "g-1",
+          body: "continue",
+          executionMode: "complement",
+          executionId: "m-1",
+        }),
+      ).toEqual(MESSAGE);
+      expect(service.postUserMessage).toHaveBeenLastCalledWith({
+        groupId: "g-1",
+        body: "continue",
+        executionMode: "complement",
+        executionId: "m-1",
+      });
+      expect(
         handlers.get("group:resume-execution")?.(trusted, {
           groupId: "g-1",
           executionId: "exec-1",
