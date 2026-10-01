@@ -86,5 +86,9 @@ export function groupWorkingShimmerText(
         locale,
       })
     : formatGroupProgressLabel({ phase: "Thinking", presenceState: "thinking", locale });
-  return groupAgentProgressShimmerLabel({ names, phaseLabel, locale });
+  return groupAgentProgressShimmerLabel({
+    names,
+    phaseLabel,
+    ...(locale !== undefined ? { locale } : {}),
+  });
 }

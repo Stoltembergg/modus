@@ -57,21 +57,23 @@ export function useGroupMemberWorking(
   );
   return useMemo(
     () =>
-      working.map((row) => ({
-        ...row,
-        live: buildGroupLiveTurn(
-          (events.get(row.sessionId) ?? []).map((item) => ({
-            event: item.event,
-            ...((item.updatedAt ?? item.createdAt)
-              ? { createdAt: item.updatedAt ?? item.createdAt }
-              : {}),
-          })),
-          row.mode,
-          row.mode === "queued"
-            ? { queuedSinceMs: queuedSinceRef.current.get(row.sessionId) }
-            : undefined,
-        ),
-      })),
+      working.map((row) => {
+        const queuedSinceMs =
+          row.mode === "queued" ? queuedSinceRef.current.get(row.sessionId) : undefined;
+        return {
+          ...row,
+          live: buildGroupLiveTurn(
+            (events.get(row.sessionId) ?? []).map((item) => ({
+              event: item.event,
+              ...((item.updatedAt ?? item.createdAt)
+                ? { createdAt: item.updatedAt ?? item.createdAt }
+                : {}),
+            })),
+            row.mode,
+            queuedSinceMs !== undefined ? { queuedSinceMs } : undefined,
+          ),
+        };
+      }),
     [working, events],
   );
 }

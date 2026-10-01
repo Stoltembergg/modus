@@ -48,9 +48,9 @@ export function formatGroupProgressLabel(input: GroupProgressLabelInput): string
 
   const key = thinkingStateKeyFromLive({
     phase: input.phase,
-    presenceState: input.presenceState,
-    activity: input.activity,
-    stillWorking: input.stillWorking,
+    ...(input.presenceState !== undefined ? { presenceState: input.presenceState } : {}),
+    ...(input.activity !== undefined ? { activity: input.activity } : {}),
+    ...(input.stillWorking !== undefined ? { stillWorking: input.stillWorking } : {}),
   });
   let label = groupRoomLabel(key, input.locale);
 
