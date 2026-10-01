@@ -1,0 +1,34 @@
+name: Apply PR109 biome format fix
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/apply-pr109-biome.yml"
+      - "internal/_push/resume/pr109-biome-fix.patch"
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/resume-by-execution-id-db25
+          fetch-depth: 0
+      - name: Apply patch and cleanup
+        run: |
+          set -euo pipefail
+          patch -p1 < internal/_push/resume/pr109-biome-fix.patch
+          # refuse empty schema modules
+          for f in apps/desktop/src/main/ipc/schemas-part-0{1,2,3,4}.ts apps/desktop/src/main/ipc/schemas-shared.ts; do
+            bytes=$(wc -c < "$f")
+            test "$bytes" -gt 1000
+            head -1 "$f" | grep -q 'import'
+          done
+          rm -f .github/workflows/apply-pr109-biome.yml
+          rm -f internal/_push/resume/pr109-biome-fix.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(ci): biome format resume PR modules (exactOptional tip)"
+          git push origin HEAD:cursor/resume-by-execution-id-db25
