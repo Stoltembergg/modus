@@ -376,6 +376,7 @@ export function GroupMessageRow({
   }
   const canRetry =
     onRetry &&
+    Boolean(message.turnId) &&
     (message.status === "failed" ||
       message.status === "cancelled" ||
       message.status === "interrupted");
