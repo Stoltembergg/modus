@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: cursor/auto-assign-group-lead-60c6
-      - name: Apply patches
+      - name: Apply zlib payloads
         run: python3 docs/_tmp/lead-auto-assign/apply.py
       - name: Commit and cleanup
         run: |
