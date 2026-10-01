@@ -138,7 +138,6 @@ export function App() {
   const [securityState, setSecurityState] = useState<SecurityState | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
-  const [synchronizedWorkspaceId, setSynchronizedWorkspaceId] = useState<string | undefined>();
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
   const groupMemberStates = useGroupMemberStates();
@@ -181,7 +180,6 @@ export function App() {
   const [model, setModel] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsInitialSection, setSettingsInitialSection] = useState<"limits" | undefined>();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -261,14 +259,8 @@ export function App() {
     if (!window.modus) return;
     const revision = ++workspaceSelectionRevisionRef.current;
     const workspaceId = requestedWorkspaceId;
-    setSynchronizedWorkspaceId(undefined);
     void window.modus.workspace
       .select(workspaceId ? { workspaceId } : {})
-      .then(() => {
-        if (revision === workspaceSelectionRevisionRef.current) {
-          setSynchronizedWorkspaceId(workspaceId);
-        }
-      })
       .catch((error: unknown) => {
         if (revision === workspaceSelectionRevisionRef.current) {
           console.error("Unable to synchronize the current workspace selection.", error);
@@ -1179,19 +1171,11 @@ export function App() {
                   {settingsOpen ? (
                     <Suspense fallback={<ModusLoadingFallback />}>
                       <SettingsPanel
-                        {...(settingsInitialSection
-                          ? { initialSection: settingsInitialSection }
-                          : {})}
                         onClose={() => setSettingsOpen(false)}
                         onRefresh={refreshModelSettings}
                         onRefreshCatalog={refreshModelCatalog}
                         state={modelSettings}
                         workspaces={workspaces}
-                        workspaceId={
-                          requestedWorkspaceId && synchronizedWorkspaceId === requestedWorkspaceId
-                            ? requestedWorkspaceId
-                            : undefined
-                        }
                         workspaceCwd={activeWorkspace?.rootPath}
                       />
                     </Suspense>
@@ -1219,11 +1203,6 @@ export function App() {
                         onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
                         onOpenWorkspace={() => void openWorkspace()}
                         onOpenSettings={() => {
-                          setSettingsInitialSection(undefined);
-                          setSettingsOpen(true);
-                        }}
-                        onOpenLimits={() => {
-                          setSettingsInitialSection("limits");
                           setSettingsOpen(true);
                         }}
                         onSelectSession={selectSession}
@@ -1350,7 +1329,6 @@ export function App() {
                                   environmentStats={environmentStats}
                                   inspectorOpen={responsiveInspectorOpen}
                                   onOpenSettings={() => {
-                                    setSettingsInitialSection(undefined);
                                     setSettingsOpen(true);
                                   }}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}

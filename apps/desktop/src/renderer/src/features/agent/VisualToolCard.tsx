@@ -14,7 +14,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSuppressNativeSurface } from "../../components/ui/nativeSurface";
 import { cn } from "../../lib/cn";
-import { useTheme } from "../../lib/theme";
+import { useEffectiveTheme } from "../../lib/theme";
 
 type VisualKind = "html" | "svg";
 
@@ -310,7 +310,7 @@ export function VisualToolCard({ args, isComplete = false, isError = false }: Vi
   const showFrame = !isError && (running || hasContent);
   const renderContent = isComplete ? content : trimIncompleteTrailingTag(content);
 
-  useTheme();
+  useEffectiveTheme();
   const theme = readTheme();
 
   useEffect(() => {

@@ -23,7 +23,7 @@ import {
   useIsCodeFenceIncomplete,
 } from "streamdown";
 import { cn } from "../../lib/cn";
-import { type ThemeMode, useTheme } from "../../lib/theme";
+import { type EffectiveThemeMode, useEffectiveTheme } from "../../lib/theme";
 import { isMentionHref } from "../groups/groupMentions";
 import { MentionChip } from "../groups/MentionChip";
 import { FileRefChip, MarkdownFileCode } from "./FileRefChip";
@@ -69,7 +69,7 @@ const math = createMathPlugin({
 
 /* ── Mermaid theme — mermaid cannot resolve CSS var(), so we pass computed
  * token values from the active Modus theme. ───────────────────────────────── */
-function buildMermaidConfig(theme: ThemeMode): MermaidConfig {
+function buildMermaidConfig(theme: EffectiveThemeMode): MermaidConfig {
   const rootStyle = getComputedStyle(document.documentElement);
   const fontFamily =
     rootStyle.getPropertyValue("--font-sans").trim() ||
@@ -291,7 +291,7 @@ export default function MarkdownMessageRenderer({
   content,
   streaming = false,
 }: MarkdownMessageRendererProps) {
-  const [theme] = useTheme();
+  const theme = useEffectiveTheme();
 
   // Rebuild syntax-highlight + diagram plugins only when the theme flips
   // (rare, deliberate) — stable across streamed frames so Streamdown's memo

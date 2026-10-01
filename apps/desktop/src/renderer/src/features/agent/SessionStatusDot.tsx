@@ -1,6 +1,6 @@
 import { ThinkingOrb } from "thinking-orbs";
 import { cn } from "../../lib/cn";
-import { useTheme } from "../../lib/theme";
+import { useEffectiveTheme } from "../../lib/theme";
 import type { SessionActivity } from "./agentEventHub";
 
 /**
@@ -15,7 +15,7 @@ export function SessionStatusDot({
   activity: SessionActivity | undefined;
   className?: string;
 }) {
-  const [mode] = useTheme();
+  const mode = useEffectiveTheme();
 
   if (activity?.needsInput) {
     return (

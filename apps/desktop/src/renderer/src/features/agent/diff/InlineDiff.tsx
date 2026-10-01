@@ -2,7 +2,7 @@ import { memo, useMemo } from "react";
 import type { ThemedToken } from "shiki/core";
 import { cn } from "../../../lib/cn";
 import { highlightToLines, languageForPath, useCodeHighlighter } from "../../../lib/codeHighlight";
-import { useTheme } from "../../../lib/theme";
+import { useEffectiveTheme } from "../../../lib/theme";
 import type { InlineDiff, InlineDiffLine } from "./computeInlineDiff";
 
 type InlineDiffViewProps = {
@@ -27,7 +27,7 @@ const SIGN: Record<InlineDiffLine["kind"], string> = {
  * loads, rows fall back to plain text and re-render once it's ready.
  */
 export const InlineDiffView = memo(function InlineDiffView({ diff, path }: InlineDiffViewProps) {
-  const [themeMode] = useTheme();
+  const themeMode = useEffectiveTheme();
   const lang = languageForPath(path);
   const ready = useCodeHighlighter(lang);
 
