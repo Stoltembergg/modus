@@ -655,7 +655,7 @@ function BrowserRecentsDrawer({
 
   return (
     <div
-      className="absolute inset-y-0 left-0 z-10 flex flex-col border-hairline border-r bg-canvas/95 p-3 shadow-xl backdrop-blur"
+      className="absolute inset-y-0 left-0 z-10 flex flex-col border-hairline border-r bg-canvas p-3 shadow-xl"
       style={{ width: RECENTS_DRAWER_WIDTH }}
     >
       <input

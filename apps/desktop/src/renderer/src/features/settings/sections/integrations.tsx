@@ -59,7 +59,7 @@ function filterTools(tools: ComposioToolSummary[], query: string): ComposioToolS
   );
 }
 
-export function IntegrationsSettingsPanel() {
+export function IntegrationsSettingsPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const [settings, setSettings] = useState<ComposioSettingsState | undefined>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | undefined>();
@@ -348,7 +348,7 @@ export function IntegrationsSettingsPanel() {
   if (loading) {
     return (
       <div aria-live="polite" className="text-sm text-fg-muted">
-        Loading integrations…
+        Loading {standalone ? "connections" : "integrations"}…
       </div>
     );
   }
@@ -369,7 +369,7 @@ export function IntegrationsSettingsPanel() {
           ) : null
         }
         description="Conecte integrações de plataformas e escolha quais contas e operações os agentes podem usar."
-        title="Composio"
+        title={standalone ? "Connections" : "Composio"}
       />
 
       <SettingsSection

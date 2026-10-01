@@ -332,7 +332,7 @@ function ImageViewerOverlay({ state, onClose }: { state: ViewerState; onClose():
         </div>
         <m.div
           animate={{ opacity: 1, y: 0 }}
-          className="app-no-drag absolute top-3 right-3 flex items-center gap-1.5 popup-chrome bg-elevated/95 p-1"
+          className="app-no-drag absolute top-3 right-3 flex items-center gap-1.5 popup-chrome p-1"
           exit={{ opacity: 0 }}
           initial={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.16, ease: "easeOut", delay: 0.04 }}

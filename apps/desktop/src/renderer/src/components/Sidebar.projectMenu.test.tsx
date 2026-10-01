@@ -37,6 +37,7 @@ function renderSidebar() {
       activityBySession={{}}
       agentSessions={SESSIONS}
       canCreateSession
+      section="direct-messages"
       maxWidth={480}
       onArchiveProjectChats={onArchiveProjectChats}
       onArchiveSession={noop}
@@ -64,6 +65,7 @@ function renderSidebar() {
 }
 
 async function openProjectMenu(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+  await user.click(screen.getByRole("button", { name: "Project context" }));
   await user.click(screen.getByRole("button", { name: "Project actions" }));
   return screen.findByRole("menu");
 }

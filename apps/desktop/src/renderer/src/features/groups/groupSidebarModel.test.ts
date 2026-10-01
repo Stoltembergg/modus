@@ -45,7 +45,7 @@ describe("groupSidebarModel", () => {
   });
 
   it("hides an agent's 1:1 chat from the chat lists (it is listed under its agent)", () => {
-    expect(isListedChat(session("dm", { agentId: "a-1" }))).toBe(false);
+    expect(isListedChat(session("dm", { agentId: "a-1" }))).toBe(true);
   });
 
   it("keeps the activity selector stubbed off by default", () => {

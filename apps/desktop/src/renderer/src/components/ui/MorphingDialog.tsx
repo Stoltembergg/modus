@@ -127,7 +127,7 @@ export function MorphingDialogContainer({ children }: { children: ReactNode }) {
         <div className="fixed inset-0 z-50" data-testid="morphing-dialog-root">
           <m.div
             animate={{ opacity: 1 }}
-            className="absolute inset-0 bg-black/45 backdrop-blur-[2px]"
+            className="dialog-scrim absolute inset-0"
             exit={{ opacity: 0 }}
             initial={{ opacity: 0 }}
             key={`backdrop-${uniqueId}`}

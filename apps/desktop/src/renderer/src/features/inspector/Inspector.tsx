@@ -1,5 +1,6 @@
 import { Tabs } from "@base-ui/react/tabs";
 import {
+  IconActivity,
   IconFileText,
   IconGitBranch,
   IconGridDots,
@@ -27,6 +28,7 @@ import { TOOLBAR_ICON } from "../../components/ui/ToolbarButton";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { cn } from "../../lib/cn";
 import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
+import { ActivityTimeline } from "../agent/ActivityTimeline";
 import type { AgentEventHub } from "../agent/agentEventHub";
 import { DiffPanel } from "../diff/DiffPanel";
 import { FilesPanel } from "../files/FilesPanel";
@@ -60,6 +62,8 @@ type InspectorProps = {
   onModelConfigChange(model: string, thinkingVariant: string): Promise<void> | void;
   onOpenReview(cwd?: string): void;
   onOpenSubagent(childSessionId: string): void;
+  onOpenFile?(path: string): void;
+  onOpenPlan?(plan: PlanRef): void;
   onPlanUpdated(plan: PlanRef): void;
   onOpenChange(open: boolean): void;
   onWidthChange(width: number): void;
@@ -74,7 +78,7 @@ type InspectorProps = {
 const INSPECTOR_MAX_WIDTH = 1040;
 const INSPECTOR_BROWSER_PREFERRED_WIDTH = 760;
 const INSPECTOR_COLLAPSED_WIDTH = 0;
-const INSPECTOR_TRANSITION = { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] } as const;
+const INSPECTOR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
 const INSPECTOR_TAB_PANEL_CLASS = "inspector-tab-panel min-h-0 flex-1 outline-none";
 const loadBrowserPanel = () => import("../browser/BrowserPanel");
 const loadTerminalPanel = () => import("../terminal/TerminalPanel");
@@ -88,6 +92,11 @@ const TerminalPanel = lazy(() =>
 );
 
 const TABS = [
+  {
+    value: "activity",
+    label: "Activity",
+    icon: <IconActivity size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />,
+  },
   {
     value: "changes",
     label: "Changes",
@@ -148,6 +157,8 @@ export function Inspector({
   onModelConfigChange,
   onOpenReview,
   onOpenSubagent,
+  onOpenFile,
+  onOpenPlan,
   onPlanUpdated,
   onOpenChange,
   onWidthChange,
@@ -283,7 +294,8 @@ export function Inspector({
 
   return (
     <m.aside
-      className="relative flex min-w-0 shrink-0 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0 bg-canvas"
+      className="surface-sidebar relative flex min-w-0 shrink-0 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0"
+      data-ui-surface="sidebar"
       style={{ width: panelWidth }}
     >
       {open ? (
@@ -331,6 +343,22 @@ export function Inspector({
                   </Tabs.List>
                 </div>
 
+                <Tabs.Panel className={INSPECTOR_TAB_PANEL_CLASS} value="activity">
+                  <ContentTransition
+                    className="flex min-h-0 flex-1 flex-col"
+                    transitionKey="activity"
+                  >
+                    <ActivityTimeline
+                      cwd={cwd}
+                      hub={hub}
+                      key={sessionId ?? "none"}
+                      onOpenSubagent={onOpenSubagent}
+                      sessionId={sessionId}
+                      {...(onOpenFile ? { onOpenFile } : {})}
+                      {...(onOpenPlan ? { onOpenPlan } : {})}
+                    />
+                  </ContentTransition>
+                </Tabs.Panel>
                 <Tabs.Panel className={INSPECTOR_TAB_PANEL_CLASS} value="changes">
                   <ContentTransition
                     className="flex min-h-0 flex-1 flex-col"

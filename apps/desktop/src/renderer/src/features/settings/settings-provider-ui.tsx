@@ -535,7 +535,7 @@ export function ModelGroupSection({
 }) {
   return (
     <section>
-      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-hairline-soft border-b bg-panel/95 px-5 py-2.5 backdrop-blur">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-hairline-soft border-b bg-panel px-5 py-2.5">
         <div className="min-w-0">
           <h5 className="text-xs font-normal text-fg-muted">{group.title}</h5>
           <p className="mt-0.5 text-2xs text-fg-faint">{group.description}</p>
