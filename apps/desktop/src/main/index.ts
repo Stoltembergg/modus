@@ -5,6 +5,10 @@ import {
   stopRemoteModelCatalog,
 } from "./agent/model-service";
 import { resolveBrowserLocale } from "./browser/browser-locale";
+import {
+  initializeComposioService,
+  shutdownComposioService,
+} from "./composio/composio-service-instance";
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
@@ -31,6 +35,18 @@ try {
 let mainWindow: BrowserWindowType | null = null;
 let ipcRegistered = false;
 const startupTimeline = createStartupTimeline();
+const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
+
+function drainShutdown(tasks: Promise<unknown>[]): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, SHUTDOWN_DRAIN_TIMEOUT_MS);
+    timeout.unref?.();
+    void Promise.allSettled(tasks).then(() => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+}
 
 startupTimeline.mark("main.entry");
 
@@ -81,6 +97,8 @@ if (!app.requestSingleInstanceLock()) {
         }
       });
       openMainWindow();
+      // Restore the profile after the first renderer exists; do not block agent startup on Composio.
+      void initializeComposioService().catch(() => undefined);
       // No-op in dev, beta builds and unsupported platforms; first check runs after a delay.
       startUpdateServiceInBackground();
 
@@ -121,7 +139,16 @@ if (!app.requestSingleInstanceLock()) {
     shutdownTerminals();
     // Stop the group queue's retry timer and its agent-runtime subscriptions.
     disposeGroupRuntime();
-    void Promise.allSettled([shutdownProviderAuthOperations(), disposeAllMcp()]).then(() => {
+    void drainShutdown([
+      shutdownProviderAuthOperations(),
+      (async () => {
+        try {
+          await shutdownComposioService();
+        } finally {
+          await disposeAllMcp();
+        }
+      })(),
+    ]).then(() => {
       allowQuitAfterShutdown = true;
       app.quit();
     });

@@ -295,6 +295,19 @@ const api: ModusApi = {
     setEnabled: (input) => ipcRenderer.invoke("mcp:set-enabled", input),
     entry: (input) => ipcRenderer.invoke("mcp:entry", input),
   },
+  composio: {
+    getState: () => ipcRenderer.invoke("composio:get-state"),
+    setApiKey: (input) => ipcRenderer.invoke("composio:set-api-key", input),
+    removeApiKey: () => ipcRenderer.invoke("composio:remove-api-key"),
+    refreshCatalog: () => ipcRenderer.invoke("composio:refresh-catalog"),
+    listTools: (input) => ipcRenderer.invoke("composio:list-tools", input),
+    startConnection: (input) => ipcRenderer.invoke("composio:start-connection", input),
+    getConnectionOperation: (input) =>
+      ipcRenderer.invoke("composio:get-connection-operation", input),
+    setToolkitPolicy: (input) => ipcRenderer.invoke("composio:set-toolkit-policy", input),
+    renameAccount: (input) => ipcRenderer.invoke("composio:rename-account", input),
+    disconnectAccount: (input) => ipcRenderer.invoke("composio:disconnect-account", input),
+  },
   rules: {
     list: (cwd) => ipcRenderer.invoke("rules:list", cwd),
     getAgents: (cwd) => ipcRenderer.invoke("rules:get-agents", cwd),

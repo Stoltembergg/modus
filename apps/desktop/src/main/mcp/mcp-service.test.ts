@@ -10,6 +10,11 @@ import { defaultMcpConfigPath } from "./mcp-config";
 
 type MockCloseable = { close: ReturnType<typeof vi.fn> };
 type MockClient = MockCloseable & { transport?: MockCloseable | undefined };
+type MockHttpTransportCall = {
+  url: string;
+  options: Record<string, unknown>;
+  transport: MockCloseable;
+};
 
 const mcpMock = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
@@ -20,8 +25,15 @@ const mcpMock = vi.hoisted(() => ({
   callObservedAbort: false,
   clients: [] as MockClient[],
   transports: [] as MockCloseable[],
+  streamableHttpCalls: [] as MockHttpTransportCall[],
+  sseCalls: [] as Array<{ url: string; options: Record<string, unknown> }>,
   connect: undefined as (() => Promise<void>) | undefined,
-  listTools: undefined as (() => Promise<{ tools: Array<Record<string, unknown>> }>) | undefined,
+  listTools: undefined as
+    | ((params?: { cursor?: string }) => Promise<{
+        tools: Array<Record<string, unknown>>;
+        nextCursor?: string;
+      }>)
+    | undefined,
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
@@ -75,6 +87,24 @@ vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
   },
 }));
 
+vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
+  StreamableHTTPClientTransport: class {
+    close = vi.fn(async () => {});
+    constructor(url: URL, options: Record<string, unknown>) {
+      mcpMock.streamableHttpCalls.push({ url: url.toString(), options, transport: this });
+    }
+  },
+}));
+
+vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+  SSEClientTransport: class {
+    close = vi.fn(async () => {});
+    constructor(url: URL, options: Record<string, unknown>) {
+      mcpMock.sseCalls.push({ url: url.toString(), options });
+    }
+  },
+}));
+
 vi.mock("../agent/agent-run-store", () => ({
   getActiveAgentRun: (sessionId: string) => mcpMock.activeRuns.get(sessionId),
 }));
@@ -83,9 +113,12 @@ import {
   disposeAllMcp,
   listAllMcpTools,
   listAllowlistedMcpToolNames,
+  listMcpServers,
   mcpToolName,
+  registerComposioMcpSession,
   setMcpServerEnabled,
   syncWorkspaceMcp,
+  unregisterComposioMcpSession,
 } from "./mcp-service";
 
 let cwd: string;
@@ -145,6 +178,8 @@ beforeEach(async () => {
   mcpMock.callObservedAbort = false;
   mcpMock.clients = [];
   mcpMock.transports = [];
+  mcpMock.streamableHttpCalls = [];
+  mcpMock.sseCalls = [];
   mcpMock.connect = undefined;
   mcpMock.listTools = undefined;
 });
@@ -552,6 +587,213 @@ describe("MCP read-only allowlist", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("Composio MCP bridge", () => {
+  const sessionInput = (allowedToolSlugs: string[]) => ({
+    url: "https://mcp.composio.dev/session/secret-path",
+    headers: { "x-session-key": "session-secret" },
+    allowedToolSlugs,
+  });
+
+  it("registers exactly the selected tools for chat through dangerous mcp.call permissions", async () => {
+    mcpMock.tools = [
+      {
+        name: "GITHUB_LIST_REPOSITORIES",
+        description: "List repositories",
+        inputSchema: { type: "object" },
+      },
+      {
+        name: "GITHUB_CREATE_ISSUE",
+        description: "Create an issue",
+        inputSchema: { type: "object" },
+      },
+      { name: "GITHUB_DELETE_REPOSITORY", inputSchema: { type: "object" } },
+    ];
+
+    const registered = await registerComposioMcpSession(
+      sessionInput(["GITHUB_LIST_REPOSITORIES", "GITHUB_CREATE_ISSUE"]),
+    );
+    const listName = mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES", "dangerous");
+    const createName = mcpToolName("__modus_composio", "GITHUB_CREATE_ISSUE", "dangerous");
+    const omittedName = mcpToolName("__modus_composio", "GITHUB_DELETE_REPOSITORY", "dangerous");
+
+    expect(registered.map((tool) => tool.name)).toEqual([
+      "GITHUB_LIST_REPOSITORIES",
+      "GITHUB_CREATE_ISSUE",
+    ]);
+    expect(toolRegistry.getEntry(listName)).toMatchObject({
+      profiles: ["chat"],
+      permission: { danger: "dangerous", action: "mcp.call" },
+    });
+    expect(toolRegistry.getEntry(createName)).toMatchObject({
+      profiles: ["chat"],
+      permission: { danger: "dangerous", action: "mcp.call" },
+    });
+    expect(toolRegistry.getEntry(omittedName)).toBeUndefined();
+    expect(toolRegistry.getCustomToolDefinitions("plan").map((tool) => tool.name)).not.toContain(
+      listName,
+    );
+    expect(
+      toolRegistry.classify({
+        type: "tool_call",
+        toolCallId: "composio-call",
+        toolName: createName,
+        input: {},
+      } as never),
+    ).toEqual({ action: "mcp.call", dangerous: true });
+  });
+
+  it("uses Streamable HTTP only and sends session headers with redirect handling set to error", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+
+    await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+
+    expect(mcpMock.streamableHttpCalls).toHaveLength(1);
+    expect(mcpMock.streamableHttpCalls[0]?.url).toBe(sessionInput([]).url);
+    expect(mcpMock.streamableHttpCalls[0]?.options).toMatchObject({
+      requestInit: {
+        headers: { "x-session-key": "session-secret" },
+        redirect: "error",
+      },
+    });
+    expect(mcpMock.sseCalls).toHaveLength(0);
+  });
+
+  it("does not fall back to SSE when the Composio Streamable HTTP connection fails", async () => {
+    mcpMock.connect = async () => {
+      throw new Error("Streamable HTTP unavailable");
+    };
+
+    await expect(
+      registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"])),
+    ).rejects.toThrow(/Streamable HTTP unavailable/);
+
+    expect(mcpMock.streamableHttpCalls).toHaveLength(1);
+    expect(mcpMock.sseCalls).toHaveLength(0);
+    expect(
+      toolRegistry.getEntry(mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES")),
+    ).toBeUndefined();
+  });
+
+  it("survives workspace MCP reconciliation without appearing in workspace server state", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+
+    const workspaceServers = await syncWorkspaceMcp(cwd);
+
+    expect(workspaceServers).toEqual([]);
+    expect(listMcpServers()).toEqual([]);
+    expect(
+      toolRegistry.getEntry(mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES")),
+    ).toBeDefined();
+  });
+
+  it("closes the internal session and unregisters its tools during disposeAllMcp", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+    const client = getMockClient();
+    const transport = mcpMock.streamableHttpCalls[0]?.transport;
+    const toolName = mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES");
+
+    await disposeAllMcp();
+
+    expect(client.close).toHaveBeenCalledOnce();
+    expect(transport?.close).toHaveBeenCalledOnce();
+    expect(toolRegistry.getEntry(toolName)).toBeUndefined();
+  });
+
+  it("does not overwrite a generic MCP tool with a colliding generated name", async () => {
+    const rawName = "GITHUB_LIST_REPOSITORIES";
+    const generatedName = mcpToolName("__modus_composio", rawName, "dangerous");
+    mcpMock.tools = [{ name: rawName, inputSchema: { type: "object" } }];
+    await configureServers({
+      __modus_composio: { command: "mock-mcp", args: [], readOnlyToolAllowlist: [] },
+    });
+    const genericDefinition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === generatedName);
+
+    await expect(registerComposioMcpSession(sessionInput([rawName]))).rejects.toThrow(/collision/i);
+
+    expect(toolRegistry.getEntry(generatedName)).toBeDefined();
+    expect(
+      toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === generatedName),
+    ).toBe(genericDefinition);
+  });
+
+  it("does not let a later generic server claim an active Composio tool name", async () => {
+    const rawName = "GITHUB_LIST_REPOSITORIES";
+    const generatedName = mcpToolName("__modus_composio", rawName, "dangerous");
+    mcpMock.tools = [{ name: rawName, inputSchema: { type: "object" } }];
+    await registerComposioMcpSession(sessionInput([rawName]));
+    const composioDefinition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === generatedName);
+
+    await configureServers({
+      __modus_composio: { command: "mock-mcp", args: [], readOnlyToolAllowlist: [] },
+    });
+
+    expect(listMcpServers()).toMatchObject([
+      { name: "__modus_composio", status: "failed", tools: [] },
+    ]);
+    expect(toolRegistry.getEntry(generatedName)?.ui.verb).toBe("Composio");
+    expect(
+      toolRegistry.getCustomToolDefinitions("chat").find((tool) => tool.name === generatedName),
+    ).toBe(composioDefinition);
+  });
+
+  it("registers nothing if any explicitly selected operation is missing", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+
+    await expect(
+      registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES", "GITHUB_CREATE_ISSUE"])),
+    ).rejects.toThrow(/selected.*missing|missing.*selected/i);
+
+    expect(
+      toolRegistry.getEntry(mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES")),
+    ).toBeUndefined();
+  });
+
+  it("rejects more than 500 selected operations before opening a transport", async () => {
+    const selected = Array.from({ length: 501 }, (_, index) => `TOOL_${index}`);
+
+    await expect(registerComposioMcpSession(sessionInput(selected))).rejects.toThrow(/500/);
+
+    expect(mcpMock.clients).toHaveLength(0);
+    expect(mcpMock.streamableHttpCalls).toHaveLength(0);
+  });
+
+  it("unregisters the prior session before rejecting an insecure replacement URL", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+    const previousClient = getMockClient();
+    const toolName = mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES");
+
+    await expect(
+      registerComposioMcpSession({
+        ...sessionInput(["GITHUB_LIST_REPOSITORIES"]),
+        url: "http://mcp.composio.dev/session/insecure",
+      }),
+    ).rejects.toThrow(/HTTPS/);
+
+    expect(previousClient.close).toHaveBeenCalledOnce();
+    expect(toolRegistry.getEntry(toolName)).toBeUndefined();
+    expect(mcpMock.clients).toHaveLength(1);
+  });
+
+  it("unregisters the current Composio tools when explicitly requested", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+    const client = getMockClient();
+    const toolName = mcpToolName("__modus_composio", "GITHUB_LIST_REPOSITORIES");
+
+    await unregisterComposioMcpSession();
+
+    expect(toolRegistry.getEntry(toolName)).toBeUndefined();
+    expect(client.close).toHaveBeenCalledOnce();
   });
 });
 

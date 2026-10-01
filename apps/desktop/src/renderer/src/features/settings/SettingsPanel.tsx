@@ -15,6 +15,7 @@ import { AppearanceSettingsPanel } from "./sections/appearance";
 import { FailureBlacklistSettingsPanel } from "./sections/failure-blacklist";
 import { GeneralSettingsPanel } from "./sections/general";
 import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
+import { IntegrationsSettingsPanel } from "./sections/integrations";
 import { LimitsSettingsPanel } from "./sections/limits";
 import { McpSettingsPanel } from "./sections/mcp";
 import {
@@ -537,6 +538,7 @@ export function SettingsPanel({
           {activeSection === "mcp" ? (
             <McpSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
           ) : null}
+          {activeSection === "integrations" ? <IntegrationsSettingsPanel /> : null}
           {activeSection === "rules" ? <RulesSettingsPanel cwd={workspaceCwd} /> : null}
           {activeSection === "project-memory" ? (
             <ProjectMemorySettingsPanel workspaceId={workspaceId} />

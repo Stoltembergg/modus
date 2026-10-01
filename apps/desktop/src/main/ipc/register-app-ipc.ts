@@ -104,6 +104,7 @@ import {
   stopFindInBrowserPage,
   toggleBrowserDevtools,
 } from "../browser/browser-service";
+import { getComposioService } from "../composio/composio-service-instance";
 import { resolveContext, searchContext } from "../context/context-service";
 import { addDocSource, listDocSources, searchDocs } from "../docs/docs-service";
 import { listDirectory, readWorkspaceFile, writeWorkspaceFile } from "../files/files-service";
@@ -213,6 +214,7 @@ import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
 import { IPC_CHANNELS } from "./channels";
+import { registerComposioIpcHandlers } from "./composio-ipc";
 import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
@@ -1415,6 +1417,7 @@ export function registerAppIpc({
         (request) => completeWithModel({ ...request, timeoutMs: AGENT_PROFILE_TIMEOUT_MS }),
       ),
   });
+  registerComposioIpcHandlers(ipcMain, assertTrustedSender, getComposioService);
   registerGroupIpcHandlers(ipcMain, assertTrustedSender, {
     listAgentGroupsWithMembers: () => listAgentGroupsWithMembers(),
     createAgentGroupWithMembers: (input) => createGroupWithNewAgents(input),

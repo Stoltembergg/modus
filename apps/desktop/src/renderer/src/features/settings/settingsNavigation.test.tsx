@@ -17,6 +17,7 @@ const NAV_LABELS = [
   "Project memory",
   "Harness Insights",
   "Failure blacklist",
+  "Integrations",
   "MCP",
   "Skills",
   "Subagents",
@@ -29,6 +30,7 @@ const GROUPED_NAV = {
     "Project memory",
     "Harness Insights",
     "Failure blacklist",
+    "Integrations",
     "MCP",
     "Skills",
     "Subagents",
@@ -108,6 +110,13 @@ describe("filterSettingsNav", () => {
     ]);
   });
 
+  it("exposes Composio integrations separately from the generic MCP settings", () => {
+    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "integration").map((item) => item.id)).toEqual([
+      "integrations",
+    ]);
+    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "mcp").map((item) => item.id)).toEqual(["mcp"]);
+  });
+
   it("trims surrounding whitespace from the query", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "  limits  ").map((item) => item.id)).toEqual([
       "limits",
@@ -132,7 +141,7 @@ describe("groupSettingsNav", () => {
 });
 
 describe("Settings navigation search", () => {
-  it("shows all twelve nav items when the query is empty", () => {
+  it("shows all thirteen nav items when the query is empty", () => {
     const markup = renderSidebar({ query: "" });
 
     expect(navLabels(markup)).toEqual(RENDERED_NAV_LABELS);
