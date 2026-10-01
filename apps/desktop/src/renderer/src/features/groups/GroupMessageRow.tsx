@@ -329,6 +329,8 @@ export function GroupMessageRow({
   onRetry,
   role,
   activeWaitingSessionIds,
+  liveTurn,
+  streaming,
   replyToMessage,
 }: {
   message: GroupMessage;
