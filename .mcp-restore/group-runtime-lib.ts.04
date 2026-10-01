@@ -1,0 +1,124 @@
+de",
+  "noite",
+  "tudo",
+  "bem",
+]);
+
+/**
+ * True for short social / greeting messages with no actionable objective.
+ * These wake at most the single most relevant member (usually Lead) — others stay silent.
+ */
+export function isSimpleSocialMessage(body: string): boolean {
+  const text = body
+    .replace(/@[\p{L}\p{N}_.-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return true;
+  if (text.length > 80) return false;
+  const lower = text.toLocaleLowerCase();
+  // Explicit work / routing cues → not social-only.
+  if (
+    /\b(fix|build|implement|review|plan|test|ship|deploy|debug|investigate|refactor|write|create|add|remove|delete|block|handoff|task|pr|pull\s*request|bug|issue)\b/i.test(
+      lower,
+    )
+  ) {
+    return false;
+  }
+  if (/[?/]|https?:\/\//i.test(text) && text.length > 24) return false;
+  const socialOnly =
+    /^(hi|hello|hey|yo|sup|thanks|thank you|thx|cheers|gm|good\s+(morning|afternoon|evening)|howdy|hola|oi|ol[aá]|bom\s+dia|boa\s+(tarde|noite)|tudo\s+bem|e\s+a[ií]|fala|salve)([!.\s].*)?$/iu;
+  if (socialOnly.test(lower)) return true;
+  const tokens = tokenizeForWake(text);
+  // No content tokens left after stop-words → social / empty ask.
+  return tokens.length === 0;
+}
+
+/** Soft specialty cues in the user message → role/title/description patterns. */
+const SPECIALTY_CUES: ReadonlyArray<{ message: RegExp; member: RegExp; weight: number }> = [
+  { message: /\b(review|reviews|reviewer|lgtm|approve|feedback)\b/i, member: /review/i, weight: 5 },
+  {
+    message: /\b(implement|implementation|code|coding|build|builder|fix|patch|write|edit)\b/i,
+    member: /build|dev|engineer|implement|coder/i,
+    weight: 5,
+  },
+  {
+    message: /\b(plan|planning|planner|design|architect|spec|approach|strategy)\b/i,
+    member: /plan|architect|design/i,
+    weight: 5,
+  },
+  {
+    message: /\b(test|tests|testing|qa|verify|verification)\b/i,
+    member: /test|qa|verif/i,
+    weight: 5,
+  },
+  {
+    message: /\b(research|explore|investigate|find|search|look\s*into)\b/i,
+    member: /research|explor|scout|analyst/i,
+    weight: 4,
+  },
+];
+
+function tokenizeForWake(body: string): string[] {
+  return body
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
+}
+
+function memberHaystack(member: MemberRef): string {
+  return [member.title, member.role, member.description]
+    .filter(Boolean)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+/**
+ * Pick who should wake for a user message with no @mentions (natural groups N1).
+ * Scores role/description/title against the body, open-task ownership, and a soft
+ * Lead bias. Lead is optional: if absent or not best-fit, another member may wake.
+ * Simple/social greetings wake at most one member (Lead preferred) — Builder/Reviewer
+ * stay silent unless there is a real specialty cue or open task.
+ * Never returns empty when at least one non-archived, non-excluded member exists.
+ */
+export function selectAutonomousWakeTargets(input: {
+  body: string;
+  members: readonly MemberRef[];
+  leadSessionId?: string;
+  excludeSessionIds?: readonly string[];
+  openTasks?: readonly AutonomousWakeTaskHint[];
+  /** Cap simultaneous wakes from one untargeted user message (default 1). */
+  maxTargets?: number;
+}): string[] {
+  const excluded = new Set(input.excludeSessionIds ?? []);
+  const eligible = input.members.filter(
+    (member) => !member.archived && !excluded.has(member.sessionId),
+  );
+  if (eligible.length === 0) return [];
+
+  const social = isSimpleSocialMessage(input.body);
+  const maxTargets = social ? 1 : Math.max(1, input.maxTargets ?? 1);
+  const hasOpenWork = (input.openTasks ?? []).some(
+    (task) =>
+      task.status === "open" || task.status === "in_progress" || task.status === "in_review",
+  );
+
+  // Social / greeting with no pending work → Lead only (or first eligible). Others stay quiet.
+  if (social && !hasOpenWork) {
+    if (input.leadSessionId && eligible.some((m) => m.sessionId === input.leadSessionId)) {
+      return [input.leadSessionId];
+    }
+    return eligible[0] ? [eligible[0].sessionId] : [];
+  }
+
+  const tokens = tokenizeForWake(input.body);
+  const scores = new Map<string, number>();
+
+  for (const member of eligible) {
+    let score = 0;
+    const hay = memberHaystack(member);
+    for (const token of tokens) {
+      if (!hay.includes(token)) continue;
+      score += token.length >= 5 ? 3 : 2;
+      if (member.rol
