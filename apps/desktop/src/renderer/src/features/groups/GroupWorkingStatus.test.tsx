@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+/** CI keepalive: tip had 0 check_runs after merge-main race (2026-10-01T10:37Z). */
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
