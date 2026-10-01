@@ -1,0 +1,8 @@
+name: apply-group-minors-room-test
+on:
+  workflow_dispatch:
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "superseded by apply-group-minors-restore"

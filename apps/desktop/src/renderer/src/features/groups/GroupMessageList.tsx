@@ -1,11 +1,19 @@
+import { IconSearch, IconX } from "@tabler/icons-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
+import {
+  estimateTokensByExecution,
+  executionTokenAnchorIds,
+  filterMessagesByGroupSearch,
+  withGroupDaySeparators,
+} from "../../../../shared/group-conversation-minors";
 import {
   filterMessagesByExecution,
   shortExecutionLabel,
 } from "../../../../shared/group-execution-link";
 import { isNearBottom } from "../../../../shared/group-room-transcript";
+import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
@@ -21,6 +29,7 @@ export const GROUP_MESSAGE_VIRTUALIZE_THRESHOLD = 40;
 
 /** Estimated row height before measure (compact agent cards ~120px). */
 const ESTIMATED_MESSAGE_ROW_PX = 120;
+const ESTIMATED_DAY_SEPARATOR_PX = 28;
 
 export {
   GroupMessageRow,
@@ -86,6 +95,12 @@ export function GroupMessageList({
     height: 0,
     nearBottom: true,
   });
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchGroupId, setSearchGroupId] = useState(groupId);
+  if (searchGroupId !== groupId) {
+    setSearchGroupId(groupId);
+    setSearchQuery("");
+  }
   const labels = useMemo(() => memberLabels(members), [members]);
   const roomMessages = useMemo(
     () => messages.filter((message) => message.groupId === groupId),
@@ -95,25 +110,38 @@ export function GroupMessageList({
   // store, but leave no empty "Completed" bubble in the user's conversation.
   const renderedMessages = useMemo(
     () =>
-      filterMessagesByExecution(
-        roomMessages.filter(
-          (message) =>
-            !(
-              message.authorKind === "agent" &&
-              message.turnId &&
-              message.status === "completed" &&
-              !message.body.trim()
-            ),
+      filterMessagesByGroupSearch(
+        filterMessagesByExecution(
+          roomMessages.filter(
+            (message) =>
+              !(
+                message.authorKind === "agent" &&
+                message.turnId &&
+                message.status === "completed" &&
+                !message.body.trim()
+              ),
+          ),
+          executionFilter,
         ),
-        executionFilter,
+        searchQuery,
+        labels,
       ),
-    [roomMessages, executionFilter],
+    [roomMessages, executionFilter, searchQuery, labels],
   );
   const filterRoot = useMemo(
     () =>
       executionFilter ? roomMessages.find((message) => message.id === executionFilter) : undefined,
     [executionFilter, roomMessages],
   );
+  const transcriptItems = useMemo(
+    () => withGroupDaySeparators(renderedMessages),
+    [renderedMessages],
+  );
+  const tokenTotals = useMemo(
+    () => estimateTokensByExecution(renderedMessages),
+    [renderedMessages],
+  );
+  const tokenAnchors = useMemo(() => executionTokenAnchorIds(renderedMessages), [renderedMessages]);
   const byId = useMemo(
     () => new Map(roomMessages.map((message) => [message.id, message])),
     [roomMessages],
@@ -165,13 +193,21 @@ export function GroupMessageList({
   }, [renderedMessages]);
 
   const [viewportHeight, setViewportHeight] = useState(0);
+  // Threshold stays on message count (not day separators) so small rooms stay full-DOM.
   const virtualize =
     renderedMessages.length >= GROUP_MESSAGE_VIRTUALIZE_THRESHOLD && viewportHeight > 0;
   const virtualizer = useVirtualizer({
-    count: virtualize ? renderedMessages.length : 0,
+    count: virtualize ? transcriptItems.length : 0,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ESTIMATED_MESSAGE_ROW_PX,
-    getItemKey: (index) => renderedMessages[index]?.id ?? index,
+    estimateSize: (index) =>
+      transcriptItems[index]?.type === "day"
+        ? ESTIMATED_DAY_SEPARATOR_PX
+        : ESTIMATED_MESSAGE_ROW_PX,
+    getItemKey: (index) => {
+      const item = transcriptItems[index];
+      if (!item) return index;
+      return item.type === "day" ? item.key : item.message.id;
+    },
     overscan: 8,
     enabled: virtualize,
     initialRect: { width: 760, height: Math.max(viewportHeight, 1) },
@@ -257,6 +293,8 @@ export function GroupMessageList({
     if (node.scrollHeight <= node.clientHeight) void loadOlder();
   }, [hasOlder, loadingOlder, loadOlder]);
 
+  const searching = searchQuery.trim().length > 0;
+
   const messageRowProps = (message: GroupMessage) => {
     const liveRow =
       message.authorKind === "agent" && message.authorSessionId
@@ -272,6 +310,9 @@ export function GroupMessageList({
       activeWaitingSessionIds: activeWaiting,
       avatar: message.authorSessionId ? avatars.get(message.authorSessionId) : undefined,
       cwd,
+      executionTokenTotal: tokenAnchors.has(message.id)
+        ? tokenTotals.get(message.chainId ?? message.id)
+        : undefined,
       labels,
       liveTurn: hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined,
       members,
@@ -286,8 +327,44 @@ export function GroupMessageList({
     };
   };
 
+  function renderDaySeparator(key: string, label: string) {
+    return (
+      <div className="flex items-center gap-3 py-1" data-testid="group-day-separator" key={key}>
+        <span className="h-px flex-1 bg-hairline" />
+        <span className="shrink-0 text-2xs text-fg-faint">{label}</span>
+        <span className="h-px flex-1 bg-hairline" />
+      </div>
+    );
+  }
+
   return (
-    <div className="relative flex min-h-0 min-w-0 flex-1">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="mx-auto flex w-full max-w-[760px] shrink-0 items-center gap-2 px-3 pt-3 sm:px-6">
+        <label
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-hairline bg-elevated/80 px-2.5 py-1.5 text-fg-muted"
+          data-testid="group-conversation-search"
+        >
+          <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
+          <input
+            aria-label="Search in conversation"
+            className="min-w-0 flex-1 bg-transparent text-fg text-xs outline-none placeholder:text-fg-faint"
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
+            placeholder="Search in conversation"
+            type="search"
+            value={searchQuery}
+          />
+          {searching ? (
+            <button
+              aria-label="Clear search"
+              className="shrink-0 text-fg-faint hover:text-fg"
+              onClick={() => setSearchQuery("")}
+              type="button"
+            >
+              <IconX size={ICON.xs} stroke={ICON_STROKE.sm} />
+            </button>
+          ) : null}
+        </label>
+      </div>
       <div
         className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="group-message-list"
@@ -336,6 +413,14 @@ export function GroupMessageList({
               {GROUP_ROOM_EMPTY_TEXT}
             </div>
           ) : null}
+          {searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
+            <div
+              className="py-10 text-center text-fg-faint text-sm"
+              data-testid="group-conversation-search-empty"
+            >
+              No messages match “{searchQuery.trim()}”.
+            </div>
+          ) : null}
           {virtualize ? (
             <div
               className="relative w-full"
@@ -343,8 +428,22 @@ export function GroupMessageList({
               style={{ height: virtualizer.getTotalSize() }}
             >
               {virtualizer.getVirtualItems().map((row) => {
-                const message = renderedMessages[row.index];
-                if (!message) return null;
+                const item = transcriptItems[row.index];
+                if (!item) return null;
+                if (item.type === "day") {
+                  return (
+                    <div
+                      className="absolute top-0 left-0 w-full pb-3"
+                      data-index={row.index}
+                      key={item.key}
+                      ref={virtualizer.measureElement}
+                      style={{ transform: `translateY(${row.start}px)` }}
+                    >
+                      {renderDaySeparator(item.key, item.label)}
+                    </div>
+                  );
+                }
+                const message = item.message;
                 return (
                   <div
                     className="absolute top-0 left-0 w-full pb-3"
@@ -359,16 +458,17 @@ export function GroupMessageList({
               })}
             </div>
           ) : (
-            renderedMessages.map((message) => (
-              <GroupMessageRow key={message.id} {...messageRowProps(message)} />
-            ))
+            transcriptItems.map((item) => {
+              if (item.type === "day") return renderDaySeparator(item.key, item.label);
+              return <GroupMessageRow key={item.message.id} {...messageRowProps(item.message)} />;
+            })
           )}
           <GroupWorkingStatus
             avatars={avatars}
             groupId={groupId}
             labels={labels}
             members={members}
-            rows={visibleWorkingRows}
+            rows={searching ? [] : visibleWorkingRows}
             {...(roles ? { roles } : {})}
           />
         </div>

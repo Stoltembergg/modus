@@ -156,6 +156,17 @@ beforeEach(() => {
   for (const fn of [...Object.values(group), ...Object.values(update), ...Object.values(agents)])
     fn.mockClear();
   Object.assign(window, { modus: { group, update, agents } });
+  // Persistent group composer drafts use localStorage — reset between tests.
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith("modus.group.composerDraft.v1.")) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
 });
 
 afterEach(() => cleanup());
@@ -212,7 +223,7 @@ describe("GroupRoom", () => {
     expect(screen.queryByTestId("group-live-writing")).toBeNull();
   });
 
-  it("clears reply and composer state when navigating to another group", async () => {
+  it("keeps a per-group composer draft when navigating away; clears reply", async () => {
     pages = [[message("original", { body: "Original room message" })]];
     const view = renderRoom();
     const user = userEvent.setup();
@@ -238,6 +249,21 @@ describe("GroupRoom", () => {
     expect(
       (screen.getByRole("textbox", { name: "Message the group" }) as HTMLTextAreaElement).value,
     ).toBe("");
+    view.rerender(
+      <GroupRoom
+        group={GROUP}
+        memberStates={states()}
+        onDelete={vi.fn()}
+        onOpenMember={vi.fn()}
+        onRename={vi.fn()}
+        onUpdateMembers={vi.fn(async () => undefined)}
+        workspaces={WORKSPACES}
+      />,
+    );
+    await screen.findByText("Release squad");
+    expect(
+      (screen.getByRole("textbox", { name: "Message the group" }) as HTMLTextAreaElement).value,
+    ).toBe("Private draft");
   });
 
   it("explicitly resumes an interrupted task by execution id", async () => {
@@ -466,8 +492,11 @@ describe("GroupRoom", () => {
     emit({ type: "group.message", groupId: "g-1", message: left });
     await vi.waitFor(() => expect(screen.getAllByTestId("group-message")).toHaveLength(3));
     const rows = screen.getAllByTestId("group-message");
-    expect(rows.map((row) => row.textContent)).toEqual([
-      "YYouHuman#1hello",
+    expect(rows[0]?.textContent).toContain("You");
+    expect(rows[0]?.textContent).toContain("hello");
+    expect(rows[0]?.textContent).toContain("#1");
+    expect(rows[0]?.textContent).toContain("~2 tokens");
+    expect(rows.slice(1).map((row) => row.textContent)).toEqual([
       "Cy joined as Scribe",
       "Cy left the group",
     ]);

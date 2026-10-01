@@ -23,8 +23,10 @@ import {
   splitRoomMessageBody,
   stripAgentSelfIntro,
 } from "../../../../shared/group-room-transcript";
+import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
+import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { GroupFinalResultCard } from "./GroupFinalResultCard";
@@ -227,9 +229,11 @@ function MessageAttachments({ message }: { message: GroupMessage }) {
 
 function MessageMeta({
   message,
+  executionTokenTotal,
   onExecutionFilter,
 }: {
   message: GroupMessage;
+  executionTokenTotal?: number | undefined;
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
 }) {
   const status = message.status;
@@ -248,7 +252,12 @@ function MessageMeta({
       #{shortExecutionLabel(executionId)}
     </button>
   ) : null;
+  const tokenLabel =
+    typeof executionTokenTotal === "number" && executionTokenTotal > 0
+      ? formatTokenCount(executionTokenTotal)
+      : "";
   // Live turns already show concrete phases — do not stamp opaque "Working".
+  // Hoist executionChip so running/writing rows still expose the filter control.
   if (!status || status === "running" || status === "writing")
     return (
       <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
@@ -256,6 +265,15 @@ function MessageMeta({
         <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
           {formatClock(Date.parse(message.createdAt))}
         </time>
+        {tokenLabel ? (
+          <span
+            className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
+            data-testid="group-execution-tokens"
+            title="Estimated tokens for this execution (characters ÷ 4)"
+          >
+            ~{tokenLabel} tokens
+          </span>
+        ) : null}
       </span>
     );
   const label = {
@@ -273,6 +291,15 @@ function MessageMeta({
       <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
         {formatClock(Date.parse(message.createdAt))}
       </time>
+      {tokenLabel ? (
+        <span
+          className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
+          data-testid="group-execution-tokens"
+          title="Estimated tokens for this execution (characters ÷ 4)"
+        >
+          ~{tokenLabel} tokens
+        </span>
+      ) : null}
       {label ? (
         <span
           className={
@@ -284,6 +311,42 @@ function MessageMeta({
         </span>
       ) : null}
     </span>
+  );
+}
+
+function MessageActions({
+  copyText,
+  onReply,
+  message,
+  align,
+}: {
+  copyText: string;
+  onReply?: ((message: GroupMessage) => void) | undefined;
+  message: GroupMessage;
+  align: "start" | "end";
+}) {
+  if (!copyText.trim() && !onReply) return null;
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100",
+        align === "end" ? "mr-3 self-end" : "ml-8 self-start",
+      )}
+      data-testid="group-message-actions"
+    >
+      {copyText.trim() ? <CopyButton label="Copy message" text={copyText} /> : null}
+      {onReply ? (
+        <button
+          aria-label="Reply to message"
+          className="text-2xs text-fg-faint hover:text-fg-muted"
+          data-testid="group-message-reply"
+          onClick={() => onReply(message)}
+          type="button"
+        >
+          Reply
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -364,6 +427,7 @@ export function GroupMessageRow({
   liveTurn,
   streaming,
   replyToMessage,
+  executionTokenTotal,
 }: {
   message: GroupMessage;
   replyToMessage?: GroupMessage | undefined;
@@ -376,6 +440,8 @@ export function GroupMessageRow({
   onRetry?: ((message: GroupMessage) => Promise<void>) | undefined;
   /** Click the execution chip to filter the transcript. */
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
+  /** Estimated token total for this ask-spanning execution (shown on the chain’s last message). */
+  executionTokenTotal?: number | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
   /** Discreet role under the name (agent role or "You"). */
@@ -494,7 +560,13 @@ export function GroupMessageRow({
             <PromptMessageIdentity
               name="You"
               role={role?.trim() || "Human"}
-              trailing={<MessageMeta message={message} onExecutionFilter={onExecutionFilter} />}
+              trailing={
+                <MessageMeta
+                  executionTokenTotal={executionTokenTotal}
+                  message={message}
+                  onExecutionFilter={onExecutionFilter}
+                />
+              }
             />
             <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
             {message.body.trim() ? (
@@ -506,17 +578,7 @@ export function GroupMessageRow({
             <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
-        {onReply ? (
-          <button
-            aria-label="Reply to message"
-            className="mr-3 self-end text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
-            data-testid="group-message-reply"
-            onClick={() => onReply(message)}
-            type="button"
-          >
-            Reply
-          </button>
-        ) : null}
+        <MessageActions align="end" copyText={message.body} message={message} onReply={onReply} />
       </div>
     );
   }
@@ -593,7 +655,11 @@ export function GroupMessageRow({
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}
-                <MessageMeta message={message} onExecutionFilter={onExecutionFilter} />
+                <MessageMeta
+                  executionTokenTotal={executionTokenTotal}
+                  message={message}
+                  onExecutionFilter={onExecutionFilter}
+                />
                 {readyOnly ? (
                   <span
                     className="font-normal text-amber-400/90 text-2xs"
@@ -663,17 +729,12 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-      {onReply && !writing && !showLiveProgress && !fallbackProgress ? (
-        <button
-          aria-label="Reply to message"
-          className="ml-8 self-start text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
-          data-testid="group-message-reply"
-          onClick={() => onReply(message)}
-          type="button"
-        >
-          Reply
-        </button>
-      ) : null}
+      <MessageActions
+        align="start"
+        copyText={prose || message.body}
+        message={message}
+        onReply={onReply}
+      />
     </div>
   );
 }
