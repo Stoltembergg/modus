@@ -1,0 +1,70 @@
+name: restore-composer-merge-main-pr113
+# Restores GroupComposer from aa91251 (pre-PLACEHOLDER), merges main, keeps liveTurn + onExecutionFilter.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/restore-composer-merge-main-pr113.yml
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Restore composer, merge main, resolve list
+        run: |
+          set -euo pipefail
+          git config user.email "stoltembergg@gmail.com"
+          git config user.name "Gabriel"
+          GOOD=aa912513201cbb447b3d31fb4fc8a61e811f3923
+          f=apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx
+          git checkout "$GOOD" -- "$f"
+          test "$(wc -c < "$f")" -gt 10000
+          grep -q 'export function GroupComposer\|function GroupComposer' "$f" || grep -q 'executionMode' "$f"
+          ! grep -q 'PLACEHOLDER_WILL_REPLACE' "$f"
+          git fetch origin main
+          set +e
+          git merge origin/main --no-edit
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            list=apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx")
+          text = p.read_text()
+          if "<<<<<<<" in text:
+              pattern = re.compile(r"<<<<<<< HEAD\n.*?=======\n(.*?)>>>>>>> origin/main\n", re.S)
+              m = pattern.search(text)
+              assert m, "conflict pattern mismatch"
+              theirs = m.group(1)
+              if "onExecutionFilter={onExecutionFilterChange}" not in theirs:
+                  theirs = theirs.replace(
+                      "message={message}\n",
+                      "message={message}\n                onExecutionFilter={onExecutionFilterChange}\n",
+                      1,
+                  )
+              text = pattern.sub(theirs, text, count=1)
+              assert "<<<<<<<" not in text
+              p.write_text(text)
+          PY
+            git add -A
+            git commit -m "fix(groups): restore GroupComposer + merge main (liveTurn + execution filter)"
+          else
+            # merge clean but composer restore may need commit
+            if ! git diff --quiet || ! git diff --cached --quiet; then
+              git add -A
+              git commit -m "fix(groups): restore GroupComposer after PLACEHOLDER wipe"
+            fi
+          fi
+          ! grep -R --include='*.ts' --include='*.tsx' -n 'PLACEHOLDER_WILL_REPLACE\|LOAD_FROM_FILE' apps/desktop/src || exit 1
+          grep -q 'executionMode' apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx
+          grep -q 'onExecutionFilter' apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+          git push origin HEAD:cursor/group-execution-linking-c747
