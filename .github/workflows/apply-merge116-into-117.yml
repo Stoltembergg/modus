@@ -3,7 +3,7 @@ on:
   push:
     branches: [cursor/group-conversation-minors-c747]
     paths:
-      - 'internal/_push/merge116/**'
+      - 'internal/_push/merge116/READY'
 permissions:
   contents: write
 jobs:
@@ -20,8 +20,10 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test -f internal/_push/merge116/READY
+          test -f internal/_push/merge116/manifest.json
           python3 <<'PY'
-          import base64, hashlib, json, pathlib, zlib, subprocess, os
+          import base64, hashlib, json, pathlib, zlib, subprocess, os, shutil
           root = pathlib.Path('internal/_push/merge116')
           manifest = json.loads((root / 'manifest.json').read_text())
           merge_ref = manifest['merge_ref']
@@ -45,7 +47,6 @@ jobs:
               target.parent.mkdir(parents=True, exist_ok=True)
               target.write_bytes(data)
               print('resolved', target, 'sha', digest)
-          import shutil
           shutil.rmtree(root)
           subprocess.check_call(['git', 'add', '-A'])
           status = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
