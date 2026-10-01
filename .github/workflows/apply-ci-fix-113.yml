@@ -1,0 +1,53 @@
+name: apply-ci-fix-113
+on:
+  push:
+    branches: [cursor/group-execution-linking-c747]
+    paths: ['.ci-fix/**']
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: cursor/group-execution-linking-c747
+      - name: Restore and patch CI fix files
+        run: |
+          set -euo pipefail
+          python3 << 'PY'
+          import base64, hashlib, json, pathlib, zlib, subprocess, shutil
+          root = pathlib.Path('.')
+          # group-runtime: restore pre-corruption blob then apply EOPT patch
+          gr = root/'apps/desktop/src/main/groups/group-runtime.ts'
+          gr.write_bytes(subprocess.check_output([
+            'git','show','8bbe652bead5690309ed91ac8a470b5b4cd3b117:apps/desktop/src/main/groups/group-runtime.ts'
+          ]))
+          subprocess.check_call(['patch','-p1','-i','.ci-fix/group-runtime.eopt.patch'])
+          # GroupComposer: absolute write from zlib payload (avoids tip drift)
+          gc = root/'apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx'
+          zb = (root/'.ci-fix/GroupComposer.tsx.zb64').read_text().strip()
+          gc.write_bytes(zlib.decompress(base64.b64decode(zb)))
+          expect = {
+            'apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx': (19667, '2292d7e122e5ceac288fd80fe62411f2b330285e99bc9dafaeaf90ec90eae5a9'),
+            'apps/desktop/src/main/groups/group-runtime.ts': (47218, 'd94d9f28cd65e5ccf39892b36c2fb43a2c01ccb64cbe5ae75fef8899a42adeb6'),
+          }
+          for path, (nbytes, sha) in expect.items():
+              data = pathlib.Path(path).read_bytes()
+              got = hashlib.sha256(data).hexdigest()
+              print(path, len(data), got[:12])
+              assert len(data) == nbytes and got == sha, (path, len(data), got)
+          schemas = pathlib.Path('apps/desktop/src/main/ipc/schemas.ts').read_bytes()
+          assert len(schemas) == 33894, len(schemas)
+          print('schemas OK', len(schemas))
+          shutil.rmtree(root/'.ci-fix', ignore_errors=True)
+          wf = root/'.github/workflows/apply-ci-fix-113.yml'
+          if wf.exists(): wf.unlink()
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status
+          git commit -m "fix(groups): biome fieldset + EOPT chainId for execution linking"
+          git push origin HEAD:cursor/group-execution-linking-c747
