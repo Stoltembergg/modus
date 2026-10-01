@@ -302,6 +302,9 @@ function mimeTypeLabel(mimeType: string): string {
 /**
  * Prompt Kit Text Shimmer — animated loading text for working agents above the composer.
  * https://www.prompt-kit.com/docs/text-shimmer
+ *
+ * Uses the same sheen technique as ThoughtLine (no injected <style> / arbitrary
+ * keyframes), so Electron Vite packaging stays lean on CI runners.
  */
 export function TextShimmer({
   children,
@@ -318,42 +321,30 @@ export function TextShimmer({
   className?: string;
 } & Omit<React.HTMLAttributes<HTMLElement>, "as" | "children" | "className">) {
   const dynamicSpread = Math.min(Math.max(spread, 5), 45);
+  const mutedStop = Math.max(5, 50 - dynamicSpread);
+  const brightStop = Math.min(95, 50 + dynamicSpread);
   return (
-    <>
-      <style>{`
-@keyframes prompt-kit-shimmer {
-  0% { background-position: 200% 50%; }
-  100% { background-position: -200% 50%; }
-}
-@media (prefers-reduced-motion: reduce) {
-  [data-prompt-kit="text-shimmer"] {
-    animation: none !important;
-    background-image: none !important;
-    color: inherit;
-    -webkit-text-fill-color: currentColor;
-  }
-}
-`}</style>
-      <Tag
-        className={cn(
-          "bg-clip-text font-medium text-transparent [background-size:200%_auto]",
-          "animate-[prompt-kit-shimmer_var(--pk-shimmer-duration,4s)_infinite_linear]",
-          className,
-        )}
-        data-prompt-kit="text-shimmer"
-        data-testid="group-text-shimmer"
-        style={
-          {
-            backgroundImage: `linear-gradient(to right, var(--muted-foreground, var(--color-fg-faint, #888)) ${50 - dynamicSpread}%, var(--foreground, var(--color-fg, #eee)) 50%, var(--muted-foreground, var(--color-fg-faint, #888)) ${50 + dynamicSpread}%)`,
-            "--pk-shimmer-duration": `${duration}s`,
-            animationDuration: `${duration}s`,
-            WebkitBackgroundClip: "text",
-          } as CSSProperties
-        }
-        {...props}
-      >
-        {children}
-      </Tag>
-    </>
+    <Tag
+      className={cn(
+        "inline-block bg-clip-text font-medium text-transparent",
+        "motion-reduce:bg-none motion-reduce:text-fg-subtle",
+        className,
+      )}
+      data-prompt-kit="text-shimmer"
+      data-testid="group-text-shimmer"
+      style={
+        {
+          backgroundImage: `linear-gradient(100deg, color-mix(in srgb, var(--muted-foreground, #888) 55%, transparent) ${mutedStop}%, var(--foreground, #eee) 50%, color-mix(in srgb, var(--muted-foreground, #888) 55%, transparent) ${brightStop}%)`,
+          backgroundSize: "250% 100%",
+          backgroundPosition: "125% 0",
+          WebkitBackgroundClip: "text",
+          WebkitTextFillColor: "transparent",
+          animation: `t-think-shimmer ${duration}s linear infinite`,
+        } as CSSProperties
+      }
+      {...props}
+    >
+      {children}
+    </Tag>
   );
 }
