@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
+import { buildSafeChainOfThought } from "../../../../shared/group-prompt-kit";
 import { inlineLiveStatusLabel } from "../../../../shared/group-room-transcript";
 import { shouldShowStillWorking } from "../../../../shared/group-semantic-presence";
-import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import {
   type GroupLiveTurnSnapshot,
   isStillWorking,
   STILL_WORKING_AFTER_MS,
 } from "./groupLiveTurn";
-import { PromptTool } from "./prompt-kit/PromptKit";
+import { PromptChainOfThought } from "./prompt-kit/PromptKit";
 
 /**
- * Ephemeral Thinking State + active Tool under the agent name.
- * Hidden once `message.delta` has produced stream text, and dismantled on run end.
- * Never persists into the transcript.
+ * Ephemeral, safe progress summary inside the agent's message card.
+ * Public prose can appear alongside it; raw model thinking is never rendered.
  */
 export function GroupMemberLiveTurn({
   mode,
@@ -32,10 +31,9 @@ export function GroupMemberLiveTurn({
     return () => window.clearInterval(id);
   }, [mode]);
 
-  // Terminal runs and streamed text dismantle all transients immediately.
+  // Terminal runs dismantle progress; streamed text stays alongside its summary.
   if (live.collapsed) return null;
   const stream = live.streamText.trim();
-  if (stream) return null;
 
   const lastActivity = live.lastEventAt > 0 ? live.lastEventAt : startedAtRef.current;
   const still =
@@ -43,38 +41,53 @@ export function GroupMemberLiveTurn({
     (live.presence
       ? shouldShowStillWorking(live.presence, now, STILL_WORKING_AFTER_MS)
       : isStillWorking(mode, lastActivity, now, STILL_WORKING_AFTER_MS));
-  const statusLabel = inlineLiveStatusLabel({
-    phase: String(live.phase),
-    presenceState: live.presence?.state,
+  const working = mode === "running";
+  const progress =
+    mode === "queued"
+      ? ["Waiting for its turn"]
+      : buildSafeChainOfThought({
+          phase: String(live.phase),
+          activity: live.presence?.activity,
+          tools: live.tools,
+          hasStream: Boolean(stream),
+        });
+  if (stream) {
+    const writingIndex = progress.findIndex((step) => /writ/i.test(step));
+    if (writingIndex >= 0) {
+      const [writingStep] = progress.splice(writingIndex, 1);
+      if (writingStep) progress.push(writingStep);
+    }
+  }
+  if (still && !stream && !progress.some((step) => /still working/i.test(step))) {
+    progress.push("Still working…");
+  }
+  const progressItems = progress.slice(-4);
+  const statusSummary = inlineLiveStatusLabel({
+    phase: stream ? "Writing" : String(live.phase),
+    presenceState: stream ? "writing" : live.presence?.state,
     activity: live.presence?.activity,
     waitingFor: live.presence?.waitingFor,
-    stillWorking: still,
+    stillWorking: !stream && still,
     startedAt: live.presence?.startedAt ?? (mode === "queued" ? startedAtRef.current : undefined),
     nowMs: now,
   });
-  const working = mode === "running";
-  // Only the active (not-done) tool — disappears as soon as it finishes.
-  const activeTool = live.tools.find((tool) => !tool.done);
+  const summary = progressItems[progressItems.length - 1] ?? statusSummary;
 
   return (
-    <div className="min-w-0 space-y-1" data-testid="group-member-live-turn" data-tone="temporary">
+    <div
+      className="flex min-w-0 items-start gap-1.5"
+      data-label={summary}
+      data-testid="group-member-live-turn"
+      data-tone="temporary"
+    >
       <div
-        className="flex min-w-0 items-center gap-1.5 text-fg-subtle text-sm"
-        data-testid="group-live-status"
-      >
-        {working ? (
-          <span
-            aria-hidden
-            className="size-1.5 shrink-0 animate-pulse rounded-full bg-fg-faint"
-            data-testid="group-live-pulse"
-          />
-        ) : null}
-        <span className="sr-only">{statusLabel}</span>
-        <ThinkingStates className="text-fg-subtle" label={statusLabel} />
+        className={`mt-1.5 size-1.5 shrink-0 rounded-full bg-fg-faint${working ? " animate-pulse" : ""}`}
+        aria-hidden
+        data-working={working || undefined}
+      />
+      <div className="min-w-0 flex-1" data-testid="group-live-status">
+        <PromptChainOfThought items={progressItems} summary={summary} title="Progress" />
       </div>
-      {activeTool ? (
-        <PromptTool name={activeTool.label || activeTool.name} state="running" />
-      ) : null}
     </div>
   );
 }
