@@ -916,6 +916,7 @@ describe("coordinator mode", () => {
       [
         "<group_snapshot>",
         "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
+        "When a task finishes, consolidate into one final result card: Outcome / Validations / Changed files / Open items.",
         "Members:",
         "- @Alpha (id a) lead, you: working",
         "- @Beta (id b): idle, branch modus/group/g/b",
