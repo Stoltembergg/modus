@@ -1,0 +1,41 @@
+--- a/apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
++++ b/apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
+@@ -96,6 +96,7 @@
+   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
+     message("posted", { body: input.body }),
+   ),
++  resumeExecution: vi.fn(async (_input: unknown) => undefined),
+   stop: vi.fn(async (_groupId: string) => undefined),
+   listTasks: vi.fn(async (_groupId: string) => tasks),
+   cancelTask: vi.fn(async (taskId: string) => {
+@@ -239,7 +240,7 @@
+     ).toBe("");
+   });
+ 
+-  it("explicitly resumes an interrupted task as a new user request", async () => {
++  it("explicitly resumes an interrupted task by execution id", async () => {
+     pages = [
+       [
+         message("interrupted", {
+@@ -248,17 +249,18 @@
+           body: "Saved progress",
+           status: "interrupted",
+           error: "App restarted",
++          turnId: "exec-1",
+         }),
+       ],
+     ];
+     renderRoom();
+     const user = userEvent.setup();
+     await user.click(await screen.findByRole("button", { name: "Resume task" }));
+-    expect(group.postMessage).toHaveBeenCalledWith({
++    expect(group.resumeExecution).toHaveBeenCalledWith({
+       groupId: "g-1",
+-      body: "Resume this task.",
+-      replyToMessageId: "interrupted",
++      executionId: "exec-1",
+     });
++    expect(group.postMessage).not.toHaveBeenCalled();
+     expect(screen.getByText("Interrupted")).toBeTruthy();
+     expect(screen.getByText("Saved progress")).toBeTruthy();
+   });

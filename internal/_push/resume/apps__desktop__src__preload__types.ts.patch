@@ -1,0 +1,18 @@
+--- a/apps/desktop/src/preload/types.ts
++++ b/apps/desktop/src/preload/types.ts
+@@ -68,7 +68,6 @@
+   PersonalizationState,
+   PlanRef,
+   PostGroupMessageInput,
+-  ResumeGroupExecutionInput,
+   PreviewReadResult,
+   ProjectMemoryScope,
+   ProjectMemorySnapshot,
+@@ -81,6 +80,7 @@
+   QuestionResponse,
+   RawMcpEntry,
+   ResolvedContext,
++  ResumeGroupExecutionInput,
+   RuleFileInfo,
+   SkillDetail,
+   SkillInfo,
