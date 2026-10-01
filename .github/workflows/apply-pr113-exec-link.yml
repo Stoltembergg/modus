@@ -1,0 +1,32 @@
+name: apply-pr113-exec-link
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/patches/pr113-exec-link.patch
+      - .github/workflows/apply-pr113-exec-link.yml
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply execution-link patch
+        run: |
+          set -euo pipefail
+          patch=.github/patches/pr113-exec-link.patch
+          test -f "$patch"
+          if grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts; then
+            echo 'already applied'
+            exit 0
+          fi
+          git apply --index "$patch"
+          git config user.email "stoltembergg@gmail.com"
+          git config user.name "Gabriel"
+          git commit -m "fix(groups): wire executionId through store, schemas, and composer"
+          git push origin HEAD:cursor/group-execution-linking-c747
