@@ -135,12 +135,12 @@ describe("group runtime IPC", () => {
       ).toThrow(/Invalid IPC payload/);
       expect(() => handlers.get("group:working")?.(trusted, { x: 1 })).toThrow(/expected no input/);
       expect(() => handlers.get("group:member-states")?.(trusted, {})).toThrow(/expected no input/);
-      expect(() =>
-        handlers.get("group:stop")?.(trusted, { groupId: "" }),
-      ).toThrow(/Invalid IPC payload/);
-      expect(() =>
-        handlers.get("group:resume-execution")?.(trusted, { groupId: "g-1" }),
-      ).toThrow(/Invalid IPC payload/);
+      expect(() => handlers.get("group:stop")?.(trusted, { groupId: "" })).toThrow(
+        /Invalid IPC payload/,
+      );
+      expect(() => handlers.get("group:resume-execution")?.(trusted, { groupId: "g-1" })).toThrow(
+        /Invalid IPC payload/,
+      );
       expect(service.stopGroup).not.toHaveBeenCalled();
       service.postUserMessage.mockImplementationOnce(() => {
         throw Object.assign(new Error("Session s-9 is not a member"), {

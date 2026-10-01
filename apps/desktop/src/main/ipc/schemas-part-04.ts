@@ -13,15 +13,6 @@ import {
 } from "../../shared/update-restore";
 
 import {
-  MAX_ATTACHMENT_BASE64_CHARS,
-  MAX_GROUP_MEMBERS,
-  MAX_GROUP_MESSAGE_BODY,
-  MAX_HYPERPLAN_REVISION_BYTES,
-  MAX_HYPERPLAN_SOURCE_EVIDENCE,
-  MAX_HYPERPLAN_SOURCE_ITEMS,
-  MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES,
-  MAX_PLAN_CONTENT_BYTES,
-  MAX_PROFILE_ROLES,
   agentFields,
   agentIdString,
   fileOpenSchema,
@@ -35,6 +26,15 @@ import {
   hexColor,
   jsonByteLength,
   jsonObjectSchema,
+  MAX_ATTACHMENT_BASE64_CHARS,
+  MAX_GROUP_MEMBERS,
+  MAX_GROUP_MESSAGE_BODY,
+  MAX_HYPERPLAN_REVISION_BYTES,
+  MAX_HYPERPLAN_SOURCE_EVIDENCE,
+  MAX_HYPERPLAN_SOURCE_ITEMS,
+  MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES,
+  MAX_PLAN_CONTENT_BYTES,
+  MAX_PROFILE_ROLES,
   mcpReadOnlyToolAllowlistSchema,
   modelCompatibilitySchema,
   modelCostSchema,
@@ -53,7 +53,7 @@ import {
   stringRecordSchema,
   thinkingLevelSchema,
   updateRestoreUiStateSchema,
-  updateSaveUiStateSchema
+  updateSaveUiStateSchema,
 } from "./schemas-shared";
 
 export function parseIpcInput<T>(schema: z.ZodType<T>, value: unknown, channel: string): T {
@@ -112,7 +112,6 @@ export const agentsGenerateProfileSchema = z
     agentId: agentIdString.optional(),
   })
   .strict();
-
 
 export const groupCreateSchema = z
   .object({
