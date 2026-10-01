@@ -483,6 +483,7 @@ export function IntegrationsSettingsPanel() {
 
       {currentError ? (
         <div
+          aria-label="Falha na integração Composio"
           className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
           role="alert"
         >
@@ -914,7 +915,7 @@ export function IntegrationsSettingsPanel() {
         <p
           aria-live="assertive"
           className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
-          role="alert"
+          role="status"
         >
           {currentError}
         </p>
