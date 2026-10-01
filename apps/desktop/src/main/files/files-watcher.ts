@@ -2,13 +2,14 @@ import { type FSWatcher, watch } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import { BrowserWindow } from "electron";
 import type { FilesChangeEvent } from "../../shared/contracts";
+import { notifyGroupProjectPathsChanged } from "../groups/group-project-setup";
 import { IPC_CHANNELS } from "../ipc/channels";
 
 /**
  * Live workspace refresh for the Files panel. Watches a workspace root,
  * debounces filesystem bursts, and broadcasts `files:event` so the renderer
  * can refresh the tree and open buffer. Policy: when the open file changes on
- * disk (agent / external editor), disk wins — the renderer overwrites any
+ * disk (agent / external editor), disk wins — the panel overwrites any
  * unsaved local draft.
  */
 
@@ -18,7 +19,7 @@ type WatchEntry = {
   refCount: number;
   watcher: FSWatcher | undefined;
   timer: ReturnType<typeof setTimeout> | undefined;
-  /** Absolute paths coalesced in the current burst (empty ⇒ full refresh). */
+  /** Absolute paths coalesced in the current burst (empty → full refresh). */
   pendingPaths: Set<string>;
   root: string;
 };
@@ -31,6 +32,8 @@ export function emitFilesEvent(event: FilesChangeEvent): void {
       window.webContents.send(IPC_CHANNELS.filesEvent, event);
     }
   }
+  // Incremental Agent Groups project Setup (selective invalidate via fingerprint).
+  notifyGroupProjectPathsChanged(event.cwd, event.paths ?? []);
 }
 
 /**
@@ -85,7 +88,7 @@ export function watchWorkspace(cwd: string): string {
         }
         entry.pendingPaths.add(abs);
       }
-      // Missing filename (some platforms) ⇒ flush with empty paths = full refresh.
+      // Missing filename (some platforms) → flush with empty paths = full refresh.
       scheduleFlush(entry);
     });
     watcher.on("error", () => {

@@ -187,5 +187,6 @@ export const GROUP_COLLAB_WAKE_PROTOCOL = [
   'Do not introduce yourself (avatar, name, and role already identify you — never say "Here is @Name" / "Aqui é o @Name").',
   "Prefer short natural replies. Stay silent (empty reply) when you have nothing useful to add.",
   "Do not explore the workspace, run tools, or start work just to stay busy — only act on a real objective, pending task, handoff, review, or blockage.",
+  "Consult the shared project map (project_context / Project Model / CodeGraph via fast_codebase) before broad search; open extra files only on real uncertainty or stale context.",
   "If you finish with no @mention and no Agreed/Blocked/Proposed/Ready line, the room will nudge you.",
 ].join("\n");
