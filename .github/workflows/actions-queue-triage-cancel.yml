@@ -12,44 +12,20 @@ permissions:
   contents: read
 
 jobs:
-  cancel-stale-macos-117:
+  cancel-nontip-macos-117:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel non-tip Package macOS for #117 (keep 220b554 / 36865905706)
+      - name: Cancel Package macOS only when head_sha != current #117 tip
         uses: actions/github-script@v7
         with:
           script: |
-            const keepSha = '220b55489230b13818425179d91fab12bdfbb373';
-            const keepRun = 36865905706;
-            const explicit = [36864907236, 36864844857, 36865888232, 36865742244, 36865994014];
+            // CRITICAL: never cancel Package macOS for current tip head_sha
+            const tipSha = '5c555869539666fdea9638736a4fda7fde317253';
             const branch = 'cursor/group-conversation-minors-c747';
             const cancelled = [];
             const kept = [];
             const errors = [];
-
-            async function cancelRun(id, reason) {
-              if (id === keepRun) {
-                kept.push({ id, reason: 'keep_run' });
-                return;
-              }
-              try {
-                await github.rest.actions.cancelWorkflowRun({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  run_id: id,
-                });
-                cancelled.push({ id, reason });
-                core.info(`cancelled ${id} (${reason})`);
-              } catch (e) {
-                errors.push({ id, reason, message: e.message, status: e.status });
-                core.info(`skip ${id}: ${e.status || ''} ${e.message}`);
-              }
-            }
-
-            for (const id of explicit) {
-              await cancelRun(id, 'explicit');
-            }
 
             for (let page = 1; page <= 10; page++) {
               const { data } = await github.rest.actions.listWorkflowRunsForRepo({
@@ -63,18 +39,29 @@ jobs:
               for (const run of data.workflow_runs) {
                 if (run.name !== 'Package macOS') continue;
                 if (!['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(run.status)) continue;
-                if (run.id === keepRun || run.head_sha === keepSha) {
-                  kept.push({ id: run.id, head_sha: run.head_sha, status: run.status, reason: 'keep_tip' });
+                if (run.head_sha === tipSha) {
+                  kept.push({ id: run.id, head_sha: run.head_sha, status: run.status });
+                  core.info(`KEEP tip Package macOS ${run.id} @ ${run.head_sha}`);
                   continue;
                 }
-                await cancelRun(run.id, `non-tip head ${run.head_sha}`);
+                try {
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: run.id,
+                  });
+                  cancelled.push({ id: run.id, head_sha: run.head_sha, previous: run.status });
+                  core.info(`cancelled nontip ${run.id} @ ${run.head_sha}`);
+                } catch (e) {
+                  errors.push({ id: run.id, message: e.message, status: e.status });
+                }
               }
               if (data.workflow_runs.length < 100) break;
             }
 
             await core.summary
-              .addHeading('#117 keep Package macOS 36865905706 @ 220b554')
-              .addRaw(`Cancelled: ${cancelled.length}; kept: ${kept.length}; errors: ${errors.length}`)
-              .addCodeBlock(JSON.stringify({ cancelled, kept, errors }, null, 2), 'json')
+              .addHeading(`#117 nontip Package macOS cancel; tip ${tipSha.slice(0,12)}`)
+              .addRaw(`Cancelled: ${cancelled.length}; kept tip: ${kept.length}; errors: ${errors.length}`)
+              .addCodeBlock(JSON.stringify({ tipSha, cancelled, kept, errors }, null, 2), 'json')
               .write();
-            console.log(JSON.stringify({ cancelled, kept, errors }, null, 2));
+            console.log(JSON.stringify({ tipSha, cancelled, kept, errors }, null, 2));
