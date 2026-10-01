@@ -50,20 +50,30 @@ jobs:
       - name: Build Electron app
         shell: bash
         env:
-          NODE_OPTIONS: --max-old-space-size=12288
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
-          set -euo pipefail
-          set -o pipefail
-          if ! npm --workspace @modus/desktop exec -- electron-vite build 2>&1 | tee electron-vite-build.log; then
-            echo "::group::electron-vite build failure (tail)"
-            tail -n 100 electron-vite-build.log || true
+          set +e
+          npm --workspace @modus/desktop exec -- electron-vite build > electron-vite-build.log 2>&1
+          status=$?
+          set -e
+          echo "electron-vite exit=${status} log_bytes=$(wc -c < electron-vite-build.log | tr -d ' ')"
+          if [ "$status" -ne 0 ]; then
+            echo "::group::electron-vite build log (tail)"
+            tail -n 160 electron-vite-build.log || true
             echo "::endgroup::"
-            # Surface last lines as check annotations (readable without job-log auth).
-            tail -n 30 electron-vite-build.log | while IFS= read -r line; do
-              echo "::error title=electron-vite::$line"
-            done
-            exit 1
+            MSG="$(tail -c 3000 electron-vite-build.log | tr -cd '\11\12\15\40-\176' | sed 's/::/[:]/g' | tr '\n' ' ')"
+            echo "::error title=electron-vite::${MSG}"
+            exit "$status"
           fi
+
+      - name: Upload electron-vite log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-vite-log-win-x64-${{ github.sha }}
+          path: electron-vite-build.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Package Windows x64 (unsigned)
         env:
