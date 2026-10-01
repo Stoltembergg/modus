@@ -206,6 +206,21 @@ export function newGroupMemberInput(member: NewGroupMember): NewGroupAgentInput 
   };
 }
 
+/**
+ * Effective Lead for the create modal: the chosen member when still present,
+ * otherwise the first member so Coordinator mode is always active on create.
+ */
+export function resolveNewGroupLead(
+  members: readonly NewGroupMember[],
+  leadKey: string | null,
+): NewGroupMember | undefined {
+  if (leadKey) {
+    const chosen = members.find((member) => member.key === leadKey);
+    if (chosen) return chosen;
+  }
+  return members[0];
+}
+
 /** The ONE `group:create` payload: members in order, the Lead by its final name. */
 export function newGroupCreateInput(state: {
   name: string;
@@ -213,7 +228,7 @@ export function newGroupCreateInput(state: {
   members: readonly NewGroupMember[];
   leadKey: string | null;
 }): CreateAgentGroupInput {
-  const lead = state.members.find((member) => member.key === state.leadKey);
+  const lead = resolveNewGroupLead(state.members, state.leadKey);
   return {
     name: state.name.trim() || NEW_GROUP_DEFAULT_NAME,
     workspaceId: state.workspaceId,
