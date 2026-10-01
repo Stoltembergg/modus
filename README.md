@@ -24,8 +24,6 @@ Modus is an open-source desktop app for running AI coding agents inside real loc
 
 Open a workspace, connect your own model provider, plan or build, inspect changes, approve risky actions, and keep the full workflow in one window.
 
-Modus is early and currently runs best from source.
-
 ## Features
 
 - **Workspaces and sessions** - Open local projects, switch recent workspaces, pin projects, and keep separate agent sessions per repo.
@@ -34,6 +32,7 @@ Modus is early and currently runs best from source.
 - **Terminal, browser, and files** - Use a real PTY terminal, an in-app browser with tabs and DevTools, and a workspace file explorer.
 - **Fast Codebase** - Let the agent build a compact local code map before reading files, reducing broad grep/read exploration.
 - **Subagents** - Create specialized subagents, track their activity, and apply or clean up their worktrees.
+- **Agent Groups** - Create multi-agent rooms, with Coordinator enabled by default for new groups. A chronological timeline gives each user and agent message its own card, keeps internal coordination out of the conversation, and shows compact progress with retry/resume actions for interrupted or failed work.
 - **Plan and build modes** - Start with a reviewable plan, answer structured questions, then move into implementation.
 - **Context and images** - Attach files, folders, docs, Git diffs, terminal output, browser state, selected page elements, rules, and images.
 - **MCP, skills, and rules** - Load Modus MCP servers, invoke local skills with `/`, and apply project rules from AGENTS/Claude/Cursor-style files.
@@ -74,13 +73,12 @@ Then open a workspace folder and configure a model provider in Settings.
 
 ```bash
 npm run dev
+npm run check
 npm run test
 npm --workspace @modus/desktop run typecheck
 npm --workspace @modus/desktop run build:pty
 npm --workspace @modus/desktop run build
 ```
-
-`npm run check` runs Biome plus workspace typechecks. Biome format/lint may still report pre-existing issues on some branches; prefer `typecheck` + `test` as the local gate until a format sweep lands.
 
 Package locally:
 
@@ -111,7 +109,7 @@ Electron, React, TypeScript, Tailwind CSS, Base UI, Motion, Monaco, xterm.js, St
 
 ## Contributing
 
-Contributions are welcome. Keep PRs small, use Conventional Commits, and run `npm run test` plus `npm --workspace @modus/desktop run typecheck` before opening a PR.
+Contributions are welcome. Keep PRs small, use Conventional Commits, and run `npm run check` and `npm run test` before opening a PR.
 
 ## License
 
