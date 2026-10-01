@@ -1,0 +1,111 @@
+aracters. Shown after the
+ * role: `- @Name [Role]: <first line>`. (The agents table has no description
+ * column yet; A3/A4 may add one.)
+ */
+export function agentDescription(instructions: string | undefined): string | undefined {
+  const line = (instructions ?? "")
+    .split("\n")
+    .map((text) => text.trim())
+    .find(Boolean);
+  if (!line) return undefined;
+  return line.slice(0, GROUP_ROSTER_DESCRIPTION_MAX_CHARS).trimEnd();
+}
+
+/** The room's CURRENT membership, read fresh on every call (never cached). */
+export function membersOf(groupId: string): MemberRef[] {
+  return listAgentGroupMembers(groupId).map((member) => {
+    const role = member.role?.trim() || member.agentRole?.trim();
+    const description = agentDescription(getAgent(member.agentId)?.instructions);
+    return {
+      sessionId: member.sessionId,
+      title: member.name,
+      ...(role ? { role } : {}),
+      ...(description ? { description } : {}),
+      ...(member.archived ? { archived: true } : {}),
+    };
+  });
+}
+
+/** The member's agent persona (its `instructions`), for the top of its wake prompt. */
+export function instructionsOf(groupId: string, sessionId: string): string | undefined {
+  const agentId = listAgentGroupMembers(groupId).find(
+    (member) => member.sessionId === sessionId,
+  )?.agentId;
+  const instructions = agentId ? getAgent(agentId)?.instructions.trim() : undefined;
+  return instructions || undefined;
+}
+
+/**
+ * The member's current agent `modelId`, read fresh on every wake so an Edit-agent
+ * Model change applies on the next turn (the session row may still be stale until
+ * Save rebinds it; the prompt path also applies this authoritatively).
+ */
+export function modelIdOf(groupId: string, sessionId: string): string | undefined {
+  const agentId = listAgentGroupMembers(groupId).find(
+    (member) => member.sessionId === sessionId,
+  )?.agentId;
+  const modelId = agentId ? getAgent(agentId)?.modelId?.trim() : undefined;
+  return modelId || undefined;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Member session ids mentioned in `text` as `@<session title>` (case-insensitive,
+ * longest title first) or `@<session id>`, in member order.
+ */
+export function parseGroupMentions(text: string, members: readonly MemberRef[]): string[] {
+  const found = new Set<string>();
+  // Members sharing a title (case-insensitive) are all woken by `@Title`.
+  const byTitle = new Map<string, { title: string; sessionIds: string[] }>();
+  for (const member of members) {
+    const title = member.title.trim();
+    if (!title) continue;
+    const key = title.toLocaleLowerCase();
+    const entry = byTitle.get(key) ?? { title, sessionIds: [] };
+    entry.sessionIds.push(member.sessionId);
+    byTitle.set(key, entry);
+  }
+  const handles = [
+    ...[...byTitle.values()].map((entry) => ({
+      handle: entry.title,
+      sessionIds: entry.sessionIds,
+    })),
+    ...members.map((member) => ({ handle: member.sessionId, sessionIds: [member.sessionId] })),
+  ].sort((a, b) => b.handle.length - a.handle.length);
+  // P2: `@everyone` stays in the transcript (broadcast) but never mass-wakes.
+  let rest = text.replace(/@everyone(?![\p{L}\p{N}_-])/giu, " ");
+  for (const { handle, sessionIds } of handles) {
+    if (!handle.trim()) continue;
+    const pattern = new RegExp(`@${escapeRegExp(handle)}(?![\\p{L}\\p{N}_-])`, "giu");
+    if (pattern.test(rest)) {
+      for (const id of sessionIds) found.add(id);
+      // Consume it so a shorter handle that prefixes this one does not match too.
+      rest = rest.replace(pattern, " ");
+    }
+  }
+  return members.map((member) => member.sessionId).filter((id) => found.has(id));
+}
+
+function escapeText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function authorLabel(message: GroupMessage, titles: Map<string, string>): string {
+  if (message.authorKind === "user") return "user";
+  if (message.authorKind === "system") return "system";
+  return `@${titles.get(message.authorSessionId ?? "") ?? message.authorSessionId ?? "member"}`;
+}
+
+/**
+ * The group's shared context for a wake prompt: `decisions` (newest first)
+ * until 20 items or ~2k estimated tokens, then "(N older decisions omitted)".
+ * Empty when the group has no decisions.
+ */
+export function composeGroupDecisionsSection(
+  decisions: readonly GroupDecision[],
+  titles: ReadonlyMap<string, string>,
+): string {
+  if (decisions.length === 0) r
