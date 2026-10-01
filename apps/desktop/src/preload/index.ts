@@ -44,6 +44,7 @@ const api: ModusApi = {
     setMode: (input) => ipcRenderer.invoke("group:set-mode", input),
     updateMembers: (input) => ipcRenderer.invoke("group:update-members", input),
     postMessage: (input) => ipcRenderer.invoke("group:post-message", input),
+    resumeExecution: (input) => ipcRenderer.invoke("group:resume-execution", input),
     listMessages: (input) => ipcRenderer.invoke("group:list-messages", input),
     workingGroupIds: () => ipcRenderer.invoke("group:working"),
     memberStates: () => ipcRenderer.invoke("group:member-states"),

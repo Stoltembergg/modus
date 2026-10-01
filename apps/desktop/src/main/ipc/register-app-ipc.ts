@@ -1443,6 +1443,7 @@ export function registerAppIpc({
   // Resolved lazily: the GroupRuntime subscribes to the agent runtime on first use.
   registerGroupRuntimeIpcHandlers(ipcMain, assertTrustedSender, {
     postUserMessage: (input) => getGroupRuntime().postUserMessage(input),
+    resumeExecution: (input) => getGroupRuntime().resumeExecution(input),
     listGroupMessages: (groupId, options) => listGroupMessages(groupId, options),
     workingGroupIds: () => getGroupRuntime().workingGroupIds(),
     memberStates: () => getGroupRuntime().memberStates(),

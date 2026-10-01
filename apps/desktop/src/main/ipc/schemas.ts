@@ -1082,6 +1082,10 @@ const groupMessageCursorSchema = z
 
 export const groupStopSchema = z.object({ groupId: groupIdString }).strict();
 
+export const groupResumeExecutionSchema = z
+  .object({ groupId: groupIdString, executionId: groupIdString })
+  .strict();
+
 export const groupListMessagesSchema = z
   .object({
     groupId: groupIdString,
