@@ -250,6 +250,52 @@ describe("Groups runtime audit", () => {
     expect(listGroupMessages(group.id).find((m) => m.turnId)?.status).toBe("interrupted");
   });
 
+  it("F04b resumes an interrupted turn by execution id without posting a user message", async () => {
+    const { group, a } = squad();
+    const env = setup();
+    env.groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha ship the feature",
+      attachments: [{ type: "image", mimeType: "image/png", data: "abc", name: "shot.png" }],
+    });
+    const before = listGroupMessages(group.id);
+    expect(before.some((m) => m.authorKind === "user")).toBe(true);
+    env.groups.dispose();
+    const recovered = new GroupRuntime({
+      runtime: env.runtime,
+      host: env.host,
+      recoverPending: true,
+    });
+    instances.push(recovered);
+    const card = listGroupMessages(group.id).find((m) => m.turnId && m.status === "interrupted");
+    expect(card?.turnId).toBeTruthy();
+    const userCountBefore = listGroupMessages(group.id).filter(
+      (m) => m.authorKind === "user",
+    ).length;
+    recovered.resumeExecution({ groupId: group.id, executionId: card!.turnId! });
+    expect(listGroupMessages(group.id).filter((m) => m.authorKind === "user")).toHaveLength(
+      userCountBefore,
+    );
+    expect(listGroupMessages(group.id).some((m) => m.body === "Resume this task.")).toBe(false);
+    expect(env.calls.filter((call) => call.input.sessionId === a)).toHaveLength(2);
+    const resumed = env.calls[1]!;
+    expect(resumed.input.message).toContain("ship the feature");
+    expect(resumed.input.attachments).toEqual([
+      expect.objectContaining({ type: "image", mimeType: "image/png", data: "abc" }),
+    ]);
+    expect(listGroupMessages(group.id).find((m) => m.turnId === card!.turnId)?.status).toBe(
+      "running",
+    );
+    resumed.resolve({ outcome: "ok", finalText: "Continued from checkpoint." });
+    await flush();
+    expect(listGroupMessages(group.id).find((m) => m.turnId === card!.turnId)).toMatchObject({
+      body: "Continued from checkpoint.",
+      status: "completed",
+      chainId: card!.chainId,
+      turnId: card!.turnId,
+    });
+  });
+
   it("F04 commits a user request and its queue atomically", () => {
     const { group } = squad();
     const env = setup();

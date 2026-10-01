@@ -27,6 +27,7 @@ import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
 import { replyPreview } from "./groupThreads";
@@ -35,6 +36,7 @@ import { MentionChip } from "./MentionChip";
 import type { MemberLabel } from "./memberLabels";
 import {
   AttachmentChip,
+  PromptChainOfThought,
   PromptMessage,
   PromptMessageBody,
   PromptMessageIdentity,
@@ -357,6 +359,21 @@ function MessageError({ message }: { message: GroupMessage }) {
   );
 }
 
+function fallbackProgressLabel(status: GroupMessage["status"]): string | undefined {
+  switch (status) {
+    case "queued":
+      return "Waiting for its turn";
+    case "running":
+      return "Working on the task";
+    case "writing":
+      return "Writing a reply";
+    case "awaiting_user":
+      return "Waiting for you";
+    default:
+      return undefined;
+  }
+}
+
 export function GroupMessageRow({
   avatar,
   message,
@@ -369,6 +386,8 @@ export function GroupMessageRow({
   onRetry,
   role,
   activeWaitingSessionIds,
+  liveTurn,
+  streaming,
   replyToMessage,
   executionTokenTotal,
 }: {
@@ -387,9 +406,9 @@ export function GroupMessageRow({
   role?: string | undefined;
   /** Members with a live pending ask_user / approval (amber Waiting only for these). */
   activeWaitingSessionIds?: ReadonlySet<string> | readonly string[];
-  /** @deprecated Auxiliary snapshots are ignored; canonical messages own public text. */
+  /** Ephemeral live progress for the same canonical message card. */
   liveTurn?: { mode: "running" | "queued"; live: GroupLiveTurnSnapshot } | undefined;
-  /** @deprecated Use the canonical message status to mark writing. */
+  /** Marks public text as streaming for transient fallback cards. */
   streaming?: boolean | undefined;
   /** Estimated token total for this ask-spanning execution (shown on the chain’s last message). */
   executionTokenTotal?: number | undefined;
@@ -519,12 +538,16 @@ export function GroupMessageRow({
   const sessionId = message.authorSessionId ?? "";
   const label = author ?? { title: "Member" };
   const title = label.title;
-  const writing = message.status === "writing";
-  const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(message.body);
+  const liveText = liveTurn?.live.streamText ?? "";
+  const body = message.body.trim() ? message.body : liveText;
+  const writing = message.status === "writing" || Boolean(streaming) || Boolean(liveText.trim());
+  const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(body);
   const prose = stripAgentSelfIntro(rawProse);
   const statuses = rawStatuses.filter(shouldPersistCollabStatusInTranscript);
   const readyOnly =
     !prose.trim() && rawStatuses.some((status) => status.kind === "ready") && statuses.length === 0;
+  const fallbackProgress =
+    !liveTurn && message.authorKind === "agent" ? fallbackProgressLabel(message.status) : undefined;
   // Hide Planner→peer handoff dumps that have no user-facing prose.
   if (
     !writing &&
@@ -535,6 +558,7 @@ export function GroupMessageRow({
     return null;
   }
   const sources = !writing ? extractUsefulSources(prose) : [];
+  const showLiveProgress = Boolean(liveTurn && !liveTurn.live.collapsed);
   return (
     <div
       className="group/msg flex w-full flex-col items-start gap-0.5"
@@ -593,6 +617,11 @@ export function GroupMessageRow({
             }
           />
           <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
+          {showLiveProgress && liveTurn ? (
+            <GroupMemberLiveTurn live={liveTurn.live} mode={liveTurn.mode} />
+          ) : fallbackProgress ? (
+            <PromptChainOfThought items={[fallbackProgress]} summary={fallbackProgress} />
+          ) : null}
           {prose ? (
             <div
               className="text-fg text-sm leading-relaxed"
@@ -644,7 +673,7 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-      {!writing ? (
+{!writing && !showLiveProgress && !fallbackProgress ? (
         <MessageActions
           align="start"
           copyText={prose || message.body}

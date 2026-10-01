@@ -148,6 +148,24 @@ export function GroupMessageList({
         memberIds.has(row.sessionId) && !row.live.collapsed && !represented.has(row.sessionId),
     );
   }, [workingRows, roomMessages, members]);
+  const liveBySession = useMemo(
+    () => new Map(workingRows.map((row) => [row.sessionId, row])),
+    [workingRows],
+  );
+  const activeMessageBySession = useMemo(() => {
+    const active = new Map<string, string>();
+    for (const message of renderedMessages) {
+      if (
+        message.authorKind === "agent" &&
+        message.authorSessionId &&
+        message.status &&
+        ["queued", "running", "writing", "awaiting_user"].includes(message.status)
+      ) {
+        active.set(message.authorSessionId, message.id);
+      }
+    }
+    return active;
+  }, [renderedMessages]);
 
   // Prepending older pages preserves the reading position. Revisions of an
   // existing card never count as new messages or move a reader above the bottom.
@@ -250,7 +268,7 @@ export function GroupMessageList({
               {GROUP_ROOM_EMPTY_TEXT}
             </div>
           ) : null}
-          {searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
+{searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
             <div
               className="py-10 text-center text-fg-faint text-sm"
               data-testid="group-conversation-search-empty"
@@ -258,52 +276,61 @@ export function GroupMessageList({
               No messages match “{searchQuery.trim()}”.
             </div>
           ) : null}
-          {transcriptItems.map((item) =>
-            item.type === "day" ? (
-              <div
-                className="flex items-center gap-3 py-1"
-                data-testid="group-day-separator"
-                key={item.key}
-              >
-                <span className="h-px flex-1 bg-hairline" />
-                <span className="shrink-0 text-2xs text-fg-faint">{item.label}</span>
-                <span className="h-px flex-1 bg-hairline" />
-              </div>
-            ) : (
+          {transcriptItems.map((item) => {
+            if (item.type === "day") {
+              return (
+                <div
+                  className="flex items-center gap-3 py-1"
+                  data-testid="group-day-separator"
+                  key={item.key}
+                >
+                  <span className="h-px flex-1 bg-hairline" />
+                  <span className="shrink-0 text-2xs text-fg-faint">{item.label}</span>
+                  <span className="h-px flex-1 bg-hairline" />
+                </div>
+              );
+            }
+            const message = item.message;
+            const liveRow =
+              message.authorKind === "agent" && message.authorSessionId
+                ? liveBySession.get(message.authorSessionId)
+                : undefined;
+            const hasActiveTurn =
+              message.authorKind === "agent" &&
+              message.authorSessionId &&
+              activeMessageBySession.get(message.authorSessionId) === message.id &&
+              liveRow &&
+              !liveRow.live.collapsed;
+            return (
               <GroupMessageRow
                 activeWaitingSessionIds={activeWaiting}
                 avatar={
-                  item.message.authorSessionId
-                    ? avatars.get(item.message.authorSessionId)
-                    : undefined
+                  message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
                 }
                 cwd={cwd}
                 executionTokenTotal={
-                  tokenAnchors.has(item.message.id)
-                    ? tokenTotals.get(item.message.chainId ?? item.message.id)
+                  tokenAnchors.has(message.id)
+                    ? tokenTotals.get(message.chainId ?? message.id)
                     : undefined
                 }
-                key={item.message.id}
+                key={message.id}
                 labels={labels}
+                liveTurn={
+                  hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined
+                }
                 members={members}
-                message={item.message}
+                message={message}
                 onHandoffClick={onHandoffClick}
                 onOpenFile={onOpenFile}
                 onReply={onReply}
                 onRetry={onRetry}
                 replyToMessage={
-                  item.message.replyToMessageId
-                    ? byId.get(item.message.replyToMessageId)
-                    : undefined
+                  message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
                 }
-                role={
-                  item.message.authorSessionId
-                    ? roles?.get(item.message.authorSessionId)
-                    : undefined
-                }
+                role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
               />
-            ),
-          )}
+            );
+          })}
           <GroupWorkingStatus
             avatars={avatars}
             groupId={groupId}

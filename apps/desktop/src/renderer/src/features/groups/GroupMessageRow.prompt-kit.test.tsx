@@ -72,7 +72,7 @@ describe("GroupMessageRow Prompt Kit", () => {
     expect(container.querySelector("[data-testid=group-message]")).toBeNull();
   });
 
-  it("uses canonical public text even when an auxiliary live snapshot is provided", () => {
+  it("keeps public text canonical and renders only safe live progress", () => {
     const thinking: GroupLiveTurnSnapshot = {
       phase: "Exploring",
       thoughtPreview: "raw secret thought should not appear",
@@ -98,11 +98,11 @@ describe("GroupMessageRow Prompt Kit", () => {
         streaming
       />,
     );
-    expect(screen.queryByTestId("group-live-status")).toBeNull();
+    expect(screen.getByTestId("group-live-status")).toBeTruthy();
     expect(screen.queryByTestId("group-prompt-tool")).toBeNull();
     expect(screen.getByText("Canonical public text")).toBeTruthy();
     expect(screen.queryByTestId("group-prompt-steps")).toBeNull();
-    expect(screen.queryByTestId("group-prompt-cot")).toBeNull();
+    expect(screen.getByTestId("group-prompt-cot")).toBeTruthy();
     expect(screen.queryByText(/raw secret thought/i)).toBeNull();
 
     const writing: GroupLiveTurnSnapshot = {
@@ -120,7 +120,7 @@ describe("GroupMessageRow Prompt Kit", () => {
         streaming
       />,
     );
-    expect(screen.queryByTestId("group-live-status")).toBeNull();
+    expect(screen.getByTestId("group-live-status")).toBeTruthy();
     expect(screen.queryByTestId("group-prompt-tool")).toBeNull();
     expect(screen.getByTestId("group-live-writing").textContent).toContain(
       "Looking at the composer",
