@@ -17,6 +17,11 @@ import type {
   BrowserRecentInfo,
   BrowserTabInfo,
   CheckpointInfo,
+  ComposioConnectionOperation,
+  ComposioSettingsState,
+  ComposioStartConnectionInput,
+  ComposioToolkitPolicyInput,
+  ComposioToolSummary,
   ConfigureProviderInput,
   ContextItem,
   ContextKind,
@@ -601,6 +606,25 @@ export type ModusApi = {
     delete(input: { cwd: string; name: string }): Promise<McpServerInfo[]>;
     setEnabled(input: { cwd: string; name: string; enabled: boolean }): Promise<McpServerInfo[]>;
     entry(input: { cwd: string; name: string }): Promise<RawMcpEntry | undefined>;
+  };
+  composio: {
+    getState(): Promise<ComposioSettingsState>;
+    setApiKey(input: { apiKey: string }): Promise<ComposioSettingsState>;
+    removeApiKey(): Promise<ComposioSettingsState>;
+    refreshCatalog(): Promise<ComposioSettingsState>;
+    listTools(input: { toolkitSlug: string }): Promise<ComposioToolSummary[]>;
+    startConnection(input: ComposioStartConnectionInput): Promise<ComposioConnectionOperation>;
+    getConnectionOperation(input: { operationId: string }): Promise<ComposioConnectionOperation>;
+    setToolkitPolicy(input: ComposioToolkitPolicyInput): Promise<ComposioSettingsState>;
+    renameAccount(input: {
+      toolkitSlug: string;
+      accountId: string;
+      alias: string;
+    }): Promise<ComposioSettingsState>;
+    disconnectAccount(input: {
+      toolkitSlug: string;
+      accountId: string;
+    }): Promise<ComposioSettingsState>;
   };
   rules: {
     /** Detected project rule files (AGENTS.md, .cursor/rules…) with apply modes. */

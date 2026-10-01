@@ -50,6 +50,8 @@ const MAX_MCP_TOOL_PAGES = 100;
 const MAX_MCP_TOOLS_PER_SERVER = 500;
 const MAX_MCP_CONTENT_BLOCKS = 50;
 const MAX_MCP_CONTENT_BYTES = 64 * 1024;
+const COMPOSIO_MCP_SERVER_NAME = "__modus_composio";
+const COMPOSIO_TOOL_OWNER = Symbol("Composio MCP bridge");
 
 type ManagedServer = {
   config: McpServerConfig;
@@ -66,9 +68,31 @@ const servers = new Map<string, ManagedServer>();
 /** Tool names currently registered per server, for clean unregistration. */
 const registeredTools = new Map<string, string[]>();
 /** Registered names have one owner so cleanup never unregisters another server. */
-const registeredToolOwners = new Map<string, string>();
+const registeredToolOwners = new Map<string, string | typeof COMPOSIO_TOOL_OWNER>();
 /** Allowlist-selected names only, kept in sync with each server's registrations. */
 const registeredAllowlistedTools = new Map<string, string[]>();
+
+export type ComposioMcpSessionInput = {
+  url: string;
+  headers: Record<string, string>;
+  allowedToolSlugs: string[];
+};
+
+export interface ComposioMcpBridge {
+  registerComposioMcpSession(input: ComposioMcpSessionInput): Promise<McpToolInfo[]>;
+  unregisterComposioMcpSession(): Promise<void>;
+}
+
+type ManagedComposioSession = {
+  client: Client;
+  transport: StreamableHTTPClientTransport;
+  toolNames: string[];
+  tools: McpToolInfo[];
+};
+
+/** Hosted Composio tools are internal to the local selected-account policy. */
+let composioSession: ManagedComposioSession | undefined;
+let composioSessionGeneration = 0;
 
 export type McpToolPermissionMode = "allowlisted" | "dangerous";
 
@@ -570,6 +594,169 @@ async function connectServer(managed: ManagedServer): Promise<void> {
   }
 }
 
+function detachComposioSession(): ManagedComposioSession | undefined {
+  const current = composioSession;
+  composioSession = undefined;
+  if (!current) return undefined;
+  for (const name of current.toolNames) {
+    if (registeredToolOwners.get(name) === COMPOSIO_TOOL_OWNER) {
+      toolRegistry.unregisterTool(name);
+      registeredToolOwners.delete(name);
+    }
+  }
+  return current;
+}
+
+async function closeComposioSession(session: ManagedComposioSession | undefined): Promise<void> {
+  if (session) await closeClientAndTransport(session.client, session.transport);
+}
+
+/** Remove the hosted Composio registration without touching workspace servers. */
+export async function unregisterComposioMcpSession(): Promise<void> {
+  composioSessionGeneration += 1;
+  const previous = detachComposioSession();
+  await closeComposioSession(previous);
+}
+
+/**
+ * Connect the single hosted session used by Composio, exposing only exact
+ * selected operation slugs through the normal dangerous `mcp.call` path.
+ */
+export async function registerComposioMcpSession(
+  input: ComposioMcpSessionInput,
+): Promise<McpToolInfo[]> {
+  const generation = ++composioSessionGeneration;
+  const previous = detachComposioSession();
+  await closeComposioSession(previous);
+  if (generation !== composioSessionGeneration) {
+    throw new Error("Composio session registration was superseded.");
+  }
+
+  const selectedToolSlugs = [...new Set(input.allowedToolSlugs)];
+  if (selectedToolSlugs.length > MAX_MCP_TOOLS_PER_SERVER) {
+    throw new Error(
+      `Composio cannot register more than ${MAX_MCP_TOOLS_PER_SERVER} selected operations.`,
+    );
+  }
+  if (selectedToolSlugs.some((slug) => typeof slug !== "string" || slug.trim().length === 0)) {
+    throw new Error("Composio selected operations must have non-empty names.");
+  }
+  if (selectedToolSlugs.length === 0) return [];
+
+  let url: URL;
+  try {
+    url = new URL(input.url);
+  } catch {
+    throw new Error("Composio returned an invalid MCP session URL.");
+  }
+  if (url.protocol !== "https:" || url.username.length > 0 || url.password.length > 0) {
+    throw new Error("Composio MCP sessions must use a credential-free HTTPS URL.");
+  }
+  const headers = Object.fromEntries(
+    Object.entries(input.headers).filter(
+      ([name, value]) => name.trim().length > 0 && typeof value === "string" && value.length > 0,
+    ),
+  );
+  if (Object.keys(headers).length === 0) {
+    throw new Error("Composio MCP session headers are missing.");
+  }
+
+  const client = new Client({ name: "modus", version: "0.1.0" });
+  const transport = new StreamableHTTPClientTransport(url, {
+    requestInit: { headers, redirect: "error" },
+  });
+  try {
+    await connectWithCleanup(
+      client,
+      transport as unknown as Parameters<Client["connect"]>[0],
+      "connect Composio MCP session",
+    );
+    if (generation !== composioSessionGeneration) {
+      await closeClientAndTransport(client, transport);
+      throw new Error("Composio session registration was superseded.");
+    }
+
+    const listedTools = await listAllMcpTools(client, COMPOSIO_MCP_SERVER_NAME);
+    if (generation !== composioSessionGeneration) {
+      await closeClientAndTransport(client, transport);
+      throw new Error("Composio session registration was superseded.");
+    }
+
+    const allowed = new Set(selectedToolSlugs);
+    const selectedTools = listedTools.filter((tool) => allowed.has(tool.name));
+    const selectedNames = new Set(selectedTools.map((tool) => tool.name));
+    if (
+      selectedTools.length !== selectedToolSlugs.length ||
+      selectedNames.size !== selectedToolSlugs.length
+    ) {
+      throw new Error("One or more selected Composio operations are missing or ambiguous.");
+    }
+
+    const definitions = selectedTools.map((tool) =>
+      buildToolDefinition(COMPOSIO_MCP_SERVER_NAME, client, tool, false),
+    );
+    const candidateNames = new Set<string>();
+    for (const definition of definitions) {
+      const owner = registeredToolOwners.get(definition.name);
+      if (
+        candidateNames.has(definition.name) ||
+        owner !== undefined ||
+        toolRegistry.getEntry(definition.name) !== undefined
+      ) {
+        throw new Error(`Composio MCP tool registration name collision: ${definition.name}`);
+      }
+      candidateNames.add(definition.name);
+    }
+
+    const registeredNames: string[] = [];
+    try {
+      for (const definition of definitions) {
+        toolRegistry.registerTool({
+          entry: {
+            name: definition.name,
+            profiles: ["chat"],
+            permission: { danger: "dangerous", action: "mcp.call" },
+            ui: { verb: "Composio" },
+          },
+          definition,
+        });
+        registeredToolOwners.set(definition.name, COMPOSIO_TOOL_OWNER);
+        registeredNames.push(definition.name);
+      }
+    } catch (error) {
+      for (const name of registeredNames) {
+        if (registeredToolOwners.get(name) === COMPOSIO_TOOL_OWNER) {
+          toolRegistry.unregisterTool(name);
+          registeredToolOwners.delete(name);
+        }
+      }
+      throw error;
+    }
+
+    const tools: McpToolInfo[] = selectedTools.map((tool, index) => ({
+      name: tool.name,
+      registeredName: definitions[index]?.name ?? mcpToolName(COMPOSIO_MCP_SERVER_NAME, tool.name),
+      description: tool.description,
+    }));
+    const managed: ManagedComposioSession = {
+      client,
+      transport,
+      toolNames: registeredNames,
+      tools,
+    };
+    composioSession = managed;
+    client.onclose = () => {
+      if (composioSession === managed) {
+        void closeComposioSession(detachComposioSession());
+      }
+    };
+    return tools;
+  } catch (error) {
+    await closeClientAndTransport(client, transport);
+    throw error;
+  }
+}
+
 async function disposeServer(name: string): Promise<void> {
   const managed = servers.get(name);
   if (!managed) {
@@ -685,5 +872,8 @@ export function getMcpServerEntry(cwd: string, name: string): RawMcpEntry | unde
 
 /** App-shutdown cleanup: close every transport (kills stdio children). */
 export async function disposeAllMcp(): Promise<void> {
-  await Promise.all([...servers.keys()].map((name) => disposeServer(name)));
+  await Promise.all([
+    ...[...servers.keys()].map((name) => disposeServer(name)),
+    unregisterComposioMcpSession(),
+  ]);
 }
