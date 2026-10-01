@@ -303,48 +303,35 @@ function mimeTypeLabel(mimeType: string): string {
  * Prompt Kit Text Shimmer — animated loading text for working agents above the composer.
  * https://www.prompt-kit.com/docs/text-shimmer
  *
- * Uses the same sheen technique as ThoughtLine (no injected <style> / arbitrary
- * keyframes), so Electron Vite packaging stays lean on CI runners.
+ * Sheen via the shared `.t-think` / `.t-think-text` CSS (app.css) so packaging
+ * does not depend on inline color-mix / custom keyframes.
  */
 export function TextShimmer({
   children,
-  as: Tag = "span",
   duration = 4,
-  spread = 20,
+  spread: _spread = 20,
   className,
   ...props
 }: {
   children: ReactNode;
-  as?: "span" | "p" | "div";
   duration?: number;
+  /** Accepted for Prompt Kit API compatibility; sheen width is CSS-fixed. */
   spread?: number;
   className?: string;
-} & Omit<React.HTMLAttributes<HTMLElement>, "as" | "children" | "className">) {
-  const dynamicSpread = Math.min(Math.max(spread, 5), 45);
-  const mutedStop = Math.max(5, 50 - dynamicSpread);
-  const brightStop = Math.min(95, 50 + dynamicSpread);
+} & Omit<React.HTMLAttributes<HTMLSpanElement>, "children" | "className">) {
+  void _spread;
+  const label = typeof children === "string" ? children : "";
   return (
-    <Tag
-      className={cn(
-        "inline-block bg-clip-text font-medium text-transparent",
-        "motion-reduce:bg-none motion-reduce:text-fg-subtle",
-        className,
-      )}
+    <span
+      className={cn("t-think text-fg-subtle", className)}
       data-prompt-kit="text-shimmer"
       data-testid="group-text-shimmer"
-      style={
-        {
-          backgroundImage: `linear-gradient(100deg, color-mix(in srgb, var(--muted-foreground, #888) 55%, transparent) ${mutedStop}%, var(--foreground, #eee) 50%, color-mix(in srgb, var(--muted-foreground, #888) 55%, transparent) ${brightStop}%)`,
-          backgroundSize: "250% 100%",
-          backgroundPosition: "125% 0",
-          WebkitBackgroundClip: "text",
-          WebkitTextFillColor: "transparent",
-          animation: `t-think-shimmer ${duration}s linear infinite`,
-        } as CSSProperties
-      }
+      style={{ ["--think-shimmer" as string]: `${duration}s` } as CSSProperties}
       {...props}
     >
-      {children}
-    </Tag>
+      <span className="t-think-text" data-text={label}>
+        {children}
+      </span>
+    </span>
   );
 }
