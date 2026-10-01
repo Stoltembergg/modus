@@ -1,0 +1,12 @@
+{
+  "target": "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx",
+  "sha256": "8e522901bcf6a0299ad229b62f359ebf687fa581887d29856edadae981212be0",
+  "bytes": 37295,
+  "encoding": "zlib+base64",
+  "parts": [
+    "GroupRoom.test.tsx.b64.000",
+    "GroupRoom.test.tsx.b64.001",
+    "GroupRoom.test.tsx.b64.002",
+    "GroupRoom.test.tsx.b64.003"
+  ]
+}
