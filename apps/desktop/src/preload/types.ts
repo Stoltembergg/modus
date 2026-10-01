@@ -80,6 +80,7 @@ import type {
   QuestionResponse,
   RawMcpEntry,
   ResolvedContext,
+  ResumeGroupExecutionInput,
   RuleFileInfo,
   SkillDetail,
   SkillInfo,
@@ -200,6 +201,11 @@ export type ModusApi = {
      * mentioned members (or the lead when nobody is mentioned).
      */
     postMessage(input: PostGroupMessageInput): Promise<GroupMessage>;
+    /**
+     * Resume an interrupted/failed turn by durable execution id (job/turn id).
+     * Requeues the existing job — does not post a new user message.
+     */
+    resumeExecution(input: ResumeGroupExecutionInput): Promise<void>;
     /** A page of room messages in (created_at, id) order. */
     listMessages(input: {
       groupId: string;

@@ -103,15 +103,16 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
-describe("GroupMessageList working strip", () => {
-  it("shows Thinking for a running member while Stop-worthy activity is live", async () => {
+describe("GroupMessageList working cards", () => {
+  it("shows a progress card for a running member while Stop-worthy activity is live", async () => {
     renderList(states({ runningSessionIds: ["s-lead"] }));
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
     const row = screen.getByTestId("group-member-working");
     expect(row.dataset.mode).toBe("running");
     expect(row.dataset.phase).toBe("Thinking");
     expect(row.textContent).toContain("Planner");
-    expect(row.textContent).toContain("Thinking");
+    expect(row.textContent).toContain("Considering the request");
+    expect(screen.getByTestId("group-prompt-cot")).toBeTruthy();
   });
 
   it("updates the room phase from semantic presence as tools run", async () => {
@@ -135,12 +136,12 @@ describe("GroupMessageList working strip", () => {
     });
     const row = await screen.findByTestId("group-member-working");
     await vi.waitFor(() => expect(row.dataset.phase).toBe("Exploring"));
-    expect(row.textContent).toContain("Exploring");
+    expect(row.textContent).toContain("Reading");
     expect(screen.queryByTestId("group-live-thought")).toBeNull();
     expect(screen.queryByTestId("group-live-tools")).toBeNull();
   });
 
-  it("shows concurrent member presence without synthesizing public messages", async () => {
+  it("keeps concurrent member progress separate and shows streamed text in its card", async () => {
     renderList(states({ runningSessionIds: ["s-lead", "s-build"] }));
     await screen.findByTestId("group-working-status");
     act(() => {
@@ -162,13 +163,14 @@ describe("GroupMessageList working strip", () => {
     const items = await screen.findAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
     await vi.waitFor(() => expect(items[0]?.textContent).toContain("Writing"));
-    expect(items[0]?.textContent).not.toContain("Planner stream only");
+    expect(items[0]?.textContent).toContain("Planner stream only");
     expect(items[0]?.textContent).not.toContain("Exploring");
-    expect(items[1]?.textContent).toContain("Exploring");
+    expect(items[1]?.textContent).toContain("Searching");
     expect(items[1]?.textContent).not.toContain("Planner stream only");
+    expect(screen.getAllByTestId("group-message")).toHaveLength(3);
   });
 
-  it("changes Exploring to Writing presence without showing unpersisted text", async () => {
+  it("transitions from live tool progress to Writing text inside the same card", async () => {
     renderList(states({ runningSessionIds: ["s-lead"] }));
     await screen.findByTestId("group-working-status");
     act(() => {
@@ -176,7 +178,7 @@ describe("GroupMessageList working strip", () => {
         listener({ type: "tool.started", sessionId: "s-lead", toolCallId: "t1", toolName: "read" });
     });
     await vi.waitFor(() =>
-      expect(screen.getByTestId("group-live-status").textContent).toContain("Exploring"),
+      expect(screen.getByTestId("group-live-status").textContent).toContain("Reading"),
     );
     act(() => {
       for (const listener of agentListeners)
@@ -190,8 +192,8 @@ describe("GroupMessageList working strip", () => {
     await vi.waitFor(() =>
       expect(screen.getByTestId("group-live-status").textContent).toContain("Writing"),
     );
-    expect(screen.queryByText("Unpersisted prose")).toBeNull();
-    expect(screen.getAllByTestId("group-message")).toHaveLength(1);
+    expect(screen.getByTestId("group-live-writing").textContent).toContain("Unpersisted prose");
+    expect(screen.getAllByTestId("group-message")).toHaveLength(2);
   });
 
   it("shows canonical text exactly once and clears presence when the member stops", async () => {

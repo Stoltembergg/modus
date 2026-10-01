@@ -7,6 +7,7 @@ import type {
   GroupMessage,
   GroupRuntimeEvent,
   PostGroupMessageInput,
+  ResumeGroupExecutionInput,
 } from "../../shared/contracts";
 import {
   GROUP_BLOCKED_TEXT,
@@ -19,6 +20,7 @@ import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-sto
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import { getDatabase } from "../db/database";
 import {
+  getGroupJob,
   listRecoverableGroupJobs,
   persistGroupChain,
   persistGroupJob,
@@ -146,6 +148,101 @@ export class GroupRuntime {
     this.supersedeWaiting(input.groupId);
     this.pump();
     return message;
+  }
+
+  /**
+   * Resume an interrupted/failed turn by durable execution id (job/turn id).
+   * Requeues the same job in its original chain — no new user message.
+   */
+  resumeExecution(input: ResumeGroupExecutionInput): void {
+    if (this.disposed) throw new Error("Group runtime is disposed.");
+    this.durableDispatch(() => this.requeueExecution(input));
+    this.pump();
+  }
+
+  private requeueExecution(input: ResumeGroupExecutionInput): void {
+    const job = getGroupJob(input.executionId);
+    if (!job || job.wake.groupId !== input.groupId) {
+      throw new GroupStoreError(
+        "message-not-found",
+        `Group execution not found: ${input.executionId}`,
+      );
+    }
+    if (job.status !== "interrupted" && job.status !== "failed" && job.status !== "cancelled") {
+      throw new GroupStoreError(
+        "invalid-transition",
+        `Cannot resume execution ${input.executionId}: it is ${job.status}.`,
+      );
+    }
+    const member = membersOf(input.groupId).find((row) => row.sessionId === job.wake.sessionId);
+    if (!member) {
+      throw new GroupStoreError(
+        "not-a-member",
+        `Session ${job.wake.sessionId} is not a member of group ${input.groupId}.`,
+      );
+    }
+    if (member.archived) {
+      throw new GroupStoreError(
+        "member-archived",
+        `Session ${job.wake.sessionId} is archived and cannot be resumed.`,
+      );
+    }
+    if (
+      this.running.has(job.wake.sessionId) ||
+      this.gated.has(job.wake.sessionId) ||
+      (this.queues.get(job.wake.sessionId) ?? []).some((wake) => wake.id === job.wake.id)
+    ) {
+      throw new GroupStoreError(
+        "invalid-transition",
+        `Cannot resume execution ${input.executionId}: the member already has active work.`,
+      );
+    }
+    const chain =
+      this.chains.get(job.wake.chainId) ??
+      this.retiredChains.get(job.wake.chainId) ??
+      readGroupChain(job.wake.chainId);
+    if (!chain) {
+      throw new GroupStoreError(
+        "message-not-found",
+        `Execution chain not found for ${input.executionId}.`,
+      );
+    }
+    if (chain.ended) {
+      delete chain.ended;
+      persistGroupChain(chain);
+    }
+    this.retiredChains.delete(chain.chainId);
+    this.chains.set(chain.chainId, chain);
+    // Rebuild wake without prior run/error/progress fields (exactOptionalPropertyTypes).
+    const {
+      error: _error,
+      runId: _runId,
+      lastEventCursor: _lastEventCursor,
+      startedAt: _startedAt,
+      lastProgressAt: _lastProgressAt,
+      pausedAt: _pausedAt,
+      worktreeBranch: _worktreeBranch,
+      publicMessageIds: _publicMessageIds,
+      assistantMessageIds: _assistantMessageIds,
+      questionRequestIds: _questionRequestIds,
+      watchdog: _watchdog,
+      cancelled: _cancelled,
+      gated: _gated,
+      seq: _seq,
+      ...base
+    } = job.wake;
+    const wake: Wake = {
+      ...base,
+      seq: ++this.seq,
+      cancelled: false,
+      gated: false,
+    };
+    updateGroupJob(wake, "pending");
+    this.transcript.setState(wake, "queued");
+    const queue = this.queues.get(wake.sessionId) ?? [];
+    queue.push(wake);
+    this.queues.set(wake.sessionId, queue);
+    this.emitActivity(wake.groupId);
   }
 
   private saveUserMessage(input: PostGroupMessageInput): GroupMessage {
