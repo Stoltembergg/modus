@@ -62,13 +62,14 @@ export function GroupMemberLiveTurn({
     progress.push("Still working…");
   }
   const progressItems = progress.slice(-4);
-  const summary = inlineLiveStatusLabel({
+  const statusSummary = inlineLiveStatusLabel({
     phase: stream ? "Writing" : String(live.phase),
     presenceState: stream ? "writing" : live.presence?.state,
     activity: live.presence?.activity,
     waitingFor: live.presence?.waitingFor,
     stillWorking: !stream && still,
   });
+  const summary = progressItems[progressItems.length - 1] ?? statusSummary;
 
   return (
     <div
