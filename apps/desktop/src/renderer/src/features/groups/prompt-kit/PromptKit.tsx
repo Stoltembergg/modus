@@ -329,6 +329,11 @@ export function TextShimmer({
       style={{ ["--think-shimmer" as string]: `${duration}s` } as CSSProperties}
       {...props}
     >
+      {/* Invisible sizer — `.t-think-text` is absolute; without this the strip
+          collapses to 0 height and paints under the composer below. */}
+      <span aria-hidden="true" className="t-think-sizer">
+        {children}
+      </span>
       <span className="t-think-text" data-text={label}>
         {children}
       </span>
