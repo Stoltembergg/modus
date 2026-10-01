@@ -72,6 +72,8 @@ export function registerGroupRuntimeIpcHandlers(
         ? { attachments: parsed.attachments }
         : {}),
       ...(contextItems && contextItems.length > 0 ? { contextItems } : {}),
+      ...(parsed.executionMode ? { executionMode: parsed.executionMode } : {}),
+      ...(parsed.executionId ? { executionId: parsed.executionId } : {}),
     });
   });
 
