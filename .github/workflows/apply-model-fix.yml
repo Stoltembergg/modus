@@ -1,0 +1,43 @@
+name: apply-model-fix
+on:
+  push:
+    branches: [cursor/fix-group-agent-model-apply]
+    paths: [.a4-restore/model-apply.diff]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/fix-group-agent-model-apply
+      - name: Apply patch and land feat commit
+        run: |
+          set -euo pipefail
+          git apply .a4-restore/model-apply.diff
+          python3 <<'PY'
+          import hashlib
+          from pathlib import Path
+          expected = {
+            "apps/desktop/src/main/agents/agents-store.ts": "87c5ec146461181f322547bbf711f394bf012898ef54dc5783fb23341d07e7cd",
+            "apps/desktop/src/main/groups/group-runtime-lib.ts": "83b7ec431add92964347615055eac42dab9df25f876395036b09c8da4784ba4e",
+            "apps/desktop/src/main/groups/group-runtime.ts": "0ced64788276193c87a40e9e6b2d8d167fda94a0a8fd4a479fb289a074cfa948",
+            "apps/desktop/src/main/groups/group-agents.test.ts": "a82bbe3ac51714cdf73886f36bf52c7217144b8e73d7fe0adf3d09607bb5009b",
+            "apps/desktop/src/main/groups/group-runtime.test.ts": "8cd8b674b1f43835b16986f61e8bfef29b40183d22c921c5b4bc4ff3c6e4e44f",
+          }
+          for path, exp in expected.items():
+              got = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+              assert got == exp, (path, got, exp)
+          print("hashes ok")
+          PY
+          rm -rf .a4-restore .github/workflows/apply-model-fix.yml
+          git config user.name "Gabriel"
+          git config user.email "stoltembergg@gmail.com"
+          git add -A
+          git commit -m "fix(groups): apply Edit agent model on next wake
+
+          Rebind group_member and 1:1 chat session models when agents:update
+          changes modelId, and pass the agent modelId on Group Runtime wake so
+          the next turn uses the newly chosen model without a restart."
+          git push
