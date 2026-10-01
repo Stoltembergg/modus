@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-// chore: re-trigger Package after cancelled macOS jobs
+// chore: re-trigger Package for tip after bot action_required (2026-10-01T11:34Z)
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
