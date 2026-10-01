@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
@@ -39,7 +40,6 @@ import {
   parseIpcInput,
 } from "./schemas";
 import type { TrustedSenderEvent } from "./trusted-sender";
-import { z } from "zod";
 
 /** Local schema so we do not enlarge the shared schemas monolith for one channel. */
 const groupProjectContextSchema = z.object({ workspaceId: z.string().min(1).max(128) }).strict();
