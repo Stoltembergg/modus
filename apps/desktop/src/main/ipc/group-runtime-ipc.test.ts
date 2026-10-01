@@ -93,7 +93,6 @@ describe("group runtime IPC", () => {
         replyToMessageId: "m-0",
       });
       expect(
-<<<<<<< HEAD
         handlers.get("group:post-message")?.(trusted, {
           groupId: "g-1",
           body: "continue",
@@ -106,7 +105,8 @@ describe("group runtime IPC", () => {
         body: "continue",
         executionMode: "complement",
         executionId: "m-1",
-=======
+      });
+      expect(
         handlers.get("group:resume-execution")?.(trusted, {
           groupId: "g-1",
           executionId: "exec-1",
@@ -115,7 +115,6 @@ describe("group runtime IPC", () => {
       expect(service.resumeExecution).toHaveBeenCalledWith({
         groupId: "g-1",
         executionId: "exec-1",
->>>>>>> origin/main
       });
       const cursor = { createdAt: MESSAGE.createdAt, id: MESSAGE.id };
       expect(
