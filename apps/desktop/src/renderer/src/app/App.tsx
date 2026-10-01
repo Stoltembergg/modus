@@ -48,7 +48,6 @@ import type {
   UpdateRestoreUiState,
   WorkspaceInfo,
 } from "../../../shared/contracts";
-import modusLogo from "../assets/modus-logo.png";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
 import { APP_RAIL_WIDTH, AppRail, type PrimaryDestination } from "../components/shell/AppRail";
 import { AppShell } from "../components/shell/AppShell";
@@ -1740,7 +1739,6 @@ function MenuBar() {
       )}
     >
       <div className={cn("flex flex-1 items-center gap-0.5", !isMac && "pl-2.5")}>
-        <BrandMark />
         {isMac ? null : (
           <>
             <MenuItem>File</MenuItem>
@@ -1751,14 +1749,6 @@ function MenuBar() {
         )}
       </div>
       {isMac ? null : <WindowControls />}
-    </div>
-  );
-}
-
-function BrandMark() {
-  return (
-    <div className="mr-1 flex size-7 items-center justify-center">
-      <img alt="Modus" className="size-[18px] object-contain" src={modusLogo} />
     </div>
   );
 }
