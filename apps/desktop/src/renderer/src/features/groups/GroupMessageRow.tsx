@@ -21,8 +21,10 @@ import {
   splitRoomMessageBody,
   stripAgentSelfIntro,
 } from "../../../../shared/group-room-transcript";
+import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
+import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
@@ -220,7 +222,13 @@ function MessageAttachments({ message }: { message: GroupMessage }) {
   );
 }
 
-function MessageMeta({ message }: { message: GroupMessage }) {
+function MessageMeta({
+  message,
+  executionTokenTotal,
+}: {
+  message: GroupMessage;
+  executionTokenTotal?: number | undefined;
+}) {
   const status = message.status;
   const label = status
     ? {
@@ -235,11 +243,24 @@ function MessageMeta({ message }: { message: GroupMessage }) {
       }[status]
     : undefined;
   const warning = status === "failed" || status === "interrupted";
+  const tokenLabel =
+    typeof executionTokenTotal === "number" && executionTokenTotal > 0
+      ? formatTokenCount(executionTokenTotal)
+      : "";
   return (
     <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
       <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
         {formatClock(Date.parse(message.createdAt))}
       </time>
+      {tokenLabel ? (
+        <span
+          className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
+          data-testid="group-execution-tokens"
+          title="Estimated tokens for this execution (characters ÷ 4)"
+        >
+          ~{tokenLabel} tokens
+        </span>
+      ) : null}
       {label ? (
         <span
           className={
@@ -251,6 +272,42 @@ function MessageMeta({ message }: { message: GroupMessage }) {
         </span>
       ) : null}
     </span>
+  );
+}
+
+function MessageActions({
+  copyText,
+  onReply,
+  message,
+  align,
+}: {
+  copyText: string;
+  onReply?: ((message: GroupMessage) => void) | undefined;
+  message: GroupMessage;
+  align: "start" | "end";
+}) {
+  if (!copyText.trim() && !onReply) return null;
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100",
+        align === "end" ? "mr-3 self-end" : "ml-8 self-start",
+      )}
+      data-testid="group-message-actions"
+    >
+      {copyText.trim() ? <CopyButton label="Copy message" text={copyText} /> : null}
+      {onReply ? (
+        <button
+          aria-label="Reply to message"
+          className="text-2xs text-fg-faint hover:text-fg-muted"
+          data-testid="group-message-reply"
+          onClick={() => onReply(message)}
+          type="button"
+        >
+          Reply
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -313,6 +370,7 @@ export function GroupMessageRow({
   role,
   activeWaitingSessionIds,
   replyToMessage,
+  executionTokenTotal,
 }: {
   message: GroupMessage;
   replyToMessage?: GroupMessage | undefined;
@@ -333,6 +391,8 @@ export function GroupMessageRow({
   liveTurn?: { mode: "running" | "queued"; live: GroupLiveTurnSnapshot } | undefined;
   /** @deprecated Use the canonical message status to mark writing. */
   streaming?: boolean | undefined;
+  /** Estimated token total for this ask-spanning execution (shown on the chain’s last message). */
+  executionTokenTotal?: number | undefined;
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
@@ -440,7 +500,7 @@ export function GroupMessageRow({
             <PromptMessageIdentity
               name="You"
               role={role?.trim() || "Human"}
-              trailing={<MessageMeta message={message} />}
+              trailing={<MessageMeta executionTokenTotal={executionTokenTotal} message={message} />}
             />
             <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
             {message.body.trim() ? (
@@ -452,17 +512,7 @@ export function GroupMessageRow({
             <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
-        {onReply ? (
-          <button
-            aria-label="Reply to message"
-            className="mr-3 self-end text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
-            data-testid="group-message-reply"
-            onClick={() => onReply(message)}
-            type="button"
-          >
-            Reply
-          </button>
-        ) : null}
+        <MessageActions align="end" copyText={message.body} message={message} onReply={onReply} />
       </div>
     );
   }
@@ -530,7 +580,7 @@ export function GroupMessageRow({
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}
-                <MessageMeta message={message} />
+                <MessageMeta executionTokenTotal={executionTokenTotal} message={message} />
                 {readyOnly ? (
                   <span
                     className="font-normal text-amber-400/90 text-2xs"
@@ -594,16 +644,13 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-      {onReply && !writing ? (
-        <button
-          aria-label="Reply to message"
-          className="ml-8 self-start text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
-          data-testid="group-message-reply"
-          onClick={() => onReply(message)}
-          type="button"
-        >
-          Reply
-        </button>
+      {!writing ? (
+        <MessageActions
+          align="start"
+          copyText={prose || message.body}
+          message={message}
+          onReply={onReply}
+        />
       ) : null}
     </div>
   );
