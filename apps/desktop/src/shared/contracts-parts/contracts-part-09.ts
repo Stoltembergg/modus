@@ -39,7 +39,6 @@ export type ComposioConnectionOperation = {
   error?: ComposioUserError;
 };
 
-
 export type ComposioSettingsState = {
   apiKeyConfigured: boolean;
   status: "unconfigured" | "loading" | "ready" | "error";
@@ -52,7 +51,6 @@ export type ComposioConnectivityResult = {
   mcpSessionReady: boolean;
   error?: ComposioUserError;
 };
-
 
 export type ComposioToolkitPolicyInput = {
   toolkitSlug: string;

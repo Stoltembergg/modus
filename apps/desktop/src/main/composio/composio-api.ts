@@ -1,7 +1,8 @@
 import { Composio, SessionPreset } from "@composio/core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import type { ComposioDisconnectAccountInput,
+import type {
+  ComposioDisconnectAccountInput,
   ComposioRenameAccountInput,
   ComposioStartConnectionInput,
   ComposioToolkitPolicyInput,
@@ -238,9 +239,13 @@ export function createComposioApi(apiKey: string): ComposioApi {
       let session: ComposioSession | undefined;
       try {
         session = await this.createSession(profileId, {
-          toolkits: { enable: [] }, tools: {}, connectedAccounts: {},
-          sessionPreset: SessionPreset.DIRECT_TOOLS, mcp: true,
-          sandbox: { enable: false }, manageConnections: { enable: false },
+          toolkits: { enable: [] },
+          tools: {},
+          connectedAccounts: {},
+          sessionPreset: SessionPreset.DIRECT_TOOLS,
+          mcp: true,
+          sandbox: { enable: false },
+          manageConnections: { enable: false },
           multiAccount: { enable: false, requireExplicitSelection: false },
         });
         const client = new Client({ name: "modus-composio-connectivity-check", version: "0.1.0" });
@@ -251,7 +256,16 @@ export function createComposioApi(apiKey: string): ComposioApi {
           await client.connect(transport as unknown as Parameters<Client["connect"]>[0]);
           return { apiReachable: true, mcpSessionReady: true };
         } catch (error) {
-          return { apiReachable: true, mcpSessionReady: false, error: { code: "mcp_transport_failed", message: error instanceof Error ? error.message.slice(0, 240) : "MCP transport failed", retryable: true } };
+          return {
+            apiReachable: true,
+            mcpSessionReady: false,
+            error: {
+              code: "mcp_transport_failed",
+              message:
+                error instanceof Error ? error.message.slice(0, 240) : "MCP transport failed",
+              retryable: true,
+            },
+          };
         } finally {
           await client.close().catch(() => undefined);
           await transport.close().catch(() => undefined);

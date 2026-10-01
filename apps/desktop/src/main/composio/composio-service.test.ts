@@ -250,7 +250,11 @@ describe("Composio service", () => {
     vi.mocked(api.api.validateMcpConnectivity).mockResolvedValue({
       apiReachable: true,
       mcpSessionReady: false,
-      error: { code: "missing_scope_read", message: "MCP session permission denied", retryable: false },
+      error: {
+        code: "missing_scope_read",
+        message: "MCP session permission denied",
+        retryable: false,
+      },
     });
     const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
     const state = await harness.service.diagnose();
@@ -279,7 +283,9 @@ describe("Composio service", () => {
     const api = makeApi();
     vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
       Object.assign(new Error("fetch failed"), {
-        cause: Object.assign(new Error("getaddrinfo ENOTFOUND backend.composio.dev"), { code: "ENOTFOUND" }),
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND backend.composio.dev"), {
+          code: "ENOTFOUND",
+        }),
       }),
     );
     const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });

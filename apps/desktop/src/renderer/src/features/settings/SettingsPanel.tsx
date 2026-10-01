@@ -15,8 +15,8 @@ import { AppearanceSettingsPanel } from "./sections/appearance";
 import { FailureBlacklistSettingsPanel } from "./sections/failure-blacklist";
 import { GeneralSettingsPanel } from "./sections/general";
 import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
-import { McpSettingsPanel } from "./sections/mcp";
 import { LimitsSettingsPanel } from "./sections/limits";
+import { McpSettingsPanel } from "./sections/mcp";
 import {
   ModelProviderSettingsPanel,
   UnofficialProviderInterstitialDialog,

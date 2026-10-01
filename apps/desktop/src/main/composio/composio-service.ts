@@ -77,39 +77,59 @@ class ComposioServiceError extends Error {
 function errorFields(error: unknown): {
   code: string;
   message: string;
+  cause: unknown;
   status: number | undefined;
 } {
   if (typeof error !== "object" || error === null) {
-    return { code: "", message: String(error ?? ""), status: undefined };
+    return { code: "", message: String(error ?? ""), cause: undefined, status: undefined };
   }
   const value = error as Record<string, unknown>;
-  const cause = typeof value.cause === "object" && value.cause !== null
-    ? (value.cause as Record<string, unknown>)
-    : undefined;
+  const cause =
+    typeof value.cause === "object" && value.cause !== null
+      ? (value.cause as Record<string, unknown>)
+      : undefined;
   const message = [value.message, cause?.message]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
-  const nestedResponse = typeof value.response === "object" && value.response !== null
-    ? (value.response as Record<string, unknown>)
-    : undefined;
-  const nestedError = typeof value.error === "object" && value.error !== null
-    ? (value.error as Record<string, unknown>)
-    : undefined;
-  const nestedDetails = typeof value.details === "object" && value.details !== null
-    ? (value.details as Record<string, unknown>)
-    : undefined;
-  const rawStatus = value.statusCode ?? value.status ?? value.httpStatus ?? nestedResponse?.status ?? nestedDetails?.status;
+  const nestedResponse =
+    typeof value.response === "object" && value.response !== null
+      ? (value.response as Record<string, unknown>)
+      : undefined;
+  const nestedError =
+    typeof value.error === "object" && value.error !== null
+      ? (value.error as Record<string, unknown>)
+      : undefined;
+  const nestedDetails =
+    typeof value.details === "object" && value.details !== null
+      ? (value.details as Record<string, unknown>)
+      : undefined;
+  const rawStatus =
+    value.statusCode ??
+    value.status ??
+    value.httpStatus ??
+    nestedResponse?.status ??
+    nestedDetails?.status;
   const status = typeof rawStatus === "number" ? rawStatus : undefined;
-  const code = [value.code, value.type, value.name, cause?.code, nestedError?.code, nestedDetails?.slug]
+  const rawCode = [value.code, value.type, value.name, nestedError?.code, nestedDetails?.slug]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
-  const enrichedMessage = [value.message, nestedError?.message, nestedDetails?.message, nestedDetails?.suggested_fix]
+  const code = [rawCode, cause?.code]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
-  return { code, message: enrichedMessage, status };
+  const enrichedMessage = [
+    value.message,
+    cause?.message,
+    nestedError?.message,
+    nestedDetails?.message,
+    nestedDetails?.suggested_fix,
+  ]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+  return { code, message: enrichedMessage, cause, status };
 }
 
 function diagnosticText(error: unknown): string {
@@ -128,17 +148,38 @@ function diagnosticText(error: unknown): string {
     }
     current = fields.cause;
   }
-  return [...new Set(parts)]
-    .join(" ")
-    .replace(/https?:\/\/\S+/gi, "[url]")
-    .replace(/(?:cmp|comp|sk|eyJ)[_-][a-z0-9._-]{12,}/gi, "[credential]")
-    .slice(0, 600) || "detalhes técnicos não disponíveis";
+  return (
+    [...new Set(parts)]
+      .join(" ")
+      .replace(/https?:\/\/\S+/gi, "[url]")
+      .replace(/(?:cmp|comp|sk|eyJ)[_-][a-z0-9._-]{12,}/gi, "[credential]")
+      .slice(0, 600) || "detalhes técnicos não disponíveis"
+  );
 }
 
 export function safeError(error: unknown, context: ErrorContext): ComposioUserError {
   if (error instanceof ComposioServiceError) return error.userError;
-  const { code, message, status } = errorFields(error);
+  const { code, message, cause } = errorFields(error);
   const markers = `${code} ${message}`;
+  const status = (() => {
+    if (typeof error !== "object" || error === null) return undefined;
+    const fields = error as Record<string, unknown>;
+    const response =
+      typeof fields.response === "object" && fields.response !== null
+        ? (fields.response as Record<string, unknown>)
+        : undefined;
+    const details =
+      typeof fields.details === "object" && fields.details !== null
+        ? (fields.details as Record<string, unknown>)
+        : undefined;
+    const candidate =
+      fields.statusCode ??
+      fields.status ??
+      fields.httpStatus ??
+      response?.status ??
+      details?.status;
+    return typeof candidate === "number" ? candidate : undefined;
+  })();
 
   if (/cancel(?:ed|led)|user_cancel|authorization_canceled|connection_canceled/.test(markers)) {
     return {
@@ -154,7 +195,10 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       retryable: true,
     };
   }
-  if (status === 401 || /invalid[_ -]?(?:api[_ -]?)?key|wrong[_ -]?project|project[_ -]?not[_ -]?found/.test(markers)) {
+  if (
+    status === 401 ||
+    /invalid[_ -]?(?:api[_ -]?)?key|wrong[_ -]?project|project[_ -]?not[_ -]?found/.test(markers)
+  ) {
     return {
       code: "invalid_project_key",
       message:
@@ -255,7 +299,11 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       retryable: true,
     };
   }
-  if (/network|fetch|econn|socket|offline|connection reset|failed to fetch|api_connection/.test(markers)) {
+  if (
+    /network|fetch|econn|socket|offline|connection reset|failed to fetch|api_connection/.test(
+      markers,
+    )
+  ) {
     const safeDiagnostic = diagnosticText(error);
     return {
       code: "network_unavailable",
@@ -694,11 +742,11 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
       const profile = dependencies.profileStore.load();
       await currentApi.validateProjectReadAccess(profile.profileId);
       const result = await currentApi.validateMcpConnectivity(profile.profileId);
-        return {
-          apiReachable: true,
-          mcpSessionReady: result.mcpSessionReady,
-          ...(result.error ? { error: safeError(result.error, "project-read") } : {}),
-        };
+      return {
+        apiReachable: true,
+        mcpSessionReady: result.mcpSessionReady,
+        ...(result.error ? { error: safeError(result.error, "project-read") } : {}),
+      };
     })().catch((error: unknown) => ({
       apiReachable: false,
       mcpSessionReady: false,

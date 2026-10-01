@@ -75,7 +75,10 @@ describe("Composio API adapter", () => {
     client.sessions.create.mockResolvedValue({
       sessionId: "probe-session",
       configVersion: 1,
-      mcp: { url: "https://mcp.composio.dev/session/probe", headers: { authorization: "Bearer probe" } },
+      mcp: {
+        url: "https://mcp.composio.dev/session/probe",
+        headers: { authorization: "Bearer probe" },
+      },
       update: vi.fn(),
     });
     const api = createComposioApi("project-key");

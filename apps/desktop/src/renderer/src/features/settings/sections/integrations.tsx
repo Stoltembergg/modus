@@ -356,11 +356,18 @@ export function IntegrationsSettingsPanel() {
   return (
     <>
       <SettingsPageHeader
-        actions={settings?.apiKeyConfigured ? (
-          <button className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted hover:bg-hover disabled:opacity-50" disabled={saving !== undefined} onClick={() => void refreshCatalog()} type="button">
-            <IconRefresh size={14} /> Atualizar catálogo
-          </button>
-        ) : null}
+        actions={
+          settings?.apiKeyConfigured ? (
+            <button
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted hover:bg-hover disabled:opacity-50"
+              disabled={saving !== undefined}
+              onClick={() => void refreshCatalog()}
+              type="button"
+            >
+              <IconRefresh size={14} /> Atualizar catálogo
+            </button>
+          ) : null
+        }
         description="Conecte integrações de plataformas e escolha quais contas e operações os agentes podem usar."
         title="Composio"
       />
@@ -370,7 +377,10 @@ export function IntegrationsSettingsPanel() {
         title="Project API Key"
       >
         <SettingsList>
-          <form className="flex flex-col gap-3 p-4 sm:flex-row" onSubmit={(event) => void saveApiKey(event)}>
+          <form
+            className="flex flex-col gap-3 p-4 sm:flex-row"
+            onSubmit={(event) => void saveApiKey(event)}
+          >
             <label className="flex-1 text-xs text-fg-muted">
               <span className="mb-1.5 block">Composio Project API Key</span>
               <input
@@ -383,11 +393,24 @@ export function IntegrationsSettingsPanel() {
               />
             </label>
             <div className="flex items-end gap-2">
-            <button className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50" disabled={saving !== undefined || !apiKey.trim()} type="submit">
-            {saving === "api-key" ? "Salvando…" : settings?.apiKeyConfigured ? "Substituir chave" : "Salvar chave"}
+              <button
+                className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50"
+                disabled={saving !== undefined || !apiKey.trim()}
+                type="submit"
+              >
+                {saving === "api-key"
+                  ? "Salvando…"
+                  : settings?.apiKeyConfigured
+                    ? "Substituir chave"
+                    : "Salvar chave"}
               </button>
               {settings?.apiKeyConfigured ? (
-                <button className="h-9 rounded-md px-3 text-sm text-danger hover:bg-hover disabled:opacity-50" disabled={saving !== undefined} onClick={() => setShowRemoveKey((shown) => !shown)} type="button">
+                <button
+                  className="h-9 rounded-md px-3 text-sm text-danger hover:bg-hover disabled:opacity-50"
+                  disabled={saving !== undefined}
+                  onClick={() => setShowRemoveKey((shown) => !shown)}
+                  type="button"
+                >
                   Remover chave
                 </button>
               ) : null}
@@ -400,10 +423,25 @@ export function IntegrationsSettingsPanel() {
           ) : null}
           {showRemoveKey ? (
             <div className="flex items-center justify-between gap-3 border-hairline-soft border-t px-4 py-3">
-              <p className="text-xs text-fg-muted">Remover a chave local? As contas Composio conectadas permanecem no provedor.</p>
+              <p className="text-xs text-fg-muted">
+                Remover a chave local? As contas Composio conectadas permanecem no provedor.
+              </p>
               <div className="flex gap-2">
-                <button className="rounded-md px-2.5 py-1.5 text-xs text-fg-muted hover:bg-hover" onClick={() => setShowRemoveKey(false)} type="button">Cancelar</button>
-                <button className="rounded-md bg-danger/15 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/25" disabled={saving !== undefined} onClick={() => void removeApiKey()} type="button">Confirmar remoção</button>
+                <button
+                  className="rounded-md px-2.5 py-1.5 text-xs text-fg-muted hover:bg-hover"
+                  onClick={() => setShowRemoveKey(false)}
+                  type="button"
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="rounded-md bg-danger/15 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/25"
+                  disabled={saving !== undefined}
+                  onClick={() => void removeApiKey()}
+                  type="button"
+                >
+                  Confirmar remoção
+                </button>
               </div>
             </div>
           ) : null}
@@ -416,7 +454,12 @@ export function IntegrationsSettingsPanel() {
       >
         <SettingsList>
           <div className="flex flex-wrap items-center gap-3 p-4">
-            <button className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50" disabled={checkingConnectivity || !settings?.apiKeyConfigured} onClick={() => void diagnoseConnection()} type="button">
+            <button
+              className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50"
+              disabled={checkingConnectivity || !settings?.apiKeyConfigured}
+              onClick={() => void diagnoseConnection()}
+              type="button"
+            >
               {checkingConnectivity ? "Testando conexão…" : "Testar conexão"}
             </button>
             {diagnostic ? (
@@ -427,7 +470,11 @@ export function IntegrationsSettingsPanel() {
                 <span className={diagnostic.mcpSessionReady ? "text-success" : "text-danger"}>
                   Sessão MCP: {diagnostic.mcpSessionReady ? "conectada" : "não conectada"}
                 </span>
-                {diagnostic.error ? <span className="max-w-xl break-words text-danger">{diagnostic.error.message}</span> : null}
+                {diagnostic.error ? (
+                  <span className="max-w-xl break-words text-danger">
+                    {diagnostic.error.message}
+                  </span>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -435,7 +482,12 @@ export function IntegrationsSettingsPanel() {
       </SettingsSection>
 
       {currentError ? (
-        <div className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">{currentError}</div>
+        <div
+          className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+          role="alert"
+        >
+          {currentError}
+        </div>
       ) : null}
 
       {settings?.apiKeyConfigured ? (
