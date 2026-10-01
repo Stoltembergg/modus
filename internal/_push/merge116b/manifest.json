@@ -1,0 +1,16 @@
+{
+  "merge_ref": "7f6b8681f31fca1d4cd06de354fe2c5c34136aed",
+  "merge_branch": "cursor/group-transcript-virtualization-c747",
+  "files": [
+    {
+      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
+      "bytes": 25621,
+      "blob": "223babba83d9c880959880362ea16014994a37d3",
+      "parts": [
+        "GroupMessageRow.tsx.part00.zlib.b64",
+        "GroupMessageRow.tsx.part01.zlib.b64",
+        "GroupMessageRow.tsx.part02.zlib.b64"
+      ]
+    }
+  ]
+}
