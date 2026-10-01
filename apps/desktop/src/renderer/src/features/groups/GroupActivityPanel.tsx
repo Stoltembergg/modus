@@ -5,12 +5,14 @@ import type {
   GroupTask,
 } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
+import { estimateTokensByExecution } from "../../../../shared/group-conversation-minors";
 import { formatGroupProjectContextDetails } from "../../../../shared/group-project";
 import {
   collectRoomMessageDetails,
   type HandoffPacketField,
 } from "../../../../shared/group-room-transcript";
 import { cn } from "../../lib/cn";
+import { formatTokenCount } from "../../lib/tokenUsage";
 import { GroupDecisionsSection } from "./GroupDecisions";
 import { GroupStageChip } from "./GroupRoomHeader";
 import { activeTaskCount, GroupTaskPanel } from "./GroupTaskPanel";
@@ -50,6 +52,10 @@ export function GroupActivityPanel({
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
 }) {
   const details = collectRoomMessageDetails(messages).slice(-12);
+  const executionTokens = estimateTokensByExecution(messages);
+  const allTokenRows = [...executionTokens.entries()].filter(([, total]) => total > 0);
+  const tokenGrand = allTokenRows.reduce((sum, [, total]) => sum + total, 0);
+  const tokenRows = allTokenRows.slice(-8).reverse();
   return (
     <GroupTaskPanel
       ariaLabel="Activity"
@@ -68,11 +74,50 @@ export function GroupActivityPanel({
             stage={stage}
           />
           <ActivityProjectContextSection snapshot={projectContext} />
+          <ActivityTokenSection
+            executionCount={allTokenRows.length}
+            grand={tokenGrand}
+            rows={tokenRows}
+          />
           <ActivityDetailsSection fields={details} />
           <GroupDecisionsSection groupId={groupId} labels={labels} />
         </>
       }
     />
+  );
+}
+
+function ActivityTokenSection({
+  rows,
+  grand,
+  executionCount,
+}: {
+  rows: readonly [string, number][];
+  grand: number;
+  executionCount: number;
+}) {
+  if (executionCount === 0) return null;
+  return (
+    <section className="mb-3 px-1" data-testid="group-activity-tokens">
+      <h3 className="mb-1.5 text-2xs text-fg-faint uppercase tracking-wide">Tokens</h3>
+      <p className="mb-1.5 text-2xs text-fg-faint">
+        Estimated · ~{formatTokenCount(grand)} across {executionCount}{" "}
+        {executionCount === 1 ? "execution" : "executions"}
+      </p>
+      <ul className="space-y-1">
+        {rows.map(([executionId, total]) => (
+          <li
+            className="flex items-center justify-between gap-2 text-2xs text-fg-muted"
+            key={executionId}
+          >
+            <span className="min-w-0 truncate font-mono" title={executionId}>
+              {executionId.slice(0, 8)}
+            </span>
+            <span className="shrink-0 tabular-nums">~{formatTokenCount(total)}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
