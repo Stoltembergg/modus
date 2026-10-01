@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - .github/patches/pr113-exec-link/**
+      - .github/patches/pr113-exec-link/p0*.b64
       - .github/workflows/apply-pr113-exec-link.yml
 permissions:
   contents: write
@@ -15,20 +15,23 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply execution-link patch
+      - name: Decode patch, verify hash, apply once
         run: |
           set -euo pipefail
           if grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts; then
-            echo 'already applied'
+            echo already applied
             exit 0
           fi
-          cat .github/patches/pr113-exec-link/part-*.txt > /tmp/pr113-exec-link.patch
-          # Sanity: reconstructed patch must match expected size and markers
-          test "$(wc -c < /tmp/pr113-exec-link.patch)" -ge 27000
-          grep -q 'latestGroupExecutionId' /tmp/pr113-exec-link.patch
-          grep -q 'Nova tarefa' /tmp/pr113-exec-link.patch
+          python3 -c "import base64,hashlib,pathlib; e='9b08e0ad44dd1e390b2d893ced25c5c2bbb0fab4593f7f3d04057086c6c298b9'; ps=[pathlib.Path(f'.github/patches/pr113-exec-link/p{i:02d}.b64') for i in range(5)]; assert all(p.is_file() for p in ps), ps; d=b''.join(base64.b64decode(p.read_text()) for p in ps); h=hashlib.sha256(d).hexdigest(); print(len(d),h); assert h==e; assert b'PLACEHOLDER' not in d; assert b'latestGroupExecutionId' in d; pathlib.Path('/tmp/pr113-exec-link.patch').write_bytes(d)"
           git apply --index /tmp/pr113-exec-link.patch
+          if grep -R --include='*.ts' --include='*.tsx' -n 'PLACEHOLDER_WILL_REPLACE' apps/desktop/src; then exit 1; fi
+          grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts
+          grep -q 'executionMode' apps/desktop/src/main/ipc/schemas.ts
+          python3 -c "import hashlib,pathlib; w={'apps/desktop/src/main/groups/group-store.ts':'2210b646e0a774a9','apps/desktop/src/main/ipc/schemas.ts':'746be98000c3d6d6','apps/desktop/src/main/groups/group-runtime.ts':'b0fde7f0eb8faa9d'};
+for p,x in w.items():
+ h=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); assert h.startswith(x),(p,h); print(p,h[:16])"
           git config user.email "stoltembergg@gmail.com"
           git config user.name "Gabriel"
           git commit -m "fix(groups): wire executionId through store, schemas, and composer"
