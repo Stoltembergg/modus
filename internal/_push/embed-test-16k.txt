@@ -1,0 +1,42 @@
+import { Dialog } from "@base-ui/react/dialog";
+import { IconCrown, IconPlus, IconX } from "@tabler/icons-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AGENT_TEMPLATES,
+  type AgentTemplate,
+  agentAvatarForId,
+} from "../../../../shared/agent-templates";
+import type {
+  AgentGroupWithMembers,
+  AgentInfo,
+  CreateAgentGroupInput,
+  GenerateAgentProfileInput,
+  GeneratedAgentProfile,
+  NewGroupAgentInput,
+  WorkspaceInfo,
+} from "../../../../shared/contracts";
+import { GROUP_MAX_MEMBERS } from "../../../../shared/group-blocked";
+import { cn } from "../../lib/cn";
+import { AgentAvatar } from "../agents/AgentAvatar";
+import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog";
+import type { GroupDialogModel } from "./CreateGroupDialog";
+import { describeGroupError } from "./groupErrors";
+import {
+  applyCollabPipeline,
+  copyMember,
+  dialogMember,
+  NEW_GROUP_DEFAULT_NAME,
+  type NewGroupMember,
+  newGroupBlocker,
+  newGroupCounter,
+  newGroupCreateInput,
+  resolveNewGroupLead,
+  templateMember,
+} from "./newGroupModel";
+
+/** Folder select value that runs the existing "Add folder…" flow. */
+const ADD_FOLDER = "__add_folder__";
+
+type Tab = "templates" | "copy" | "custom";
+
+PROBE_OK_16K_PREFIX_WITH_resolveNewGroupLead
