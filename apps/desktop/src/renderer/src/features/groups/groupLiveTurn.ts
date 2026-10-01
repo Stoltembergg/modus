@@ -65,6 +65,7 @@ function toolLabel(name: string): string {
 export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
+  options?: { nowMs?: number; queuedSinceMs?: number },
 ): GroupLiveTurnSnapshot {
   const roles = new Map<string, "assistant" | "user">();
   for (const { event } of events) {
@@ -78,7 +79,12 @@ export function buildGroupLiveTurn(
         roles.get(event.messageId) === "user"
       ),
   );
-  const presence = buildGroupSemanticPresence(publicEvents, mode);
+  const presence = buildGroupSemanticPresence(
+    publicEvents,
+    mode,
+    options?.nowMs ?? Date.now(),
+    options?.queuedSinceMs,
+  );
   if (mode === "queued") {
     return {
       phase: presence.label,
