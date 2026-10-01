@@ -258,14 +258,7 @@ describe("GroupRoom", () => {
     await user.click(await screen.findByRole("button", { name: "Resume task" }));
     expect(group.resumeExecution).toHaveBeenCalledWith({
       groupId: "g-1",
-<<<<<<< HEAD
-      body: "Resume this task.",
-      replyToMessageId: "interrupted",
-      executionMode: "complement",
-      executionId: "interrupted",
-=======
       executionId: "exec-1",
->>>>>>> origin/main
     });
     expect(group.postMessage).not.toHaveBeenCalled();
     expect(screen.getByText("Interrupted")).toBeTruthy();

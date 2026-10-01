@@ -293,14 +293,7 @@ function GroupRoomContent({
             if (!message.turnId) return;
             await window.modus.group.resumeExecution({
               groupId: group.id,
-<<<<<<< HEAD
-              body: "Resume this task.",
-              replyToMessageId: message.id,
-              executionMode: "complement",
-              executionId: messageExecutionId(message),
-=======
               executionId: message.turnId,
->>>>>>> origin/main
             });
           }}
           roles={roles}
