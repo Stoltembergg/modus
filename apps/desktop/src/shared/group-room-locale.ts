@@ -7,6 +7,7 @@ export type GroupRoomLocale = "en" | "pt" | "zh";
 
 export type GroupThinkingStateKey =
   | "thinking"
+  | "waitingOnModel"
   | "exploring"
   | "reading"
   | "runningTests"
@@ -26,6 +27,7 @@ export type GroupThinkingStateKey =
 const LABELS: Record<GroupRoomLocale, Record<GroupThinkingStateKey, string>> = {
   en: {
     thinking: "Thinking…",
+    waitingOnModel: "Waiting on model…",
     exploring: "Exploring…",
     reading: "Reading files…",
     runningTests: "Running tests…",
@@ -44,6 +46,7 @@ const LABELS: Record<GroupRoomLocale, Record<GroupThinkingStateKey, string>> = {
   },
   pt: {
     thinking: "Pensando…",
+    waitingOnModel: "Aguardando o modelo…",
     exploring: "Explorando…",
     reading: "Lendo arquivos…",
     runningTests: "Executando testes…",
@@ -62,6 +65,7 @@ const LABELS: Record<GroupRoomLocale, Record<GroupThinkingStateKey, string>> = {
   },
   zh: {
     thinking: "思考中…",
+    waitingOnModel: "等待模型…",
     exploring: "探索中…",
     reading: "读取文件…",
     runningTests: "运行测试…",
@@ -168,7 +172,11 @@ export function thinkingStateKeyFromLive(input: {
   if (presence === "waiting_for_agent" || /^waiting$/i.test(phase)) return "waiting";
   if (presence === "blocked" || /waiting for you/i.test(phase)) return "waitingForYou";
   if (presence === "queued" || /^queued$/i.test(phase)) return "queued";
-  if (/test|vitest|jest|pytest|spec/.test(activity) || /test/i.test(phase)) {
+  if (
+    /test|vitest|jest|pytest|spec/.test(activity) ||
+    /test/i.test(phase) ||
+    /running tests/i.test(phase)
+  ) {
     return "runningTests";
   }
   if (presence === "exploring" || /^explor/i.test(phase)) return "exploring";
@@ -184,6 +192,14 @@ export function thinkingStateKeyFromLive(input: {
   if (/^done$/i.test(phase)) return "done";
   if (/^failed$/i.test(phase)) return "failed";
   if (/^stopped$/i.test(phase)) return "stopped";
-  if (/thinking/i.test(phase) || !phase) return "thinking";
-  return "thinking";
+  // Idle on the model (no tool spam yet) — concrete, not opaque "Working"/"Thinking".
+  if (
+    presence === "thinking" ||
+    /waiting on model/i.test(phase) ||
+    /thinking/i.test(phase) ||
+    !phase
+  ) {
+    return "waitingOnModel";
+  }
+  return "waitingOnModel";
 }

@@ -109,9 +109,9 @@ describe("GroupMessageList working cards", () => {
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
     const row = screen.getByTestId("group-member-working");
     expect(row.dataset.mode).toBe("running");
-    expect(row.dataset.phase).toBe("Thinking");
+    expect(row.dataset.phase).toBe("Waiting on model");
     expect(row.textContent).toContain("Planner");
-    expect(row.textContent).toContain("Considering the request");
+    expect(row.textContent).toContain("Waiting on model");
     expect(screen.getByTestId("group-prompt-cot")).toBeTruthy();
   });
 

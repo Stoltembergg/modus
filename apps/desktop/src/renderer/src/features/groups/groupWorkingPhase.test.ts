@@ -21,12 +21,12 @@ describe("groupMemberWorkingPhase", () => {
     ).toBe("Queued");
   });
 
-  it("defaults a live turn to Thinking before any stream", () => {
-    expect(groupMemberWorkingPhase([], "running")).toBe("Thinking");
-    expect(groupMemberWorkingPhase([ev(runStarted)], "running")).toBe("Thinking");
+  it("defaults a live turn to Waiting on model before any stream", () => {
+    expect(groupMemberWorkingPhase([], "running")).toBe("Waiting on model");
+    expect(groupMemberWorkingPhase([ev(runStarted)], "running")).toBe("Waiting on model");
   });
 
-  it("tracks Thinking → Exploring → Writing from semantic presence", () => {
+  it("tracks Waiting on model → Exploring → Writing from semantic presence", () => {
     const events = [
       ev(runStarted),
       ev({ type: "thinking.delta", sessionId: "s", messageId: "m1", delta: "plan" }),
@@ -39,9 +39,9 @@ describe("groupMemberWorkingPhase", () => {
       ev({ type: "tool.ended", sessionId: "s", toolCallId: "t1", isError: false }),
       ev({ type: "message.delta", sessionId: "s", messageId: "m2", delta: "hi" }),
     ];
-    expect(groupMemberWorkingPhase(events.slice(0, 2), "running")).toBe("Thinking");
+    expect(groupMemberWorkingPhase(events.slice(0, 2), "running")).toBe("Waiting on model");
     expect(groupMemberWorkingPhase(events.slice(0, 3), "running")).toBe("Exploring");
-    expect(groupMemberWorkingPhase(events.slice(0, 4), "running")).toBe("Thinking");
+    expect(groupMemberWorkingPhase(events.slice(0, 4), "running")).toBe("Waiting on model");
     expect(groupMemberWorkingPhase(events, "running")).toBe("Writing");
   });
 

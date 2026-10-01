@@ -113,7 +113,9 @@ describe("GroupWorkingShimmer", () => {
     ];
     render(<GroupWorkingShimmer labels={labels} locale="pt-BR" rows={rows} />);
     const shimmer = screen.getByTestId("group-text-shimmer");
-    expect(shimmer.querySelector(".t-think-text")?.textContent).toBe("Builder está a trabalhar…");
+    expect(shimmer.querySelector(".t-think-text")?.textContent).toBe(
+      "Builder · Aguardando o modelo…",
+    );
     expect(screen.getByTestId("group-working-shimmer")).toBeTruthy();
   });
 
@@ -162,7 +164,7 @@ describe("GroupWorkingShimmer", () => {
     const strip = screen.getByTestId("group-working-shimmer");
     const shimmer = screen.getByTestId("group-text-shimmer");
     const sizer = shimmer.querySelector(".t-think-sizer");
-    expect(sizer?.textContent).toBe("Planner e Builder estão a trabalhar…");
+    expect(sizer?.textContent).toBe("Planner e Builder · Aguardando o modelo…");
     // Absolute .t-think-text needs a sizer + strip gap so the composer cannot clip it.
     expect(strip.className).toMatch(/\bmb-2\b/);
     expect(strip.className).toMatch(/\bshrink-0\b/);

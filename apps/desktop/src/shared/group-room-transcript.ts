@@ -5,11 +5,8 @@
 
 import type { GroupCollabStatus } from "./group-collab-status";
 import { parseGroupCollabStatusLine } from "./group-collab-status";
-import {
-  groupRoomLabel,
-  groupWaitingForAgentLabel,
-  thinkingStateKeyFromLive,
-} from "./group-room-locale";
+import { formatGroupProgressLabel } from "./group-progress-label";
+import { groupRoomLabel } from "./group-room-locale";
 
 /** Rigid handoff-packet keys moved out of the main timeline into Activity/Details. */
 export const HANDOFF_PACKET_KEYS = [
@@ -212,7 +209,7 @@ export function collabStatusTone(status: GroupCollabStatus): RoomMessageTone {
 /**
  * Living inline Thinking State under the agent name.
  * Ephemeral — replaced by streamed writing as soon as tokens arrive.
- * Labels follow the current app/renderer locale.
+ * Labels follow the current app/renderer locale; queued rows include age.
  */
 export function inlineLiveStatusLabel(input: {
   phase: string;
@@ -220,18 +217,11 @@ export function inlineLiveStatusLabel(input: {
   activity?: string | undefined;
   waitingFor?: string | undefined;
   stillWorking?: boolean;
+  startedAt?: number | undefined;
+  nowMs?: number | undefined;
   locale?: string | null;
 }): string {
-  const waitingFor = input.waitingFor?.trim();
-  if (
-    !input.stillWorking &&
-    (input.presenceState === "waiting_for_agent" || /^waiting$/i.test(input.phase)) &&
-    waitingFor
-  ) {
-    return groupWaitingForAgentLabel(waitingFor, input.locale);
-  }
-  const key = thinkingStateKeyFromLive(input);
-  return groupRoomLabel(key, input.locale);
+  return formatGroupProgressLabel(input);
 }
 
 /** Auto-follow only when the user is already near the bottom. */

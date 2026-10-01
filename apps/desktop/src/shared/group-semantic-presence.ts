@@ -22,7 +22,7 @@ export type GroupSemanticState =
 /** Natural labels shown in the primary room (English, like other statuses). */
 export const GROUP_SEMANTIC_LABEL: Record<GroupSemanticState, string> = {
   queued: "Queued",
-  thinking: "Thinking",
+  thinking: "Waiting on model",
   exploring: "Exploring",
   running_tool: "Working",
   waiting_for_agent: "Waiting",
@@ -78,13 +78,17 @@ export function buildGroupSemanticPresence(
   events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
   nowMs = Date.now(),
+  /** Stable epoch ms when this member entered the queue (renderer-tracked). */
+  queuedSinceMs?: number,
 ): GroupSemanticPresence {
   if (mode === "queued") {
+    const startedAt =
+      queuedSinceMs != null && Number.isFinite(queuedSinceMs) ? queuedSinceMs : nowMs;
     return {
       state: "queued",
       label: GROUP_SEMANTIC_LABEL.queued,
-      startedAt: nowMs,
-      lastProgressAt: nowMs,
+      startedAt,
+      lastProgressAt: startedAt,
     };
   }
 

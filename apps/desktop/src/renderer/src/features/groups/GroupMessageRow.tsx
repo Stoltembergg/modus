@@ -12,6 +12,7 @@ import {
 } from "../../../../shared/group-collab-status";
 import { messageExecutionId, shortExecutionLabel } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
+import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
 import {
   collabStatusTone,
   extractUsefulSources,
@@ -26,6 +27,7 @@ import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
@@ -231,18 +233,23 @@ function MessageMeta({
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
 }) {
   const status = message.status;
-  const label = status
-    ? {
-        queued: "Queued",
-        running: "Working",
-        writing: "Writing",
-        awaiting_user: "Waiting for you",
-        completed: "Completed",
-        failed: "Failed",
-        cancelled: "Cancelled",
-        interrupted: "Interrupted",
-      }[status]
-    : undefined;
+  // Live turns already show concrete phases — do not stamp opaque "Working".
+  if (!status || status === "running" || status === "writing")
+    return (
+      <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+        <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
+          {formatClock(Date.parse(message.createdAt))}
+        </time>
+      </span>
+    );
+  const label = {
+    queued: "Queued",
+    awaiting_user: "Waiting for you",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    interrupted: "Interrupted",
+  }[status];
   const warning = status === "failed" || status === "interrupted";
   const executionId = messageExecutionId(message);
   const showChip = message.authorKind === "user" || Boolean(message.chainId);
@@ -518,10 +525,14 @@ export function GroupMessageRow({
   const body = message.body.trim() ? message.body : liveText;
   const writing = message.status === "writing" || Boolean(streaming) || Boolean(liveText.trim());
   const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(body);
-  const prose = stripAgentSelfIntro(rawProse);
+  const resultParsed = !writing ? parseGroupFinalResultCard(rawProse) : undefined;
+  const prose = stripAgentSelfIntro(resultParsed?.prose ?? rawProse);
   const statuses = rawStatuses.filter(shouldPersistCollabStatusInTranscript);
   const readyOnly =
-    !prose.trim() && rawStatuses.some((status) => status.kind === "ready") && statuses.length === 0;
+    !prose.trim() &&
+    !resultParsed &&
+    rawStatuses.some((status) => status.kind === "ready") &&
+    statuses.length === 0;
   const fallbackProgress =
     !liveTurn && message.authorKind === "agent" ? fallbackProgressLabel(message.status) : undefined;
   // Hide Planner→peer handoff dumps that have no user-facing prose.
@@ -614,6 +625,7 @@ export function GroupMessageRow({
               )}
             </div>
           ) : null}
+          {resultParsed ? <GroupFinalResultCard card={resultParsed.card} /> : null}
           {sources.length > 0 ? (
             <div className="flex flex-wrap gap-1" data-testid="group-message-sources">
               {sources.map((source) => (

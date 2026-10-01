@@ -70,15 +70,15 @@ describe("GroupWorkingStatus", () => {
 
   it("shows one progress card per running or queued member", () => {
     const rows: GroupMemberWorkingRow[] = [
-      { sessionId: "s-lead", mode: "running", live: live({ phase: "Thinking" }) },
+      { sessionId: "s-lead", mode: "running", live: live({ phase: "Waiting on model" }) },
       { sessionId: "s-build", mode: "queued", live: live({ phase: "Queued", lastEventAt: 0 }) },
     ];
     renderStatus(rows);
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
-    expect(items[0]?.dataset.phase).toBe("Thinking");
+    expect(items[0]?.dataset.phase).toBe("Waiting on model");
     expect(items[0]?.textContent).toContain("Planner");
-    expect(items[0]?.textContent).toContain("Considering the request");
+    expect(items[0]?.textContent).toContain("Waiting on model");
     expect(items[1]?.dataset.phase).toBe("Queued");
     expect(items[1]?.textContent).toContain("Builder");
     expect(screen.getAllByTestId("group-prompt-cot")).toHaveLength(2);
@@ -179,11 +179,11 @@ describe("GroupWorkingStatus", () => {
       {
         sessionId: "s-lead",
         mode: "running",
-        live: live({ phase: "Thinking", lastEventAt: last }),
+        live: live({ phase: "Waiting on model", lastEventAt: last }),
       },
     ];
     renderStatus(rows);
-    expect(screen.getByTestId("group-live-status").textContent).toContain("Considering");
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Waiting on model");
     act(() => {
       vi.advanceTimersByTime(STILL_WORKING_AFTER_MS + 50);
     });
