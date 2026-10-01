@@ -1,67 +1,10 @@
+# DISABLED — PR113 merge-helper removed to stop tip churn. Do not re-enable.
 name: merge-main-pr113-v2
-# merge main; apply pre-resolved conflict files
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - .github/pr113-merge/**
-      - .github/workflows/merge-main-pr113-v2.yml
-permissions:
-  contents: write
 jobs:
-  merge:
+  disabled:
+    if: false
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: cursor/group-execution-linking-c747
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Merge main and apply conflict resolutions
-        run: |
-          set -euo pipefail
-          git config user.email "stoltembergg@gmail.com"
-          git config user.name "Gabriel"
-          git fetch origin main
-          if git merge-base --is-ancestor origin/main HEAD; then
-            echo main already merged
-            exit 0
-          fi
-          set +e
-          git merge origin/main --no-edit
-          code=$?
-          set -e
-          python3 <<'PY'
-          import base64, hashlib, json, pathlib, zlib
-          meta = json.loads(pathlib.Path('.github/pr113-merge/meta.json').read_text())
-          for name, info in meta.items():
-              zb = pathlib.Path('.github/pr113-merge') / name
-              data = zlib.decompress(base64.b64decode(zb.read_text().strip()))
-              h = hashlib.sha256(data).hexdigest()
-              assert h == info['sha256'] and len(data) == info['nbytes'], (name, h, len(data))
-              path = pathlib.Path(info['path'])
-              path.parent.mkdir(parents=True, exist_ok=True)
-              path.write_bytes(data)
-              print('wrote', info['path'], len(data), h[:12])
-          PY
-          if git grep -n '<<<<<<<' -- '*.ts' '*.tsx'; then
-            echo 'conflict markers remain' >&2
-            exit 1
-          fi
-          git add -A
-          if git diff --cached --quiet; then
-            echo nothing to commit
-            exit 0
-          fi
-          # If merge in progress, commit the merge; else regular commit
-          if [ -f .git/MERGE_HEAD ]; then
-            git commit -m "merge: main into PR113 (resume execution + live progress)"
-          else
-            git commit -m "fix(groups): resolve main merge for execution linking"
-          fi
-          # verify markers
-          grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts
-          grep -q 'joinExecutionId' apps/desktop/src/main/groups/group-runtime.ts
-          grep -q 'executionMode' apps/desktop/src/main/ipc/schemas.ts
-          git push origin HEAD:cursor/group-execution-linking-c747
+      - run: echo disabled
