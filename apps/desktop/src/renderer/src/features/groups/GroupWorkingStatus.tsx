@@ -23,12 +23,12 @@ export function GroupWorkingStatus({
 }) {
   const [now, setNow] = useState(() => Date.now());
   const visible = rows.filter((row) => !row.live.collapsed);
-  const running = visible.some((row) => row.mode === "running");
+  const ticking = visible.some((row) => row.mode === "running" || row.mode === "queued");
   useEffect(() => {
-    if (!running) return undefined;
+    if (!ticking) return undefined;
     const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
-  }, [running]);
+  }, [ticking]);
   if (visible.length === 0) return null;
 
   return (
@@ -47,8 +47,11 @@ export function GroupWorkingStatus({
         const phase = inlineLiveStatusLabel({
           phase: String(row.live.phase),
           presenceState: row.live.presence?.state,
+          activity: row.live.presence?.activity,
           waitingFor: row.live.presence?.waitingFor,
           stillWorking: still,
+          startedAt: row.live.presence?.startedAt,
+          nowMs: now,
         });
         return (
           <span

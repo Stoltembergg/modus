@@ -24,10 +24,10 @@ export function GroupMemberLiveTurn({
   const [now, setNow] = useState(() => Date.now());
   const startedAtRef = useRef(Date.now());
   useEffect(() => {
-    if (mode === "running") startedAtRef.current = Date.now();
+    if (mode === "running" || mode === "queued") startedAtRef.current = Date.now();
   }, [mode]);
   useEffect(() => {
-    if (mode !== "running") return undefined;
+    if (mode !== "running" && mode !== "queued") return undefined;
     const id = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(id);
   }, [mode]);
@@ -49,6 +49,8 @@ export function GroupMemberLiveTurn({
     activity: live.presence?.activity,
     waitingFor: live.presence?.waitingFor,
     stillWorking: still,
+    startedAt: live.presence?.startedAt ?? (mode === "queued" ? startedAtRef.current : undefined),
+    nowMs: now,
   });
   const working = mode === "running";
   // Only the active (not-done) tool — disappears as soon as it finishes.
