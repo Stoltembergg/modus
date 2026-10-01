@@ -180,7 +180,7 @@ export class GroupRuntime {
       authorKind: "user",
       body: input.body,
       mentions,
-      ...(startsChain ? { startsChain: true } : { chainId }),
+      ...(startsChain || chainId === undefined ? { startsChain: true } : { chainId }),
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
       ...(input.attachments && input.attachments.length > 0
         ? { attachments: input.attachments }
