@@ -8,6 +8,7 @@ const msg = (kind: GroupMessage["kind"]): GroupMessage => ({
   authorKind: "system",
   kind,
   body: "x",
+  mentions: [],
   createdAt: "2026-01-01T00:00:00.000Z",
 });
 
