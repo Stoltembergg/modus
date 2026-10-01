@@ -401,18 +401,21 @@ export function setAgentSessionArchived(
     );
     if (archived) detachSessionFromGroupRows(sessionId);
   };
-  if (db.isTransaction) {
-    // Already inside a caller's transaction: never nest BEGIN.
-    apply();
-  } else {
+  // node:sqlite DatabaseSync has no isTransaction; join an open txn by catching nested BEGIN.
+  let started = false;
+  try {
     db.exec("begin");
-    try {
-      apply();
-      db.exec("commit");
-    } catch (error) {
-      db.exec("rollback");
-      throw error;
-    }
+    started = true;
+  } catch {
+    apply();
+    return getAgentSession(sessionId);
+  }
+  try {
+    apply();
+    db.exec("commit");
+  } catch (error) {
+    if (started) db.exec("rollback");
+    throw error;
   }
   return getAgentSession(sessionId);
 }
