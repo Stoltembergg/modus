@@ -234,7 +234,7 @@ export function createComposioApi(apiKey: string): ComposioApi {
       ]);
     },
 
-    async validateMcpConnectivity(profileId) {
+    async validateMcpConnectivity(profileId: string): Promise<ComposioConnectivityResult> {
       await this.validateProjectReadAccess(profileId);
       let session: ComposioSession | undefined;
       try {
@@ -255,14 +255,16 @@ export function createComposioApi(apiKey: string): ComposioApi {
         try {
           await client.connect(transport as unknown as Parameters<Client["connect"]>[0]);
           return { apiReachable: true, mcpSessionReady: true };
-        } catch (error) {
+        } catch {
+          // The Composio/MCP SDK includes request URLs in some network exceptions.
+          // Keep raw errors in the main process; expose only a safe layer-specific hint.
           return {
             apiReachable: true,
             mcpSessionReady: false,
             error: {
               code: "mcp_transport_failed",
               message:
-                error instanceof Error ? error.message.slice(0, 240) : "MCP transport failed",
+                "A API do Composio respondeu, mas a sessão MCP não conectou. Verifique proxy, DNS, TLS e a permissão de executar ferramentas de sessão na Project API Key.",
               retryable: true,
             },
           };
