@@ -197,17 +197,21 @@ export function PromptSteps({
   );
 }
 
-/** @deprecated Room uses a single Thinking line — kept for Activity/tests. */
+/** Collapsible safe progress summary using Prompt Kit's Chain of Thought visual. */
 export function PromptChainOfThought({
   items,
   defaultOpen = false,
+  title = "Progress",
+  summary: summaryOverride,
 }: {
   items: readonly string[];
   defaultOpen?: boolean;
+  title?: string;
+  summary?: string | undefined;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (items.length === 0) return null;
-  const summary = items[items.length - 1] ?? "Progress";
+  const summary = summaryOverride?.trim() || items[items.length - 1] || "Progress";
   return (
     <div className="mt-1" data-prompt-kit="chain-of-thought" data-testid="group-prompt-cot">
       <button
@@ -216,7 +220,7 @@ export function PromptChainOfThought({
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
-        <span className="truncate font-medium">{open ? "Reasoning" : summary}</span>
+        <span className="truncate font-medium">{open ? title : summary}</span>
       </button>
       <CollapsibleMotion open={open} preset="compact">
         <ol className="mt-1 space-y-1 pl-1 text-2xs text-fg-subtle">
