@@ -52,10 +52,10 @@ import {
 } from "./group-runtime-lib";
 import {
   appendGroupMessage,
+  GroupStoreError,
   getAgentGroup,
   getAgentGroupForSession,
   getGroupMessage,
-  GroupStoreError,
   listAgentGroupMembers,
   listGroupDecisions,
   listGroupMessages,
@@ -208,26 +208,34 @@ export class GroupRuntime {
       );
     }
     if (chain.ended) {
-      chain.ended = undefined;
+      delete chain.ended;
       persistGroupChain(chain);
     }
     this.retiredChains.delete(chain.chainId);
     this.chains.set(chain.chainId, chain);
+    // Rebuild wake without prior run/error/progress fields (exactOptionalPropertyTypes).
+    const {
+      error: _error,
+      runId: _runId,
+      lastEventCursor: _lastEventCursor,
+      startedAt: _startedAt,
+      lastProgressAt: _lastProgressAt,
+      pausedAt: _pausedAt,
+      worktreeBranch: _worktreeBranch,
+      publicMessageIds: _publicMessageIds,
+      assistantMessageIds: _assistantMessageIds,
+      questionRequestIds: _questionRequestIds,
+      watchdog: _watchdog,
+      cancelled: _cancelled,
+      gated: _gated,
+      seq: _seq,
+      ...base
+    } = job.wake;
     const wake: Wake = {
-      ...job.wake,
+      ...base,
       seq: ++this.seq,
       cancelled: false,
       gated: false,
-      error: undefined,
-      runId: undefined,
-      lastEventCursor: undefined,
-      startedAt: undefined,
-      lastProgressAt: undefined,
-      pausedAt: undefined,
-      worktreeBranch: undefined,
-      publicMessageIds: undefined,
-      assistantMessageIds: undefined,
-      questionRequestIds: undefined,
     };
     updateGroupJob(wake, "pending");
     this.transcript.setState(wake, "queued");
