@@ -9,10 +9,7 @@ import type { GroupRuntimeEvent } from "../../../../shared/contracts";
  * - `group.activity` / `group.chain-ended` (turns start or end; tools run there)
  * - `group.message` with `kind === "status"` (Decision/task status lines)
  */
-export function shouldRefreshGroupSidePanel(
-  groupId: string,
-  event: GroupRuntimeEvent,
-): boolean {
+export function shouldRefreshGroupSidePanel(groupId: string, event: GroupRuntimeEvent): boolean {
   if (!("groupId" in event) || event.groupId !== groupId) return false;
   if (event.type === "group.activity" || event.type === "group.chain-ended") return true;
   if (event.type === "group.message") return event.message.kind === "status";
