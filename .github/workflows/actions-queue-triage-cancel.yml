@@ -12,98 +12,70 @@ permissions:
   contents: read
 
 jobs:
-  cancel-for-113-capacity:
+  cancel-stale-macos-117:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
-      - name: Cancel competing Package/CI to free #113 tip 79c27b13
+      - name: Cancel non-tip Package macOS for #117 (keep tip)
         uses: actions/github-script@v7
         with:
           script: |
-            const tip = "79c27b13344fd36a4002fa1c7a0c602c5be3b164";
-            const never = new Set([36853358104, 36853358141, 36853358146]); // tip Package Win, Package Mac, CI
-            const branches = {
-              "cursor/group-execution-linking-c747": { pr: 113, mode: "non_tip_all" },
-              "cursor/group-transcript-virtualization-c747": { pr: 116, mode: "package_only" },
-              "cursor/group-conversation-minors-c747": { pr: 117, mode: "package_only" },
-              "cursor/group-progress-final-card-c747": { pr: 115, mode: "package_only" },
-            };
-            const results = [];
-            let canceled = 0;
-            let kept = 0;
-            let skipped = 0;
+            const keepTip = '220b55489230b13818425179d91fab12bdfbb373';
+            const keepLegacy = '31d8802fae51975b2c18d6d0ded875a66c6a0a81';
+            const keepRuns = new Set([36864907236]); // prior clean Package macOS if still useful
+            const explicit = [36864574769, 36864844857, 36864860165, 36865742244];
+            const branch = 'cursor/group-conversation-minors-c747';
+            const cancelled = [];
+            const kept = [];
+            const errors = [];
 
-            async function listActive(branch) {
-              const active = [];
-              for (let page = 1; page <= 10; page++) {
-                const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+            async function cancelRun(id, reason) {
+              if (keepRuns.has(id)) {
+                kept.push({ id, reason: 'keep_run' });
+                return;
+              }
+              try {
+                await github.rest.actions.cancelWorkflowRun({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  branch,
-                  per_page: 100,
-                  page,
+                  run_id: id,
                 });
-                if (!data.workflow_runs.length) break;
-                for (const run of data.workflow_runs) {
-                  if (["queued", "in_progress", "waiting", "requested", "pending"].includes(run.status)) {
-                    active.push(run);
-                  }
-                }
-                if (data.workflow_runs.length < 100) break;
+                cancelled.push({ id, reason });
+                core.info(`cancelled ${id} (${reason})`);
+              } catch (e) {
+                errors.push({ id, reason, message: e.message, status: e.status });
+                core.info(`skip ${id}: ${e.status || ''} ${e.message}`);
               }
-              return active;
             }
 
-            function shouldCancel(run, meta) {
-              if (never.has(run.id) || run.head_sha === tip) return "keep_tip";
-              const isPackage = run.name.startsWith("Package");
-              const isCi = run.name === "CI";
-              if (meta.mode === "non_tip_all") {
-                // #113: cancel Package + CI on non-tip SHAs
-                if (isPackage || isCi) return "cancel";
-                return "skip";
-              }
-              if (meta.mode === "package_only") {
-                // #115/#116/#117: cancel Package macOS/Windows only
-                if (isPackage) return "cancel";
-                return "skip";
-              }
-              return "skip";
+            for (const id of explicit) {
+              await cancelRun(id, 'explicit');
             }
 
-            for (const [branch, meta] of Object.entries(branches)) {
-              const active = await listActive(branch);
-              core.info(`branch ${branch} active=${active.length}`);
-              for (const run of active) {
-                const decision = shouldCancel(run, meta);
-                try {
-                  if (decision === "keep_tip") {
-                    kept++;
-                    results.push({ pr: meta.pr, run_id: run.id, status: "kept_tip", name: run.name, head_sha: run.head_sha, run_status: run.status });
-                    continue;
-                  }
-                  if (decision === "skip") {
-                    skipped++;
-                    results.push({ pr: meta.pr, run_id: run.id, status: "skipped", name: run.name, head_sha: run.head_sha, run_status: run.status });
-                    continue;
-                  }
-                  await github.rest.actions.cancelWorkflowRun({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    run_id: run.id,
-                  });
-                  canceled++;
-                  results.push({ pr: meta.pr, run_id: run.id, status: "canceled", previous: run.status, name: run.name, head_sha: run.head_sha });
-                  core.info(`canceled PR#${meta.pr} ${run.id} ${run.name} ${run.head_sha}`);
-                } catch (e) {
-                  results.push({ pr: meta.pr, run_id: run.id, status: "error", message: e.message, name: run.name, head_sha: run.head_sha });
+            for (let page = 1; page <= 10; page++) {
+              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                branch,
+                per_page: 100,
+                page,
+              });
+              if (!data.workflow_runs.length) break;
+              for (const run of data.workflow_runs) {
+                if (run.name !== 'Package macOS') continue;
+                if (!['queued', 'in_progress', 'waiting', 'requested', 'pending'].includes(run.status)) continue;
+                if (run.head_sha === keepTip || run.head_sha === keepLegacy || keepRuns.has(run.id)) {
+                  kept.push({ id: run.id, head_sha: run.head_sha, status: run.status, reason: 'keep_tip' });
+                  continue;
                 }
+                await cancelRun(run.id, `branch active head ${run.head_sha}`);
               }
+              if (data.workflow_runs.length < 100) break;
             }
 
             await core.summary
-              .addHeading(`#113 capacity triage tip ${tip.slice(0,12)}`)
-              .addRaw(`Canceled: ${canceled}; kept tip: ${kept}; skipped: ${skipped}`)
-              .addCodeBlock(JSON.stringify(results, null, 2), "json")
+              .addHeading('#117 Package macOS capacity cancel (helper branch)')
+              .addRaw(`Cancelled: ${cancelled.length}; kept: ${kept.length}; errors: ${errors.length}`)
+              .addCodeBlock(JSON.stringify({ cancelled, kept, errors }, null, 2), 'json')
               .write();
-            console.log(JSON.stringify({ canceled, kept, skipped, results }, null, 2));
+            console.log(JSON.stringify({ cancelled, kept, errors }, null, 2));
