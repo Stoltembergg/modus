@@ -1,2 +1,0 @@
-  const re0 = /\bhttps?:\/\/[^\s)\]>'"]+/gi;
-  const s0 = "hello\nworld";
