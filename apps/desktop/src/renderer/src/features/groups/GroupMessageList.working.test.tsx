@@ -136,7 +136,7 @@ describe("GroupMessageList working cards", () => {
     });
     const row = await screen.findByTestId("group-member-working");
     await vi.waitFor(() => expect(row.dataset.phase).toBe("Exploring"));
-    expect(row.textContent).toContain("Exploring");
+    expect(row.textContent).toContain("Reading");
     expect(screen.queryByTestId("group-live-thought")).toBeNull();
     expect(screen.queryByTestId("group-live-tools")).toBeNull();
   });
@@ -165,12 +165,12 @@ describe("GroupMessageList working cards", () => {
     await vi.waitFor(() => expect(items[0]?.textContent).toContain("Writing"));
     expect(items[0]?.textContent).toContain("Planner stream only");
     expect(items[0]?.textContent).not.toContain("Exploring");
-    expect(items[1]?.textContent).toContain("Exploring");
+    expect(items[1]?.textContent).toContain("Searching");
     expect(items[1]?.textContent).not.toContain("Planner stream only");
     expect(screen.getAllByTestId("group-message")).toHaveLength(3);
   });
 
-  it("transitions from Exploring progress to Writing text inside the same card", async () => {
+  it("transitions from live tool progress to Writing text inside the same card", async () => {
     renderList(states({ runningSessionIds: ["s-lead"] }));
     await screen.findByTestId("group-working-status");
     act(() => {
@@ -178,7 +178,7 @@ describe("GroupMessageList working cards", () => {
         listener({ type: "tool.started", sessionId: "s-lead", toolCallId: "t1", toolName: "read" });
     });
     await vi.waitFor(() =>
-      expect(screen.getByTestId("group-live-status").textContent).toContain("Exploring"),
+      expect(screen.getByTestId("group-live-status").textContent).toContain("Reading"),
     );
     act(() => {
       for (const listener of agentListeners)
