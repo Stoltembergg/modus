@@ -1,0 +1,54 @@
+name: mcp-apply-remaining-exec-link
+on:
+  push:
+    branches: [cursor/group-execution-linking-c747]
+    paths: [.mcp-restore/exec-link/TRIGGER-remaining]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+      - name: Apply remaining execution-link patch
+        run: |
+          set -euo pipefail
+          git apply .mcp-restore/exec-link/remaining-exec-link.patch
+          declare -A EXPECT=(
+            [apps/desktop/src/main/db/database.ts]="37854:c309e0e8498d8e1a86b1b63b73a2429bf50d05b14e7a5c8d64f4f5843bf75cb7"
+            [apps/desktop/src/main/groups/group-store.ts]="76779:2210b646e0a774a977253371dea6f26ac9f69d878e266723fb4d5b4c0cdbbee8"
+            [apps/desktop/src/main/groups/group-runtime.ts]="47297:bd58cc2633eb935056e20fc39520117431998c2c9b6da10d5966f36071306cac"
+            [apps/desktop/src/main/groups/group-runtime.test.ts]="60068:312452ca0bc07c822b463a36a7ae0c9fb8113cba4d08af08e7c077859ec22701"
+            [apps/desktop/src/main/agent/tools/group-tools.ts]="40420:4624e6388f455ccad5594672400eae5ca1d08244c6be49a9026ac7936501d17c"
+            [apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx]="37126:e1709ff26e8d4e777218ac4dbe80e1bd5d4fac01d10524f1abac52d9a7eef9bb"
+          )
+          for path in "${!EXPECT[@]}"; do
+            IFS=: read -r bytes sha <<< "${EXPECT[$path]}"
+            actual_bytes=$(wc -c < "$path")
+            actual_sha=$(sha256sum "$path" | awk '{print $1}')
+            echo "$path bytes=$actual_bytes sha=$actual_sha"
+            test "$actual_bytes" -eq "$bytes"
+            test "$actual_sha" = "$sha"
+          done
+          grep -q 'latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts
+          grep -q 'execution_id' apps/desktop/src/main/db/database.ts
+      - name: Commit and cleanup
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/desktop/src/main/db/database.ts \
+            apps/desktop/src/main/groups/group-store.ts \
+            apps/desktop/src/main/groups/group-runtime.ts \
+            apps/desktop/src/main/groups/group-runtime.test.ts \
+            apps/desktop/src/main/agent/tools/group-tools.ts \
+            apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
+          git commit -m "feat(groups): stamp executionId through store, runtime, tools, and tests"
+          git rm -rf .mcp-restore/exec-link/remaining-exec-link.patch \
+            .mcp-restore/exec-link/TRIGGER-remaining \
+            .github/workflows/mcp-apply-remaining-exec-link.yml || true
+          git commit -m "chore: cleanup remaining exec-link assemble artifacts" || true
+          git push

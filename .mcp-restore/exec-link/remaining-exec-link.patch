@@ -1,0 +1,411 @@
+--- a/apps/desktop/src/main/db/database.ts
++++ b/apps/desktop/src/main/db/database.ts
+@@ -547,6 +547,15 @@
+     );
+     create index if not exists idx_group_jobs_pending on group_jobs(status, seq);
+   `);
++  // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
++  addColumn(db, "group_tasks", "execution_id", "text");
++  addColumn(db, "group_decisions", "execution_id", "text");
++  db.exec(`
++    create index if not exists idx_group_tasks_execution
++      on group_tasks(group_id, execution_id);
++    create index if not exists idx_group_decisions_execution
++      on group_decisions(group_id, execution_id);
++  `);
+ }
+ 
+ /**
+--- a/apps/desktop/src/main/groups/group-store.ts
++++ b/apps/desktop/src/main/groups/group-store.ts
+@@ -125,6 +125,7 @@
+   created_by_session_id: string | null;
+   reviewer_session_id: string | null;
+   branch: string | null;
++  execution_id: string | null;
+   created_at: string;
+   updated_at: string;
+ };
+@@ -135,6 +136,7 @@
+   text: string;
+   author_session_id: string | null;
+   source_message_id: string | null;
++  execution_id: string | null;
+   created_at: string;
+ };
+ 
+@@ -149,8 +151,9 @@
+   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
+   turn_id, run_id, sdk_message_id, sequence, status, updated_at, error`;
+ const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
+-  created_by_session_id, reviewer_session_id, branch, created_at, updated_at`;
+-const DECISION_COLUMNS = "id, group_id, text, author_session_id, source_message_id, created_at";
++  created_by_session_id, reviewer_session_id, branch, execution_id, created_at, updated_at`;
++const DECISION_COLUMNS =
++  "id, group_id, text, author_session_id, source_message_id, execution_id, created_at";
+ 
+ function toGroup(row: GroupRow): AgentGroupInfo {
+   return {
+@@ -283,6 +286,7 @@
+       : {}),
+     ...(row.reviewer_session_id !== null ? { reviewerSessionId: row.reviewer_session_id } : {}),
+     ...(row.branch !== null ? { branch: row.branch } : {}),
++    ...(row.execution_id !== null ? { executionId: row.execution_id } : {}),
+     createdAt: row.created_at,
+     updatedAt: row.updated_at,
+   };
+@@ -295,6 +299,7 @@
+     text: row.text,
+     ...(row.author_session_id !== null ? { authorSessionId: row.author_session_id } : {}),
+     ...(row.source_message_id !== null ? { sourceMessageId: row.source_message_id } : {}),
++    ...(row.execution_id !== null ? { executionId: row.execution_id } : {}),
+     createdAt: row.created_at,
+   };
+ }
+@@ -387,6 +392,34 @@
+   }
+ }
+ 
++/** Execution ids are message chain roots that already exist in the group. */
++function requireExecutionInGroup(groupId: string, executionId: string): void {
++  const row = getDatabase()
++    .prepare("select group_id from group_messages where id = ?")
++    .get(executionId) as { group_id: string } | undefined;
++  if (!row || row.group_id !== groupId) {
++    throw new GroupStoreError(
++      "message-not-found",
++      `Execution ${executionId} is not a message in group ${groupId}.`,
++    );
++  }
++}
++
++/**
++ * Latest ask-spanning execution for Complementar: newest user message's chain.
++ */
++export function latestGroupExecutionId(groupId: string): string | undefined {
++  const row = getDatabase()
++    .prepare(
++      `select coalesce(chain_id, id) as execution_id from group_messages
++       where group_id = ? and author_kind = 'user'
++       order by sequence desc, created_at desc, id desc
++       limit 1`,
++    )
++    .get(groupId) as { execution_id: string } | undefined;
++  return row?.execution_id;
++}
++
+ function isUniqueMemberViolation(error: unknown): boolean {
+   if (!(error instanceof Error)) return false;
+   const errcode = (error as { errcode?: unknown }).errcode;
+@@ -1514,6 +1547,8 @@
+   createdBySessionId?: string;
+   reviewerSessionId?: string;
+   branch?: string;
++  /** Ask-spanning execution id (message chain root). */
++  executionId?: string;
+ }): GroupTask {
+   const db = getDatabase();
+   requireGroupRow(input.groupId);
+@@ -1524,11 +1559,12 @@
+     requireMember(input.groupId, input.createdBySessionId, "task creator");
+   }
+   if (input.reviewerSessionId) requireMember(input.groupId, input.reviewerSessionId, "reviewer");
++  if (input.executionId) requireExecutionInGroup(input.groupId, input.executionId);
+   const id = input.id ?? randomUUID();
+   const now = new Date().toISOString();
+   db.prepare(
+     `insert into group_tasks (${TASK_COLUMNS})
+-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
++     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+   ).run(
+     id,
+     input.groupId,
+@@ -1539,6 +1575,7 @@
+     input.createdBySessionId ?? null,
+     input.reviewerSessionId ?? null,
+     input.branch ?? null,
++    input.executionId ?? null,
+     now,
+     now,
+   );
+@@ -1716,6 +1753,7 @@
+   title: string;
+   description?: string;
+   reviewerSessionId?: string;
++  executionId?: string;
+ }): GroupTask {
+   requireGroupRow(input.groupId);
+   requireMember(input.groupId, input.actorSessionId, "task creator");
+@@ -1726,6 +1764,7 @@
+     createdBySessionId: input.actorSessionId,
+     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+     ...(input.reviewerSessionId ? { reviewerSessionId: input.reviewerSessionId } : {}),
++    ...(input.executionId ? { executionId: input.executionId } : {}),
+   });
+ }
+ 
+@@ -1966,6 +2005,7 @@
+   text: string;
+   authorSessionId?: string;
+   sourceMessageId?: string;
++  executionId?: string;
+ }): GroupDecision {
+   const db = getDatabase();
+   const text = typeof input.text === "string" ? input.text.trim() : "";
+@@ -1991,6 +2031,7 @@
+         );
+       }
+     }
++    if (input.executionId) requireExecutionInGroup(input.groupId, input.executionId);
+     const count = db
+       .prepare("select count(*) as n from group_decisions where group_id = ?")
+       .get(input.groupId) as { n: number };
+@@ -2003,13 +2044,14 @@
+     const decisionId = randomUUID();
+     db.prepare(
+       `insert into group_decisions (${DECISION_COLUMNS})
+-       values (?, ?, ?, ?, ?, ?)`,
++       values (?, ?, ?, ?, ?, ?, ?)`,
+     ).run(
+       decisionId,
+       input.groupId,
+       text,
+       input.authorSessionId ?? null,
+       input.sourceMessageId ?? null,
++      input.executionId ?? null,
+       new Date().toISOString(),
+     );
+     return decisionId;
+--- a/apps/desktop/src/main/groups/group-runtime.ts
++++ b/apps/desktop/src/main/groups/group-runtime.ts
+@@ -14,6 +14,7 @@
+   groupBlockedReason,
+ } from "../../shared/group-blocked";
+ import { isCoordinatorModeActive } from "../../shared/group-coordinator";
++import { bindSessionExecution, unbindSessionExecution } from "../../shared/group-execution-link";
+ import { getAgentSession } from "../agent/agent-store";
+ import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
+ import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
+@@ -54,6 +55,7 @@
+   getAgentGroup,
+   getAgentGroupForSession,
+   getGroupMessage,
++  latestGroupExecutionId,
+   listAgentGroupMembers,
+   listGroupDecisions,
+   listGroupMessages,
+@@ -140,7 +142,7 @@
+     if (options.recoverPending) this.recoverJobs();
+   }
+ 
+-  /** A user message into the room: always opens a new chain (counters reset). */
++  /** A user message into the room: new execution by default; Complementar joins one. */
+   postUserMessage(input: PostGroupMessageInput): GroupMessage {
+     const message = this.durableDispatch(() => this.saveUserMessage(input));
+     this.supersedeWaiting(input.groupId);
+@@ -162,13 +164,23 @@
+       ...parseGroupMentions(input.body, members),
+     ]);
+     const mentions = members.map((member) => member.sessionId).filter((id) => mentioned.has(id));
++    const mode = input.executionMode ?? "new";
++    let startsChain = true;
++    let chainId: string | undefined;
++    if (mode === "complement") {
++      const target = input.executionId ?? latestGroupExecutionId(input.groupId);
++      if (target) {
++        startsChain = false;
++        chainId = target;
++      }
++    }
+     const message = appendGroupMessage({
+       createdAt: this.stamp(),
+       groupId: input.groupId,
+       authorKind: "user",
+       body: input.body,
+       mentions,
+-      startsChain: true,
++      ...(startsChain ? { startsChain: true } : { chainId }),
+       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
+       ...(input.attachments && input.attachments.length > 0
+         ? { attachments: input.attachments }
+@@ -178,7 +190,8 @@
+         : {}),
+     });
+     this.emitMessage(message);
+-    const chain = this.openChain(input.groupId, message.id);
++    const executionId = message.chainId ?? message.id;
++    const chain = this.openChain(input.groupId, executionId);
+     this.route(chain, message);
+     this.retireIdleChains();
+     return message;
+@@ -882,6 +895,7 @@
+   private enqueue(wake: Wake): void {
+     this.transcript.create(wake);
+     persistGroupJob(wake);
++    bindSessionExecution(wake.sessionId, wake.chainId);
+     const queue = this.queues.get(wake.sessionId) ?? [];
+     queue.push(wake);
+     this.queues.set(wake.sessionId, queue);
+@@ -1045,6 +1059,13 @@
+     }
+     if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
+     if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
++    if (
++      !this.running.has(wake.sessionId) &&
++      !this.gated.has(wake.sessionId) &&
++      (this.queues.get(wake.sessionId)?.length ?? 0) === 0
++    ) {
++      unbindSessionExecution(wake.sessionId);
++    }
+     const chain = this.chains.get(wake.chainId);
+     const stillMember = listAgentGroupMembers(wake.groupId).some(
+       (member) => member.sessionId === wake.sessionId,
+--- a/apps/desktop/src/main/groups/group-runtime.test.ts
++++ b/apps/desktop/src/main/groups/group-runtime.test.ts
+@@ -524,6 +524,38 @@
+     expect(second.chainId).toBe(second.id);
+     expect(groups.chainSnapshot(second.id).hops).toBe(1);
+   });
++
++  it("Complementar reuses the active executionId; Nova tarefa opens a new one", async () => {
++    const { group, alpha } = squad();
++    const { runtime, groups } = setup();
++    const first = groups.postUserMessage({
++      groupId: group.id,
++      body: "@Alpha ship login",
++      executionMode: "new",
++    });
++    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Login shipped." });
++    await flush();
++    const complement = groups.postUserMessage({
++      groupId: group.id,
++      body: "@Alpha also cover OAuth",
++      executionMode: "complement",
++      executionId: first.id,
++    });
++    expect(complement.chainId).toBe(first.id);
++    runtime.take(alpha).resolve({ outcome: "ok", finalText: "OAuth covered." });
++    await flush();
++    const fresh = groups.postUserMessage({
++      groupId: group.id,
++      body: "@Alpha separate docs",
++      executionMode: "new",
++    });
++    expect(fresh.chainId).toBe(fresh.id);
++    expect(fresh.chainId).not.toBe(first.id);
++    const linked = room(group.id).filter((m) => m.chainId === first.id);
++    expect(linked.some((m) => m.id === first.id)).toBe(true);
++    expect(linked.some((m) => m.id === complement.id)).toBe(true);
++    expect(linked.every((m) => m.chainId === first.id)).toBe(true);
++  });
+ });
+ 
+ /* ── limits ──────────────────────────────────────────────────────────── */
+--- a/apps/desktop/src/main/agent/tools/group-tools.ts
++++ b/apps/desktop/src/main/agent/tools/group-tools.ts
+@@ -12,6 +12,7 @@
+ } from "../../../shared/group-blocked";
+ import { formatGroupCollabStatus } from "../../../shared/group-collab-status";
+ import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
++import { sessionExecutionId } from "../../../shared/group-execution-link";
+ import type { ToolProfileName } from "../../../shared/tools";
+ import {
+   createMemberWorktree,
+@@ -346,12 +347,14 @@
+       }
+       case "group_create_task": {
+         const input = params as GroupToolParams["group_create_task"];
++        const executionId = sessionExecutionId(actor);
+         const task = createMemberGroupTask({
+           groupId,
+           actorSessionId: actor,
+           title: input.title,
+           ...(input.description ? { description: input.description } : {}),
+           ...(input.reviewer ? { reviewerSessionId: resolveMember(members, input.reviewer) } : {}),
++          ...(executionId ? { executionId } : {}),
+         });
+         return `Created ${formatTask(members, task)}`;
+       }
+@@ -412,7 +415,13 @@
+       }
+       case "group_record_decision": {
+         const { text } = params as GroupToolParams["group_record_decision"];
+-        const decision = recordGroupDecision({ groupId, text, authorSessionId: actor });
++        const executionId = sessionExecutionId(actor);
++        const decision = recordGroupDecision({
++          groupId,
++          text,
++          authorSessionId: actor,
++          ...(executionId ? { executionId } : {}),
++        });
+         // Recorded in the room as the member, but wakes nobody.
+         taskWakeSink?.({
+           groupId,
+@@ -508,10 +517,12 @@
+           const task = completeGroupTaskForAgreement(groupId, input.taskId, actor);
+           taskLine = ` Closed ${formatTask(members, task)}.`;
+         }
++        const executionId = sessionExecutionId(actor);
+         const decision = recordGroupDecision({
+           groupId,
+           text: decisionText,
+           authorSessionId: actor,
++          ...(executionId ? { executionId } : {}),
+         });
+         taskWakeSink?.({
+           groupId,
+@@ -558,11 +569,13 @@
+         const targetName = members.titles.get(target) ?? target;
+         let taskLine = "";
+         if (input.taskTitle?.trim()) {
++          const executionId = sessionExecutionId(actor);
+           const task = createMemberGroupTask({
+             groupId,
+             actorSessionId: actor,
+             title: input.taskTitle.trim(),
+             description: objective,
++            ...(executionId ? { executionId } : {}),
+           });
+           taskLine = ` Created ${formatTask(members, task)}.`;
+         }
+--- a/apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
++++ b/apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
+@@ -258,6 +258,8 @@
+       groupId: "g-1",
+       body: "Resume this task.",
+       replyToMessageId: "interrupted",
++      executionMode: "complement",
++      executionId: "interrupted",
+     });
+     expect(screen.getByText("Interrupted")).toBeTruthy();
+     expect(screen.getByText("Saved progress")).toBeTruthy();
+@@ -465,7 +467,7 @@
+     await vi.waitFor(() => expect(screen.getAllByTestId("group-message")).toHaveLength(3));
+     const rows = screen.getAllByTestId("group-message");
+     expect(rows.map((row) => row.textContent)).toEqual([
+-      "YYouHumanhello",
++      "YYouHuman#1hello",
+       "Cy joined as Scribe",
+       "Cy left the group",
+     ]);
+@@ -554,6 +556,7 @@
+     expect(group.postMessage).toHaveBeenCalledWith({
+       groupId: "g-1",
+       body: "hi @Planner and @s-rev-2 \nline two",
++      executionMode: "new",
+     });
+     await vi.waitFor(() => expect(input.value).toBe(""));
+   });
+@@ -572,7 +575,11 @@
+       "Interrupted runs stay visible",
+     );
+     await user.type(screen.getByRole("textbox", { name: "Message the group" }), "later{Enter}");
+-    expect(group.postMessage).toHaveBeenCalledWith({ groupId: "g-1", body: "later" });
++    expect(group.postMessage).toHaveBeenCalledWith({
++      groupId: "g-1",
++      body: "later",
++      executionMode: "new",
++    });
+     act(() => {
+       for (const listener of updateListeners) listener({ status: "idle" });
+     });
