@@ -323,6 +323,16 @@ export type PostGroupMessageInput = {
   executionId?: string;
 };
 
+/**
+ * Resume an interrupted/failed group turn by its durable execution id (job/turn id).
+ * Requeues the existing job in the same chain — does not post a new user message.
+ */
+export type ResumeGroupExecutionInput = {
+  groupId: string;
+  /** Group job id / message `turnId`. */
+  executionId: string;
+};
+
 /** Why a group chain stopped waking members (it waits for the user). */
 export type GroupChainEndReason =
   | "blocked"

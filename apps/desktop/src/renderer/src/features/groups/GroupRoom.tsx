@@ -290,12 +290,17 @@ function GroupRoomContent({
             setReplyTo({ messageId: message.id, preview: replyPreview(message.body) })
           }
           onRetry={async (message) => {
-            await window.modus.group.postMessage({
+            if (!message.turnId) return;
+            await window.modus.group.resumeExecution({
               groupId: group.id,
+<<<<<<< HEAD
               body: "Resume this task.",
               replyToMessageId: message.id,
               executionMode: "complement",
               executionId: messageExecutionId(message),
+=======
+              executionId: message.turnId,
+>>>>>>> origin/main
             });
           }}
           roles={roles}

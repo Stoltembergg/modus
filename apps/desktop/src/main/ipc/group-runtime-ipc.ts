@@ -3,12 +3,14 @@ import type {
   GroupMessage,
   GroupMessageCursor,
   PostGroupMessageInput,
+  ResumeGroupExecutionInput,
 } from "../../shared/contracts";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
 import {
   groupListMessagesSchema,
   groupPostMessageSchema,
+  groupResumeExecutionSchema,
   groupStopSchema,
   parseIpcInput,
 } from "./schemas";
@@ -17,6 +19,7 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 /** The room operations the renderer needs (the GroupRuntime plus the message store). */
 export type GroupRuntimeIpcService = {
   postUserMessage(input: PostGroupMessageInput): GroupMessage;
+  resumeExecution(input: ResumeGroupExecutionInput): void;
   listGroupMessages(
     groupId: string,
     options: { before?: GroupMessageCursor; after?: GroupMessageCursor; limit?: number },
@@ -31,8 +34,8 @@ type HandlerRegistration = {
 };
 
 /**
- * `group:post-message`, `group:list-messages`, `group:working`,
- * `group:member-states` and `group:stop`. Live updates
+ * `group:post-message`, `group:resume-execution`, `group:list-messages`,
+ * `group:working`, `group:member-states` and `group:stop`. Live updates
  * are pushed on `group:event` (see GroupRuntimeEvent in shared/contracts).
  */
 export function registerGroupRuntimeIpcHandlers(
@@ -75,6 +78,16 @@ export function registerGroupRuntimeIpcHandlers(
       ...(parsed.executionMode ? { executionMode: parsed.executionMode } : {}),
       ...(parsed.executionId ? { executionId: parsed.executionId } : {}),
     });
+  });
+
+  handle(IPC_CHANNELS.groupResumeExecution, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      groupResumeExecutionSchema,
+      input,
+      IPC_CHANNELS.groupResumeExecution,
+    );
+    service.resumeExecution(parsed);
   });
 
   handle(IPC_CHANNELS.groupListMessages, (event, input) => {

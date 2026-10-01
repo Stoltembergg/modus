@@ -7,6 +7,7 @@ vi.mock("electron", () => ({ app: { getPath: () => "/tmp" } }));
 
 const CHANNELS = [
   "group:post-message",
+  "group:resume-execution",
   "group:list-messages",
   "group:working",
   "group:member-states",
@@ -29,6 +30,7 @@ type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
 function mockService() {
   return {
     postUserMessage: vi.fn((_input: unknown): GroupMessage => MESSAGE),
+    resumeExecution: vi.fn((_input: unknown): void => undefined),
     listGroupMessages: vi.fn((_groupId: string, _options: unknown): GroupMessage[] => [MESSAGE]),
     workingGroupIds: vi.fn((): string[] => ["g-1"]),
     memberStates: vi.fn(() => [
@@ -91,6 +93,7 @@ describe("group runtime IPC", () => {
         replyToMessageId: "m-0",
       });
       expect(
+<<<<<<< HEAD
         handlers.get("group:post-message")?.(trusted, {
           groupId: "g-1",
           body: "continue",
@@ -103,6 +106,16 @@ describe("group runtime IPC", () => {
         body: "continue",
         executionMode: "complement",
         executionId: "m-1",
+=======
+        handlers.get("group:resume-execution")?.(trusted, {
+          groupId: "g-1",
+          executionId: "exec-1",
+        }),
+      ).toBeUndefined();
+      expect(service.resumeExecution).toHaveBeenCalledWith({
+        groupId: "g-1",
+        executionId: "exec-1",
+>>>>>>> origin/main
       });
       const cursor = { createdAt: MESSAGE.createdAt, id: MESSAGE.id };
       expect(
@@ -138,6 +151,9 @@ describe("group runtime IPC", () => {
       expect(() => handlers.get("group:working")?.(trusted, { x: 1 })).toThrow(/expected no input/);
       expect(() => handlers.get("group:member-states")?.(trusted, {})).toThrow(/expected no input/);
       expect(() => handlers.get("group:stop")?.(trusted, { groupId: "" })).toThrow(
+        /Invalid IPC payload/,
+      );
+      expect(() => handlers.get("group:resume-execution")?.(trusted, { groupId: "g-1" })).toThrow(
         /Invalid IPC payload/,
       );
       expect(service.stopGroup).not.toHaveBeenCalled();
