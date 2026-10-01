@@ -1,0 +1,67 @@
+{
+  "files": [
+    {
+      "path": "apps/desktop/src/main/ipc/schemas.ts",
+      "strategy": "restore_from_ref_then_patch",
+      "base_ref": "a6186a59e4d53819ab473aa9fa9c32de8e06ed05",
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__main__ipc__schemas.ts.patch",
+      "expected_bytes": 33764,
+      "expected_sha256": "65615ef0fb1307f9e752f7daea3f74f0b957a18d00d51ff00bd6365d4aed1cda",
+      "patch_bytes": 404
+    },
+    {
+      "path": "apps/desktop/src/main/ipc/register-app-ipc.ts",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__main__ipc__register-app-ipc.ts.patch",
+      "expected_bytes": 61802,
+      "expected_sha256": "b0811539c24a308e377524f51b46d872be77fbade194e92be88bccbb4ab318a8",
+      "patch_bytes": 636
+    },
+    {
+      "path": "apps/desktop/src/preload/types.ts",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__preload__types.ts.patch",
+      "expected_bytes": 27342,
+      "expected_sha256": "4b1a24becc5642aec5f6b441c7bb8096628abd43da2131850595105bc96f8d4c",
+      "patch_bytes": 414
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__renderer__src__features__groups__GroupMessageRow.tsx.patch",
+      "expected_bytes": 20935,
+      "expected_sha256": "04508fdd91bc91999028cdd1278c3212e29ca701a5d44957373982aacf7db134",
+      "patch_bytes": 357
+    },
+    {
+      "path": "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__renderer__src__features__groups__GroupRoom.test.tsx.patch",
+      "expected_bytes": 37083,
+      "expected_sha256": "25f63242237952e82d3caf7ab4df98fe73a6e2aa8411c1befd7e756494c17437",
+      "patch_bytes": 1533
+    },
+    {
+      "path": "apps/desktop/src/main/groups/group-runtime.ts",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__main__groups__group-runtime.ts.patch",
+      "expected_bytes": 49459,
+      "expected_sha256": "99bc7a468988dfcc63389ee6e21d34238cee1aaa9cdee89c83181cb05ae8ee7e",
+      "patch_bytes": 3977
+    },
+    {
+      "path": "apps/desktop/src/main/groups/group-runtime-reliability.test.ts",
+      "strategy": "patch_current",
+      "base_ref": null,
+      "patch_repo_path": "internal/_push/resume/apps__desktop__src__main__groups__group-runtime-reliability.test.ts.patch",
+      "expected_bytes": 16734,
+      "expected_sha256": "6ca715d4ee71b6a0f6367a0df73be4b1f04b63d083fe60f512ed340bee1c1ade",
+      "patch_bytes": 2413
+    }
+  ]
+}
