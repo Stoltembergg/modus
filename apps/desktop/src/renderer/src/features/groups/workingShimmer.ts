@@ -1,12 +1,28 @@
 /**
  * Visibility + naming for the Prompt Kit working shimmer above the group composer.
  * Hide when idle or when streamed writing already makes progress obvious.
+ * Label uses concrete phases (queued age / waiting on model / running tests).
  */
+
+import {
+  formatGroupProgressLabel,
+  groupAgentProgressShimmerLabel,
+} from "../../../../shared/group-progress-label";
 
 export type GroupWorkingShimmerRow = {
   sessionId: string;
   mode: "running" | "queued";
-  live: { streamText: string; collapsed: boolean };
+  live: {
+    streamText: string;
+    collapsed: boolean;
+    phase?: string;
+    presence?: {
+      state?: string;
+      activity?: string;
+      waitingFor?: string;
+      startedAt?: number;
+    };
+  };
 };
 
 /** Rows that still need a working indicator (no obvious streamed text yet). */
@@ -40,4 +56,35 @@ export function groupWorkingShimmerNames(
     names.push(title);
   }
   return names;
+}
+
+/** Primary candidate row for the shimmer phase (running first). */
+export function groupWorkingShimmerPrimary(
+  rows: readonly GroupWorkingShimmerRow[],
+): GroupWorkingShimmerRow | undefined {
+  const candidates = groupWorkingShimmerCandidates(rows);
+  return candidates.find((row) => row.mode === "running") ?? candidates[0];
+}
+
+/** Concrete shimmer text: "Builder · Waiting on model…" / "Planner · Queued · 12s". */
+export function groupWorkingShimmerText(
+  rows: readonly GroupWorkingShimmerRow[],
+  labels: ReadonlyMap<string, { title: string }>,
+  locale?: string | null,
+  nowMs = Date.now(),
+): string {
+  const primary = groupWorkingShimmerPrimary(rows);
+  const names = groupWorkingShimmerNames(rows, labels);
+  const phaseLabel = primary
+    ? formatGroupProgressLabel({
+        phase: String(primary.live.phase ?? (primary.mode === "queued" ? "Queued" : "Thinking")),
+        presenceState: primary.live.presence?.state,
+        activity: primary.live.presence?.activity,
+        waitingFor: primary.live.presence?.waitingFor,
+        startedAt: primary.live.presence?.startedAt,
+        nowMs,
+        locale,
+      })
+    : formatGroupProgressLabel({ phase: "Thinking", presenceState: "thinking", locale });
+  return groupAgentProgressShimmerLabel({ names, phaseLabel, locale });
 }

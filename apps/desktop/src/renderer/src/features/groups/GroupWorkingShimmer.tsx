@@ -1,13 +1,13 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { groupAgentWorkingLabel } from "../../../../shared/group-room-locale";
 import type { MemberLabel } from "./memberLabels";
 import { TextShimmer } from "./prompt-kit/PromptKit";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
-import { groupWorkingShimmerNames, shouldShowGroupWorkingShimmer } from "./workingShimmer";
+import { groupWorkingShimmerText, shouldShowGroupWorkingShimmer } from "./workingShimmer";
 
 /**
  * Compact Prompt Kit text-shimmer above the group composer.
- * Names the agent(s) still working without streamed writing yet.
+ * Names the agent(s) and a concrete phase (queued age / waiting on model / …).
  * Clears when idle or when streaming makes progress obvious.
  */
 export function GroupWorkingShimmer({
@@ -20,12 +20,21 @@ export function GroupWorkingShimmer({
   locale?: string | null;
 }) {
   const visible = shouldShowGroupWorkingShimmer(rows);
-  const names = useMemo(
-    () => (visible ? groupWorkingShimmerNames(rows, labels) : []),
-    [visible, rows, labels],
+  const needsTick = visible && rows.some((row) => row.mode === "queued" && !row.live.collapsed);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!needsTick) return undefined;
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [needsTick]);
+  const text = useMemo(
+    () =>
+      visible
+        ? groupWorkingShimmerText(rows, labels, locale, now)
+        : groupAgentWorkingLabel([], locale),
+    [visible, rows, labels, locale, now],
   );
   if (!visible) return null;
-  const text = groupAgentWorkingLabel(names, locale);
   return (
     <div
       aria-live="polite"
