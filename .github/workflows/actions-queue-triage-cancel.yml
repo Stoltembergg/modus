@@ -16,18 +16,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel superseded / failed-tip Package macOS runs
+      - name: Cancel Package runs blocking #111 arm64
         uses: actions/github-script@v7
         with:
           script: |
-            // Priority: free macOS arm64 for PR #111 job 110304318185.
-            // Never cancel run 36842393932 (#111).
+            // Free macOS arm64 for PR #111 job 110304318185 / run 36842393932.
+            // Never cancel #111.
+            const never = new Set([36842393932]);
+            // Explicit tip Package runs: cancel even if in_progress (typecheck already failed).
+            const cancelEvenIfInProgress = new Set([
+              36844892933, // #109 tip 2f27dd8 Package macOS (queued x64+arm64)
+              36844892757, // #109 tip 2f27dd8 Package Windows (in_progress x64 110312559115)
+              36844144646, // #113 tip f282bc2 Package macOS
+              36843989188  // #115 tip 8ad899d Package macOS
+            ]);
             const runIds = [
-              // Typecheck-failed tips — cancel their queued Package macOS
-              36844892933, // #109 tip 2f27dd8 Package (queued; CI failed)
-              36844144646, // #113 tip f282bc2 Package (queued; CI failed)
-              36843989188, // #115 tip 8ad899d Package (queued; CI failed)
-              // Superseded queued Package macOS on #109/#113/#114/#115
+              36844892933,
+              36844892757,
+              36844144646,
+              36843989188,
+              // superseded queued Package macOS
               36844884042, 36844830194, 36844824939, 36844662125,
               36844266532, 36844251704, 36844167509, 36844097510,
               36844020087, 36844011359, 36843966300, 36843929324,
@@ -43,7 +51,6 @@ jobs:
               36842194555, 36842179204, 36842158782, 36842123176,
               36842114221
             ];
-            const never = new Set([36842393932]);
             const results = [];
             for (const run_id of runIds) {
               if (never.has(run_id)) {
@@ -57,11 +64,11 @@ jobs:
                   run_id
                 });
                 if (run.status === 'completed') {
-                  results.push({ run_id, status: 'already_completed', conclusion: run.conclusion });
+                  results.push({ run_id, status: 'already_completed', conclusion: run.conclusion, name: run.name });
                   continue;
                 }
-                if (run.status === 'in_progress') {
-                  results.push({ run_id, status: 'skipped_in_progress' });
+                if (run.status === 'in_progress' && !cancelEvenIfInProgress.has(run_id)) {
+                  results.push({ run_id, status: 'skipped_in_progress', name: run.name });
                   continue;
                 }
                 await github.rest.actions.cancelWorkflowRun({
@@ -70,7 +77,7 @@ jobs:
                   run_id
                 });
                 results.push({ run_id, status: 'canceled', previous: run.status, name: run.name });
-                core.info(`canceled ${run_id}`);
+                core.info(`canceled ${run_id} (${run.name}, was ${run.status})`);
               } catch (e) {
                 results.push({ run_id, status: 'error', message: e.message });
                 core.warning(`fail ${run_id}: ${e.message}`);
