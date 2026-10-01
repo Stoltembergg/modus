@@ -143,6 +143,7 @@ export const IPC_CHANNELS = {
   mcpSetEnabled: "mcp:set-enabled",
   mcpEntry: "mcp:entry",
   composioGetState: "composio:get-state",
+  composioDiagnose: "composio:diagnose",
   composioSetApiKey: "composio:set-api-key",
   composioRemoveApiKey: "composio:remove-api-key",
   composioRefreshCatalog: "composio:refresh-catalog",

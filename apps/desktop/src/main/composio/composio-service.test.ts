@@ -59,6 +59,7 @@ function makeApi(overrides: Partial<ComposioApi> = {}) {
   } as unknown as ComposioSession;
   const api = {
     validateProjectReadAccess: vi.fn(async () => {}),
+    validateMcpConnectivity: vi.fn(async () => ({ apiReachable: true, mcpSessionReady: true })),
     listToolkits: vi.fn(async () => [
       { slug: "github", name: "GitHub", description: "Source control" },
       { slug: "slack", name: "Slack" },
@@ -223,6 +224,71 @@ describe("Composio service", () => {
     expect(state.status).toBe("error");
     expect(state.error?.code).toBe("invalid_project_key");
     expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+  });
+
+  it("surfaces scoped-key permissions needed for Composio MCP sessions", async () => {
+    const api = makeApi();
+    vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
+      Object.assign(new Error("session tool execution permission denied"), {
+        statusCode: 403,
+        code: "insufficient_scope",
+      }),
+    );
+    const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
+
+    const state = await harness.service.initialize();
+
+    expect(state.status).toBe("error");
+    expect(state.error?.code).toBe("missing_scope_read");
+    expect(state.error?.message).toMatch(/sessões.*MCP|MCP.*sessões|sessões.*execução.*MCP/i);
+    expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+  });
+
+  it("reports MCP permission failures separately from API and safely cleans the probe session", async () => {
+    const api = makeApi();
+    api.accounts.push(makeAccount("account-1"));
+    vi.mocked(api.api.validateMcpConnectivity).mockResolvedValue({
+      apiReachable: true,
+      mcpSessionReady: false,
+      error: { code: "missing_scope_read", message: "MCP session permission denied", retryable: false },
+    });
+    const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
+    const state = await harness.service.diagnose();
+
+    expect(state).toMatchObject({
+      apiReachable: true,
+      mcpSessionReady: false,
+      error: { code: "missing_scope_read" },
+    });
+    expect(api.api.validateMcpConnectivity).toHaveBeenCalledOnce();
+  });
+
+  it("keeps Composio HTTP 5xx errors distinct from network failures", async () => {
+    const api = makeApi();
+    vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
+      Object.assign(new Error("Composio server failure"), { statusCode: 503 }),
+    );
+    const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
+
+    const state = await harness.service.initialize();
+
+    expect(state.error?.code).toBe("composio_unavailable");
+  });
+
+  it("keeps the exact Composio endpoint, TCP, DNS, TLS, or proxy diagnostic for support", async () => {
+    const api = makeApi();
+    vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
+      Object.assign(new Error("fetch failed"), {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND backend.composio.dev"), { code: "ENOTFOUND" }),
+      }),
+    );
+    const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
+
+    const state = await harness.service.initialize();
+
+    expect(state.error?.code).toBe("network_unavailable");
+    expect(state.error?.message).toMatch(/ENOTFOUND.*backend\.composio\.dev/);
+    expect(state.error?.message).not.toContain(OLD_KEY);
   });
 
   it("reconciles a saved allowlist at startup before exposing selected operations", async () => {

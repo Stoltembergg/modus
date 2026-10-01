@@ -18,6 +18,7 @@ import type {
   BrowserTabInfo,
   CheckpointInfo,
   ComposioConnectionOperation,
+  ComposioConnectivityResult,
   ComposioSettingsState,
   ComposioStartConnectionInput,
   ComposioToolkitPolicyInput,
@@ -609,6 +610,7 @@ export type ModusApi = {
   };
   composio: {
     getState(): Promise<ComposioSettingsState>;
+    diagnose(): Promise<ComposioConnectivityResult>;
     setApiKey(input: { apiKey: string }): Promise<ComposioSettingsState>;
     removeApiKey(): Promise<ComposioSettingsState>;
     refreshCatalog(): Promise<ComposioSettingsState>;

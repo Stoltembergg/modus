@@ -1,6 +1,7 @@
-import { Composio, type SessionPreset } from "@composio/core";
-import type {
-  ComposioDisconnectAccountInput,
+import { Composio, SessionPreset } from "@composio/core";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { ComposioDisconnectAccountInput,
   ComposioRenameAccountInput,
   ComposioStartConnectionInput,
   ComposioToolkitPolicyInput,
@@ -58,6 +59,12 @@ export type ComposioSessionConfig = {
   multiAccount: { enable: false; requireExplicitSelection: false };
 };
 
+export type ComposioConnectivityResult = {
+  apiReachable: boolean;
+  mcpSessionReady: boolean;
+  error?: ComposioUserError;
+};
+
 export type ComposioSession = {
   id: string;
   configVersion: number;
@@ -67,6 +74,7 @@ export type ComposioSession = {
 
 export interface ComposioApi {
   validateProjectReadAccess(profileId: string): Promise<void>;
+  validateMcpConnectivity(profileId: string): Promise<ComposioConnectivityResult>;
   listToolkits(): Promise<ComposioToolkitRecord[]>;
   listTools(toolkitSlug: string): Promise<ComposioToolRecord[]>;
   listAuthConfigs(toolkitSlug: string): Promise<ComposioAuthConfigRecord[]>;
@@ -213,7 +221,9 @@ function mapSession(sessionLike: unknown): ComposioSession {
 }
 
 export function createComposioApi(apiKey: string): ComposioApi {
-  const composio = new Composio({ apiKey });
+  // Ignore COMPOSIO_BASE_URL and CLI user-config overrides. Modus sends the
+  // user's project key to Composio's documented production API origin only.
+  const composio = new Composio({ apiKey, baseURL: "https://backend.composio.dev" });
 
   return {
     async validateProjectReadAccess(profileId: string): Promise<void> {
@@ -221,6 +231,34 @@ export function createComposioApi(apiKey: string): ComposioApi {
         composio.toolkits.get({ managedBy: "all", limit: 1 }),
         composio.connectedAccounts.list({ userIds: [profileId], limit: 1 }),
       ]);
+    },
+
+    async validateMcpConnectivity(profileId) {
+      await this.validateProjectReadAccess(profileId);
+      let session: ComposioSession | undefined;
+      try {
+        session = await this.createSession(profileId, {
+          toolkits: { enable: [] }, tools: {}, connectedAccounts: {},
+          sessionPreset: SessionPreset.DIRECT_TOOLS, mcp: true,
+          sandbox: { enable: false }, manageConnections: { enable: false },
+          multiAccount: { enable: false, requireExplicitSelection: false },
+        });
+        const client = new Client({ name: "modus-composio-connectivity-check", version: "0.1.0" });
+        const transport = new StreamableHTTPClientTransport(new URL(session.mcp.url), {
+          requestInit: { headers: session.mcp.headers ?? {}, redirect: "error" },
+        });
+        try {
+          await client.connect(transport as unknown as Parameters<Client["connect"]>[0]);
+          return { apiReachable: true, mcpSessionReady: true };
+        } catch (error) {
+          return { apiReachable: true, mcpSessionReady: false, error: { code: "mcp_transport_failed", message: error instanceof Error ? error.message.slice(0, 240) : "MCP transport failed", retryable: true } };
+        } finally {
+          await client.close().catch(() => undefined);
+          await transport.close().catch(() => undefined);
+        }
+      } finally {
+        if (session) await this.deleteSession(session.id).catch(() => undefined);
+      }
     },
 
     async listToolkits(): Promise<ComposioToolkitRecord[]> {

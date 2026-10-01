@@ -6,7 +6,6 @@ export type SettingsSectionId =
   | "skills"
   | "subagents"
   | "mcp"
-  | "integrations"
   | "rules"
   | "project-memory"
   | "harness-insights"

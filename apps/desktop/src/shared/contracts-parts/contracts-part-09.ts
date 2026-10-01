@@ -39,12 +39,20 @@ export type ComposioConnectionOperation = {
   error?: ComposioUserError;
 };
 
+
 export type ComposioSettingsState = {
   apiKeyConfigured: boolean;
   status: "unconfigured" | "loading" | "ready" | "error";
   toolkits: ComposioToolkitSummary[];
   error?: ComposioUserError;
 };
+
+export type ComposioConnectivityResult = {
+  apiReachable: boolean;
+  mcpSessionReady: boolean;
+  error?: ComposioUserError;
+};
+
 
 export type ComposioToolkitPolicyInput = {
   toolkitSlug: string;
