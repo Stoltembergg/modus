@@ -1,1 +1,1 @@
-$file:/tmp/modus-pushes/escape-stress.txt
+  const re0 = /\u005cbhttps?:\u005c/\u005c/[^\u005cs)\u005c]>'\u0022]+/gi;\n  const s0 = \u0022hello\u005cnworld\u0022;\n
