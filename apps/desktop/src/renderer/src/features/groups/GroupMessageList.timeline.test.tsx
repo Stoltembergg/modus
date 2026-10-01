@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+// chore: re-trigger Package after cancelled macOS jobs
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
