@@ -5,6 +5,7 @@ import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { describeGroupError } from "./groupErrors";
+import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 
@@ -14,9 +15,8 @@ export const DELETE_DECISION_CONFIRM_LABEL = "Click again to delete";
 export const FORMER_MEMBER_TEXT = "Former member";
 
 /**
- * The group's decisions (`group:list-decisions`, newest first), refetched when
- * the room changes (members record them inside turns; the status line
- * "Decision: …" is a group.message).
+ * The group's decisions (`group:list-decisions`, newest first). Reloads on
+ * turn/activity and status lines — not on every chat `group.message`.
  */
 export function useGroupDecisions(groupId: string) {
   const [decisions, setDecisions] = useState<GroupDecision[]>([]);
@@ -31,8 +31,7 @@ export function useGroupDecisions(groupId: string) {
     setDecisions([]);
     void refresh();
     return window.modus.group.onEvent((event: GroupRuntimeEvent) => {
-      if (event.groupId !== groupId) return;
-      if (event.type === "group.message" || event.type === "group.activity") void refresh();
+      if (shouldRefreshGroupSidePanel(groupId, event)) void refresh();
     });
   }, [groupId, refresh]);
   const remove = useCallback((decisionId: string) => {
