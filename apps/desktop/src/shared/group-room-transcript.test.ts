@@ -90,10 +90,27 @@ describe("inlineLiveStatusLabel", () => {
         activity: "Running tests",
       }),
     ).toBe("Running tests…");
+    expect(
+      inlineLiveStatusLabel({
+        phase: "Waiting on model",
+        presenceState: "thinking",
+      }),
+    ).toBe("Waiting on model…");
   });
 
   it("yields Still working… after silence", () => {
     expect(inlineLiveStatusLabel({ phase: "Thinking", stillWorking: true })).toBe("Still working…");
+  });
+
+  it("appends queued age", () => {
+    expect(
+      inlineLiveStatusLabel({
+        phase: "Queued",
+        presenceState: "queued",
+        startedAt: 10_000,
+        nowMs: 25_000,
+      }),
+    ).toBe("Queued · 15s");
   });
 });
 
