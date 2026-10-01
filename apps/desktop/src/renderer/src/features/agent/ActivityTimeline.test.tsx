@@ -2,8 +2,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PlanRef } from "../../../../shared/contracts";
-import { AgentEventHub } from "./agentEventHub";
 import { ActivityTimeline } from "./ActivityTimeline";
+import { AgentEventHub } from "./agentEventHub";
 
 vi.mock("./Timeline", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./Timeline")>();
@@ -56,14 +56,18 @@ describe("ActivityTimeline", () => {
         event: { type: "run.started", sessionId: "s", runId: "run-1", delivery: "normal" },
       },
     ]);
-    await waitFor(() => expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event"));
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-event-count").textContent).toBe("1 event"),
+    );
 
     hub.publish({
       id: "completed",
       createdAt: "2026-10-01T12:00:01.000Z",
       event: { type: "run.completed", sessionId: "s", runId: "run-1" },
     });
-    await waitFor(() => expect(screen.getByTestId("activity-event-count").textContent).toBe("2 events"));
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-event-count").textContent).toBe("2 events"),
+    );
   });
 
   it("forwards file, plan, and subagent actions to the owning app", async () => {

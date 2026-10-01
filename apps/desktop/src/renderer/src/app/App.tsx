@@ -54,13 +54,13 @@ import { APP_RAIL_WIDTH, AppRail, type PrimaryDestination } from "../components/
 import { AppShell } from "../components/shell/AppShell";
 import { ContextSidebar } from "../components/shell/ContextSidebar";
 import { MainSurface } from "../components/shell/MainSurface";
-import { TopBar } from "../components/shell/TopBar";
 import {
-  INITIAL_PRIMARY_NAVIGATION,
   closeSettingsNavigation,
+  INITIAL_PRIMARY_NAVIGATION,
   navigatePrimary,
   restorePrimaryNavigation,
 } from "../components/shell/navigation-state";
+import { TopBar } from "../components/shell/TopBar";
 import { Aurora } from "../components/ui/Aurora";
 import { ChromeMoreMenu } from "../components/ui/ChromeMoreMenu";
 import { FadeContent } from "../components/ui/FadeContent";
@@ -1103,12 +1103,10 @@ export function App() {
   const workspaceChrome = WORKSPACE_GUTTER * (inspectorSpace > 0 ? 4 : 3);
   const mainSpace = MAIN_MIN_WIDTH + workspaceChrome;
   const inspectorFits =
-    layoutWidth === 0 ||
-    layoutWidth >= APP_RAIL_WIDTH + sidebarSpace + inspectorWidth + mainSpace;
+    layoutWidth === 0 || layoutWidth >= APP_RAIL_WIDTH + sidebarSpace + inspectorWidth + mainSpace;
   const sidebarFits =
     layoutWidth === 0 ||
-    layoutWidth >=
-      APP_RAIL_WIDTH + sidebarWidth + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
+    layoutWidth >= APP_RAIL_WIDTH + sidebarWidth + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
   const responsiveInspectorOpen = showInspectorForRoute && inspectorOpen && inspectorFits;
   const responsiveSidebarOpen = sidebarOpen && sidebarFits;
   const sidebarMaxWidth =
@@ -1117,10 +1115,7 @@ export function App() {
       : Number.POSITIVE_INFINITY;
   const inspectorMaxWidth =
     layoutWidth > 0
-      ? Math.max(
-          INSPECTOR_MIN_WIDTH,
-          layoutWidth - APP_RAIL_WIDTH - sidebarSpace - mainSpace,
-        )
+      ? Math.max(INSPECTOR_MIN_WIDTH, layoutWidth - APP_RAIL_WIDTH - sidebarSpace - mainSpace)
       : Number.POSITIVE_INFINITY;
 
   // When the window (or the other panel) shrinks, pull an over-wide panel back
@@ -1947,9 +1942,7 @@ function WorkspaceMenu({
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">No folder</span>
-                <span className="truncate text-2xs text-fg-faint">
-                  Starts a Direct Message
-                </span>
+                <span className="truncate text-2xs text-fg-faint">Starts a Direct Message</span>
               </span>
             </Menu.Item>
             {workspaces.length === 0 ? (

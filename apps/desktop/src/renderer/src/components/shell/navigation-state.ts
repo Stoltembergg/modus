@@ -24,9 +24,7 @@ export function navigatePrimary(
   return { ...current, active: destination };
 }
 
-export function closeSettingsNavigation(
-  current: PrimaryNavigationState,
-): PrimaryNavigationState {
+export function closeSettingsNavigation(current: PrimaryNavigationState): PrimaryNavigationState {
   if (current.active !== "settings") return current;
   return { active: current.settingsReturnTo, settingsReturnTo: current.settingsReturnTo };
 }
@@ -35,9 +33,6 @@ export function restorePrimaryNavigation(
   current: PrimaryNavigationState,
   restored: { settingsOpen: boolean; activeSessionId?: string | null | undefined },
 ): PrimaryNavigationState {
-  const primary = navigatePrimary(
-    current,
-    restored.activeSessionId ? "direct-messages" : "groups",
-  );
+  const primary = navigatePrimary(current, restored.activeSessionId ? "direct-messages" : "groups");
   return restored.settingsOpen ? navigatePrimary(primary, "settings") : primary;
 }

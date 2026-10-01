@@ -68,8 +68,8 @@ describe("Modus semantic design tokens", () => {
   });
 
   it("uses the same semantic surface aliases in dark, light, and dark-plus themes", () => {
-    expect(css).toContain(":root[data-theme=\"light\"]");
-    expect(css).toContain(":root[data-theme=\"dark-plus\"]");
+    expect(css).toContain(':root[data-theme="light"]');
+    expect(css).toContain(':root[data-theme="dark-plus"]');
     expect(css).toMatch(/--surface-app:\s*var\(--color-panel\)/);
     expect(css).toMatch(/--surface-sidebar:\s*var\(--color-panel\)/);
     expect(css).toMatch(/--surface-raised:\s*var\(--color-elevated\)/);

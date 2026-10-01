@@ -7,8 +7,8 @@ import {
   IconHelpCircle,
   IconListCheck,
   IconLoader2,
-  IconPlus,
   IconPlugConnected,
+  IconPlus,
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
@@ -787,9 +787,7 @@ export function Composer({
           </button>
         </div>
         {footer ? (
-          <div className="relative z-10 border-t border-hairline-soft px-3 py-1.5">
-            {footer}
-          </div>
+          <div className="relative z-10 border-t border-hairline-soft px-3 py-1.5">{footer}</div>
         ) : null}
       </div>
     </div>

@@ -44,9 +44,7 @@ describe("App shell", () => {
 
   it("labels the primary destinations and marks the active one", () => {
     const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
-    render(
-      <AppRail active="direct-messages" onNavigate={onNavigate} />,
-    );
+    render(<AppRail active="direct-messages" onNavigate={onNavigate} />);
 
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
     const directMessages = within(navigation).getByRole("button", { name: "Direct Messages" });
@@ -59,9 +57,7 @@ describe("App shell", () => {
   });
 
   it("reserves native titlebar space above the rail on macOS", () => {
-    const { rerender } = render(
-      <AppRail active="groups" nativeTitlebar onNavigate={vi.fn()} />,
-    );
+    const { rerender } = render(<AppRail active="groups" nativeTitlebar onNavigate={vi.fn()} />);
 
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
     expect(rail.getAttribute("data-native-titlebar-clearance")).toBe("true");

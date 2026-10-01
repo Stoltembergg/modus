@@ -54,7 +54,6 @@ import { latestPendingPermissionRequest } from "./permissionRequests";
 import { latestPendingQuestionRequest } from "./questionRequests";
 import { RetryStatusBar } from "./RetryStatusBar";
 import { latestSessionStatus } from "./runState";
-import { splitTimelinePresentation } from "./timelinePresentation";
 import { SubagentPreviewSheet } from "./SubagentPreviewSheet";
 import { readSessionScroll, rememberSessionScroll } from "./sessionScrollMemory";
 import {
@@ -63,6 +62,7 @@ import {
   subagentActivityLabel,
 } from "./subagentUi";
 import { buildVisibleTimelineBlocks, Timeline } from "./Timeline";
+import { splitTimelinePresentation } from "./timelinePresentation";
 import { useAutoScroll } from "./useAutoScroll";
 import { WorkingSubagentBar } from "./WorkingSubagentBar";
 

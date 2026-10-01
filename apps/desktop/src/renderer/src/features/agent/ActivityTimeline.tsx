@@ -62,7 +62,9 @@ export function ActivityTimeline({
           />
         ) : (
           <p className="px-4 py-8 text-center text-xs text-fg-faint">
-            {sessionId ? "No execution activity recorded yet." : "Select a Direct Message to view activity."}
+            {sessionId
+              ? "No execution activity recorded yet."
+              : "Select a Direct Message to view activity."}
           </p>
         )}
       </div>

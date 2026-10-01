@@ -394,9 +394,7 @@ export function GroupComposer({
       ) : null}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach via the paperclip button or paste. */}
       <div
-        className={cn(
-          "composer-dock-shell relative transition-colors",
-        )}
+        className={cn("composer-dock-shell relative transition-colors")}
         data-composer-surface
         data-dragging={dragOver ? "" : undefined}
         data-testid="group-composer-dropzone"

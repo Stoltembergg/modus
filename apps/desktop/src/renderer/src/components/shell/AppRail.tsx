@@ -34,7 +34,7 @@ export function AppRail({
       data-native-titlebar-clearance={nativeTitlebar ? "true" : undefined}
       data-shell-layer="app-rail"
     >
-      <div aria-label="Modus" className="app-rail-mark" title="Modus">
+      <div aria-hidden className="app-rail-mark" title="Modus">
         M
       </div>
       <div className="flex flex-col gap-1">

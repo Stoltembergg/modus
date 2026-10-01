@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  INITIAL_PRIMARY_NAVIGATION,
   closeSettingsNavigation,
+  INITIAL_PRIMARY_NAVIGATION,
   navigatePrimary,
   restorePrimaryNavigation,
 } from "./navigation-state";

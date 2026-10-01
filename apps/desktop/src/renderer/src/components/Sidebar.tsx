@@ -201,20 +201,14 @@ export function Sidebar({
   const pinnedSessions = useMemo(
     () =>
       ungroupedSessions.filter(
-        (session) =>
-          !session.parentSessionId &&
-          !session.archivedAt &&
-          session.pinnedAt,
+        (session) => !session.parentSessionId && !session.archivedAt && session.pinnedAt,
       ),
     [ungroupedSessions],
   );
   const directMessageSessions = useMemo(
     () =>
       ungroupedSessions.filter(
-        (session) =>
-          !session.parentSessionId &&
-          !session.archivedAt &&
-          !session.pinnedAt,
+        (session) => !session.parentSessionId && !session.archivedAt && !session.pinnedAt,
       ),
     [ungroupedSessions],
   );
@@ -417,34 +411,34 @@ export function Sidebar({
                   </p>
                 ) : (
                   directMessageSessions.map((session) => (
-                <ScrollReveal
-                  key={session.id}
-                  offsetY={8}
-                  scrollContainerRef={scrollContainerRef}
-                  blurStrength={3}
-                >
-                  <SessionRow
-                    activity={activityBySession[session.id]}
-                    isActive={activeSessionId === session.id}
-                    onArchive={(event) => {
-                      event.stopPropagation();
-                      onArchiveSession(session);
-                    }}
-                    onDelete={(event) => {
-                      event.stopPropagation();
-                      onDeleteSession(session);
-                    }}
-                    onPin={(event) => {
-                      event.stopPropagation();
-                      onPinSession(session, !session.pinnedAt);
-                    }}
-                    onRename={(title) => onRenameSession?.(session.id, title)}
-                    onSelect={() => onSelectSession(session)}
-                    pinned={Boolean(session.pinnedAt)}
-                    title={session.title}
-                    updatedAt={session.updatedAt}
-                  />
-                </ScrollReveal>
+                    <ScrollReveal
+                      key={session.id}
+                      offsetY={8}
+                      scrollContainerRef={scrollContainerRef}
+                      blurStrength={3}
+                    >
+                      <SessionRow
+                        activity={activityBySession[session.id]}
+                        isActive={activeSessionId === session.id}
+                        onArchive={(event) => {
+                          event.stopPropagation();
+                          onArchiveSession(session);
+                        }}
+                        onDelete={(event) => {
+                          event.stopPropagation();
+                          onDeleteSession(session);
+                        }}
+                        onPin={(event) => {
+                          event.stopPropagation();
+                          onPinSession(session, !session.pinnedAt);
+                        }}
+                        onRename={(title) => onRenameSession?.(session.id, title)}
+                        onSelect={() => onSelectSession(session)}
+                        pinned={Boolean(session.pinnedAt)}
+                        title={session.title}
+                        updatedAt={session.updatedAt}
+                      />
+                    </ScrollReveal>
                   ))
                 )}
               </AnimatePresence>

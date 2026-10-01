@@ -271,9 +271,7 @@ describe("AgentEventHub", () => {
     const hub = new AgentEventHub();
     const timestamp = "2026-10-01T12:00:00.000Z";
     hub.publish({ id: "live-complete", event: runCompleted, createdAt: timestamp });
-    hub.seedHistory("s", [
-      { id: "persisted-start", event: runStarted, createdAt: timestamp },
-    ]);
+    hub.seedHistory("s", [{ id: "persisted-start", event: runStarted, createdAt: timestamp }]);
 
     expect(hub.getHistory("s").map((entry) => entry.id)).toEqual([
       "persisted-start",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEventItem } from "./agentEventHub";
-import { buildVisibleTimelineBlocks } from "./Timeline";
 import type { TimelineBlock, WorkFoldBlockItem } from "./Timeline";
+import { buildVisibleTimelineBlocks } from "./Timeline";
 import { splitTimelinePresentation } from "./timelinePresentation";
 
 const userMessage: TimelineBlock = {
@@ -32,7 +32,12 @@ function fold(status: WorkFoldBlockItem["run"]["status"]): WorkFoldBlockItem {
           { id: "read", type: "tool", name: "read", output: "parser.ts", isComplete: true },
         ],
       },
-      { id: "intermediate", type: "message", role: "assistant", content: "I found the entry point." },
+      {
+        id: "intermediate",
+        type: "message",
+        role: "assistant",
+        content: "I found the entry point.",
+      },
     ],
   };
 }
@@ -41,19 +46,58 @@ describe("splitTimelinePresentation", () => {
   it("projects real event streams into a clean prompt and final answer transcript", () => {
     const events: AgentEventItem[] = [
       { id: "1", event: { type: "message.started", sessionId: "s", messageId: "u", role: "user" } },
-      { id: "2", event: { type: "message.delta", sessionId: "s", messageId: "u", delta: "Fix the parser" } },
+      {
+        id: "2",
+        event: { type: "message.delta", sessionId: "s", messageId: "u", delta: "Fix the parser" },
+      },
       { id: "3", event: { type: "message.completed", sessionId: "s", messageId: "u" } },
       { id: "4", event: { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" } },
-      { id: "5", event: { type: "message.started", sessionId: "s", messageId: "draft", role: "assistant" } },
-      { id: "6", event: { type: "message.delta", sessionId: "s", messageId: "draft", delta: "Inspecting the parser." } },
+      {
+        id: "5",
+        event: { type: "message.started", sessionId: "s", messageId: "draft", role: "assistant" },
+      },
+      {
+        id: "6",
+        event: {
+          type: "message.delta",
+          sessionId: "s",
+          messageId: "draft",
+          delta: "Inspecting the parser.",
+        },
+      },
       { id: "7", event: { type: "message.completed", sessionId: "s", messageId: "draft" } },
-      { id: "8", event: { type: "thinking.delta", sessionId: "s", messageId: "draft", delta: "Check parse flow" } },
+      {
+        id: "8",
+        event: {
+          type: "thinking.delta",
+          sessionId: "s",
+          messageId: "draft",
+          delta: "Check parse flow",
+        },
+      },
       { id: "9", event: { type: "thinking.completed", sessionId: "s", messageId: "draft" } },
-      { id: "10", event: { type: "tool.started", sessionId: "s", toolCallId: "t", toolName: "read" } },
-      { id: "11", event: { type: "tool.output", sessionId: "s", toolCallId: "t", output: "parser.ts" } },
+      {
+        id: "10",
+        event: { type: "tool.started", sessionId: "s", toolCallId: "t", toolName: "read" },
+      },
+      {
+        id: "11",
+        event: { type: "tool.output", sessionId: "s", toolCallId: "t", output: "parser.ts" },
+      },
       { id: "12", event: { type: "tool.ended", sessionId: "s", toolCallId: "t", isError: false } },
-      { id: "13", event: { type: "message.started", sessionId: "s", messageId: "final", role: "assistant" } },
-      { id: "14", event: { type: "message.delta", sessionId: "s", messageId: "final", delta: "Parser shipped." } },
+      {
+        id: "13",
+        event: { type: "message.started", sessionId: "s", messageId: "final", role: "assistant" },
+      },
+      {
+        id: "14",
+        event: {
+          type: "message.delta",
+          sessionId: "s",
+          messageId: "final",
+          delta: "Parser shipped.",
+        },
+      },
       { id: "15", event: { type: "message.completed", sessionId: "s", messageId: "final" } },
       { id: "16", event: { type: "run.completed", sessionId: "s", runId: "r" } },
     ];
@@ -84,19 +128,20 @@ describe("splitTimelinePresentation", () => {
       userMessage,
       fold("completed"),
       { id: "final", type: "message", role: "assistant", content: "Parser shipped." },
-      { id: "failure", type: "notice", title: "Tool warning", body: "A retry was needed.", isError: true },
+      {
+        id: "failure",
+        type: "notice",
+        title: "Tool warning",
+        body: "A retry was needed.",
+        isError: true,
+      },
     ];
 
     const { transcriptBlocks, activityBlocks } = splitTimelinePresentation(source);
 
     expect(transcriptBlocks.map((block) => block.id)).toEqual(["prompt", "final"]);
     expect(activityBlocks.map((block) => block.id)).toEqual(["fold:run-1", "failure"]);
-    expect(source.map((block) => block.id)).toEqual([
-      "prompt",
-      "fold:run-1",
-      "final",
-      "failure",
-    ]);
+    expect(source.map((block) => block.id)).toEqual(["prompt", "fold:run-1", "final", "failure"]);
   });
 
   it("keeps queued prompts in chat and hides active assistant output with the technical activity", () => {

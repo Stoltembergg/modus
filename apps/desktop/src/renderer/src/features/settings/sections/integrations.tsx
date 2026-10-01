@@ -59,11 +59,7 @@ function filterTools(tools: ComposioToolSummary[], query: string): ComposioToolS
   );
 }
 
-export function IntegrationsSettingsPanel({
-  standalone = false,
-}: {
-  standalone?: boolean;
-} = {}) {
+export function IntegrationsSettingsPanel({ standalone = false }: { standalone?: boolean } = {}) {
   const [settings, setSettings] = useState<ComposioSettingsState | undefined>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | undefined>();
