@@ -94,7 +94,7 @@ function requeueExecution(runtime: ResumeRuntime, input: ResumeGroupExecutionInp
   runtime.retiredChains.delete(chain.chainId);
   runtime.chains.set(chain.chainId, chain);
   // Rebuild wake without prior run/error/progress fields (exactOptionalPropertyTypes).
-  // Keeps resumed jobs requeue-ready without undefined optional props.
+  // Omit undefined optional props so resumed jobs stay requeue-ready.
   const {
     error: _error,
     runId: _runId,
