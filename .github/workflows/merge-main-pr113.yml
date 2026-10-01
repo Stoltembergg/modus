@@ -1,12 +1,16 @@
 name: merge-main-pr113
-# Resolves known GroupMessageList conflict: keep main liveTurn + PR onExecutionFilter.
+# Merge main (#109) into PR113 and apply known conflict resolutions.
 on:
   workflow_dispatch:
   push:
     paths:
       - .github/workflows/merge-main-pr113.yml
+      - .github/patches/pr113-merge-main/**
 permissions:
   contents: write
+concurrency:
+  group: merge-main-pr113
+  cancel-in-progress: true
 jobs:
   merge:
     runs-on: ubuntu-latest
@@ -16,56 +20,58 @@ jobs:
         with:
           ref: cursor/group-execution-linking-c747
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Merge main with known resolution
+      - name: Merge main and apply resolutions
         run: |
           set -euo pipefail
           git config user.email "stoltembergg@gmail.com"
           git config user.name "Gabriel"
           git fetch origin main
+          MAIN_SHA=$(git rev-parse origin/main)
+          echo "main=$MAIN_SHA"
           if git merge-base --is-ancestor origin/main HEAD; then
-            echo main already ancestor
+            echo "main already ancestor"
             exit 0
           fi
           set +e
-          git merge origin/main --no-edit
+          git merge origin/main --no-edit -m "ci: merge main (${MAIN_SHA:0:7} #109) into PR113"
           code=$?
           set -e
-          if [ "$code" -eq 0 ]; then
-            git push origin HEAD:cursor/group-execution-linking-c747
-            exit 0
+          if [ "$code" -ne 0 ]; then
+            echo "applying known conflict resolutions"
+            cp .github/patches/pr113-merge-main/group-runtime-ipc.test.ts \
+              apps/desktop/src/main/ipc/group-runtime-ipc.test.ts
+            cp .github/patches/pr113-merge-main/GroupMessageList.tsx \
+              apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+            cp .github/patches/pr113-merge-main/GroupRoom.tsx \
+              apps/desktop/src/renderer/src/features/groups/GroupRoom.tsx
+            cp .github/patches/pr113-merge-main/GroupRoom.test.tsx \
+              apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx
+            if grep -R --include='*.ts' --include='*.tsx' -n '^<<<<<<<\|^=======\|^>>>>>>>' apps/desktop; then
+              echo "unresolved conflict markers remain" >&2
+              exit 1
+            fi
+            git add -A
+            git commit -m "ci: merge main (${MAIN_SHA:0:7} #109) into PR113"
           fi
-          f=apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
-          test -f "$f"
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-          p = Path("apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx")
-          text = p.read_text()
-          if "<<<<<<<" not in text:
-              raise SystemExit("expected conflict markers")
-          # Prefer origin/main body (liveTurn) and inject onExecutionFilter.
-          pattern = re.compile(r"<<<<<<< HEAD\n.*?=======\n(.*?)>>>>>>> origin/main\n", re.S)
-          m = pattern.search(text)
-          if not m:
-              raise SystemExit("conflict pattern mismatch")
-          theirs = m.group(1)
-          if "onExecutionFilter={onExecutionFilterChange}" not in theirs:
-              theirs = theirs.replace(
-                  "message={message}\n",
-                  "message={message}\n                onExecutionFilter={onExecutionFilterChange}\n",
-                  1,
-              )
-          text = pattern.sub(theirs, text, count=1)
-          if "<<<<<<<" in text:
-              raise SystemExit("unresolved markers remain")
-          if "onExecutionFilter={onExecutionFilterChange}" not in text:
-              raise SystemExit("missing onExecutionFilter after resolve")
-          if "liveTurn=" not in text:
-              raise SystemExit("missing liveTurn after resolve")
-          p.write_text(text)
-          PY
-          git add -A
-          git commit -m "merge main into group-execution-linking: keep liveTurn + execution filter"
-          ! grep -R --include='*.ts' --include='*.tsx' -n 'LOAD_FROM_FILE\|PLACEHOLDER_WILL_REPLACE' apps/desktop/src || exit 1
+          # Verify invariants
+          test -f apps/desktop/src/main/groups/group-runtime.ts
+          lines=$(wc -l < apps/desktop/src/main/groups/group-runtime.ts)
+          echo "group-runtime lines=$lines"
+          test "$lines" -ge 1200
+          grep -q 'export class GroupRuntime' apps/desktop/src/main/groups/group-runtime.ts
+          ! grep -n 'LOAD_FROM_FILE\|PLACEHOLDER_WILL_REPLACE' apps/desktop/src/main/groups/group-runtime.ts
+          grep -F '"execution_id"' apps/desktop/src/main/groups/group-store.test.ts
+          grep -F 'idx_group_decisions_execution' apps/desktop/src/main/groups/group-store.test.ts
+          grep -F 'onExecutionFilter={onExecutionFilterChange}' \
+            apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+          grep -F 'liveTurn=' apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+          grep -F 'resumeExecution' apps/desktop/src/renderer/src/features/groups/GroupRoom.tsx
+          grep -F 'executionMode: "complement"' apps/desktop/src/main/ipc/group-runtime-ipc.test.ts
+          # Drop helper payloads from tip after successful merge
+          rm -rf .github/patches/pr113-merge-main
+          git add -A .github/patches/pr113-merge-main || true
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: remove PR113 merge-main helper patches"
+          fi
           git push origin HEAD:cursor/group-execution-linking-c747
+          echo "pushed=$(git rev-parse HEAD)"
