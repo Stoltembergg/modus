@@ -14,7 +14,10 @@ import type {
 import { resolveWindowAppearance } from "../shared/window-appearance";
 import type { ModusApi, SecurityState } from "./types";
 
-const windowAppearance = resolveWindowAppearance(process.platform, process.getSystemVersion());
+const windowAppearance = resolveWindowAppearance(
+  process.platform,
+  process.getSystemVersion?.() ?? "",
+);
 let nativeGlassAvailable = windowAppearance.glass === "native";
 const nativeGlassListeners = new Set<(available: boolean) => void>();
 

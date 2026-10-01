@@ -68,7 +68,7 @@ export function createMainWindow({
   const width = Math.min(1180, workArea.width);
   const height = Math.min(760, workArea.height);
 
-  const appearance = resolveWindowAppearance(process.platform, process.getSystemVersion());
+  const appearance = resolveWindowAppearance(process.platform, process.getSystemVersion?.() ?? "");
   let nativeGlassAvailable = appearance.glass === "native";
   const createWindow = (glass: "native" | "solid"): BrowserWindowType =>
     new BrowserWindow({
