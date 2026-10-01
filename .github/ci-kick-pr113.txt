@@ -1,1 +1,1 @@
-kick 2026-10-01T10:38Z after execution_id test fix tip 5e606b1 — start typecheck·test·biome
+kick 2026-10-01T10:44Z — wait for merge-main-pr113-v2 then typecheck
