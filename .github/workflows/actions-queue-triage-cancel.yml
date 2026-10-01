@@ -16,14 +16,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Re-cancel leftover Package macOS blocking #109 x64
+      - name: Cancel Package macOS from CI kick / #113-117
         uses: actions/github-script@v7
         with:
           script: |
-            // Free macOS x64 for #109 tip a9ae746 run 36847793892. Never cancel #109.
+            // Protect only #109 run 36847793892 (tip a9ae746). Cancel new Package macOS on #113-117.
             const never = new Set([36847793892]);
             const runIds = [
-              36847945213, 36847128358,
+              36849938135,
             ];
             const results = [];
             for (const run_id of runIds) {
@@ -50,8 +50,7 @@ jobs:
                 core.info(`canceled ${run_id}`);
               } catch (e) {
                 results.push({ run_id, status: 'error', message: e.message });
-                core.warning(`fail ${run_id}: ${e.message}`);
               }
             }
-            await core.summary.addHeading('#109 x64 free pass').addCodeBlock(JSON.stringify(results, null, 2), 'json').write();
+            await core.summary.addHeading('CI kick Package cancel').addCodeBlock(JSON.stringify(results, null, 2), 'json').write();
             console.log(JSON.stringify(results, null, 2));
