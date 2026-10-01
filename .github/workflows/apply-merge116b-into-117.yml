@@ -1,0 +1,64 @@
+name: apply-merge116b-into-117
+on:
+  push:
+    branches: [cursor/group-conversation-minors-c747]
+    paths:
+      - 'internal/_push/merge116b/READY'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge #116 tip 7f6b8681 and apply Row conflict resolution
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          test -f internal/_push/merge116b/READY
+          test -f internal/_push/merge116b/manifest.json
+          python3 <<'PY'
+          import base64, hashlib, json, pathlib, zlib, subprocess, os, shutil
+          root = pathlib.Path('internal/_push/merge116b')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          merge_ref = manifest['merge_ref']
+          merge_branch = manifest['merge_branch']
+          subprocess.check_call(['git', 'fetch', 'origin', merge_branch, merge_ref])
+          tip = subprocess.check_output(['git', 'rev-parse', merge_ref], text=True).strip()
+          print('merging', tip)
+          msg = 'merge: bring #116 tip %s into conversation minors (executionChip)' % tip[:12]
+          rc = subprocess.call(['git', 'merge', '--no-edit', '-m', msg, tip])
+          if rc not in (0, 1):
+              raise SystemExit('merge failed rc=%s' % rc)
+          for entry in manifest['files']:
+              parts = [(root / name).read_text().strip() for name in entry['parts']]
+              data = zlib.decompress(base64.b64decode(''.join(parts)))
+              assert len(data) == entry['bytes'], (entry['target'], len(data), entry['bytes'])
+              digest = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+              assert digest == entry['blob'], (entry['target'], digest, entry['blob'])
+              target = pathlib.Path(entry['target'])
+              target.parent.mkdir(parents=True, exist_ok=True)
+              target.write_bytes(data)
+              print('resolved', target, 'sha', digest)
+          shutil.rmtree(root)
+          subprocess.check_call(['git', 'add', '-A'])
+          status = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+          print(status)
+          if 'UU ' in status or 'AA ' in status:
+              raise SystemExit('unmerged paths remain')
+          if subprocess.call(['git', 'diff', '--cached', '--quiet']) == 0:
+              print('nothing to commit')
+          else:
+              merged = pathlib.Path('.git/MERGE_HEAD').exists()
+              if merged:
+                  subprocess.check_call(['git', 'commit', '--no-edit', '-m', 'merge: #116 tip %s + executionChip hoist on UX minors' % tip[:12]])
+              else:
+                  subprocess.check_call(['git', 'commit', '-m', 'fix(groups): keep #117 UX minors + #116 executionChip hoist %s' % tip[:12]])
+          subprocess.check_call(['git', 'push', 'origin', 'HEAD:%s' % os.environ['GITHUB_REF_NAME']])
+          print('pushed', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+          PY
