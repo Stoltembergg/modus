@@ -5,6 +5,8 @@ import {
   planSupervisedCodeFlow,
 } from "./group-supervised-flow";
 
+/** CI keepalive: re-trigger Package after cancelled macOS jobs. */
+
 const roster = [
   { sessionId: "lead", title: "Planner", role: "Lead" },
   { sessionId: "build", title: "Builder", role: "Builder" },
@@ -15,7 +17,7 @@ describe("classifySupervisedAsk", () => {
   it("detects social, docs, trivial, design, review-only, and code asks", () => {
     expect(classifySupervisedAsk("hi team")).toBe("social");
     expect(classifySupervisedAsk("Update the README with install steps")).toBe("docs");
-    expect(classifySupervisedAsk("fix typo in the error string")).toBe("trivial");
+    expect(classifySupervisedAsk("Fix typo in the error string")).toBe("trivial");
     expect(classifySupervisedAsk("Propose an architecture approach for auth")).toBe("design");
     expect(classifySupervisedAsk("Please review this PR for edge cases")).toBe("review-only");
     expect(classifySupervisedAsk("Implement the login feature with tests")).toBe("code");
