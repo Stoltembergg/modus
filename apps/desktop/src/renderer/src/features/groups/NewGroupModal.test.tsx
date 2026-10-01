@@ -1,1 +1,1 @@
-PLACEHOLDER
+LOAD_FROM_/tmp/final-cof-3.json
