@@ -16,40 +16,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel Package runs blocking #111 arm64
+      - name: Cancel Package macOS competing with #111 arm64
         uses: actions/github-script@v7
         with:
           script: |
-            // Free macOS arm64 for PR #111 job 110304318185 / run 36842393932.
-            // Never cancel #111.
+            // Free macOS arm64 for PR #111 job 110304318185 / run 36842393932 tip c4595c9.
+            // Never cancel #111. Target OTHER Groups PRs #109,#113,#114,#115,#116 only.
             const never = new Set([36842393932]);
-            // Explicit tip Package runs: cancel even if in_progress (typecheck already failed).
+            // Cancel queued + in_progress Package macOS on competing PRs (macos-14 runners).
             const cancelEvenIfInProgress = new Set([
-              36844892933, // #109 tip 2f27dd8 Package macOS (queued x64+arm64)
-              36844892757, // #109 tip 2f27dd8 Package Windows (in_progress x64 110312559115)
-              36844144646, // #113 tip f282bc2 Package macOS
-              36843989188  // #115 tip 8ad899d Package macOS
+              36846292207, 36846291035, 36846260481, 36846245746, 36846185959, 36846069573,
+              36845929347, 36845826710, 36845707923, 36845708110, 36845678242, 36845500025,
+              36845490565, 36845425875, 36845418835, 36845401123, 36845401894, 36845358870,
+              36845357423, 36845316582, 36845226767, 36845173083, 36845160671, 36845088930,
+              36844913889, 36844837328, 36844814297, 36844299265, 36842743287,
             ]);
             const runIds = [
-              36844892933,
-              36844892757,
-              36844144646,
-              36843989188,
-              // superseded queued Package macOS
-              36844884042, 36844830194, 36844824939, 36844662125,
-              36844266532, 36844251704, 36844167509, 36844097510,
-              36844020087, 36844011359, 36843966300, 36843929324,
-              36843826871, 36843809898, 36843759267, 36843743375,
-              36843714773, 36843706319, 36843686873, 36843654668,
-              36843653308, 36843619313, 36843583015, 36843570339,
-              36843550309, 36843544892, 36843531257, 36843526977,
-              36843428829, 36843351732, 36843277307, 36843237753,
-              36843226367, 36843194294, 36843151744, 36843101125,
-              36843049033, 36842977727, 36842932243, 36842930423,
-              36842891252, 36842817333, 36842793287, 36842689091,
-              36842443896, 36842343442, 36842307811, 36842256014,
-              36842194555, 36842179204, 36842158782, 36842123176,
-              36842114221
+              36846292207, 36846291035, 36846260481, 36846245746, 36846185959, 36846069573,
+              36845929347, 36845826710, 36845707923, 36845708110, 36845678242, 36845500025,
+              36845490565, 36845425875, 36845418835, 36845401123, 36845401894, 36845358870,
+              36845357423, 36845316582, 36845226767, 36845173083, 36845160671, 36845088930,
+              36844913889, 36844837328, 36844814297, 36844299265, 36842743287,
             ];
             const results = [];
             for (const run_id of runIds) {
@@ -76,7 +63,7 @@ jobs:
                   repo: context.repo.repo,
                   run_id
                 });
-                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name });
+                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name, head_sha: run.head_sha, branch: run.head_branch });
                 core.info(`canceled ${run_id} (${run.name}, was ${run.status})`);
               } catch (e) {
                 results.push({ run_id, status: 'error', message: e.message });
