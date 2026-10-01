@@ -1,1 +1,1 @@
-PLACEHOLDER
+$file:/agent/modus/apps/desktop/src/shared/group-room-transcript.ts
