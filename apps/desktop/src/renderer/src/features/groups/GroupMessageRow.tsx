@@ -14,6 +14,7 @@ import {
   collabStatusTone,
   extractUsefulSources,
   formatNaturalCollabStatus,
+  isOrchestrationOnlyRoomMessage,
   type RoomMessageTone,
   shouldPersistCollabStatusInTranscript,
   splitRoomMessageBody,
@@ -256,6 +257,9 @@ export function GroupMessageRow({
     ? (labels.get(message.toSessionId) ?? { title: message.toSessionId })
     : undefined;
   if (message.kind === "status") {
+    const collab = parseGroupCollabStatusLine(message.body);
+    // Orchestration handoffs: Activity / runtime only — never the main transcript.
+    if (collab?.kind === "handoff") return null;
     const activeWaiting = isActiveWaitingStatus(
       message.body,
       message.authorSessionId,
@@ -263,7 +267,6 @@ export function GroupMessageRow({
     );
     const waiting = isWaitingStatus(message.body);
     const nudge = isNoNextOwnerStatus(message.body);
-    const collab = parseGroupCollabStatusLine(message.body);
     const display = collab ? formatNaturalCollabStatus(collab) : message.body;
     const classified = classifyGroupSystemStatus(display);
     if (classified?.show === "hide") return null;
@@ -358,6 +361,15 @@ export function GroupMessageRow({
   const showLiveStatus = Boolean(
     liveTurn && !prose.trim() && !readyOnly && !liveTurn.live.collapsed,
   );
+  // Hide Planner→peer handoff dumps that have no user-facing prose.
+  if (
+    !streaming &&
+    !liveTurn &&
+    !readyOnly &&
+    isOrchestrationOnlyRoomMessage({ kind: message.kind, body: message.body })
+  ) {
+    return null;
+  }
   const sources = !streaming && !liveTurn ? extractUsefulSources(prose) : [];
   return (
     <div
