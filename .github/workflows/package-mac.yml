@@ -79,7 +79,19 @@ jobs:
         env:
           # Large renderer (Monaco/Mermaid) can abort under default heap on GHA mac runners.
           NODE_OPTIONS: --max-old-space-size=12288
-        run: npm --workspace @modus/desktop exec -- electron-vite build
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          if ! npm --workspace @modus/desktop exec -- electron-vite build 2>&1 | tee electron-vite-build.log; then
+            echo "::group::electron-vite build failure (tail)"
+            tail -n 100 electron-vite-build.log || true
+            echo "::endgroup::"
+            # Surface last lines as check annotations (readable without job-log auth).
+            tail -n 30 electron-vite-build.log | while IFS= read -r line; do
+              echo "::error title=electron-vite::$line"
+            done
+            exit 1
+          fi
 
       - name: Package macOS ${{ matrix.electron_arch }} (unsigned)
         env:
