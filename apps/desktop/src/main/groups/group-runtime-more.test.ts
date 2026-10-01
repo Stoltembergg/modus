@@ -17,6 +17,7 @@ const {
   createAgentGroupWithMembers,
   removeAgentFromGroup,
   listGroupMessages,
+  listAgentGroupMembers,
   createMemberGroupTask,
   recordGroupDecision,
   removeAgentGroupMember,
@@ -42,6 +43,7 @@ const {
   isUpdatePendingState,
   parseGroupMentions,
 } = await import("./group-runtime");
+const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
@@ -233,7 +235,8 @@ describe("dispose", () => {
     expect(groups.isAwaitingUser(alpha)).toBe(true);
     expect(groups.chainSnapshot(user.id)).toEqual(snapshotBefore);
     expect(groups.liveChainIds()).toEqual([]);
-    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.aborted).toContain(beta);
     expect(runtime.started).toEqual([alpha, beta]);
   });
 });
@@ -386,7 +389,6 @@ describe("task tool wakes", () => {
   });
 
   it("a review request from a turn stopped at the intent gate persists the task but wakes nobody", async () => {
-    const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
     const { createMemberGroupTask, claimGroupTask, listGroupTasks } = await import("./group-store");
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
@@ -444,12 +446,22 @@ describe("chain cleanup", () => {
     const { runtime, groups } = setup();
     const first = groups.postUserMessage({ groupId: group.id, body: "go" });
     expect(groups.liveChainIds()).toEqual([first.id]);
-    groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, targetSessionId: beta, body: "Review the result" });
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: alpha,
+      targetSessionId: beta,
+      body: "Review the result",
+    });
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta you" });
     await flush();
     // Still live: Beta's wake runs in it.
     expect(groups.liveChainIds()).toEqual([first.id]);
-    groups.handleTaskWake({ groupId: group.id, actorSessionId: beta, targetSessionId: alpha, body: "Address the review" });
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: beta,
+      targetSessionId: alpha,
+      body: "Address the review",
+    });
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done." });
     await flush();
     // The explicit return handoff keeps the chain live; the public reply adds no wake.
@@ -622,12 +634,20 @@ describe("worktree re-wake (group_start_worktree)", () => {
       chainId: user.id,
       mentions: [],
     });
-    expect(after[2]).toMatchObject({ authorSessionId: alpha, kind: "message", body: "", status: "running", chainId: user.id });
+    expect(after[2]).toMatchObject({
+      authorSessionId: alpha,
+      kind: "message",
+      body: "",
+      status: "running",
+      chainId: user.id,
+    });
     expect(after[2]?.turnId).not.toBe(originalCard?.turnId);
     expect(after.some((message) => message.body === GROUP_STATUS_TEXT.aborted)).toBe(false);
     // Same member, same chain, same trigger: the prompt is rebuilt from the user message.
     expect(runtime.pendingSessions()).toEqual([alpha]);
-    expect(runtime.calls[0]?.input.message).toContain('<group_message from="user">\nbuild the parser');
+    expect(runtime.calls[0]?.input.message).toContain(
+      '<group_message from="user">\nbuild the parser',
+    );
     expect(runtime.calls[0]?.input.message).toContain("Worktree ready:");
     expect(groups.chainSnapshot(user.id)).toMatchObject({
       hops: 2,
@@ -747,7 +767,11 @@ describe("stopGroup (room Stop button)", () => {
     expect(statuses.map((m) => [m.authorKind, m.authorSessionId, m.body])).toEqual([
       ["system", undefined, "Stopped by you"],
     ]);
-    expect(room(group.id).filter((message) => message.kind === "message" && message.authorKind === "agent").map((message) => [message.id, message.authorSessionId, message.status, message.body])).toEqual([
+    expect(
+      room(group.id)
+        .filter((message) => message.kind === "message" && message.authorKind === "agent")
+        .map((message) => [message.id, message.authorSessionId, message.status, message.body]),
+    ).toEqual([
       [cards[0]?.id, alpha, "cancelled", ""],
       [cards[1]?.id, beta, "cancelled", ""],
       [cards[2]?.id, gamma, "cancelled", ""],
@@ -781,11 +805,18 @@ describe("stopGroup (room Stop button)", () => {
     expect(runtime.pendingSessions()).toEqual([other.beta]);
     expect(room(group.id)).toHaveLength(before + 1);
     expect(room(group.id).at(-1)).toMatchObject({ authorKind: "system", body: "Stopped by you" });
-    expect(room(group.id).find((message) => message.authorSessionId === alpha)).toMatchObject({ status: "cancelled", body: "" });
-    expect(room(other.group.id).find((message) => message.authorSessionId === other.beta)).toMatchObject({ status: "running", body: "" });
+    expect(room(group.id).find((message) => message.authorSessionId === alpha)).toMatchObject({
+      status: "cancelled",
+      body: "",
+    });
+    expect(
+      room(other.group.id).find((message) => message.authorSessionId === other.beta),
+    ).toMatchObject({ status: "running", body: "" });
     expect(room(other.group.id).some((m) => m.body === "Stopped by you")).toBe(false);
     expect(groups.isAwaitingUser(beta)).toBe(false);
-    expect(groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds ?? []).toEqual([]);
+    expect(
+      groups.memberStates().find((s) => s.groupId === group.id)?.waitingSessionIds ?? [],
+    ).toEqual([]);
     expect(groups.isGroupWorking(other.group.id)).toBe(true);
   });
 });
@@ -887,7 +918,7 @@ describe("agents in the room", () => {
   }
 
   it("the wake prompt starts with the agent's instructions and lists names with roles", async () => {
-    const { group, lead, builder, leadSession } = agentsRoom();
+    const { group, lead, builder, leadSession, builderSession } = agentsRoom();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "Plan the release" });
     const prompt = runtime.take(leadSession).input.message;
@@ -897,8 +928,8 @@ describe("agents in the room", () => {
     expect(prompt).toContain(
       [
         `You are @${lead.name}, a member of this group. Members right now:`,
-        `- @${lead.name} [Lead] (lead) (you): Split the work into tasks.`,
-        `- @${builder.name} [Builder]`,
+        `- @${lead.name} [Lead] (lead) (you): Split the work into tasks. (sessionId: ${leadSession})`,
+        `- @${builder.name} [Builder] (sessionId: ${builderSession})`,
       ].join("\n"),
     );
   });
@@ -916,7 +947,7 @@ describe("agents in the room", () => {
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: `@${lead.name} go` });
     expect(runtime.take(leadSession).input.message).toContain(
-      `- @${lead.name} [Lead] (lead) (you): ${"x".repeat(119)}y\n`,
+      `- @${lead.name} [Lead] (lead) (you): ${"x".repeat(119)}y (sessionId: ${leadSession})\n`,
     );
   });
 
@@ -1016,15 +1047,18 @@ describe("agents in the room", () => {
       instructions: "Reviews every diff.\nBe strict.",
       modelId: "openai/gpt-5",
     });
+    const sessionByName = new Map(
+      listAgentGroupMembers(group.id).map((member) => [member.name, member.sessionId]),
+    );
     // The join line itself wakes nobody.
     expect(runtime.pendingSessions()).toEqual([]);
     expect(room(group.id).at(-1)).toMatchObject({ kind: "status", body: "Cy joined as Reviewer" });
     groups.postUserMessage({ groupId: group.id, body: "@Ana plan it" });
     const prompt = runtime.take(ana).input.message;
     expect(rosterOf(prompt)).toEqual([
-      "- @Ana [Planner] (lead) (you)",
-      "- @Bo 1 [Builder]",
-      "- @Cy [Reviewer]: Reviews every diff.",
+      `- @Ana [Planner] (lead) (you) (sessionId: ${ana})`,
+      `- @Bo 1 [Builder] (sessionId: ${group.members[1]?.sessionId})`,
+      `- @Cy [Reviewer]: Reviews every diff. (sessionId: ${sessionByName.get("Cy")})`,
     ]);
     expect(prompt).toContain("[system status] Cy joined as Reviewer");
   });
@@ -1039,8 +1073,8 @@ describe("agents in the room", () => {
     groups.postUserMessage({ groupId: group.id, body: "@Ana go" });
     const prompt = runtime.take(ana).input.message;
     expect(rosterOf(prompt)).toEqual([
-      "- @Ana [Planner] (lead) (you)",
-      "- @Bo 1 [Builder] (archived)",
+      `- @Ana [Planner] (lead) (you) (sessionId: ${ana})`,
+      `- @Bo 1 [Builder] (archived) (sessionId: ${group.members[1]?.sessionId})`,
     ]);
     expect(prompt).toContain("[system status] Bo 2 left the group");
   });
@@ -1056,7 +1090,11 @@ describe("agents in the room", () => {
     runtime.streaming.delete(ana);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await flush();
-    expect(rosterOf(runtime.take(ana).input.message)).toContain("- @Dee");
+    const wake = runtime.take(ana);
+    const deeSessionId = listAgentGroupMembers(group.id).find(
+      (member) => member.name === "Dee",
+    )?.sessionId;
+    expect(rosterOf(wake.input.message)).toContain(`- @Dee (sessionId: ${deeSessionId})`);
     expect(bo).toBeTruthy();
   });
 

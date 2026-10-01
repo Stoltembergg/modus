@@ -447,6 +447,7 @@ export class GroupRuntime {
     this.queues.clear();
     this.running.clear();
     this.gated.clear();
+    this.retireIdleChains();
     this.settleIdle();
   }
 

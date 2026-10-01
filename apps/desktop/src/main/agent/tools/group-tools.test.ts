@@ -245,7 +245,7 @@ describe("group member tools", () => {
     expect(runGroupTool("group_list_tasks", b, {})).toMatch(/^\[group-error:not-a-member\] /);
   });
 
-  it("group_read_messages pages by (created_at, id), max 50, within the estimated 8k cap", () => {
+  it("group_read_messages pages by persisted sequence, max 50, within the estimated 8k cap", () => {
     const { group, alpha } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     expect(runGroupTool("group_read_messages", a, {})).toBe("No messages.");
@@ -258,18 +258,12 @@ describe("group member tools", () => {
           authorKind: i % 2 ? "agent" : "user",
           ...(i % 2 ? { authorSessionId: alpha } : {}),
           body: `message ${i}`,
-          // Pairs share a millisecond: the id breaks the tie.
+          // Pairs share a timestamp; append sequence preserves their conversation order.
           createdAt: at(Math.floor(i / 2)),
         }).id,
       );
     }
-    const ordered = [...ids].sort((x, y) => {
-      const i = ids.indexOf(x);
-      const j = ids.indexOf(y);
-      const tx = at(Math.floor(i / 2));
-      const ty = at(Math.floor(j / 2));
-      return tx === ty ? (x < y ? -1 : 1) : tx < ty ? -1 : 1;
-    });
+    const ordered = ids;
     const idsIn = (text: string) => [...text.matchAll(/^\[(\S+) /gm)].map((m) => m[1]);
 
     const first = runGroupTool("group_read_messages", a, { limit: 5 });
