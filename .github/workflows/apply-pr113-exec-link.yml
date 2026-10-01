@@ -1,4 +1,5 @@
 name: apply-pr113-exec-link
+# repair-gate: splice-p03-collapse-44-v3
 on:
   workflow_dispatch:
   push:
@@ -18,20 +19,23 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: Decode patch, verify hash, apply once
+        env:
+          APPLY_PY_B64: "aW1wb3J0IGJhc2U2NCwgaGFzaGxpYiwgcGF0aGxpYgpleHBlY3RlZCA9ICI5YjA4ZTBhZDQ0ZGQxZTM5MGIyZDg5M2NlZDI1YzVjMmJiYjBmYWI0NTkzZjdmM2QwNDA1NzA4NmM2YzI5OGI5Igpyb290ID0gcGF0aGxpYi5QYXRoKCIuZ2l0aHViL3BhdGNoZXMvcHIxMTMtZXhlYy1saW5rIikKdGV4dHMgPSBbXQpmb3IgaSBpbiByYW5nZSg1KToKICAgIHAgPSByb290IC8gZiJwe2k6MDJkfS5iNjQiCiAgICBhc3NlcnQgcC5pc19maWxlKCksIHAKICAgIHRleHQgPSBwLnJlYWRfdGV4dCgpCiAgICBpZiBpID09IDM6CiAgICAgICAgbGVmdCA9ICJMbWR5YjNWd1NXUSIKICAgICAgICBtaWQgPSAicE93b2dJQ0J5WlhGMWFYSmxUV1Z0WW1WeUtHbHVjSFYwIgogICAgICAgIHJpZ2h0ID0gIkxtZHliM1Z3U1dRIgogICAgICAgIHRhaWwgPSAic0lHbHVjSFYwTG1GamRHOXlVMlZ6YzJsdmJrbGtMQ0FpZEdGemF5QmpjbVZoZEc5eUlpazdDa0JBSUMweE56STIiCiAgICAgICAgb2xkID0gbGVmdCArIHRhaWwKICAgICAgICBuZXcgPSBsZWZ0ICsgbWlkICsgcmlnaHQgKyB0YWlsCiAgICAgICAgaWYgb2xkIGluIHRleHQgYW5kIG5ldyBub3QgaW4gdGV4dDoKICAgICAgICAgICAgcHJpbnQoInJlcGFpcmluZyBwMDMgY29sbGFwc2UiKQogICAgICAgICAgICB0ZXh0ID0gdGV4dC5yZXBsYWNlKG9sZCwgbmV3LCAxKQogICAgICAgIHdhbnQgPSAiNGRhMmU5YTk0M2Q2OGZhNzEyMzY4Y2ExYWFiNTk0ZTFkYzk1OTE0Yjk2ZjQ1N2RiYjYwYTZjYTVkMDdkMWZmYSIKICAgICAgICBnb3QgPSBoYXNobGliLnNoYTI1Nih0ZXh0LmVuY29kZSgpKS5oZXhkaWdlc3QoKQogICAgICAgIGFzc2VydCBnb3QgPT0gd2FudCBhbmQgbGVuKHRleHQpID09IDUzMzcsIChnb3QsIGxlbih0ZXh0KSkKICAgIHByaW50KHAubmFtZSwgbGVuKHRleHQpKQogICAgdGV4dHMuYXBwZW5kKHRleHQpCmRhdGEgPSBiIiIuam9pbihiYXNlNjQuYjY0ZGVjb2RlKHQpIGZvciB0IGluIHRleHRzKQpkaWdlc3QgPSBoYXNobGliLnNoYTI1NihkYXRhKS5oZXhkaWdlc3QoKQpwcmludChsZW4oZGF0YSksIGRpZ2VzdCkKYXNzZXJ0IGRpZ2VzdCA9PSBleHBlY3RlZAphc3NlcnQgYiJQTEFDRUhPTERFUiIgbm90IGluIGRhdGEKYXNzZXJ0IGIibGF0ZXN0R3JvdXBFeGVjdXRpb25JZCIgaW4gZGF0YQpwYXRobGliLlBhdGgoIi90bXAvcHIxMTMtZXhlYy1saW5rLnBhdGNoIikud3JpdGVfYnl0ZXMoZGF0YSkK"
         run: |
           set -euo pipefail
           if grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts; then
             echo already applied
             exit 0
           fi
-          python3 -c "import base64,hashlib,pathlib; e='9b08e0ad44dd1e390b2d893ced25c5c2bbb0fab4593f7f3d04057086c6c298b9'; ps=[pathlib.Path(f'.github/patches/pr113-exec-link/p{i:02d}.b64') for i in range(5)]; assert all(p.is_file() for p in ps), ps; d=b''.join(base64.b64decode(p.read_text()) for p in ps); h=hashlib.sha256(d).hexdigest(); print(len(d),h); assert h==e; assert b'PLACEHOLDER' not in d; assert b'latestGroupExecutionId' in d; pathlib.Path('/tmp/pr113-exec-link.patch').write_bytes(d)"
+          printf '%s' "$APPLY_PY_B64" | base64 -d > /tmp/apply-pr113.py
+          python3 /tmp/apply-pr113.py
           git apply --index /tmp/pr113-exec-link.patch
           if grep -R --include='*.ts' --include='*.tsx' -n 'PLACEHOLDER_WILL_REPLACE' apps/desktop/src; then exit 1; fi
           grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts
           grep -q 'executionMode' apps/desktop/src/main/ipc/schemas.ts
           python3 -c "import hashlib,pathlib; w={'apps/desktop/src/main/groups/group-store.ts':'2210b646e0a774a9','apps/desktop/src/main/ipc/schemas.ts':'746be98000c3d6d6','apps/desktop/src/main/groups/group-runtime.ts':'b0fde7f0eb8faa9d'};
-for p,x in w.items():
- h=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); assert h.startswith(x),(p,h); print(p,h[:16])"
+          for p,x in w.items():
+           h=hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); assert h.startswith(x),(p,h); print(p,h[:16])"
           git config user.email "stoltembergg@gmail.com"
           git config user.name "Gabriel"
           git commit -m "fix(groups): wire executionId through store, schemas, and composer"
