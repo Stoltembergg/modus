@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a user-facing improvement to Modus
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/Stoltembergg/modus/issues) and [discussions](https://github.com/Stoltembergg/modus/discussions) first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the workflow and where it currently gets stuck.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: What would you like Modus to do?
+      description: A solution idea is helpful, but it is fine to describe only the desired outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or context
+      description: Other approaches you considered, or a screenshot/example if useful.
+    validations:
+      required: false

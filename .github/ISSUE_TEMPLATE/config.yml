@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and project discussion
+    url: https://github.com/Stoltembergg/modus/discussions
+    about: Ask setup questions or discuss ideas here once Discussions are enabled for the repository.
+  - name: Security vulnerability
+    url: https://github.com/Stoltembergg
+    about: Contact the maintainer privately. Do not post vulnerability details in a public issue.

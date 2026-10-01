@@ -11,8 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="#getting-started">Getting started</a> ·
+  <a href="#download">Download</a> ·
   <a href="#features">Features</a> ·
+  <a href="#getting-started">Build from source</a> ·
   <a href="./docs/architecture/desktop-security.md">Security</a>
 </p>
 
@@ -23,6 +24,16 @@
 Modus is an open-source desktop app for running AI coding agents inside real local projects.
 
 Open a workspace, connect your own model provider, plan or build, inspect changes, approve risky actions, and keep the full workflow in one window.
+
+## Download
+
+The latest published release is [v0.1.1](https://github.com/Stoltembergg/modus/releases/tag/v0.1.1). Download the installer for your platform:
+
+- **Windows:** [x64 installer](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-win-x64-setup.exe)
+- **macOS:** [Apple Silicon (ARM64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-mac-arm64.dmg) · [Intel (x64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-mac-x64.dmg)
+- **Linux:** [AppImage (x86_64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-linux-x86_64.AppImage) · [.deb (amd64)](https://github.com/Stoltembergg/modus/releases/download/v0.1.1/Modus-0.1.1-linux-amd64.deb)
+
+The current installers are unsigned. Windows SmartScreen may warn on first install; macOS Gatekeeper may require right-clicking the app and choosing **Open**. See the [release notes](https://github.com/Stoltembergg/modus/releases/tag/v0.1.1) for details.
 
 ## Features
 
@@ -80,15 +91,17 @@ npm --workspace @modus/desktop run build:pty
 npm --workspace @modus/desktop run build
 ```
 
-Package locally:
+### Build locally
 
 ```bash
+npm run check
+npm run test
 npm --workspace @modus/desktop run package:win -- --publish never
 npm --workspace @modus/desktop run package:mac -- --publish never
 npm --workspace @modus/desktop run package:linux -- --publish never
 ```
 
-Run the platform-matching package command on that OS.
+Run the platform-matching package command on that OS. Packaged releases are also available in the [GitHub Releases page](https://github.com/Stoltembergg/modus/releases).
 
 Releases are built by CI from `v*` tags; see [docs/releasing.md](docs/releasing.md).
 
@@ -109,7 +122,13 @@ Electron, React, TypeScript, Tailwind CSS, Base UI, Motion, Monaco, xterm.js, St
 
 ## Contributing
 
-Contributions are welcome. Keep PRs small, use Conventional Commits, and run `npm run check` and `npm run test` before opening a PR.
+Contributions are welcome. Before opening a pull request:
+
+1. Read [CONTRIBUTING.md](./CONTRIBUTING.md) for the setup, checks, and PR expectations.
+2. For a bug, use the bug report template. For an idea, use the feature request template. Please search existing reports first.
+3. Keep pull requests focused and small, use Conventional Commits, and run `npm run check` and `npm run test`.
+
+Questions and project discussion: use the repository's issue tracker once it is enabled. Security issues should follow [SECURITY.md](./SECURITY.md).
 
 ## License
 
