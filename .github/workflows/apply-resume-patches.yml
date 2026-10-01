@@ -1,4 +1,5 @@
 name: apply-resume-patches
+# version: 2 — GroupRoom.test already on tip
 on:
   push:
     branches: [cursor/resume-by-execution-id-db25]

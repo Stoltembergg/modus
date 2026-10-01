@@ -28,15 +28,6 @@
       "patch_bytes": 414
     },
     {
-      "path": "apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx",
-      "strategy": "restore_from_ref_then_patch",
-      "base_ref": "50df5bc667ac177b516c0ec9087f3e5474d4b717",
-      "patch_repo_path": "internal/_push/resume/apps__desktop__src__renderer__src__features__groups__GroupRoom.test.tsx.patch",
-      "expected_bytes": 37083,
-      "expected_sha256": "25f63242237952e82d3caf7ab4df98fe73a6e2aa8411c1befd7e756494c17437",
-      "patch_bytes": 1533
-    },
-    {
       "path": "apps/desktop/src/main/groups/group-runtime.ts",
       "strategy": "patch_current",
       "base_ref": null,
@@ -54,5 +45,6 @@
       "expected_sha256": "6ca715d4ee71b6a0f6367a0df73be4b1f04b63d083fe60f512ed340bee1c1ade",
       "patch_bytes": 2413
     }
-  ]
+  ],
+  "version": 2
 }
