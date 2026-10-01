@@ -5,4 +5,4 @@ jobs:
   noop:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "legacy single-file apply disabled; use apply-group-minors-restore"
+      - run: echo "superseded by apply-group-minors-restore"
