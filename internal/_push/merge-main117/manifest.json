@@ -1,0 +1,25 @@
+{
+  "merge_ref": "78cf869ef6b4465459e1105064c7a28fe01121f5",
+  "merge_branch": "main",
+  "files": [
+    {
+      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx",
+      "bytes": 18796,
+      "blob": "8a420e2b2784969f753ed6567bf1b8d3892f782f",
+      "parts": [
+        "GroupMessageList.tsx.part00.zlib.b64",
+        "GroupMessageList.tsx.part01.zlib.b64"
+      ]
+    },
+    {
+      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
+      "bytes": 25621,
+      "blob": "223babba83d9c880959880362ea16014994a37d3",
+      "parts": [
+        "GroupMessageRow.tsx.part00.zlib.b64",
+        "GroupMessageRow.tsx.part01.zlib.b64",
+        "GroupMessageRow.tsx.part02.zlib.b64"
+      ]
+    }
+  ]
+}
