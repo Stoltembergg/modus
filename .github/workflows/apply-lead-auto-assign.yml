@@ -1,0 +1,38 @@
+name: apply-lead-auto-assign
+on:
+  push:
+    paths:
+      - "docs/_tmp/lead-auto-assign/**"
+      - ".github/workflows/apply-lead-auto-assign.yml"
+    branches:
+      - "cursor/auto-assign-group-lead-60c6"
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/auto-assign-group-lead-60c6
+      - name: Apply patches
+        run: python3 docs/_tmp/lead-auto-assign/apply.py
+      - name: Commit and cleanup
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            apps/desktop/src/renderer/src/features/groups/NewGroupModal.tsx \
+            apps/desktop/src/main/groups/group-agents.test.ts || true
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(groups): auto-assign Lead for custom/copy + store tests"
+          fi
+          if [ -d docs/_tmp/lead-auto-assign ] || [ -f .github/workflows/apply-lead-auto-assign.yml ]; then
+            git rm -r --ignore-unmatch docs/_tmp/lead-auto-assign .github/workflows/apply-lead-auto-assign.yml || true
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: remove lead auto-assign staging"
+            fi
+          fi
+          git push origin HEAD:cursor/auto-assign-group-lead-60c6
