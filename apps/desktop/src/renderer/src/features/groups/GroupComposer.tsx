@@ -5,6 +5,11 @@ import type {
   GroupMessageContextItem,
   UpdateState,
 } from "../../../../shared/contracts";
+import {
+  clearGroupComposerDraft,
+  readGroupComposerDraft,
+  writeGroupComposerDraft,
+} from "../../../../shared/group-conversation-minors";
 import { groupRoomLabel } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
@@ -99,8 +104,11 @@ export function GroupComposer({
   replyTo?: GroupComposerReply | undefined;
   onClearReply?: (() => void) | undefined;
 }) {
-  const [value, setValue] = useState("");
-  const [caret, setCaret] = useState(0);
+  const [value, setValue] = useState(() => (groupId ? readGroupComposerDraft(groupId) : ""));
+  const [caret, setCaret] = useState(() => {
+    const initial = groupId ? readGroupComposerDraft(groupId) : "";
+    return initial.length;
+  });
   const [dismissedAt, setDismissedAt] = useState<number | null>(null);
   const [highlight, setHighlight] = useState(0);
   const [sending, setSending] = useState(false);
@@ -108,9 +116,23 @@ export function GroupComposer({
   const [dragOver, setDragOver] = useState(false);
   const [kickoffOutcome, setKickoffOutcome] = useState("");
   const [kickoffOwner, setKickoffOwner] = useState("");
+  const [draftGroupId, setDraftGroupId] = useState(groupId);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const memberStates = useGroupMemberStates();
+
+  // Persist drafts across room switches / remounts (text only).
+  if (draftGroupId !== groupId) {
+    setDraftGroupId(groupId);
+    const restored = groupId ? readGroupComposerDraft(groupId) : "";
+    setValue(restored);
+    setCaret(restored.length);
+  }
+
+  useEffect(() => {
+    if (!groupId) return;
+    writeGroupComposerDraft(groupId, value);
+  }, [groupId, value]);
   const {
     addFiles,
     attachments,
@@ -191,6 +213,7 @@ export function GroupComposer({
       });
       setValue("");
       setCaret(0);
+      if (groupId) clearGroupComposerDraft(groupId);
       clear();
       onClearReply?.();
     } catch (cause) {
