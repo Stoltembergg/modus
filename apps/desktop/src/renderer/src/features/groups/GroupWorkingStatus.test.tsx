@@ -68,7 +68,7 @@ describe("GroupWorkingStatus", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows per-member Waiting on model / Queued rows while the group run is active", () => {
+  it("shows one progress card per running or queued member", () => {
     const rows: GroupMemberWorkingRow[] = [
       { sessionId: "s-lead", mode: "running", live: live({ phase: "Waiting on model" }) },
       { sessionId: "s-build", mode: "queued", live: live({ phase: "Queued", lastEventAt: 0 }) },
@@ -81,9 +81,10 @@ describe("GroupWorkingStatus", () => {
     expect(items[0]?.textContent).toContain("Waiting on model");
     expect(items[1]?.dataset.phase).toBe("Queued");
     expect(items[1]?.textContent).toContain("Builder");
+    expect(screen.getAllByTestId("group-prompt-cot")).toHaveLength(2);
   });
 
-  it("shows only compact Writing presence and never duplicates public stream text", () => {
+  it("shows the public response and safe progress in the same card", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -100,9 +101,9 @@ describe("GroupWorkingStatus", () => {
     expect(screen.getByTestId("group-live-status").textContent).toContain("Writing");
     expect(screen.queryByTestId("group-live-thought")).toBeNull();
     expect(screen.queryByTestId("group-live-tools")).toBeNull();
-    expect(screen.queryByTestId("group-live-writing")).toBeNull();
-    expect(screen.queryByTestId("group-message")).toBeNull();
-    expect(screen.queryByText(/hand off|Plan the toggle|Reading/)).toBeNull();
+    expect(screen.getByTestId("group-live-writing").textContent).toContain("hand off to Builder");
+    expect(screen.getByTestId("group-prompt-cot")).toBeTruthy();
+    expect(screen.queryByText(/Plan the toggle/)).toBeNull();
   });
 
   it("shows Exploring… inline before any writing arrives", () => {
@@ -126,7 +127,7 @@ describe("GroupWorkingStatus", () => {
     expect(screen.queryByTestId("group-live-writing")).toBeNull();
   });
 
-  it("keeps concurrent agent presence independent without a second transcript", () => {
+  it("keeps each concurrent agent's progress and response in its own card", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -152,7 +153,7 @@ describe("GroupWorkingStatus", () => {
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
     expect(items[0]?.textContent).toContain("Writing");
-    expect(items[0]?.textContent).not.toContain("Planner draft A");
+    expect(items[0]?.textContent).toContain("Planner draft A");
     expect(items[0]?.textContent).not.toContain("Exploring");
     expect(items[1]?.textContent).toContain("Exploring");
     expect(items[1]?.textContent).not.toContain("Planner draft A");

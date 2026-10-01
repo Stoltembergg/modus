@@ -19,7 +19,7 @@ export type GroupLiveTurnSnapshot = {
   phase: GroupMemberWorkingPhase;
   /** Latest thinking text (truncated for Activity). */
   thoughtPreview: string;
-  /** Recent tools (oldest → newest; capped) — Activity detail; room shows phase. */
+  /** Recent tool labels (oldest → newest; capped) for safe room progress and Activity. */
   tools: readonly GroupLiveToolLine[];
   /**
    * Latest assistant message preview, scoped by messageId.
