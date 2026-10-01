@@ -341,9 +341,6 @@
     background-color var(--motion-ui) var(--ease-ui),
     color var(--motion-ui) var(--ease-ui);
 }
-.app-rail-item > span {
-  max-width: 100%;
-}
 .app-rail-item:hover {
   background-color: var(--color-hover);
   color: var(--text-primary);

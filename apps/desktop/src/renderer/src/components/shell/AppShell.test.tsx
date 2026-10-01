@@ -49,11 +49,18 @@ describe("App shell", () => {
     const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
     const directMessages = within(navigation).getByRole("button", { name: "Direct Messages" });
     expect(directMessages.getAttribute("aria-current")).toBe("page");
+    expect(within(navigation).queryByText("Direct Messages")).toBeNull();
+    expect(within(navigation).queryByText("Groups")).toBeNull();
     expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
     const connections = within(navigation).getByRole("button", { name: "Connections" });
+    expect(within(navigation).queryByText("Connections")).toBeNull();
+    expect(within(navigation).getByRole("img", { name: "Modus" })).toBeTruthy();
+    expect(directMessages.getAttribute("title")).toBe("Direct Messages");
     fireEvent.click(connections);
     expect(onNavigate).toHaveBeenCalledWith("connections");
-    expect(within(navigation).getByRole("button", { name: "Settings" })).toBeTruthy();
+    const settings = within(navigation).getByRole("button", { name: "Settings" });
+    expect(settings.getAttribute("title")).toBe("Settings");
+    expect(within(navigation).queryByText("Settings")).toBeNull();
   });
 
   it("reserves native titlebar space above the rail on macOS", () => {

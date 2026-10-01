@@ -4,6 +4,7 @@ import {
   IconPlugConnected,
   IconSettings,
 } from "@tabler/icons-react";
+import modusLogo from "../../assets/modus-logo.png";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import type { PrimaryDestination } from "./navigation-state";
@@ -34,32 +35,34 @@ export function AppRail({
       data-native-titlebar-clearance={nativeTitlebar ? "true" : undefined}
       data-shell-layer="app-rail"
     >
-      <div aria-hidden className="app-rail-mark" title="Modus">
-        M
+      <div className="app-rail-mark" title="Modus">
+        <img alt="Modus" className="size-5 object-contain" src={modusLogo} />
       </div>
       <div className="flex flex-col gap-1">
         {DESTINATIONS.map(({ id, icon: Icon, label }) => (
           <button
+            aria-label={label}
             aria-current={active === id ? "page" : undefined}
             className={cn("app-rail-item", active === id && "app-rail-item-selected")}
             key={id}
             onClick={() => onNavigate(id)}
+            title={label}
             type="button"
           >
             <Icon aria-hidden size={ICON.md} stroke={ICON_STROKE.md} />
-            <span>{label}</span>
           </button>
         ))}
       </div>
       <div className="mt-auto">
         <button
+          aria-label="Settings"
           aria-current={active === "settings" ? "page" : undefined}
           className={cn("app-rail-item", active === "settings" && "app-rail-item-selected")}
           onClick={() => onNavigate("settings")}
+          title="Settings"
           type="button"
         >
           <IconSettings aria-hidden size={ICON.md} stroke={ICON_STROKE.md} />
-          <span>Settings</span>
         </button>
       </div>
     </nav>
