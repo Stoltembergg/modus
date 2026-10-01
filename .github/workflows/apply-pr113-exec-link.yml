@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - .github/patches/pr113-exec-link.patch
+      - .github/patches/pr113-exec-link/**
       - .github/workflows/apply-pr113-exec-link.yml
 permissions:
   contents: write
@@ -19,13 +19,16 @@ jobs:
       - name: Apply execution-link patch
         run: |
           set -euo pipefail
-          patch=.github/patches/pr113-exec-link.patch
-          test -f "$patch"
           if grep -q 'export function latestGroupExecutionId' apps/desktop/src/main/groups/group-store.ts; then
             echo 'already applied'
             exit 0
           fi
-          git apply --index "$patch"
+          cat .github/patches/pr113-exec-link/part-*.txt > /tmp/pr113-exec-link.patch
+          # Sanity: reconstructed patch must match expected size and markers
+          test "$(wc -c < /tmp/pr113-exec-link.patch)" -ge 27000
+          grep -q 'latestGroupExecutionId' /tmp/pr113-exec-link.patch
+          grep -q 'Nova tarefa' /tmp/pr113-exec-link.patch
+          git apply --index /tmp/pr113-exec-link.patch
           git config user.email "stoltembergg@gmail.com"
           git config user.name "Gabriel"
           git commit -m "fix(groups): wire executionId through store, schemas, and composer"
