@@ -39,6 +39,7 @@ export const IPC_CHANNELS = {
   /** One LLM call for a custom agent's { role, instructions } (A3). */
   agentsGenerateProfile: "agents:generate-profile",
   groupPostMessage: "group:post-message",
+  groupResumeExecution: "group:resume-execution",
   groupListMessages: "group:list-messages",
   groupWorking: "group:working",
   groupMemberStates: "group:member-states",
