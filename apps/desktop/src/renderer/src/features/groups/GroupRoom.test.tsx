@@ -467,7 +467,7 @@ describe("GroupRoom", () => {
     await vi.waitFor(() => expect(screen.getAllByTestId("group-message")).toHaveLength(3));
     const rows = screen.getAllByTestId("group-message");
     expect(rows.map((row) => row.textContent)).toEqual([
-      "YYouHumanhello",
+      "YYouHuman#1hello",
       "Cy joined as Scribe",
       "Cy left the group",
     ]);
@@ -556,6 +556,7 @@ describe("GroupRoom", () => {
     expect(group.postMessage).toHaveBeenCalledWith({
       groupId: "g-1",
       body: "hi @Planner and @s-rev-2 \nline two",
+      executionMode: "new",
     });
     await vi.waitFor(() => expect(input.value).toBe(""));
   });
@@ -574,7 +575,11 @@ describe("GroupRoom", () => {
       "Interrupted runs stay visible",
     );
     await user.type(screen.getByRole("textbox", { name: "Message the group" }), "later{Enter}");
-    expect(group.postMessage).toHaveBeenCalledWith({ groupId: "g-1", body: "later" });
+    expect(group.postMessage).toHaveBeenCalledWith({
+      groupId: "g-1",
+      body: "later",
+      executionMode: "new",
+    });
     act(() => {
       for (const listener of updateListeners) listener({ status: "idle" });
     });

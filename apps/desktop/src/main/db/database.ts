@@ -547,6 +547,15 @@ export function migrateDatabase(db: DatabaseSync): void {
     );
     create index if not exists idx_group_jobs_pending on group_jobs(status, seq);
   `);
+  // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
+  addColumn(db, "group_tasks", "execution_id", "text");
+  addColumn(db, "group_decisions", "execution_id", "text");
+  db.exec(`
+    create index if not exists idx_group_tasks_execution
+      on group_tasks(group_id, execution_id);
+    create index if not exists idx_group_decisions_execution
+      on group_decisions(group_id, execution_id);
+  `);
 }
 
 /**

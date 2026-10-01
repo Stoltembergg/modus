@@ -1,5 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
+import {
+  filterMessagesByExecution,
+  shortExecutionLabel,
+} from "../../../../shared/group-execution-link";
 import { isNearBottom } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
@@ -39,6 +43,8 @@ export function GroupMessageList({
   workingRows,
   roles,
   groupId,
+  executionFilter,
+  onExecutionFilterChange,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   groupId: string;
@@ -63,6 +69,9 @@ export function GroupMessageList({
   workingRows: readonly GroupMemberWorkingRow[];
   /** Optional role label per session id. */
   roles?: ReadonlyMap<string, string>;
+  /** Optional filter: show only messages for this ask-spanning execution. */
+  executionFilter?: string | undefined;
+  onExecutionFilterChange?: ((executionId: string | undefined) => void) | undefined;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
@@ -79,16 +88,24 @@ export function GroupMessageList({
   // store, but leave no empty "Completed" bubble in the user's conversation.
   const renderedMessages = useMemo(
     () =>
-      roomMessages.filter(
-        (message) =>
-          !(
-            message.authorKind === "agent" &&
-            message.turnId &&
-            message.status === "completed" &&
-            !message.body.trim()
-          ),
+      filterMessagesByExecution(
+        roomMessages.filter(
+          (message) =>
+            !(
+              message.authorKind === "agent" &&
+              message.turnId &&
+              message.status === "completed" &&
+              !message.body.trim()
+            ),
+        ),
+        executionFilter,
       ),
-    [roomMessages],
+    [roomMessages, executionFilter],
+  );
+  const filterRoot = useMemo(
+    () =>
+      executionFilter ? roomMessages.find((message) => message.id === executionFilter) : undefined,
+    [executionFilter, roomMessages],
   );
   const byId = useMemo(
     () => new Map(roomMessages.map((message) => [message.id, message])),
@@ -204,6 +221,27 @@ export function GroupMessageList({
         ref={scrollRef}
       >
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-3 py-5 sm:px-6">
+          {executionFilter ? (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
+              data-testid="group-execution-filter"
+            >
+              <span className="min-w-0 flex-1 truncate">
+                This execution ·{" "}
+                <span className="text-fg">
+                  {shortExecutionLabel(executionFilter, filterRoot?.body)}
+                </span>
+              </span>
+              <button
+                className="shrink-0 text-fg-faint hover:text-fg"
+                data-testid="group-execution-filter-clear"
+                onClick={() => onExecutionFilterChange?.(undefined)}
+                type="button"
+              >
+                Show all
+              </button>
+            </div>
+          ) : null}
           {loadingOlder ? (
             <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
           ) : null}
@@ -236,6 +274,7 @@ export function GroupMessageList({
                 }
                 members={members}
                 message={message}
+                onExecutionFilter={onExecutionFilterChange}
                 onHandoffClick={onHandoffClick}
                 onOpenFile={onOpenFile}
                 onReply={onReply}

@@ -12,6 +12,7 @@ import {
 } from "../../../shared/group-blocked";
 import { formatGroupCollabStatus } from "../../../shared/group-collab-status";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../../shared/group-errors";
+import { sessionExecutionId } from "../../../shared/group-execution-link";
 import type { ToolProfileName } from "../../../shared/tools";
 import {
   createMemberWorktree,
@@ -346,12 +347,14 @@ export function runGroupTool<N extends SyncGroupToolName>(
       }
       case "group_create_task": {
         const input = params as GroupToolParams["group_create_task"];
+        const executionId = sessionExecutionId(actor);
         const task = createMemberGroupTask({
           groupId,
           actorSessionId: actor,
           title: input.title,
           ...(input.description ? { description: input.description } : {}),
           ...(input.reviewer ? { reviewerSessionId: resolveMember(members, input.reviewer) } : {}),
+          ...(executionId ? { executionId } : {}),
         });
         return `Created ${formatTask(members, task)}`;
       }
@@ -412,7 +415,13 @@ export function runGroupTool<N extends SyncGroupToolName>(
       }
       case "group_record_decision": {
         const { text } = params as GroupToolParams["group_record_decision"];
-        const decision = recordGroupDecision({ groupId, text, authorSessionId: actor });
+        const executionId = sessionExecutionId(actor);
+        const decision = recordGroupDecision({
+          groupId,
+          text,
+          authorSessionId: actor,
+          ...(executionId ? { executionId } : {}),
+        });
         // Recorded in the room as the member, but wakes nobody.
         taskWakeSink?.({
           groupId,
@@ -508,10 +517,12 @@ export function runGroupTool<N extends SyncGroupToolName>(
           const task = completeGroupTaskForAgreement(groupId, input.taskId, actor);
           taskLine = ` Closed ${formatTask(members, task)}.`;
         }
+        const executionId = sessionExecutionId(actor);
         const decision = recordGroupDecision({
           groupId,
           text: decisionText,
           authorSessionId: actor,
+          ...(executionId ? { executionId } : {}),
         });
         taskWakeSink?.({
           groupId,
@@ -558,11 +569,13 @@ export function runGroupTool<N extends SyncGroupToolName>(
         const targetName = members.titles.get(target) ?? target;
         let taskLine = "";
         if (input.taskTitle?.trim()) {
+          const executionId = sessionExecutionId(actor);
           const task = createMemberGroupTask({
             groupId,
             actorSessionId: actor,
             title: input.taskTitle.trim(),
             description: objective,
+            ...(executionId ? { executionId } : {}),
           });
           taskLine = ` Created ${formatTask(members, task)}.`;
         }

@@ -10,6 +10,7 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
+import { messageExecutionId, shortExecutionLabel } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import {
   collabStatusTone,
@@ -222,7 +223,13 @@ function MessageAttachments({ message }: { message: GroupMessage }) {
   );
 }
 
-function MessageMeta({ message }: { message: GroupMessage }) {
+function MessageMeta({
+  message,
+  onExecutionFilter,
+}: {
+  message: GroupMessage;
+  onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
+}) {
   const status = message.status;
   const label = status
     ? {
@@ -237,8 +244,23 @@ function MessageMeta({ message }: { message: GroupMessage }) {
       }[status]
     : undefined;
   const warning = status === "failed" || status === "interrupted";
+  const executionId = messageExecutionId(message);
+  const showChip = message.authorKind === "user" || Boolean(message.chainId);
+  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
   return (
     <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+      {showChip ? (
+        <button
+          className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
+          data-execution-id={executionId}
+          data-testid="group-execution-chip"
+          onClick={() => onExecutionFilter?.(executionId)}
+          title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
+          type="button"
+        >
+          #{shortExecutionLabel(executionId)}
+        </button>
+      ) : null}
       <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
         {formatClock(Date.parse(message.createdAt))}
       </time>
@@ -327,6 +349,7 @@ export function GroupMessageRow({
   onHandoffClick,
   onReply,
   onRetry,
+  onExecutionFilter,
   role,
   activeWaitingSessionIds,
   liveTurn,
@@ -342,6 +365,8 @@ export function GroupMessageRow({
   onHandoffClick?: ((targetName: string) => void) | undefined;
   onReply?: ((message: GroupMessage) => void) | undefined;
   onRetry?: ((message: GroupMessage) => Promise<void>) | undefined;
+  /** Click the execution chip to filter the transcript. */
+  onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
   /** Discreet role under the name (agent role or "You"). */
@@ -460,7 +485,7 @@ export function GroupMessageRow({
             <PromptMessageIdentity
               name="You"
               role={role?.trim() || "Human"}
-              trailing={<MessageMeta message={message} />}
+              trailing={<MessageMeta message={message} onExecutionFilter={onExecutionFilter} />}
             />
             <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
             {message.body.trim() ? (
@@ -555,7 +580,7 @@ export function GroupMessageRow({
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}
-                <MessageMeta message={message} />
+                <MessageMeta message={message} onExecutionFilter={onExecutionFilter} />
                 {readyOnly ? (
                   <span
                     className="font-normal text-amber-400/90 text-2xs"

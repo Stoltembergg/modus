@@ -1303,6 +1303,7 @@ describe("decisions", () => {
         "author_session_id",
         "source_message_id",
         "created_at",
+        "execution_id",
       ]);
       const rows = db
         .prepare("select id, text, author_session_id from group_decisions order by id")
@@ -1315,6 +1316,7 @@ describe("decisions", () => {
         db.prepare("PRAGMA index_list(group_decisions)").all() as Array<{ name: string }>
       ).map((index) => index.name);
       expect(indexes).toContain("idx_group_decisions_group_created");
+      expect(indexes).toContain("idx_group_decisions_execution");
     } finally {
       db.close();
       await rm(dir, { recursive: true, force: true });

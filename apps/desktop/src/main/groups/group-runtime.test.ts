@@ -524,6 +524,38 @@ describe("chains", () => {
     expect(second.chainId).toBe(second.id);
     expect(groups.chainSnapshot(second.id).hops).toBe(1);
   });
+
+  it("Complementar reuses the active executionId; Nova tarefa opens a new one", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const first = groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha ship login",
+      executionMode: "new",
+    });
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Login shipped." });
+    await flush();
+    const complement = groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha also cover OAuth",
+      executionMode: "complement",
+      executionId: first.id,
+    });
+    expect(complement.chainId).toBe(first.id);
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "OAuth covered." });
+    await flush();
+    const fresh = groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha separate docs",
+      executionMode: "new",
+    });
+    expect(fresh.chainId).toBe(fresh.id);
+    expect(fresh.chainId).not.toBe(first.id);
+    const linked = room(group.id).filter((m) => m.chainId === first.id);
+    expect(linked.some((m) => m.id === first.id)).toBe(true);
+    expect(linked.some((m) => m.id === complement.id)).toBe(true);
+    expect(linked.every((m) => m.chainId === first.id)).toBe(true);
+  });
 });
 
 /* ── limits ──────────────────────────────────────────────────────────── */
