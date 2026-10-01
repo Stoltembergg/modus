@@ -10,6 +10,7 @@ import {
   newGroupCounter,
   newGroupCreateInput,
   nextFreeName,
+  resolveNewGroupLead,
   templateMember,
 } from "./newGroupModel";
 
@@ -123,6 +124,16 @@ describe("newGroupModel (A4)", () => {
       ],
       leadName: "Boss",
     });
+  });
+
+  it("defaults Lead to the first member when leadKey is missing or stale", () => {
+    const list = members(2);
+    expect(resolveNewGroupLead(list, null)?.key).toBe("k0");
+    expect(resolveNewGroupLead(list, "gone")?.key).toBe("k0");
+    expect(resolveNewGroupLead(list, "k1")?.key).toBe("k1");
+    expect(
+      newGroupCreateInput({ name: "Crew", workspaceId: "ws", members: list, leadKey: null }),
+    ).toMatchObject({ leadName: "Builder" });
   });
 
   it("applyCollabPipeline adds Planner → Builder → Reviewer without duplicating", () => {
