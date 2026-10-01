@@ -15,6 +15,7 @@ import {
   groupBlockedReason,
 } from "../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
+import { bindSessionExecution, unbindSessionExecution } from "../../shared/group-execution-link";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
@@ -56,6 +57,7 @@ import {
   getAgentGroup,
   getAgentGroupForSession,
   getGroupMessage,
+  latestGroupExecutionId,
   listAgentGroupMembers,
   listGroupDecisions,
   listGroupMessages,
@@ -142,7 +144,7 @@ export class GroupRuntime {
     if (options.recoverPending) this.recoverJobs();
   }
 
-  /** A user message into the room: always opens a new chain (counters reset). */
+  /** A user message into the room: new execution by default; Complementar joins one. */
   postUserMessage(input: PostGroupMessageInput): GroupMessage {
     const message = this.durableDispatch(() => this.saveUserMessage(input));
     this.supersedeWaiting(input.groupId);
@@ -259,13 +261,18 @@ export class GroupRuntime {
       ...parseGroupMentions(input.body, members),
     ]);
     const mentions = members.map((member) => member.sessionId).filter((id) => mentioned.has(id));
+    const mode = input.executionMode ?? "new";
+    let joinExecutionId: string | undefined;
+    if (mode === "complement") {
+      joinExecutionId = input.executionId ?? latestGroupExecutionId(input.groupId);
+    }
     const message = appendGroupMessage({
       createdAt: this.stamp(),
       groupId: input.groupId,
       authorKind: "user",
       body: input.body,
       mentions,
-      startsChain: true,
+      ...(joinExecutionId ? { chainId: joinExecutionId } : { startsChain: true }),
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
       ...(input.attachments && input.attachments.length > 0
         ? { attachments: input.attachments }
@@ -275,7 +282,8 @@ export class GroupRuntime {
         : {}),
     });
     this.emitMessage(message);
-    const chain = this.openChain(input.groupId, message.id);
+    const executionId = message.chainId ?? message.id;
+    const chain = this.openChain(input.groupId, executionId);
     this.route(chain, message);
     this.retireIdleChains();
     return message;
@@ -979,6 +987,7 @@ export class GroupRuntime {
   private enqueue(wake: Wake): void {
     this.transcript.create(wake);
     persistGroupJob(wake);
+    bindSessionExecution(wake.sessionId, wake.chainId);
     const queue = this.queues.get(wake.sessionId) ?? [];
     queue.push(wake);
     this.queues.set(wake.sessionId, queue);
@@ -1142,6 +1151,13 @@ export class GroupRuntime {
     }
     if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
     if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
+    if (
+      !this.running.has(wake.sessionId) &&
+      !this.gated.has(wake.sessionId) &&
+      (this.queues.get(wake.sessionId)?.length ?? 0) === 0
+    ) {
+      unbindSessionExecution(wake.sessionId);
+    }
     const chain = this.chains.get(wake.chainId);
     const stillMember = listAgentGroupMembers(wake.groupId).some(
       (member) => member.sessionId === wake.sessionId,

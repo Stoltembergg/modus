@@ -203,6 +203,7 @@ export const GROUP_COLLAB_WAKE_PROTOCOL = [
   "Resolve task IDs with group_list_tasks and use member session IDs for unambiguous delegation. Public @mentions are visual references and do not wake peers.",
   "A completed turn can finish naturally in the user's language. No English status marker or next-owner line is required.",
   "Publish concise results, decisions, real blockers, questions, and material progress the user can act on. Keep internal reasoning, self narration, tool logs, and routine status chatter out of public messages.",
+  "When you (Lead/Coordinator) finish a task, post one final result card with these lines: Outcome: … / Validations: … / Changed files: … / Open items: … (use bullet lists when there are several).",
   "Include concrete inputs, deliverables, and constraints in task tool arguments. Keep IDs and task IDs in tools rather than repeating them in the conversation.",
   'Do not introduce yourself (avatar, name, and role already identify you — never say "Here is @Name" / "Aqui é o @Name").',
   "Prefer short natural replies. Stay silent (empty reply) when you have nothing useful to add.",

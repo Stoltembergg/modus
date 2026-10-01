@@ -111,7 +111,8 @@ export function buildSafeChainOfThought(input: {
 
 function humanizePhase(phase: string): string {
   const lower = phase.toLocaleLowerCase();
-  if (lower === "thinking" || lower === "queued") return "Considering the request";
+  if (lower === "thinking" || /waiting on model/i.test(phase)) return "Waiting on model…";
+  if (lower === "queued") return "Waiting for its turn";
   if (lower === "exploring" || lower.startsWith("explor")) return "Exploring the codebase";
   if (lower === "reviewing" || lower.startsWith("review")) return "Reviewing the work";
   if (lower === "writing" || lower.startsWith("writ")) return "Writing a reply";

@@ -1,4 +1,5 @@
 import { IconSearch, IconX } from "@tabler/icons-react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
 import {
@@ -7,6 +8,10 @@ import {
   filterMessagesByGroupSearch,
   withGroupDaySeparators,
 } from "../../../../shared/group-conversation-minors";
+import {
+  filterMessagesByExecution,
+  shortExecutionLabel,
+} from "../../../../shared/group-execution-link";
 import { isNearBottom } from "../../../../shared/group-room-transcript";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
@@ -18,6 +23,13 @@ import type { GroupMemberStatesById } from "./useWorkingGroups";
 
 export const GROUP_ROOM_EMPTY_TEXT =
   "Write to the group. Members pick up what fits — or @mention someone.";
+
+/** Virtualize once the transcript is large enough to matter for scroll cost. */
+export const GROUP_MESSAGE_VIRTUALIZE_THRESHOLD = 40;
+
+/** Estimated row height before measure (compact agent cards ~120px). */
+const ESTIMATED_MESSAGE_ROW_PX = 120;
+const ESTIMATED_DAY_SEPARATOR_PX = 28;
 
 export {
   GroupMessageRow,
@@ -47,6 +59,8 @@ export function GroupMessageList({
   workingRows,
   roles,
   groupId,
+  executionFilter,
+  onExecutionFilterChange,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   groupId: string;
@@ -71,6 +85,9 @@ export function GroupMessageList({
   workingRows: readonly GroupMemberWorkingRow[];
   /** Optional role label per session id. */
   roles?: ReadonlyMap<string, string>;
+  /** Optional filter: show only messages for this ask-spanning execution. */
+  executionFilter?: string | undefined;
+  onExecutionFilterChange?: ((executionId: string | undefined) => void) | undefined;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
@@ -94,19 +111,27 @@ export function GroupMessageList({
   const renderedMessages = useMemo(
     () =>
       filterMessagesByGroupSearch(
-        roomMessages.filter(
-          (message) =>
-            !(
-              message.authorKind === "agent" &&
-              message.turnId &&
-              message.status === "completed" &&
-              !message.body.trim()
-            ),
+        filterMessagesByExecution(
+          roomMessages.filter(
+            (message) =>
+              !(
+                message.authorKind === "agent" &&
+                message.turnId &&
+                message.status === "completed" &&
+                !message.body.trim()
+              ),
+          ),
+          executionFilter,
         ),
         searchQuery,
         labels,
       ),
-    [roomMessages, searchQuery, labels],
+    [roomMessages, executionFilter, searchQuery, labels],
+  );
+  const filterRoot = useMemo(
+    () =>
+      executionFilter ? roomMessages.find((message) => message.id === executionFilter) : undefined,
+    [executionFilter, roomMessages],
   );
   const transcriptItems = useMemo(
     () => withGroupDaySeparators(renderedMessages),
@@ -167,6 +192,59 @@ export function GroupMessageList({
     return active;
   }, [renderedMessages]);
 
+  const [viewportHeight, setViewportHeight] = useState(0);
+  // Threshold stays on message count (not day separators) so small rooms stay full-DOM.
+  const virtualize =
+    renderedMessages.length >= GROUP_MESSAGE_VIRTUALIZE_THRESHOLD && viewportHeight > 0;
+  const virtualizer = useVirtualizer({
+    count: virtualize ? transcriptItems.length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) =>
+      transcriptItems[index]?.type === "day" ? ESTIMATED_DAY_SEPARATOR_PX : ESTIMATED_MESSAGE_ROW_PX,
+    getItemKey: (index) => {
+      const item = transcriptItems[index];
+      if (!item) return index;
+      return item.type === "day" ? item.key : item.message.id;
+    },
+    overscan: 8,
+    enabled: virtualize,
+    initialRect: { width: 760, height: Math.max(viewportHeight, 1) },
+    // Prefer clientHeight (tests can stub it); fall back to measured viewport state.
+    observeElementRect: (instance, callback) => {
+      const element = instance.scrollElement as HTMLElement | null;
+      const report = () => {
+        const height = element?.clientHeight || viewportHeight;
+        callback({
+          width: element?.clientWidth || 760,
+          height: Math.max(height, 1),
+        });
+      };
+      report();
+      if (!element || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(report);
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+  });
+  const virtualTotalSize = virtualizer.getTotalSize();
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    // Re-measure when the room or transcript size changes (threshold crossing).
+    void groupId;
+    void renderedMessages.length;
+    if (!node) {
+      setViewportHeight(0);
+      return;
+    }
+    const sync = () => setViewportHeight(node.clientHeight);
+    sync();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(sync);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [groupId, renderedMessages.length]);
+
   // Prepending older pages preserves the reading position. Revisions of an
   // existing card never count as new messages or move a reader above the bottom.
   useLayoutEffect(() => {
@@ -174,6 +252,7 @@ export function GroupMessageList({
     if (!node) return;
     // Presence changes can change the scroll height without adding public messages.
     void visibleWorkingRows;
+    void virtualTotalSize;
     if (previousRoomRef.current !== groupId) {
       previousRoomRef.current = groupId;
       previousLastRef.current = undefined;
@@ -195,7 +274,7 @@ export function GroupMessageList({
     }
     previousLastRef.current = roomMessages.at(-1)?.id;
     anchorRef.current = { first, height: node.scrollHeight, nearBottom: previous.nearBottom };
-  }, [roomMessages, visibleWorkingRows, groupId]);
+  }, [roomMessages, visibleWorkingRows, groupId, virtualTotalSize]);
 
   function jumpToLatest(): void {
     const node = scrollRef.current;
@@ -213,6 +292,48 @@ export function GroupMessageList({
   }, [hasOlder, loadingOlder, loadOlder]);
 
   const searching = searchQuery.trim().length > 0;
+
+  const messageRowProps = (message: GroupMessage) => {
+    const liveRow =
+      message.authorKind === "agent" && message.authorSessionId
+        ? liveBySession.get(message.authorSessionId)
+        : undefined;
+    const hasActiveTurn =
+      message.authorKind === "agent" &&
+      message.authorSessionId &&
+      activeMessageBySession.get(message.authorSessionId) === message.id &&
+      liveRow &&
+      !liveRow.live.collapsed;
+    return {
+      activeWaitingSessionIds: activeWaiting,
+      avatar: message.authorSessionId ? avatars.get(message.authorSessionId) : undefined,
+      cwd,
+      executionTokenTotal: tokenAnchors.has(message.id)
+        ? tokenTotals.get(message.chainId ?? message.id)
+        : undefined,
+      labels,
+      liveTurn: hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined,
+      members,
+      message,
+      onExecutionFilter: onExecutionFilterChange,
+      onHandoffClick,
+      onOpenFile,
+      onReply,
+      onRetry,
+      replyToMessage: message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined,
+      role: message.authorSessionId ? roles?.get(message.authorSessionId) : undefined,
+    };
+  };
+
+  function renderDaySeparator(key: string, label: string) {
+    return (
+      <div className="flex items-center gap-3 py-1" data-testid="group-day-separator" key={key}>
+        <span className="h-px flex-1 bg-hairline" />
+        <span className="shrink-0 text-2xs text-fg-faint">{label}</span>
+        <span className="h-px flex-1 bg-hairline" />
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
@@ -245,6 +366,7 @@ export function GroupMessageList({
       <div
         className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="group-message-list"
+        data-virtualized={virtualize ? "true" : "false"}
         onScroll={(event) => {
           const node = event.currentTarget;
           anchorRef.current.nearBottom = isNearBottom(
@@ -259,6 +381,27 @@ export function GroupMessageList({
         ref={scrollRef}
       >
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-3 py-5 sm:px-6">
+          {executionFilter ? (
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
+              data-testid="group-execution-filter"
+            >
+              <span className="min-w-0 flex-1 truncate">
+                This execution ·{" "}
+                <span className="text-fg">
+                  {shortExecutionLabel(executionFilter, filterRoot?.body)}
+                </span>
+              </span>
+              <button
+                className="shrink-0 text-fg-faint hover:text-fg"
+                data-testid="group-execution-filter-clear"
+                onClick={() => onExecutionFilterChange?.(undefined)}
+                type="button"
+              >
+                Show all
+              </button>
+            </div>
+          ) : null}
           {loadingOlder ? (
             <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
           ) : null}
@@ -276,59 +419,48 @@ export function GroupMessageList({
               No messages match “{searchQuery.trim()}”.
             </div>
           ) : null}
-          {transcriptItems.map((item) => {
-            if (item.type === "day") {
-              return (
-                <div
-                  className="flex items-center gap-3 py-1"
-                  data-testid="group-day-separator"
-                  key={item.key}
-                >
-                  <span className="h-px flex-1 bg-hairline" />
-                  <span className="shrink-0 text-2xs text-fg-faint">{item.label}</span>
-                  <span className="h-px flex-1 bg-hairline" />
-                </div>
-              );
-            }
-            const message = item.message;
-            const liveRow =
-              message.authorKind === "agent" && message.authorSessionId
-                ? liveBySession.get(message.authorSessionId)
-                : undefined;
-            const hasActiveTurn =
-              message.authorKind === "agent" &&
-              message.authorSessionId &&
-              activeMessageBySession.get(message.authorSessionId) === message.id &&
-              liveRow &&
-              !liveRow.live.collapsed;
-            return (
-              <GroupMessageRow
-                activeWaitingSessionIds={activeWaiting}
-                avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
-                cwd={cwd}
-                executionTokenTotal={
-                  tokenAnchors.has(message.id)
-                    ? tokenTotals.get(message.chainId ?? message.id)
-                    : undefined
+          {virtualize ? (
+            <div
+              className="relative w-full"
+              data-testid="group-message-virtualizer"
+              style={{ height: virtualizer.getTotalSize() }}
+            >
+              {virtualizer.getVirtualItems().map((row) => {
+                const item = transcriptItems[row.index];
+                if (!item) return null;
+                if (item.type === "day") {
+                  return (
+                    <div
+                      className="absolute top-0 left-0 w-full pb-3"
+                      data-index={row.index}
+                      key={item.key}
+                      ref={virtualizer.measureElement}
+                      style={{ transform: `translateY(${row.start}px)` }}
+                    >
+                      {renderDaySeparator(item.key, item.label)}
+                    </div>
+                  );
                 }
-                key={message.id}
-                labels={labels}
-                liveTurn={
-                  hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined
-                }
-                members={members}
-                message={message}
-                onHandoffClick={onHandoffClick}
-                onOpenFile={onOpenFile}
-                onReply={onReply}
-                onRetry={onRetry}
-                replyToMessage={
-                  message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
-                }
-                role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
-              />
-            );
-          })}
+                const message = item.message;
+                return (
+                  <div
+                    className="absolute top-0 left-0 w-full pb-3"
+                    data-index={row.index}
+                    key={message.id}
+                    ref={virtualizer.measureElement}
+                    style={{ transform: `translateY(${row.start}px)` }}
+                  >
+                    <GroupMessageRow {...messageRowProps(message)} />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            transcriptItems.map((item) => {
+              if (item.type === "day") return renderDaySeparator(item.key, item.label);
+              return <GroupMessageRow key={item.message.id} {...messageRowProps(item.message)} />;
+            })
+          )}
           <GroupWorkingStatus
             avatars={avatars}
             groupId={groupId}

@@ -1,6 +1,7 @@
 import { IconArrowUp, IconClockPause, IconPaperclip } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  GroupExecutionMode,
   GroupMessageAttachment,
   GroupMessageContextItem,
   UpdateState,
@@ -78,6 +79,8 @@ export type GroupComposerSendPayload = {
   replyToMessageId?: string;
   attachments?: GroupMessageAttachment[];
   contextItems?: GroupMessageContextItem[];
+  executionMode?: GroupExecutionMode;
+  executionId?: string;
 };
 
 export function GroupComposer({
@@ -90,6 +93,8 @@ export function GroupComposer({
   onSeedConsumed,
   replyTo,
   onClearReply,
+  activeExecutionId,
+  activeExecutionTitle,
 }: {
   groupId?: string;
   members: readonly MentionMember[];
@@ -103,6 +108,10 @@ export function GroupComposer({
   /** N3: active thread reply target. */
   replyTo?: GroupComposerReply | undefined;
   onClearReply?: (() => void) | undefined;
+  /** Latest ask-spanning execution; enables Complementar. */
+  activeExecutionId?: string | undefined;
+  /** Short label for the active execution chip. */
+  activeExecutionTitle?: string | undefined;
 }) {
   const [value, setValue] = useState(() => (groupId ? readGroupComposerDraft(groupId) : ""));
   const [caret, setCaret] = useState(() => {
@@ -117,6 +126,7 @@ export function GroupComposer({
   const [kickoffOutcome, setKickoffOutcome] = useState("");
   const [kickoffOwner, setKickoffOwner] = useState("");
   const [draftGroupId, setDraftGroupId] = useState(groupId);
+  const [executionMode, setExecutionMode] = useState<GroupExecutionMode>("new");
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const memberStates = useGroupMemberStates();
@@ -176,6 +186,12 @@ export function GroupComposer({
     setKickoffOwner((planner ?? members[0])?.title ?? "");
   }, [showKickoff, members, kickoffOwner]);
 
+  useEffect(() => {
+    if (!activeExecutionId && executionMode === "complement") {
+      setExecutionMode("new");
+    }
+  }, [activeExecutionId, executionMode]);
+
   const query = activeMentionQuery(value, caret);
   const suggestions =
     query && query.start !== dismissedAt ? mentionSuggestions(query.query, members) : [];
@@ -210,6 +226,10 @@ export function GroupComposer({
         ...(replyTo?.messageId ? { replyToMessageId: replyTo.messageId } : {}),
         ...(imageAttachments.length > 0 ? { attachments: imageAttachments } : {}),
         ...(contextItems.length > 0 ? { contextItems } : {}),
+        executionMode,
+        ...(executionMode === "complement" && activeExecutionId
+          ? { executionId: activeExecutionId }
+          : {}),
       });
       setValue("");
       setCaret(0);
@@ -273,6 +293,45 @@ export function GroupComposer({
             Cancel
           </button>
         </div>
+      ) : null}
+      {activeExecutionId ? (
+        <fieldset
+          className="mb-2 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
+          data-testid="group-composer-execution-mode"
+        >
+          <legend className="sr-only">Execution mode</legend>
+          <button
+            className={cn(
+              "rounded-md border px-2 py-1 font-medium transition-colors",
+              executionMode === "new"
+                ? "border-accent/40 bg-accent/15 text-fg"
+                : "border-hairline bg-elevated/60 text-fg-muted hover:text-fg",
+            )}
+            data-testid="group-composer-mode-new"
+            onClick={() => setExecutionMode("new")}
+            type="button"
+          >
+            Nova tarefa
+          </button>
+          <button
+            className={cn(
+              "rounded-md border px-2 py-1 font-medium transition-colors",
+              executionMode === "complement"
+                ? "border-accent/40 bg-accent/15 text-fg"
+                : "border-hairline bg-elevated/60 text-fg-muted hover:text-fg",
+            )}
+            data-testid="group-composer-mode-complement"
+            onClick={() => setExecutionMode("complement")}
+            type="button"
+          >
+            Complementar
+          </button>
+          {executionMode === "complement" ? (
+            <span className="text-fg-faint" data-testid="group-composer-active-execution">
+              · {activeExecutionTitle ?? activeExecutionId.slice(0, 8)}
+            </span>
+          ) : null}
+        </fieldset>
       ) : null}
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       {showKickoff && !value.trim() && attachments.length === 0 ? (
