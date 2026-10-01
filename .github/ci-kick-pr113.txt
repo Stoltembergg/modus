@@ -1,1 +1,1 @@
-kick 2026-10-01T10:24Z after restore 8843ffd
+kick 2026-10-01T10:31Z after bot tip aa91251 (typecheck passes locally)
