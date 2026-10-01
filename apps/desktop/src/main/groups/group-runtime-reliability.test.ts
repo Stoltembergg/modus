@@ -51,6 +51,7 @@ function squad() {
     workspaceId,
     members,
     leadSessionId: members[0]!.sessionId,
+    mode: "free",
   });
   return { group, a: members[0]!.sessionId, b: members[1]!.sessionId, c: members[2]!.sessionId };
 }

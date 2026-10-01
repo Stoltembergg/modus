@@ -430,7 +430,7 @@ export function migrateDatabase(db: DatabaseSync): void {
       id text primary key,
       name text not null,
       workspace_id text references workspaces(id) on delete cascade,
-      mode text not null default 'free' check (mode in ('free','coordinator')),
+      mode text not null default 'coordinator' check (mode in ('free','coordinator')),
       lead_session_id text references agent_sessions(id) on delete set null,
       created_at text not null,
       updated_at text not null

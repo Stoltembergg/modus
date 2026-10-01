@@ -422,7 +422,7 @@ type NewGroupInput = {
 /** Validates a new group's fields and inserts its row (lead unset). Returns the group id. */
 function insertGroupRow(input: NewGroupInput): { id: string; workspaceId: string | null } {
   const name = requireText(input.name, "name");
-  const mode = requireOneOf(input.mode ?? "free", GROUP_MODES, "group mode");
+  const mode = requireOneOf(input.mode ?? "coordinator", GROUP_MODES, "group mode");
   const workspaceId =
     input.workspaceId && input.workspaceId !== CHATS_WORKSPACE_ID ? input.workspaceId : null;
   const db = getDatabase();

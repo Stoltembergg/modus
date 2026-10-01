@@ -87,6 +87,7 @@ function squad() {
   const gamma = insertSession(ws, "Gamma");
   const group = createAgentGroupWithMembers({
     name: "Squad",
+    mode: "free",
     workspaceId: ws,
     members: [{ sessionId: alpha }, { sessionId: beta }, { sessionId: gamma }],
     leadSessionId: alpha,

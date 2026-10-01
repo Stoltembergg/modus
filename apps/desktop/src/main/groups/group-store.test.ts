@@ -131,7 +131,7 @@ function projectGroupFixture() {
   const workspaceId = insertWorkspace();
   const a = insertSession(workspaceId);
   const b = insertSession(workspaceId);
-  const group = createAgentGroup({ name: "Squad", workspaceId });
+  const group = createAgentGroup({ name: "Squad", workspaceId, mode: "free" });
   addAgentGroupMember({ groupId: group.id, sessionId: a, role: "implement" });
   addAgentGroupMember({ groupId: group.id, sessionId: b, role: "review" });
   return { workspaceId, a, b, group };
@@ -231,9 +231,17 @@ describe("groups", () => {
     const workspaceId = insertWorkspace();
     const projectGroup = createAgentGroup({ name: "  Build crew ", workspaceId });
     const inboxGroup = createAgentGroup({ name: "Inbox crew", workspaceId: CHATS_WORKSPACE_ID });
+    const freeWorkspaceId = insertWorkspace();
+    const freeGroup = createAgentGroup({
+      name: "Free crew",
+      workspaceId: freeWorkspaceId,
+      mode: "free",
+    });
 
-    expect(projectGroup).toMatchObject({ name: "Build crew", workspaceId, mode: "free" });
+    expect(projectGroup).toMatchObject({ name: "Build crew", workspaceId, mode: "coordinator" });
     expect(projectGroup.leadSessionId).toBeUndefined();
+    expect(inboxGroup.mode).toBe("coordinator");
+    expect(freeGroup.mode).toBe("free");
     expect(inboxGroup.workspaceId).toBeUndefined();
     expect(getAgentGroup(projectGroup.id)).toEqual(projectGroup);
     expect(listAgentGroups({ workspaceId }).map((group) => group.id)).toEqual([projectGroup.id]);
@@ -1439,7 +1447,12 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
       leadSessionId: b,
     });
 
-    expect(created).toMatchObject({ name: "Crew", workspaceId, mode: "free", leadSessionId: b });
+    expect(created).toMatchObject({
+      name: "Crew",
+      workspaceId,
+      mode: "coordinator",
+      leadSessionId: b,
+    });
     expect(created.members).toEqual([
       expect.objectContaining({ sessionId: a, role: "implement" }),
       expect.objectContaining({ sessionId: b }),
