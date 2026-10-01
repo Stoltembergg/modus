@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "name": "GroupMessageList.tsx",
+      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx",
+      "bytes": 13741,
+      "blob": "e2e431dae17141575c3c161f8aa6253098a99078",
+      "parts": 6
+    },
+    {
+      "name": "GroupMessageRow.tsx",
+      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
+      "bytes": 23345,
+      "blob": "39b6032d21d57de94e8a15d78d1135c612973e7f",
+      "parts": 10
+    }
+  ]
+}

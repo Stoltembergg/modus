@@ -1,0 +1,94 @@
+name: merge-main-into-minors
+on:
+  push:
+    branches: [cursor/group-conversation-minors-c747]
+    paths:
+      - 'internal/_push/merge112/**'
+      - '.github/workflows/merge-main-into-minors.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge main and apply conflict resolutions
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          set +e
+          git merge origin/main --no-edit
+          merge_rc=$?
+          set -e
+          python3 <<'PY'
+          import base64, hashlib, json, pathlib, zlib, re
+          root = pathlib.Path('internal/_push/merge112')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          for entry in manifest['files']:
+            name = entry['name']
+            parts = sorted(root.glob(f'{name}.part*.zlib.b64'))
+            assert len(parts) == entry['parts'], (name, len(parts), entry['parts'])
+            blob = ''.join(''.join(p.read_text().split()) for p in parts)
+            data = zlib.decompress(base64.b64decode(blob))
+            assert len(data) == entry['bytes']
+            dig = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+            assert dig == entry['blob'], (name, dig, entry['blob'])
+            assert b'<<<<<<' not in data
+            pathlib.Path(entry['target']).write_bytes(data)
+            print('wrote', entry['target'], dig)
+          # Ensure #111 streaming-refresh assertion is present on GroupRoom.test
+          test = pathlib.Path('apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx')
+          text = test.read_text()
+          if 'Ordinary chat messages must not re-hit the DB' not in text:
+            old = '''  it("reloads on group.message and group.activity of this group only", async () => {
+    const user = userEvent.setup();
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
+    decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
+    await emit({ type: "group.message", groupId: "g-1", message: message("9") });
+    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
+'''
+            new = '''  it("reloads on status messages and group.activity of this group only (not chat messages)", async () => {
+    const user = userEvent.setup();
+    renderRoom();
+    const panel = await openPanel(user);
+    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
+    decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
+    // Ordinary chat messages must not re-hit the DB (streaming freezes).
+    await emit({ type: "group.message", groupId: "g-1", message: message("9") });
+    expect(group.listDecisions).toHaveBeenCalledTimes(1);
+    await emit({
+      type: "group.message",
+      groupId: "g-1",
+      message: { ...message("9s"), kind: "status", body: "Decision: Use SQLite" },
+    });
+    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
+'''
+            assert old in text, 'GroupRoom.test patch target missing'
+            text = text.replace(old, new, 1)
+            test.write_text(text)
+            print('patched GroupRoom.test for #111')
+          else:
+            print('GroupRoom.test already has #111 assertion')
+          PY
+          rm -rf internal/_push/merge112
+          rm -f .github/workflows/merge-main-into-minors.yml
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'nothing to commit'
+            exit 0
+          fi
+          if [ -f .git/MERGE_HEAD ]; then
+            git commit -m 'fix(groups): merge main (#112); resolve MessageList/Row with minors'
+          else
+            git commit -m 'fix(groups): apply #112 merge resolutions for conversation minors'
+          fi
+          git push origin HEAD:${{ github.ref_name }}
