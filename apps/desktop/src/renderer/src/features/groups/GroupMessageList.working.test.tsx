@@ -104,14 +104,14 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("GroupMessageList working strip", () => {
-  it("shows Thinking for a running member while Stop-worthy activity is live", async () => {
+  it("shows Waiting on model for a running member while Stop-worthy activity is live", async () => {
     renderList(states({ runningSessionIds: ["s-lead"] }));
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
     const row = screen.getByTestId("group-member-working");
     expect(row.dataset.mode).toBe("running");
-    expect(row.dataset.phase).toBe("Thinking");
+    expect(row.dataset.phase).toBe("Waiting on model");
     expect(row.textContent).toContain("Planner");
-    expect(row.textContent).toContain("Thinking");
+    expect(row.textContent).toContain("Waiting on model");
   });
 
   it("updates the room phase from semantic presence as tools run", async () => {
