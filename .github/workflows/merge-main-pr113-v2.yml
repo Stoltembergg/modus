@@ -1,0 +1,66 @@
+name: merge-main-pr113-v2
+# Creates a real merge commit of origin/main; resolves GroupMessageList to liveTurn + onExecutionFilter.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/merge-main-pr113-v2.yml
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge main (real merge commit)
+        run: |
+          set -euo pipefail
+          git config user.email "stoltembergg@gmail.com"
+          git config user.name "Gabriel"
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "main already ancestor; nothing to merge"
+            exit 0
+          fi
+          set +e
+          git merge --no-ff --no-commit origin/main
+          code=$?
+          set -e
+          if [ "$code" -ne 0 ]; then
+            python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path("apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx")
+          text = p.read_text()
+          if "<<<<<<<" not in text:
+              raise SystemExit("merge failed without Conflict markers in GroupMessageList")
+          pattern = re.compile(r"<<<<<<< HEAD\n.*?=======\n(.*?)>>>>>>> origin/main\n", re.S)
+          m = pattern.search(text)
+          assert m, "unexpected conflict shape"
+          theirs = m.group(1)
+          if "onExecutionFilter={onExecutionFilterChange}" not in theirs:
+              theirs = theirs.replace(
+                  "message={message}\n",
+                  "message={message}\n                onExecutionFilter={onExecutionFilterChange}\n",
+                  1,
+              )
+          text = pattern.sub(theirs, text, count=1)
+          assert "<<<<<<<" not in text
+          assert "liveTurn=" in text and "onExecutionFilter=" in text
+          p.write_text(text)
+          PY
+            git add -A
+          fi
+          test -f .git/MERGE_HEAD
+          # Guard against PLACEHOLDER corruption on tip files.
+          ! grep -R --include='*.ts' --include='*.tsx' -n 'PLACEHOLDER_WILL_REPLACE\|LOAD_FROM_FILE' apps/desktop/src || exit 1
+          test "$(wc -c < apps/desktop/src/renderer/src/features/groups/GroupComposer.tsx)" -gt 10000
+          git commit -m "merge main into group-execution-linking: liveTurn + execution filter"
+          parents=$(git rev-list --parents -n 1 HEAD | awk '{print NF-1}')
+          test "$parents" -ge 2
+          git push origin HEAD:cursor/group-execution-linking-c747
