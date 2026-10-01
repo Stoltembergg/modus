@@ -390,6 +390,7 @@ export function composeGroupSnapshotSection(input: {
   const head = [
     "<group_snapshot>",
     "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
+    "When a task finishes, consolidate into one final result card: Outcome / Validations / Changed files / Open items.",
     "Members:",
     ...memberLines,
     "Tasks (open, in progress, in review):",
