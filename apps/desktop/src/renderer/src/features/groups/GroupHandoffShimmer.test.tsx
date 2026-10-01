@@ -112,8 +112,60 @@ describe("GroupWorkingShimmer", () => {
       },
     ];
     render(<GroupWorkingShimmer labels={labels} locale="pt-BR" rows={rows} />);
-    expect(screen.getByTestId("group-text-shimmer").textContent).toBe("Builder está a trabalhar…");
+    const shimmer = screen.getByTestId("group-text-shimmer");
+    expect(shimmer.querySelector(".t-think-text")?.textContent).toBe("Builder está a trabalhar…");
     expect(screen.getByTestId("group-working-shimmer")).toBeTruthy();
+  });
+
+  it("reserves line height with t-think-sizer so the label stays above the composer", () => {
+    const rows: GroupMemberWorkingRow[] = [
+      {
+        sessionId: "s-lead",
+        mode: "running",
+        live: {
+          phase: "Thinking",
+          thoughtPreview: "",
+          tools: [],
+          streamText: "",
+          writingPreview: "",
+          lastEventAt: Date.now(),
+          collapsed: false,
+          presence: {
+            state: "thinking",
+            label: "Thinking",
+            startedAt: Date.now(),
+            lastProgressAt: Date.now(),
+          },
+        },
+      },
+      {
+        sessionId: "s-build",
+        mode: "running",
+        live: {
+          phase: "Thinking",
+          thoughtPreview: "",
+          tools: [],
+          streamText: "",
+          writingPreview: "",
+          lastEventAt: Date.now(),
+          collapsed: false,
+          presence: {
+            state: "thinking",
+            label: "Thinking",
+            startedAt: Date.now(),
+            lastProgressAt: Date.now(),
+          },
+        },
+      },
+    ];
+    render(<GroupWorkingShimmer labels={labels} locale="pt-BR" rows={rows} />);
+    const strip = screen.getByTestId("group-working-shimmer");
+    const shimmer = screen.getByTestId("group-text-shimmer");
+    const sizer = shimmer.querySelector(".t-think-sizer");
+    expect(sizer?.textContent).toBe("Planner e Builder estão a trabalhar…");
+    // Absolute .t-think-text needs a sizer + strip gap so the composer cannot clip it.
+    expect(strip.className).toMatch(/\bmb-2\b/);
+    expect(strip.className).toMatch(/\bshrink-0\b/);
   });
 
   it("renders nothing when idle or when streaming is already visible", () => {
