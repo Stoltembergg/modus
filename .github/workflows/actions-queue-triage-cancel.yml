@@ -16,27 +16,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel Package macOS competing with #111 arm64
+      - name: Cancel Package macOS competing with #111 arm64 (pass 2)
         uses: actions/github-script@v7
         with:
           script: |
-            // Free macOS arm64 for PR #111 job 110304318185 / run 36842393932 tip c4595c9.
-            // Never cancel #111. Target OTHER Groups PRs #109,#113,#114,#115,#116 only.
+            // Pass 2: leftovers + newly queued Package macOS on #109/#113-116.
+            // Never cancel #111 run 36842393932 / job 110304318185.
             const never = new Set([36842393932]);
-            // Cancel queued + in_progress Package macOS on competing PRs (macos-14 runners).
             const cancelEvenIfInProgress = new Set([
-              36846292207, 36846291035, 36846260481, 36846245746, 36846185959, 36846069573,
-              36845929347, 36845826710, 36845707923, 36845708110, 36845678242, 36845500025,
-              36845490565, 36845425875, 36845418835, 36845401123, 36845401894, 36845358870,
-              36845357423, 36845316582, 36845226767, 36845173083, 36845160671, 36845088930,
-              36844913889, 36844837328, 36844814297, 36844299265, 36842743287,
+              36847399224, 36847232234, 36847200266, 36847166012, 36847124818, 36847080743,
+              36847047744, 36846944320, 36846890770, 36846755390,
             ]);
             const runIds = [
-              36846292207, 36846291035, 36846260481, 36846245746, 36846185959, 36846069573,
-              36845929347, 36845826710, 36845707923, 36845708110, 36845678242, 36845500025,
-              36845490565, 36845425875, 36845418835, 36845401123, 36845401894, 36845358870,
-              36845357423, 36845316582, 36845226767, 36845173083, 36845160671, 36845088930,
-              36844913889, 36844837328, 36844814297, 36844299265, 36842743287,
+              36847399224, 36847232234, 36847200266, 36847166012, 36847124818, 36847080743,
+              36847047744, 36846944320, 36846890770, 36846755390,
             ];
             const results = [];
             for (const run_id of runIds) {
@@ -71,7 +64,7 @@ jobs:
               }
             }
             await core.summary
-              .addHeading('Actions queue triage cancel')
+              .addHeading('Actions queue triage cancel pass 2')
               .addCodeBlock(JSON.stringify(results, null, 2), 'json')
               .write();
             console.log(JSON.stringify(results, null, 2));
