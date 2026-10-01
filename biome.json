@@ -33,6 +33,7 @@
       "!**/out",
       "!**/dist",
       "!**/.modus-cache",
+      "!**/.modus",
       "!package-lock.json",
       "!catalog",
       "!.cursor",
