@@ -256,8 +256,7 @@ export function GroupMessageList({
       avatar: message.authorSessionId ? avatars.get(message.authorSessionId) : undefined,
       cwd,
       labels,
-      liveTurn:
-        hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined,
+      liveTurn: hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined,
       members,
       message,
       onHandoffClick,
