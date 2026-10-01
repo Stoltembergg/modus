@@ -22,12 +22,12 @@ jobs:
           script: |
             // Priority: free macOS arm64 for PR #111 job 110304318185.
             // Never cancel run 36842393932 (#111).
-            // Skip any run that is no longer cancelable / already completed.
             const runIds = [
-              // Explicit: typecheck-failed tips named by coordinator
-              36844144646, // #113 tip f282bc2 Package macOS (queued)
-              36843989188, // #115 tip 8ad899d Package macOS (queued)
-              // Superseded queued Package macOS on #109/#113/#114/#115 (no in_progress at triage)
+              // Typecheck-failed tips — cancel their queued Package macOS
+              36844892933, // #109 tip 2f27dd8 Package (queued; CI failed)
+              36844144646, // #113 tip f282bc2 Package (queued; CI failed)
+              36843989188, // #115 tip 8ad899d Package (queued; CI failed)
+              // Superseded queued Package macOS on #109/#113/#114/#115
               36844884042, 36844830194, 36844824939, 36844662125,
               36844266532, 36844251704, 36844167509, 36844097510,
               36844020087, 36844011359, 36843966300, 36843929324,
@@ -61,7 +61,6 @@ jobs:
                   continue;
                 }
                 if (run.status === 'in_progress') {
-                  // Do not cancel in-progress runs
                   results.push({ run_id, status: 'skipped_in_progress' });
                   continue;
                 }
@@ -77,7 +76,7 @@ jobs:
                 core.warning(`fail ${run_id}: ${e.message}`);
               }
             }
-            core.summary
+            await core.summary
               .addHeading('Actions queue triage cancel')
               .addCodeBlock(JSON.stringify(results, null, 2), 'json')
               .write();
