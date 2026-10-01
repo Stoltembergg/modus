@@ -1065,6 +1065,10 @@ export const groupPostMessageSchema = z
       .max(20)
       .transform((items) => items as ContextItem[])
       .optional(),
+    /** `new` opens a fresh execution; `complement` joins an existing one. */
+    executionMode: z.enum(["new", "complement"]).optional(),
+    /** Explicit execution id to complement (chain root message id). */
+    executionId: groupIdString.optional(),
   })
   .strict()
   .transform((value) => ({ ...value, body: value.body.trim() }))
