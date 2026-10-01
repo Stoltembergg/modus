@@ -78,18 +78,49 @@ describe("App shell", () => {
     expect(within(navigation).queryByText("Settings")).toBeNull();
   });
 
-  it("reserves native titlebar space above the rail on macOS", () => {
-    const { rerender } = render(<AppRail active="groups" nativeTitlebar onNavigate={vi.fn()} />);
+  it("keeps rail destinations in fixed slots with larger vector icons across navigation", () => {
+    const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
+    const { rerender } = render(
+      <AppRail active="groups" topChromeClearance onNavigate={onNavigate} />,
+    );
+
+    const metrics = () => {
+      const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+      return within(navigation)
+        .getAllByRole("button")
+        .map((button) => ({
+          label: button.getAttribute("title"),
+          iconSize: button.querySelector("svg")?.getAttribute("width"),
+          slotClass: button.classList.contains("app-rail-item"),
+        }));
+    };
+
+    const initialMetrics = metrics();
+    expect(initialMetrics).toEqual([
+      { label: "Groups", iconSize: "20", slotClass: true },
+      { label: "Direct Messages", iconSize: "20", slotClass: true },
+      { label: "Connections", iconSize: "20", slotClass: true },
+      { label: "Settings", iconSize: "20", slotClass: true },
+    ]);
+
+    rerender(<AppRail active="settings" topChromeClearance onNavigate={onNavigate} />);
+    expect(metrics()).toEqual(initialMetrics);
+  });
+
+  it("reserves top chrome space above the rail when its row starts at the window top", () => {
+    const { rerender } = render(
+      <AppRail active="groups" topChromeClearance onNavigate={vi.fn()} />,
+    );
 
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
-    expect(rail.getAttribute("data-native-titlebar-clearance")).toBe("true");
-    expect(rail.classList.contains("app-rail-native-titlebar")).toBe(true);
+    expect(rail.getAttribute("data-top-chrome-clearance")).toBe("true");
+    expect(rail.classList.contains("app-rail-top-chrome-clearance")).toBe(true);
 
     rerender(<AppRail active="groups" onNavigate={vi.fn()} />);
     expect(
       screen
         .getByRole("navigation", { name: "Primary navigation" })
-        .querySelector('[data-native-titlebar-clearance="true"]'),
+        .querySelector('[data-top-chrome-clearance="true"]'),
     ).toBeNull();
   });
 });

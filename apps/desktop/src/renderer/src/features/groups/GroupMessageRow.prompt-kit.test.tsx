@@ -30,6 +30,33 @@ function agentMessage(body: string): GroupMessage {
 }
 
 describe("GroupMessageRow Prompt Kit", () => {
+  it.each([
+    ["agent", agentMessage("Agent response")],
+    [
+      "user",
+      {
+        id: "u1",
+        groupId: "g1",
+        authorKind: "user",
+        kind: "message",
+        body: "User message",
+        mentions: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+      } satisfies GroupMessage,
+    ],
+  ])("renders the %s message surface without a card border", (_kind, message) => {
+    const { container } = render(
+      <GroupMessageRow labels={labels} members={members} message={message} />,
+    );
+
+    const surface = container.querySelector('[data-prompt-kit="message"]');
+    expect(surface).toBeTruthy();
+    expect(
+      surface?.className.split(/\s+/u).some((className) => className.startsWith("border")),
+    ).toBe(false);
+    expect(surface?.textContent).toContain(message.body);
+  });
+
   it("renders System Message for waiting / blocked statuses", () => {
     render(
       <GroupMessageRow

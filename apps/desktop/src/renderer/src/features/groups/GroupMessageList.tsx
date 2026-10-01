@@ -1,4 +1,3 @@
-import { IconSearch, IconX } from "@tabler/icons-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
@@ -13,7 +12,6 @@ import {
   shortExecutionLabel,
 } from "../../../../shared/group-execution-link";
 import { isNearBottom } from "../../../../shared/group-room-transcript";
-import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
@@ -61,6 +59,7 @@ export function GroupMessageList({
   groupId,
   executionFilter,
   onExecutionFilterChange,
+  searchQuery = "",
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   groupId: string;
@@ -88,6 +87,8 @@ export function GroupMessageList({
   /** Optional filter: show only messages for this ask-spanning execution. */
   executionFilter?: string | undefined;
   onExecutionFilterChange?: ((executionId: string | undefined) => void) | undefined;
+  /** Search is owned by GroupRoom and rendered in the room's top bar. */
+  searchQuery?: string | undefined;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
@@ -95,12 +96,6 @@ export function GroupMessageList({
     height: 0,
     nearBottom: true,
   });
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchGroupId, setSearchGroupId] = useState(groupId);
-  if (searchGroupId !== groupId) {
-    setSearchGroupId(groupId);
-    setSearchQuery("");
-  }
   const labels = useMemo(() => memberLabels(members), [members]);
   const roomMessages = useMemo(
     () => messages.filter((message) => message.groupId === groupId),
@@ -339,32 +334,6 @@ export function GroupMessageList({
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-      <div className="mx-auto flex w-full max-w-[760px] shrink-0 items-center gap-2 px-3 pt-3 sm:px-6">
-        <label
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-default bg-elevated px-2.5 py-1.5 text-fg-muted"
-          data-testid="group-conversation-search"
-        >
-          <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
-          <input
-            aria-label="Search in conversation"
-            className="min-w-0 flex-1 bg-transparent text-fg text-xs outline-none placeholder:text-fg-faint"
-            onChange={(event) => setSearchQuery(event.currentTarget.value)}
-            placeholder="Search in conversation"
-            type="search"
-            value={searchQuery}
-          />
-          {searching ? (
-            <button
-              aria-label="Clear search"
-              className="shrink-0 text-fg-faint hover:text-fg"
-              onClick={() => setSearchQuery("")}
-              type="button"
-            >
-              <IconX size={ICON.xs} stroke={ICON_STROKE.sm} />
-            </button>
-          ) : null}
-        </label>
-      </div>
       <div
         className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="group-message-list"

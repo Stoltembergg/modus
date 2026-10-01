@@ -1,11 +1,7 @@
 import { Menu } from "@base-ui/react/menu";
-import { IconDots, IconPlayerStop } from "@tabler/icons-react";
+import { IconDots, IconPlayerStop, IconSearch, IconX } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
-import type {
-  AgentGroupMode,
-  AgentGroupWithMembers,
-  GroupProjectContextStatus,
-} from "../../../../shared/contracts";
+import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
@@ -13,7 +9,6 @@ import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
-import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
@@ -81,7 +76,8 @@ export function GroupRoomHeader({
   members,
   memberStates,
   projectName,
-  projectContextStatus,
+  searchQuery,
+  onSearchChange,
   running,
   tasksButton,
   models,
@@ -102,8 +98,8 @@ export function GroupRoomHeader({
   members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
-  /** Compact Project Setup chip (Mapping… / Ready / Updating / Needs refresh). */
-  projectContextStatus?: GroupProjectContextStatus | undefined;
+  searchQuery: string;
+  onSearchChange(query: string): void;
   running: boolean;
   tasksButton: ReactNode;
   models?: readonly GroupDialogModel[];
@@ -159,7 +155,30 @@ export function GroupRoomHeader({
         >
           {projectName ?? "No project"}
         </span>
-        <GroupProjectContextChip status={projectContextStatus} />
+        <label
+          className="app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md border border-default bg-elevated/70 px-2 py-1 text-fg-muted"
+          data-testid="group-conversation-search"
+        >
+          <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
+          <input
+            aria-label="Search in conversation"
+            className="min-w-0 flex-1 bg-transparent text-fg text-xs outline-none placeholder:text-fg-faint"
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            placeholder="Search in conversation"
+            type="search"
+            value={searchQuery}
+          />
+          {searchQuery ? (
+            <button
+              aria-label="Clear search"
+              className="shrink-0 text-fg-faint hover:text-fg"
+              onClick={() => onSearchChange("")}
+              type="button"
+            >
+              <IconX size={ICON.xs} stroke={ICON_STROKE.sm} />
+            </button>
+          ) : null}
+        </label>
         <span className="min-w-2 flex-1" />
         <GroupAgentsPopover
           avatars={avatars}

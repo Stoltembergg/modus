@@ -298,18 +298,41 @@ describe("GroupRoom", () => {
     expect(screen.getByText("Saved progress")).toBeTruthy();
   });
 
-  it("shows the header (name, Project badge, Agents control) and the empty state", async () => {
+  it("shows the room header and presence avatars without shifting its navigation controls", async () => {
     renderRoom();
     expect(await screen.findByText(GROUP_ROOM_EMPTY_TEXT)).toBeTruthy();
     const header = screen.getByTestId("group-room-header");
     expect(within(header).getByText("Release squad")).toBeTruthy();
     expect(screen.getByTestId("group-project-badge").textContent).toBe("Repo");
-    expect(screen.getByTestId("group-agents-button").textContent).toContain("Agents");
-    expect(screen.getByTestId("group-agents-button").textContent).toContain("3");
+    expect(within(header).queryByTestId("group-project-context-chip")).toBeNull();
+    expect(await screen.findByTestId("group-agent-presence")).toBeTruthy();
+    expect(screen.queryByTestId("group-agents-button")).toBeNull();
     expect(screen.queryByTestId("group-member-chip")).toBeNull();
     expect(group.listMessages).toHaveBeenCalledWith({ groupId: "g-1", limit: GROUP_MESSAGE_PAGE });
     // No member running: no Stop button.
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  it("keeps conversation search in the group header and filters the transcript", async () => {
+    const user = userEvent.setup();
+    pages = [[message("1", { body: "first result" }), message("2", { body: "second result" })]];
+    renderRoom();
+
+    const header = screen.getByTestId("group-room-header");
+    const search = await within(header).findByRole("searchbox", { name: "Search in conversation" });
+    expect(within(screen.getByTestId("group-message-list")).queryByRole("searchbox")).toBeNull();
+
+    await user.type(search, "second");
+    expect(await screen.findByText("second result")).toBeTruthy();
+    expect(screen.queryByText("first result")).toBeNull();
+  });
+
+  it("opens the existing morphing agent editor from a presence avatar", async () => {
+    const user = userEvent.setup();
+    renderRoom();
+
+    await user.click(await screen.findByRole("button", { name: "Edit Planner" }));
+    expect(await screen.findByTestId("morphing-agent-edit")).toBeTruthy();
   });
 
   it("renders user, member and status messages, with mentions as chips", async () => {
@@ -362,7 +385,7 @@ describe("GroupRoom", () => {
     const row = screen.getByTestId("group-room-header-row");
     expect(within(row).getByText("Release squad")).toBeTruthy();
     expect(within(row).getByTestId("group-project-badge")).toBeTruthy();
-    expect(within(row).getByTestId("group-agents-button")).toBeTruthy();
+    expect(within(row).getByTestId("group-agent-presence")).toBeTruthy();
     expect(within(row).getByText("Activity")).toBeTruthy();
     // No dedicated second header row for member chips / stage.
     expect(header.querySelectorAll('[data-testid="group-room-header-row"]')).toHaveLength(1);
@@ -535,8 +558,10 @@ describe("GroupRoom", () => {
         workspaces={WORKSPACES}
       />,
     );
-    expect(screen.getByTestId("group-activity-dots")).toBeTruthy();
-    await user.click(screen.getByTestId("group-agents-button"));
+    const presence = screen.getByTestId("group-agent-presence");
+    expect(presence.querySelector('[data-presence="working"]')).toBeTruthy();
+    expect(presence.querySelector('[data-presence="waiting"]')).toBeTruthy();
+    await user.click(screen.getByTestId("group-agent-actions-button"));
     const panel = await screen.findByTestId("group-agents-popover");
     const rows = within(panel).getAllByTestId("group-agents-member");
     expect(rows).toHaveLength(3);
@@ -911,18 +936,21 @@ describe("GroupRoom blocked groups", () => {
   it.each([
     ["no workspace", undefined],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])("a group with %s shows 'Choose a folder to continue this group' instead of the composer", async (_label, workspaceId) => {
-    const user = userEvent.setup();
-    const { workspaceId: _drop, ...rest } = GROUP;
-    const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
-    const { onChooseFolder } = renderRoom(states(), vi.fn(), roomGroup);
-    const banner = await screen.findByTestId("group-blocked-banner");
-    expect(banner.textContent).toContain("Choose a folder to continue this group");
-    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
-    await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
-    expect(onChooseFolder).toHaveBeenCalledTimes(1);
-    expect(group.postMessage).not.toHaveBeenCalled();
-  });
+  ])(
+    "a group with %s shows 'Choose a folder to continue this group' instead of the composer",
+    async (_label, workspaceId) => {
+      const user = userEvent.setup();
+      const { workspaceId: _drop, ...rest } = GROUP;
+      const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
+      const { onChooseFolder } = renderRoom(states(), vi.fn(), roomGroup);
+      const banner = await screen.findByTestId("group-blocked-banner");
+      expect(banner.textContent).toContain("Choose a folder to continue this group");
+      expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+      await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
+      expect(onChooseFolder).toHaveBeenCalledTimes(1);
+      expect(group.postMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("a group left with one agent shows 'Add a member to continue' and opens Manage members", async () => {
     const user = userEvent.setup();

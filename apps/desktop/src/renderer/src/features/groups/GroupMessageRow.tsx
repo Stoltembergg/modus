@@ -550,7 +550,7 @@ export function GroupMessageRow({
     return (
       <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
         <PromptMessage
-          className="flex-row-reverse border-accent/20 bg-accent/10"
+          className="flex-row-reverse bg-accent/10"
           data-align="right"
           data-kind="user"
           data-message-id={message.id}

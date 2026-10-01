@@ -1242,7 +1242,7 @@ export function App() {
                 >
                   <AppRail
                     active={primaryNavigation.active}
-                    nativeTitlebar={isMac && !settingsOpen}
+                    topChromeClearance={!settingsOpen}
                     onNavigate={navigateToPrimary}
                   />
                   {settingsOpen ? (
@@ -1633,13 +1633,9 @@ export function App() {
                                   onDraftChange={setHeroDraft}
                                   footer={
                                     <HeroEnvironmentTray
-                                      activeWorkspace={activeWorkspace}
                                       branch={branch}
                                       cwd={activeCwd}
                                       onError={setSessionCreateError}
-                                      onOpenFolder={() => void openWorkspace()}
-                                      onSelectWorkspace={openNewChat}
-                                      workspaces={workspaces}
                                     />
                                   }
                                   mode={heroMode}
@@ -1740,7 +1736,7 @@ export function App() {
 }
 
 /**
- * Top chrome strip (44px) — settings only:
+ * Top chrome strip (36px) — settings only:
  *   - macOS: native traffic lights only; File/Edit/View/Help live in the system menu bar
  *   - Windows/Linux: native controls; the renderer contributes menu labels only
  *
@@ -1754,7 +1750,7 @@ function MenuBar() {
   return (
     <div
       className={cn(
-        "flex h-11 shrink-0 items-center bg-panel",
+        "menu-bar flex shrink-0 items-center bg-panel",
         (isMac || windowChrome === "windows-overlay") && "app-drag",
         windowChrome === "windows-overlay" && "pr-[138px]",
         // Clear native traffic lights (positioned at ~14,14 in main-window).
@@ -1793,30 +1789,16 @@ const HERO_ENVIRONMENT_TRIGGER_CLASS =
   "flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-sm font-normal text-fg-muted outline-none transition-colors hover:bg-hover hover:text-fg data-popup-open:bg-hover data-popup-open:text-fg disabled:opacity-60 disabled:hover:bg-transparent";
 
 function HeroEnvironmentTray({
-  activeWorkspace,
   branch,
   cwd,
-  workspaces,
-  onSelectWorkspace,
-  onOpenFolder,
   onError,
 }: {
-  activeWorkspace: WorkspaceInfo | null;
   branch: string | undefined;
   cwd: string | undefined;
-  workspaces: WorkspaceInfo[];
-  onSelectWorkspace(workspace: WorkspaceInfo | null): void;
-  onOpenFolder(): void;
   onError(message: string): void;
 }) {
   return (
     <div className="app-no-drag flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      <WorkspaceMenu
-        activeWorkspace={activeWorkspace}
-        onOpenFolder={onOpenFolder}
-        onSelect={onSelectWorkspace}
-        workspaces={workspaces}
-      />
       <BranchSwitcher cwd={cwd} onError={onError} triggerClassName={HERO_ENVIRONMENT_TRIGGER_CLASS}>
         <span className="toolbar-icon">
           <IconGitBranch size={18} stroke={1.7} />

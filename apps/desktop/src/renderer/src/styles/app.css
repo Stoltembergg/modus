@@ -249,6 +249,11 @@
 
   --space-shell-gap: 8px;
   --space-rail-width: 68px;
+  --space-rail-gap: 10px;
+  --space-rail-padding-top: 10px;
+  --space-rail-padding-inline: 6px;
+  --space-rail-padding-bottom: 8px;
+  --space-rail-item-height: 46px;
   --space-native-titlebar: 36px;
   --space-sidebar-width: clamp(224px, 18vw, 264px);
   --space-row-height: 30px;
@@ -298,17 +303,28 @@
 }
 .app-rail {
   box-sizing: border-box;
+  position: relative;
   display: flex;
   width: var(--space-rail-width);
   flex: 0 0 var(--space-rail-width);
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 6px 8px;
-  border-right: 1px solid var(--border-subtle);
+  gap: var(--space-rail-gap);
+  padding: var(--space-rail-padding-top) var(--space-rail-padding-inline)
+    var(--space-rail-padding-bottom);
   background-color: var(--surface-sidebar);
 }
-.app-rail-native-titlebar {
-  padding-top: var(--space-native-titlebar);
+.app-rail::after {
+  position: absolute;
+  inset: 0 0 0 auto;
+  border-right: 1px solid var(--border-subtle);
+  content: "";
+  pointer-events: none;
+}
+.app-rail-top-chrome-clearance {
+  padding-top: calc(var(--space-native-titlebar) + var(--space-rail-padding-top));
+}
+.app-rail-top-chrome-clearance::after {
+  top: var(--space-native-titlebar);
 }
 .app-rail-mark {
   display: grid;
@@ -325,7 +341,7 @@
 .app-rail-item {
   display: flex;
   min-width: 0;
-  min-height: 46px;
+  min-height: var(--space-rail-item-height);
   width: 100%;
   flex-direction: column;
   align-items: center;
@@ -355,6 +371,9 @@
 .app-rail-item-selected {
   background-color: var(--color-active);
   color: var(--text-primary);
+}
+.menu-bar {
+  height: var(--space-native-titlebar);
 }
 .surface-app {
   background-color: var(--surface-app);
@@ -758,7 +777,7 @@ body {
     -webkit-app-region: no-drag;
   }
   .toolbar-row {
-    height: 36px;
+    height: var(--space-native-titlebar);
   }
   .toolbar-icon-button {
     color: var(--color-icon-muted);
@@ -1956,8 +1975,7 @@ body {
  */
 .modus-markdown [data-streamdown="table-wrapper"] > div:not(:has(table)),
 .modus-markdown [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]),
-.modus-markdown
-  [data-streamdown="mermaid-block"]
+.modus-markdown [data-streamdown="mermaid-block"]
   > div:has(> [data-streamdown="mermaid-block-actions"]) {
   opacity: 0;
   pointer-events: none;
@@ -2085,7 +2103,8 @@ body {
 }
 
 /* Loading-only: collapse Streamdown min-h shells before SVG exists. */
-.modus-markdown [data-streamdown="mermaid-block"]
+.modus-markdown
+  [data-streamdown="mermaid-block"]
   > div:last-child:not(:has([data-streamdown="mermaid"]))
   [class*="min-h-"] {
   min-height: 0;
@@ -2169,8 +2188,7 @@ body > div.fixed.inset-0:has([data-streamdown="mermaid"]) [data-streamdown="merm
 
 /* Shared chrome tokens for the top-right control cluster. */
 body > div.fixed.inset-0:has([data-streamdown="mermaid"]) > button.absolute,
-body
-  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   display: flex;
@@ -2185,7 +2203,8 @@ body
 }
 
 /* Zoom± / Reset: move from bottom-left column → top-right row, left of Close. */
-body > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   top: 1rem !important;

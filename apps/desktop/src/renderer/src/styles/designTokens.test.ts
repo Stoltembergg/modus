@@ -24,6 +24,11 @@ describe("Modus semantic design tokens", () => {
       "--state-drop-surface",
       "--shadow-composer",
       "--space-rail-width",
+      "--space-rail-gap",
+      "--space-rail-padding-top",
+      "--space-rail-padding-inline",
+      "--space-rail-padding-bottom",
+      "--space-rail-item-height",
       "--space-native-titlebar",
       "--space-sidebar-width",
       "--space-row-height",
@@ -80,6 +85,30 @@ describe("Modus semantic design tokens", () => {
   it("does not render custom caption controls in the application chrome", () => {
     expect(app).not.toContain("WindowControls");
     expect(app).not.toContain("CaptionButton");
+  });
+
+  it("keeps the rail aligned with the top chrome across routes and platforms", () => {
+    expect(css).toContain("--space-rail-padding-top");
+    expect(css).toMatch(
+      /\.app-rail-top-chrome-clearance\s*\{[^}]*padding-top: calc\(var\(--space-native-titlebar\) \+ var\(--space-rail-padding-top\)\)/su,
+    );
+    expect(css).toMatch(
+      /\.app-rail::after\s*\{[^}]*border-right: 1px solid var\(--border-subtle\)/su,
+    );
+    expect(css).toMatch(
+      /\.app-rail-top-chrome-clearance::after\s*\{[^}]*top: var\(--space-native-titlebar\)/su,
+    );
+    expect(css).toMatch(/\.menu-bar\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
+    expect(css).toMatch(/\.toolbar-row\s*\{[^}]*height: var\(--space-native-titlebar\)/su);
+    expect(app).toContain("topChromeClearance={!settingsOpen}");
+  });
+
+  it("keeps the Direct Messages folder selector out of its composer footer", () => {
+    const heroTray =
+      app.split("function HeroEnvironmentTray(")[1]?.split("function WorkspaceMenu(")[0] ?? "";
+
+    expect(heroTray).not.toContain("<WorkspaceMenu");
+    expect(app.match(/<WorkspaceMenu\b/g) ?? []).toHaveLength(1);
   });
 
   it("uses the same semantic surface aliases in dark, light, and dark-plus themes", () => {

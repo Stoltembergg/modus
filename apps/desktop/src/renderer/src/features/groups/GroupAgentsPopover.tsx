@@ -1,5 +1,5 @@
 import { Popover } from "@base-ui/react/popover";
-import { IconCrown, IconMessage, IconUsers } from "@tabler/icons-react";
+import { IconCrown, IconDots, IconMessage } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import type {
   AgentGroupWithMembers,
@@ -20,53 +20,11 @@ import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog } from "../agents/AgentDialog";
 import { agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import type { GroupDialogModel } from "./CreateGroupDialog";
-import { GroupStateDot } from "./GroupRoomHeader";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
 import { type MemberLabel, memberLabels, memberLabelText } from "./memberLabels";
 import { type GroupMemberStatesById, memberActivityState } from "./useWorkingGroups";
-
-function ActivityDots({
-  memberStates,
-  groupId,
-  members,
-}: {
-  memberStates: GroupMemberStatesById;
-  groupId: string;
-  members: readonly MentionMember[];
-}) {
-  let working = 0;
-  let waiting = 0;
-  for (const member of members) {
-    const state = memberActivityState(memberStates, groupId, member.sessionId);
-    if (state === "working") working += 1;
-    if (state === "waiting") waiting += 1;
-  }
-  if (working === 0 && waiting === 0) return null;
-  return (
-    <span className="flex items-center gap-1" data-testid="group-activity-dots">
-      {working > 0 ? (
-        <span
-          className="flex items-center gap-0.5 text-2xs text-fg-faint tabular-nums"
-          title="Working"
-        >
-          <GroupStateDot state="working" />
-          {working}
-        </span>
-      ) : null}
-      {waiting > 0 ? (
-        <span
-          className="flex items-center gap-0.5 text-2xs text-fg-faint tabular-nums"
-          title="Waiting"
-        >
-          <GroupStateDot state="waiting" />
-          {waiting}
-        </span>
-      ) : null}
-    </span>
-  );
-}
 
 function AgentMorphEdit({
   agent,
@@ -75,6 +33,7 @@ function AgentMorphEdit({
   defaultModelId,
   onUpdated,
   trigger,
+  triggerClassName = "flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-hover",
 }: {
   agent: AgentInfo;
   group: AgentGroupWithMembers;
@@ -82,13 +41,15 @@ function AgentMorphEdit({
   defaultModelId?: string | undefined;
   onUpdated(): void;
   trigger: React.ReactNode;
+  triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <MorphingDialog onOpenChange={setOpen} open={open}>
       <MorphingDialogTrigger
         aria-label={`Edit ${agent.name}`}
-        className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-hover"
+        className={triggerClassName}
+        data-testid="group-agent-avatar-trigger"
       >
         {trigger}
       </MorphingDialogTrigger>
@@ -149,30 +110,110 @@ export function GroupAgentsPopover({
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
-    void window.modus.agents.list().then((list: AgentInfo[]) => {
-      if (!cancelled) setAgents(list);
-    });
+    void window.modus.agents
+      .list()
+      .then((list: AgentInfo[]) => {
+        if (!cancelled) setAgents(list);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, []);
 
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const visibleMembers = group.members.slice(0, 4);
 
   return (
-    <div className="flex items-center gap-1.5">
-      <ActivityDots groupId={group.id} memberStates={memberStates} members={members} />
+    <div className="flex items-center gap-1">
+      <fieldset
+        aria-label="Agent presence"
+        className="m-0 flex min-w-0 items-center border-0 p-0 -space-x-2"
+        data-testid="group-agent-presence"
+      >
+        {visibleMembers.map((member) => {
+          const avatar = avatars.get(member.sessionId) ?? {
+            agentId: member.agentId,
+            ...memberAvatar(member),
+            archived: member.archived === true,
+          };
+          const state = memberActivityState(memberStates, group.id, member.sessionId);
+          const label = member.name;
+          const agent = agentsById.get(member.agentId);
+          const face = (
+            <span
+              className="relative flex size-7 items-center justify-center rounded-full ring-2 ring-[var(--surface-main)]"
+              key={member.sessionId}
+            >
+              <AgentAvatar
+                className="scale-125"
+                color={avatar.color}
+                face={avatar.face}
+                seed={avatar.agentId}
+                shape={avatar.shape}
+                size={20}
+                state={agentAvatarState(state, avatar.archived)}
+              />
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute right-0 bottom-0 size-2 rounded-full border border-[var(--surface-main)] transition-colors duration-[var(--motion-ui)]",
+                  state === "working"
+                    ? "bg-success"
+                    : state === "waiting"
+                      ? "bg-amber-400"
+                      : "bg-fg-faint",
+                )}
+                data-presence={state}
+                title={state === "working" ? "Working" : state === "waiting" ? "Waiting" : "Idle"}
+              />
+            </span>
+          );
+          return agent ? (
+            <AgentMorphEdit
+              agent={agent}
+              defaultModelId={defaultModelId}
+              group={group}
+              key={member.sessionId}
+              models={models}
+              onUpdated={() => {
+                void window.modus.agents
+                  .list()
+                  .then(setAgents)
+                  .catch(() => undefined);
+                onAgentsChanged?.();
+              }}
+              trigger={face}
+              triggerClassName="relative z-0 flex size-7 shrink-0 items-center justify-center rounded-full outline-none transition-transform hover:z-10 hover:scale-105 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-focus-ring"
+            />
+          ) : (
+            <button
+              aria-label={`${label} profile unavailable`}
+              className="relative z-0 flex size-7 shrink-0 items-center justify-center rounded-full ring-2 ring-[var(--surface-main)]"
+              disabled
+              key={member.sessionId}
+              title={`${label} profile unavailable`}
+              type="button"
+            >
+              {face}
+            </button>
+          );
+        })}
+        {group.members.length > visibleMembers.length ? (
+          <span className="flex size-7 items-center justify-center rounded-full bg-elevated text-2xs text-fg-muted ring-2 ring-[var(--surface-main)]">
+            +{group.members.length - visibleMembers.length}
+          </span>
+        ) : null}
+      </fieldset>
       <Popover.Root onOpenChange={setOpen} open={open}>
         <Popover.Trigger
-          aria-label="Agents"
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg data-popup-open:bg-hover"
-          data-testid="group-agents-button"
+          aria-label="Agent actions"
+          className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg data-popup-open:bg-hover"
+          data-testid="group-agent-actions-button"
+          title="Agent actions"
         >
-          <IconUsers size={ICON.xs} stroke={ICON_STROKE.xs} />
-          Agents
-          <span className="text-fg-faint tabular-nums">{group.members.length}</span>
+          <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Positioner align="end" side="bottom" sideOffset={6}>
@@ -219,7 +260,16 @@ export function GroupAgentsPopover({
                           <span className="truncate text-fg text-xs">
                             <MemberName label={label} />
                           </span>
-                          <GroupStateDot state={state} />
+                          {state !== "idle" ? (
+                            <span
+                              className={cn(
+                                "shrink-0 text-2xs",
+                                state === "working" ? "text-success" : "text-amber-400",
+                              )}
+                            >
+                              {state === "working" ? "Working" : "Waiting"}
+                            </span>
+                          ) : null}
                           {isLead ? (
                             <span className="flex shrink-0 items-center gap-0.5 text-2xs text-accent">
                               <IconCrown aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />

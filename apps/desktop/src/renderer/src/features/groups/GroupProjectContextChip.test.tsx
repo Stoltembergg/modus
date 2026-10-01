@@ -65,6 +65,9 @@ describe("GroupActivityPanel project context", () => {
       />,
     );
     const section = screen.getByTestId("group-activity-project-context");
+    expect(within(section).getByTestId("group-project-context-chip").textContent).toContain(
+      "Project context · Ready",
+    );
     expect(section.textContent).toContain("Fingerprint: abcdef012345");
     expect(section.textContent).toContain("CodeGraph: ready");
   });

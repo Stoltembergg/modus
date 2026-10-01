@@ -22,17 +22,17 @@ const DESTINATIONS = [
 export function AppRail({
   active,
   onNavigate,
-  nativeTitlebar = false,
+  topChromeClearance = false,
 }: {
   active: PrimaryDestination;
   onNavigate(destination: PrimaryDestination): void;
-  nativeTitlebar?: boolean;
+  topChromeClearance?: boolean;
 }) {
   return (
     <nav
       aria-label="Primary navigation"
-      className={cn("app-rail", nativeTitlebar && "app-rail-native-titlebar")}
-      data-native-titlebar-clearance={nativeTitlebar ? "true" : undefined}
+      className={cn("app-rail", topChromeClearance && "app-rail-top-chrome-clearance")}
+      data-top-chrome-clearance={topChromeClearance ? "true" : undefined}
       data-shell-layer="app-rail"
     >
       <div className="app-rail-mark" title="Modus">
@@ -49,7 +49,7 @@ export function AppRail({
             title={label}
             type="button"
           >
-            <Icon aria-hidden size={ICON.md} stroke={ICON_STROKE.md} />
+            <Icon aria-hidden size={ICON.rail} stroke={ICON_STROKE.rail} />
           </button>
         ))}
       </div>
@@ -62,7 +62,7 @@ export function AppRail({
           title="Settings"
           type="button"
         >
-          <IconSettings aria-hidden size={ICON.md} stroke={ICON_STROKE.md} />
+          <IconSettings aria-hidden size={ICON.rail} stroke={ICON_STROKE.rail} />
         </button>
       </div>
     </nav>

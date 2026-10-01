@@ -138,6 +138,7 @@ function GroupRoomContent({
   const [managing, setManaging] = useState(false);
   const running = isGroupRunning(memberStates, group.id);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [composerSeed, setComposerSeed] = useState<string | undefined>();
   const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
   const [executionFilter, setExecutionFilter] = useState<string | undefined>();
@@ -221,6 +222,8 @@ function GroupRoomContent({
       group={group}
       members={members}
       memberStates={memberStates}
+      onSearchChange={setSearchQuery}
+      searchQuery={searchQuery}
       models={models}
       onDelete={onDelete}
       onAddAgent={onAddAgent}
@@ -240,7 +243,6 @@ function GroupRoomContent({
           .stop(group.id)
           .catch((error: unknown) => console.warn("[groups] stop failed", error));
       }}
-      projectContextStatus={projectContext?.status}
       projectName={workspace?.displayName}
       running={running}
       tasksButton={
@@ -301,6 +303,7 @@ function GroupRoomContent({
             });
           }}
           roles={roles}
+          searchQuery={searchQuery}
           workingRows={workingRows}
         />
         {blocked ? (
