@@ -1,0 +1,43 @@
+name: fix-pr113-eotp-chainid
+# one-shot: exactOptionalPropertyTypes-safe chainId spread on complement path
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/fix-pr113-eotp-chainid.yml
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply one-line EOTP fix
+        run: |
+          set -euo pipefail
+          f=apps/desktop/src/main/groups/group-runtime.ts
+          if grep -q 'startsChain || chainId === undefined' "$f"; then
+            echo already fixed
+            exit 0
+          fi
+          python3 - <<'PY2'
+          from pathlib import Path
+          p = Path("apps/desktop/src/main/groups/group-runtime.ts")
+          old = "      ...(startsChain ? { startsChain: true } : { chainId }),"
+          new = "      ...(startsChain || chainId === undefined ? { startsChain: true } : { chainId }),"
+          text = p.read_text()
+          if old not in text:
+              raise SystemExit(f"pattern missing; has complement? {'executionMode' in text}")
+          p.write_text(text.replace(old, new, 1))
+          assert "PLACEHOLDER" not in p.read_text()
+          PY2
+          git config user.email "stoltembergg@gmail.com"
+          git config user.name "Gabriel"
+          git add "$f"
+          git commit -m "fix(groups): exactOptionalPropertyTypes-safe chainId on complement"
+          git push origin HEAD:cursor/group-execution-linking-c747
