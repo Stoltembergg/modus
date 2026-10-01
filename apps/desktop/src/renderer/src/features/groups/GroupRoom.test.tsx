@@ -790,13 +790,20 @@ describe("GroupRoom decisions", () => {
     expect(within(panel).getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 
-  it("reloads on group.message and group.activity of this group only", async () => {
+  it("reloads on status messages and group.activity of this group only (not chat messages)", async () => {
     const user = userEvent.setup();
     renderRoom();
     const panel = await openPanel(user);
     await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
     decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
+    // Ordinary chat messages must not re-hit the DB (streaming freezes).
     await emit({ type: "group.message", groupId: "g-1", message: message("9") });
+    expect(group.listDecisions).toHaveBeenCalledTimes(1);
+    await emit({
+      type: "group.message",
+      groupId: "g-1",
+      message: { ...message("9s"), kind: "status", body: "Decision: Use SQLite" },
+    });
     await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
     decisions = [decision("2", "Ship weekly"), ...decisions];
     await emit({ type: "group.activity", groupId: "g-2" } as GroupRuntimeEvent);
