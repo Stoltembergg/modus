@@ -1,4 +1,4 @@
-name: apply-group-minors-room-test
+name: apply-gtest-restore
 on:
   workflow_dispatch:
 jobs:
