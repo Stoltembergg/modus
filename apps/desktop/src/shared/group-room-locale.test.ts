@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  groupAgentWorkingLabel,
   groupRoomLabel,
   resolveGroupRoomLocale,
   thinkingStateKeyFromLive,
@@ -49,11 +50,30 @@ describe("stripAgentSelfIntro / sources / ready persistence", () => {
     ).toEqual([{ href: "https://example.com/docs", label: "example.com" }]);
   });
 
-  it("does not persist Ready in the transcript", () => {
+  it("does not persist Ready or orchestration handoffs in the transcript", () => {
     expect(shouldPersistCollabStatusInTranscript({ kind: "ready" })).toBe(false);
+    expect(
+      shouldPersistCollabStatusInTranscript({
+        kind: "handoff",
+        targetName: "Builder",
+        objective: "fix symlink escapes",
+      }),
+    ).toBe(false);
     expect(shouldPersistCollabStatusInTranscript({ kind: "blocked", reason: "need key" })).toBe(
       true,
     );
+  });
+
+  it("localizes working shimmer agent names", () => {
+    expect(groupAgentWorkingLabel(["Planner"], "en")).toBe("Planner is working…");
+    expect(groupAgentWorkingLabel(["Planner"], "pt-BR")).toBe("Planner está a trabalhar…");
+    expect(groupAgentWorkingLabel(["Planner", "Builder"], "en")).toBe(
+      "Planner and Builder are working…",
+    );
+    expect(groupAgentWorkingLabel(["Planner", "Builder"], "pt")).toBe(
+      "Planner e Builder estão a trabalhar…",
+    );
+    expect(groupAgentWorkingLabel([], "en")).toBe("Working…");
   });
 
   it("localizes inline live status", () => {
