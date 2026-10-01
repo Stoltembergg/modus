@@ -673,7 +673,7 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-{!writing && !showLiveProgress && !fallbackProgress ? (
+      {!writing && !showLiveProgress && !fallbackProgress ? (
         <MessageActions
           align="start"
           copyText={prose || message.body}

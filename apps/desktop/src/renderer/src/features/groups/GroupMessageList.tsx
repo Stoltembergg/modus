@@ -268,7 +268,7 @@ export function GroupMessageList({
               {GROUP_ROOM_EMPTY_TEXT}
             </div>
           ) : null}
-{searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
+          {searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
             <div
               className="py-10 text-center text-fg-faint text-sm"
               data-testid="group-conversation-search-empty"
@@ -304,9 +304,7 @@ export function GroupMessageList({
             return (
               <GroupMessageRow
                 activeWaitingSessionIds={activeWaiting}
-                avatar={
-                  message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
-                }
+                avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
                 cwd={cwd}
                 executionTokenTotal={
                   tokenAnchors.has(message.id)
