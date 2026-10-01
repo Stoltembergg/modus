@@ -276,14 +276,14 @@ export function Sidebar({
 
   return (
     <m.aside
-      className="relative flex shrink-0 flex-col overflow-hidden bg-panel"
+      className="app-context-sidebar relative flex shrink-0 flex-col overflow-hidden bg-panel"
       layout={reduceMotion ? false : "size"}
       layoutDependency={open}
       style={{ transformOrigin: "left", width: open ? panelWidth : 0 }}
       transition={{ layout: SIDEBAR_TRANSITION }}
     >
       <m.div
-        className="flex h-full flex-col bg-panel"
+        className="app-context-sidebar-body flex h-full flex-col bg-panel"
         layout={reduceMotion ? false : "position"}
         style={{ width: panelWidth }}
         transition={{ layout: SIDEBAR_TRANSITION }}

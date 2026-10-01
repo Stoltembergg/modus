@@ -42,6 +42,21 @@ describe("App shell", () => {
     expect(screen.getByText("Room content")).toBeTruthy();
   });
 
+  it("exposes native glass state as shell metadata without elevating the main surface", () => {
+    render(
+      <AppShell
+        glassMode="native"
+        main={<MainSurface className="surface-main">Chat</MainSurface>}
+      />,
+    );
+
+    const shell = screen.getByTestId("app-shell");
+    expect(shell.getAttribute("data-glass-mode")).toBe("native");
+    const main = shell.querySelector<HTMLElement>('[data-shell-layer="main-surface"]');
+    expect(main?.classList.contains("surface-main")).toBe(true);
+    expect(main?.classList.contains("surface-glass")).toBe(false);
+  });
+
   it("labels the primary destinations and marks the active one", () => {
     const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
     render(<AppRail active="direct-messages" onNavigate={onNavigate} />);

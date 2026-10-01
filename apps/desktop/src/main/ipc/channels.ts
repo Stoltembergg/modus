@@ -202,12 +202,13 @@ export const IPC_CHANNELS = {
   modelLimits: "model:limits",
   modelLimitsRefresh: "model:limits-refresh",
   modelLimitsSetCodexEnabled: "model:limits-set-codex-enabled",
-  // 自绘 titlebar：renderer 调 IPC 触发 window 操作，main 反推 maximize 状态以同步图标
+  // Window actions for application commands, plus native effect fallback state.
   windowMinimize: "window:minimize",
   windowToggleMaximize: "window:toggle-maximize",
   windowClose: "window:close",
   windowState: "window:state",
   windowStateEvent: "window:state-event",
+  windowGlassEvent: "window:glass-event",
   clipboardWriteImage: "clipboard:write-image",
   dialogSaveImage: "dialog:save-image",
   projectMemorySnapshot: "project-memory:snapshot",

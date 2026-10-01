@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+const app = readFileSync(new URL("../app/App.tsx", import.meta.url), "utf8");
 
 describe("Modus semantic design tokens", () => {
   it("defines the shared semantic visual contract in one place", () => {
@@ -45,26 +46,40 @@ describe("Modus semantic design tokens", () => {
   });
 
   it("keeps glass and backdrop blur on the elevated surface only", () => {
-    const glassSurface = css.match(/\.surface-glass\s*\{([^}]+)\}/)?.[1] ?? "";
-    const mainSurface = css.match(/\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
-    const sidebarSurface = css.match(/\.surface-sidebar\s*\{([^}]+)\}/)?.[1] ?? "";
-    const popup = css.match(/\.popup-chrome\s*\{([^}]+)\}/)?.[1] ?? "";
-    const scrim = css.match(/\.dialog-scrim\s*\{([^}]+)\}/)?.[1] ?? "";
+    const glassSurface = css.match(/(?:^|\n)\.surface-glass\s*\{([^}]+)\}/)?.[1] ?? "";
+    const mainSurface = css.match(/(?:^|\n)\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
+    const sidebarSurface = css.match(/(?:^|\n)\.surface-sidebar\s*\{([^}]+)\}/)?.[1] ?? "";
+    const popup = css.match(/(?:^|\n)\.popup-chrome\s*\{([^}]+)\}/)?.[1] ?? "";
+    const scrim = css.match(/(?:^|\n)\.dialog-scrim\s*\{([^}]+)\}/)?.[1] ?? "";
 
-    expect(glassSurface).toContain("backdrop-filter: var(--glass-filter)");
+    expect(glassSurface).not.toContain("backdrop-filter");
+    expect(glassSurface).toContain("background-color: var(--surface-glass)");
     expect(mainSurface).not.toContain("backdrop-filter");
     expect(sidebarSurface).not.toContain("backdrop-filter");
     expect(popup).toContain("background: var(--surface-glass)");
-    expect(popup).toContain("backdrop-filter: var(--glass-filter)");
+    expect(popup).not.toContain("backdrop-filter");
     expect(popup).toContain("border-radius: var(--radius-overlay)");
     expect(popup).not.toMatch(/blur\(\d/);
-    expect(scrim).toContain("backdrop-filter: var(--glass-scrim-filter)");
+    expect(scrim).not.toContain("backdrop-filter");
+    expect(css).toContain(':root[data-native-glass="true"] .dialog-scrim');
+    expect(css).toContain(':root[data-native-glass="true"] .surface-glass');
+    expect(css).toContain(':root[data-native-glass="true"] .app-context-sidebar');
+    expect(css).toContain(':root[data-native-glass="true"] .surface-main');
+    expect(css).toContain("--surface-glass: var(--surface-raised)");
+    expect(css).toMatch(
+      /:root\[data-native-glass="true"\] \.surface-main\s*\{[^}]*backdrop-filter: none/su,
+    );
     expect(css).not.toContain(".chat-scroll-top-blur");
     const composerDock = css.match(/\.composer-dock-shell\s*\{([^}]+)\}/)?.[1] ?? "";
     expect(composerDock).toContain("border: 1px solid var(--border-composer)");
     expect(composerDock).toContain("border-radius: var(--radius-composer)");
     expect(composerDock).toContain("background-color: var(--surface-raised)");
     expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
+  });
+
+  it("does not render custom caption controls in the application chrome", () => {
+    expect(app).not.toContain("WindowControls");
+    expect(app).not.toContain("CaptionButton");
   });
 
   it("uses the same semantic surface aliases in dark, light, and dark-plus themes", () => {

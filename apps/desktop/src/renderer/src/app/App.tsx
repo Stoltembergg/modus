@@ -151,12 +151,26 @@ function logInitialHydrationError(resource: string, error: unknown): void {
 
 export function App() {
   const reduceMotion = useReducedMotion();
+  const windowChrome = window.modus?.app.windowChrome ?? "system";
+  const [nativeGlass, setNativeGlass] = useState(
+    () => window.modus?.app.isNativeGlassAvailable?.() ?? window.modus?.app.nativeGlass === true,
+  );
   const [securityState, setSecurityState] = useState<SecurityState | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
   const groupMemberStates = useGroupMemberStates();
+  useEffect(() => {
+    const applyNativeGlass = (available: boolean): void => {
+      setNativeGlass(available);
+      document.documentElement.dataset.nativeGlass = String(available);
+    };
+    applyNativeGlass(
+      window.modus?.app.isNativeGlassAvailable?.() ?? window.modus?.app.nativeGlass === true,
+    );
+    return window.modus?.app.onNativeGlassChange(applyNativeGlass);
+  }, []);
   const isGroupWorking = useCallback(
     (group: AgentGroupWithMembers) => isGroupRunning(groupMemberStates, group.id),
     [groupMemberStates],
@@ -1205,7 +1219,7 @@ export function App() {
       <TooltipProvider>
         <NativeSurfaceProvider>
           <ImageViewerProvider>
-            <AppShell className="app-root">
+            <AppShell className="app-root" glassMode={nativeGlass ? "native" : "solid"}>
               {/* Settings keeps a dedicated titlebar. Conversation chrome uses the
                   main toolbar as the drag/traffic-light row so there is no empty
                   band above the chat header. */}
@@ -1213,7 +1227,7 @@ export function App() {
 
               <FadeContent blur className="flex min-h-0 min-w-0 flex-1 flex-col" duration={0.7}>
                 <div
-                  className="surface-app flex min-h-0 min-w-0 flex-1"
+                  className="app-layout-row surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
                   style={
                     primaryNavigation.active === "settings"
@@ -1244,9 +1258,14 @@ export function App() {
                     </Suspense>
                   ) : primaryNavigation.active === "connections" ? (
                     <MainSurface className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0">
-                      <TopBar className="toolbar-row app-drag flex shrink-0 items-center px-4">
+                      <TopBar
+                        className={cn(
+                          "toolbar-row flex shrink-0 items-center px-4",
+                          (isMac || windowChrome === "windows-overlay") && "app-drag",
+                          windowChrome === "windows-overlay" && "pr-[138px]",
+                        )}
+                      >
                         <h1 className="app-no-drag text-sm font-medium text-fg">Connections</h1>
-                        <div className="ml-auto">{isMac ? null : <WindowControls />}</div>
                       </TopBar>
                       <Suspense fallback={<ModusLoadingFallback />}>
                         <ConnectionsPage />
@@ -1354,7 +1373,9 @@ export function App() {
                       >
                         <TopBar
                           className={cn(
-                            "toolbar-row app-drag relative z-10 flex shrink-0 items-center px-3",
+                            "toolbar-row relative z-10 flex shrink-0 items-center px-3",
+                            (isMac || windowChrome === "windows-overlay") && "app-drag",
+                            windowChrome === "windows-overlay" && "pr-[138px]",
                             // Traffic lights sit in this row when the left sidebar is closed.
                             isMac && !responsiveSidebarOpen && "pl-[76px]",
                           )}
@@ -1419,7 +1440,6 @@ export function App() {
                                 />
                               </div>
                             )}
-                            {isMac ? null : <WindowControls />}
                           </div>
                         </TopBar>
 
@@ -1722,18 +1742,21 @@ export function App() {
 /**
  * Top chrome strip (44px) — settings only:
  *   - macOS: native traffic lights only; File/Edit/View/Help live in the system menu bar
- *   - Windows/Linux: frameless titlebar + in-window menu labels + WindowControls
+ *   - Windows/Linux: native controls; the renderer contributes menu labels only
  *
  * Conversation layout folds drag / traffic-light clearance into the sidebar +
  * main toolbar so the chat header sits flush with the window top.
  */
 function MenuBar() {
   const isMac = window.modus?.app.platform === "darwin";
+  const windowChrome = window.modus?.app.windowChrome ?? "system";
 
   return (
     <div
       className={cn(
-        "app-drag flex h-11 shrink-0 items-center bg-panel",
+        "flex h-11 shrink-0 items-center bg-panel",
+        (isMac || windowChrome === "windows-overlay") && "app-drag",
+        windowChrome === "windows-overlay" && "pr-[138px]",
         // Clear native traffic lights (positioned at ~14,14 in main-window).
         isMac && "pl-[76px]",
       )}
@@ -1748,7 +1771,6 @@ function MenuBar() {
           </>
         )}
       </div>
-      {isMac ? null : <WindowControls />}
     </div>
   );
 }
@@ -1760,91 +1782,6 @@ function MenuItem({ children }: { children: string }) {
         "app-no-drag flex h-7 items-center rounded-md px-2 text-xs font-normal text-fg-subtle",
         "transition-colors hover:bg-hover hover:text-fg",
       )}
-      type="button"
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * 自绘 Caption Buttons —— 严格被 menubar 44px 高度包覆，hover 区域不越界。
- * Windows 风格：min/max/close 三键，close hover 用 #c42b1c 高亮。
- * 命中区域 46×44（跟随自绘 menubar），但绘制完全 CSS 控制。
- */
-function WindowControls() {
-  const [maximized, setMaximized] = useState(false);
-
-  useEffect(() => {
-    if (!window.modus?.window) {
-      return;
-    }
-    void window.modus.window.getState().then((state: { maximized: boolean }) => {
-      setMaximized(state.maximized);
-    });
-    return window.modus.window.onStateChange((state: { maximized: boolean }) => {
-      setMaximized(state.maximized);
-    });
-  }, []);
-
-  return (
-    <div className="app-no-drag flex h-full shrink-0 items-stretch">
-      <CaptionButton label="Minimize" onClick={() => void window.modus?.window.minimize()}>
-        <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-          <title>Minimize</title>
-          <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      </CaptionButton>
-      <CaptionButton
-        label={maximized ? "Restore" : "Maximize"}
-        onClick={() => void window.modus?.window.toggleMaximize()}
-      >
-        {maximized ? (
-          <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-            <title>Restore</title>
-            <path
-              d="M2.5 0.5h7v7h-2M0.5 2.5h7v7h-7v-7"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1"
-            />
-          </svg>
-        ) : (
-          <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-            <title>Maximize</title>
-            <path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        )}
-      </CaptionButton>
-      <CaptionButton danger label="Close" onClick={() => void window.modus?.window.close()}>
-        <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-          <title>Close</title>
-          <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      </CaptionButton>
-    </div>
-  );
-}
-
-function CaptionButton({
-  children,
-  label,
-  onClick,
-  danger = false,
-}: {
-  children: ReactNode;
-  label: string;
-  onClick(): void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      aria-label={label}
-      className={cn(
-        "flex h-full w-[46px] items-center justify-center text-fg-muted transition-colors",
-        danger ? "hover:bg-[#c42b1c] hover:text-white" : "hover:bg-hover hover:text-fg",
-      )}
-      onClick={onClick}
       type="button"
     >
       {children}

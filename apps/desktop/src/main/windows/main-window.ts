@@ -7,6 +7,7 @@ import {
   screen,
   shell,
 } from "electron";
+import { resolveWindowAppearance } from "../../shared/window-appearance";
 import {
   invalidateHyperPlanDraftOwner,
   registerHyperPlanDraftOwner,
@@ -14,6 +15,7 @@ import {
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isTrustedRendererUrl, registerTrustedSender } from "../ipc/trusted-sender";
 import type { StartupTimeline } from "../startup/startup-timeline";
+import { windowChromeOptionsFor } from "./window-options";
 
 const currentDir = fileURLToPath(new URL(".", import.meta.url));
 const EXTERNAL_PROTOCOLS = new Set(["https:", "http:"]);
@@ -66,39 +68,59 @@ export function createMainWindow({
   const width = Math.min(1180, workArea.width);
   const height = Math.min(760, workArea.height);
 
-  const isMac = process.platform === "darwin";
+  const appearance = resolveWindowAppearance(process.platform, process.getSystemVersion());
+  let nativeGlassAvailable = appearance.glass === "native";
+  const createWindow = (glass: "native" | "solid"): BrowserWindowType =>
+    new BrowserWindow({
+      x: workArea.x + Math.round((workArea.width - width) / 2),
+      y: workArea.y + Math.round((workArea.height - height) / 2),
+      width,
+      height,
+      minWidth: Math.min(1120, width),
+      minHeight: Math.min(720, height),
+      title: "Modus",
+      ...(appearance.chrome === "macos" ? {} : { icon: appIconPath }),
+      show: true,
+      ...windowChromeOptionsFor({ ...appearance, glass }),
+      webPreferences: {
+        preload: preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+      },
+    });
 
-  const window = new BrowserWindow({
-    x: workArea.x + Math.round((workArea.width - width) / 2),
-    y: workArea.y + Math.round((workArea.height - height) / 2),
-    width,
-    height,
-    minWidth: Math.min(1120, width),
-    minHeight: Math.min(720, height),
-    title: "Modus",
-    icon: appIconPath,
-    backgroundColor: "#131314",
-    show: true,
-    // macOS: native traffic lights via hiddenInset (aligned with the 36px
-    // conversation toolbar / sidebar titlebar strip — no separate MenuBar).
-    // Windows/Linux: frameless + custom WindowControls — avoids titleBarOverlay
-    // caption hit-targets that spill past the toolbar height.
-    ...(isMac
-      ? {
-          titleBarStyle: "hiddenInset" as const,
-          trafficLightPosition: { x: 14, y: 10 },
-        }
-      : {
-          frame: false,
-        }),
-    webPreferences: {
-      preload: preloadPath,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-    },
-  });
+  let window: BrowserWindowType;
+  try {
+    window = createWindow(appearance.glass);
+  } catch (error) {
+    if (!nativeGlassAvailable) throw error;
+    nativeGlassAvailable = false;
+    window = createWindow("solid");
+  }
+  if (appearance.chrome === "windows-overlay" && nativeGlassAvailable) {
+    try {
+      window.setBackgroundMaterial("mica");
+    } catch {
+      // OS build detection normally guarantees support; keep startup usable if
+      // DWM declines the effect and paint the same solid fallback as Linux.
+      try {
+        window.setBackgroundMaterial("none");
+      } catch {
+        // The fallback color and renderer surfaces remain available without DWM.
+      }
+      nativeGlassAvailable = false;
+      window.setBackgroundColor("#131314");
+    }
+  }
+  if (appearance.glass === "native") {
+    window.webContents.once("did-finish-load", () => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(IPC_CHANNELS.windowGlassEvent, nativeGlassAvailable);
+      }
+    });
+  }
   const ownerEpoch = registerHyperPlanDraftOwner(window.webContents.id);
   startupTimeline.mark("main.window-created");
 

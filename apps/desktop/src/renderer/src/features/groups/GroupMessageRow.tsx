@@ -29,6 +29,9 @@ import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { PromptSources } from "../sources/PromptSources";
+import type { RunSource } from "../sources/runSources";
+import { useRunSources } from "../sources/useRunSources";
 import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
@@ -43,7 +46,6 @@ import {
   PromptMessage,
   PromptMessageBody,
   PromptMessageIdentity,
-  PromptSource,
   PromptSystemMessage,
 } from "./prompt-kit/PromptKit";
 
@@ -455,6 +457,13 @@ export function GroupMessageRow({
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
+  const runSources = useRunSources(
+    message.authorSessionId,
+    message.runId,
+    message.authorKind === "agent" &&
+      message.kind === "message" &&
+      (message.status === "completed" || message.status === undefined),
+  );
   async function retry(): Promise<void> {
     if (!onRetry || retrying) return;
     setRetrying(true);
@@ -608,7 +617,23 @@ export function GroupMessageRow({
   ) {
     return null;
   }
-  const sources = !writing ? extractUsefulSources(prose) : [];
+  const sources = (() => {
+    if (writing || message.authorKind !== "agent") return runSources;
+    const combined = new Map<string, RunSource>();
+    for (const source of runSources) combined.set(source.id, source);
+    for (const source of extractUsefulSources(prose)) {
+      const href = source.href;
+      if (![...combined.values()].some((existing) => existing.href === href)) {
+        combined.set(`url:${href}`, {
+          id: `url:${href}`,
+          kind: "url",
+          label: source.label ?? href,
+          href,
+        });
+      }
+    }
+    return [...combined.values()].slice(0, 24);
+  })();
   const showLiveProgress = Boolean(liveTurn && !liveTurn.live.collapsed);
   return (
     <div
@@ -694,13 +719,7 @@ export function GroupMessageRow({
             </div>
           ) : null}
           {resultParsed ? <GroupFinalResultCard card={resultParsed.card} /> : null}
-          {sources.length > 0 ? (
-            <div className="flex flex-wrap gap-1" data-testid="group-message-sources">
-              {sources.map((source) => (
-                <PromptSource href={source.href} key={source.href} label={source.label} />
-              ))}
-            </div>
-          ) : null}
+          <PromptSources onOpenFile={onOpenFile} sources={sources} />
           <MessageAttachments message={message} />
           <MessageError message={message} />
           {canRetry ? (

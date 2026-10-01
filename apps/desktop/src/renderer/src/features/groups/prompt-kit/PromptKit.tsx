@@ -136,32 +136,6 @@ export function PromptTool({
   );
 }
 
-/**
- * Prompt Kit Source — discreet citation chip on the final reply only.
- * Shown when the agent included a genuinely useful URL for the user.
- */
-export function PromptSource({ href, label }: { href: string; label?: string }) {
-  let domain = label ?? href;
-  try {
-    domain = label ?? new URL(href).hostname.replace(/^www\./, "");
-  } catch {
-    // keep fallback
-  }
-  return (
-    <a
-      className="inline-flex h-5 max-w-[10rem] items-center truncate rounded-md bg-elevated px-1.5 text-[10px] text-fg-faint no-underline transition-colors hover:text-fg-muted"
-      data-prompt-kit="source"
-      data-testid="group-prompt-source"
-      href={href}
-      rel="noopener noreferrer"
-      target="_blank"
-      title={href}
-    >
-      {domain}
-    </a>
-  );
-}
-
 /** @deprecated Room no longer persists Steps — kept for Activity/tests. */
 export function PromptSteps({
   title = "Steps",

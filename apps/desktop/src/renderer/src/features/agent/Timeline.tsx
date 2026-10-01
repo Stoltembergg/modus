@@ -21,6 +21,7 @@ import { ScrollReveal } from "../../components/ui/ScrollReveal";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
+import { collectRunSources, type RunSource } from "../sources/runSources";
 import { WorkActivityRow, WorkFold } from "./ActivityGroup";
 import { MessageBlock } from "./MessageBlock";
 import {
@@ -72,6 +73,10 @@ export type MessageBlockItem = {
   type: "message";
   role: "assistant" | "user";
   content: string;
+  /** Assistant run that produced this message; only its final segment carries sources. */
+  runId?: string;
+  /** References used by successful source tools in the same run. */
+  sources?: RunSource[];
   streaming?: boolean;
   /** Epoch ms — user send time, or assistant completion time. */
   createdAt?: number;
@@ -298,6 +303,7 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
       type: "message",
       role: "assistant",
       content: "",
+      ...(activeRunId ? { runId: activeRunId } : {}),
     });
   }
 
@@ -317,6 +323,7 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
       type: "message",
       role: "assistant",
       content: "",
+      ...(activeRunId ? { runId: activeRunId } : {}),
     };
     blocks.push(segment);
     blockById.set(segment.id, segment);
@@ -514,6 +521,7 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
         role: event.role,
         content: "",
         createdAt: eventAt,
+        ...(event.role === "assistant" && activeRunId ? { runId: activeRunId } : {}),
         ...(event.attachments && event.attachments.length > 0
           ? { attachments: event.attachments }
           : {}),
@@ -940,6 +948,17 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
     for (const thought of thoughtByMessage.values()) {
       thought.streaming = false;
     }
+  }
+
+  const finalAssistantByRun = new Map<string, MessageBlockItem>();
+  for (const block of blocks) {
+    if (block.type === "message" && block.role === "assistant" && block.runId) {
+      finalAssistantByRun.set(block.runId, block);
+    }
+  }
+  for (const [runId, message] of finalAssistantByRun) {
+    const sources = collectRunSources(agentEvents, runId);
+    if (sources.length > 0) message.sources = sources;
   }
 
   return blocks;
@@ -1440,6 +1459,7 @@ export function Timeline({
                         messageId={block.id}
                         {...(onEditResend ? { onEditResend } : {})}
                         messageRole={block.role}
+                        {...(block.sources ? { sources: block.sources } : {})}
                         streaming={block.streaming ?? false}
                         workspaceId={workspaceId}
                       />

@@ -223,7 +223,11 @@
   --surface-sidebar: var(--color-panel);
   --surface-main: var(--color-canvas);
   --surface-raised: var(--color-elevated);
-  --surface-glass: color-mix(in oklab, var(--color-elevated) 90%, transparent);
+  /* Solid on unsupported hosts; native translucency is applied by the scoped
+     data-native-glass rules below. */
+  --surface-glass: var(--surface-raised);
+  --surface-glass-sidebar: color-mix(in srgb, var(--color-panel) 78%, transparent);
+  --surface-glass-elevated: color-mix(in srgb, var(--color-elevated) 82%, transparent);
 
   --text-primary: var(--color-fg);
   --text-secondary: var(--color-fg-muted);
@@ -261,7 +265,7 @@
   --motion-ui: 160ms;
   --motion-overlay: 180ms;
   --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
-  --glass-filter: blur(14px) saturate(1.14);
+  --glass-filter: blur(18px) saturate(1.12);
   --glass-scrim-filter: blur(2px);
   --overlay-shadow: var(--shadow-popup);
   --menu-shadow: var(--shadow-popup);
@@ -287,8 +291,7 @@
   line-height: 1.5;
 }
 
-/* Shared surface primitives. Blur only appears on the explicitly elevated
-   glass surface; app chrome, transcript, and side panels stay opaque. */
+/* Shared surface primitives. Native glass is enabled per host platform below. */
 .app-shell {
   background-color: var(--surface-app);
   color: var(--text-primary);
@@ -389,13 +392,9 @@
   border-radius: var(--radius-overlay);
   background-color: var(--surface-glass);
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 .dialog-scrim {
   background-color: var(--overlay-scrim-color);
-  backdrop-filter: var(--glass-scrim-filter);
-  -webkit-backdrop-filter: var(--glass-scrim-filter);
 }
 
 /*
@@ -651,8 +650,6 @@
   border-radius: var(--radius-overlay);
   background: var(--surface-glass);
   box-shadow: var(--menu-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 
 /*
@@ -706,6 +703,50 @@ body {
 .app-root {
   isolation: isolate;
   height: 100vh;
+}
+
+/* Desktop glass is scoped to the rail, context sidebar and raised surfaces.
+   The conversation canvas stays fully opaque for readable text and media. */
+:root[data-native-glass="true"] body,
+:root[data-native-glass="true"] #root,
+:root[data-native-glass="true"] .app-shell,
+:root[data-native-glass="true"] .app-layout-row {
+  background-color: transparent;
+}
+:root[data-native-glass="true"] .app-rail,
+:root[data-native-glass="true"] .app-context-sidebar {
+  background-color: var(--surface-glass-sidebar);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .app-context-sidebar-body {
+  background-color: transparent;
+}
+:root[data-native-glass="true"] .surface-main {
+  background-color: var(--surface-main);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-native-glass="true"] .surface-raised,
+:root[data-native-glass="true"] .surface-glass {
+  background-color: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .popup-chrome {
+  background: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .dialog-scrim {
+  backdrop-filter: var(--glass-scrim-filter);
+  -webkit-backdrop-filter: var(--glass-scrim-filter);
+}
+
+:root[data-native-glass="false"] body,
+:root[data-native-glass="false"] #root,
+:root[data-native-glass="false"] .app-shell {
+  background-color: var(--surface-app);
 }
 
 /* Electron 自定义标题栏拖拽 */
@@ -1235,7 +1276,7 @@ body {
    * the same budget. Applied as a step (no transition) — at 1px the arrival is
    * imperceptible, and it then costs nothing while the sheet sits open.
    */
-  .subagent-preview-scrim[data-settled] {
+  :root[data-native-glass="true"] .subagent-preview-scrim[data-settled] {
     backdrop-filter: var(--glass-scrim-filter);
     -webkit-backdrop-filter: var(--glass-scrim-filter);
     will-change: auto;
@@ -1551,7 +1592,8 @@ body {
 }
 
 /* Heading after-gap is authoritative; don't double with the next block's top margin. */
-.modus-markdown :where(h1, h2, h3, h4, h5, h6)
+.modus-markdown
+  :where(h1, h2, h3, h4, h5, h6)
   + :where(
     p,
     ul,
@@ -1983,7 +2025,8 @@ body {
 }
 
 /* Actions cluster (copy / fullscreen) — pin top-right; visibility via hover rules above. */
-.modus-markdown [data-streamdown="mermaid-block"]
+.modus-markdown
+  [data-streamdown="mermaid-block"]
   > div:has(> [data-streamdown="mermaid-block-actions"]) {
   position: absolute;
   top: 0.45rem;
@@ -2044,7 +2087,8 @@ body {
 }
 
 /* Loading-only: collapse Streamdown min-h shells before SVG exists. */
-.modus-markdown [data-streamdown="mermaid-block"]
+.modus-markdown
+  [data-streamdown="mermaid-block"]
   > div:last-child:not(:has([data-streamdown="mermaid"]))
   [class*="min-h-"] {
   min-height: 0;
@@ -2141,12 +2185,11 @@ body
   background: var(--surface-glass);
   color: var(--color-fg-subtle);
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 
 /* Zoom± / Reset: move from bottom-left column → top-right row, left of Close. */
-body > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   top: 1rem !important;
@@ -2415,7 +2458,6 @@ body
   font-weight: 500;
   letter-spacing: 0.01em;
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
 }
 .pdf-page-chrome__label {
   padding: 0 8px 0 4px;
@@ -2438,6 +2480,21 @@ body
 .pdf-rect-tool:hover {
   color: var(--color-fg);
   background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+
+:root[data-native-glass="true"]
+  body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+  > button.absolute,
+:root[data-native-glass="true"]
+  body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+  [data-streamdown="mermaid"]
+  [class*="absolute"][class*="rounded-md"],
+:root[data-native-glass="true"] .pdf-page-chrome {
+  background: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
 }
 .pdf-rect-tool.is-active {
   color: var(--color-accent);

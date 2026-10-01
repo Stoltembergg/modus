@@ -32,6 +32,8 @@ import {
 import { InspectGlyph, SkillTokenContent } from "../composer/composerTokens";
 import type { ComposerImage } from "../composer/useComposerImages";
 import { materialIconForFile } from "../files/fileIcons";
+import { PromptSources } from "../sources/PromptSources";
+import type { RunSource } from "../sources/runSources";
 import { CheckpointRestoreButton } from "./CheckpointRestoreButton";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -69,6 +71,8 @@ type MessageBlockProps = {
   contextItems?: ContextItem[];
   /** User only: selected skills attached to the prompt. */
   skills?: SkillSelection[];
+  /** Run-scoped references shown only after the final assistant response. */
+  sources?: RunSource[];
   compactClip?: boolean | undefined;
 };
 
@@ -90,6 +94,7 @@ export const MessageBlock = memo(function MessageBlock({
   contextChips,
   contextItems,
   skills,
+  sources,
   compactClip = false,
 }: MessageBlockProps) {
   const [editing, setEditing] = useState(false);
@@ -212,6 +217,9 @@ export const MessageBlock = memo(function MessageBlock({
           onOpenFile={onOpenFile}
           streaming={streaming}
         />
+      ) : null}
+      {!streaming && sources?.length ? (
+        <PromptSources onOpenFile={onOpenFile} sources={sources} />
       ) : null}
     </div>
   );

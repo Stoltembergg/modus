@@ -30,6 +30,51 @@ function tool(id: string, name: string, complete = true, isError = false) {
 }
 
 describe("buildBlocks", () => {
+  it("attaches run sources only to the final assistant message segment", () => {
+    const blocks = buildBlocks([
+      item("run", { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" }),
+      item("read-start", {
+        type: "tool.started",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "read",
+        toolName: "read_file",
+        args: { path: "src/main.ts" },
+      }),
+      item("read-end", {
+        type: "tool.ended",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "read",
+        isError: false,
+      }),
+      item("answer-start", {
+        type: "message.started",
+        sessionId: "s",
+        messageId: "answer-1",
+        role: "assistant",
+      }),
+      item("answer-done", { type: "message.completed", sessionId: "s", messageId: "answer-1" }),
+      item("final-start", {
+        type: "message.started",
+        sessionId: "s",
+        messageId: "answer-2",
+        role: "assistant",
+      }),
+      item("final-done", { type: "message.completed", sessionId: "s", messageId: "answer-2" }),
+      item("run-done", { type: "run.completed", sessionId: "s", runId: "r" }),
+    ]);
+    const assistantMessages = blocks.filter(
+      (block): block is Extract<(typeof blocks)[number], { type: "message" }> =>
+        block.type === "message" && block.role === "assistant",
+    );
+
+    expect(assistantMessages[0]?.sources).toBeUndefined();
+    expect(assistantMessages[1]?.sources).toEqual([
+      expect.objectContaining({ kind: "file", path: "src/main.ts" }),
+    ]);
+  });
+
   it("renders adaptive decision and failure notices", () => {
     const blocks = buildBlocks([
       item("d1", {
