@@ -1,0 +1,5 @@
+apps/desktop/src/main/groups/group-project-setup.ts	2dd0d782db3e9df2ff6068760a467d828d0b8c06	18041	3
+apps/desktop/src/preload/index.ts	1ee7e4dcba7dc9c08cf468d555277ca5f000f0f9	19251	2
+apps/desktop/src/main/ipc/group-ipc.test.ts	ed84130dd0680857e83bfe89b997dff5359aeddd	22607	3
+apps/desktop/src/preload/types.ts	838c82e204c0851e238ea39b975fd6fd5e5d41e5	27076	4
+apps/desktop/src/main/groups/group-runtime-lib.ts	2e482b46e22dcad2d76699740a6c5bd79e344015	28393	5
