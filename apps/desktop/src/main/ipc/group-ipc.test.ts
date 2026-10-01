@@ -12,6 +12,9 @@ vi.mock("electron", () => ({
   app: {
     getPath: () => userData,
   },
+  BrowserWindow: {
+    getAllWindows: () => [],
+  },
 }));
 
 const GROUP_CHANNELS = [
@@ -29,6 +32,7 @@ const GROUP_CHANNELS = [
   "group:delete-decision",
   "group:set-mode",
   "group:set-workspace",
+  "group:project-context",
 ];
 
 const MODEL = "openai/gpt-5";

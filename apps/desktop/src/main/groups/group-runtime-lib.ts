@@ -19,6 +19,7 @@ import type {
   TurnSettledEvent,
 } from "../agent/runtime";
 import { getAgent } from "../agents/agents-store";
+import { loadGroupProjectContextSection } from "./group-project-context-slice";
 import { listAgentGroupMembers } from "./group-store";
 
 /**
@@ -645,6 +646,8 @@ export function composeGroupWakePrompt(input: {
   snapshot?: string;
   /** The woken member's agent persona; first in the prompt when set. */
   instructions?: string;
+  /** Role-scoped shared Project Model slice (consult map before broad search). */
+  projectContext?: string;
   maxContextTokens: number;
 }): string | undefined {
   const titles = new Map(input.members.map((member) => [member.sessionId, member.title]));
@@ -675,8 +678,20 @@ export function composeGroupWakePrompt(input: {
   const footer = "</group_room>";
   const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
   const snapshot = input.snapshot ?? "";
+  const member = input.members.find((row) => row.sessionId === input.sessionId);
+  const projectContext =
+    input.projectContext?.trim() ||
+    (input.group.workspaceId
+      ? (loadGroupProjectContextSection({
+          workspaceId: input.group.workspaceId,
+          ...(member?.role ? { role: member.role } : {}),
+          prompt: input.trigger.body,
+        }) ?? "")
+      : "");
   let used = estimateGroupTokens(
-    [persona, header, snapshot, decisions, triggerBlock, footer].filter(Boolean).join("\n"),
+    [persona, header, projectContext, snapshot, decisions, triggerBlock, footer]
+      .filter(Boolean)
+      .join("\n"),
   );
   if (used > input.maxContextTokens) return undefined;
   const lines: string[] = [];
@@ -691,7 +706,7 @@ export function composeGroupWakePrompt(input: {
   }
   const history =
     lines.length > 0 ? `<recent_messages>\n${lines.join("\n")}\n</recent_messages>` : "";
-  return [persona, header, snapshot, decisions, history, triggerBlock, footer]
+  return [persona, header, projectContext, snapshot, decisions, history, triggerBlock, footer]
     .filter(Boolean)
     .join("\n");
 }
