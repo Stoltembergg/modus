@@ -3,6 +3,7 @@ import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../
 import { SpringCheck } from "../../components/ui/SpringCheck";
 import { cn } from "../../lib/cn";
 import { describeGroupError } from "./groupErrors";
+import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 
@@ -31,8 +32,8 @@ function statusBadge(status: GroupTaskStatus): string | undefined {
 }
 
 /**
- * The group's tasks (`group:list-tasks`), refetched when the room changes
- * (a member posts or a turn starts / ends: task tools run inside turns).
+ * The group's tasks (`group:list-tasks`). Reloads on turn/activity and status
+ * lines — not on every chat `group.message` (streaming would re-hit the DB).
  */
 export function useGroupTasks(groupId: string) {
   const [tasks, setTasks] = useState<GroupTask[]>([]);
@@ -47,8 +48,7 @@ export function useGroupTasks(groupId: string) {
     setTasks([]);
     void refresh();
     return window.modus.group.onEvent((event: GroupRuntimeEvent) => {
-      if (event.groupId !== groupId) return;
-      if (event.type === "group.message" || event.type === "group.activity") void refresh();
+      if (shouldRefreshGroupSidePanel(groupId, event)) void refresh();
     });
   }, [groupId, refresh]);
   const replace = useCallback((task: GroupTask) => {
