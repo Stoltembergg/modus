@@ -125,6 +125,7 @@ type TaskRow = {
   created_by_session_id: string | null;
   reviewer_session_id: string | null;
   branch: string | null;
+  execution_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -135,6 +136,7 @@ type DecisionRow = {
   text: string;
   author_session_id: string | null;
   source_message_id: string | null;
+  execution_id: string | null;
   created_at: string;
 };
 
@@ -149,8 +151,9 @@ const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
   turn_id, run_id, sdk_message_id, sequence, status, updated_at, error`;
 const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
-  created_by_session_id, reviewer_session_id, branch, created_at, updated_at`;
-const DECISION_COLUMNS = "id, group_id, text, author_session_id, source_message_id, created_at";
+  created_by_session_id, reviewer_session_id, branch, execution_id, created_at, updated_at`;
+const DECISION_COLUMNS =
+  "id, group_id, text, author_session_id, source_message_id, execution_id, created_at";
 
 function toGroup(row: GroupRow): AgentGroupInfo {
   return {
@@ -283,6 +286,7 @@ function toTask(row: TaskRow): GroupTask {
       : {}),
     ...(row.reviewer_session_id !== null ? { reviewerSessionId: row.reviewer_session_id } : {}),
     ...(row.branch !== null ? { branch: row.branch } : {}),
+    ...(row.execution_id !== null ? { executionId: row.execution_id } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -295,6 +299,7 @@ function toDecision(row: DecisionRow): GroupDecision {
     text: row.text,
     ...(row.author_session_id !== null ? { authorSessionId: row.author_session_id } : {}),
     ...(row.source_message_id !== null ? { sourceMessageId: row.source_message_id } : {}),
+    ...(row.execution_id !== null ? { executionId: row.execution_id } : {}),
     createdAt: row.created_at,
   };
 }
@@ -385,6 +390,34 @@ function requireMember(groupId: string, sessionId: string, field: string): void 
       `The ${field} session ${sessionId} is not a member of group ${groupId}.`,
     );
   }
+}
+
+/** Execution ids are message chain roots that already exist in the group. */
+function requireExecutionInGroup(groupId: string, executionId: string): void {
+  const row = getDatabase()
+    .prepare("select group_id from group_messages where id = ?")
+    .get(executionId) as { group_id: string } | undefined;
+  if (!row || row.group_id !== groupId) {
+    throw new GroupStoreError(
+      "message-not-found",
+      `Execution ${executionId} is not a message in group ${groupId}.`,
+    );
+  }
+}
+
+/**
+ * Latest ask-spanning execution for Complementar: newest user message's chain.
+ */
+export function latestGroupExecutionId(groupId: string): string | undefined {
+  const row = getDatabase()
+    .prepare(
+      `select coalesce(chain_id, id) as execution_id from group_messages
+       where group_id = ? and author_kind = 'user'
+       order by sequence desc, created_at desc, id desc
+       limit 1`,
+    )
+    .get(groupId) as { execution_id: string } | undefined;
+  return row?.execution_id;
 }
 
 function isUniqueMemberViolation(error: unknown): boolean {
@@ -1514,6 +1547,8 @@ export function createGroupTask(input: {
   createdBySessionId?: string;
   reviewerSessionId?: string;
   branch?: string;
+  /** Ask-spanning execution id (message chain root). */
+  executionId?: string;
 }): GroupTask {
   const db = getDatabase();
   requireGroupRow(input.groupId);
@@ -1524,11 +1559,12 @@ export function createGroupTask(input: {
     requireMember(input.groupId, input.createdBySessionId, "task creator");
   }
   if (input.reviewerSessionId) requireMember(input.groupId, input.reviewerSessionId, "reviewer");
+  if (input.executionId) requireExecutionInGroup(input.groupId, input.executionId);
   const id = input.id ?? randomUUID();
   const now = new Date().toISOString();
   db.prepare(
     `insert into group_tasks (${TASK_COLUMNS})
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.groupId,
@@ -1539,6 +1575,7 @@ export function createGroupTask(input: {
     input.createdBySessionId ?? null,
     input.reviewerSessionId ?? null,
     input.branch ?? null,
+    input.executionId ?? null,
     now,
     now,
   );
@@ -1716,6 +1753,7 @@ export function createMemberGroupTask(input: {
   title: string;
   description?: string;
   reviewerSessionId?: string;
+  executionId?: string;
 }): GroupTask {
   requireGroupRow(input.groupId);
   requireMember(input.groupId, input.actorSessionId, "task creator");
@@ -1726,6 +1764,7 @@ export function createMemberGroupTask(input: {
     createdBySessionId: input.actorSessionId,
     ...(input.description?.trim() ? { description: input.description.trim() } : {}),
     ...(input.reviewerSessionId ? { reviewerSessionId: input.reviewerSessionId } : {}),
+    ...(input.executionId ? { executionId: input.executionId } : {}),
   });
 }
 
@@ -1966,6 +2005,7 @@ export function recordGroupDecision(input: {
   text: string;
   authorSessionId?: string;
   sourceMessageId?: string;
+  executionId?: string;
 }): GroupDecision {
   const db = getDatabase();
   const text = typeof input.text === "string" ? input.text.trim() : "";
@@ -1991,6 +2031,7 @@ export function recordGroupDecision(input: {
         );
       }
     }
+    if (input.executionId) requireExecutionInGroup(input.groupId, input.executionId);
     const count = db
       .prepare("select count(*) as n from group_decisions where group_id = ?")
       .get(input.groupId) as { n: number };
@@ -2003,13 +2044,14 @@ export function recordGroupDecision(input: {
     const decisionId = randomUUID();
     db.prepare(
       `insert into group_decisions (${DECISION_COLUMNS})
-       values (?, ?, ?, ?, ?, ?)`,
+       values (?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       decisionId,
       input.groupId,
       text,
       input.authorSessionId ?? null,
       input.sourceMessageId ?? null,
+      input.executionId ?? null,
       new Date().toISOString(),
     );
     return decisionId;
