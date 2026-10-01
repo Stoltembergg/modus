@@ -33,6 +33,7 @@ import {
 } from "./GroupMessageList";
 import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
+import { GroupWorkingShimmer } from "./GroupWorkingShimmer";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { replyPreview } from "./groupThreads";
@@ -235,24 +236,29 @@ export function GroupRoom({
             reason={blocked}
           />
         ) : (
-          <GroupComposer
-            members={members}
-            onClearReply={() => setReplyTo(undefined)}
-            onSeedConsumed={() => setComposerSeed(undefined)}
-            onSend={async (payload) => {
-              await window.modus.group.postMessage({
-                groupId: group.id,
-                body: payload.body,
-                ...(payload.replyToMessageId ? { replyToMessageId: payload.replyToMessageId } : {}),
-                ...(payload.attachments ? { attachments: payload.attachments } : {}),
-                ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
-              });
-            }}
-            replyTo={replyTo}
-            seed={composerSeed}
-            showKickoff={loaded && messages.length === 0 && !replyTo}
-            updatePending={updatePending}
-          />
+          <>
+            <GroupWorkingShimmer labels={labels} rows={workingRows} />
+            <GroupComposer
+              members={members}
+              onClearReply={() => setReplyTo(undefined)}
+              onSeedConsumed={() => setComposerSeed(undefined)}
+              onSend={async (payload) => {
+                await window.modus.group.postMessage({
+                  groupId: group.id,
+                  body: payload.body,
+                  ...(payload.replyToMessageId
+                    ? { replyToMessageId: payload.replyToMessageId }
+                    : {}),
+                  ...(payload.attachments ? { attachments: payload.attachments } : {}),
+                  ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
+                });
+              }}
+              replyTo={replyTo}
+              seed={composerSeed}
+              showKickoff={loaded && messages.length === 0 && !replyTo}
+              updatePending={updatePending}
+            />
+          </>
         )}
       </div>
       {activityOpen ? (
