@@ -237,42 +237,57 @@ function MessageMeta({
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
 }) {
   const status = message.status;
-  // Live turns already show concrete phases — do not stamp opaque "Working".
-  const hideLiveStatus = !status || status === "running" || status === "writing";
-  const label = status
-    ? {
-        queued: "Queued",
-        running: "Working",
-        writing: "Writing",
-        awaiting_user: "Waiting for you",
-        completed: "Completed",
-        failed: "Failed",
-        cancelled: "Cancelled",
-        interrupted: "Interrupted",
-      }[status]
-    : undefined;
-  const warning = status === "failed" || status === "interrupted";
+  const executionId = messageExecutionId(message);
+  const showChip = message.authorKind === "user" || Boolean(message.chainId);
+  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
+  const executionChip = showChip ? (
+    <button
+      className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
+      data-execution-id={executionId}
+      data-testid="group-execution-chip"
+      onClick={() => onExecutionFilter?.(executionId)}
+      title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
+      type="button"
+    >
+      #{shortExecutionLabel(executionId)}
+    </button>
+  ) : null;
   const tokenLabel =
     typeof executionTokenTotal === "number" && executionTokenTotal > 0
       ? formatTokenCount(executionTokenTotal)
       : "";
-  const executionId = messageExecutionId(message);
-  const showChip = message.authorKind === "user" || Boolean(message.chainId);
-  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
+  // Live turns already show concrete phases — do not stamp opaque "Working".
+  // Hoist executionChip so running/writing rows still expose the filter control.
+  if (!status || status === "running" || status === "writing")
+    return (
+      <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+        {executionChip}
+        <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
+          {formatClock(Date.parse(message.createdAt))}
+        </time>
+        {tokenLabel ? (
+          <span
+            className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
+            data-testid="group-execution-tokens"
+            title="Estimated tokens for this execution (characters ÷ 4)"
+          >
+            ~{tokenLabel} tokens
+          </span>
+        ) : null}
+      </span>
+    );
+  const label = {
+    queued: "Queued",
+    awaiting_user: "Waiting for you",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    interrupted: "Interrupted",
+  }[status];
+  const warning = status === "failed" || status === "interrupted";
   return (
     <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
-      {showChip ? (
-        <button
-          className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
-          data-execution-id={executionId}
-          data-testid="group-execution-chip"
-          onClick={() => onExecutionFilter?.(executionId)}
-          title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
-          type="button"
-        >
-          #{shortExecutionLabel(executionId)}
-        </button>
-      ) : null}
+      {executionChip}
       <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
         {formatClock(Date.parse(message.createdAt))}
       </time>
@@ -285,7 +300,7 @@ function MessageMeta({
           ~{tokenLabel} tokens
         </span>
       ) : null}
-      {!hideLiveStatus && label ? (
+      {label ? (
         <span
           className={
             warning ? "text-danger" : status === "awaiting_user" ? "text-amber-400" : undefined
