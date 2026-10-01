@@ -291,6 +291,32 @@ export type GroupChainEndReason =
   | "context-too-large";
 
 /**
+ * Compact Project context status for Agent Groups Setup.
+ * Persisted per workspace (shared map); shown per open group room.
+ */
+export type GroupProjectContextStatus =
+  | "mapping"
+  | "ready"
+  | "updating"
+  | "needs_refresh"
+  | "failed";
+
+/** Snapshot returned by `group:project-context` and pushed on `group.project-setup`. */
+export type GroupProjectContextSnapshot = {
+  workspaceId: string;
+  status: GroupProjectContextStatus;
+  /** Short SHA-256 hex of the project fingerprint (empty while first mapping). */
+  fingerprint: string;
+  /** CodeGraph index state when known (`created` | `synced` | `ready` | …). */
+  codegraphState?: string;
+  edgeCount: number;
+  detail?: string;
+  revision?: string;
+  updatedAt: string;
+  lastReadyAt?: string;
+};
+
+/**
  * `group:event` push (main → renderer) from the group runtime. `group.activity`
  * carries the runtime state the sidebar's activity dot reads.
  */
@@ -306,7 +332,19 @@ export type GroupRuntimeEvent =
       /** Members waiting for the user (intent gate open, or a HyperPlan choice pending). */
       waitingSessionIds: string[];
     }
-  | { type: "group.chain-ended"; groupId: string; chainId: string; reason: GroupChainEndReason };
+  | { type: "group.chain-ended"; groupId: string; chainId: string; reason: GroupChainEndReason }
+  | {
+      type: "group.project-setup";
+      workspaceId: string;
+      /** Present when Setup was tied to a specific group create / room. */
+      groupId?: string;
+      status: GroupProjectContextStatus;
+      fingerprint: string;
+      edgeCount: number;
+      codegraphState?: string;
+      detail?: string;
+      updatedAt: string;
+    };
 
 /** One group's member states (`group:member-states` snapshot; same fields as `group.activity`). */
 export type GroupMemberStates = {
