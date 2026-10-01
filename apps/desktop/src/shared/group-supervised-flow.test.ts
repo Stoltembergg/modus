@@ -5,7 +5,7 @@ import {
   planSupervisedCodeFlow,
 } from "./group-supervised-flow";
 
-/** CI keepalive: re-trigger Package after cancelled macOS jobs. */
+/** CI keepalive: re-trigger Package after cancelled arm64 (2026-10-01T10:33Z). */
 
 const roster = [
   { sessionId: "lead", title: "Planner", role: "Lead" },
