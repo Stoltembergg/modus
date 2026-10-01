@@ -414,6 +414,22 @@ describe("an agent's 1:1 chat (A3)", () => {
     expect(getAgentSession(chat.id)).toMatchObject({ workspaceId: to, cwd: `/root/${to}` });
   });
 
+  it("changing modelId rebinds the room session and the 1:1 chat for the next turn", () => {
+    const group = newGroup(2);
+    const member = group.members[0];
+    const agentId = member?.agentId ?? "";
+    const roomSessionId = member?.sessionId ?? "";
+    const chat = openAgentChat(agentId);
+    expect(getAgentSession(roomSessionId)?.model).toBe(MODEL);
+    expect(chat.model).toBe(MODEL);
+
+    const nextModel = "openai/gpt-6-luna";
+    updateAgent(agentId, { modelId: nextModel });
+    expect(getAgent(agentId)?.modelId).toBe(nextModel);
+    expect(getAgentSession(roomSessionId)?.model).toBe(nextModel);
+    expect(getAgentSession(chat.id)?.model).toBe(nextModel);
+  });
+
   it("a group without a Project lists its agents but cannot make a new chat", () => {
     const group = newGroup(2);
     const [first, second] = group.members;
