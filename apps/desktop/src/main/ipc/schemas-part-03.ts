@@ -129,7 +129,7 @@ export const rulesSaveAgentsSchema = z.object({
   content: z.string().max(200_000),
 });
 
-export const setProviderNotificationsEnabledSchema = z.object({
+export const setProviderModelsEnabledSchema = z.object({
   provider: nonEmptyString,
   enabled: z.boolean(),
 });
