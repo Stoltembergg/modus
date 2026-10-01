@@ -28,7 +28,7 @@ jobs:
           merge_rc=$?
           set -e
           python3 <<'PY'
-          import base64, hashlib, json, pathlib, zlib, re
+          import base64, hashlib, json, pathlib, zlib
           root = pathlib.Path('internal/_push/merge112')
           manifest = json.loads((root / 'manifest.json').read_text())
           for entry in manifest['files']:
@@ -43,35 +43,11 @@ jobs:
             assert b'<<<<<<' not in data
             pathlib.Path(entry['target']).write_bytes(data)
             print('wrote', entry['target'], dig)
-          # Ensure #111 streaming-refresh assertion is present on GroupRoom.test
           test = pathlib.Path('apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx')
           text = test.read_text()
           if 'Ordinary chat messages must not re-hit the DB' not in text:
-            old = '''  it("reloads on group.message and group.activity of this group only", async () => {
-    const user = userEvent.setup();
-    renderRoom();
-    const panel = await openPanel(user);
-    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
-    decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
-    await emit({ type: "group.message", groupId: "g-1", message: message("9") });
-    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
-'''
-            new = '''  it("reloads on status messages and group.activity of this group only (not chat messages)", async () => {
-    const user = userEvent.setup();
-    renderRoom();
-    const panel = await openPanel(user);
-    await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
-    decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
-    // Ordinary chat messages must not re-hit the DB (streaming freezes).
-    await emit({ type: "group.message", groupId: "g-1", message: message("9") });
-    expect(group.listDecisions).toHaveBeenCalledTimes(1);
-    await emit({
-      type: "group.message",
-      groupId: "g-1",
-      message: { ...message("9s"), kind: "status", body: "Decision: Use SQLite" },
-    });
-    await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
-'''
+            old = base64.b64decode('ICBpdCgicmVsb2FkcyBvbiBncm91cC5tZXNzYWdlIGFuZCBncm91cC5hY3Rpdml0eSBvZiB0aGlzIGdyb3VwIG9ubHkiLCBhc3luYyAoKSA9PiB7CiAgICBjb25zdCB1c2VyID0gdXNlckV2ZW50LnNldHVwKCk7CiAgICByZW5kZXJSb29tKCk7CiAgICBjb25zdCBwYW5lbCA9IGF3YWl0IG9wZW5QYW5lbCh1c2VyKTsKICAgIGF3YWl0IHZpLndhaXRGb3IoKCkgPT4gZXhwZWN0KGdyb3VwLmxpc3REZWNpc2lvbnMpLnRvSGF2ZUJlZW5DYWxsZWRUaW1lcygxKSk7CiAgICBkZWNpc2lvbnMgPSBbZGVjaXNpb24oIjEiLCAiVXNlIFNRTGl0ZSIsIHsgYXV0aG9yU2Vzc2lvbklkOiAicy1sZWFkIiB9KV07CiAgICBhd2FpdCBlbWl0KHsgdHlwZTogImdyb3VwLm1lc3NhZ2UiLCBncm91cElkOiAiZy0xIiwgbWVzc2FnZTogbWVzc2FnZSgiOSIpIH0pOwogICAgYXdhaXQgdmkud2FpdEZvcigoKSA9PiBleHBlY3Qod2l0aGluKHBhbmVsKS5nZXRCeVRleHQoIlVzZSBTUUxpdGUiKSkudG9CZVRydXRoeSgpKTsK').decode()
+            new = base64.b64decode('ICBpdCgicmVsb2FkcyBvbiBzdGF0dXMgbWVzc2FnZXMgYW5kIGdyb3VwLmFjdGl2aXR5IG9mIHRoaXMgZ3JvdXAgb25seSAobm90IGNoYXQgbWVzc2FnZXMpIiwgYXN5bmMgKCkgPT4gewogICAgY29uc3QgdXNlciA9IHVzZXJFdmVudC5zZXR1cCgpOwogICAgcmVuZGVyUm9vbSgpOwogICAgY29uc3QgcGFuZWwgPSBhd2FpdCBvcGVuUGFuZWwodXNlcik7CiAgICBhd2FpdCB2aS53YWl0Rm9yKCgpID0+IGV4cGVjdChncm91cC5saXN0RGVjaXNpb25zKS50b0hhdmVCZWVuQ2FsbGVkVGltZXMoMSkpOwogICAgZGVjaXNpb25zID0gW2RlY2lzaW9uKCIxIiwgIlVzZSBTUUxpdGUiLCB7IGF1dGhvclNlc3Npb25JZDogInMtbGVhZCIgfSldOwogICAgLy8gT3JkaW5hcnkgY2hhdCBtZXNzYWdlcyBtdXN0IG5vdCByZS1oaXQgdGhlIERCIChzdHJlYW1pbmcgZnJlZXplcykuCiAgICBhd2FpdCBlbWl0KHsgdHlwZTogImdyb3VwLm1lc3NhZ2UiLCBncm91cElkOiAiZy0xIiwgbWVzc2FnZTogbWVzc2FnZSgiOSIpIH0pOwogICAgZXhwZWN0KGdyb3VwLmxpc3REZWNpc2lvbnMpLnRvSGF2ZUJlZW5DYWxsZWRUaW1lcygxKTsKICAgIGF3YWl0IGVtaXQoewogICAgICB0eXBlOiAiZ3JvdXAubWVzc2FnZSIsCiAgICAgIGdyb3VwSWQ6ICJnLTEiLAogICAgICBtZXNzYWdlOiB7IC4uLm1lc3NhZ2UoIjlzIiksIGtpbmQ6ICJzdGF0dXMiLCBib2R5OiAiRGVjaXNpb246IFVzZSBTUUxpdGUiIH0sCiAgICB9KTsKICAgIGF3YWl0IHZpLndhaXRGb3IoKCkgPT4gZXhwZWN0KHdpdGhpbihwYW5lbCkuZ2V0QnlUZXh0KCJVc2UgU1FMaXRlIikpLnRvQmVUcnV0aHkoKSk7Cg==').decode()
             assert old in text, 'GroupRoom.test patch target missing'
             text = text.replace(old, new, 1)
             test.write_text(text)
