@@ -1,0 +1,43 @@
+name: mcp-restore-eotp
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/mcp-restore-eotp.yml
+permissions:
+  contents: write
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+      - name: Restore group-runtime.ts from known-good blob
+        run: |
+          set -euo pipefail
+          TARGET="apps/desktop/src/main/groups/group-runtime.ts"
+          # Exact content from pf_eotp / commit 90e34988c962
+          git show 90e34988c962:"$TARGET" > "$TARGET"
+          test "$(git hash-object "$TARGET")" = "0443ba26073ab1cc3f09f2b08df313f02810df0b"
+          grep -F "startsChain || chainId === undefined" "$TARGET"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$TARGET"
+          if git diff --cached --quiet; then
+            echo "already restored"
+            exit 0
+          fi
+          git commit -m "fix(groups): exactOptionalPropertyTypes-safe chainId on complement"
+          git push origin "HEAD:cursor/group-execution-linking-c747"
+      - name: Remove restore workflow
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/workflows/mcp-restore-eotp.yml
+          git add -A .github/workflows/mcp-restore-eotp.yml
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: remove mcp-restore-eotp workflow"
+          git push origin "HEAD:cursor/group-execution-linking-c747"
