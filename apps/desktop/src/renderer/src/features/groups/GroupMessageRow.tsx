@@ -272,7 +272,7 @@ function ReplyQuote({
         : "Message";
   return (
     <blockquote
-      className="rounded-md border-l-2 border-accent/60 bg-canvas/60 px-2.5 py-1.5 text-2xs text-fg-subtle"
+      className="rounded-md bg-canvas/60 px-2.5 py-1.5 text-2xs text-fg-subtle"
       data-testid="group-message-quote"
     >
       <a
