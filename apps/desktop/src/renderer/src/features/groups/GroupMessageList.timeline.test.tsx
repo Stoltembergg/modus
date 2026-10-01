@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
+// chore: re-trigger Package for tip after bot action_required (2026-10-01T11:34Z)
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
-import { GroupMessageList } from "./GroupMessageList";
+import { GROUP_MESSAGE_VIRTUALIZE_THRESHOLD, GroupMessageList } from "./GroupMessageList";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 
 afterEach(cleanup);
@@ -191,5 +192,58 @@ describe("Groups canonical timeline", () => {
     );
     expect(screen.queryByTestId("group-new-messages")).toBeNull();
     expect(list.scrollTop).toBe(1000);
+  });
+});
+
+describe("GroupMessageList virtualization", () => {
+  it(`enables the virtualizer at ${GROUP_MESSAGE_VIRTUALIZE_THRESHOLD}+ messages when the viewport has height`, () => {
+    const small = Array.from({ length: GROUP_MESSAGE_VIRTUALIZE_THRESHOLD - 1 }, (_, i) =>
+      message(`m-${i}`, `Body ${i}`),
+    );
+    const { rerender } = render(<List messages={small} />);
+    const list = screen.getByTestId("group-message-list");
+    expect(list.dataset.virtualized).toBe("false");
+    expect(screen.queryByTestId("group-message-virtualizer")).toBeNull();
+    expect(screen.getAllByTestId("group-message")).toHaveLength(small.length);
+
+    Object.defineProperties(list, {
+      scrollHeight: { value: 8000, configurable: true },
+      clientHeight: { value: 400, configurable: true },
+      clientWidth: { value: 760, configurable: true },
+      scrollTop: { value: 0, writable: true, configurable: true },
+    });
+    list.getBoundingClientRect = () =>
+      ({
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        bottom: 400,
+        right: 760,
+        width: 760,
+        height: 400,
+        toJSON() {
+          return {};
+        },
+      }) as DOMRect;
+    const large = Array.from({ length: GROUP_MESSAGE_VIRTUALIZE_THRESHOLD + 10 }, (_, i) =>
+      message(`m-${i}`, `Body ${i}`),
+    );
+    rerender(<List messages={large} />);
+    expect(screen.getByTestId("group-message-list").dataset.virtualized).toBe("true");
+    expect(screen.getByTestId("group-message-virtualizer")).toBeTruthy();
+    // Only the overscanned window mounts — not every transcript row.
+    const mounted = screen.getAllByTestId("group-message").length;
+    expect(mounted).toBeGreaterThan(0);
+    expect(mounted).toBeLessThan(large.length);
+  });
+
+  it("keeps a full DOM list when the scroll viewport has no height (tests / hidden)", () => {
+    const large = Array.from({ length: GROUP_MESSAGE_VIRTUALIZE_THRESHOLD + 5 }, (_, i) =>
+      message(`m-${i}`, `Body ${i}`),
+    );
+    render(<List messages={large} />);
+    expect(screen.getByTestId("group-message-list").dataset.virtualized).toBe("false");
+    expect(screen.getAllByTestId("group-message")).toHaveLength(large.length);
   });
 });

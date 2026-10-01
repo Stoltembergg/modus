@@ -1,3 +1,4 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
 import {
@@ -14,6 +15,12 @@ import type { GroupMemberStatesById } from "./useWorkingGroups";
 
 export const GROUP_ROOM_EMPTY_TEXT =
   "Write to the group. Members pick up what fits — or @mention someone.";
+
+/** Virtualize once the transcript is large enough to matter for scroll cost. */
+export const GROUP_MESSAGE_VIRTUALIZE_THRESHOLD = 40;
+
+/** Estimated row height before measure (compact agent cards ~120px). */
+const ESTIMATED_MESSAGE_ROW_PX = 120;
 
 export {
   GroupMessageRow,
@@ -157,6 +164,53 @@ export function GroupMessageList({
     return active;
   }, [renderedMessages]);
 
+  const [viewportHeight, setViewportHeight] = useState(0);
+  const virtualize =
+    renderedMessages.length >= GROUP_MESSAGE_VIRTUALIZE_THRESHOLD && viewportHeight > 0;
+  const virtualizer = useVirtualizer({
+    count: virtualize ? renderedMessages.length : 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ESTIMATED_MESSAGE_ROW_PX,
+    getItemKey: (index) => renderedMessages[index]?.id ?? index,
+    overscan: 8,
+    enabled: virtualize,
+    initialRect: { width: 760, height: Math.max(viewportHeight, 1) },
+    // Prefer clientHeight (tests can stub it); fall back to measured viewport state.
+    observeElementRect: (instance, callback) => {
+      const element = instance.scrollElement as HTMLElement | null;
+      const report = () => {
+        const height = element?.clientHeight || viewportHeight;
+        callback({
+          width: element?.clientWidth || 760,
+          height: Math.max(height, 1),
+        });
+      };
+      report();
+      if (!element || typeof ResizeObserver === "undefined") return;
+      const observer = new ResizeObserver(report);
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+  });
+  const virtualTotalSize = virtualizer.getTotalSize();
+
+  useLayoutEffect(() => {
+    const node = scrollRef.current;
+    // Re-measure when the room or transcript size changes (threshold crossing).
+    void groupId;
+    void renderedMessages.length;
+    if (!node) {
+      setViewportHeight(0);
+      return;
+    }
+    const sync = () => setViewportHeight(node.clientHeight);
+    sync();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(sync);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [groupId, renderedMessages.length]);
+
   // Prepending older pages preserves the reading position. Revisions of an
   // existing card never count as new messages or move a reader above the bottom.
   useLayoutEffect(() => {
@@ -164,6 +218,7 @@ export function GroupMessageList({
     if (!node) return;
     // Presence changes can change the scroll height without adding public messages.
     void visibleWorkingRows;
+    void virtualTotalSize;
     if (previousRoomRef.current !== groupId) {
       previousRoomRef.current = groupId;
       previousLastRef.current = undefined;
@@ -185,7 +240,7 @@ export function GroupMessageList({
     }
     previousLastRef.current = roomMessages.at(-1)?.id;
     anchorRef.current = { first, height: node.scrollHeight, nearBottom: previous.nearBottom };
-  }, [roomMessages, visibleWorkingRows, groupId]);
+  }, [roomMessages, visibleWorkingRows, groupId, virtualTotalSize]);
 
   function jumpToLatest(): void {
     const node = scrollRef.current;
@@ -202,11 +257,41 @@ export function GroupMessageList({
     if (node.scrollHeight <= node.clientHeight) void loadOlder();
   }, [hasOlder, loadingOlder, loadOlder]);
 
+  const messageRowProps = (message: GroupMessage) => {
+    const liveRow =
+      message.authorKind === "agent" && message.authorSessionId
+        ? liveBySession.get(message.authorSessionId)
+        : undefined;
+    const hasActiveTurn =
+      message.authorKind === "agent" &&
+      message.authorSessionId &&
+      activeMessageBySession.get(message.authorSessionId) === message.id &&
+      liveRow &&
+      !liveRow.live.collapsed;
+    return {
+      activeWaitingSessionIds: activeWaiting,
+      avatar: message.authorSessionId ? avatars.get(message.authorSessionId) : undefined,
+      cwd,
+      labels,
+      liveTurn: hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined,
+      members,
+      message,
+      onExecutionFilter: onExecutionFilterChange,
+      onHandoffClick,
+      onOpenFile,
+      onReply,
+      onRetry,
+      replyToMessage: message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined,
+      role: message.authorSessionId ? roles?.get(message.authorSessionId) : undefined,
+    };
+  };
+
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1">
       <div
         className="min-h-0 min-w-0 flex-1 overflow-y-auto"
         data-testid="group-message-list"
+        data-virtualized={virtualize ? "true" : "false"}
         onScroll={(event) => {
           const node = event.currentTarget;
           anchorRef.current.nearBottom = isNearBottom(
@@ -251,41 +336,33 @@ export function GroupMessageList({
               {GROUP_ROOM_EMPTY_TEXT}
             </div>
           ) : null}
-          {renderedMessages.map((message) => {
-            const liveRow =
-              message.authorKind === "agent" && message.authorSessionId
-                ? liveBySession.get(message.authorSessionId)
-                : undefined;
-            const hasActiveTurn =
-              message.authorKind === "agent" &&
-              message.authorSessionId &&
-              activeMessageBySession.get(message.authorSessionId) === message.id &&
-              liveRow &&
-              !liveRow.live.collapsed;
-            return (
-              <GroupMessageRow
-                activeWaitingSessionIds={activeWaiting}
-                avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
-                cwd={cwd}
-                key={message.id}
-                labels={labels}
-                liveTurn={
-                  hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined
-                }
-                members={members}
-                message={message}
-                onExecutionFilter={onExecutionFilterChange}
-                onHandoffClick={onHandoffClick}
-                onOpenFile={onOpenFile}
-                onReply={onReply}
-                onRetry={onRetry}
-                replyToMessage={
-                  message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
-                }
-                role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
-              />
-            );
-          })}
+          {virtualize ? (
+            <div
+              className="relative w-full"
+              data-testid="group-message-virtualizer"
+              style={{ height: virtualizer.getTotalSize() }}
+            >
+              {virtualizer.getVirtualItems().map((row) => {
+                const message = renderedMessages[row.index];
+                if (!message) return null;
+                return (
+                  <div
+                    className="absolute top-0 left-0 w-full pb-3"
+                    data-index={row.index}
+                    key={message.id}
+                    ref={virtualizer.measureElement}
+                    style={{ transform: `translateY(${row.start}px)` }}
+                  >
+                    <GroupMessageRow {...messageRowProps(message)} />
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            renderedMessages.map((message) => (
+              <GroupMessageRow key={message.id} {...messageRowProps(message)} />
+            ))
+          )}
           <GroupWorkingStatus
             avatars={avatars}
             groupId={groupId}
