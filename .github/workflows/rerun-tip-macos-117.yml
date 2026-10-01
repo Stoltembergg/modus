@@ -1,0 +1,24 @@
+name: rerun-tip-macos-117
+on:
+  push:
+    branches: [cursor/rerun-macos-117-7ef8]
+permissions:
+  actions: write
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Re-run cancelled tip Package macOS
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runId = 36866125741;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const { data: run } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: runId });
+            console.log('target', run.id, run.head_sha, run.status, run.conclusion, run.name);
+            if (run.head_sha !== '5c555869539666fdea9638736a4fda7fde317253') {
+              throw new Error(`refusing to rerun: head_sha ${run.head_sha} != tip 5c555869`);
+            }
+            await github.rest.actions.reRunWorkflow({ owner, repo, run_id: runId });
+            console.log('rerun requested for', runId);
