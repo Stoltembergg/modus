@@ -28,12 +28,10 @@
    listAgentGroupMembers,
    listGroupDecisions,
    listGroupMessages,
-@@ -146,6 +148,93 @@
-     this.supersedeWaiting(input.groupId);
-     this.pump();
+@@ -148,6 +150,93 @@
      return message;
-+  }
-+
+   }
+ 
 +  /**
 +   * Resume an interrupted/failed turn by durable execution id (job/turn id).
 +   * Requeues the same job in its original chain — no new user message.
@@ -120,5 +118,7 @@
 +    this.queues.set(wake.sessionId, queue);
 +    this.emitActivity(wake.groupId);
 +  }
- 
++
    private saveUserMessage(input: PostGroupMessageInput): GroupMessage {
+     const group = getAgentGroup(input.groupId);
+     const blocked = group ? groupBlockedReason(group, listAgentGroupMembers(group.id)) : null;
