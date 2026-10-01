@@ -1,10 +1,5 @@
 import type { ResumeGroupExecutionInput } from "../../shared/contracts";
-import {
-  getGroupJob,
-  persistGroupChain,
-  readGroupChain,
-  updateGroupJob,
-} from "./group-job-store";
+import { getGroupJob, persistGroupChain, readGroupChain, updateGroupJob } from "./group-job-store";
 import type { ChainState, Wake } from "./group-runtime-lib";
 import { membersOf } from "./group-runtime-lib";
 import { getGroupRuntime } from "./group-runtime-service";
@@ -93,26 +88,34 @@ function requeueExecution(runtime: ResumeRuntime, input: ResumeGroupExecutionInp
     );
   }
   if (chain.ended) {
-    chain.ended = undefined;
+    delete chain.ended;
     persistGroupChain(chain);
   }
   runtime.retiredChains.delete(chain.chainId);
   runtime.chains.set(chain.chainId, chain);
+  // Rebuild wake without prior run/error/progress fields (exactOptionalPropertyTypes).
+  const {
+    error: _error,
+    runId: _runId,
+    lastEventCursor: _lastEventCursor,
+    startedAt: _startedAt,
+    lastProgressAt: _lastProgressAt,
+    pausedAt: _pausedAt,
+    worktreeBranch: _worktreeBranch,
+    publicMessageIds: _publicMessageIds,
+    assistantMessageIds: _assistantMessageIds,
+    questionRequestIds: _questionRequestIds,
+    watchdog: _watchdog,
+    cancelled: _cancelled,
+    gated: _gated,
+    seq: _seq,
+    ...base
+  } = job.wake;
   const wake: Wake = {
-    ...job.wake,
+    ...base,
     seq: ++runtime.seq,
     cancelled: false,
     gated: false,
-    error: undefined,
-    runId: undefined,
-    lastEventCursor: undefined,
-    startedAt: undefined,
-    lastProgressAt: undefined,
-    pausedAt: undefined,
-    worktreeBranch: undefined,
-    publicMessageIds: undefined,
-    assistantMessageIds: undefined,
-    questionRequestIds: undefined,
   };
   updateGroupJob(wake, "pending");
   runtime.transcript.setState(wake, "queued");
