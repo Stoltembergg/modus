@@ -279,7 +279,7 @@ export function GroupComposer({
       ) : null}
       {replyTo ? (
         <div
-          className="mb-2 flex items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
+          className="mb-2 flex items-center gap-2 rounded-md border border-hairline bg-elevated px-2.5 py-1.5 text-2xs text-fg-muted"
           data-testid="group-composer-reply"
         >
           <span className="min-w-0 flex-1 truncate">
@@ -305,7 +305,7 @@ export function GroupComposer({
               "rounded-md border px-2 py-1 font-medium transition-colors",
               executionMode === "new"
                 ? "border-accent/40 bg-accent/15 text-fg"
-                : "border-hairline bg-elevated/60 text-fg-muted hover:text-fg",
+                : "border-hairline bg-elevated text-fg-muted hover:text-fg",
             )}
             data-testid="group-composer-mode-new"
             onClick={() => setExecutionMode("new")}
@@ -318,7 +318,7 @@ export function GroupComposer({
               "rounded-md border px-2 py-1 font-medium transition-colors",
               executionMode === "complement"
                 ? "border-accent/40 bg-accent/15 text-fg"
-                : "border-hairline bg-elevated/60 text-fg-muted hover:text-fg",
+                : "border-hairline bg-elevated text-fg-muted hover:text-fg",
             )}
             data-testid="group-composer-mode-complement"
             onClick={() => setExecutionMode("complement")}
@@ -336,7 +336,7 @@ export function GroupComposer({
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       {showKickoff && !value.trim() && attachments.length === 0 ? (
         <div
-          className="mb-2 space-y-2 rounded-xl border border-hairline bg-elevated/80 px-3 py-2.5"
+          className="mb-2 space-y-2 rounded-xl border border-hairline bg-elevated px-3 py-2.5"
           data-testid="group-kickoff"
         >
           <p className="font-medium text-fg text-xs">Kick off the group</p>
@@ -395,10 +395,12 @@ export function GroupComposer({
       {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach via the paperclip button or paste. */}
       <div
         className={cn(
-          "relative rounded-xl border border-composer-border bg-elevated transition-colors",
-          dragOver && "border-accent/60 bg-accent/5",
+          "composer-dock-shell relative transition-colors",
         )}
+        data-composer-surface
+        data-dragging={dragOver ? "" : undefined}
         data-testid="group-composer-dropzone"
+        data-ui-surface="raised"
         onDragEnter={(event) => {
           event.preventDefault();
           setDragOver(true);

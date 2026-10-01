@@ -11,7 +11,6 @@ import {
   IconPencil,
   IconPin,
   IconPinnedOff,
-  IconSettings,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
@@ -32,7 +31,6 @@ import type {
   CreateAgentGroupInput,
   WorkspaceInfo,
 } from "../../../shared/contracts";
-import { CHATS_WORKSPACE_ID } from "../../../shared/contracts";
 import type { SessionActivity } from "../features/agent/agentEventHub";
 import { SessionStatusDot } from "../features/agent/SessionStatusDot";
 import type { GroupDialogModel, GroupMembersChange } from "../features/groups/CreateGroupDialog";
@@ -53,7 +51,7 @@ import { ScrollReveal } from "./ui/ScrollReveal";
 
 export const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 480;
-export const SIDEBAR_TRANSITION = { duration: 0.3, ease: [0.25, 0.1, 0.25, 1] } as const;
+export const SIDEBAR_TRANSITION = { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] } as const;
 
 /**
  * Sidebar density contract — one icon rail for nav / folder / session dots.
@@ -73,9 +71,11 @@ const SB_ICON = ICON.lg;
 const SB_STROKE = ICON_STROKE.lg;
 const SB_ACTION = ICON.sm;
 const SB_ACTION_STROKE = ICON_STROKE.sm;
-const LIST_MOTION = { duration: 0.22, ease: "easeOut" } as const;
+const LIST_MOTION = { duration: 0.16, ease: "easeOut" } as const;
 
 type SidebarProps = {
+  /** The primary rail destination whose list belongs in this context panel. */
+  section?: "groups" | "direct-messages";
   workspaces: WorkspaceInfo[];
   agentSessions: AgentSessionInfo[];
   activeSessionId?: string | undefined;
@@ -142,6 +142,7 @@ const NO_GROUPS: readonly AgentGroupWithMembers[] = [];
 const NO_MODELS: readonly GroupDialogModel[] = [];
 
 export function Sidebar({
+  section = "groups",
   workspaces,
   agentSessions,
   activeSessionId,
@@ -164,7 +165,6 @@ export function Sidebar({
   onDeleteProjectChats,
   onRemoveProject,
   onRevealProject,
-  onOpenSettings,
   onWidthChange,
   canCreateSession,
   onRenameSession,
@@ -188,39 +188,35 @@ export function Sidebar({
   onEditAgent,
   onAddAgent,
 }: SidebarProps) {
-  const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [projectsExpanded, setProjectsExpanded] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
   const [groupsExpanded, setGroupsExpanded] = useState(true);
-  const projectIds = useMemo(
-    () => new Set(workspaces.map((workspace) => workspace.id)),
-    [workspaces],
-  );
   // Hidden group room sessions (kind "group_member") are never listed as chats.
   const ungroupedSessions = useMemo(() => agentSessions.filter(isListedChat), [agentSessions]);
-  const sessionsByWorkspace = groupSessionsByWorkspace(ungroupedSessions);
-  // Split inbox: pinned first, then unpinned
+  const sessionsByWorkspace = groupSessionsByWorkspace(
+    ungroupedSessions.filter((session) => !session.pinnedAt && !session.agentId),
+  );
+  // Pinned direct messages stay together; the rest of the list stays flat.
   const pinnedSessions = useMemo(
     () =>
       ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
-          session.pinnedAt &&
-          (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
+          session.pinnedAt,
       ),
-    [ungroupedSessions, projectIds],
+    [ungroupedSessions],
   );
-  const inboxSessions = useMemo(
+  const directMessageSessions = useMemo(
     () =>
       ungroupedSessions.filter(
         (session) =>
           !session.parentSessionId &&
           !session.archivedAt &&
-          !session.pinnedAt &&
-          (session.workspaceId === CHATS_WORKSPACE_ID || !projectIds.has(session.workspaceId)),
+          !session.pinnedAt,
       ),
-    [ungroupedSessions, projectIds],
+    [ungroupedSessions],
   );
   const { ref: scrollFadeRef, fadeTop, fadeBottom } = useScrollFade();
   const scrollContainerRef = scrollFadeRef as RefObject<HTMLElement | null>;
@@ -300,15 +296,17 @@ export function Sidebar({
       >
         {/* Clears native traffic lights; conversation layout has no separate MenuBar. */}
         {isMac ? <div aria-hidden className="app-drag h-9 shrink-0" /> : null}
-        <div className="app-no-drag px-2 pt-3 pb-1">
-          <NavRow
-            disabled={!canCreateSession}
-            icon={<IconEdit size={SB_ICON} stroke={SB_STROKE} />}
-            onClick={onNewSession}
-          >
-            New chat
-          </NavRow>
-        </div>
+        {section === "direct-messages" ? (
+          <div className="app-no-drag px-2 pt-3 pb-1">
+            <NavRow
+              disabled={!canCreateSession}
+              icon={<IconEdit size={SB_ICON} stroke={SB_STROKE} />}
+              onClick={onNewSession}
+            >
+              New message
+            </NavRow>
+          </div>
+        ) : null}
 
         <div
           className={cn(
@@ -320,7 +318,7 @@ export function Sidebar({
           ref={scrollFadeRef}
         >
           {/* 📌 Pinned section — global, above Projects and Chats */}
-          {pinnedSessions.length > 0 && (
+          {section === "direct-messages" && pinnedSessions.length > 0 && (
             <>
               <SectionHeader
                 expanded={pinnedExpanded}
@@ -369,7 +367,7 @@ export function Sidebar({
             </>
           )}
 
-          {onCreateGroup ? (
+          {section === "groups" && onCreateGroup ? (
             <>
               <SectionHeader
                 expanded={groupsExpanded}
@@ -409,91 +407,16 @@ export function Sidebar({
             </>
           ) : null}
 
-          <SectionHeader
-            expanded={projectsExpanded}
-            onToggle={() => setProjectsExpanded((expanded) => !expanded)}
-          >
-            Projects
-          </SectionHeader>
-
-          <CollapsibleMotion open={projectsExpanded} preset="default">
-            {workspaces.length === 0 ? (
-              <NavRow
-                icon={<IconFolder size={SB_ICON} stroke={SB_STROKE} />}
-                muted
-                onClick={onOpenWorkspace}
-              >
-                Open a repository…
-              </NavRow>
-            ) : (
+          {section === "direct-messages" ? (
+            <>
+              <SectionLabel>Direct Messages</SectionLabel>
               <AnimatePresence initial={false}>
-                {workspaces.map((workspace) => (
-                  <m.div
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
-                    initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                    key={workspace.id}
-                    layout
-                    transition={{
-                      duration: reduceMotion ? 0 : LIST_MOTION.duration,
-                      ease: LIST_MOTION.ease,
-                    }}
-                  >
-                    <WorkspaceItem
-                      activityBySession={activityBySession}
-                      onArchiveSession={onArchiveSession}
-                      onDeleteSession={onDeleteSession}
-                      onListArchivedSessions={onListArchivedSessions}
-                      onNewSession={() => onNewWorkspaceSession(workspace)}
-                      onPinSession={onPinSession}
-                      onRenameSession={(id, title) => onRenameSession?.(id, title)}
-                      onRestoreSession={onRestoreSession}
-                      onSelectSession={onSelectSession}
-                      activeSessionId={activeSessionId}
-                      sessions={sessionsByWorkspace.get(workspace.id) ?? []}
-                      workspace={workspace}
-                      renaming={renamingId === workspace.id}
-                      onStartRename={() => setRenamingId(workspace.id)}
-                      onCommitRename={(name) => {
-                        setRenamingId(null);
-                        const next = name.trim();
-                        if (next && next !== workspace.displayName) {
-                          onRenameProject(workspace.id, next);
-                        }
-                      }}
-                      onCancelRename={() => setRenamingId(null)}
-                      onPin={() => onPinProject(workspace.id, !workspace.pinned)}
-                      onReveal={() => onRevealProject(workspace.id)}
-                      onArchiveChats={() => onArchiveProjectChats(workspace.id)}
-                      onDeleteChats={() => onDeleteProjectChats(workspace.id)}
-                      onRemove={() => onRemoveProject(workspace.id)}
-                      groupNames={projectGroupNames(groups, workspace.id)}
-                      scrollContainerRef={scrollContainerRef}
-                    />
-                  </m.div>
-                ))}
-              </AnimatePresence>
-            )}
-
-            <div className="mt-1">
-              <NavRow
-                icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
-                muted
-                onClick={onOpenWorkspace}
-              >
-                Open workspace
-              </NavRow>
-            </div>
-          </CollapsibleMotion>
-
-          <SectionLabel>Chats</SectionLabel>
-          <AnimatePresence initial={false}>
-            {inboxSessions.length === 0 ? (
-              <p className="px-2 py-1 text-2xs text-fg-faint">
-                Chats without a folder appear here.
-              </p>
-            ) : (
-              inboxSessions.map((session) => (
+                {directMessageSessions.length === 0 ? (
+                  <p className="px-2 py-1 text-2xs text-fg-faint">
+                    Your direct messages will appear here.
+                  </p>
+                ) : (
+                  directMessageSessions.map((session) => (
                 <ScrollReveal
                   key={session.id}
                   offsetY={8}
@@ -522,18 +445,84 @@ export function Sidebar({
                     updatedAt={session.updatedAt}
                   />
                 </ScrollReveal>
-              ))
-            )}
-          </AnimatePresence>
-        </div>
+                  ))
+                )}
+              </AnimatePresence>
+            </>
+          ) : null}
 
-        <div className="app-no-drag px-2 pt-1 pb-2">
-          <NavRow
-            icon={<IconSettings size={SB_ICON} stroke={SB_STROKE} />}
-            onClick={onOpenSettings}
-          >
-            Settings
-          </NavRow>
+          {section === "direct-messages" ? (
+            <div
+              className="mt-3 border-t border-hairline pt-2"
+              data-testid="sidebar-project-context"
+            >
+              <SectionHeader
+                expanded={projectsExpanded}
+                onToggle={() => setProjectsExpanded((expanded) => !expanded)}
+              >
+                Project context
+              </SectionHeader>
+
+              <CollapsibleMotion open={projectsExpanded} preset="default">
+                <AnimatePresence initial={false}>
+                  {workspaces.map((workspace) => (
+                    <m.div
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -4 }}
+                      initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                      key={workspace.id}
+                      layout
+                      transition={{
+                        duration: reduceMotion ? 0 : LIST_MOTION.duration,
+                        ease: LIST_MOTION.ease,
+                      }}
+                    >
+                      <WorkspaceItem
+                        activityBySession={activityBySession}
+                        onArchiveSession={onArchiveSession}
+                        onDeleteSession={onDeleteSession}
+                        onListArchivedSessions={onListArchivedSessions}
+                        onNewSession={() => onNewWorkspaceSession(workspace)}
+                        onPinSession={onPinSession}
+                        onRenameSession={(id, title) => onRenameSession?.(id, title)}
+                        onRestoreSession={onRestoreSession}
+                        onSelectSession={onSelectSession}
+                        activeSessionId={activeSessionId}
+                        sessions={sessionsByWorkspace.get(workspace.id) ?? []}
+                        workspace={workspace}
+                        renaming={renamingId === workspace.id}
+                        onStartRename={() => setRenamingId(workspace.id)}
+                        onCommitRename={(name) => {
+                          setRenamingId(null);
+                          const next = name.trim();
+                          if (next && next !== workspace.displayName) {
+                            onRenameProject(workspace.id, next);
+                          }
+                        }}
+                        onCancelRename={() => setRenamingId(null)}
+                        onPin={() => onPinProject(workspace.id, !workspace.pinned)}
+                        onReveal={() => onRevealProject(workspace.id)}
+                        onArchiveChats={() => onArchiveProjectChats(workspace.id)}
+                        onDeleteChats={() => onDeleteProjectChats(workspace.id)}
+                        onRemove={() => onRemoveProject(workspace.id)}
+                        groupNames={projectGroupNames(groups, workspace.id)}
+                        scrollContainerRef={scrollContainerRef}
+                      />
+                    </m.div>
+                  ))}
+                </AnimatePresence>
+                <div className="mt-1">
+                  <NavRow
+                    icon={<IconFolderPlus size={SB_ICON} stroke={SB_STROKE} />}
+                    muted
+                    onClick={onOpenWorkspace}
+                  >
+                    Open workspace
+                  </NavRow>
+                </div>
+              </CollapsibleMotion>
+            </div>
+          ) : null}
         </div>
       </m.div>
       {open ? (
@@ -992,7 +981,7 @@ function ProjectRow({
             menuOpen && "bg-hover text-fg",
           )}
           layout
-          transition={{ duration: 0.22, ease: "easeOut" }}
+          transition={{ duration: 0.16, ease: "easeOut" }}
         >
           <button
             aria-expanded={expanded}
@@ -1008,7 +997,7 @@ function ProjectRow({
             <m.span
               animate={{ rotate: expanded ? 90 : 0 }}
               className="flex size-3 shrink-0 items-center justify-center text-fg-faint opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-              transition={{ duration: 0.28, ease: [0.25, 0.1, 0.25, 1] }}
+              transition={{ duration: 0.16, ease: [0.25, 0.1, 0.25, 1] }}
             >
               <IconChevronRight size={ICON.xs} stroke={ICON_STROKE.xs} />
             </m.span>

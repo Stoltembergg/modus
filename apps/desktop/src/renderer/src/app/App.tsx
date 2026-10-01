@@ -50,6 +50,17 @@ import type {
 } from "../../../shared/contracts";
 import modusLogo from "../assets/modus-logo.png";
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_TRANSITION, Sidebar } from "../components/Sidebar";
+import { APP_RAIL_WIDTH, AppRail, type PrimaryDestination } from "../components/shell/AppRail";
+import { AppShell } from "../components/shell/AppShell";
+import { ContextSidebar } from "../components/shell/ContextSidebar";
+import { MainSurface } from "../components/shell/MainSurface";
+import { TopBar } from "../components/shell/TopBar";
+import {
+  INITIAL_PRIMARY_NAVIGATION,
+  closeSettingsNavigation,
+  navigatePrimary,
+  restorePrimaryNavigation,
+} from "../components/shell/navigation-state";
 import { Aurora } from "../components/ui/Aurora";
 import { ChromeMoreMenu } from "../components/ui/ChromeMoreMenu";
 import { FadeContent } from "../components/ui/FadeContent";
@@ -115,6 +126,7 @@ const WORKSPACE_GUTTER = 8;
 const loadChatPane = () => import("../features/agent/ChatPane");
 const loadInspector = () => import("../features/inspector/Inspector");
 const loadSettingsPanel = () => import("../features/settings/SettingsPanel");
+const loadConnectionsPage = () => import("../features/settings/ConnectionsPage");
 const ChatPane = lazy(() =>
   loadChatPane().then(({ ChatPane: Component }) => ({ default: Component })),
 );
@@ -125,6 +137,11 @@ const Inspector = lazy(() =>
 );
 const SettingsPanel = lazy(() =>
   loadSettingsPanel().then(({ SettingsPanel: Component }) => ({
+    default: Component,
+  })),
+);
+const ConnectionsPage = lazy(() =>
+  loadConnectionsPage().then(({ ConnectionsPage: Component }) => ({
     default: Component,
   })),
 );
@@ -179,7 +196,17 @@ export function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState("");
   const [modelSettings, setModelSettings] = useState<ModelSettingsState | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
+  const primaryNavigationTouchedRef = useRef(false);
+  const settingsOpen = primaryNavigation.active === "settings";
+  const navigateToPrimary = useCallback((destination: PrimaryDestination) => {
+    primaryNavigationTouchedRef.current = true;
+    setPrimaryNavigation((current) => navigatePrimary(current, destination));
+  }, []);
+  const closeSettings = useCallback(() => {
+    primaryNavigationTouchedRef.current = true;
+    setPrimaryNavigation((current) => closeSettingsNavigation(current));
+  }, []);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(300);
   const [inspectorOpen, setInspectorOpen] = useState(false);
@@ -338,7 +365,12 @@ export function App() {
 
   useEffect(() => {
     const idleCallback = window.requestIdleCallback(() => {
-      void Promise.allSettled([loadChatPane(), loadInspector(), loadSettingsPanel()]);
+      void Promise.allSettled([
+        loadChatPane(),
+        loadInspector(),
+        loadSettingsPanel(),
+        loadConnectionsPage(),
+      ]);
     });
     return () => window.cancelIdleCallback(idleCallback);
   }, []);
@@ -451,7 +483,14 @@ export function App() {
         setInspectorOpen(layout.inspector.open);
         setInspectorWidth(Math.max(INSPECTOR_MIN_WIDTH, layout.inspector.width));
         setInspectorTab(layout.inspector.tab);
-        setSettingsOpen(layout.settingsOpen);
+        if (!primaryNavigationTouchedRef.current) {
+          setPrimaryNavigation((current) =>
+            restorePrimaryNavigation(current, {
+              settingsOpen: layout.settingsOpen,
+              activeSessionId: navigation?.activeSessionId,
+            }),
+          );
+        }
       })
       .catch(() => undefined);
     void hydration.settled.then(() => {
@@ -568,13 +607,14 @@ export function App() {
     // System notification click → surface that session in the chat view.
     const unsubscribeFocus = window.modus.agent.onFocusSession((sessionId: string) => {
       setActiveSessionId(sessionId);
+      navigateToPrimary("direct-messages");
     });
 
     return () => {
       unsubscribe();
       unsubscribeFocus();
     };
-  }, [refreshSessions]);
+  }, [navigateToPrimary, refreshSessions]);
 
   // Opening a session unmounts the hero composer: its text is dropped, as it was
   // before the draft was lifted into App.
@@ -632,7 +672,7 @@ export function App() {
 
   async function createSession(workspace: WorkspaceInfo | null): Promise<AgentSessionInfo | null> {
     if (!model) {
-      setSettingsOpen(true);
+      navigateToPrimary("settings");
       setSessionCreateError("No model is configured. Connect a provider in Settings first.");
       return null;
     }
@@ -656,6 +696,7 @@ export function App() {
           : [session, ...current];
       });
       setActiveSessionId(session.id);
+      navigateToPrimary("direct-messages");
       void refreshSessions();
       return session;
     } catch (error) {
@@ -666,8 +707,8 @@ export function App() {
 
   function selectSession(session: AgentSessionInfo): void {
     setSessionCreateError(undefined);
-    setSettingsOpen(false);
-    // Inbox / orphan chats stay under Chats — clear the project folder selection.
+    navigateToPrimary("direct-messages");
+    // Direct messages without a project keep the project context clear.
     const project = workspaces.find((workspace) => workspace.id === session.workspaceId);
     setActiveWorkspace(project && !project.inbox ? project : null);
     setAgentSessions((current) => {
@@ -690,6 +731,15 @@ export function App() {
     setInspectorTab("changes");
     setInspectorOpen(true);
   }
+
+  const openActivity = useCallback(() => {
+    setInspectorTab("activity");
+    setInspectorOpen(true);
+  }, []);
+
+  const openConnections = useCallback(() => {
+    navigateToPrimary("connections");
+  }, [navigateToPrimary]);
 
   const rememberActivePlan = useCallback(
     (plan: PlanRef) => {
@@ -718,7 +768,7 @@ export function App() {
    */
   function selectGroup(group: AgentGroupWithMembers): void {
     setSessionCreateError(undefined);
-    setSettingsOpen(false);
+    navigateToPrimary("groups");
     setActiveSessionId(undefined);
     setActiveGroupId(group.id);
   }
@@ -729,7 +779,7 @@ export function App() {
       setActiveWorkspace(workspace);
     }
     setSessionCreateError(undefined);
-    setSettingsOpen(false);
+    navigateToPrimary("direct-messages");
     setActiveSessionId(undefined);
   }
 
@@ -1019,7 +1069,15 @@ export function App() {
   }, [cycleModel]);
 
   const hasSession = Boolean(activeSession);
-  const activeCwd = activeSession?.cwd ?? activeWorkspace?.rootPath;
+  const visibleSession = primaryNavigation.active === "direct-messages" ? activeSession : undefined;
+  const visibleGroup = primaryNavigation.active === "groups" ? activeGroup : undefined;
+  const visibleGroupWorkspace = visibleGroup
+    ? workspaces.find((workspace) => workspace.id === visibleGroup.workspaceId)
+    : undefined;
+  const activeCwd =
+    visibleSession?.cwd ??
+    visibleGroupWorkspace?.rootPath ??
+    (primaryNavigation.active === "direct-messages" ? activeWorkspace?.rootPath : undefined);
   const branch = useGitBranch(activeCwd);
   const isMac = window.modus?.app.platform === "darwin";
   const activeRunning = activeSession
@@ -1040,22 +1098,29 @@ export function App() {
   // Each panel may grow only until the OTHER panel + main's reserved floor are
   // accounted for. Until the row is measured, allow the panels' own caps.
   const sidebarSpace = sidebarOpen ? sidebarWidth : 0;
-  const inspectorSpace = hasSession && inspectorOpen ? inspectorWidth : 0;
-  const workspaceChrome = WORKSPACE_GUTTER * (inspectorSpace > 0 ? 3 : 2);
+  const showInspectorForRoute = primaryNavigation.active === "direct-messages" && hasSession;
+  const inspectorSpace = showInspectorForRoute && inspectorOpen ? inspectorWidth : 0;
+  const workspaceChrome = WORKSPACE_GUTTER * (inspectorSpace > 0 ? 4 : 3);
   const mainSpace = MAIN_MIN_WIDTH + workspaceChrome;
   const inspectorFits =
-    layoutWidth === 0 || layoutWidth >= sidebarSpace + inspectorWidth + mainSpace;
+    layoutWidth === 0 ||
+    layoutWidth >= APP_RAIL_WIDTH + sidebarSpace + inspectorWidth + mainSpace;
   const sidebarFits =
-    layoutWidth === 0 || layoutWidth >= sidebarWidth + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 2;
-  const responsiveInspectorOpen = hasSession && inspectorOpen && inspectorFits;
+    layoutWidth === 0 ||
+    layoutWidth >=
+      APP_RAIL_WIDTH + sidebarWidth + MAIN_MIN_WIDTH + WORKSPACE_GUTTER * 3;
+  const responsiveInspectorOpen = showInspectorForRoute && inspectorOpen && inspectorFits;
   const responsiveSidebarOpen = sidebarOpen && sidebarFits;
   const sidebarMaxWidth =
     layoutWidth > 0
-      ? Math.max(SIDEBAR_MIN_WIDTH, layoutWidth - inspectorSpace - mainSpace)
+      ? Math.max(SIDEBAR_MIN_WIDTH, layoutWidth - APP_RAIL_WIDTH - inspectorSpace - mainSpace)
       : Number.POSITIVE_INFINITY;
   const inspectorMaxWidth =
     layoutWidth > 0
-      ? Math.max(INSPECTOR_MIN_WIDTH, layoutWidth - sidebarSpace - mainSpace)
+      ? Math.max(
+          INSPECTOR_MIN_WIDTH,
+          layoutWidth - APP_RAIL_WIDTH - sidebarSpace - mainSpace,
+        )
       : Number.POSITIVE_INFINITY;
 
   // When the window (or the other panel) shrinks, pull an over-wide panel back
@@ -1146,7 +1211,7 @@ export function App() {
       <TooltipProvider>
         <NativeSurfaceProvider>
           <ImageViewerProvider>
-            <div className="app-root flex h-screen flex-col bg-panel text-fg">
+            <AppShell className="app-root">
               {/* Settings keeps a dedicated titlebar. Conversation chrome uses the
                   main toolbar as the drag/traffic-light row so there is no empty
                   band above the chat header. */}
@@ -1154,24 +1219,28 @@ export function App() {
 
               <FadeContent blur className="flex min-h-0 min-w-0 flex-1 flex-col" duration={0.7}>
                 <div
-                  className="flex min-h-0 min-w-0 flex-1 bg-panel"
+                  className="surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
                   style={
-                    settingsOpen
+                    primaryNavigation.active === "settings"
                       ? undefined
                       : {
                           gap: WORKSPACE_GUTTER,
                           paddingTop: 0,
                           paddingRight: WORKSPACE_GUTTER,
                           paddingBottom: WORKSPACE_GUTTER,
-                          paddingLeft: responsiveSidebarOpen ? 0 : WORKSPACE_GUTTER,
                         }
                   }
                 >
+                  <AppRail
+                    active={primaryNavigation.active}
+                    nativeTitlebar={isMac && !settingsOpen}
+                    onNavigate={navigateToPrimary}
+                  />
                   {settingsOpen ? (
                     <Suspense fallback={<ModusLoadingFallback />}>
                       <SettingsPanel
-                        onClose={() => setSettingsOpen(false)}
+                        onClose={closeSettings}
                         onRefresh={refreshModelSettings}
                         onRefreshCatalog={refreshModelCatalog}
                         state={modelSettings}
@@ -1179,73 +1248,86 @@ export function App() {
                         workspaceCwd={activeWorkspace?.rootPath}
                       />
                     </Suspense>
+                  ) : primaryNavigation.active === "connections" ? (
+                    <MainSurface className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0">
+                      <TopBar className="toolbar-row app-drag flex shrink-0 items-center px-4">
+                        <h1 className="app-no-drag text-sm font-medium text-fg">Connections</h1>
+                        <div className="ml-auto">{isMac ? null : <WindowControls />}</div>
+                      </TopBar>
+                      <Suspense fallback={<ModusLoadingFallback />}>
+                        <ConnectionsPage />
+                      </Suspense>
+                    </MainSurface>
                   ) : (
                     <>
-                      <Sidebar
-                        activityBySession={activityBySession}
-                        agentSessions={rootSessions}
-                        canCreateSession={canCreateSession}
-                        onArchiveSession={(session) => void archiveSession(session)}
-                        onDeleteSession={(session) => void deleteSession(session)}
-                        onListArchivedSessions={(workspaceId) =>
-                          window.modus.agent.listArchived(workspaceId)
-                        }
-                        onPinProject={(id, pinned) => void pinProject(id, pinned)}
-                        onPinSession={(session, pinned) => void pinSession(session, pinned)}
-                        onRenameSession={(id, title) => void renameSession(id, title)}
-                        onRenameProject={(id, displayName) => void renameProject(id, displayName)}
-                        onArchiveProjectChats={(id) => void archiveProjectChats(id)}
-                        onDeleteProjectChats={(id) => void deleteProjectChats(id)}
-                        onRemoveProject={(id) => void removeProject(id)}
-                        onRestoreSession={(session) => void restoreSession(session)}
-                        onRevealProject={(id) => void revealProject(id)}
-                        onNewSession={() => openNewChat()}
-                        onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
-                        onOpenWorkspace={() => void openWorkspace()}
-                        onOpenSettings={() => {
-                          setSettingsOpen(true);
-                        }}
-                        onSelectSession={selectSession}
-                        onWidthChange={setSidebarWidth}
-                        activeSessionId={activeSessionId}
-                        maxWidth={sidebarMaxWidth}
-                        open={responsiveSidebarOpen}
-                        width={sidebarWidth}
-                        workspaces={workspaces}
-                        groups={agentGroups}
-                        groupModels={groupModels}
-                        defaultGroupModelId={model || undefined}
-                        isGroupWorking={isGroupWorking}
-                        isGroupWaiting={isGroupWaiting}
-                        activeGroupId={activeGroup?.id}
-                        onSelectGroup={selectGroup}
-                        activeWorkspaceId={
-                          activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
-                        }
-                        onCreateGroup={createGroup}
-                        newGroupServices={newGroupServices}
-                        onUpdateGroupMembers={updateGroupMembers}
-                        onRenameGroup={(id, name) =>
-                          void runGroupAction(() => window.modus.group.rename({ id, name }))
-                        }
-                        onDeleteGroup={(id) =>
-                          void runGroupAction(() => window.modus.group.remove(id))
-                        }
-                        onRemoveGroupMember={(groupId, sessionId) =>
-                          void runGroupAction(() =>
-                            window.modus.group.removeMember({ groupId, sessionId }),
-                          )
-                        }
-                        onSetGroupLead={(groupId, sessionId) =>
-                          void runGroupAction(() =>
-                            window.modus.group.setLead({ groupId, sessionId }),
-                          )
-                        }
-                        groupMemberStates={groupMemberStates}
-                        onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
-                        onEditAgent={(agentId) => void editAgent(agentId)}
-                        onAddAgent={(groupId) => setAgentDialog({ groupId })}
-                      />
+                      <ContextSidebar>
+                        <Sidebar
+                          section={
+                            primaryNavigation.active === "groups" ? "groups" : "direct-messages"
+                          }
+                          activityBySession={activityBySession}
+                          agentSessions={rootSessions}
+                          canCreateSession={canCreateSession}
+                          onArchiveSession={(session) => void archiveSession(session)}
+                          onDeleteSession={(session) => void deleteSession(session)}
+                          onListArchivedSessions={(workspaceId) =>
+                            window.modus.agent.listArchived(workspaceId)
+                          }
+                          onPinProject={(id, pinned) => void pinProject(id, pinned)}
+                          onPinSession={(session, pinned) => void pinSession(session, pinned)}
+                          onRenameSession={(id, title) => void renameSession(id, title)}
+                          onRenameProject={(id, displayName) => void renameProject(id, displayName)}
+                          onArchiveProjectChats={(id) => void archiveProjectChats(id)}
+                          onDeleteProjectChats={(id) => void deleteProjectChats(id)}
+                          onRemoveProject={(id) => void removeProject(id)}
+                          onRestoreSession={(session) => void restoreSession(session)}
+                          onRevealProject={(id) => void revealProject(id)}
+                          onNewSession={() => openNewChat()}
+                          onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
+                          onOpenWorkspace={() => void openWorkspace()}
+                          onOpenSettings={() => navigateToPrimary("settings")}
+                          onSelectSession={selectSession}
+                          onWidthChange={setSidebarWidth}
+                          activeSessionId={activeSessionId}
+                          maxWidth={sidebarMaxWidth}
+                          open={responsiveSidebarOpen}
+                          width={sidebarWidth}
+                          workspaces={workspaces}
+                          groups={agentGroups}
+                          groupModels={groupModels}
+                          defaultGroupModelId={model || undefined}
+                          isGroupWorking={isGroupWorking}
+                          isGroupWaiting={isGroupWaiting}
+                          activeGroupId={activeGroup?.id}
+                          onSelectGroup={selectGroup}
+                          activeWorkspaceId={
+                            activeWorkspace?.inbox ? null : (activeWorkspace?.id ?? null)
+                          }
+                          onCreateGroup={createGroup}
+                          newGroupServices={newGroupServices}
+                          onUpdateGroupMembers={updateGroupMembers}
+                          onRenameGroup={(id, name) =>
+                            void runGroupAction(() => window.modus.group.rename({ id, name }))
+                          }
+                          onDeleteGroup={(id) =>
+                            void runGroupAction(() => window.modus.group.remove(id))
+                          }
+                          onRemoveGroupMember={(groupId, sessionId) =>
+                            void runGroupAction(() =>
+                              window.modus.group.removeMember({ groupId, sessionId }),
+                            )
+                          }
+                          onSetGroupLead={(groupId, sessionId) =>
+                            void runGroupAction(() =>
+                              window.modus.group.setLead({ groupId, sessionId }),
+                            )
+                          }
+                          groupMemberStates={groupMemberStates}
+                          onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
+                          onEditAgent={(agentId) => void editAgent(agentId)}
+                          onAddAgent={(groupId) => setAgentDialog({ groupId })}
+                        />
+                      </ContextSidebar>
                       {agentDialogGroup && agentDialog ? (
                         <AgentDialog
                           agent={agentDialog.agent}
@@ -1269,13 +1351,14 @@ export function App() {
                         />
                       ) : null}
 
-                      <m.main
-                        className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0 bg-canvas"
+                      <MainSurface
+                        data-shell-layer="main-surface"
+                        className="surface-main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0"
                         layout={!reduceMotion}
                         layoutDependency={responsiveSidebarOpen}
                         transition={{ layout: SIDEBAR_TRANSITION }}
                       >
-                        <header
+                        <TopBar
                           className={cn(
                             "toolbar-row app-drag relative z-10 flex shrink-0 items-center px-3",
                             // Traffic lights sit in this row when the left sidebar is closed.
@@ -1296,21 +1379,30 @@ export function App() {
                                 stroke={TOOLBAR_ICON.stroke}
                               />
                             </ToolbarButton>
-                            {activeGroup ? (
+                            {primaryNavigation.active === "direct-messages" && !visibleSession ? (
+                              <WorkspaceMenu
+                                activeWorkspace={activeWorkspace}
+                                workspaces={workspaces}
+                                onSelect={openNewChat}
+                                onOpenFolder={() => void openWorkspace()}
+                                triggerClassName="app-no-drag flex h-7 min-w-0 max-w-[190px] items-center gap-1.5 rounded-md px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                              />
+                            ) : null}
+                            {visibleGroup ? (
                               <div
                                 className="app-no-drag flex min-w-0 flex-1 items-center"
                                 data-testid="group-chrome-host"
                                 ref={setGroupChromeHost}
                               />
-                            ) : activeSession ? (
+                            ) : visibleSession ? (
                               <SessionTitlePopover
                                 branch={branch}
-                                contextUsage={contextUsageBySession[activeSession.id]}
-                                modelId={activeSession.model ?? model}
+                                contextUsage={contextUsageBySession[visibleSession.id]}
+                                modelId={visibleSession.model ?? model}
                                 models={models}
-                                session={activeSession}
+                                session={visibleSession}
                                 workspace={
-                                  workspaceById.get(activeSession.workspaceId) ?? activeWorkspace
+                                  workspaceById.get(visibleSession.workspaceId) ?? activeWorkspace
                                 }
                               />
                             ) : null}
@@ -1318,26 +1410,24 @@ export function App() {
                           <div
                             className={cn(
                               "flex h-full items-center justify-end",
-                              !activeGroup && "flex-1",
+                              !visibleGroup && "flex-1",
                             )}
                           >
-                            {activeGroup ? null : (
+                            {visibleGroup ? null : (
                               <div className="pr-2">
                                 <HeaderActions
                                   activeWorkspace={activeWorkspace}
                                   branch={branch}
                                   environmentStats={environmentStats}
                                   inspectorOpen={responsiveInspectorOpen}
-                                  onOpenSettings={() => {
-                                    setSettingsOpen(true);
-                                  }}
+                                  onOpenSettings={() => navigateToPrimary("settings")}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}
                                 />
                               </div>
                             )}
                             {isMac ? null : <WindowControls />}
                           </div>
-                        </header>
+                        </TopBar>
 
                         {/* Top right, below the toolbar: clear of the composer (bottom of the
                             chat, center of the hero). */}
@@ -1353,25 +1443,47 @@ export function App() {
                         ) : null}
 
                         <AnimatePresence mode="wait">
-                          {activeGroup ? (
+                          {primaryNavigation.active === "groups" && !visibleGroup ? (
+                            <m.div
+                              animate={{ opacity: 1, y: 0 }}
+                              className="flex min-h-0 min-w-0 flex-1 items-center justify-center px-8"
+                              exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
+                              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+                              key="groups-empty"
+                              transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
+                            >
+                              <div className="max-w-md text-center">
+                                <p className="mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-fg-faint">
+                                  Persistent agent teams
+                                </p>
+                                <h1 className="text-xl font-medium tracking-tight text-fg">
+                                  Keep shared work moving
+                                </h1>
+                                <p className="mt-2 text-sm leading-6 text-fg-muted">
+                                  Choose a group from the sidebar, or create one to give agents a
+                                  shared room, project, and history.
+                                </p>
+                              </div>
+                            </m.div>
+                          ) : visibleGroup ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="flex min-h-0 min-w-0 flex-1"
                               exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
                               initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                              key={`group:${activeGroup.id}`}
+                              key={`group:${visibleGroup.id}`}
                               transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
                             >
                               <GroupRoom
                                 chromeHost={groupChromeHost}
                                 defaultModelId={model || undefined}
-                                group={activeGroup}
-                                key={activeGroup.id}
+                                group={visibleGroup}
+                                key={visibleGroup.id}
                                 memberStates={groupMemberStates}
                                 models={groupModels}
-                                onChooseFolder={() => void chooseGroupFolder(activeGroup.id)}
+                                onChooseFolder={() => void chooseGroupFolder(visibleGroup.id)}
                                 onDelete={() => {
-                                  const id = activeGroup.id;
+                                  const id = visibleGroup.id;
                                   setActiveGroupId(undefined);
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
@@ -1379,30 +1491,30 @@ export function App() {
                                 onOpenMember={(sessionId) => void openGroupMember(sessionId)}
                                 onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
                                 onAgentsChanged={() => void refreshGroups()}
-                                onAddAgent={() => setAgentDialog({ groupId: activeGroup.id })}
+                                onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
                                 onRename={(name) =>
                                   void runGroupAction(() =>
-                                    window.modus.group.rename({ id: activeGroup.id, name }),
+                                    window.modus.group.rename({ id: visibleGroup.id, name }),
                                   )
                                 }
                                 onSetMode={(mode) =>
                                   void runGroupAction(() =>
-                                    window.modus.group.setMode({ groupId: activeGroup.id, mode }),
+                                    window.modus.group.setMode({ groupId: visibleGroup.id, mode }),
                                   )
                                 }
                                 onUpdateMembers={(change) =>
-                                  updateGroupMembers(activeGroup.id, change)
+                                  updateGroupMembers(visibleGroup.id, change)
                                 }
                                 workspaces={workspaces}
                               />
                             </m.div>
-                          ) : activeSession ? (
+                          ) : visibleSession ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
                               className="flex min-h-0 min-w-0 flex-1"
                               exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
                               initial={reduceMotion ? false : { opacity: 0, y: 4 }}
-                              key={`conversation:${activeSession.id}`}
+                              key={`conversation:${visibleSession.id}`}
                               layout={reduceMotion ? false : "position"}
                               layoutDependency={responsiveSidebarOpen}
                               transition={{
@@ -1413,7 +1525,7 @@ export function App() {
                             >
                               <Suspense fallback={<ModusLoadingFallback />}>
                                 <ChatPane
-                                  composerDraft={composerDraftBySession[activeSession.id]}
+                                  composerDraft={composerDraftBySession[visibleSession.id]}
                                   composerReplacement={
                                     activeChatBlocked ? (
                                       <BlockedBanner
@@ -1429,19 +1541,21 @@ export function App() {
                                       />
                                     ) : undefined
                                   }
-                                  contextUsage={contextUsageBySession[activeSession.id]}
+                                  contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
                                   hub={hubRef.current}
-                                  initialEvents={initialEventsBySession[activeSession.id]}
-                                  key={activeSession.id}
+                                  initialEvents={initialEventsBySession[visibleSession.id]}
+                                  key={visibleSession.id}
                                   models={models}
                                   onModelChange={setModel}
                                   onModelConfigChange={(next, thinkingVariant) =>
                                     void updateModelThinking(next, thinkingVariant)
                                   }
                                   onOpenReview={openReview}
+                                  onOpenActivity={openActivity}
+                                  onOpenConnections={openConnections}
                                   onComposerDraftChange={(update) =>
-                                    updateSessionComposerDraft(activeSession.id, update)
+                                    updateSessionComposerDraft(visibleSession.id, update)
                                   }
                                   onInitialEventsConsumed={(sessionId) => {
                                     setInitialEventsBySession((current) => {
@@ -1458,7 +1572,7 @@ export function App() {
                                   onOpenTerminal={openTerminal}
                                   onOpenSubagent={openSubagent}
                                   subagentSessions={agentSessions.filter(
-                                    (session) => session.parentSessionId === activeSession.id,
+                                    (session) => session.parentSessionId === visibleSession.id,
                                   )}
                                   {...(responsiveInspectorOpen &&
                                   inspectorTab === "subagents" &&
@@ -1467,9 +1581,9 @@ export function App() {
                                     : {})}
                                   onPlanUpdated={rememberActivePlan}
                                   onSessionsChanged={() => void refreshSessions()}
-                                  session={activeSession}
+                                  session={visibleSession}
                                   workspace={
-                                    workspaceById.get(activeSession.workspaceId) ?? activeWorkspace
+                                    workspaceById.get(visibleSession.workspaceId) ?? activeWorkspace
                                   }
                                 />
                               </Suspense>
@@ -1497,6 +1611,7 @@ export function App() {
                                   <ModusBot className="size-20" />
                                 </div>
                                 <Composer
+                                  onOpenConnections={openConnections}
                                   canSubmit={canCreateSession}
                                   contextItems={heroContextItems}
                                   cwd={activeWorkspace?.rootPath}
@@ -1545,13 +1660,13 @@ export function App() {
                             </m.div>
                           )}
                         </AnimatePresence>
-                      </m.main>
+                      </MainSurface>
 
                       {responsiveInspectorOpen ? (
                         <Suspense
                           fallback={
                             <div
-                              className="flex min-h-0 min-w-0 shrink-0 overflow-hidden rounded-b-lg border border-hairline-strong border-t-0 bg-canvas"
+                              className="surface-main flex min-h-0 min-w-0 shrink-0 overflow-hidden rounded-b-lg border border-hairline-strong border-t-0"
                               style={{ width: inspectorWidth }}
                             >
                               <ModusLoadingFallback />
@@ -1572,6 +1687,8 @@ export function App() {
                               void updateModelThinking(next, thinkingVariant)
                             }
                             onOpenChange={setInspectorOpen}
+                            onOpenFile={openWorkspaceFile}
+                            onOpenPlan={openPlan}
                             onOpenReview={openReview}
                             onOpenSubagent={openSubagent}
                             onPlanUpdated={rememberActivePlan}
@@ -1600,7 +1717,7 @@ export function App() {
                   )}
                 </div>
               </FadeContent>
-            </div>
+            </AppShell>
           </ImageViewerProvider>
         </NativeSurfaceProvider>
       </TooltipProvider>
@@ -1831,7 +1948,7 @@ function WorkspaceMenu({
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">No folder</span>
                 <span className="truncate text-2xs text-fg-faint">
-                  Goes to Chats in the sidebar
+                  Starts a Direct Message
                 </span>
               </span>
             </Menu.Item>
@@ -1949,7 +2066,7 @@ function EnvironmentPopover({
               <Popover.Popup render={<m.div />}>
                 <m.div
                   animate={{ opacity: 1, scale: 1, y: 0 }}
-                  className="popup-chrome w-[375px] rounded-[22px] bg-surface p-5 outline-none"
+                  className="popup-chrome w-[375px] p-5 outline-none"
                   exit={{ opacity: 0, scale: 0.98, y: -6 }}
                   initial={{ opacity: 0, scale: 0.98, y: -6 }}
                   transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}

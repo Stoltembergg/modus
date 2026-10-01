@@ -267,7 +267,11 @@ function GroupRoomContent({
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1" data-testid="group-room">
+    <div
+      className="surface-main flex min-h-0 min-w-0 flex-1"
+      data-testid="group-room"
+      data-ui-surface="main"
+    >
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {chromeHost ? createPortal(header, chromeHost) : header}
         <GroupMessageList

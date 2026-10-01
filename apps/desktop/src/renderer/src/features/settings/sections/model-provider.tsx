@@ -342,9 +342,9 @@ function ProviderConfigDialogShell({
       open={open}
     >
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-50 bg-fg/20 backdrop-blur-[1px] transition-opacity duration-150 motion-reduce:transition-none data-ending-style:opacity-0 data-starting-style:opacity-0" />
+        <Dialog.Backdrop className="dialog-scrim fixed inset-0 z-50 transition-opacity duration-150 motion-reduce:transition-none data-ending-style:opacity-0 data-starting-style:opacity-0" />
         <Dialog.Viewport className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden px-6 py-6">
-          <Dialog.Popup className="flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden rounded-lg border border-popup-border bg-canvas shadow-popup outline-none transition-[opacity,transform] duration-150 motion-reduce:transition-none data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
+          <Dialog.Popup className="popup-chrome flex h-[min(820px,calc(100vh-48px))] w-full max-w-[760px] flex-col overflow-hidden outline-none transition-[opacity,transform] duration-150 motion-reduce:transition-none data-ending-style:translate-y-2 data-ending-style:opacity-0 data-starting-style:translate-y-2 data-starting-style:opacity-0">
             <div className="flex h-[52px] items-center justify-between gap-3 px-5">
               <Dialog.Close
                 aria-label={`Back from ${title}`}

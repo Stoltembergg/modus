@@ -216,6 +216,13 @@ const emit = (event: GroupRuntimeEvent) =>
   });
 
 describe("GroupRoom", () => {
+  it("uses the shared opaque main surface for the room transcript", async () => {
+    renderRoom();
+    const room = await screen.findByTestId("group-room");
+    expect(room.getAttribute("data-ui-surface")).toBe("main");
+    expect(room.className).toContain("surface-main");
+  });
+
   it("shows one compact presence surface while members work", async () => {
     renderRoom(states({ runningSessionIds: ["s-lead"] }));
     expect(await screen.findByTestId("group-working-status")).toBeTruthy();
@@ -638,6 +645,8 @@ describe("GroupRoom", () => {
     await vi.waitFor(() => expect(screen.getByTestId("group-task-count").textContent).toBe("3"));
     await user.click(screen.getByRole("button", { name: "Activity (3 active)" }));
     const panel = screen.getByTestId("group-activity-panel");
+    expect(panel.getAttribute("data-ui-surface")).toBe("sidebar");
+    expect(panel.className).toContain("surface-sidebar");
     expect(within(panel).getByTestId("task-checklist-progress").textContent).toContain("1/4 done");
     expect(within(panel).getByTestId("task-checklist")).toBeTruthy();
     // Cancelled starts hidden.

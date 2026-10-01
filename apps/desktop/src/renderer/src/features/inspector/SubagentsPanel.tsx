@@ -262,7 +262,7 @@ export function SubagentsPanel({
   if (view === "detail" && selected) {
     return (
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-12 shrink-0 items-center gap-2 bg-canvas/85 px-3 backdrop-blur">
+        <div className="surface-sidebar flex h-12 shrink-0 items-center gap-2 px-3">
           <button
             aria-label="Back to subagents"
             className="flex size-7 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg"

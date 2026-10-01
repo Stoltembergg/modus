@@ -399,7 +399,7 @@ export function CustomProviderForm({
         </div>
       </FormSection>
 
-      <div className="sticky bottom-0 z-10 border-hairline-soft border-t bg-canvas/95 pt-3 pb-1 backdrop-blur">
+      <div className="sticky bottom-0 z-10 border-hairline-soft border-t bg-canvas pt-3 pb-1">
         {formError ? (
           <p className="mb-2 text-xs leading-5 text-danger" title={formError}>
             {formError}

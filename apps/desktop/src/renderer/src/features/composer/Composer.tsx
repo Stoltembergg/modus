@@ -8,6 +8,7 @@ import {
   IconListCheck,
   IconLoader2,
   IconPlus,
+  IconPlugConnected,
   IconSparkles,
   IconX,
 } from "@tabler/icons-react";
@@ -60,7 +61,7 @@ import { type SlashActionItem, type SlashItem, useComposerSlash } from "./useCom
 const COMPOSER_PLACEHOLDER = "What will you build with Modus?";
 
 /** Shared with read-only user bubbles — single radius/chrome truth for the prompt shell. */
-export const COMPOSER_RADIUS_CLASS = "rounded-[14px]";
+export const COMPOSER_RADIUS_CLASS = "rounded-composer";
 export const COMPOSER_SHELL_CLASS = cn(
   "border border-composer-border bg-surface shadow-composer-edge",
   COMPOSER_RADIUS_CLASS,
@@ -76,7 +77,11 @@ type ComposerProps = {
   canSubmit: boolean;
   isRunning?: boolean;
   footer?: ReactNode;
+  /** Input content shares the single elevated shell owned by ComposerDock. */
+  integrated?: boolean;
   trailingActions?: ReactNode;
+  /** Opens the first-class Connections view for Composio and provider access. */
+  onOpenConnections?(): void;
   onModelChange(model: string): void;
   onModelConfigChange?(model: string, thinkingVariant: string): Promise<void> | void;
   onContextChange(items: ContextItem[]): void;
@@ -176,11 +181,13 @@ export function Composer({
   cwd,
   canSubmit,
   footer,
+  integrated = false,
   trailingActions,
   isRunning = false,
   onAbort,
   onModelChange,
   onModelConfigChange,
+  onOpenConnections,
   onContextChange,
   onCompact,
   onSubmit,
@@ -561,26 +568,22 @@ export function Composer({
   }
 
   return (
-    <div className={cn("relative flex flex-col items-stretch", footer ? "pb-12" : undefined)}>
-      {footer ? (
-        <div
-          className={cn(
-            "pointer-events-none absolute inset-x-0 top-12 bottom-0 z-0 bg-composer-tray shadow-composer",
-            COMPOSER_RADIUS_CLASS,
-          )}
-        />
-      ) : null}
+    <div className="relative flex flex-col items-stretch">
       {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach images via paste in the editor. */}
       <div
         className={cn(
-          "composer-prompt-shell relative border border-composer-border bg-surface shadow-composer-edge transition-[border-color] duration-150",
-          COMPOSER_RADIUS_CLASS,
-          Boolean(footer) && "z-10",
+          "composer-prompt-shell relative transition-[border-color] duration-150",
+          integrated
+            ? "border-0 bg-transparent shadow-none"
+            : "border border-composer-border bg-surface shadow-composer-edge",
+          !integrated && COMPOSER_RADIUS_CLASS,
+          !integrated && Boolean(footer) && "z-10",
           // No focus glow: only text focus or drag nudges the border one notch brighter.
           !isRunning && "focus-within:border-composer-border-strong",
           dragging && "border-composer-border-strong",
           submitting && "pointer-events-none opacity-60",
         )}
+        {...(!integrated ? { "data-composer-surface": "" } : {})}
         {...(effortMaxed ? { "data-effort-max": "" } : {})}
         onDragLeave={() => setDragging(false)}
         onDragOver={handleDragOver}
@@ -711,6 +714,18 @@ export function Composer({
                 onModelChange={onModelChange}
                 {...(onModelConfigChange ? { onModelConfigChange } : {})}
               />
+              {onOpenConnections ? (
+                <button
+                  aria-label="Connections"
+                  className="app-no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                  onClick={onOpenConnections}
+                  title="Manage Connections and Composio access"
+                  type="button"
+                >
+                  <IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />
+                  <span className="hidden @[520px]:inline">Connections</span>
+                </button>
+              ) : null}
             </>
           ) : null}
 
@@ -771,8 +786,12 @@ export function Composer({
             )}
           </button>
         </div>
+        {footer ? (
+          <div className="relative z-10 border-t border-hairline-soft px-3 py-1.5">
+            {footer}
+          </div>
+        ) : null}
       </div>
-      {footer ? <div className="absolute inset-x-0 bottom-2 z-20 px-5">{footer}</div> : null}
     </div>
   );
 }

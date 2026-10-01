@@ -70,7 +70,7 @@ export function SubagentPreviewSheet({
       <m.div
         animate={open ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
         aria-hidden={open ? undefined : true}
-        className="absolute inset-x-4 top-9 bottom-1 z-10 mx-auto flex max-w-5xl flex-col overflow-hidden popup-chrome bg-elevated"
+        className="absolute inset-x-4 top-9 bottom-1 z-10 mx-auto flex max-w-5xl flex-col overflow-hidden popup-chrome"
         initial={{ opacity: 0, y: 12 }}
         onAnimationComplete={() => {
           if (!open) setPresent(false);
@@ -79,7 +79,7 @@ export function SubagentPreviewSheet({
         role="dialog"
         transition={PANEL_TRANSITION}
       >
-        <div className="flex h-11 shrink-0 items-center justify-between gap-1 bg-elevated/85 px-2 backdrop-blur">
+        <div className="flex h-11 shrink-0 items-center justify-between gap-1 bg-elevated px-2">
           <div className="flex min-w-0 flex-1 items-center gap-1">
             <ToolbarButton label="Close preview" onClick={onClose}>
               <IconArrowLeft size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />

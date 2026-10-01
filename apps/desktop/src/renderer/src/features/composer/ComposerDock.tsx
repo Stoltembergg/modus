@@ -1,10 +1,7 @@
 import type { ReactNode } from "react";
-import { cn } from "../../lib/cn";
 
 /**
- * Cursor-style layered dock: a narrower, rectangular status plate sits behind
- * the composer (same surface fill as the prompt). The prompt overlaps its
- * bottom edge — not a full-width grey peer card, not a merged shell.
+ * One raised surface for prompt input and compact contextual status rails.
  */
 export function ComposerDock({
   rails,
@@ -17,18 +14,18 @@ export function ComposerDock({
   const hasRails = Boolean(rails);
 
   return (
-    <div className="relative flex flex-col">
+    <div
+      className="composer-dock-shell surface-raised relative flex flex-col overflow-hidden"
+      data-composer-surface
+      data-testid="composer-dock"
+      data-ui-surface="raised"
+    >
       {hasRails ? (
-        <div
-          className={cn(
-            // Inset + modest radius → reads as a rectangle behind a wider prompt.
-            "relative z-0 mx-3 overflow-hidden rounded-md border border-composer-border bg-surface pb-2.5",
-          )}
-        >
-          <div className="divide-y divide-hairline-soft">{rails}</div>
+        <div className="composer-dock-rails relative z-0 border-b border-hairline-soft px-2 py-1">
+          <div className="flex flex-col gap-1">{rails}</div>
         </div>
       ) : null}
-      <div className={cn("relative z-10", hasRails && "-mt-2.5")}>{children}</div>
+      <div className="relative z-10 min-w-0">{children}</div>
     </div>
   );
 }

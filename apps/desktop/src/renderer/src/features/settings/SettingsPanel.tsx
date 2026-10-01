@@ -497,7 +497,7 @@ export function SettingsPanel({
   return (
     <m.div
       animate={isClosing ? { opacity: 0, y: -3 } : { opacity: 1, y: 0 }}
-      className="flex min-h-0 flex-1 overflow-hidden bg-panel"
+      className="surface-app flex min-h-0 flex-1 overflow-hidden"
       initial={reduceMotion ? false : { opacity: 0, y: 4 }}
       aria-hidden={isClosing}
       inert={isClosing}
@@ -517,7 +517,7 @@ export function SettingsPanel({
         query={settingsQuery}
       />
 
-      <main className="scroll-thin min-w-0 flex-1 overflow-y-auto border-hairline-strong border-l bg-canvas">
+      <main className="surface-main scroll-thin min-w-0 flex-1 overflow-y-auto border-hairline-strong border-l">
         <ContentTransition
           className="mx-auto flex w-full max-w-[1080px] flex-col gap-8 px-10 pt-16 pb-12"
           transitionKey={activeSection}

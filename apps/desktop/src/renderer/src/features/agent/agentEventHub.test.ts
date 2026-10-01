@@ -25,7 +25,7 @@ const permissionRequested: AgentEvent = {
   request: { id: "p", action: "shell.execute", target: "rm", reason: "dangerous" },
 };
 
-function item(event: AgentEvent, id = crypto.randomUUID()): AgentEventItem {
+function item(event: AgentEvent, id: string = crypto.randomUUID()): AgentEventItem {
   return { id, event };
 }
 
@@ -249,6 +249,38 @@ describe("appendAgentEvents", () => {
 });
 
 describe("AgentEventHub", () => {
+  it("seeds full session history and notifies Activity subscribers about live changes", async () => {
+    const hub = new AgentEventHub();
+    const subscriber = vi.fn<(items: AgentEventItem[]) => void>();
+    hub.subscribeHistory("s", subscriber);
+    hub.seedHistory("s", [item(runStarted, "seed-run-start")]);
+    hub.publish(item(runCompleted, "live-run-complete"));
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+
+    expect(hub.getHistory("s").map((entry) => entry.event.type)).toEqual([
+      "run.started",
+      "run.completed",
+    ]);
+    expect(subscriber.mock.lastCall?.[0].map((entry) => entry.event.type)).toEqual([
+      "run.started",
+      "run.completed",
+    ]);
+  });
+
+  it("keeps live events concurrent with a persisted snapshot that ends in the same millisecond", () => {
+    const hub = new AgentEventHub();
+    const timestamp = "2026-10-01T12:00:00.000Z";
+    hub.publish({ id: "live-complete", event: runCompleted, createdAt: timestamp });
+    hub.seedHistory("s", [
+      { id: "persisted-start", event: runStarted, createdAt: timestamp },
+    ]);
+
+    expect(hub.getHistory("s").map((entry) => entry.id)).toEqual([
+      "persisted-start",
+      "live-complete",
+    ]);
+  });
+
   it("fans events out to the matching session's subscribers only", () => {
     const hub = new AgentEventHub();
     const a = vi.fn();

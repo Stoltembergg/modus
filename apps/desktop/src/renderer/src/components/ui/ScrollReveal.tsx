@@ -6,9 +6,7 @@
  * on the app's existing animation stack (no gsap dependency).
  *
  * Entrance only: brief blur → sharp when a block enters the scrollport.
- * Top-of-conversation chrome blur lives on the scrollport overlay
- * (`.chat-scroll-top-blur`), not on each block — a per-block filter would
- * smear entire tall messages.
+ * The conversation surface remains clear while the message itself enters.
  */
 import { m, useReducedMotion } from "motion/react";
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";

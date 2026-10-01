@@ -341,7 +341,7 @@ export function GroupMessageList({
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="mx-auto flex w-full max-w-[760px] shrink-0 items-center gap-2 px-3 pt-3 sm:px-6">
         <label
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-hairline bg-elevated/80 px-2.5 py-1.5 text-fg-muted"
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md border border-default bg-elevated px-2.5 py-1.5 text-fg-muted"
           data-testid="group-conversation-search"
         >
           <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
@@ -385,7 +385,7 @@ export function GroupMessageList({
         <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-3 py-5 sm:px-6">
           {executionFilter ? (
             <div
-              className="flex flex-wrap items-center gap-2 rounded-md border border-hairline bg-elevated/70 px-2.5 py-1.5 text-2xs text-fg-muted"
+              className="flex flex-wrap items-center gap-2 rounded-md border border-default bg-elevated px-2.5 py-1.5 text-2xs text-fg-muted"
               data-testid="group-execution-filter"
             >
               <span className="min-w-0 flex-1 truncate">

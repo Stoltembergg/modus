@@ -58,7 +58,11 @@ function filterTools(tools: ComposioToolSummary[], query: string): ComposioToolS
   );
 }
 
-export function IntegrationsSettingsPanel() {
+export function IntegrationsSettingsPanel({
+  standalone = false,
+}: {
+  standalone?: boolean;
+} = {}) {
   const [settings, setSettings] = useState<ComposioSettingsState | undefined>();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | undefined>();
@@ -331,8 +335,8 @@ export function IntegrationsSettingsPanel() {
 
   if (loading) {
     return (
-      <div aria-live="polite" className="text-sm text-fg-muted">
-        Loading integrations…
+        <div aria-live="polite" className="text-sm text-fg-muted">
+          Loading {standalone ? "connections" : "integrations"}…
       </div>
     );
   }
@@ -354,7 +358,7 @@ export function IntegrationsSettingsPanel() {
           ) : null
         }
         description="Connect platforms through Composio and explicitly choose which account and operations agents can use."
-        title="Integrations"
+        title={standalone ? "Connections" : "Integrations"}
       />
 
       <SettingsSection

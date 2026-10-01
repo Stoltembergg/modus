@@ -100,7 +100,8 @@ export function GroupTaskPanel({
   return (
     <aside
       aria-label={ariaLabel}
-      className="flex w-[300px] shrink-0 flex-col overflow-y-auto border-hairline border-l px-3 py-3"
+      className="surface-sidebar flex w-[min(300px,40%)] shrink-0 flex-col overflow-y-auto border-hairline border-l px-3 py-3"
+      data-ui-surface="sidebar"
       data-testid={testId}
     >
       {top}

@@ -287,7 +287,7 @@ describe("SidebarGroups", () => {
 });
 
 describe("Sidebar with groups", () => {
-  function renderSidebar() {
+  function renderSidebar(section: "groups" | "direct-messages" = "groups") {
     const noop = vi.fn();
     render(
       <Sidebar
@@ -295,6 +295,7 @@ describe("Sidebar with groups", () => {
         agentSessions={SESSIONS}
         canCreateSession
         groups={GROUPS}
+        section={section}
         maxWidth={480}
         onArchiveProjectChats={noop}
         onArchiveSession={noop}
@@ -321,32 +322,41 @@ describe("Sidebar with groups", () => {
     );
   }
 
-  it("orders sections New chat, Pinned, Groups, Projects, Chats", () => {
+  it("keeps the Groups context focused on persistent teams", () => {
     renderSidebar();
-    const text = document.body.textContent ?? "";
-    const order = ["New chat", "Pinned", "Groups", "Projects", "Chats"].map((label) =>
-      text.indexOf(label),
-    );
-    expect(order.every((index) => index >= 0)).toBe(true);
-    expect([...order].sort((x, y) => x - y)).toEqual(order);
+    expect(screen.getByTestId("sidebar-groups")).toBeTruthy();
+    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.queryByText("Direct Messages")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 
-  it("does not list member room sessions in the sidebar (N5)", () => {
+  it("shows a flat Direct Messages list and keeps project context collapsed", () => {
+    renderSidebar("direct-messages");
+    expect(screen.getByText("Direct Messages")).toBeTruthy();
+    expect(screen.getByText("Chat project-chat")).toBeTruthy();
+    expect(screen.getByText("Chat inbox-chat")).toBeTruthy();
+    expect(screen.queryByTestId("sidebar-groups")).toBeNull();
+    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.queryByText("Repo")).toBeNull();
+  });
+
+  it("keeps group member room sessions out of the primary direct message list (N5)", () => {
     renderSidebar();
     const groups = screen.getByTestId("sidebar-groups");
     for (const title of ["Chat member-a", "Chat member-b", "Chat inbox-member"]) {
       expect(screen.queryByText(title)).toBeNull();
       expect(within(groups).queryByText(title)).toBeNull();
     }
-    // Non-members stay where they were.
+    // Direct messages are scoped to their own rail destination.
     expect(within(groups).queryByText("Chat pinned-inbox")).toBeNull();
-    expect(screen.getAllByText("Chat pinned-inbox")).toHaveLength(1);
     expect(within(groups).queryByText("Chat inbox-chat")).toBeNull();
-    expect(screen.getAllByText("Chat inbox-chat")).toHaveLength(1);
+    expect(screen.queryByText("Chat pinned-inbox")).toBeNull();
+    expect(screen.queryByText("Chat inbox-chat")).toBeNull();
   });
 
-  it("an agent's 1:1 chat is not listed under its Project (only under its agent)", () => {
+  it("keeps an agent's 1:1 chat in Direct Messages and outside Project context", async () => {
     const noop = vi.fn();
+    const user = userEvent.setup();
     render(
       <Sidebar
         activityBySession={{}}
@@ -356,6 +366,7 @@ describe("Sidebar with groups", () => {
         ]}
         canCreateSession
         groups={GROUPS}
+        section="direct-messages"
         maxWidth={480}
         onArchiveProjectChats={noop}
         onArchiveSession={noop}
@@ -380,12 +391,15 @@ describe("Sidebar with groups", () => {
         workspaces={WORKSPACES}
       />,
     );
-    expect(screen.getByText("Chat project-chat")).toBeTruthy();
-    expect(screen.queryByText("Direct with Ana")).toBeNull();
+    expect(screen.getByText("Direct with Ana")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Project context" }));
+    const projectContext = screen.getByTestId("sidebar-project-context");
+    expect(within(projectContext).getByText("Chat project-chat")).toBeTruthy();
+    expect(within(projectContext).queryByText("Direct with Ana")).toBeNull();
   });
 
   it("room sessions (kind group_member) never show in the sidebar, even pinned", () => {
-    renderSidebar();
+    renderSidebar("direct-messages");
     const pinned = screen.getByTestId("sidebar-pinned");
     expect(within(pinned).queryByText("Chat inbox-member")).toBeNull();
     expect(within(pinned).getByText("Chat pinned-inbox")).toBeTruthy();
@@ -415,6 +429,7 @@ describe("Sidebar with groups", () => {
           activityBySession={{}}
           agentSessions={SESSIONS}
           canCreateSession
+          section="direct-messages"
           groups={groups}
           maxWidth={480}
           onArchiveProjectChats={noop}
@@ -444,6 +459,7 @@ describe("Sidebar with groups", () => {
     }
 
     async function openProjectMenu(user: ReturnType<typeof userEvent.setup>, index: number) {
+      await user.click(screen.getByRole("button", { name: "Project context" }));
       await user.click(
         screen.getAllByRole("button", { name: "Project actions" })[index] as HTMLElement,
       );

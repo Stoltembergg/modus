@@ -54,6 +54,7 @@ import { latestPendingPermissionRequest } from "./permissionRequests";
 import { latestPendingQuestionRequest } from "./questionRequests";
 import { RetryStatusBar } from "./RetryStatusBar";
 import { latestSessionStatus } from "./runState";
+import { splitTimelinePresentation } from "./timelinePresentation";
 import { SubagentPreviewSheet } from "./SubagentPreviewSheet";
 import { readSessionScroll, rememberSessionScroll } from "./sessionScrollMemory";
 import {
@@ -373,6 +374,10 @@ type ChatPaneProps = {
   onModelConfigChange(model: string, thinkingVariant: string): Promise<void> | void;
   /** "Review" on the changes strip: focus this pane and open the diff panel. */
   onOpenReview(cwd?: string): void;
+  /** Open the technical event history without adding it to the transcript. */
+  onOpenActivity?(): void;
+  /** Open the first-class Connections destination from the Composer. */
+  onOpenConnections?(): void;
   onOpenSubagent?(childSessionId: string): void;
   composerReplacement?: ReactNode;
   composerDraft?: ChatComposerDraft | undefined;
@@ -663,6 +668,8 @@ export function ChatPane({
   onModelChange,
   onModelConfigChange,
   onOpenReview,
+  onOpenActivity,
+  onOpenConnections,
   onOpenSubagent,
   composerReplacement,
   composerDraft,
@@ -863,6 +870,10 @@ export function ChatPane({
     });
   }, []);
   const visibleBlocks = useMemo(() => buildVisibleTimelineBlocks(agentEvents), [agentEvents]);
+  const transcriptBlocks = useMemo(
+    () => splitTimelinePresentation(visibleBlocks).transcriptBlocks,
+    [visibleBlocks],
+  );
 
   // The latest plan written/updated in this session. Keep the inspector's data
   // current without opening it; only the timeline card's expand action opens it.
@@ -971,7 +982,9 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: see above.
   useEffect(() => {
     let cancelled = false;
-    setAgentEvents(initialEvents ?? []);
+    const optimisticEvents = initialEvents ?? [];
+    setAgentEvents(optimisticEvents);
+    hub.seedHistory(sessionId, optimisticEvents);
     if (initialEvents && initialEvents.length > 0) {
       onInitialEventsConsumed?.(sessionId);
     }
@@ -1021,7 +1034,9 @@ export function ChatPane({
         queuedRef.current = [];
       }
       if (!cancelled) {
-        setAgentEvents(foldAgentEvents([...(initialEvents ?? []), ...items]));
+        const seededEvents = foldAgentEvents([...optimisticEvents, ...items]);
+        hub.seedHistory(sessionId, seededEvents);
+        setAgentEvents(seededEvents);
         // Prefer the scroll offset from the last visit; otherwise land on latest.
         settleSessionViewport(readSessionScroll(sessionId));
       }
@@ -1396,9 +1411,27 @@ export function ChatPane({
         </div>
       ) : null}
 
+      {isRunning ? (
+        <div
+          className="flex min-h-8 shrink-0 items-center gap-2 border-b border-hairline px-5 text-xs text-fg-muted"
+          data-testid="chat-run-status"
+          role="status"
+        >
+          <VortexMark className="size-4 shrink-0" />
+          <span>{retryStatus ? "Retrying the current turn" : "Working on your request"}</span>
+          <button
+            className="ml-auto rounded px-1.5 py-0.5 text-fg-faint transition-colors hover:bg-hover hover:text-fg"
+            onClick={onOpenActivity}
+            type="button"
+          >
+            Activity
+          </button>
+        </div>
+      ) : null}
+
       <div className="relative flex min-h-0 min-w-0 flex-1">
         {isLite ? null : (
-          <ConversationTimeline blocks={visibleBlocks} scrollContainer={scrollContainer} />
+          <ConversationTimeline blocks={transcriptBlocks} scrollContainer={scrollContainer} />
         )}
         <ChatViewport
           contentRef={autoScroll.contentRef}
@@ -1406,7 +1439,7 @@ export function ChatPane({
           scrollRef={setChatScrollRef}
         >
           <Timeline
-            blocks={visibleBlocks}
+            blocks={transcriptBlocks}
             cwd={activeCwd}
             {...(isLite ? { embedded: true } : {})}
             model={paneModel}
@@ -1575,6 +1608,7 @@ export function ChatPane({
                       }
                     >
                       <Composer
+                        integrated
                         canSubmit={canSubmitPromptForSession(
                           workspace,
                           session.workspaceId,
@@ -1600,6 +1634,7 @@ export function ChatPane({
                         onModeChange={setComposerMode}
                         onModelChange={(next) => void changeModel(next)}
                         onModelConfigChange={onModelConfigChange}
+                        {...(onOpenConnections ? { onOpenConnections } : {})}
                         onSubmit={(message, context, delivery, attachments, skills, mode) =>
                           submitPrompt(message, context, delivery, attachments, skills, mode)
                         }
@@ -1635,8 +1670,6 @@ function ChatViewport({
       onScroll={onScroll}
       ref={scrollRef}
     >
-      {/* Viewport chrome: stronger blur at the top edge, gradient to sharp below. */}
-      <div aria-hidden className="chat-scroll-top-blur" />
       <div className="flex min-h-full min-w-0 w-full max-w-full flex-col" ref={contentRef}>
         {children}
       </div>

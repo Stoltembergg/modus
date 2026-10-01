@@ -97,6 +97,7 @@ export function affectsActivity(event: AgentEvent): boolean {
 }
 
 type Subscriber = (item: AgentEventItem) => void;
+type HistorySubscriber = (items: AgentEventItem[]) => void;
 
 /**
  * Per-session fanout. Multiple panes may subscribe to the same session (the
@@ -106,6 +107,94 @@ type Subscriber = (item: AgentEventItem) => void;
 export class AgentEventHub {
   private subscribers = new Map<string, Set<Subscriber>>();
   private prepared = new Map<string, AgentEventItem[]>();
+  private historyBySession = new Map<string, AgentEventItem[]>();
+  private pendingHistoryBySession = new Map<string, AgentEventItem[]>();
+  private historyFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private historySubscribers = new Map<string, Set<HistorySubscriber>>();
+
+  getHistory(sessionId: string): AgentEventItem[] {
+    const history = this.historyBySession.get(sessionId) ?? [];
+    const pending = this.pendingHistoryBySession.get(sessionId) ?? [];
+    return pending.length > 0 ? foldAgentEvents([...history, ...pending]) : [...history];
+  }
+
+  /** Seed persisted events, then retain any newer events streamed during the fetch. */
+  seedHistory(sessionId: string, items: AgentEventItem[]): void {
+    this.flushHistory(sessionId, false);
+    if (items.length === 0) {
+      this.notifyHistory(sessionId);
+      return;
+    }
+    const current = this.historyBySession.get(sessionId) ?? [];
+    let seededThrough = Number.NEGATIVE_INFINITY;
+    for (const item of items) {
+      const timestamp = Date.parse(item.updatedAt ?? item.createdAt ?? "");
+      if (Number.isFinite(timestamp)) seededThrough = Math.max(seededThrough, timestamp);
+    }
+    const currentById = new Map(current.map((item) => [item.id, item]));
+    const mergedSeed = items.map((item) => {
+      const live = currentById.get(item.id);
+      if (!live) return item;
+      const persistedAt = Date.parse(item.updatedAt ?? item.createdAt ?? "");
+      const liveAt = Date.parse(live.updatedAt ?? live.createdAt ?? "");
+      return !Number.isFinite(persistedAt) || liveAt >= persistedAt ? live : item;
+    });
+    const seededIds = new Set(mergedSeed.map((item) => item.id));
+    const newerLiveItems = current.filter((item) => {
+      if (seededIds.has(item.id)) return false;
+      const timestamp = Date.parse(item.updatedAt ?? item.createdAt ?? "");
+      return !Number.isFinite(timestamp) || timestamp >= seededThrough;
+    });
+    this.historyBySession.set(sessionId, foldAgentEvents([...mergedSeed, ...newerLiveItems]));
+    this.notifyHistory(sessionId);
+  }
+
+  subscribeHistory(sessionId: string, subscriber: HistorySubscriber): () => void {
+    const set = this.historySubscribers.get(sessionId) ?? new Set<HistorySubscriber>();
+    set.add(subscriber);
+    this.historySubscribers.set(sessionId, set);
+    subscriber(this.getHistory(sessionId));
+    if ((this.pendingHistoryBySession.get(sessionId)?.length ?? 0) > 0) {
+      this.scheduleHistoryFlush(sessionId);
+    }
+    return () => {
+      set.delete(subscriber);
+      if (set.size === 0) this.historySubscribers.delete(sessionId);
+    };
+  }
+
+  private notifyHistory(sessionId: string): void {
+    const history = this.getHistory(sessionId);
+    for (const subscriber of this.historySubscribers.get(sessionId) ?? []) {
+      subscriber(history);
+    }
+  }
+
+  private scheduleHistoryFlush(sessionId: string): void {
+    if (this.historyFlushTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      this.historyFlushTimers.delete(sessionId);
+      this.flushHistory(sessionId);
+    }, 16);
+    this.historyFlushTimers.set(sessionId, timer);
+  }
+
+  private flushHistory(sessionId: string, notify = true): void {
+    const timer = this.historyFlushTimers.get(sessionId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.historyFlushTimers.delete(sessionId);
+    }
+    const pending = this.pendingHistoryBySession.get(sessionId);
+    if (pending?.length) {
+      this.historyBySession.set(
+        sessionId,
+        appendAgentEvents(this.historyBySession.get(sessionId) ?? [], pending),
+      );
+      this.pendingHistoryBySession.delete(sessionId);
+    }
+    if (notify && this.historySubscribers.has(sessionId)) this.notifyHistory(sessionId);
+  }
 
   prepare(sessionId: string): void {
     if (!this.subscribers.has(sessionId) && !this.prepared.has(sessionId)) {
@@ -135,6 +224,10 @@ export class AgentEventHub {
   }
 
   publish(item: AgentEventItem): void {
+    const pendingHistory = this.pendingHistoryBySession.get(item.event.sessionId) ?? [];
+    pendingHistory.push(item);
+    this.pendingHistoryBySession.set(item.event.sessionId, pendingHistory);
+    this.scheduleHistoryFlush(item.event.sessionId);
     const set = this.subscribers.get(item.event.sessionId);
     if (!set) {
       this.prepared.get(item.event.sessionId)?.push(item);

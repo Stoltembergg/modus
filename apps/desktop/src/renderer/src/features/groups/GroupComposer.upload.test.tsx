@@ -29,7 +29,10 @@ describe("GroupComposer file upload", () => {
       />,
     );
     expect(screen.getByTestId("group-composer-attach")).toBeTruthy();
-    expect(screen.getByTestId("group-composer-dropzone")).toBeTruthy();
+    const dropzone = screen.getByTestId("group-composer-dropzone");
+    expect(dropzone).toBeTruthy();
+    expect(dropzone.getAttribute("data-ui-surface")).toBe("raised");
+    expect(dropzone.hasAttribute("data-composer-surface")).toBe(true);
 
     const file = new File(["hello"], "note.png", { type: "image/png" });
     Object.defineProperty(file, "size", { value: 5 });

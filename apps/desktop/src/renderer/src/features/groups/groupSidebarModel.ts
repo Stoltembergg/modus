@@ -10,13 +10,13 @@ import { type AgentAvatarState, agentAvatarState, memberAvatar } from "../agents
 import { type GroupMemberStatesById, memberActivityState } from "./useWorkingGroups";
 
 /**
- * Hidden group room sessions (kind "group_member") never show in Pinned /
- * Projects / Chats. The main process leaves them out of listings; this also
- * drops one passed in with `includeSessionId` (opened from a room). An agent's
- * 1:1 chat (A3, `agentId` set) is listed under its agent in the group instead.
+ * Hidden group room sessions (kind "group_member") never show in navigation.
+ * The main process leaves them out of listings; this also drops one passed in
+ * with `includeSessionId` (opened from a room). Agent 1:1 chats can appear in
+ * Direct Messages and under their agent in the group room.
  */
 export function isListedChat(session: AgentSessionInfo): boolean {
-  return session.kind !== "group_member" && !session.agentId;
+  return session.kind !== "group_member";
 }
 
 /** One agent row inside its group in the sidebar (A3). */

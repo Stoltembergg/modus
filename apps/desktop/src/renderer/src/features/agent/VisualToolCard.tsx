@@ -400,7 +400,7 @@ function VisualMenu({
       <Menu.Trigger
         className={cn(
           "absolute top-2 right-2 z-10 flex size-8 items-center justify-center rounded-full",
-          "bg-elevated/90 text-fg-muted opacity-0 shadow-popup backdrop-blur transition-opacity",
+          "popup-chrome text-fg-muted opacity-0 transition-opacity",
           "hover:bg-hover hover:text-fg group-hover:opacity-100 focus-visible:opacity-100 data-popup-open:opacity-100",
         )}
         disabled={disabled}
@@ -542,7 +542,7 @@ function VisualFullscreen({
   }, [onClose]);
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex flex-col bg-canvas/95 backdrop-blur">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-canvas">
       <div className="flex h-12 shrink-0 items-center justify-between border-hairline border-b px-3">
         <div className="min-w-0 truncate text-fg-subtle text-sm">{title}</div>
         <div className="flex items-center gap-1 popup-chrome p-1">
