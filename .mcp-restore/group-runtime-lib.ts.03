@@ -1,0 +1,145 @@
+eturn "";
+  const open = [
+    "<group_decisions>",
+    "Group decisions (newest first; the group agreed on these, keep to them):",
+  ].join("\n");
+  const close = "</group_decisions>";
+  const omittedLine = (count: number) => `(${count} older decisions omitted)`;
+  // Reserve room for the omitted line (its longest possible count) up front.
+  const reserve = estimateGroupTokens(`${omittedLine(decisions.length)}\n`);
+  let used = estimateGroupTokens(`${open}\n${close}`) + reserve;
+  const lines: string[] = [];
+  for (const decision of decisions) {
+    if (lines.length >= GROUP_PROMPT_DECISIONS_MAX_ITEMS) break;
+    // Only members record decisions: no author (session deleted, `on delete set null`)
+    // or an author no longer in the group is a former member, never the user.
+    const title = decision.authorSessionId ? titles.get(decision.authorSessionId) : undefined;
+    const author = title !== undefined ? `@${title}` : "former member";
+    const line = `- ${escapeText(decision.text)} (${escapeText(author)})`;
+    const cost = estimateGroupTokens(`${line}\n`);
+    if (used + cost > GROUP_PROMPT_DECISIONS_MAX_TOKENS) break;
+    used += cost;
+    lines.push(line);
+  }
+  const omitted = decisions.length - lines.length;
+  if (omitted > 0) lines.push(omittedLine(omitted));
+  return [open, ...lines, close].join("\n");
+}
+
+export type GroupSnapshotMember = {
+  sessionId: string;
+  title: string;
+  state: "working" | "waiting" | "idle";
+  branch?: string;
+};
+
+const SNAPSHOT_TASK_STATUSES: readonly GroupTask["status"][] = ["open", "in_progress", "in_review"];
+
+/**
+ * Coordinator mode (PR 7): what the Lead sees of its group. Every member (title
+ * and session id, so repeated titles stay distinct; state; worktree branch),
+ * then the open / in progress / in review tasks until ~1.5k estimated tokens,
+ * then "(N more tasks omitted)".
+ */
+export function composeGroupSnapshotSection(input: {
+  sessionId: string;
+  leadSessionId: string;
+  members: readonly GroupSnapshotMember[];
+  tasks: readonly GroupTask[];
+}): string {
+  const who = (id: string | undefined) => {
+    if (!id) return "none";
+    const title = input.members.find((member) => member.sessionId === id)?.title ?? id;
+    return `@${title} (id ${id})`;
+  };
+  const memberLines = input.members.map((member) => {
+    const tags = [
+      member.sessionId === input.leadSessionId ? "lead" : "",
+      member.sessionId === input.sessionId ? "you" : "",
+    ].filter(Boolean);
+    const state = [member.state, member.branch ? `branch ${member.branch}` : ""]
+      .filter(Boolean)
+      .join(", ");
+    return escapeText(
+      `- ${who(member.sessionId)}${tags.length > 0 ? ` ${tags.join(", ")}` : ""}: ${state}`,
+    );
+  });
+  const head = [
+    "<group_snapshot>",
+    "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
+    "Members:",
+    ...memberLines,
+    "Tasks (open, in progress, in review):",
+  ];
+  const close = "</group_snapshot>";
+  const tasks = input.tasks.filter((task) => SNAPSHOT_TASK_STATUSES.includes(task.status));
+  const omittedLine = (count: number) => `(${count} more tasks omitted)`;
+  let used =
+    estimateGroupTokens(`${head.join("\n")}\n${close}`) +
+    estimateGroupTokens(`${omittedLine(tasks.length)}\n`);
+  const lines: string[] = [];
+  for (const task of tasks) {
+    const line = escapeText(
+      `- task ${task.id} [${task.status}] "${task.title}" owner=${who(task.ownerSessionId)} reviewer=${who(task.reviewerSessionId)}`,
+    );
+    const cost = estimateGroupTokens(`${line}\n`);
+    if (used + cost > GROUP_PROMPT_SNAPSHOT_MAX_TOKENS) break;
+    used += cost;
+    lines.push(line);
+  }
+  if (tasks.length === 0) lines.push("- none");
+  else if (lines.length < tasks.length) lines.push(omittedLine(tasks.length - lines.length));
+  return [...head, ...lines, close].join("\n");
+}
+
+/** Open/in-progress/in-review task hint for autonomous no-@ routing. */
+export type AutonomousWakeTaskHint = {
+  status: string;
+  title?: string;
+  ownerSessionId?: string;
+  reviewerSessionId?: string;
+};
+
+const STOP_WORDS = new Set([
+  "a",
+  "an",
+  "the",
+  "to",
+  "for",
+  "and",
+  "or",
+  "of",
+  "in",
+  "on",
+  "at",
+  "is",
+  "are",
+  "be",
+  "this",
+  "that",
+  "it",
+  "we",
+  "you",
+  "please",
+  "can",
+  "could",
+  "should",
+  "would",
+  "with",
+  "from",
+  "into",
+  "our",
+  "your",
+  "team",
+  "group",
+  "hello",
+  "hi",
+  "hey",
+  "thanks",
+  "thank",
+  "ola",
+  "olá",
+  "oi",
+  "bom",
+  "dia",
+  "tar
