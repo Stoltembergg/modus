@@ -68,17 +68,17 @@ describe("GroupWorkingStatus", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("shows per-member Thinking / Queued rows while the group run is active", () => {
+  it("shows per-member Waiting on model / Queued rows while the group run is active", () => {
     const rows: GroupMemberWorkingRow[] = [
-      { sessionId: "s-lead", mode: "running", live: live({ phase: "Thinking" }) },
+      { sessionId: "s-lead", mode: "running", live: live({ phase: "Waiting on model" }) },
       { sessionId: "s-build", mode: "queued", live: live({ phase: "Queued", lastEventAt: 0 }) },
     ];
     renderStatus(rows);
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
-    expect(items[0]?.dataset.phase).toBe("Thinking");
+    expect(items[0]?.dataset.phase).toBe("Waiting on model");
     expect(items[0]?.textContent).toContain("Planner");
-    expect(items[0]?.textContent).toContain("Thinking");
+    expect(items[0]?.textContent).toContain("Waiting on model");
     expect(items[1]?.dataset.phase).toBe("Queued");
     expect(items[1]?.textContent).toContain("Builder");
   });
@@ -178,11 +178,11 @@ describe("GroupWorkingStatus", () => {
       {
         sessionId: "s-lead",
         mode: "running",
-        live: live({ phase: "Thinking", lastEventAt: last }),
+        live: live({ phase: "Waiting on model", lastEventAt: last }),
       },
     ];
     renderStatus(rows);
-    expect(screen.getByTestId("group-live-status").textContent).toContain("Thinking");
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Waiting on model");
     act(() => {
       vi.advanceTimersByTime(STILL_WORKING_AFTER_MS + 50);
     });
