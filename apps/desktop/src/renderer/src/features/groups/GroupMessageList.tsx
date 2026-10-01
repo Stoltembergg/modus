@@ -200,7 +200,9 @@ export function GroupMessageList({
     count: virtualize ? transcriptItems.length : 0,
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) =>
-      transcriptItems[index]?.type === "day" ? ESTIMATED_DAY_SEPARATOR_PX : ESTIMATED_MESSAGE_ROW_PX,
+      transcriptItems[index]?.type === "day"
+        ? ESTIMATED_DAY_SEPARATOR_PX
+        : ESTIMATED_MESSAGE_ROW_PX,
     getItemKey: (index) => {
       const item = transcriptItems[index];
       if (!item) return index;
