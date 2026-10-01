@@ -46,6 +46,12 @@ export type ComposioSettingsState = {
   error?: ComposioUserError;
 };
 
+export type ComposioConnectivityResult = {
+  apiReachable: boolean;
+  mcpSessionReady: boolean;
+  error?: ComposioUserError;
+};
+
 export type ComposioToolkitPolicyInput = {
   toolkitSlug: string;
   enabled: boolean;

@@ -22,6 +22,7 @@ import { cn } from "../../../lib/cn";
 import { SelectField } from "../form-controls";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 import { McpTypeCard, type SettingsProjectTab, settingsProjectTabs } from "../settings-provider-ui";
+import { IntegrationsSettingsPanel } from "./integrations";
 
 const MCP_STATUS_STYLE: Record<McpServerInfo["status"], { dot: string; label: string }> = {
   connected: { dot: "bg-success", label: "Connected" },
@@ -358,6 +359,12 @@ export function McpSettingsPanel({
         title="MCP"
       />
 
+      <SettingsSection
+        description="Teste API e MCP em camadas separadas; o teste não altera ferramentas nem autorizações existentes."
+        title="Composio"
+      >
+        <IntegrationsSettingsPanel />
+      </SettingsSection>
       <div className="flex flex-wrap items-center gap-1">
         <button
           className={cn(

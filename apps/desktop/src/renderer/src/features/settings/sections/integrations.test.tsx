@@ -87,7 +87,7 @@ describe("IntegrationsSettingsPanel", () => {
 
     const keyInput = await screen.findByLabelText("Composio Project API Key");
     expect((keyInput as HTMLInputElement).type).toBe("password");
-    expect(screen.getByText(/operating system key store/i)).toBeTruthy();
+    expect(screen.getByText(/armazenada com segurança neste dispositivo/i)).toBeTruthy();
   });
 
   it("submits and clears the key without reading it back into the interface", async () => {
@@ -103,7 +103,7 @@ describe("IntegrationsSettingsPanel", () => {
     render(<IntegrationsSettingsPanel />);
     const keyInput = await screen.findByLabelText("Composio Project API Key");
     await user.type(keyInput, "cmp_test_secret_value");
-    await user.click(screen.getByRole("button", { name: "Save key" }));
+    await user.click(screen.getByRole("button", { name: "Salvar chave" }));
 
     await waitFor(() =>
       expect(api.setApiKey).toHaveBeenCalledWith({ apiKey: "cmp_test_secret_value" }),
@@ -213,7 +213,7 @@ describe("IntegrationsSettingsPanel", () => {
     await screen.findByRole("button", { name: "Select all" });
     await user.click(within(toolkit).getByRole("button", { name: "Select all" }));
 
-    expect((await screen.findByRole("alert")).textContent).toMatch(/500 operations or fewer/i);
+    expect((await screen.findByRole("status")).textContent).toMatch(/500 operations or fewer/i);
     expect(api.setToolkitPolicy).not.toHaveBeenCalled();
   });
 
@@ -238,7 +238,7 @@ describe("IntegrationsSettingsPanel", () => {
     await user.click(within(toolkit).getByRole("button", { name: /configure/i }));
     await user.click(await screen.findByRole("checkbox", { name: /list repositories/i }));
 
-    expect((await screen.findByRole("alert")).textContent).toMatch(/session write permission/i);
+    expect((await screen.findByRole("status")).textContent).toMatch(/session write permission/i);
   });
 
   it.each([
@@ -312,7 +312,7 @@ describe("IntegrationsSettingsPanel", () => {
 
     render(<IntegrationsSettingsPanel />);
 
-    expect((await screen.findByRole("alert")).textContent).toMatch(
+    expect((await screen.findByRole("status")).textContent).toMatch(
       /check the connection and retry/i,
     );
   });

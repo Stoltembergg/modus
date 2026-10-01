@@ -150,7 +150,7 @@ describe("HarnessInsightsView", () => {
     expect(markup).toContain("90 days");
   });
 
-  it("keeps Harness Insights out of the Settings navigation", () => {
+  it("shows the active Harness Insights navigation entry once", () => {
     const markup = renderToStaticMarkup(
       <SettingsSidebar
         activeSection="harness-insights"
@@ -161,6 +161,6 @@ describe("HarnessInsightsView", () => {
       />,
     );
 
-    expect(markup).not.toContain("Harness Insights");
+    expect(markup.match(/Harness Insights/g)).toHaveLength(1);
   });
 });

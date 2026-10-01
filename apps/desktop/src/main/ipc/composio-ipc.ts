@@ -72,6 +72,12 @@ export function registerComposioIpcHandlers(
     return getService().getSettingsState();
   }) as IpcHandler);
 
+  ipcMain.handle(IPC_CHANNELS.composioDiagnose, ((event, input) => {
+    assertTrustedSender(event);
+    parseIpcInput(noInputSchema, input, IPC_CHANNELS.composioDiagnose);
+    return getService().diagnose();
+  }) as IpcHandler);
+
   ipcMain.handle(IPC_CHANNELS.composioSetApiKey, ((event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(setApiKeySchema, input, IPC_CHANNELS.composioSetApiKey);
