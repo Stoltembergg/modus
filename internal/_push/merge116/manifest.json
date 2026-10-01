@@ -8,7 +8,8 @@
       "blob": "8cdc1d46d0ef72b814ab8c1563e94df3d89c5dff",
       "parts": [
         "GroupComposer.tsx.part00.zlib.b64",
-        "GroupComposer.tsx.part01.zlib.b64"
+        "GroupComposer.tsx.part01.zlib.b64",
+        "GroupComposer.tsx.part02.zlib.b64"
       ]
     },
     {
@@ -26,7 +27,8 @@
       "blob": "d62d321af3af5ffba82ce3ae06e8be1258716019",
       "parts": [
         "GroupMessageRow.tsx.part00.zlib.b64",
-        "GroupMessageRow.tsx.part01.zlib.b64"
+        "GroupMessageRow.tsx.part01.zlib.b64",
+        "GroupMessageRow.tsx.part02.zlib.b64"
       ]
     },
     {
@@ -35,7 +37,9 @@
       "blob": "047ba3ecde0c7f4b90ebc4aeac22f607ec3044f3",
       "parts": [
         "GroupRoom.test.tsx.part00.zlib.b64",
-        "GroupRoom.test.tsx.part01.zlib.b64"
+        "GroupRoom.test.tsx.part01.zlib.b64",
+        "GroupRoom.test.tsx.part02.zlib.b64",
+        "GroupRoom.test.tsx.part03.zlib.b64"
       ]
     }
   ]
