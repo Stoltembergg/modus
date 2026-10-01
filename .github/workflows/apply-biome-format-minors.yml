@@ -1,0 +1,43 @@
+name: apply-biome-format-minors
+on:
+  push:
+    branches: [cursor/group-conversation-minors-c747]
+    paths:
+      - 'internal/_push/biome-format/**'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply formatted files
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, hashlib, json, pathlib, zlib
+          root = pathlib.Path('internal/_push/biome-format')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          for entry in manifest['files']:
+            name = entry['name']
+            parts = sorted(root.glob(f'{name}.part*.zlib.b64'))
+            assert len(parts) == entry['parts']
+            blob = ''.join(''.join(p.read_text().split()) for p in parts)
+            data = zlib.decompress(base64.b64decode(blob))
+            dig = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+            assert dig == entry['blob'], (name, dig, entry['blob'])
+            pathlib.Path(entry['target']).write_bytes(data)
+            print('wrote', entry['target'], dig)
+          PY
+          rm -rf internal/_push/biome-format
+          rm -f .github/workflows/apply-biome-format-minors.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'style(groups): biome-format MessageList/Row after #112 merge'
+          git push origin HEAD:${{ github.ref_name }}
