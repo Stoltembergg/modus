@@ -26,7 +26,15 @@ export const MAX_HYPERPLAN_SOURCE_SNAPSHOT_BYTES = 1024 * 1024;
 
 export const sourceSnapshotIdSchema = z.string().min(1).max(128).regex(/\S/);
 
-export const thinkingLevelSchema = z.enum(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+export const thinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 
 export const jsonObjectSchema = z.record(z.string(), z.unknown());
 
@@ -88,7 +96,10 @@ export const stringRecordSchema = z.record(z.string(), z.string());
 
 export const restoreIdSchema = z.string().min(1).max(256);
 
-export const restorePanelSchema = { open: z.boolean(), width: z.number().finite().min(0).max(4096) };
+export const restorePanelSchema = {
+  open: z.boolean(),
+  width: z.number().finite().min(0).max(4096),
+};
 
 export const restoreDraftSchema = z
   .object({

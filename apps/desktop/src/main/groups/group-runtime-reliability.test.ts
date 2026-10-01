@@ -269,7 +269,9 @@ describe("Groups runtime audit", () => {
     instances.push(recovered);
     const card = listGroupMessages(group.id).find((m) => m.turnId && m.status === "interrupted");
     expect(card?.turnId).toBeTruthy();
-    const userCountBefore = listGroupMessages(group.id).filter((m) => m.authorKind === "user").length;
+    const userCountBefore = listGroupMessages(group.id).filter(
+      (m) => m.authorKind === "user",
+    ).length;
     recovered.resumeExecution({ groupId: group.id, executionId: card!.turnId! });
     expect(listGroupMessages(group.id).filter((m) => m.authorKind === "user")).toHaveLength(
       userCountBefore,
