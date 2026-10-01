@@ -90,6 +90,20 @@ describe("group runtime IPC", () => {
         mentions: ["s-1"],
         replyToMessageId: "m-0",
       });
+      expect(
+        handlers.get("group:post-message")?.(trusted, {
+          groupId: "g-1",
+          body: "continue",
+          executionMode: "complement",
+          executionId: "m-1",
+        }),
+      ).toEqual(MESSAGE);
+      expect(service.postUserMessage).toHaveBeenLastCalledWith({
+        groupId: "g-1",
+        body: "continue",
+        executionMode: "complement",
+        executionId: "m-1",
+      });
       const cursor = { createdAt: MESSAGE.createdAt, id: MESSAGE.id };
       expect(
         handlers.get("group:list-messages")?.(trusted, {
