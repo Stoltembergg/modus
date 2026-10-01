@@ -1,5 +1,11 @@
-import type { AgentGroupMode, GroupMessage, GroupTask } from "../../../../shared/contracts";
+import type {
+  AgentGroupMode,
+  GroupMessage,
+  GroupProjectContextSnapshot,
+  GroupTask,
+} from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
+import { formatGroupProjectContextDetails } from "../../../../shared/group-project";
 import {
   collectRoomMessageDetails,
   type HandoffPacketField,
@@ -25,6 +31,7 @@ export function GroupActivityPanel({
   coordinating,
   hasLead,
   messages = [],
+  projectContext,
   onCancelled,
   onSetMode,
 }: {
@@ -37,6 +44,8 @@ export function GroupActivityPanel({
   hasLead: boolean;
   /** Room transcript — ops packets surface under Details. */
   messages?: readonly GroupMessage[];
+  /** Project Setup diagnostics (fingerprint, CodeGraph, edges). */
+  projectContext?: GroupProjectContextSnapshot | undefined;
   onCancelled(task: GroupTask): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
 }) {
@@ -58,6 +67,7 @@ export function GroupActivityPanel({
             onSetMode={onSetMode}
             stage={stage}
           />
+          <ActivityProjectContextSection snapshot={projectContext} />
           <ActivityDetailsSection fields={details} />
           <GroupDecisionsSection groupId={groupId} labels={labels} />
         </>
@@ -148,6 +158,27 @@ function ActivityDetailsSection({ fields }: { fields: readonly HandoffPacketFiel
           </div>
         ))}
       </dl>
+    </section>
+  );
+}
+
+function ActivityProjectContextSection({
+  snapshot,
+}: {
+  snapshot: GroupProjectContextSnapshot | undefined;
+}) {
+  if (!snapshot) return null;
+  const lines = formatGroupProjectContextDetails(snapshot);
+  return (
+    <section className="mb-3" data-testid="group-activity-project-context">
+      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">
+        Project context
+      </h3>
+      <ul className="flex flex-col gap-0.5 px-1 text-2xs text-fg-muted">
+        {lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
     </section>
   );
 }
