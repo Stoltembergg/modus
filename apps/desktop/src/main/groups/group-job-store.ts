@@ -74,6 +74,30 @@ export function updateGroupJob(wake: Wake, status: GroupJobStatus, error?: strin
     .run(status, error ?? null, new Date().toISOString(), wake.id);
 }
 
+function wakeFromRow(row: JobRow): Wake {
+  return {
+    id: row.id,
+    messageId: row.message_id,
+    groupId: row.group_id,
+    sessionId: row.session_id,
+    chainId: row.chain_id,
+    triggerMessageId: row.trigger_message_id,
+    seq: row.seq,
+    prompt: row.prompt,
+  };
+}
+
+/** Look up a durable group job by its execution id (turn id). */
+export function getGroupJob(
+  jobId: string,
+): { wake: Wake; status: GroupJobStatus; error: string | null } | undefined {
+  const row = getDatabase()
+    .prepare("select * from group_jobs where id = ?")
+    .get(jobId) as JobRow | undefined;
+  if (!row) return undefined;
+  return { status: row.status, error: row.error, wake: wakeFromRow(row) };
+}
+
 export function listRecoverableGroupJobs(): Array<{ wake: Wake; status: GroupJobStatus }> {
   const rows = getDatabase()
     .prepare(
@@ -82,15 +106,6 @@ export function listRecoverableGroupJobs(): Array<{ wake: Wake; status: GroupJob
     .all() as JobRow[];
   return rows.map((row) => ({
     status: row.status,
-    wake: {
-      id: row.id,
-      messageId: row.message_id,
-      groupId: row.group_id,
-      sessionId: row.session_id,
-      chainId: row.chain_id,
-      triggerMessageId: row.trigger_message_id,
-      seq: row.seq,
-      prompt: row.prompt,
-    },
+    wake: wakeFromRow(row),
   }));
 }
