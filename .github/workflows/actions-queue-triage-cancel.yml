@@ -12,63 +12,98 @@ permissions:
   contents: read
 
 jobs:
-  cancel-stale-113:
+  cancel-for-113-capacity:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Cancel all non-tip #113 Actions (keep tip 79c27b13344f)
+      - name: Cancel competing Package/CI to free #113 tip 79c27b13
         uses: actions/github-script@v7
         with:
           script: |
             const tip = "79c27b13344fd36a4002fa1c7a0c602c5be3b164";
-            const branch = "cursor/group-execution-linking-c747";
-            const never = new Set([36853358104, 36853358141, 36853358146]);
+            const never = new Set([36853358104, 36853358141, 36853358146]); // tip Package Win, Package Mac, CI
+            const branches = {
+              "cursor/group-execution-linking-c747": { pr: 113, mode: "non_tip_all" },
+              "cursor/group-transcript-virtualization-c747": { pr: 116, mode: "package_only" },
+              "cursor/group-conversation-minors-c747": { pr: 117, mode: "package_only" },
+              "cursor/group-progress-final-card-c747": { pr: 115, mode: "package_only" },
+            };
             const results = [];
             let canceled = 0;
             let kept = 0;
-            let page = 1;
-            const active = [];
-            while (page <= 10) {
-              const { data } = await github.rest.actions.listWorkflowRunsForRepo({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                branch,
-                per_page: 100,
-                page
-              });
-              if (!data.workflow_runs.length) break;
-              for (const run of data.workflow_runs) {
-                if (["queued", "in_progress", "waiting", "requested", "pending"].includes(run.status)) {
-                  active.push(run);
-                }
-              }
-              if (data.workflow_runs.length < 100) break;
-              page++;
-            }
-            for (const run of active) {
-              const run_id = run.id;
-              try {
-                if (never.has(run_id) || run.head_sha === tip) {
-                  kept++;
-                  results.push({ run_id, status: "kept_tip", name: run.name, head_sha: run.head_sha, run_status: run.status });
-                  continue;
-                }
-                // Same as: gh api -X POST repos/.../actions/runs/{id}/cancel
-                await github.rest.actions.cancelWorkflowRun({
+            let skipped = 0;
+
+            async function listActive(branch) {
+              const active = [];
+              for (let page = 1; page <= 10; page++) {
+                const { data } = await github.rest.actions.listWorkflowRunsForRepo({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  run_id
+                  branch,
+                  per_page: 100,
+                  page,
                 });
-                canceled++;
-                results.push({ run_id, status: "canceled", previous: run.status, name: run.name, head_sha: run.head_sha });
-                core.info(`canceled ${run_id} ${run.name} ${run.head_sha}`);
-              } catch (e) {
-                results.push({ run_id, status: "error", message: e.message, name: run.name, head_sha: run.head_sha });
+                if (!data.workflow_runs.length) break;
+                for (const run of data.workflow_runs) {
+                  if (["queued", "in_progress", "waiting", "requested", "pending"].includes(run.status)) {
+                    active.push(run);
+                  }
+                }
+                if (data.workflow_runs.length < 100) break;
+              }
+              return active;
+            }
+
+            function shouldCancel(run, meta) {
+              if (never.has(run.id) || run.head_sha === tip) return "keep_tip";
+              const isPackage = run.name.startsWith("Package");
+              const isCi = run.name === "CI";
+              if (meta.mode === "non_tip_all") {
+                // #113: cancel Package + CI on non-tip SHAs
+                if (isPackage || isCi) return "cancel";
+                return "skip";
+              }
+              if (meta.mode === "package_only") {
+                // #115/#116/#117: cancel Package macOS/Windows only
+                if (isPackage) return "cancel";
+                return "skip";
+              }
+              return "skip";
+            }
+
+            for (const [branch, meta] of Object.entries(branches)) {
+              const active = await listActive(branch);
+              core.info(`branch ${branch} active=${active.length}`);
+              for (const run of active) {
+                const decision = shouldCancel(run, meta);
+                try {
+                  if (decision === "keep_tip") {
+                    kept++;
+                    results.push({ pr: meta.pr, run_id: run.id, status: "kept_tip", name: run.name, head_sha: run.head_sha, run_status: run.status });
+                    continue;
+                  }
+                  if (decision === "skip") {
+                    skipped++;
+                    results.push({ pr: meta.pr, run_id: run.id, status: "skipped", name: run.name, head_sha: run.head_sha, run_status: run.status });
+                    continue;
+                  }
+                  await github.rest.actions.cancelWorkflowRun({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    run_id: run.id,
+                  });
+                  canceled++;
+                  results.push({ pr: meta.pr, run_id: run.id, status: "canceled", previous: run.status, name: run.name, head_sha: run.head_sha });
+                  core.info(`canceled PR#${meta.pr} ${run.id} ${run.name} ${run.head_sha}`);
+                } catch (e) {
+                  results.push({ pr: meta.pr, run_id: run.id, status: "error", message: e.message, name: run.name, head_sha: run.head_sha });
+                }
               }
             }
+
             await core.summary
-              .addHeading(`#113 triage tip ${tip.slice(0,12)}`)
-              .addRaw(`Canceled: ${canceled}; kept tip: ${kept}; scanned active: ${active.length}`)
+              .addHeading(`#113 capacity triage tip ${tip.slice(0,12)}`)
+              .addRaw(`Canceled: ${canceled}; kept tip: ${kept}; skipped: ${skipped}`)
               .addCodeBlock(JSON.stringify(results, null, 2), "json")
               .write();
-            console.log(JSON.stringify({ canceled, kept, scanned: active.length, results }, null, 2));
+            console.log(JSON.stringify({ canceled, kept, skipped, results }, null, 2));
