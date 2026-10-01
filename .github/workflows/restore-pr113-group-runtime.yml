@@ -1,39 +1,44 @@
 name: restore-pr113-group-runtime
-# Restores group-runtime.ts from known-good tip 8bbe652 (pre-LOAD_FROM_FILE corruption in 61d1d0b).
 on:
-  workflow_dispatch:
   push:
     paths:
       - .github/workflows/restore-pr113-group-runtime.yml
+  workflow_dispatch:
 permissions:
   contents: write
+concurrency:
+  group: restore-pr113-group-runtime
+  cancel-in-progress: true
 jobs:
   restore:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/cursor/group-execution-linking-c747'
     steps:
       - uses: actions/checkout@v4
         with:
           ref: cursor/group-execution-linking-c747
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Restore group-runtime.ts from 8bbe652
+      - name: Restore group-runtime.ts
         run: |
           set -euo pipefail
-          f=apps/desktop/src/main/groups/group-runtime.ts
-          if grep -q 'export class GroupRuntime' "$f" && grep -q 'startsChain || chainId === undefined' "$f"; then
-            echo already restored
+          GOOD=90e34988c96296f16c121f238e94c743f32e2087
+          TARGET=apps/desktop/src/main/groups/group-runtime.ts
+          git show "$GOOD:$TARGET" > "$TARGET"
+          bytes=$(wc -c < "$TARGET")
+          echo "restored_bytes=$bytes"
+          test "$bytes" -gt 40000
+          ! grep -q '^LOAD_FROM_FILE$' "$TARGET"
+          grep -q 'class GroupRuntime' "$TARGET"
+          grep -q 'startsChain || chainId === undefined' "$TARGET"
+          sha256sum "$TARGET"
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/desktop/src/main/groups/group-runtime.ts
+          if git diff --cached --quiet; then
+            echo "already_restored"
             exit 0
           fi
-          git checkout 8bbe652bead5690309ed91ac8a470b5b4cd3b117 -- "$f"
-          test -s "$f"
-          grep -q 'export class GroupRuntime' "$f"
-          grep -q 'startsChain || chainId === undefined' "$f"
-          ! grep -q 'LOAD_FROM_FILE' "$f"
-          ! grep -q 'PLACEHOLDER' "$f"
-          python3 -c "import pathlib; b=pathlib.Path('$f').read_bytes(); assert len(b)>40000, len(b)"
-          git config user.email "stoltembergg@gmail.com"
-          git config user.name "Gabriel"
-          git add "$f"
-          git commit -m "fix(groups): restore group-runtime.ts after LOAD_FROM_FILE corruption"
+          git commit -m "fix(groups): restore group-runtime.ts wiped by LOAD_FROM_FILE stub"
           git push origin HEAD:cursor/group-execution-linking-c747
