@@ -29,11 +29,11 @@ export function GroupWorkingShimmer({
   return (
     <div
       aria-live="polite"
-      className="mx-auto w-full max-w-[760px] px-6 pb-1 pt-0.5"
+      className="mx-auto mb-2 w-full max-w-[760px] shrink-0 px-6 pt-0.5"
       data-testid="group-working-shimmer"
       role="status"
     >
-      <TextShimmer className="text-xs" duration={3.2} spread={18}>
+      <TextShimmer className="text-xs leading-snug" duration={3.2} spread={18}>
         {text}
       </TextShimmer>
     </div>
