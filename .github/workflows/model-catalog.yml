@@ -26,7 +26,7 @@ jobs:
           mv node_modules/@earendil-works/pi-ai "$RUNNER_TEMP/model-catalog-pi-ai-locked"
           ln -s "$runtime_dir/node_modules/@earendil-works/pi-ai" node_modules/@earendil-works/pi-ai
           node scripts/generate-model-catalog.mjs
-          npx vitest run --root . apps/desktop/src/main/agent/model-catalog-service.test.ts
+          npx vitest run --root . apps/desktop/src/main/agent/model-catalog-service.test.ts apps/desktop/scripts/model-catalog-utils.test.mjs
       - name: Publish catalog update
         run: |
           branch=automation/model-catalog

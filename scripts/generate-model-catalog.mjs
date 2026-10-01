@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
+import { omitEmptyProviders } from "./model-catalog-utils.mjs";
 
 const MODELS_DEV_URL = "https://models.dev/api.json";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -125,24 +126,26 @@ function officialControls(modelsDev, byId, provider, id) {
 
 const modelsDev = await loadModelsDev();
 const reasoningById = buildReasoningIndex(modelsDev);
-const providers = Object.fromEntries(
-  getBuiltinProviders()
-    .sort()
-    .map((provider) => [
-      provider,
-      getBuiltinModels(provider)
-        .toSorted((a, b) => a.id.localeCompare(b.id))
-        .map((model) => {
-          const controls = officialControls(modelsDev, reasoningById, provider, model.id);
-          const reasoningCapability = controls
-            ? capabilityFromModelsDev(controls)
-            : capabilityFromPi(model);
-          return {
-            ...model,
-            ...(reasoningCapability ? { reasoningCapability } : {}),
-          };
-        }),
-    ]),
+const providers = omitEmptyProviders(
+  Object.fromEntries(
+    getBuiltinProviders()
+      .sort()
+      .map((provider) => [
+        provider,
+        getBuiltinModels(provider)
+          .toSorted((a, b) => a.id.localeCompare(b.id))
+          .map((model) => {
+            const controls = officialControls(modelsDev, reasoningById, provider, model.id);
+            const reasoningCapability = controls
+              ? capabilityFromModelsDev(controls)
+              : capabilityFromPi(model);
+            return {
+              ...model,
+              ...(reasoningCapability ? { reasoningCapability } : {}),
+            };
+          }),
+      ]),
+  ),
 );
 
 let generatedAt = new Date().toISOString();
