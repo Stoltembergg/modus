@@ -1,0 +1,40 @@
+name: mcp-assemble-lib
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".mcp-restore/TRIGGER"
+permissions:
+  contents: write
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assemble lib from chunks
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import hashlib
+          parts = sorted(Path(".mcp-restore").glob("group-runtime-lib.ts.*"))
+          if not parts:
+              raise SystemExit("no chunks")
+          text = "".join(p.read_text(encoding="utf-8") for p in parts)
+          dest = Path("apps/desktop/src/main/groups/group-runtime-lib.ts")
+          dest.write_text(text, encoding="utf-8")
+          data = text.encode("utf-8")
+          blob = hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+          print("blob", blob, "bytes", len(data))
+          expect = "ad2a790ae1b851feda995234a9984d24aa82b939"
+          if blob != expect:
+              raise SystemExit(f"blob mismatch: {blob} != {expect}")
+          PY
+          rm -rf .mcp-restore
+          rm -f .github/workflows/mcp-assemble-lib.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status
+          git commit -m "feat(groups): inject supervised flow into Coordinator Lead wakes"
+          git push
