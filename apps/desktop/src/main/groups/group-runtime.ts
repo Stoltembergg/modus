@@ -33,6 +33,7 @@ import {
   instructionsOf,
   type MemberRef,
   membersOf,
+  modelIdOf,
   parseGroupMentions,
   RETIRED_CHAIN_HISTORY,
   selectAutonomousWakeTargets,
@@ -720,11 +721,13 @@ export class GroupRuntime {
       const attachments = trigger?.attachments;
       const contextItems = (trigger?.contextItems ??
         []) as import("../../shared/contracts").ContextItem[];
+      const model = modelIdOf(wake.groupId, wake.sessionId);
       turn = this.runtime.prompt(window, {
         sessionId: wake.sessionId,
         message: this.freshPrompt(wake),
         context: contextItems,
         delivery: "normal",
+        ...(model ? { model } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
     } catch (error) {

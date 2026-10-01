@@ -228,6 +228,19 @@ export function instructionsOf(groupId: string, sessionId: string): string | und
   return instructions || undefined;
 }
 
+/**
+ * The member's current agent `modelId`, read fresh on every wake so an Edit-agent
+ * Model change applies on the next turn (the session row may still be stale until
+ * Save rebinds it; the prompt path also applies this authoritatively).
+ */
+export function modelIdOf(groupId: string, sessionId: string): string | undefined {
+  const agentId = listAgentGroupMembers(groupId).find(
+    (member) => member.sessionId === sessionId,
+  )?.agentId;
+  const modelId = agentId ? getAgent(agentId)?.modelId?.trim() : undefined;
+  return modelId || undefined;
+}
+
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

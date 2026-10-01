@@ -342,6 +342,7 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
 /** Changes only the given fields; `null` clears the model / default Project. */
 export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo {
   const row = requireAgentRow(agentId);
+  const nextModelId = input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id;
   getDatabase()
     .prepare(
       `update agents
@@ -353,7 +354,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
       input.name !== undefined ? requireFreeName(input.name, row.group_id, agentId) : row.name,
       input.role !== undefined ? input.role.trim() : row.role,
       input.instructions !== undefined ? input.instructions : row.instructions,
-      input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id,
+      nextModelId,
       input.defaultWorkspaceId !== undefined
         ? requireWorkspace(input.defaultWorkspaceId)
         : row.default_workspace_id,
@@ -369,7 +370,30 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
       .prepare("update agent_sessions set title = ? where agent_id = ? and kind = 'chat'")
       .run(requireAgentRow(agentId).name, agentId);
   }
+  // Edit agent Model must rebind every session that runs as this agent: the
+  // hidden room session (group_member) and the 1:1 chat. Otherwise the next
+  // wake / turn keeps the model stamped at create time.
+  if (input.modelId !== undefined) {
+    rebindAgentSessionModels(agentId, nextModelId);
+  }
   return toAgent(requireAgentRow(agentId));
+}
+
+/**
+ * Stamp `model` onto the agent's room session and 1:1 chat so the next prompt
+ * (and any resume) picks up an Edit-agent model change without a restart.
+ */
+function rebindAgentSessionModels(agentId: string, modelId: string | null): void {
+  const db = getDatabase();
+  const member = db
+    .prepare("select session_id from agent_group_members where agent_id = ?")
+    .get(agentId) as { session_id: string } | undefined;
+  const sessionIds = [...(member ? [member.session_id] : []), ...agentChatSessionIds([agentId])];
+  if (sessionIds.length === 0) return;
+  const update = db.prepare("update agent_sessions set model = ? where id = ?");
+  for (const sessionId of sessionIds) {
+    update.run(modelId, sessionId);
+  }
 }
 
 /**

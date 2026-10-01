@@ -1239,3 +1239,40 @@ describe("N4 proactive follow-ups", () => {
     });
   });
 });
+
+/* ── Edit agent model applies on the next wake ───────────────────────── */
+
+describe("Edit agent model applies on next wake", () => {
+  it("passes the agent modelId on wake, and uses the new model after Save", async () => {
+    const firstModel = "openai/gpt-5";
+    const nextModel = "openai/gpt-6-luna";
+    const group = createGroupWithNewAgents({
+      name: uid("ModelGroup"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Planner", role: "Lead", modelId: firstModel },
+        { name: "Builder", role: "Builder", modelId: firstModel },
+      ],
+    });
+    const planner = group.members.find((member) => member.name === "Planner");
+    expect(planner).toBeDefined();
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: planner?.sessionId,
+      model: firstModel,
+      delivery: "normal",
+    });
+    runtime.take(planner?.sessionId ?? "").resolve({ outcome: "ok", finalText: "Plan ready." });
+    await flush();
+
+    updateAgent(planner?.agentId ?? "", { modelId: nextModel });
+    groups.postUserMessage({ groupId: group.id, body: "@Planner continue" });
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: planner?.sessionId,
+      model: nextModel,
+      delivery: "normal",
+    });
+  });
+});
