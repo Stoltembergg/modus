@@ -1,0 +1,44 @@
+name: apply-group-minors-room-test
+on:
+  push:
+    branches: [cursor/group-conversation-minors-c747]
+    paths:
+      - 'internal/_push/group-minors/**'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble GroupRoom.test.tsx
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, hashlib, json, pathlib, zlib
+          root = pathlib.Path('internal/_push/group-minors')
+          manifest = json.loads((root / 'manifest.json').read_text())
+          parts = sorted(root.glob('GroupRoom.test.tsx.part*.zlib.b64'))
+          assert len(parts) == manifest['parts'], (len(parts), manifest['parts'])
+          blob = b''.join(p.read_text().strip().encode() for p in parts)
+          data = zlib.decompress(base64.b64decode(blob))
+          assert len(data) == manifest['bytes']
+          digest = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+          assert digest == manifest['blob'], (digest, manifest['blob'])
+          target = pathlib.Path(manifest['target'])
+          target.write_bytes(data)
+          print('wrote', target, 'bytes', len(data), 'sha', digest)
+          PY
+          rm -rf internal/_push/group-minors
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'nothing to commit'
+            exit 0
+          fi
+          git commit -m 'feat(groups): apply GroupRoom.test conversation minors payload'
+          git push origin HEAD:${{ github.ref_name }}
