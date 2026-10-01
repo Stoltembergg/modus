@@ -1,0 +1,62 @@
+name: apply-group-minors-restore
+on:
+  push:
+    branches: [cursor/group-conversation-minors-c747]
+    paths:
+      - 'internal/_push/group-minors/**'
+      - '.github/workflows/apply-group-minors-restore.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble group-minors payloads
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import base64, hashlib, json, pathlib, zlib
+          root = pathlib.Path('internal/_push/group-minors')
+          if not root.exists():
+            print('no payload dir')
+            raise SystemExit(0)
+          manifest = json.loads((root / 'manifest.json').read_text())
+          # Support legacy single-file manifest and multi-file
+          if 'files' in manifest:
+            entries = manifest['files']
+          else:
+            entries = [manifest]
+          for entry in entries:
+            target = pathlib.Path(entry['target'])
+            name = entry.get('name') or target.name
+            parts = sorted(root.glob(f'{name}.part*.zlib.b64'))
+            assert parts, f'no parts for {name}'
+            assert len(parts) == entry['parts'], (name, len(parts), entry['parts'])
+            blob = ''.join(p.read_text().strip() for p in parts)
+            data = zlib.decompress(base64.b64decode(blob))
+            assert len(data) == entry['bytes'], (name, len(data), entry['bytes'])
+            digest = hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()
+            assert digest == entry['blob'], (name, digest, entry['blob'])
+            # Refuse path-stub / PLACEHOLDER content
+            head = data[:200]
+            assert not head.startswith(b'$file:') and not head.startswith(b'@file:')
+            assert b'PLACEHOLDER' not in data[:500]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            print('wrote', target, 'bytes', len(data), 'sha', digest)
+          PY
+          rm -rf internal/_push/group-minors
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'nothing to commit'
+            exit 0
+          fi
+          git commit -m 'fix(groups): restore conversation minors UI + GroupRoom.test from payloads'
+          git push origin HEAD:${{ github.ref_name }}
