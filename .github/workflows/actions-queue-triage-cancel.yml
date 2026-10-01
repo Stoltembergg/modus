@@ -16,20 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel Package macOS competing with #111 arm64 (pass 2)
+      - name: Cancel Package macOS competing with #111 arm64 (pass 3)
         uses: actions/github-script@v7
         with:
           script: |
-            // Pass 2: leftovers + newly queued Package macOS on #109/#113-116.
-            // Never cancel #111 run 36842393932 / job 110304318185.
+            // Pass 3: newly queued after tip churn on #109/#113-116. Never touch #111.
             const never = new Set([36842393932]);
             const cancelEvenIfInProgress = new Set([
-              36847399224, 36847232234, 36847200266, 36847166012, 36847124818, 36847080743,
-              36847047744, 36846944320, 36846890770, 36846755390,
+              36847737415, 36847722582, 36847706319, 36847689170, 36847568234,
             ]);
             const runIds = [
-              36847399224, 36847232234, 36847200266, 36847166012, 36847124818, 36847080743,
-              36847047744, 36846944320, 36846890770, 36846755390,
+              36847737415, 36847722582, 36847706319, 36847689170, 36847568234,
             ];
             const results = [];
             for (const run_id of runIds) {
@@ -47,24 +44,16 @@ jobs:
                   results.push({ run_id, status: 'already_completed', conclusion: run.conclusion, name: run.name });
                   continue;
                 }
-                if (run.status === 'in_progress' && !cancelEvenIfInProgress.has(run_id)) {
-                  results.push({ run_id, status: 'skipped_in_progress', name: run.name });
-                  continue;
-                }
                 await github.rest.actions.cancelWorkflowRun({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   run_id
                 });
-                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name, head_sha: run.head_sha, branch: run.head_branch });
-                core.info(`canceled ${run_id} (${run.name}, was ${run.status})`);
+                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name, head_sha: run.head_sha });
+                core.info(`canceled ${run_id}`);
               } catch (e) {
                 results.push({ run_id, status: 'error', message: e.message });
-                core.warning(`fail ${run_id}: ${e.message}`);
               }
             }
-            await core.summary
-              .addHeading('Actions queue triage cancel pass 2')
-              .addCodeBlock(JSON.stringify(results, null, 2), 'json')
-              .write();
+            await core.summary.addHeading('pass 3').addCodeBlock(JSON.stringify(results, null, 2), 'json').write();
             console.log(JSON.stringify(results, null, 2));
