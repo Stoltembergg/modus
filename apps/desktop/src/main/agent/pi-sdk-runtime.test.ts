@@ -1338,10 +1338,11 @@ describe("PiSdkRuntime", () => {
       type: "plan.updated",
       sessionId,
       plan,
+      eventCursor: expect.any(Number),
     });
     expect(window.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       expect.any(String),
-      { type: "plan.updated", sessionId, plan },
+      { type: "plan.updated", sessionId, plan, eventCursor: expect.any(Number) },
     );
   });
 
@@ -1387,6 +1388,7 @@ describe("PiSdkRuntime", () => {
       type: "plan.updated",
       sessionId,
       plan,
+      eventCursor: expect.any(Number),
     });
   });
 
