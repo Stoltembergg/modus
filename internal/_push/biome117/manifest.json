@@ -1,15 +1,6 @@
 {
-  "purpose": "biome-format #117",
+  "purpose": "biome-format #117 restore Row",
   "files": [
-    {
-      "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx",
-      "bytes": 18812,
-      "blob": "3f5d406958421ebfec1bcf34c55d75dea057d87e",
-      "parts": [
-        "GroupMessageList.tsx.part00.zlib.b64",
-        "GroupMessageList.tsx.part01.zlib.b64"
-      ]
-    },
     {
       "target": "apps/desktop/src/renderer/src/features/groups/GroupMessageRow.tsx",
       "bytes": 25793,
