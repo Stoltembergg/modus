@@ -1,6 +1,6 @@
 import type { SettingsSectionId } from "./settings-types";
 
-export type SettingsNavGroupId = "workspace" | "models-limits" | "interface";
+export type SettingsNavGroupId = "interface" | "workspace" | "models";
 
 export type SettingsNavGroupDef = {
   id: SettingsNavGroupId;
@@ -14,27 +14,28 @@ export type SettingsNavEntry = {
 };
 
 export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroupDef[] = [
-  { id: "workspace", title: "Workspace" },
-  { id: "models-limits", title: "Models & limits" },
   { id: "interface", title: "Interface" },
+  { id: "workspace", title: "Workspace" },
+  { id: "models", title: "Models" },
 ];
 
 // Group membership lives only here: moving an item is a one-field change.
 export const SETTINGS_NAV_ITEMS: readonly SettingsNavEntry[] = [
   { id: "general", label: "General", group: "interface" },
-  { id: "model-provider", label: "Model & Provider", group: "models-limits" },
   { id: "appearance", label: "Appearance", group: "interface" },
   { id: "personalization", label: "Personalization", group: "interface" },
-  { id: "project-memory", label: "Project memory", group: "workspace" },
-  { id: "harness-insights", label: "Harness Insights", group: "workspace" },
-  { id: "failure-blacklist", label: "Failure blacklist", group: "workspace" },
   { id: "integrations", label: "Integrations", group: "workspace" },
   { id: "mcp", label: "MCP", group: "workspace" },
   { id: "skills", label: "Skills", group: "workspace" },
   { id: "subagents", label: "Subagents", group: "workspace" },
   { id: "rules", label: "Rules", group: "workspace" },
-  { id: "limits", label: "Limits", group: "models-limits" },
+  { id: "model-provider", label: "Model & Provider", group: "models" },
 ];
+
+/** Hidden/removed sections resolve to General when opened through a stale route. */
+export function normalizeSettingsSection(section: SettingsSectionId): SettingsSectionId {
+  return SETTINGS_NAV_ITEMS.some((item) => item.id === section) ? section : "general";
+}
 
 export function filterSettingsNav<T extends { label: string }>(
   items: readonly T[],

@@ -1,7 +1,7 @@
 import { IconFileUnknown } from "@tabler/icons-react";
 import { type CSSProperties, useState } from "react";
 import type { DiffFilePatch, DiffTarget } from "../../../../shared/contracts";
-import { useTheme } from "../../lib/theme";
+import { useEffectiveTheme } from "../../lib/theme";
 
 export type DiffPreviewRequest = {
   cwd: string;
@@ -62,7 +62,7 @@ export function FileDiffPreview({
   changedLines,
   binary,
 }: FileDiffPreviewProps) {
-  const [theme] = useTheme();
+  const theme = useEffectiveTheme();
   const [allowLarge, setAllowLarge] = useState(false);
   const [preparingLarge, setPreparingLarge] = useState(false);
 

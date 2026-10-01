@@ -8,7 +8,6 @@ import {
   IconFolder,
   IconFolderOpen,
   IconFolderPlus,
-  IconGauge,
   IconPencil,
   IconPin,
   IconPinnedOff,
@@ -103,7 +102,6 @@ type SidebarProps = {
   onRemoveProject(id: string): void;
   onRevealProject(id: string): void;
   onOpenSettings(): void;
-  onOpenLimits(): void;
   onWidthChange(width: number): void;
   canCreateSession: boolean;
   /** Agent Groups (with members). Member chats show only under their group. */
@@ -167,7 +165,6 @@ export function Sidebar({
   onRemoveProject,
   onRevealProject,
   onOpenSettings,
-  onOpenLimits,
   onWidthChange,
   canCreateSession,
   onRenameSession,
@@ -531,9 +528,6 @@ export function Sidebar({
         </div>
 
         <div className="app-no-drag px-2 pt-1 pb-2">
-          <NavRow icon={<IconGauge size={SB_ICON} stroke={SB_STROKE} />} onClick={onOpenLimits}>
-            Limits
-          </NavRow>
           <NavRow
             icon={<IconSettings size={SB_ICON} stroke={SB_STROKE} />}
             onClick={onOpenSettings}

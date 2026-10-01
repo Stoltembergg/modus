@@ -304,7 +304,6 @@ describe("Sidebar with groups", () => {
         onListArchivedSessions={vi.fn(async () => [])}
         onNewSession={noop}
         onNewWorkspaceSession={noop}
-        onOpenLimits={noop}
         onOpenSettings={noop}
         onOpenWorkspace={noop}
         onPinProject={noop}
@@ -366,7 +365,6 @@ describe("Sidebar with groups", () => {
         onListArchivedSessions={vi.fn(async () => [])}
         onNewSession={noop}
         onNewWorkspaceSession={noop}
-        onOpenLimits={noop}
         onOpenSettings={noop}
         onOpenWorkspace={noop}
         onPinProject={noop}
@@ -427,7 +425,6 @@ describe("Sidebar with groups", () => {
           onListArchivedSessions={vi.fn(async () => [])}
           onNewSession={noop}
           onNewWorkspaceSession={noop}
-          onOpenLimits={noop}
           onOpenSettings={noop}
           onOpenWorkspace={noop}
           onPinProject={noop}

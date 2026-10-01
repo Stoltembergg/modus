@@ -1,4 +1,4 @@
-import { IconMoon, IconMoonStars, IconSun } from "@tabler/icons-react";
+import { IconDeviceDesktop, IconMoon, IconMoonStars, IconSun } from "@tabler/icons-react";
 import { cn } from "../../../lib/cn";
 import { type ThemeMode, useTheme } from "../../../lib/theme";
 import {
@@ -21,7 +21,7 @@ export function AppearanceSettingsPanel() {
         <SettingsList>
           <SettingsRow
             control={<ThemeToggle onChange={setTheme} value={theme} />}
-            description="Switch between light, dark, and softer Dark+ palettes."
+            description="Follow your system appearance or choose a light, dark, or eye-care palette."
             title="Color scheme"
           />
           <SettingsRow
@@ -35,6 +35,7 @@ export function AppearanceSettingsPanel() {
   );
 }
 const THEME_OPTIONS: ReadonlyArray<{ value: ThemeMode; label: string; icon: typeof IconSun }> = [
+  { value: "system", label: "System", icon: IconDeviceDesktop },
   { value: "light", label: "Light", icon: IconSun },
   { value: "dark", label: "Dark", icon: IconMoon },
   { value: "dark-plus", label: "Eye-care Dark", icon: IconMoonStars },

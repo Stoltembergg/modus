@@ -45,7 +45,6 @@ function renderSidebar() {
       onListArchivedSessions={vi.fn(async () => [])}
       onNewSession={noop}
       onNewWorkspaceSession={noop}
-      onOpenLimits={noop}
       onOpenSettings={noop}
       onOpenWorkspace={noop}
       onPinProject={noop}
@@ -72,6 +71,12 @@ async function openProjectMenu(user: ReturnType<typeof userEvent.setup>): Promis
 afterEach(() => cleanup());
 
 describe("Project menu", () => {
+  it("does not expose Limits as a sidebar destination", () => {
+    renderSidebar();
+
+    expect(screen.queryByRole("button", { name: "Limits" })).toBeNull();
+  });
+
   it("closes on a plain item click (the real Base UI close-on-click is active)", async () => {
     const user = userEvent.setup();
     const { onArchiveProjectChats } = renderSidebar();

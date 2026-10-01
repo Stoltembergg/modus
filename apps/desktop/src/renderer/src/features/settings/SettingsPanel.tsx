@@ -12,23 +12,20 @@ import type {
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
 import { AppearanceSettingsPanel } from "./sections/appearance";
-import { FailureBlacklistSettingsPanel } from "./sections/failure-blacklist";
 import { GeneralSettingsPanel } from "./sections/general";
-import { HarnessInsightsSettingsPanel } from "./sections/harness-insights";
 import { IntegrationsSettingsPanel } from "./sections/integrations";
-import { LimitsSettingsPanel } from "./sections/limits";
 import { McpSettingsPanel } from "./sections/mcp";
 import {
   ModelProviderSettingsPanel,
   UnofficialProviderInterstitialDialog,
 } from "./sections/model-provider";
 import { PersonalizationSettingsPanel } from "./sections/personalization";
-import { ProjectMemorySettingsPanel } from "./sections/project-memory";
 import { RulesSettingsPanel } from "./sections/rules";
 import { SettingsSidebar } from "./sections/SettingsSidebar";
 import { SkillsSettingsPanel } from "./sections/skills";
 import { SubagentsSettingsPanel } from "./sections/subagents";
 import type { ModelConfigPatch, SettingsSectionId } from "./settings-types";
+import { normalizeSettingsSection } from "./settingsNav";
 
 export type { HarnessInsightsViewState } from "./sections/harness-insights";
 export {
@@ -74,8 +71,6 @@ type SettingsPanelProps = {
   workspaceCwd?: string | undefined;
   /** Recent workspaces — used as project MCP scopes. */
   workspaces?: WorkspaceInfo[] | undefined;
-  /** Active project scope for the memory manager; omitted in Inbox. */
-  workspaceId?: string | undefined;
 };
 
 export function SettingsPanel({
@@ -83,7 +78,6 @@ export function SettingsPanel({
   onClose,
   onRefresh,
   onRefreshCatalog,
-  workspaceId,
   workspaceCwd,
   workspaces = [],
   initialSection = "model-provider",
@@ -106,7 +100,9 @@ export function SettingsPanel({
   authOperationRef.current = authOperation;
   const [credentialEditorProvider, setCredentialEditorProvider] = useState<string | undefined>();
   const [providerKeys, setProviderKeys] = useState<Record<string, string>>({});
-  const [activeSection, setActiveSection] = useState<SettingsSectionId>(initialSection);
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(() =>
+    normalizeSettingsSection(initialSection),
+  );
   const [settingsQuery, setSettingsQuery] = useState("");
   // Provider id awaiting risk acknowledgement before OAuth may begin. Anything
   // other than "antigravity" should never land here in practice — it is the
@@ -540,16 +536,6 @@ export function SettingsPanel({
           ) : null}
           {activeSection === "integrations" ? <IntegrationsSettingsPanel /> : null}
           {activeSection === "rules" ? <RulesSettingsPanel cwd={workspaceCwd} /> : null}
-          {activeSection === "project-memory" ? (
-            <ProjectMemorySettingsPanel workspaceId={workspaceId} />
-          ) : null}
-          {activeSection === "harness-insights" ? (
-            <HarnessInsightsSettingsPanel workspaceId={workspaceId} />
-          ) : null}
-          {activeSection === "failure-blacklist" ? (
-            <FailureBlacklistSettingsPanel workspaceId={workspaceId} />
-          ) : null}
-          {activeSection === "limits" ? <LimitsSettingsPanel models={state?.models ?? []} /> : null}
           {activeSection === "model-provider" ? (
             <ModelProviderSettingsPanel
               authOperation={authOperation}
