@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: cursor/resume-by-execution-id-db25
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Skip if staging already cleaned
         id: guard
@@ -25,7 +25,7 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Apply resume patches
+      - name: Apply patches onto triggering snapshot
         if: steps.guard.outputs.skip == 'false'
         run: |
           set -euo pipefail
@@ -33,6 +33,8 @@ jobs:
           import json, hashlib, subprocess
           from pathlib import Path
           manifest = json.loads(Path("internal/_push/resume/manifest.json").read_text())
+          out = Path("/tmp/applied")
+          out.mkdir(parents=True, exist_ok=True)
           for entry in manifest["files"]:
               path = Path(entry["path"])
               patch_path = Path(entry["patch_repo_path"])
@@ -41,11 +43,22 @@ jobs:
               if entry["strategy"] == "restore_from_ref_then_patch":
                   content = subprocess.check_output(
                       ["git", "show", f"{entry['base_ref']}:{entry['path']}"],
-                      text=True,
                   )
                   path.parent.mkdir(parents=True, exist_ok=True)
-                  path.write_text(content)
-              subprocess.check_call(["patch", "-p1", "--batch", "-i", str(patch_path)])
+                  path.write_bytes(content)
+                  print(f"restored {path} from {entry['base_ref']} ({len(content)} bytes)")
+              else:
+                  if not path.is_file():
+                      raise SystemExit(f"missing current file for patch_current: {path}")
+                  print(f"patching current {path} ({path.stat().st_size} bytes)")
+              proc = subprocess.run(
+                  ["patch", "-p1", "--batch", "--verbose", "-i", str(patch_path)],
+                  capture_output=True, text=True,
+              )
+              print(proc.stdout)
+              if proc.returncode != 0:
+                  print(proc.stderr)
+                  raise SystemExit(f"patch failed for {path}: {proc.returncode}")
               result = path.read_bytes()
               got = hashlib.sha256(result).hexdigest()
               if got != entry["expected_sha256"]:
@@ -56,17 +69,50 @@ jobs:
                   raise SystemExit(
                       f"byte mismatch for {path}: got {len(result)} want {entry['expected_bytes']}"
                   )
-              print(f"OK {path} {len(result)} {got[:16]}")
+              dest = out / path
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(result)
+              print(f"OK {path} {len(result)} {got}")
+          Path("/tmp/applied/manifest.json").write_text(json.dumps(manifest))
           PY
-      - name: Commit applied files and remove staging
+      - name: Commit applied files onto latest tip
         if: steps.guard.outputs.skip == 'false'
         run: |
           set -euo pipefail
+          git fetch origin cursor/resume-by-execution-id-db25
+          git checkout -B apply-work origin/cursor/resume-by-execution-id-db25
+          python3 <<'PY'
+          import json, shutil
+          from pathlib import Path
+          manifest = json.loads(Path("/tmp/applied/manifest.json").read_text())
+          for entry in manifest["files"]:
+              src = Path("/tmp/applied") / entry["path"]
+              dest = Path(entry["path"])
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(src, dest)
+              print("copied", dest)
+          for stub in [
+              "apps/desktop/src/main/ipc/schemas-shared.ts",
+              "apps/desktop/src/main/ipc/schemas-part-00.ts",
+              "apps/desktop/src/main/ipc/schemas-part-01.ts",
+              "apps/desktop/src/main/ipc/schemas-part-02.ts",
+              "apps/desktop/src/main/ipc/schemas-part-03.ts",
+              "apps/desktop/src/main/ipc/schemas-part-04.ts",
+          ]:
+              p = Path(stub)
+              if p.exists() and p.stat().st_size < 100:
+                  p.unlink()
+                  print("removed stub", stub)
+          PY
           rm -rf internal/_push/resume
           rm -f .github/workflows/apply-resume-patches.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git status
-          git commit -m "feat(groups): apply resume-by-execution-id file patches"
+          if git diff --cached --quiet; then
+            echo "No changes to commit (already applied)."
+            exit 0
+          fi
+          git commit -m "feat(groups): resumeExecution runtime + reliability test"
           git push origin HEAD:cursor/resume-by-execution-id-db25
