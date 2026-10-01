@@ -1,5 +1,6 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
+  AgentEvent,
   AgentGroupInfo,
   GroupChainEndReason,
   GroupDecision,
@@ -100,6 +101,7 @@ export type GroupAgentRuntime = {
   onTurnSettled(listener: (event: TurnSettledEvent) => void): () => void;
   /** The intent gate opened on a session (a group turn there frees its slot). */
   onQuestionPending(listener: (sessionId: string) => void): () => void;
+  onEvent?(listener: (event: AgentEvent) => void): () => void;
 };
 
 export type GroupRuntimeHost = {
@@ -135,6 +137,10 @@ export type GroupRuntimeOptions = {
   maxConcurrentTurns?: number;
   /** How long a gated queue (no window, update pending, member streaming) waits before retrying. */
   retryDelayMs?: number;
+  turnTimeoutMs?: number;
+  idleTimeoutMs?: number;
+  /** Only the app singleton recovers jobs; disposable test/runtime instances opt in. */
+  recoverPending?: boolean;
 };
 
 export type ChainState = {
@@ -148,6 +154,19 @@ export type ChainState = {
 };
 
 export type Wake = {
+  id?: string;
+  messageId?: string;
+  runId?: string;
+  publicMessageIds?: Map<string, string>;
+  assistantMessageIds?: Set<string>;
+  questionRequestIds?: Set<string>;
+  pausedAt?: number | undefined;
+  cancelled?: boolean;
+  startedAt?: number;
+  lastProgressAt?: number;
+  lastEventCursor?: number;
+  error?: string;
+  watchdog?: ReturnType<typeof setTimeout> | undefined;
   seq: number;
   groupId: string;
   sessionId: string;
@@ -658,7 +677,7 @@ export function composeGroupWakePrompt(input: {
       member.archived ? " (archived)" : "",
     ].join("");
     const about = member.description ? `: ${member.description}` : "";
-    return `- @${member.title}${member.role ? ` [${member.role}]` : ""}${tags}${about}`;
+    return `- @${member.title}${member.role ? ` [${member.role}]` : ""}${tags}${about} (sessionId: ${member.sessionId})`;
   });
   const persona = input.instructions?.trim()
     ? `<agent_instructions>\n${escapeText(input.instructions.trim())}\n</agent_instructions>`
@@ -667,7 +686,7 @@ export function composeGroupWakePrompt(input: {
     `<group_room name="${escapeText(input.group.name)}">`,
     `You are @${escapeText(self)}, a member of this group. Members right now:`,
     ...roster.map((line) => escapeText(line)),
-    "Reply with what the group should read — short and natural. Mention @Name to hand work to a member; without a mention, the room routes by specialty.",
+    "Reply with what the group should read — short and natural. Mentions identify people; they do not dispatch work. Delegate through group task tools using the target sessionId from the roster. The user can direct a task with @Name.",
     "If the trigger is a greeting or social ping and you have nothing useful to add, reply empty and stay silent. Do not explore files or start tools without a real objective.",
     GROUP_COLLAB_WAKE_PROTOCOL,
   ].join("\n");

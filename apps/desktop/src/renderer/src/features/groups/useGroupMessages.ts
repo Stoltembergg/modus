@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GroupMessage, GroupRuntimeEvent } from "../../../../shared/contracts";
 
-/** Room page size (`group:list-messages`). */
 export const GROUP_MESSAGE_PAGE = 50;
 
 function compareMessages(a: GroupMessage, b: GroupMessage): number {
+  if (a.sequence !== undefined && b.sequence !== undefined && a.sequence !== b.sequence)
+    return a.sequence - b.sequence;
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-/** Merge pages / live messages by id, in the store's (createdAt, id) order. */
+/** Upsert canonical cards by identity, ignoring older revisions and retaining placement. */
 export function mergeGroupMessages(
   current: readonly GroupMessage[],
   incoming: readonly GroupMessage[],
@@ -17,8 +18,23 @@ export function mergeGroupMessages(
   const byId = new Map(current.map((message) => [message.id, message]));
   let changed = false;
   for (const message of incoming) {
-    if (byId.has(message.id)) continue;
-    byId.set(message.id, message);
+    const previous = byId.get(message.id);
+    if (previous) {
+      const previousRevision = previous.updatedAt ?? previous.createdAt;
+      const nextRevision = message.updatedAt ?? message.createdAt;
+      if (
+        nextRevision < previousRevision ||
+        (previous.updatedAt !== undefined && nextRevision === previousRevision)
+      )
+        continue;
+      const update = {
+        ...message,
+        createdAt: previous.createdAt,
+        ...(previous.sequence !== undefined ? { sequence: previous.sequence } : {}),
+      };
+      if (JSON.stringify(update) === JSON.stringify(previous)) continue;
+      byId.set(message.id, update);
+    } else byId.set(message.id, message);
     changed = true;
   }
   if (!changed) return current as GroupMessage[];
@@ -27,7 +43,6 @@ export function mergeGroupMessages(
 
 export type GroupMessagesState = {
   messages: GroupMessage[];
-  /** The first page arrived (the empty state waits for it). */
   loaded: boolean;
   hasOlder: boolean;
   loadingOlder: boolean;
@@ -35,10 +50,6 @@ export type GroupMessagesState = {
   loadOlder(): Promise<void>;
 };
 
-/**
- * The room's messages: the newest page first, older pages on demand (scroll to
- * top), live `group.message` pushes merged in without duplicates.
- */
 export function useGroupMessages(groupId: string): GroupMessagesState {
   const [messages, setMessages] = useState<GroupMessage[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -47,40 +58,77 @@ export function useGroupMessages(groupId: string): GroupMessagesState {
   const [error, setError] = useState<string | undefined>();
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  const generation = useRef(0);
   const loadingRef = useRef(false);
 
   useEffect(() => {
-    let disposed = false;
+    const requestGeneration = ++generation.current;
+    const active = () => generation.current === requestGeneration;
+    loadingRef.current = false;
+    messagesRef.current = [];
     setMessages([]);
     setLoaded(false);
     setHasOlder(false);
+    setLoadingOlder(false);
     setError(undefined);
+    const belongs = (message: GroupMessage) => message.groupId === groupId;
+    const queued = new Map<string, GroupMessage>();
+    let frame: number | undefined;
+    const takeQueued = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = undefined;
+      const incoming = [...queued.values()];
+      queued.clear();
+      return incoming;
+    };
     const unsubscribe = window.modus.group.onEvent((event: GroupRuntimeEvent) => {
-      if (event.type !== "group.message" || event.groupId !== groupId) return;
-      setMessages((current) => mergeGroupMessages(current, [event.message]));
+      if (
+        !active() ||
+        event.type !== "group.message" ||
+        event.groupId !== groupId ||
+        !belongs(event.message)
+      )
+        return;
+      const previous = queued.get(event.message.id);
+      if (
+        !previous ||
+        (event.message.updatedAt ?? event.message.createdAt) >
+          (previous.updatedAt ?? previous.createdAt)
+      )
+        queued.set(event.message.id, event.message);
+      if (frame === undefined)
+        frame = requestAnimationFrame(() => {
+          const incoming = takeQueued();
+          if (active()) setMessages((current) => mergeGroupMessages(current, incoming));
+        });
     });
-    window.modus.group
+    void window.modus.group
       .listMessages({ groupId, limit: GROUP_MESSAGE_PAGE })
       .then((page: GroupMessage[]) => {
-        if (disposed) return;
-        setMessages((current) => mergeGroupMessages(current, page));
-        setHasOlder(page.length >= GROUP_MESSAGE_PAGE);
+        if (!active()) return;
+        const ownPage = page.filter(belongs);
+        const live = takeQueued();
+        setMessages((current) => mergeGroupMessages(mergeGroupMessages(current, ownPage), live));
+        setHasOlder(ownPage.length >= GROUP_MESSAGE_PAGE);
         setLoaded(true);
       })
       .catch((cause: unknown) => {
-        if (disposed) return;
+        if (!active()) return;
         setError(cause instanceof Error ? cause.message : String(cause));
         setLoaded(true);
       });
     return () => {
-      disposed = true;
+      generation.current++;
+      takeQueued();
       unsubscribe();
     };
   }, [groupId]);
 
   const loadOlder = useCallback(async (): Promise<void> => {
     const oldest = messagesRef.current[0];
-    if (!oldest || loadingRef.current) return;
+    if (!oldest || oldest.groupId !== groupId || loadingRef.current) return;
+    const requestGeneration = generation.current;
+    const active = () => generation.current === requestGeneration;
     loadingRef.current = true;
     setLoadingOlder(true);
     try {
@@ -89,13 +137,17 @@ export function useGroupMessages(groupId: string): GroupMessagesState {
         before: { createdAt: oldest.createdAt, id: oldest.id },
         limit: GROUP_MESSAGE_PAGE,
       });
-      setMessages((current) => mergeGroupMessages(current, page));
-      setHasOlder(page.length >= GROUP_MESSAGE_PAGE);
+      if (!active()) return;
+      const ownPage = page.filter((message: GroupMessage) => message.groupId === groupId);
+      setMessages((current) => mergeGroupMessages(current, ownPage));
+      setHasOlder(ownPage.length >= GROUP_MESSAGE_PAGE);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (active()) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      loadingRef.current = false;
-      setLoadingOlder(false);
+      if (active()) {
+        loadingRef.current = false;
+        setLoadingOlder(false);
+      }
     }
   }, [groupId]);
 

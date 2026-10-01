@@ -29,6 +29,16 @@ export function applyGroupActivityEvent(
   ) {
     return states;
   }
+  const previous = states.get(event.groupId);
+  const sameIds = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length && left.every((id, index) => id === right[index]);
+  if (
+    previous &&
+    sameIds(previous.runningSessionIds, event.runningSessionIds) &&
+    sameIds(previous.queuedSessionIds, event.queuedSessionIds) &&
+    sameIds(previous.waitingSessionIds, event.waitingSessionIds)
+  )
+    return states;
   const next = new Map(states);
   const entry: GroupMemberStates = {
     groupId: event.groupId,
@@ -68,12 +78,10 @@ export function memberActivityState(
   return "idle";
 }
 
-/** True while a member turn runs or is queued: the room's Stop button shows. */
+/** True while the group has work or a user wait that Stop can cancel. */
 export function isGroupRunning(states: GroupMemberStatesById, groupId: string): boolean {
   const entry = states.get(groupId);
-  return Boolean(
-    entry && (entry.runningSessionIds.length > 0 || entry.queuedSessionIds.length > 0),
-  );
+  return Boolean(entry && !isEmpty(entry));
 }
 
 /** Session ids currently waiting for the user in this group (empty when idle). */
@@ -116,7 +124,16 @@ export function useGroupMemberStates(): GroupMemberStatesById {
             const fresh = snapshot.filter((entry) => !pushed.has(entry.groupId));
             if (fresh.length === 0) return current;
             const next = new Map(current);
-            for (const entry of fresh) next.set(entry.groupId, entry);
+            for (const entry of fresh) {
+              if (
+                !Array.isArray(entry.runningSessionIds) ||
+                !Array.isArray(entry.queuedSessionIds) ||
+                !Array.isArray(entry.waitingSessionIds) ||
+                isEmpty(entry)
+              )
+                continue;
+              next.set(entry.groupId, entry);
+            }
             return next;
           });
         })

@@ -751,6 +751,7 @@ export class PiSdkRuntime implements AgentRuntime {
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
   private turnSettledListeners = new Set<(event: TurnSettledEvent) => void>();
+  private eventListeners = new Set<(event: AgentEvent) => void>();
   private questionPendingListeners = new Set<(sessionId: string) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
@@ -1507,6 +1508,14 @@ export class PiSdkRuntime implements AgentRuntime {
   ): (event: AgentEvent, options?: { idempotencyKey?: string }) => void {
     return (event, options) => {
       const rowId = recordAgentEvent(event, options);
+      const observable = { ...event, eventCursor: rowId };
+      for (const listener of this.eventListeners) {
+        try {
+          listener(observable);
+        } catch (error) {
+          console.warn("[modus] agent event listener failed:", error);
+        }
+      }
       if (
         event.type === "run.completed" ||
         event.type === "run.failed" ||
@@ -1534,7 +1543,7 @@ export class PiSdkRuntime implements AgentRuntime {
           }
         }
       }
-      window.webContents.send(IPC_CHANNELS.agentEvent, event);
+      window.webContents.send(IPC_CHANNELS.agentEvent, observable);
       maybeNotifyAgentEvent(window, event);
       this.emitSubagentUpdate(window, event);
       const runtimeSession = this.sessions.get(event.sessionId);
@@ -2137,6 +2146,13 @@ export class PiSdkRuntime implements AgentRuntime {
     this.questionPendingListeners.add(listener);
     return () => {
       this.questionPendingListeners.delete(listener);
+    };
+  }
+
+  onEvent(listener: (event: AgentEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
     };
   }
 

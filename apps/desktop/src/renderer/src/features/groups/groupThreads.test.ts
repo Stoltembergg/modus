@@ -23,17 +23,15 @@ describe("buildGroupThreads", () => {
     expect(threads.every((t) => t.replies.length === 0)).toBe(true);
   });
 
-  it("nests direct and transitive replies under the root", () => {
+  it("keeps direct and transitive replies at their canonical chronological position", () => {
     const threads = buildGroupThreads([
       msg("1", "root"),
       msg("2", "reply", "1"),
       msg("3", "nested", "2"),
       msg("4", "other"),
     ]);
-    expect(threads).toHaveLength(2);
-    expect(threads[0]?.root.id).toBe("1");
-    expect(threads[0]?.replies.map((m) => m.id)).toEqual(["2", "3"]);
-    expect(threads[1]?.root.id).toBe("4");
+    expect(threads.map((thread) => thread.root.id)).toEqual(["1", "2", "3", "4"]);
+    expect(threads.every((thread) => thread.replies.length === 0)).toBe(true);
   });
 
   it("treats dangling reply targets as roots", () => {

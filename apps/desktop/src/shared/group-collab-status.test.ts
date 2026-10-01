@@ -3,7 +3,6 @@ import {
   deriveGroupCollabStage,
   findGroupCollabStatuses,
   formatGroupCollabStatus,
-  GROUP_COLLAB_NO_NEXT_OWNER,
   lastGroupCollabStatus,
   needsNextOwnerNudge,
   parseGroupCollabStatusLine,
@@ -37,6 +36,20 @@ describe("parseGroupCollabStatusLine", () => {
     expect(parseGroupCollabStatusLine("I'll hand this to Builder")).toBeUndefined();
     expect(parseGroupCollabStatusLine("Waiting for you")).toBeUndefined();
   });
+
+  it("parses supported member names with spaces, with and without an objective", () => {
+    expect(parseGroupCollabStatusLine("Handoff → @Jennie 2 · revisar os testes")).toEqual({
+      kind: "handoff",
+      targetName: "Jennie 2",
+      objective: "revisar os testes",
+    });
+    expect(parseGroupCollabStatusLine("Handoff → @Jennie 2")).toEqual({
+      kind: "handoff",
+      targetName: "Jennie 2",
+      objective: "",
+    });
+    expect(parseGroupCollabStatusLine("Handoff → @ · work")).toBeUndefined();
+  });
 });
 
 describe("formatGroupCollabStatus", () => {
@@ -66,10 +79,16 @@ describe("needsNextOwnerNudge", () => {
     expect(needsNextOwnerNudge("Ready for you", 0)).toBe(false);
   });
 
-  it("is true for silence or a handoff line without mentions", () => {
-    expect(needsNextOwnerNudge("I finished the toggle.", 0)).toBe(true);
-    expect(needsNextOwnerNudge("Handoff → @Builder · work", 0)).toBe(true);
-    expect(GROUP_COLLAB_NO_NEXT_OWNER).toContain("@mention");
+  it("does not nudge successful replies without an English marker", () => {
+    expect(needsNextOwnerNudge("Concluído. Os testes passaram e a correção está pronta.", 0)).toBe(
+      false,
+    );
+    expect(needsNextOwnerNudge("I finished the toggle.", 0)).toBe(false);
+    expect(needsNextOwnerNudge("", 0)).toBe(false);
+  });
+
+  it("does not infer a missing task delegation from a public handoff line", () => {
+    expect(needsNextOwnerNudge("Handoff → @Builder · work", 0)).toBe(false);
   });
 });
 
@@ -112,5 +131,76 @@ describe("deriveGroupCollabStage", () => {
       stage: "Handoff",
       ownerSessionId: "s-lead",
     });
+  });
+
+  it("resets the stage at the newest user task and ignores user-authored status text", () => {
+    expect(
+      deriveGroupCollabStage([
+        { body: "Ready for you", authorKind: "agent", authorSessionId: "s-old" },
+        { body: "Ready for you", authorKind: "user", kind: "message" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("ignores a late status from a prior chain after the newest user task", () => {
+    expect(
+      deriveGroupCollabStage(
+        [
+          { id: "task-old", body: "old task", authorKind: "user" },
+          { id: "task-new", body: "new task", authorKind: "user" },
+          { body: "Ready for you", authorKind: "agent", chainId: "task-old" },
+          { body: "Handoff → @Jennie 2 · review", authorKind: "agent", chainId: "task-new" },
+        ],
+        { titleToSessionId: new Map([["jennie 2", "s-review"]]) },
+      ),
+    ).toEqual({
+      stage: "Handoff",
+      ownerSessionId: "s-review",
+      ownerName: "Jennie 2",
+    });
+    expect(
+      deriveGroupCollabStage([
+        { id: "task-new", body: "new task", authorKind: "user" },
+        { body: "Ready for you", authorKind: "agent", chainId: "task-old" },
+      ]),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { options: { runningSessionIds: ["s-active"] }, stage: "Handoff" },
+    { options: { queuedSessionIds: ["s-active"] }, stage: "Handoff" },
+    { options: { waitingSessionIds: ["s-active"] }, stage: "Review" },
+  ])("prefers active member state over a stale Ready ($stage)", ({ options, stage }) => {
+    expect(
+      deriveGroupCollabStage(
+        [{ body: "Ready for you", authorKind: "agent", authorSessionId: "s-old" }],
+        options,
+      ),
+    ).toEqual({ stage, ownerSessionId: "s-active" });
+  });
+
+  it("derives active canonical message state within the current task", () => {
+    expect(
+      deriveGroupCollabStage([
+        { id: "task-new", body: "new task", authorKind: "user" },
+        {
+          body: "",
+          authorKind: "agent",
+          authorSessionId: "s-active",
+          chainId: "task-new",
+          status: "writing",
+        },
+        { body: "Ready for you", authorKind: "agent", chainId: "task-new", status: "completed" },
+      ]),
+    ).toEqual({ stage: "Handoff", ownerSessionId: "s-active" });
+  });
+
+  it("ignores collab markers from failed or cancelled messages", () => {
+    expect(
+      deriveGroupCollabStage([
+        { body: "Ready for you", authorKind: "agent", status: "failed" },
+        { body: "Agreed", authorKind: "agent", status: "cancelled" },
+      ]),
+    ).toBeUndefined();
   });
 });

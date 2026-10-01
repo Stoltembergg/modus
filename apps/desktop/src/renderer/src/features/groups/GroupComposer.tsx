@@ -76,6 +76,7 @@ export type GroupComposerSendPayload = {
 };
 
 export function GroupComposer({
+  groupId,
   members,
   updatePending,
   onSend,
@@ -85,6 +86,7 @@ export function GroupComposer({
   replyTo,
   onClearReply,
 }: {
+  groupId?: string;
   members: readonly MentionMember[];
   updatePending: boolean;
   onSend(payload: GroupComposerSendPayload): Promise<void>;
@@ -123,13 +125,16 @@ export function GroupComposer({
   const waitingSessionIds = useMemo(() => {
     const memberIds = new Set(members.map((member) => member.sessionId));
     const waiting: string[] = [];
-    for (const entry of memberStates.values()) {
+    const entries = groupId
+      ? [memberStates.get(groupId)].filter((entry) => entry !== undefined)
+      : [...memberStates.values()];
+    for (const entry of entries) {
       for (const sessionId of entry.waitingSessionIds) {
         if (memberIds.has(sessionId) && !waiting.includes(sessionId)) waiting.push(sessionId);
       }
     }
     return waiting;
-  }, [memberStates, members]);
+  }, [memberStates, members, groupId]);
 
   useEffect(() => {
     if (!seed) return;
@@ -196,17 +201,18 @@ export function GroupComposer({
   }
 
   return (
-    <div className="mx-auto w-full max-w-[760px] px-6 pb-4">
+    <div className="mx-auto w-full max-w-[760px] px-3 pb-4 sm:px-6">
       {updatePending ? (
         <div
-          className="mb-2 flex items-center gap-2 rounded-md border border-hairline bg-elevated px-3 py-1.5 text-fg-muted text-xs"
+          className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-hairline bg-elevated px-3 py-1.5 text-fg-muted text-xs"
           data-testid="group-update-banner"
           role="status"
         >
           <IconClockPause size={ICON.sm} stroke={ICON_STROKE.sm} />
           <span className="font-medium text-fg">Paused while Modus updates</span>
           <span className="text-fg-faint">
-            Messages are saved; members answer after the restart.
+            Messages are saved. Pending tasks resume after restart. Interrupted runs stay visible
+            for you to resume.
           </span>
         </div>
       ) : null}

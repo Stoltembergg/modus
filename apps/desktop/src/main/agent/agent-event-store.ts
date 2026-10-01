@@ -24,6 +24,7 @@ import {
 } from "./harness/task-state";
 
 type AgentEventRow = {
+  event_cursor: number;
   id: string;
   payload_json: string;
   created_at: string;
@@ -920,7 +921,7 @@ export function listAgentEvents(
   const db = getDatabase();
   const rows = db
     .prepare(
-      `select id, payload_json, created_at
+      `select id, payload_json, created_at, rowid as event_cursor
        from agent_events
        where session_id = ?
        order by created_at asc, rowid asc`,
@@ -928,7 +929,7 @@ export function listAgentEvents(
     .all(sessionId) as AgentEventRow[];
   const events = rows.map((row) => ({
     id: row.id,
-    event: JSON.parse(row.payload_json) as AgentEvent,
+    event: { ...JSON.parse(row.payload_json), eventCursor: row.event_cursor } as AgentEvent,
     createdAt: row.created_at,
   }));
   const runs = db

@@ -1,9 +1,11 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
+  AgentEvent,
   AgentGroupInfo,
   GroupChainEndReason,
   GroupMemberStates,
   GroupMessage,
+  GroupRuntimeEvent,
   PostGroupMessageInput,
 } from "../../shared/contracts";
 import {
@@ -11,11 +13,18 @@ import {
   groupBlockedErrorCode,
   groupBlockedReason,
 } from "../../shared/group-blocked";
-import { lastGroupCollabStatus, needsNextOwnerNudge } from "../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
+import { getDatabase } from "../db/database";
+import {
+  listRecoverableGroupJobs,
+  persistGroupChain,
+  persistGroupJob,
+  readGroupChain,
+  updateGroupJob,
+} from "./group-job-store";
 import {
   type ChainState,
   composeGroupSnapshotSection,
@@ -37,7 +46,6 @@ import {
   parseGroupMentions,
   RETIRED_CHAIN_HISTORY,
   selectAutonomousWakeTargets,
-  statusText,
   type Wake,
 } from "./group-runtime-lib";
 import {
@@ -52,6 +60,7 @@ import {
   listGroupTasks,
   memberWorktreeBranchPrefix,
 } from "./group-store";
+import { GroupTurnTranscript } from "./group-turn-transcript";
 
 export {
   agentDescription,
@@ -87,6 +96,12 @@ export class GroupRuntime {
   private readonly limits: GroupChainLimits;
   private readonly maxConcurrent: number;
   private readonly retryDelayMs: number;
+  private readonly turnTimeoutMs: number;
+  private readonly idleTimeoutMs: number;
+  private readonly transcript: GroupTurnTranscript;
+  /** Cancelled sessions remain fenced until their owning prompt settles. */
+  private readonly cancelling = new Map<string, Wake>();
+  private lastServedGroupId: string | undefined;
   /** Live chains: removed once no wake of theirs is queued, running or gated. */
   private readonly chains = new Map<string, ChainState>();
   private readonly retiredChains = new Map<string, ChainState>();
@@ -103,6 +118,8 @@ export class GroupRuntime {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly idleWaiters = new Set<() => void>();
   private disposed = false;
+  private dispatching = false;
+  private bufferedEvents: GroupRuntimeEvent[] = [];
   private readonly unsubscribers: Array<() => void>;
 
   constructor(options: GroupRuntimeOptions) {
@@ -111,14 +128,27 @@ export class GroupRuntime {
     this.limits = { ...GROUP_CHAIN_LIMITS, ...options.limits };
     this.maxConcurrent = options.maxConcurrentTurns ?? GROUP_MAX_CONCURRENT_TURNS;
     this.retryDelayMs = options.retryDelayMs ?? 2_000;
+    this.turnTimeoutMs = options.turnTimeoutMs ?? 15 * 60_000;
+    this.idleTimeoutMs = options.idleTimeoutMs ?? 3 * 60_000;
+    this.transcript = new GroupTurnTranscript((message) => this.emitMessage(message));
     this.unsubscribers = [
       this.runtime.onTurnSettled((event) => this.handleTurnSettled(event)),
       this.runtime.onQuestionPending((sessionId) => this.handleQuestionPending(sessionId)),
     ];
+    if (this.runtime.onEvent)
+      this.unsubscribers.push(this.runtime.onEvent((event) => this.handleAgentEvent(event)));
+    if (options.recoverPending) this.recoverJobs();
   }
 
   /** A user message into the room: always opens a new chain (counters reset). */
   postUserMessage(input: PostGroupMessageInput): GroupMessage {
+    const message = this.durableDispatch(() => this.saveUserMessage(input));
+    this.supersedeWaiting(input.groupId);
+    this.pump();
+    return message;
+  }
+
+  private saveUserMessage(input: PostGroupMessageInput): GroupMessage {
     const group = getAgentGroup(input.groupId);
     const blocked = group ? groupBlockedReason(group, listAgentGroupMembers(group.id)) : null;
     if (blocked) {
@@ -156,31 +186,20 @@ export class GroupRuntime {
 
   /**
    * The intent gate opened its question on a session (`onQuestionPending`).
-   * For a turn the group started: post "Waiting for you" as the member, end
-   * the chain (its queued wakes drop) and release the turn's concurrency slot.
-   * The turn itself stays pending until the user answers in the member's chat.
+   * For a turn the group started: update its canonical card, end the chain
+   * (its queued wakes drop) and release the turn's concurrency slot. The
+   * matching question remains visible in the room until the user answers.
    */
   handleQuestionPending(sessionId: string): void {
     const wake = this.running.get(sessionId);
     if (!wake) return;
     this.running.delete(sessionId);
     wake.gated = true;
+    wake.pausedAt = Date.now();
+    this.clearWatchdog(wake);
+    updateGroupJob(wake, "awaiting_user");
+    this.transcript.setState(wake, "awaiting_user");
     this.gated.set(sessionId, wake);
-    try {
-      this.emitMessage(
-        appendGroupMessage({
-          createdAt: this.stamp(),
-          groupId: wake.groupId,
-          authorKind: "agent",
-          authorSessionId: sessionId,
-          kind: "status",
-          body: GROUP_STATUS_TEXT.waitingForYou,
-          chainId: wake.chainId,
-        }),
-      );
-    } catch (error) {
-      console.warn("[modus] group gate status failed:", error);
-    }
     const chain = this.chains.get(wake.chainId);
     if (chain) this.endChain(chain, "blocked");
     this.emitActivity(wake.groupId);
@@ -233,7 +252,8 @@ export class GroupRuntime {
     const chain = this.openChain(group.id, root.id);
     chain.hops = 1;
     chain.agentMessages = 1;
-    this.route(chain, root);
+    // A public mention in the result is not a task assignment.
+    persistGroupChain(chain);
     this.retireIdleChains();
   }
 
@@ -247,6 +267,13 @@ export class GroupRuntime {
    * (no route, no hop, no new chain counters).
    */
   handleTaskWake(input: GroupTaskWake): GroupMessage | undefined {
+    if (this.disposed || this.cancelling.has(input.actorSessionId)) return undefined;
+    const message = this.durableDispatch(() => this.saveTaskWake(input));
+    this.pump();
+    return message;
+  }
+
+  private saveTaskWake(input: GroupTaskWake): GroupMessage | undefined {
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
     const joined =
       turn && turn.groupId === input.groupId ? this.chains.get(turn.chainId) : undefined;
@@ -293,14 +320,24 @@ export class GroupRuntime {
   /**
    * The user pressed Stop in the room: every live chain of the group ends
    * (queued wakes drop, nothing else is woken), "Stopped by you" is posted and
-   * the group's running member turns are aborted; they settle as "Turn
-   * stopped". With nothing running or queued it does nothing (no line). Turns
-   * waiting at the intent gate stay with the user in the member's chat.
+   * running or question-gated turns are aborted. Their canonical cards keep
+   * partial public text and finish as cancelled. With no active work it does
+   * nothing.
    */
   stopGroup(groupId: string): void {
     const queued = [...this.queues.values()].flat().filter((wake) => wake.groupId === groupId);
     const running = [...this.running.values()].filter((wake) => wake.groupId === groupId);
-    if (queued.length === 0 && running.length === 0) return; // Nothing to stop: no line.
+    const waiting = [...this.gated.values()].filter((wake) => wake.groupId === groupId);
+    const awaiting = [...this.awaitingUser.keys()].filter(
+      (id) => getAgentGroupForSession(id)?.id === groupId,
+    );
+    if (
+      queued.length === 0 &&
+      running.length === 0 &&
+      waiting.length === 0 &&
+      awaiting.length === 0
+    )
+      return;
     for (const chain of [...this.chains.values()]) {
       if (chain.groupId === groupId) this.endChain(chain, "stopped");
     }
@@ -317,10 +354,13 @@ export class GroupRuntime {
     } catch (error) {
       console.warn("[modus] group stop status failed:", error);
     }
-    for (const wake of running) {
-      this.runtime
-        .abort(wake.sessionId)
-        .catch((error) => console.warn("[modus] group stop abort failed:", error));
+    for (const wake of [...running, ...waiting]) this.cancelWake(wake, "cancelled");
+    for (const id of awaiting) this.awaitingUser.delete(id);
+    for (const { wake } of listRecoverableGroupJobs().filter(
+      (job) => job.wake.groupId === groupId,
+    )) {
+      updateGroupJob(wake, "cancelled");
+      this.transcript.setState(wake, "cancelled");
     }
     this.emitActivity(groupId);
   }
@@ -389,16 +429,195 @@ export class GroupRuntime {
   dispose(): void {
     this.disposed = true;
     this.clearRetry();
-    this.queues.clear();
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
+    for (const wake of [...this.running.values(), ...this.gated.values()]) {
+      this.clearWatchdog(wake);
+      wake.cancelled = true;
+      updateGroupJob(wake, "interrupted");
+      this.transcript.setState(
+        wake,
+        "interrupted",
+        "The application closed during this turn. Resume explicitly to continue.",
+      );
+      void Promise.resolve()
+        .then(() => this.runtime.abort(wake.sessionId))
+        .catch((error) => console.warn("[modus] group shutdown abort failed:", error));
+    }
+    this.transcript.dispose();
+    this.queues.clear();
+    this.running.clear();
+    this.gated.clear();
+    this.settleIdle();
   }
 
   /* ── internals ────────────────────────────────────────────────────── */
 
-  /**
-   * Strictly increasing timestamps for the messages this runtime posts, so the
-   * (created_at, id) order matches posting order even within one millisecond.
-   */
+  /** A request, its cards and every queued wake survive or roll back together. */
+  private durableDispatch<T>(action: () => T): T {
+    if (this.dispatching) return action();
+    const db = getDatabase();
+    const queues = new Map([...this.queues].map(([id, wakes]) => [id, [...wakes]]));
+    const copyChains = (source: Map<string, ChainState>) =>
+      new Map(
+        [...source].map(([id, chain]) => [
+          id,
+          { ...chain, wakesByMember: new Map(chain.wakesByMember) },
+        ]),
+      );
+    const chains = copyChains(this.chains);
+    const retired = copyChains(this.retiredChains);
+    const awaiting = new Map(this.awaitingUser);
+    const seq = this.seq;
+    this.dispatching = true;
+    db.exec("savepoint group_dispatch");
+    let result: T;
+    try {
+      result = action();
+      db.exec("release group_dispatch");
+    } catch (error) {
+      db.exec("rollback to group_dispatch; release group_dispatch");
+      this.queues.clear();
+      for (const [id, wakes] of queues) this.queues.set(id, wakes);
+      this.chains.clear();
+      for (const [id, chain] of chains) this.chains.set(id, chain);
+      this.retiredChains.clear();
+      for (const [id, chain] of retired) this.retiredChains.set(id, chain);
+      this.awaitingUser.clear();
+      for (const [id, chainId] of awaiting) this.awaitingUser.set(id, chainId);
+      this.seq = seq;
+      this.bufferedEvents = [];
+      throw error;
+    } finally {
+      this.dispatching = false;
+    }
+    const events = this.bufferedEvents;
+    this.bufferedEvents = [];
+    for (const event of events) this.host.emit(event);
+    return result;
+  }
+
+  private recoverJobs(): void {
+    for (const { wake, status } of listRecoverableGroupJobs()) {
+      this.seq = Math.max(this.seq, wake.seq);
+      const chain = readGroupChain(wake.chainId);
+      if (status !== "pending") {
+        const error = "Execution was interrupted by an app restart. Resume this task to continue.";
+        updateGroupJob(wake, "interrupted", error);
+        this.transcript.setState(wake, "interrupted", error);
+        continue;
+      }
+      if (
+        !chain ||
+        chain.ended ||
+        !membersOf(wake.groupId).some((m) => m.sessionId === wake.sessionId && !m.archived)
+      ) {
+        updateGroupJob(wake, "cancelled");
+        this.transcript.setState(wake, "cancelled");
+        continue;
+      }
+      this.chains.set(chain.chainId, chain);
+      const queue = this.queues.get(wake.sessionId) ?? [];
+      queue.push(wake);
+      this.queues.set(wake.sessionId, queue);
+      this.transcript.setState(wake, "queued");
+    }
+  }
+
+  private supersedeWaiting(groupId: string): void {
+    for (const wake of [...this.gated.values()]) {
+      if (wake.groupId === groupId) this.cancelWake(wake, "cancelled");
+    }
+    for (const { wake, status } of listRecoverableGroupJobs()) {
+      if (wake.groupId !== groupId || status !== "awaiting_user") continue;
+      this.awaitingUser.delete(wake.sessionId);
+      updateGroupJob(wake, "cancelled");
+      this.transcript.setState(wake, "cancelled");
+    }
+    this.emitActivity(groupId);
+  }
+
+  private handleAgentEvent(event: AgentEvent): void {
+    const wake = this.running.get(event.sessionId) ?? this.gated.get(event.sessionId);
+    if (!wake || wake.cancelled || this.disposed) return;
+    if (wake.runId && "runId" in event && event.runId && event.runId !== wake.runId) return;
+    if (event.eventCursor !== undefined) {
+      if (wake.lastEventCursor !== undefined && event.eventCursor <= wake.lastEventCursor) return;
+      wake.lastEventCursor = event.eventCursor;
+    }
+    if (event.type === "run.failed") wake.error = event.message;
+    if (event.type === "question.requested") {
+      if (!wake.questionRequestIds) wake.questionRequestIds = new Set();
+      wake.questionRequestIds.add(event.request.id);
+    }
+    if (
+      event.type === "question.resolved" &&
+      wake.gated &&
+      wake.questionRequestIds?.delete(event.requestId)
+    ) {
+      this.gated.delete(wake.sessionId);
+      wake.gated = false;
+      if (wake.pausedAt !== undefined)
+        wake.startedAt = (wake.startedAt ?? wake.pausedAt) + Date.now() - wake.pausedAt;
+      wake.pausedAt = undefined;
+      wake.lastProgressAt = Date.now();
+      this.running.set(wake.sessionId, wake);
+      updateGroupJob(wake, "running");
+      this.transcript.setState(wake, "running");
+      this.emitActivity(wake.groupId);
+      this.armWatchdog(wake);
+    }
+    if (event.type !== "session.status") {
+      wake.lastProgressAt = Date.now();
+      this.armWatchdog(wake);
+    }
+    this.transcript.observe(wake, event);
+  }
+
+  private clearWatchdog(wake: Wake): void {
+    if (wake.watchdog) clearTimeout(wake.watchdog);
+    wake.watchdog = undefined;
+  }
+
+  private armWatchdog(wake: Wake): void {
+    this.clearWatchdog(wake);
+    if (this.disposed || wake.cancelled || wake.gated) return;
+    const totalRemaining = this.turnTimeoutMs - (Date.now() - (wake.startedAt ?? Date.now()));
+    const idleRemaining = this.idleTimeoutMs - (Date.now() - (wake.lastProgressAt ?? Date.now()));
+    wake.watchdog = setTimeout(
+      () => {
+        this.cancelWake(
+          wake,
+          "failed",
+          totalRemaining <= idleRemaining
+            ? "This turn exceeded its execution time limit. Retry the task to continue."
+            : "This agent stopped responding. Retry the task to continue.",
+        );
+      },
+      Math.max(1, Math.min(totalRemaining, idleRemaining)),
+    );
+    wake.watchdog.unref?.();
+  }
+
+  private cancelWake(wake: Wake, status: "cancelled" | "failed", error?: string): void {
+    if (wake.cancelled) return;
+    wake.cancelled = true;
+    this.clearWatchdog(wake);
+    if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
+    if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
+    this.awaitingUser.delete(wake.sessionId);
+    this.cancelling.set(wake.sessionId, wake);
+    updateGroupJob(wake, status, error);
+    this.transcript.setState(wake, status, error);
+    void this.runtime
+      .abort(wake.sessionId)
+      .catch((abortError) => console.warn("[modus] group abort failed:", abortError));
+    this.emitActivity(wake.groupId);
+    this.pump();
+    this.retireIdleChains();
+    this.settleIdle();
+  }
+
+  /** Message sequence defines conversation order; these timestamps are metadata. */
   private stamp(): string {
     const now = Math.max(Date.now(), this.lastStamp + 1);
     this.lastStamp = now;
@@ -415,6 +634,7 @@ export class GroupRuntime {
       wakesByMember: new Map(),
     };
     this.chains.set(chainId, chain);
+    persistGroupChain(chain);
     return chain;
   }
 
@@ -486,9 +706,7 @@ export class GroupRuntime {
         });
       }
     } else if (message.authorKind === "agent") {
-      targets = [...message.mentions];
-      if (message.toSessionId) targets.push(message.toSessionId);
-      if (repliedAuthor) targets.push(repliedAuthor);
+      targets = []; // Only explicit task-tool targets dispatch agent work.
     } else {
       targets = [];
     }
@@ -571,6 +789,7 @@ export class GroupRuntime {
       chain.hops += 1;
       chain.inputTokens += tokens;
       chain.wakesByMember.set(sessionId, (chain.wakesByMember.get(sessionId) ?? 0) + 1);
+      persistGroupChain(chain);
       // Waking a blocked member from the room hands it a fresh turn.
       this.awaitingUser.delete(sessionId);
       this.enqueue({
@@ -617,7 +836,16 @@ export class GroupRuntime {
   private endChain(chain: ChainState, reason: GroupChainEndReason): void {
     if (chain.ended) return;
     chain.ended = reason;
+    persistGroupChain(chain);
     for (const [sessionId, queue] of this.queues) {
+      for (const wake of queue.filter((wake) => wake.chainId === chain.chainId)) {
+        updateGroupJob(wake, "cancelled");
+        this.transcript.setState(
+          wake,
+          "cancelled",
+          "The task chain ended before this turn started.",
+        );
+      }
       const kept = queue.filter((wake) => wake.chainId !== chain.chainId);
       if (kept.length === 0) this.queues.delete(sessionId);
       else this.queues.set(sessionId, kept);
@@ -640,7 +868,7 @@ export class GroupRuntime {
         console.warn("[modus] group limit status failed:", error);
       }
     }
-    this.host.emit({
+    this.emitEvent({
       type: "group.chain-ended",
       groupId: chain.groupId,
       chainId: chain.chainId,
@@ -651,6 +879,8 @@ export class GroupRuntime {
   }
 
   private enqueue(wake: Wake): void {
+    this.transcript.create(wake);
+    persistGroupJob(wake);
     const queue = this.queues.get(wake.sessionId) ?? [];
     queue.push(wake);
     this.queues.set(wake.sessionId, queue);
@@ -663,7 +893,7 @@ export class GroupRuntime {
   }
 
   private pump(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.dispatching) return;
     if (this.queuedCount() === 0) {
       this.clearRetry();
       return;
@@ -677,10 +907,24 @@ export class GroupRuntime {
     while (this.running.size < this.maxConcurrent) {
       const heads = [...this.queues.entries()]
         // One group turn per member: a gated turn is still pending in that session.
-        .filter(([sessionId]) => !this.running.has(sessionId) && !this.gated.has(sessionId))
+        .filter(
+          ([sessionId]) =>
+            !this.running.has(sessionId) &&
+            !this.gated.has(sessionId) &&
+            !this.cancelling.has(sessionId),
+        )
         .map(([, queue]) => queue[0])
         .filter((wake): wake is Wake => Boolean(wake))
-        .sort((a, b) => a.seq - b.seq);
+        .sort((a, b) => {
+          const active = (id: string) =>
+            [...this.running.values()].filter((w) => w.groupId === id).length;
+          return (
+            active(a.groupId) - active(b.groupId) ||
+            Number(a.groupId === this.lastServedGroupId) -
+              Number(b.groupId === this.lastServedGroupId) ||
+            a.seq - b.seq
+          );
+        });
       const next = heads.find((wake) => {
         if (this.runtime.isSessionStreaming(wake.sessionId)) {
           // The user (or another turn) is streaming this session: wait, never steer.
@@ -714,6 +958,11 @@ export class GroupRuntime {
 
   private start(window: BrowserWindowType, wake: Wake): void {
     this.running.set(wake.sessionId, wake);
+    this.lastServedGroupId = wake.groupId;
+    wake.startedAt = wake.lastProgressAt = Date.now();
+    updateGroupJob(wake, "running");
+    this.transcript.setState(wake, "running");
+    this.armWatchdog(wake);
     this.emitActivity(wake.groupId);
     let turn: Promise<PromptTurnResult>;
     try {
@@ -734,28 +983,103 @@ export class GroupRuntime {
       turn = Promise.reject(error);
     }
     turn
-      .catch((): PromptTurnResult => ({ outcome: "failed" }))
+      .catch(
+        (error): PromptTurnResult => ({
+          outcome: "failed",
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
       .then((result) => this.finishTurn(wake, result))
       .catch((error) => console.warn("[modus] group turn settle failed:", error));
   }
 
   /** The wake prompt rebuilt at start (current roster); the queued one on failure. */
   private freshPrompt(wake: Wake): string {
-    try {
-      return wake.compose?.() ?? wake.prompt;
-    } catch (error) {
-      console.warn("[modus] group wake prompt rebuild failed:", error);
-      return wake.prompt;
+    const group = getAgentGroup(wake.groupId);
+    const trigger = getGroupMessage(wake.triggerMessageId);
+    if (!group || !trigger) throw new Error("The group or task no longer exists.");
+    const members = membersOf(group.id);
+    if (!members.some((m) => m.sessionId === wake.sessionId && !m.archived))
+      throw new Error("This agent is no longer available in the group.");
+    const instructions = instructionsOf(group.id, wake.sessionId);
+    const history = listGroupMessages(group.id, { limit: 100 }).filter(
+      (m) => m.id !== trigger.id && m.body.trim() && (!m.turnId || m.status === "completed"),
+    );
+    const prompt = composeGroupWakePrompt({
+      group,
+      members,
+      sessionId: wake.sessionId,
+      trigger,
+      history,
+      decisions: listGroupDecisions(group.id),
+      ...(instructions ? { instructions } : {}),
+      ...(isCoordinatorModeActive(group) && group.leadSessionId === wake.sessionId
+        ? { snapshot: this.snapshotFor(group.id, wake.sessionId, members) }
+        : {}),
+      maxContextTokens: this.limits.maxEstimatedContextTokensPerWake,
+    });
+    if (!prompt) throw new Error("The refreshed task context exceeds the group context budget.");
+    const chain = this.chains.get(wake.chainId);
+    if (chain) {
+      const tokens =
+        chain.inputTokens + estimateGroupTokens(prompt) - estimateGroupTokens(wake.prompt);
+      if (tokens > this.limits.maxEstimatedInputTokens)
+        throw new Error("The refreshed task context exceeds the chain input budget.");
+      chain.inputTokens = tokens;
+      persistGroupChain(chain);
     }
+    return prompt;
   }
 
   private finishTurn(wake: Wake, result: PromptTurnResult): void {
+    if (wake.error && !result.error) result = { ...result, error: wake.error };
+    this.clearWatchdog(wake);
+    if (this.cancelling.get(wake.sessionId) === wake) this.cancelling.delete(wake.sessionId);
+    if (this.disposed || wake.cancelled) {
+      if (!this.disposed) {
+        this.pump();
+        this.settleIdle();
+      }
+      return;
+    }
     if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
     if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
     const chain = this.chains.get(wake.chainId);
     const stillMember = listAgentGroupMembers(wake.groupId).some(
       (member) => member.sessionId === wake.sessionId,
     );
+    if (!stillMember) {
+      this.transcript.setState(
+        wake,
+        "interrupted",
+        "This agent left the group before its turn finished.",
+      );
+      updateGroupJob(wake, "interrupted");
+      this.emitActivity(wake.groupId);
+      this.pump();
+      this.retireIdleChains();
+      this.settleIdle();
+      return;
+    }
+    if (wake.worktreeBranch && result.outcome === "ok") result = { outcome: "ok" };
+    const output = this.transcript.finish(wake, result);
+    updateGroupJob(
+      wake,
+      result.outcome === "ok"
+        ? "completed"
+        : result.outcome === "blocked"
+          ? "awaiting_user"
+          : result.outcome === "aborted"
+            ? "cancelled"
+            : "failed",
+      result.error,
+    );
+    if (chain) {
+      chain.agentMessages += output.filter((m) => m.body.trim()).length;
+      persistGroupChain(chain);
+      if (chain.agentMessages >= this.limits.maxAgentMessages)
+        this.endChain(chain, "max-agent-messages");
+    }
     if (chain && stillMember) {
       try {
         if (wake.gated) this.applyGatedTurnResult(chain, wake, result);
@@ -770,22 +1094,6 @@ export class GroupRuntime {
     this.pump();
     this.retireIdleChains();
     this.settleIdle();
-  }
-
-  private postReply(chain: ChainState, wake: Wake, text: string): GroupMessage {
-    const message = appendGroupMessage({
-      createdAt: this.stamp(),
-      groupId: wake.groupId,
-      authorKind: "agent",
-      authorSessionId: wake.sessionId,
-      replyToMessageId: wake.triggerMessageId,
-      chainId: chain.chainId,
-      body: text,
-      mentions: parseGroupMentions(text, membersOf(wake.groupId)),
-    });
-    chain.agentMessages += 1;
-    this.emitMessage(message);
-    return message;
   }
 
   private postMemberStatus(chain: ChainState, wake: Wake, body: string): void {
@@ -803,52 +1111,29 @@ export class GroupRuntime {
   }
 
   private applyTurnResult(chain: ChainState, wake: Wake, result: PromptTurnResult): void {
-    const text = result.finalText?.trim();
-    if (result.outcome === "ok") {
-      if (!text) return; // An empty turn posts nothing (smart silence).
-      // An ended chain (blocked / limit) still shows the reply but wakes nobody.
-      const reply = this.postReply(chain, wake, text);
-      this.route(chain, reply);
-      if (chain.ended) return;
-      const closing = lastGroupCollabStatus(text);
-      // N4 interrupt: Ready/Blocked are for the user — do not proactive-wake peers.
-      if (closing?.kind === "ready" || closing?.kind === "blocked") return;
-      // N4: Agreed/Proposed with an owned in-progress task + reviewer → wake reviewer.
-      // Proactivity only for real review handoffs — not idle exploration.
-      if (closing?.kind === "agreed" || closing?.kind === "proposed") {
-        this.maybeRouteReviewerForOwnedTask(chain, wake);
-        return;
-      }
-      // P0b: silence (no @mention, no Agreed/Blocked/Proposed/Ready) → nudge in the room.
-      if (needsNextOwnerNudge(text, reply.mentions.length)) {
-        this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.noNextOwner);
-        // P1b: coordinator Lead wakes when an open/unowned task still needs an owner.
-        this.maybeRouteLeadForOpenTask(chain, wake);
-        // N4: resume an owned open/in_progress task when the room went silent.
-        // Only when there is real pending owned work — never wake Builder/Reviewer to stay busy.
-        this.maybeResumeOwnedTask(chain, wake);
-      }
-      return;
-    }
+    // Public text never dispatches work. Task tools carry explicit recipient IDs.
     if (result.outcome === "blocked") {
-      // Genuine ask_user / intent-gate waits go through handleQuestionPending (gated).
-      // Only a HyperPlan choice-pending may sticky-wait here. Anything else must not
-      // leave the member stuck on Waiting for you — peer handoffs stay unblocked.
       if (isHyperPlanSessionReserved(wake.sessionId)) {
-        this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.waitingForYou);
         this.awaitingUser.set(wake.sessionId, chain.chainId);
         this.endChain(chain, "blocked");
       } else {
-        this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.aborted);
+        updateGroupJob(
+          wake,
+          "interrupted",
+          "The turn ended before the pending question could be answered.",
+        );
+        this.transcript.setState(
+          wake,
+          "interrupted",
+          "The turn ended before the pending question could be answered.",
+        );
       }
-      return;
     }
-    this.postMemberStatus(chain, wake, statusText(result.outcome));
   }
 
   /**
    * The turn ended after group_start_worktree moved the member's cwd (PI
-   * `terminate`, so outcome `ok`, never "Turn stopped"). Posts "Worktree
+   * `terminate`, so outcome `ok`). Posts "Worktree
    * ready" as the member (a status: wakes nobody) and re-wakes the SAME member
    * in the SAME chain with the SAME trigger message, counting a hop and the
    * member's wakes like any wake. An ended chain or a hit limit wakes nobody;
@@ -861,93 +1146,11 @@ export class GroupRuntime {
     if (trigger) this.route(chain, trigger, [wake.sessionId], true);
   }
 
-  /**
-   * P1b: after a no-next-owner nudge, if coordinator mode is on and an open
-   * unowned task remains, wake the Lead to assign/route it.
-   */
-  private maybeRouteLeadForOpenTask(chain: ChainState, wake: Wake): void {
-    const group = getAgentGroup(chain.groupId);
-    if (!group?.leadSessionId || !isCoordinatorModeActive(group)) return;
-    if (wake.sessionId === group.leadSessionId) return;
-    const open = listGroupTasks(group.id, { status: "open" }).filter(
-      (task) => !task.ownerSessionId,
-    );
-    if (open.length === 0) return;
-    const titles = open
-      .slice(0, 3)
-      .map((task) => `"${task.title}"`)
-      .join(", ");
-    const more = open.length > 3 ? ` (+${open.length - 3} more)` : "";
-    this.postMemberStatus(
-      chain,
-      wake,
-      `Open task needs an owner: ${titles}${more} — Lead, assign or @mention`,
-    );
-    const trigger = getGroupMessage(wake.triggerMessageId);
-    if (trigger) this.route(chain, trigger, [group.leadSessionId]);
-  }
-
-  /**
-   * N4: after silence, wake one owner of an open/in_progress task so work resumes
-   * without waiting for the user. Skips the speaker and anyone already pending.
-   */
-  private maybeResumeOwnedTask(chain: ChainState, wake: Wake): void {
-    const activity = this.activityOf(chain.groupId);
-    const busy = new Set([...activity.runningSessionIds, ...activity.queuedSessionIds]);
-    const owned = listGroupTasks(chain.groupId).filter(
-      (task) =>
-        (task.status === "open" || task.status === "in_progress") &&
-        task.ownerSessionId &&
-        task.ownerSessionId !== wake.sessionId &&
-        !busy.has(task.ownerSessionId),
-    );
-    const owner = owned[0]?.ownerSessionId;
-    const title = owned[0]?.title;
-    if (!owner || !title) return;
-    this.postMemberStatus(chain, wake, `Resume: "${title}" — continue your owned work`);
-    const trigger = getGroupMessage(wake.triggerMessageId);
-    if (trigger) this.route(chain, trigger, [owner]);
-  }
-
-  /**
-   * N4: after Agreed/Proposed, wake the reviewer of the speaker's in_progress task
-   * (once) so review proceeds without an explicit @mention.
-   */
-  private maybeRouteReviewerForOwnedTask(chain: ChainState, wake: Wake): void {
-    const activity = this.activityOf(chain.groupId);
-    const busy = new Set([...activity.runningSessionIds, ...activity.queuedSessionIds]);
-    const ready = listGroupTasks(chain.groupId).filter(
-      (task) =>
-        task.status === "in_progress" &&
-        task.ownerSessionId === wake.sessionId &&
-        task.reviewerSessionId &&
-        task.reviewerSessionId !== wake.sessionId &&
-        !busy.has(task.reviewerSessionId),
-    );
-    const reviewer = ready[0]?.reviewerSessionId;
-    const title = ready[0]?.title;
-    if (!reviewer || !title) return;
-    this.postMemberStatus(chain, wake, `Review ready: "${title}" — please review`);
-    const trigger = getGroupMessage(wake.triggerMessageId);
-    if (trigger) this.route(chain, trigger, [reviewer]);
-  }
-
-  /**
-   * A turn that waited at the intent gate settled. Its chain already ended, so
-   * nothing it posts wakes anyone; the user writes in the room to go on.
-   * Proceed → the result posts; refusal (Cancel / skip → `blocked`) → "Turn stopped".
-   */
-  private applyGatedTurnResult(chain: ChainState, wake: Wake, result: PromptTurnResult): void {
-    const text = result.finalText?.trim();
-    if (result.outcome === "ok") {
-      if (text) this.postReply(chain, wake, text);
-      return;
+  private applyGatedTurnResult(_chain: ChainState, wake: Wake, result: PromptTurnResult): void {
+    if (result.outcome === "blocked") {
+      updateGroupJob(wake, "cancelled");
+      this.transcript.setState(wake, "cancelled");
     }
-    this.postMemberStatus(
-      chain,
-      wake,
-      result.outcome === "blocked" ? GROUP_STATUS_TEXT.aborted : statusText(result.outcome),
-    );
   }
 
   /** The coordinating Lead's "Group snapshot" (the Lead itself counts as working: it is being woken). */
@@ -1013,7 +1216,7 @@ export class GroupRuntime {
 
   private emitActivity(groupId: string): void {
     const { runningSessionIds, queuedSessionIds, waitingSessionIds } = this.activityOf(groupId);
-    this.host.emit({
+    this.emitEvent({
       type: "group.activity",
       groupId,
       runningSessionIds,
@@ -1023,7 +1226,12 @@ export class GroupRuntime {
   }
 
   private emitMessage(message: GroupMessage): void {
-    this.host.emit({ type: "group.message", groupId: message.groupId, message });
+    this.emitEvent({ type: "group.message", groupId: message.groupId, message });
+  }
+
+  private emitEvent(event: GroupRuntimeEvent): void {
+    if (this.dispatching) this.bufferedEvents.push(event);
+    else this.host.emit(event);
   }
 
   private settleIdle(): void {

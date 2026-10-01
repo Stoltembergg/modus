@@ -16,6 +16,7 @@ import type {
   GroupMessageContextItem,
   GroupMessageCursor,
   GroupMessageKind,
+  GroupMessageStatus,
   GroupTask,
   GroupTaskStatus,
 } from "../../shared/contracts";
@@ -105,6 +106,13 @@ type MessageRow = {
   attachments_json: string | null;
   context_items_json: string | null;
   created_at: string;
+  turn_id: string | null;
+  run_id: string | null;
+  sdk_message_id: string | null;
+  sequence: number;
+  status: GroupMessageStatus | null;
+  updated_at: string | null;
+  error: string | null;
 };
 
 type TaskRow = {
@@ -138,7 +146,8 @@ const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.jo
     a.avatar_shape as agent_avatar_shape
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
-  to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at`;
+  to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
+  turn_id, run_id, sdk_message_id, sequence, status, updated_at, error`;
 const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
   created_by_session_id, reviewer_session_id, branch, created_at, updated_at`;
 const DECISION_COLUMNS = "id, group_id, text, author_session_id, source_message_id, created_at";
@@ -251,6 +260,13 @@ function toMessage(row: MessageRow): GroupMessage {
     ...(attachments ? { attachments } : {}),
     ...(contextItems ? { contextItems } : {}),
     createdAt: row.created_at,
+    sequence: row.sequence,
+    ...(row.turn_id !== null ? { turnId: row.turn_id } : {}),
+    ...(row.run_id !== null ? { runId: row.run_id } : {}),
+    ...(row.sdk_message_id !== null ? { sdkMessageId: row.sdk_message_id } : {}),
+    ...(row.status !== null ? { status: row.status } : {}),
+    ...(row.updated_at !== null ? { updatedAt: row.updated_at } : {}),
+    ...(row.error !== null ? { error: row.error } : {}),
   };
 }
 
@@ -1275,6 +1291,11 @@ export function appendGroupMessage(input: {
   attachments?: GroupMessageAttachment[];
   contextItems?: GroupMessageContextItem[];
   createdAt?: string;
+  turnId?: string;
+  runId?: string;
+  sdkMessageId?: string;
+  status?: GroupMessageStatus;
+  error?: string;
 }): GroupMessage {
   const db = getDatabase();
   requireGroupRow(input.groupId);
@@ -1283,7 +1304,11 @@ export function appendGroupMessage(input: {
   const attachments = input.attachments?.slice(0, 6) ?? [];
   const contextItems = input.contextItems?.slice(0, 20) ?? [];
   const hasPayload = attachments.length > 0 || contextItems.length > 0;
-  if (typeof input.body !== "string" || (input.body.trim() === "" && !hasPayload)) {
+  const executionCard = authorKind === "agent" && input.turnId && input.status;
+  if (
+    typeof input.body !== "string" ||
+    (input.body.trim() === "" && !hasPayload && !executionCard)
+  ) {
     throw new GroupStoreError("invalid-value", "Group message body must not be empty.");
   }
   if (authorKind === "agent") {
@@ -1340,9 +1365,14 @@ export function appendGroupMessage(input: {
       replyChainId ??
       (authorKind === "user" && !input.replyToMessageId ? id : null));
   const createdAt = input.createdAt ?? new Date().toISOString();
+  const { sequence } = db
+    .prepare(
+      "select coalesce(max(sequence), 0) + 1 as sequence from group_messages where group_id = ?",
+    )
+    .get(input.groupId) as { sequence: number };
   db.prepare(
     `insert into group_messages (${MESSAGE_COLUMNS})
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.groupId,
@@ -1357,11 +1387,57 @@ export function appendGroupMessage(input: {
     attachments.length > 0 ? JSON.stringify(attachments) : null,
     contextItems.length > 0 ? JSON.stringify(contextItems) : null,
     createdAt,
+    input.turnId ?? null,
+    input.runId ?? null,
+    input.sdkMessageId ?? null,
+    sequence,
+    input.status ?? null,
+    createdAt,
+    input.error ?? null,
   );
   const row = db
     .prepare(`select ${MESSAGE_COLUMNS} from group_messages where id = ?`)
     .get(id) as MessageRow;
   return toMessage(row);
+}
+
+/** Update a trusted runtime-owned public card; identity and posting order stay fixed. */
+export function updateGroupMessage(
+  messageId: string,
+  patch: {
+    body?: string;
+    runId?: string;
+    sdkMessageId?: string;
+    status?: GroupMessageStatus;
+    error?: string;
+  },
+): GroupMessage | undefined {
+  const current = getGroupMessage(messageId);
+  if (!current?.turnId || current.authorKind !== "agent") return undefined;
+  const revision = new Date(
+    Math.max(Date.now(), Date.parse(current.updatedAt ?? current.createdAt) + 1),
+  ).toISOString();
+  getDatabase()
+    .prepare(`update group_messages set body = ?, run_id = ?, sdk_message_id = ?,
+    status = ?, error = ?, updated_at = ? where id = ?`)
+    .run(
+      patch.body ?? current.body,
+      patch.runId ?? current.runId ?? null,
+      patch.sdkMessageId ?? current.sdkMessageId ?? null,
+      patch.status ?? current.status ?? null,
+      patch.error ?? current.error ?? null,
+      revision,
+      messageId,
+    );
+  return getGroupMessage(messageId);
+}
+
+export function listGroupTurnMessages(turnId: string): GroupMessage[] {
+  return (
+    getDatabase()
+      .prepare(`select ${MESSAGE_COLUMNS} from group_messages where turn_id = ? order by sequence`)
+      .all(turnId) as MessageRow[]
+  ).map(toMessage);
 }
 
 export function getGroupMessage(messageId: string): GroupMessage | undefined {
@@ -1372,13 +1448,9 @@ export function getGroupMessage(messageId: string): GroupMessage | undefined {
 }
 
 /**
- * Returns one page of messages in chronological order (oldest first), keyed by
- * the total order (created_at, id). Ordering and cursors use the same key, so
- * paging never skips or repeats messages that share a timestamp.
- * - `before`: the newest `limit` messages strictly before this cursor.
- * - `after`: the oldest `limit` messages strictly after this cursor.
- * - neither: the newest `limit` messages.
- * Use the first/last returned message's `{ createdAt, id }` as the next cursor.
+ * Returns one page in persisted conversation order, oldest first.
+ * Existing `{ createdAt, id }` cursors resolve the message ID to its stable sequence.
+ * Unknown and cross-group cursor IDs use the timestamp fallback for compatibility.
  */
 export function listGroupMessages(
   groupId: string,
@@ -1390,21 +1462,33 @@ export function listGroupMessages(
   );
   const db = getDatabase();
   const conditions = ["group_id = ?"];
-  const params: string[] = [groupId];
+  const params: Array<string | number> = [groupId];
   if (options.before !== undefined) {
-    conditions.push("(created_at, id) < (?, ?)");
-    params.push(options.before.createdAt, options.before.id);
+    const boundary = getGroupMessage(options.before.id);
+    if (boundary?.groupId === groupId && boundary.sequence !== undefined) {
+      conditions.push("sequence < ?");
+      params.push(boundary.sequence);
+    } else {
+      conditions.push("(created_at, id) < (?, ?)");
+      params.push(options.before.createdAt, options.before.id);
+    }
   }
   if (options.after !== undefined) {
-    conditions.push("(created_at, id) > (?, ?)");
-    params.push(options.after.createdAt, options.after.id);
+    const boundary = getGroupMessage(options.after.id);
+    if (boundary?.groupId === groupId && boundary.sequence !== undefined) {
+      conditions.push("sequence > ?");
+      params.push(boundary.sequence);
+    } else {
+      conditions.push("(created_at, id) > (?, ?)");
+      params.push(options.after.createdAt, options.after.id);
+    }
   }
   const where = conditions.join(" and ");
   if (options.after !== undefined && options.before === undefined) {
     const rows = db
       .prepare(
         `select ${MESSAGE_COLUMNS} from group_messages where ${where}
-         order by created_at asc, id asc limit ?`,
+         order by sequence asc limit ?`,
       )
       .all(...params, limit) as MessageRow[];
     return rows.map(toMessage);
@@ -1412,7 +1496,7 @@ export function listGroupMessages(
   const rows = db
     .prepare(
       `select ${MESSAGE_COLUMNS} from group_messages where ${where}
-       order by created_at desc, id desc limit ?`,
+       order by sequence desc limit ?`,
     )
     .all(...params, limit) as MessageRow[];
   return rows.reverse().map(toMessage);

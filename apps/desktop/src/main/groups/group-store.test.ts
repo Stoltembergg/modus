@@ -553,7 +553,7 @@ describe("message chains (startsChain) and lookup", () => {
 });
 
 describe("message pagination cursor", () => {
-  it("pages same-millisecond messages by (created_at, id) without skips or duplicates", () => {
+  it("pages messages by persisted sequence without skips or duplicates", () => {
     const { group } = projectGroupFixture();
     const sameMs = "2026-02-02T10:00:00.000Z";
     // Inserted first, but with the lexicographically LARGER id.
@@ -585,7 +585,7 @@ describe("message pagination cursor", () => {
       body: "later",
       createdAt: "2026-02-02T10:00:00.001Z",
     });
-    const expected = [earlier.id, second.id, first.id, later.id];
+    const expected = [first.id, second.id, earlier.id, later.id];
     const cursor = (m: { createdAt: string; id: string }) => ({ createdAt: m.createdAt, id: m.id });
 
     expect(listGroupMessages(group.id).map((m) => m.id)).toEqual(expected);
@@ -620,7 +620,7 @@ describe("message pagination cursor", () => {
     expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })).toEqual(
       listGroupMessages(group.id, { before: cursor(first), limit: 1 }),
     );
-    expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })[0]?.id).toBe(second.id);
+    expect(listGroupMessages(group.id, { before: cursor(second), limit: 1 })[0]?.id).toBe(first.id);
   });
 });
 

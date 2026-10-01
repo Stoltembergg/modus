@@ -17,6 +17,7 @@ const {
   createAgentGroupWithMembers,
   removeAgentFromGroup,
   listGroupMessages,
+  listGroupTasks,
   claimGroupTask,
   createMemberGroupTask,
   recordGroupDecision,
@@ -159,6 +160,7 @@ function setup(
   options: {
     window?: boolean;
     updatePending?: boolean;
+    maxConcurrentTurns?: number;
     limits?: Partial<Record<keyof typeof GROUP_CHAIN_LIMITS, number>>;
   } = {},
 ) {
@@ -173,6 +175,7 @@ function setup(
       emit: (event) => events.push(event),
     },
     retryDelayMs: 5,
+    ...(options.maxConcurrentTurns ? { maxConcurrentTurns: options.maxConcurrentTurns } : {}),
     ...(options.limits ? { limits: options.limits } : {}),
   });
   created.push(groups);
@@ -230,6 +233,8 @@ describe("turn outcomes (fake runtime contract)", () => {
     const user = groups.postUserMessage({ groupId: group.id, body: "status?" });
     expect(runtime.pendingSessions()).toEqual([alpha]);
     expect(runtime.calls[0]?.input.delivery).toBe("normal");
+    const card = room(group.id)[1];
+    expect(card).toMatchObject({ body: "", status: "running", authorSessionId: alpha });
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "All green." });
     await flush();
     const [, reply] = room(group.id);
@@ -240,58 +245,73 @@ describe("turn outcomes (fake runtime contract)", () => {
       body: "All green.",
       chainId: user.id,
       replyToMessageId: user.id,
+      id: card?.id,
+      turnId: card?.turnId,
+      status: "completed",
     });
+    expect(room(group.id)).toHaveLength(2);
   });
 
-  it("ok without text posts nothing", async () => {
+  it("ok without text completes the empty canonical card without extra messages", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "status?" });
+    const card = room(group.id)[1];
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
-    expect(room(group.id)).toHaveLength(1);
+    expect(room(group.id)).toHaveLength(2);
+    expect(room(group.id)[1]).toMatchObject({ id: card?.id, body: "", status: "completed" });
     expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 
-  it("failed (and a thrown prompt) posts a status and counts as a hop", async () => {
+  it("failed and thrown prompts mark their original cards failed and preserve hop counts", async () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
+    const cards = room(group.id).slice(1);
     runtime.take(alpha).resolve({ outcome: "failed" });
     runtime.take(beta).reject(new Error("boom"));
     await flush();
-    const statuses = room(group.id).filter((m) => m.kind === "status");
-    expect(statuses.map((m) => [m.authorSessionId, m.body])).toEqual([
-      [alpha, GROUP_STATUS_TEXT.failed],
-      [beta, GROUP_STATUS_TEXT.failed],
+    const failed = room(group.id).slice(1);
+    expect(failed.map((m) => [m.id, m.authorSessionId, m.status, m.body])).toEqual([
+      [cards[0]?.id, alpha, "failed", ""],
+      [cards[1]?.id, beta, "failed", ""],
     ]);
+    expect(failed[1]?.error).toBe("boom");
+    expect(room(group.id)).toHaveLength(3);
     expect(groups.chainSnapshot(user.id).hops).toBe(2);
   });
 
-  it("aborted posts its own status", async () => {
+  it("aborted cancels the original card without a duplicate status", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "go" });
+    const card = room(group.id)[1];
     runtime.take(alpha).resolve({ outcome: "aborted" });
     await flush();
-    expect(room(group.id).at(-1)).toMatchObject({ kind: "status", body: "Turn stopped" });
+    expect(room(group.id).at(-1)).toMatchObject({ id: card?.id, kind: "message", body: "", status: "cancelled" });
+    expect(room(group.id)).toHaveLength(2);
   });
 
-  it('blocked (HyperPlan choice pending) posts "Waiting for you" as the member and ends the chain', async () => {
+  it("blocked HyperPlan marks the member card awaiting_user and ends the chain", async () => {
     const { group, alpha } = squad();
     const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
     expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
     const { runtime, groups, events } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    const card = room(group.id)[1];
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
     expect(room(group.id).at(-1)).toMatchObject({
       authorKind: "agent",
       authorSessionId: alpha,
-      kind: "status",
-      body: "Waiting for you",
+      id: card?.id,
+      kind: "message",
+      body: "",
+      status: "awaiting_user",
       chainId: user.id,
     });
+    expect(room(group.id)).toHaveLength(2);
     expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 1, ended: "blocked" });
     expect(groups.isAwaitingUser(alpha)).toBe(true);
     expect(events).toContainEqual({
@@ -310,8 +330,9 @@ describe("turn outcomes (fake runtime contract)", () => {
     await flush();
     expect(groups.isAwaitingUser(alpha)).toBe(false);
     expect(room(group.id).at(-1)).toMatchObject({
-      kind: "status",
-      body: "Turn stopped",
+      kind: "message",
+      body: "",
+      status: "interrupted",
       authorSessionId: alpha,
     });
     // Room can continue with another member without clearing a sticky wait.
@@ -374,13 +395,16 @@ describe("wake rules", () => {
     expect(runtime.pendingSessions()).toEqual([beta, gamma]);
   });
 
-  it("a self-mention does not wake the author", async () => {
+  it("public self and peer mentions wake neither the author nor the mentioned peer", async () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "go" });
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Alpha will do it, @Beta review" });
     await flush();
-    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.started).toEqual([alpha]);
+    expect(room(group.id).at(-1)).toMatchObject({ body: "@Alpha will do it, @Beta review", status: "completed" });
+    expect(runtime.started).not.toContain(beta);
   });
 
   it("a thread reply wakes the replied-to author without requiring @mention", async () => {
@@ -449,26 +473,35 @@ describe("chains", () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup();
     const first = groups.postUserMessage({ groupId: group.id, body: "go" });
+    const alphaCard = room(group.id)[1];
+    const handoff = groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, targetSessionId: beta, body: "Review the result" });
+    const betaCard = room(group.id).at(-1);
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta your turn" });
     await flush();
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done." });
     await flush();
     const second = groups.postUserMessage({ groupId: group.id, body: "again" });
     const messages = room(group.id);
-    // user → Alpha reply → Beta reply → no-next-owner nudge → second user message
+    // Stable cards keep their original positions; the structured handoff is a separate status.
     expect(messages.map((m) => m.chainId)).toEqual([
       first.id,
       first.id,
       first.id,
       first.id,
       second.id,
+      second.id,
     ]);
-    expect(messages[1]?.mentions).toEqual([beta]);
-    expect(messages[3]).toMatchObject({
+    expect(messages[1]).toMatchObject({ id: alphaCard?.id, body: "@Beta your turn", status: "completed" });
+    expect(messages[2]).toMatchObject({
+      id: handoff?.id,
       kind: "status",
-      body: GROUP_STATUS_TEXT.noNextOwner,
-      authorSessionId: beta,
+      body: "Review the result",
+      mentions: [beta],
+      authorSessionId: alpha,
     });
+    expect(messages[3]).toMatchObject({ id: betaCard?.id, body: "Done.", status: "completed" });
+    expect(messages[5]).toMatchObject({ authorSessionId: alpha, status: "running", body: "" });
+    expect(runtime.started).toEqual([alpha, beta, alpha]);
     expect(second.chainId).toBe(second.id);
     expect(groups.chainSnapshot(second.id).hops).toBe(1);
   });
@@ -483,13 +516,19 @@ describe("chain limits", () => {
     turns: number,
   ) {
     const fixture = squad();
-    const ctx = setup({ limits });
+    const ctx = setup({ limits, maxConcurrentTurns: 1 });
     const user = ctx.groups.postUserMessage({ groupId: fixture.group.id, body: "start" });
     let current = fixture.alpha;
     for (let turn = 0; turn < turns; turn += 1) {
       if (!ctx.runtime.pendingSessions().includes(current)) break;
-      const next = current === fixture.alpha ? "Beta" : "Alpha";
-      ctx.runtime.take(current).resolve({ outcome: "ok", finalText: `over to @${next}` });
+      const next = current === fixture.alpha ? fixture.beta : fixture.alpha;
+      ctx.groups.handleTaskWake({
+        groupId: fixture.group.id,
+        actorSessionId: current,
+        targetSessionId: next,
+        body: "Continue the task",
+      });
+      ctx.runtime.take(current).resolve({ outcome: "ok", finalText: "Progress recorded." });
       await flush();
       current = current === fixture.alpha ? fixture.beta : fixture.alpha;
     }
@@ -502,10 +541,11 @@ describe("chain limits", () => {
     reason: string,
     runtime: FakeAgentRuntime,
   ) {
-    const last = room(groupId).at(-1);
-    expect(last).toMatchObject({ authorKind: "system", kind: "status", chainId });
-    expect(last?.body).toBe((GROUP_STATUS_TEXT.limit as Record<string, string>)[reason]);
-    expect(last?.body.startsWith("Waiting for you")).toBe(true);
+    const limit = room(groupId).filter((message) => message.authorKind === "system" && message.kind === "status");
+    expect(limit).toHaveLength(1);
+    expect(limit[0]).toMatchObject({ chainId, body: (GROUP_STATUS_TEXT.limit as Record<string, string>)[reason] });
+    expect(limit[0]?.body.startsWith("Waiting for you")).toBe(true);
+    expect(room(groupId).filter((message) => message.authorKind === "agent" && message.kind === "message").every((message) => message.status === "completed" || message.status === "cancelled")).toBe(true);
     expect(runtime.pendingSessions()).toEqual([]);
   }
 
@@ -567,6 +607,8 @@ describe("chain limits", () => {
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
     // Hops 1-3 admitted; Alpha and Beta run, Gamma is queued.
     expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, targetSessionId: beta, body: "Review next" });
+    groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, targetSessionId: gamma, body: "Verify next" });
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta then @Gamma" });
     await flush();
     // Beta's 2nd wake is hop 4 (queued behind its running turn); Gamma's would be hop 5.
@@ -577,7 +619,8 @@ describe("chain limits", () => {
     expect(groups.isGroupWorking(group.id)).toBe(true);
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Alpha @Gamma look" });
     await flush();
-    expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, chainId: user.id });
+    expect(room(group.id).find((message) => message.authorSessionId === beta && message.status === "completed")).toMatchObject({ body: "Done, @Alpha @Gamma look", chainId: user.id });
+    expect(room(group.id).filter((message) => message.authorSessionId === gamma)).toEqual([expect.objectContaining({ status: "cancelled", body: "", chainId: user.id })]);
     expect(runtime.pendingSessions()).toEqual([]);
     expect(runtime.started).toEqual([alpha, beta]);
     expect(runtime.started).not.toContain(gamma);
@@ -623,17 +666,17 @@ describe("chain limits", () => {
       maxContextTokens: 8_000,
     });
     expect(prompt).toContain("You are @Beta");
-    expect(prompt).toContain("Members right now:\n- @Alpha (lead)\n- @Beta (you)\n");
+    expect(prompt).toContain("Members right now:\n- @Alpha (lead) (sessionId: a)\n- @Beta (you) (sessionId: b)\n");
     expect(prompt).toContain("[user] start");
     expect(prompt).toContain('<group_message from="@Alpha">\n@Beta &lt;check&gt;');
     expect(prompt).toContain("Collaboration protocol");
-    expect(prompt).toContain("Handoff → @Name");
-    expect(prompt).toContain("Owner: @Name");
+    expect(prompt).toContain("group_handoff(memberId=<session ID>");
+    expect(prompt).toContain("group_request_review(id=<task ID>");
   });
 });
 
-describe("P0b collab nudge", () => {
-  it("posts no-next-owner when a reply has no mention and no Agreed/Blocked/Proposed/Ready", async () => {
+describe("natural collaboration completion", () => {
+  it("completes a natural reply without posting a no-next-owner nudge", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "go" });
@@ -641,10 +684,12 @@ describe("P0b collab nudge", () => {
     await flush();
     expect(room(group.id).at(-1)).toMatchObject({
       authorSessionId: alpha,
-      kind: "status",
-      body: GROUP_STATUS_TEXT.noNextOwner,
+      kind: "message",
+      body: "I finished the toggle.",
+      status: "completed",
       mentions: [],
     });
+    expect(room(group.id)).toHaveLength(2);
     expect(runtime.pendingSessions()).toEqual([]);
   });
 
@@ -877,13 +922,15 @@ describe("coordinator mode", () => {
     expect(groups.chainSnapshot(user.id).inputTokens).toBe(estimateGroupTokens(prompt));
   });
 
-  it("an explicit mention still wakes the mentioned member, without the snapshot; members route as before", async () => {
+  it("user mentions wake members without a snapshot; structured handoffs wake the Lead and peers", async () => {
     const { group, alpha, beta, gamma } = squad();
     setAgentGroupMode(group.id, "coordinator");
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "@Beta check it" });
     expect(runtime.pendingSessions()).toEqual([beta]);
     expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
+    groups.handleTaskWake({ groupId: group.id, actorSessionId: beta, targetSessionId: alpha, body: "Coordinate the review" });
+    groups.handleTaskWake({ groupId: group.id, actorSessionId: beta, targetSessionId: gamma, body: "Review the change" });
     runtime.take(beta).resolve({ outcome: "ok", finalText: "@Gamma and @Alpha, over to you" });
     await flush();
     expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
@@ -941,12 +988,13 @@ describe("coordinator mode", () => {
       const user = groups.postUserMessage({ groupId: group.id, body: "split the work" });
       runGroupTool("group_assign_task", lead, { taskId: first.id, memberId: "Beta" });
       expect(runtime.pendingSessions()).toEqual([alpha, beta]);
-      expect(room(group.id).at(-1)).toMatchObject({
+      expect(room(group.id).find((message) => message.kind === "status" && message.mentions.includes(beta))).toMatchObject({
         kind: "status",
         authorSessionId: alpha,
         mentions: [beta],
         chainId: user.id,
       });
+      expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, kind: "message", body: "", status: "running", chainId: user.id });
       expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 2 });
       runGroupTool("group_assign_task", lead, { taskId: second.id, memberId: "Alpha" });
       expect(room(group.id).at(-1)?.body).toBe(`Assigned: "B" (task ${second.id}) → @Alpha`);
@@ -957,7 +1005,7 @@ describe("coordinator mode", () => {
     }
   });
 
-  it("P1b: silence with an open unowned task wakes the Lead after the no-next-owner nudge", async () => {
+  it("silence with an open unowned task leaves it open without nudging or waking the Lead", async () => {
     const { group, alpha, beta } = squad();
     setAgentGroupMode(group.id, "coordinator");
     createMemberGroupTask({ groupId: group.id, actorSessionId: alpha, title: "Parser" });
@@ -966,24 +1014,23 @@ describe("coordinator mode", () => {
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Finished the draft." });
     await flush();
     const messages = room(group.id);
-    expect(messages.at(-2)).toMatchObject({
-      kind: "status",
-      authorSessionId: beta,
-      body: GROUP_STATUS_TEXT.noNextOwner,
-    });
     expect(messages.at(-1)).toMatchObject({
-      kind: "status",
+      kind: "message",
       authorSessionId: beta,
-      body: 'Open task needs an owner: "Parser" — Lead, assign or @mention',
+      body: "Finished the draft.",
+      status: "completed",
     });
-    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(messages).toHaveLength(2);
+    expect(listGroupTasks(group.id)).toEqual([expect.objectContaining({ title: "Parser", status: "open" })]);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.started).toEqual([beta]);
   });
 });
 
 /* ── intent gate: the question opens inside prompt(); the slot is released ── */
 
 describe("intent gate on a group turn", () => {
-  it("frees the slot, posts Waiting for you and ends the chain (queued wakes drop)", async () => {
+  it("frees the slot, marks the same card awaiting_user and ends the chain", async () => {
     const { group, alpha, beta, gamma } = squad();
     const { runtime, groups, events } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
@@ -991,12 +1038,14 @@ describe("intent gate on a group turn", () => {
     const other = groups.postUserMessage({ groupId: group.id, body: "@Gamma also" });
     groups.postUserMessage({ groupId: group.id, body: "@Beta later" });
     expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    const alphaCard = room(group.id).find((message) => message.authorSessionId === alpha);
 
     runtime.openGate(alpha);
-    expect(room(group.id).find((m) => m.kind === "status")).toMatchObject({
+    expect(room(group.id).find((m) => m.id === alphaCard?.id)).toMatchObject({
       authorKind: "agent",
       authorSessionId: alpha,
-      body: "Waiting for you",
+      body: "",
+      status: "awaiting_user",
       chainId: user.id,
     });
     expect(groups.chainSnapshot(user.id).ended).toBe("blocked");
@@ -1025,6 +1074,7 @@ describe("intent gate on a group turn", () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    const card = room(group.id)[1];
     runtime.openGate(alpha);
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "Deleted. @Beta please verify" });
     await flush();
@@ -1033,7 +1083,10 @@ describe("intent gate on a group turn", () => {
       kind: "message",
       body: "Deleted. @Beta please verify",
       chainId: user.id,
+      id: card?.id,
+      status: "completed",
     });
+    expect(room(group.id)).toHaveLength(2);
     expect(runtime.pendingSessions()).toEqual([]);
     expect(groups.isAwaitingUser(alpha)).toBe(false);
     expect(groups.liveChainIds()).toEqual([]);
@@ -1042,18 +1095,16 @@ describe("intent gate on a group turn", () => {
     expect(runtime.pendingSessions()).toHaveLength(1);
   });
 
-  it('refusal (Cancel / skip → blocked) posts "Turn stopped", with nobody awaiting', async () => {
+  it("refusal cancels the same canonical card with nobody awaiting", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();
     const user = groups.postUserMessage({ groupId: group.id, body: "delete prod" });
+    const card = room(group.id)[1];
     runtime.openGate(alpha);
     runtime.take(alpha).resolve({ outcome: "blocked" });
     await flush();
-    expect(room(group.id).map((m) => [m.kind, m.body])).toEqual([
-      ["message", "delete prod"],
-      ["status", "Waiting for you"],
-      ["status", "Turn stopped"],
-    ]);
+    expect(room(group.id)).toHaveLength(2);
+    expect(room(group.id)[1]).toMatchObject({ id: card?.id, kind: "message", body: "", status: "cancelled" });
     expect(room(group.id).at(-1)?.chainId).toBe(user.id);
     expect(groups.isAwaitingUser(alpha)).toBe(false);
     expect(runtime.pendingSessions()).toEqual([]);
@@ -1087,17 +1138,19 @@ describe("HyperPlan-blocked member", () => {
     expect(runtime.pendingSessions()).toEqual([beta]);
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Gamma please verify" });
     await flush();
-    expect(room(group.id).at(-1)).toMatchObject({
+    expect(room(group.id).find((message) => message.authorSessionId === beta)).toMatchObject({
       authorSessionId: beta,
       body: "Done, @Gamma please verify",
       chainId: user.id,
+      status: "completed",
     });
+    expect(room(group.id).find((message) => message.authorSessionId === gamma)).toMatchObject({ body: "", status: "cancelled" });
     expect(runtime.pendingSessions()).toEqual([]);
     expect(runtime.started).not.toContain(gamma);
     expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 
-  it("a successful plan-build opens a new chain with reset counters; the result follows the wake rules", async () => {
+  it("a successful plan-build resets counters without dispatching public mentions; explicit handoff still wakes", async () => {
     const { group, alpha, beta } = squad();
     const { reserveHyperPlanSession } = await import("../agent/harness/hyperplan-draft-store");
     expect(reserveHyperPlanSession({ sessionId: alpha, ownerId: 1 })).toBe(true);
@@ -1116,18 +1169,22 @@ describe("HyperPlan-blocked member", () => {
     expect(root).toMatchObject({ authorSessionId: alpha, kind: "message" });
     expect(root?.chainId).toBe(root?.id);
     expect(root?.chainId).not.toBe(user.id);
-    // Hop 1 is Alpha's released result; hop 2 the wake it caused.
+    // The released result is a completed publication; public mentions do not add a hop.
     expect(groups.chainSnapshot(root?.id ?? "")).toMatchObject({
-      hops: 2,
+      hops: 1,
       agentMessages: 1,
-      wakesByMember: { [beta]: 1 },
+      wakesByMember: {},
     });
     expect(groups.chainSnapshot(root?.id ?? "").ended).toBeUndefined();
     expect(groups.isAwaitingUser(alpha)).toBe(false);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.liveChainIds()).toEqual([]);
+    const handoff = groups.handleTaskWake({ groupId: group.id, actorSessionId: alpha, targetSessionId: beta, body: "Verify the built migration" });
     expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.chainSnapshot(handoff?.id ?? "")).toMatchObject({ hops: 1, wakesByMember: { [beta]: 1 } });
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Verified." });
     await flush();
-    expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, chainId: root?.id });
+    expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: beta, chainId: handoff?.id, status: "completed" });
   });
 
   it("only an ok plan-build unblocks: failed, aborted and plain prompts do not", async () => {
@@ -1165,7 +1222,8 @@ describe("HyperPlan-blocked member", () => {
       origin: "plan-build",
       result: { outcome: "ok", finalText: "x" },
     });
-    expect(room(group.id)).toHaveLength(1);
+    expect(room(group.id)).toHaveLength(2);
+    expect(room(group.id)[1]).toMatchObject({ authorSessionId: alpha, body: "", status: "running" });
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
   });
@@ -1173,8 +1231,8 @@ describe("HyperPlan-blocked member", () => {
 
 /* ── N4 proactive resume / review + interrupt ─────────────────────────── */
 
-describe("N4 proactive follow-ups", () => {
-  it("silence with an owned in_progress task resumes the owner (not the speaker)", async () => {
+describe("structured task follow-ups", () => {
+  it("silence with an owned in_progress task leaves its owner idle until explicitly delegated", async () => {
     const { group, alpha, beta } = squad();
     const task = createMemberGroupTask({
       groupId: group.id,
@@ -1186,18 +1244,19 @@ describe("N4 proactive follow-ups", () => {
     groups.postUserMessage({ groupId: group.id, body: "@Beta draft something" });
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Draft parked." });
     await flush();
-    expect(room(group.id).at(-2)).toMatchObject({
-      kind: "status",
-      body: GROUP_STATUS_TEXT.noNextOwner,
-    });
     expect(room(group.id).at(-1)).toMatchObject({
-      kind: "status",
-      body: 'Resume: "Parser" — continue your owned work',
+      kind: "message",
+      body: "Draft parked.",
+      status: "completed",
     });
-    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(room(group.id)).toHaveLength(2);
+    expect(listGroupTasks(group.id)).toEqual([expect.objectContaining({ id: task.id, status: "in_progress", ownerSessionId: alpha })]);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(runtime.started).toEqual([beta]);
   });
 
-  it("Agreed with an owned in_progress task + reviewer wakes the reviewer once", async () => {
+  it("an explicit task review request wakes the assigned reviewer once", async () => {
+    const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
     const { group, alpha, beta, gamma } = squad();
     const task = createMemberGroupTask({
       groupId: group.id,
@@ -1208,13 +1267,23 @@ describe("N4 proactive follow-ups", () => {
     claimGroupTask(group.id, task.id, alpha);
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "@Alpha finish it" });
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      runGroupTool("group_request_review", { sessionId: alpha, groupId: group.id }, { id: task.id, reviewer: gamma });
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
     runtime.take(alpha).resolve({ outcome: "ok", finalText: "Looks good.\nAgreed" });
     await flush();
-    expect(room(group.id).at(-1)).toMatchObject({
+    expect(room(group.id).find((message) => message.kind === "status")).toMatchObject({
       kind: "status",
       authorSessionId: alpha,
-      body: 'Review ready: "Toggle" — please review',
+      body: `Review requested: "Toggle" (task ${task.id}) @Gamma`,
+      mentions: [gamma],
     });
+    expect(listGroupTasks(group.id)).toEqual([expect.objectContaining({ id: task.id, status: "in_review", reviewerSessionId: gamma })]);
+    expect(room(group.id).at(-1)).toMatchObject({ authorSessionId: gamma, status: "running", body: "" });
+    expect(runtime.started).toEqual([alpha, gamma]);
     expect(runtime.pendingSessions()).toEqual([gamma]);
     expect(runtime.pendingSessions()).not.toContain(beta);
   });

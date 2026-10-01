@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { parseGroupCollabStatusLine } from "../../../shared/group-collab-status";
 
 let userData: string;
 
@@ -602,6 +603,63 @@ describe("group_assign_task (coordinator mode)", () => {
 });
 
 describe("agreement tools (P1b)", () => {
+  it("hands off by session ID when the target's display name contains spaces", () => {
+    const ws = insertWorkspace();
+    const alpha = insertSession(ws, "Alpha");
+    const jennie = insertSession(ws, "Jennie 2");
+    const group = createAgentGroupWithMembers({
+      name: "Spaced names",
+      workspaceId: ws,
+      members: [{ sessionId: alpha }, { sessionId: jennie }],
+      leadSessionId: alpha,
+    });
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const text = runGroupTool(
+      "group_handoff",
+      { sessionId: alpha, groupId: group.id },
+      {
+        memberId: jennie,
+        objective: "revisar os testes",
+      },
+    );
+    expect(text).toBe("Handed off to @Jennie 2: revisar os testes.");
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: jennie,
+        body: "Handoff → @Jennie 2 · revisar os testes",
+      },
+    ]);
+    expect(parseGroupCollabStatusLine((wakes[0] as { body: string }).body)).toEqual({
+      kind: "handoff",
+      targetName: "Jennie 2",
+      objective: "revisar os testes",
+    });
+  });
+
+  it("posts a self handoff without waking the same agent again", () => {
+    const { group, alpha } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    runGroupTool(
+      "group_handoff",
+      { sessionId: alpha, groupId: group.id },
+      {
+        memberId: alpha,
+        objective: "document the result",
+      },
+    );
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: alpha,
+        body: "Handoff → @Alpha · document the result",
+        wake: false,
+      },
+    ]);
+  });
+
   it("group_handoff posts typed status, wakes the target, and optionally creates a task", () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
@@ -698,6 +756,56 @@ describe("agreement tools (P1b)", () => {
         body: "Blocked · missing tests",
       },
     ]);
+  });
+
+  it("group_block returns to itself without scheduling another turn", () => {
+    const { group, alpha } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    runGroupTool(
+      "group_block",
+      { sessionId: alpha, groupId: group.id },
+      {
+        reason: "waiting for user input",
+        returnTo: alpha,
+      },
+    );
+    expect(wakes).toEqual([
+      {
+        groupId: group.id,
+        actorSessionId: alpha,
+        targetSessionId: alpha,
+        body: "Blocked · waiting for user input",
+        wake: false,
+      },
+    ]);
+  });
+
+  it("group_block rejects a task from another group before publishing or waking", () => {
+    const { group, alpha, beta } = squad();
+    const other = squad();
+    const taskId = taskIdFrom(
+      runGroupTool(
+        "group_create_task",
+        {
+          sessionId: other.alpha,
+          groupId: other.group.id,
+        },
+        { title: "Private task" },
+      ),
+    );
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    expect(
+      runGroupTool(
+        "group_block",
+        { sessionId: alpha, groupId: group.id },
+        {
+          reason: "need more context",
+          taskId,
+          returnTo: beta,
+        },
+      ),
+    ).toMatch(/^\[group-error:invalid-value\] /);
+    expect(wakes).toEqual([]);
   });
 
   it("refuses empty propose/block/handoff inputs and unknown tasks", () => {

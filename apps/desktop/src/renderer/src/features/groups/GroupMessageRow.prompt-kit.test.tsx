@@ -72,7 +72,7 @@ describe("GroupMessageRow Prompt Kit", () => {
     expect(container.querySelector("[data-testid=group-message]")).toBeNull();
   });
 
-  it("shows ephemeral Thinking/Tool and streams only the definitive message", () => {
+  it("uses canonical public text even when an auxiliary live snapshot is provided", () => {
     const thinking: GroupLiveTurnSnapshot = {
       phase: "Exploring",
       thoughtPreview: "raw secret thought should not appear",
@@ -94,20 +94,21 @@ describe("GroupMessageRow Prompt Kit", () => {
         labels={labels}
         liveTurn={{ mode: "running", live: thinking }}
         members={members}
-        message={agentMessage("")}
+        message={{ ...agentMessage("Canonical public text"), status: "running" }}
         streaming
       />,
     );
-    expect(screen.getByTestId("group-live-status")).toBeTruthy();
-    expect(screen.getByTestId("group-prompt-tool")).toBeTruthy();
+    expect(screen.queryByTestId("group-live-status")).toBeNull();
+    expect(screen.queryByTestId("group-prompt-tool")).toBeNull();
+    expect(screen.getByText("Canonical public text")).toBeTruthy();
     expect(screen.queryByTestId("group-prompt-steps")).toBeNull();
     expect(screen.queryByTestId("group-prompt-cot")).toBeNull();
     expect(screen.queryByText(/raw secret thought/i)).toBeNull();
 
     const writing: GroupLiveTurnSnapshot = {
       ...thinking,
-      streamText: "Looking at the composer next.",
-      writingPreview: "Looking at the composer next.",
+      streamText: "Unpersisted snapshot prose",
+      writingPreview: "Unpersisted snapshot prose",
       presence: { ...thinking.presence, state: "writing", label: "Writing" },
     };
     rerender(
@@ -115,7 +116,7 @@ describe("GroupMessageRow Prompt Kit", () => {
         labels={labels}
         liveTurn={{ mode: "running", live: writing }}
         members={members}
-        message={agentMessage("")}
+        message={{ ...agentMessage("Looking at the composer next."), status: "writing" }}
         streaming
       />,
     );
@@ -124,6 +125,7 @@ describe("GroupMessageRow Prompt Kit", () => {
     expect(screen.getByTestId("group-live-writing").textContent).toContain(
       "Looking at the composer",
     );
+    expect(screen.queryByText("Unpersisted snapshot prose")).toBeNull();
   });
 
   it("shows Ready for you as an ephemeral chip, not a transcript status line", () => {

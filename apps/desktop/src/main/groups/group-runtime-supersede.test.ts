@@ -12,7 +12,7 @@ const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
 const { createAgentGroupWithMembers } = await import("./group-store");
 const { GroupRuntime } = await import("./group-runtime");
-// Side-effect: patch postUserMessage to clear sticky Waiting for you.
+// Compatibility import: waiting-state cancellation is implemented directly in GroupRuntime.
 await import("./group-runtime-supersede");
 
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;

@@ -204,6 +204,65 @@ const emit = (event: GroupRuntimeEvent) =>
   });
 
 describe("GroupRoom", () => {
+  it("shows one compact presence surface while members work", async () => {
+    renderRoom(states({ runningSessionIds: ["s-lead"] }));
+    expect(await screen.findByTestId("group-working-status")).toBeTruthy();
+    expect(screen.queryByTestId("group-working-shimmer")).toBeNull();
+    expect(screen.queryByTestId("group-live-writing")).toBeNull();
+  });
+
+  it("clears reply and composer state when navigating to another group", async () => {
+    pages = [[message("original", { body: "Original room message" })]];
+    const view = renderRoom();
+    const user = userEvent.setup();
+    await screen.findByText("Original room message");
+    await user.click(screen.getByTestId("group-message-reply"));
+    await user.type(screen.getByRole("textbox", { name: "Message the group" }), "Private draft");
+    expect(screen.getByTestId("group-composer-reply").textContent).toContain(
+      "Original room message",
+    );
+    view.rerender(
+      <GroupRoom
+        group={{ ...GROUP, id: "g-2", name: "Another group" }}
+        memberStates={states()}
+        onDelete={vi.fn()}
+        onOpenMember={vi.fn()}
+        onRename={vi.fn()}
+        onUpdateMembers={vi.fn(async () => undefined)}
+        workspaces={WORKSPACES}
+      />,
+    );
+    await screen.findByText("Another group");
+    expect(screen.queryByTestId("group-composer-reply")).toBeNull();
+    expect(
+      (screen.getByRole("textbox", { name: "Message the group" }) as HTMLTextAreaElement).value,
+    ).toBe("");
+  });
+
+  it("explicitly resumes an interrupted task as a new user request", async () => {
+    pages = [
+      [
+        message("interrupted", {
+          authorKind: "agent",
+          authorSessionId: "s-lead",
+          body: "Saved progress",
+          status: "interrupted",
+          error: "App restarted",
+        }),
+      ],
+    ];
+    renderRoom();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Resume task" }));
+    expect(group.postMessage).toHaveBeenCalledWith({
+      groupId: "g-1",
+      body: "Resume this task.",
+      replyToMessageId: "interrupted",
+    });
+    expect(screen.getByText("Interrupted")).toBeTruthy();
+    expect(screen.getByText("Saved progress")).toBeTruthy();
+  });
+
   it("shows the header (name, Project badge, Agents control) and the empty state", async () => {
     renderRoom();
     expect(await screen.findByText(GROUP_ROOM_EMPTY_TEXT)).toBeTruthy();
@@ -384,6 +443,7 @@ describe("GroupRoom", () => {
     emit({ type: "group.message", groupId: "g-1", message: live });
     emit({ type: "group.message", groupId: "g-1", message: newest[3] as GroupMessage });
     emit({ type: "group.message", groupId: "g-other", message: message("901") });
+    await vi.waitFor(() => expect(screen.getAllByTestId("group-message")).toHaveLength(61));
     const rows = screen.getAllByTestId("group-message");
     expect(rows).toHaveLength(61);
     expect(rows.at(-1)?.textContent).toContain("live one");
@@ -402,6 +462,7 @@ describe("GroupRoom", () => {
     const left = message("3", { authorKind: "system", kind: "status", body: "Cy left the group" });
     emit({ type: "group.message", groupId: "g-1", message: joined });
     emit({ type: "group.message", groupId: "g-1", message: left });
+    await vi.waitFor(() => expect(screen.getAllByTestId("group-message")).toHaveLength(3));
     const rows = screen.getAllByTestId("group-message");
     expect(rows.map((row) => row.textContent)).toEqual([
       "YYouHumanhello",
@@ -447,10 +508,10 @@ describe("GroupRoom", () => {
     expect(onOpenAgentChat).toHaveBeenCalledWith("agent-s-rev-1");
   });
 
-  it("shows Stop only while a member runs, and stops the group", async () => {
+  it("keeps Stop available while a member waits or runs, and stops the group", async () => {
     const user = userEvent.setup();
     const view = renderRoom(states({ waitingSessionIds: ["s-lead"] }));
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
     view.rerender(
       <GroupRoom
         group={GROUP}
@@ -503,6 +564,12 @@ describe("GroupRoom", () => {
     renderRoom();
     expect((await screen.findByTestId("group-update-banner")).textContent).toContain(
       "Paused while Modus updates",
+    );
+    expect(screen.getByTestId("group-update-banner").textContent).toContain(
+      "Pending tasks resume after restart",
+    );
+    expect(screen.getByTestId("group-update-banner").textContent).toContain(
+      "Interrupted runs stay visible",
     );
     await user.type(screen.getByRole("textbox", { name: "Message the group" }), "later{Enter}");
     expect(group.postMessage).toHaveBeenCalledWith({ groupId: "g-1", body: "later" });
