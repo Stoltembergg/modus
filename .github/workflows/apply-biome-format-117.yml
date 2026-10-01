@@ -32,11 +32,13 @@ jobs:
               path.parent.mkdir(parents=True, exist_ok=True)
               path.write_bytes(raw)
               print('wrote', entry['target'], len(raw), digest)
+          # remove staging
           shutil.rmtree(root)
           wf = pathlib.Path('.github/workflows/apply-biome-format-117.yml')
           if wf.exists():
               wf.unlink()
           subprocess.check_call(['git', 'add', '-A'])
+          # only commit if there are staged changes beyond empty
           st = subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()
           print('status', st)
           if not st:
