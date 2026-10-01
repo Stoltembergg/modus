@@ -1,173 +1,146 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgentEventItem } from "../../../../shared/agent-events";
 import type { AgentEvent, GroupMemberStates } from "../../../../shared/contracts";
-import { GroupWorkingStatus, type WorkingMemberAvatar } from "./GroupWorkingStatus";
-import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
-const members = [{ sessionId: "s-lead", title: "Planner" }];
-const labels = memberLabels(members);
-const avatars = new Map<string, WorkingMemberAvatar>([
-  [
-    "s-lead",
-    { agentId: "a-lead", face: "happy", color: "violet", shape: "circle", archived: false },
-  ],
-]);
-
-function states(entry: Partial<GroupMemberStates>): GroupMemberStatesById {
-  return new Map([
-    [
-      "g-1",
-      {
-        groupId: "g-1",
-        runningSessionIds: [],
-        queuedSessionIds: [],
-        waitingSessionIds: [],
-        ...entry,
-      },
-    ],
-  ]);
+function states(runningSessionIds: string[], groupId = "g-1"): GroupMemberStatesById {
+  const entry: GroupMemberStates = {
+    groupId,
+    runningSessionIds,
+    queuedSessionIds: [],
+    waitingSessionIds: [],
+  };
+  return new Map([[groupId, entry]]);
 }
-
-let agentListeners: Array<(event: AgentEvent) => void>;
-let resolveListEvents: ((value: unknown[]) => void) | undefined;
-
-function Harness({ memberStates }: { memberStates: GroupMemberStatesById }) {
-  const rows = useGroupMemberWorking("g-1", memberStates);
-  return (
-    <GroupWorkingStatus
-      avatars={avatars}
-      groupId="g-1"
-      labels={labels}
-      members={members}
-      rows={rows}
-    />
-  );
+function start(runId: string, sessionId = "s"): AgentEvent {
+  return { type: "run.started", sessionId, runId, delivery: "normal" };
 }
-
+function delta(text: string, messageId = "m", sessionId = "s"): AgentEvent {
+  return { type: "message.delta", sessionId, messageId, delta: text };
+}
+function item(event: AgentEvent, cursor: number): AgentEventItem {
+  return {
+    id: String(cursor),
+    event: { ...event, eventCursor: cursor } as AgentEvent,
+    createdAt: "2026-10-01T00:00:00.000Z",
+  };
+}
+let listeners: Set<(event: AgentEvent) => void>;
+let seeds: Map<string, (items: AgentEventItem[]) => void>;
+function emit(event: AgentEvent, eventCursor?: number) {
+  for (const listener of listeners)
+    listener({ ...event, ...(eventCursor === undefined ? {} : { eventCursor }) } as AgentEvent);
+}
+async function seed(sessionId: string, items: AgentEventItem[]) {
+  await act(async () => {
+    seeds.get(sessionId)?.(items);
+    await Promise.resolve();
+  });
+}
 beforeEach(() => {
-  agentListeners = [];
-  resolveListEvents = undefined;
+  listeners = new Set();
+  seeds = new Map();
   Object.assign(window, {
     modus: {
       agent: {
         listEvents: vi.fn(
-          () =>
-            new Promise((resolve) => {
-              resolveListEvents = resolve as (value: unknown[]) => void;
-            }),
+          (id: string) => new Promise<AgentEventItem[]>((resolve) => seeds.set(id, resolve)),
         ),
         onEvent: vi.fn((listener: (event: AgentEvent) => void) => {
-          agentListeners.push(listener);
-          return () => {
-            agentListeners = agentListeners.filter((item) => item !== listener);
-          };
+          listeners.add(listener);
+          return () => listeners.delete(listener);
         }),
       },
     },
   });
 });
+afterEach(cleanup);
 
-afterEach(() => cleanup());
-
-describe("preferRicherLiveEvents", () => {
-  it("keeps the live buffer when it has more assistant stream bytes than the seed", async () => {
-    const { preferRicherLiveEvents } = await import("./useGroupMemberWorking");
-    const seeded = [
-      {
-        event: {
-          type: "message.started" as const,
-          sessionId: "s",
-          messageId: "m",
-          role: "assistant" as const,
-        },
-      },
-    ];
-    const live = [
-      ...seeded,
-      {
-        event: {
-          type: "message.delta" as const,
-          sessionId: "s",
-          messageId: "m",
-          delta: "streaming now",
-        },
-      },
-    ];
-    expect(preferRicherLiveEvents(seeded, live)).toEqual(live);
-    expect(preferRicherLiveEvents(live, seeded)).toEqual(live);
+describe("useGroupMemberWorking hydration", () => {
+  it("merges the seed prefix with a live suffix even when the suffix is longer", async () => {
+    const hook = renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
+    act(() => emit(delta("defghi"), 3));
+    await seed("s", [item(start("r"), 1), item(delta("abc"), 2)]);
+    await waitFor(() => expect(hook.result.current[0]?.live.streamText).toBe("abcdefghi"));
   });
-});
-
-describe("useGroupMemberWorking live stream seed", () => {
-  it("keeps in-flight message.delta text when a slow listEvents snapshot arrives empty", async () => {
-    render(<Harness memberStates={states({ runningSessionIds: ["s-lead"] })} />);
-    expect(window.modus.agent.listEvents).toHaveBeenCalled();
-
+  it("does not let a larger previous run wipe the active run", async () => {
+    const hook = renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
     act(() => {
-      for (const listener of agentListeners) {
-        listener({
-          type: "message.started",
-          sessionId: "s-lead",
-          messageId: "m-a",
-          role: "assistant",
-        });
-        listener({
-          type: "message.delta",
-          sessionId: "s-lead",
-          messageId: "m-a",
-          delta: "Live bubble text while seed is pending",
-        });
-      }
+      emit(start("new"), 3);
+      emit(delta("new answer", "new-m"), 4);
     });
-
-    expect(await screen.findByTestId("group-live-writing")).toBeTruthy();
-    expect(screen.getByTestId("group-live-writing").textContent).toContain("Live bubble text");
-
-    // Stale seed: DB snapshot taken before deltas were durable / returned empty.
-    await act(async () => {
-      resolveListEvents?.([]);
-      await Promise.resolve();
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("group-live-writing").textContent).toContain("Live bubble text");
-    });
-    expect(screen.queryByTestId("group-live-status")).toBeNull();
-    expect(screen.getByTestId("group-member-working").dataset.streaming).toBe("true");
+    await seed("s", [
+      item(start("old"), 1),
+      item(delta("x".repeat(100), "old-m"), 2),
+      item(start("new"), 3),
+    ]);
+    await waitFor(() => expect(hook.result.current[0]?.live.streamText).toBe("new answer"));
   });
-
-  it("grows the Message-card body as subsequent deltas arrive after seed", async () => {
-    render(<Harness memberStates={states({ runningSessionIds: ["s-lead"] })} />);
+  it("applies overlapping live chunks only once using the durable cursor", async () => {
+    const hook = renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
+    act(() => {
+      emit(delta("abc"), 2);
+      emit(delta("abc"), 3);
+    });
+    await seed("s", [item(start("r"), 1), item(delta("abc"), 2)]);
+    await waitFor(() => expect(hook.result.current[0]?.live.streamText).toBe("abcabc"));
+  });
+  it("keeps an existing member subscribed when another member starts", async () => {
+    const hook = renderHook(({ ids }) => useGroupMemberWorking("g-1", states(ids)), {
+      initialProps: { ids: ["s"] },
+    });
+    await seed("s", [item(start("r"), 1), item(delta("prefix"), 2)]);
+    hook.rerender({ ids: ["s", "other"] });
+    act(() => emit(delta(" suffix"), 3));
+    await waitFor(() =>
+      expect(hook.result.current.find((row) => row.sessionId === "s")?.live.streamText).toBe(
+        "prefix suffix",
+      ),
+    );
+    expect(window.modus.agent.listEvents).toHaveBeenCalledTimes(2);
+    expect(window.modus.agent.onEvent).toHaveBeenCalledTimes(1);
+  });
+  it("batches a burst of deltas into one frame publication", async () => {
+    let renders = 0;
+    const hook = renderHook(() => {
+      renders++;
+      return useGroupMemberWorking("g-1", states(["s"]));
+    });
+    await seed("s", [item(start("r"), 1)]);
+    const before = renders;
+    for (let i = 0; i < 20; i++) act(() => emit(delta("x"), i + 2));
+    await waitFor(() => expect(hook.result.current[0]?.live.streamText).toBe("x".repeat(20)));
+    expect(renders - before).toBe(1);
+  });
+  it("ignores a seed from a room that was left", async () => {
+    const hook = renderHook(({ id }) => useGroupMemberWorking(id, states([id], id)), {
+      initialProps: { id: "A" },
+    });
+    const resolveA = seeds.get("A");
+    hook.rerender({ id: "B" });
+    await seed("B", [item(start("b", "B"), 1), item(delta("room B", "b-m", "B"), 2)]);
     await act(async () => {
-      resolveListEvents?.([]);
-      await Promise.resolve();
+      resolveA?.([item(delta("room A", "a-m", "A"), 3)]);
     });
-
+    expect(hook.result.current.map((row) => [row.sessionId, row.live.streamText])).toEqual([
+      ["B", "room B"],
+    ]);
+  });
+  it("refreshes a stalled seed before its live buffer grows without bound", async () => {
+    const hook = renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
+    const firstSeed = seeds.get("s");
     act(() => {
-      for (const listener of agentListeners) {
-        listener({
-          type: "message.delta",
-          sessionId: "s-lead",
-          messageId: "m-a",
-          delta: "Hello",
-        });
-      }
+      emit(start("r"), 1);
+      for (let i = 0; i < 600; i++) emit(delta("x"), i + 2);
     });
-    expect((await screen.findByTestId("group-live-writing")).textContent).toContain("Hello");
-
-    act(() => {
-      for (const listener of agentListeners) {
-        listener({
-          type: "message.delta",
-          sessionId: "s-lead",
-          messageId: "m-a",
-          delta: " world",
-        });
-      }
+    expect(window.modus.agent.listEvents).toHaveBeenCalledTimes(2);
+    await seed("s", [item(start("r"), 1), item(delta("x".repeat(512)), 513)]);
+    await act(async () => {
+      firstSeed?.([item(start("r"), 1)]);
     });
-    expect(screen.getByTestId("group-live-writing").textContent).toContain("Hello world");
+    await waitFor(() => expect(hook.result.current[0]?.live.streamText).toBe("x".repeat(600)));
   });
 });

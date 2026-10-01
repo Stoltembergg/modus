@@ -14,7 +14,7 @@ export type GroupLiveToolLine = {
   done: boolean;
 };
 
-/** In-transcript live snapshot for one running/queued group member (not persisted). */
+/** Activity snapshot for one running/queued member; public transcript is persisted separately. */
 export type GroupLiveTurnSnapshot = {
   phase: GroupMemberWorkingPhase;
   /** Latest thinking text (truncated for Activity). */
@@ -22,8 +22,8 @@ export type GroupLiveTurnSnapshot = {
   /** Recent tools (oldest → newest; capped) — Activity detail; room shows phase. */
   tools: readonly GroupLiveToolLine[];
   /**
-   * Full assistant text accumulated from `message.delta` for the definitive
-   * in-flight GroupMessageRow. Not a truncated preview strip.
+   * Latest assistant message preview, scoped by messageId.
+   * Activity only; canonical GroupMessage records own the conversation cards.
    */
   streamText: string;
   /** @deprecated Alias of `streamText` for older call sites. */
@@ -59,14 +59,26 @@ function toolLabel(name: string): string {
 
 /**
  * Fold agent events into a compact live turn for the group room.
- * `message.delta` appends into `streamText` for the definitive in-flight row.
+ * `message.delta` updates the latest public message preview by identity.
  * Thinking / tools are ephemeral: cleared on terminal run events.
  */
 export function buildGroupLiveTurn(
   events: readonly { event: AgentEvent; createdAt?: string }[],
   mode: "running" | "queued",
 ): GroupLiveTurnSnapshot {
-  const presence = buildGroupSemanticPresence(events, mode);
+  const roles = new Map<string, "assistant" | "user">();
+  for (const { event } of events) {
+    if (event.type === "message.started") roles.set(event.messageId, event.role);
+  }
+  const publicEvents = events.filter(
+    ({ event }) =>
+      !(
+        "messageId" in event &&
+        event.type.startsWith("message.") &&
+        roles.get(event.messageId) === "user"
+      ),
+  );
+  const presence = buildGroupSemanticPresence(publicEvents, mode);
   if (mode === "queued") {
     return {
       phase: presence.label,
@@ -81,13 +93,14 @@ export function buildGroupLiveTurn(
   }
 
   let thought = "";
-  let writing = "";
+  const writingById = new Map<string, string>();
+  let writingMessageId: string | undefined;
   const tools = new Map<string, GroupLiveToolLine>();
   let lastEventAt = presence.lastProgressAt > 0 ? presence.lastProgressAt : 0;
   let collapsed = false;
   let terminalPhase: GroupMemberWorkingPhase | undefined;
 
-  for (const item of events) {
+  for (const item of publicEvents) {
     const { event } = item;
     if (item.createdAt) {
       const ms = Date.parse(item.createdAt);
@@ -102,8 +115,15 @@ export function buildGroupLiveTurn(
         break;
       case "thinking.completed":
         break;
+      case "message.started":
+        if (event.role === "assistant") {
+          writingMessageId = event.messageId;
+          if (!writingById.has(event.messageId)) writingById.set(event.messageId, "");
+        }
+        break;
       case "message.delta":
-        writing += event.delta;
+        if (!writingById.has(event.messageId)) writingMessageId = event.messageId;
+        writingById.set(event.messageId, (writingById.get(event.messageId) ?? "") + event.delta);
         // Streaming the definitive message — drop finished tools from the room strip.
         for (const [id, tool] of [...tools]) {
           if (tool.done) tools.delete(id);
@@ -125,7 +145,8 @@ export function buildGroupLiveTurn(
       }
       case "run.started":
         thought = "";
-        writing = "";
+        writingById.clear();
+        writingMessageId = undefined;
         tools.clear();
         collapsed = false;
         terminalPhase = undefined;
@@ -155,7 +176,11 @@ export function buildGroupLiveTurn(
   const phase = terminalPhase ?? presence.label;
   const toolList = [...tools.values()];
   const recentTools = toolList.length > TOOLS_MAX ? toolList.slice(-TOOLS_MAX) : toolList;
-  const streamText = truncate(writing, STREAM_TEXT_MAX, false);
+  const streamText = truncate(
+    writingMessageId ? (writingById.get(writingMessageId) ?? "") : "",
+    STREAM_TEXT_MAX,
+    false,
+  );
 
   if (collapsed) {
     return {

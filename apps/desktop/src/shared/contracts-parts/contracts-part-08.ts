@@ -216,6 +216,16 @@ export type GroupMessageContextItem =
   | { type: "file"; path: string; range?: { fromLine?: number; toLine?: number } }
   | { type: "folder"; path: string };
 
+export type GroupMessageStatus =
+  | "queued"
+  | "running"
+  | "writing"
+  | "awaiting_user"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "interrupted";
+
 export type GroupMessage = {
   id: string;
   groupId: string;
@@ -235,6 +245,16 @@ export type GroupMessage = {
   /** Path-backed context items available to woken agents. */
   contextItems?: GroupMessageContextItem[];
   createdAt: string;
+  /** Stable execution identity, shared by distinct public messages of a turn. */
+  turnId?: string;
+  runId?: string;
+  sdkMessageId?: string;
+  /** Server-assigned order. Updates never move a message in the conversation. */
+  sequence?: number;
+  status?: GroupMessageStatus;
+  /** Monotonic revision timestamp for idempotent snapshot/live upserts. */
+  updatedAt?: string;
+  error?: string;
 };
 
 /** Message pagination cursor: the (createdAt, id) total order of group messages. */

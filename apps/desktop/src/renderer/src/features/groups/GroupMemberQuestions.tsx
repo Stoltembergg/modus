@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import type { AgentEventItem } from "../../../../shared/agent-events";
-import type { AgentEvent, QuestionAnswer, QuestionRequest } from "../../../../shared/contracts";
+import { useMemo } from "react";
+import type { QuestionAnswer, QuestionRequest } from "../../../../shared/contracts";
 import { latestPendingQuestionRequest } from "../agent/questionRequests";
 import { QuestionsCard } from "../plan/QuestionsCard";
+import { useGroupAgentEvents } from "./groupAgentEvents";
 import { type MemberLabel, memberLabelText } from "./memberLabels";
 
 /**
@@ -13,56 +13,7 @@ import { type MemberLabel, memberLabelText } from "./memberLabels";
 export function useGroupMemberQuestions(
   waitingSessionIds: readonly string[],
 ): Map<string, QuestionRequest> {
-  const [eventsBySession, setEventsBySession] = useState<
-    ReadonlyMap<string, Array<{ event: AgentEvent }>>
-  >(() => new Map());
-  const waitingKey = waitingSessionIds.slice().sort().join("|");
-
-  useEffect(() => {
-    const ids = waitingKey ? waitingKey.split("|") : [];
-    if (ids.length === 0) {
-      setEventsBySession(new Map());
-      return;
-    }
-    let cancelled = false;
-
-    const agent = window.modus.agent;
-    if (!agent?.listEvents || !agent.onEvent) {
-      setEventsBySession(new Map());
-      return;
-    }
-
-    void Promise.all(
-      ids.map(async (sessionId) => {
-        try {
-          const items = (await agent.listEvents(sessionId)) as AgentEventItem[];
-          const events: Array<{ event: AgentEvent }> = items.map((item) => ({ event: item.event }));
-          return [sessionId, events] as const;
-        } catch {
-          const empty: Array<{ event: AgentEvent }> = [];
-          return [sessionId, empty] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!cancelled) setEventsBySession(new Map(entries));
-    });
-
-    const unsubscribe = agent.onEvent((event: AgentEvent) => {
-      if (event.type !== "question.requested" && event.type !== "question.resolved") return;
-      if (!ids.includes(event.sessionId)) return;
-      setEventsBySession((current) => {
-        const next = new Map(current);
-        const list = next.get(event.sessionId) ?? [];
-        next.set(event.sessionId, [...list, { event }]);
-        return next;
-      });
-    });
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [waitingKey]);
+  const eventsBySession = useGroupAgentEvents("group-questions", waitingSessionIds, "questions");
 
   return useMemo(() => {
     const pending = new Map<string, QuestionRequest>();

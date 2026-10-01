@@ -430,7 +430,7 @@ export function migrateDatabase(db: DatabaseSync): void {
       id text primary key,
       name text not null,
       workspace_id text references workspaces(id) on delete cascade,
-      mode text not null default 'free' check (mode in ('free','coordinator')),
+      mode text not null default 'coordinator' check (mode in ('free','coordinator')),
       lead_session_id text references agent_sessions(id) on delete set null,
       created_at text not null,
       updated_at text not null
@@ -505,6 +505,48 @@ export function migrateDatabase(db: DatabaseSync): void {
   // Group room Prompt Kit file upload: image + context payloads on user messages.
   addColumn(db, "group_messages", "attachments_json", "text");
   addColumn(db, "group_messages", "context_items_json", "text");
+
+  for (const [column, type] of [
+    ["turn_id", "text"],
+    ["run_id", "text"],
+    ["sdk_message_id", "text"],
+    ["sequence", "integer"],
+    ["status", "text"],
+    ["updated_at", "text"],
+    ["error", "text"],
+  ] as const)
+    addColumn(db, "group_messages", column, type);
+  db.exec(`
+    with ordered as (
+      select id, row_number() over (partition by group_id order by created_at, id) as position
+      from group_messages
+    )
+    update group_messages set sequence = (select position from ordered where ordered.id = group_messages.id)
+    where sequence is null;
+    create unique index if not exists idx_group_messages_sequence on group_messages(group_id, sequence);
+    create index if not exists idx_group_messages_turn on group_messages(turn_id);
+    create table if not exists group_execution_chains (
+      id text primary key references group_messages(id) on delete cascade,
+      group_id text not null references agent_groups(id) on delete cascade,
+      state_json text not null,
+      updated_at text not null
+    );
+    create table if not exists group_jobs (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      session_id text not null references agent_sessions(id) on delete cascade,
+      chain_id text not null references group_execution_chains(id) on delete cascade,
+      trigger_message_id text not null references group_messages(id) on delete cascade,
+      message_id text not null references group_messages(id) on delete cascade,
+      seq integer not null,
+      prompt text not null,
+      status text not null check (status in ('pending','running','awaiting_user','completed','failed','cancelled','interrupted')),
+      error text,
+      created_at text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_group_jobs_pending on group_jobs(status, seq);
+  `);
 }
 
 /**

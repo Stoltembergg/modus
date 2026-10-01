@@ -36,7 +36,6 @@ import {
 import { projectSetupEventToSnapshot } from "./GroupProjectContextChip";
 import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
-import { GroupWorkingShimmer } from "./GroupWorkingShimmer";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { replyPreview } from "./groupThreads";
@@ -88,7 +87,12 @@ export type GroupRoomProps = {
 export type RoomAvatar = WorkingMemberAvatar;
 
 /** The group room (main panel): chrome header, message list, and composer. */
-export function GroupRoom({
+export function GroupRoom(props: GroupRoomProps) {
+  // A room owns its reply, composer, questions and scroll lifetime.
+  return <GroupRoomContent key={props.group.id} {...props} />;
+}
+
+function GroupRoomContent({
   group,
   workspaces,
   models = [],
@@ -153,6 +157,8 @@ export function GroupRoom({
     const entry = memberStates.get(group.id);
     return deriveGroupCollabStage(messages, {
       runningSessionIds: entry?.runningSessionIds ?? [],
+      queuedSessionIds: entry?.queuedSessionIds ?? [],
+      waitingSessionIds: entry?.waitingSessionIds ?? [],
       titleToSessionId,
     });
   }, [messages, memberStates, group.id, titleToSessionId]);
@@ -259,6 +265,13 @@ export function GroupRoom({
           onReply={(message) =>
             setReplyTo({ messageId: message.id, preview: replyPreview(message.body) })
           }
+          onRetry={async (message) => {
+            await window.modus.group.postMessage({
+              groupId: group.id,
+              body: "Resume this task.",
+              replyToMessageId: message.id,
+            });
+          }}
           roles={roles}
           workingRows={workingRows}
         />
@@ -268,29 +281,25 @@ export function GroupRoom({
             reason={blocked}
           />
         ) : (
-          <>
-            <GroupWorkingShimmer labels={labels} rows={workingRows} />
-            <GroupComposer
-              members={members}
-              onClearReply={() => setReplyTo(undefined)}
-              onSeedConsumed={() => setComposerSeed(undefined)}
-              onSend={async (payload) => {
-                await window.modus.group.postMessage({
-                  groupId: group.id,
-                  body: payload.body,
-                  ...(payload.replyToMessageId
-                    ? { replyToMessageId: payload.replyToMessageId }
-                    : {}),
-                  ...(payload.attachments ? { attachments: payload.attachments } : {}),
-                  ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
-                });
-              }}
-              replyTo={replyTo}
-              seed={composerSeed}
-              showKickoff={loaded && messages.length === 0 && !replyTo}
-              updatePending={updatePending}
-            />
-          </>
+          <GroupComposer
+            groupId={group.id}
+            members={members}
+            onClearReply={() => setReplyTo(undefined)}
+            onSeedConsumed={() => setComposerSeed(undefined)}
+            onSend={async (payload) => {
+              await window.modus.group.postMessage({
+                groupId: group.id,
+                body: payload.body,
+                ...(payload.replyToMessageId ? { replyToMessageId: payload.replyToMessageId } : {}),
+                ...(payload.attachments ? { attachments: payload.attachments } : {}),
+                ...(payload.contextItems ? { contextItems: payload.contextItems } : {}),
+              });
+            }}
+            replyTo={replyTo}
+            seed={composerSeed}
+            showKickoff={loaded && messages.length === 0 && !replyTo}
+            updatePending={updatePending}
+          />
         )}
       </div>
       {activityOpen ? (

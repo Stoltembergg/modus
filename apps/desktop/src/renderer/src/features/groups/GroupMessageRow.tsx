@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
@@ -21,11 +22,12 @@ import {
   stripAgentSelfIntro,
 } from "../../../../shared/group-room-transcript";
 import { cn } from "../../lib/cn";
+import { formatClock } from "../../lib/formatClock";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
-import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
+import { replyPreview } from "./groupThreads";
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import type { MemberLabel } from "./memberLabels";
@@ -218,6 +220,86 @@ function MessageAttachments({ message }: { message: GroupMessage }) {
   );
 }
 
+function MessageMeta({ message }: { message: GroupMessage }) {
+  const status = message.status;
+  const label = status
+    ? {
+        queued: "Queued",
+        running: "Working",
+        writing: "Writing",
+        awaiting_user: "Waiting for you",
+        completed: "Completed",
+        failed: "Failed",
+        cancelled: "Cancelled",
+        interrupted: "Interrupted",
+      }[status]
+    : undefined;
+  const warning = status === "failed" || status === "interrupted";
+  return (
+    <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+      <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
+        {formatClock(Date.parse(message.createdAt))}
+      </time>
+      {label ? (
+        <span
+          className={
+            warning ? "text-danger" : status === "awaiting_user" ? "text-amber-400" : undefined
+          }
+          data-testid="group-message-status"
+        >
+          {label}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function ReplyQuote({
+  message,
+  replyToMessage,
+  labels,
+}: {
+  message: GroupMessage;
+  replyToMessage: GroupMessage | undefined;
+  labels: ReadonlyMap<string, MemberLabel>;
+}) {
+  if (!message.replyToMessageId) return null;
+  const author =
+    replyToMessage?.authorKind === "user"
+      ? "You"
+      : replyToMessage?.authorSessionId
+        ? (labels.get(replyToMessage.authorSessionId)?.title ?? "Member")
+        : "Message";
+  return (
+    <blockquote
+      className="rounded-md bg-canvas/60 px-2.5 py-1.5 text-2xs text-fg-subtle"
+      data-testid="group-message-quote"
+    >
+      <a
+        className="block truncate font-medium text-fg-muted hover:text-fg"
+        href={`#group-message-${message.replyToMessageId}`}
+      >
+        Replying to {author}
+      </a>
+      <span className="block break-words">
+        {replyToMessage ? replyPreview(replyToMessage.body, 96) || "Attachment" : "Earlier message"}
+      </span>
+    </blockquote>
+  );
+}
+
+function MessageError({ message }: { message: GroupMessage }) {
+  if (!message.error?.trim()) return null;
+  return (
+    <div
+      className="break-words rounded-md bg-danger/10 px-2 py-1.5 text-xs text-danger"
+      data-testid="group-message-error"
+    >
+      {message.error}
+    </div>
+  );
+}
+
 export function GroupMessageRow({
   avatar,
   message,
@@ -227,29 +309,50 @@ export function GroupMessageRow({
   onOpenFile,
   onHandoffClick,
   onReply,
+  onRetry,
   role,
   activeWaitingSessionIds,
-  liveTurn,
-  streaming,
+  replyToMessage,
 }: {
   message: GroupMessage;
+  replyToMessage?: GroupMessage | undefined;
   members: readonly MentionMember[];
   labels: ReadonlyMap<string, MemberLabel>;
   cwd?: string | undefined;
   onOpenFile?: ((path: string) => void) | undefined;
   onHandoffClick?: ((targetName: string) => void) | undefined;
   onReply?: ((message: GroupMessage) => void) | undefined;
+  onRetry?: ((message: GroupMessage) => Promise<void>) | undefined;
   /** The author's avatar (a current member); a former member keeps the initial badge. */
   avatar?: WorkingMemberAvatar | undefined;
   /** Discreet role under the name (agent role or "You"). */
   role?: string | undefined;
   /** Members with a live pending ask_user / approval (amber Waiting only for these). */
   activeWaitingSessionIds?: ReadonlySet<string> | readonly string[];
-  /** In-flight live turn: status yields to streamed body on this definitive row. */
+  /** @deprecated Auxiliary snapshots are ignored; canonical messages own public text. */
   liveTurn?: { mode: "running" | "queued"; live: GroupLiveTurnSnapshot } | undefined;
-  /** True while this row is the in-flight stream (not yet persist-reconciled). */
+  /** @deprecated Use the canonical message status to mark writing. */
   streaming?: boolean | undefined;
 }) {
+  const [retrying, setRetrying] = useState(false);
+  const [retryError, setRetryError] = useState<string | undefined>();
+  async function retry(): Promise<void> {
+    if (!onRetry || retrying) return;
+    setRetrying(true);
+    setRetryError(undefined);
+    try {
+      await onRetry(message);
+    } catch (cause) {
+      setRetryError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setRetrying(false);
+    }
+  }
+  const canRetry =
+    onRetry &&
+    (message.status === "failed" ||
+      message.status === "cancelled" ||
+      message.status === "interrupted");
   const author: MemberLabel | undefined = message.authorSessionId
     ? (labels.get(message.authorSessionId) ?? { title: message.authorSessionId })
     : undefined;
@@ -316,8 +419,16 @@ export function GroupMessageRow({
   }
   if (message.authorKind === "user") {
     return (
-      <div className="group/msg flex flex-col gap-0.5" data-tone="normal">
-        <PromptMessage data-kind="user" data-testid="group-message">
+      <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
+        <PromptMessage
+          className="flex-row-reverse border-accent/20 bg-accent/10"
+          data-align="right"
+          data-kind="user"
+          data-message-id={message.id}
+          data-status={message.status}
+          data-testid="group-message"
+          id={`group-message-${message.id}`}
+        >
           <span
             aria-hidden
             className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-fg-muted text-2xs"
@@ -326,19 +437,25 @@ export function GroupMessageRow({
             Y
           </span>
           <PromptMessageBody>
-            <PromptMessageIdentity name="You" role={role?.trim() || "Human"} />
+            <PromptMessageIdentity
+              name="You"
+              role={role?.trim() || "Human"}
+              trailing={<MessageMeta message={message} />}
+            />
+            <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
             {message.body.trim() ? (
               <div className="whitespace-pre-wrap text-fg text-sm leading-relaxed">
                 <MentionText members={members} text={message.body} />
               </div>
             ) : null}
             <MessageAttachments message={message} />
+            <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
         {onReply ? (
           <button
-            aria-label="Reply in thread"
-            className="ml-7 self-start text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
+            aria-label="Reply to message"
+            className="mr-3 self-end text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
             data-testid="group-message-reply"
             onClick={() => onReply(message)}
             type="button"
@@ -352,32 +469,36 @@ export function GroupMessageRow({
   const sessionId = message.authorSessionId ?? "";
   const label = author ?? { title: "Member" };
   const title = label.title;
-  const streamBody = liveTurn ? liveTurn.live.streamText : message.body;
-  const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(streamBody);
+  const writing = message.status === "writing";
+  const { prose: rawProse, statuses: rawStatuses } = splitRoomMessageBody(message.body);
   const prose = stripAgentSelfIntro(rawProse);
   const statuses = rawStatuses.filter(shouldPersistCollabStatusInTranscript);
   const readyOnly =
     !prose.trim() && rawStatuses.some((status) => status.kind === "ready") && statuses.length === 0;
-  const showLiveStatus = Boolean(
-    liveTurn && !prose.trim() && !readyOnly && !liveTurn.live.collapsed,
-  );
   // Hide Planner→peer handoff dumps that have no user-facing prose.
   if (
-    !streaming &&
-    !liveTurn &&
+    !writing &&
+    !message.status &&
     !readyOnly &&
     isOrchestrationOnlyRoomMessage({ kind: message.kind, body: message.body })
   ) {
     return null;
   }
-  const sources = !streaming && !liveTurn ? extractUsefulSources(prose) : [];
+  const sources = !writing ? extractUsefulSources(prose) : [];
   return (
     <div
-      className="group/msg flex flex-col gap-0.5"
-      data-streaming={streaming || undefined}
+      className="group/msg flex w-full flex-col items-start gap-0.5"
+      data-streaming={writing || undefined}
       data-to={message.toSessionId || undefined}
     >
-      <PromptMessage data-kind="member" data-testid="group-message">
+      <PromptMessage
+        data-align="left"
+        data-kind="member"
+        data-message-id={message.id}
+        data-status={message.status}
+        data-testid="group-message"
+        id={`group-message-${message.id}`}
+      >
         {avatar ? (
           <AgentAvatar
             animated={false}
@@ -401,7 +522,7 @@ export function GroupMessageRow({
         <PromptMessageBody>
           <PromptMessageIdentity
             name={<MemberName label={label} />}
-            role={role?.trim()}
+            role={role?.trim() || "Agent"}
             trailing={
               <>
                 {toLabel ? (
@@ -409,6 +530,7 @@ export function GroupMessageRow({
                     → <MemberName label={toLabel} />
                   </span>
                 ) : null}
+                <MessageMeta message={message} />
                 {readyOnly ? (
                   <span
                     className="font-normal text-amber-400/90 text-2xs"
@@ -420,15 +542,13 @@ export function GroupMessageRow({
               </>
             }
           />
-          {showLiveStatus && liveTurn ? (
-            <GroupMemberLiveTurn live={liveTurn.live} mode={liveTurn.mode} />
-          ) : null}
+          <ReplyQuote labels={labels} message={message} replyToMessage={replyToMessage} />
           {prose ? (
             <div
               className="text-fg text-sm leading-relaxed"
-              data-testid={streaming ? "group-live-writing" : undefined}
+              data-testid={writing ? "group-live-writing" : undefined}
             >
-              {streaming ? (
+              {writing ? (
                 <p className="whitespace-pre-wrap">{prose}</p>
               ) : (
                 <MarkdownMessage
@@ -446,6 +566,23 @@ export function GroupMessageRow({
               ))}
             </div>
           ) : null}
+          <MessageAttachments message={message} />
+          <MessageError message={message} />
+          {canRetry ? (
+            <button
+              className="rounded-md border border-hairline bg-canvas px-2 py-1 text-xs text-fg-muted hover:bg-hover disabled:opacity-50"
+              disabled={retrying}
+              onClick={() => void retry()}
+              type="button"
+            >
+              {retrying ? "Sending…" : message.status === "failed" ? "Retry task" : "Resume task"}
+            </button>
+          ) : null}
+          {retryError ? (
+            <div className="text-xs text-danger" role="alert">
+              {retryError}
+            </div>
+          ) : null}
           {statuses.map((status, index) => (
             <CollabStatusLine
               // biome-ignore lint/suspicious/noArrayIndexKey: trailing status lines are positional
@@ -457,9 +594,9 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-      {onReply && !streaming ? (
+      {onReply && !writing ? (
         <button
-          aria-label="Reply in thread"
+          aria-label="Reply to message"
           className="ml-8 self-start text-2xs text-fg-faint opacity-0 transition-opacity hover:text-fg-muted group-hover/msg:opacity-100 focus:opacity-100"
           data-testid="group-message-reply"
           onClick={() => onReply(message)}

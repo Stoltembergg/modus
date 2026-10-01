@@ -63,13 +63,16 @@ function foldInto<T extends AgentEventItem>(previous: T, next: T): T {
   const withEnd = (item: T): T =>
     next.createdAt !== undefined ? ({ ...item, updatedAt: next.createdAt } as T) : item;
   if (prev.type === "message.delta" && cur.type === "message.delta") {
-    return withEnd({ ...previous, event: { ...prev, delta: prev.delta + cur.delta } } as T);
+    return withEnd({ ...previous, event: { ...prev, ...cur, delta: prev.delta + cur.delta } } as T);
   }
   if (prev.type === "thinking.delta" && cur.type === "thinking.delta") {
-    return withEnd({ ...previous, event: { ...prev, delta: prev.delta + cur.delta } } as T);
+    return withEnd({ ...previous, event: { ...prev, ...cur, delta: prev.delta + cur.delta } } as T);
   }
   if (prev.type === "tool.output" && cur.type === "tool.output") {
-    return withEnd({ ...previous, event: { ...prev, output: prev.output + cur.output } } as T);
+    return withEnd({
+      ...previous,
+      event: { ...prev, ...cur, output: prev.output + cur.output },
+    } as T);
   }
   return next;
 }

@@ -7,46 +7,11 @@ export type GroupThread = {
 };
 
 /**
- * Fold a chronological message list into roots + nested replies.
- * Only direct `replyToMessageId` edges are nested; deeper replies flatten
- * under the same root so the main timeline stays shallow.
+ * Compatibility shape for callers that previously grouped replies. Each public
+ * message keeps its canonical position; reply links are rendered as quotes.
  */
 export function buildGroupThreads(messages: readonly GroupMessage[]): GroupThread[] {
-  const byId = new Map(messages.map((message) => [message.id, message]));
-  const children = new Map<string, GroupMessage[]>();
-  const roots: GroupMessage[] = [];
-
-  for (const message of messages) {
-    const parentId = message.replyToMessageId;
-    if (parentId && byId.has(parentId)) {
-      const list = children.get(parentId) ?? [];
-      list.push(message);
-      children.set(parentId, list);
-    } else {
-      roots.push(message);
-    }
-  }
-
-  return roots.map((root) => ({
-    root,
-    replies: collectReplies(root.id, children),
-  }));
-}
-
-function collectReplies(
-  rootId: string,
-  children: ReadonlyMap<string, GroupMessage[]>,
-): GroupMessage[] {
-  const out: GroupMessage[] = [];
-  const queue = [...(children.get(rootId) ?? [])];
-  while (queue.length > 0) {
-    const next = queue.shift();
-    if (!next) break;
-    out.push(next);
-    const nested = children.get(next.id);
-    if (nested) queue.push(...nested);
-  }
-  return out;
+  return messages.map((root) => ({ root, replies: [] }));
 }
 
 /** Preview line for the composer reply chip. */
