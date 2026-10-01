@@ -1,0 +1,53 @@
+name: merge-main-resolve-116
+on:
+  push:
+    branches: [cursor/group-transcript-virtualization-c747]
+    paths: [".github/workflows/merge-main-resolve-116.yml"]
+permissions:
+  contents: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-transcript-virtualization-c747
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge main keeping resolved GroupMessageList
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "main already ancestor; removing workflow only"
+            rm -f .github/workflows/merge-main-resolve-116.yml
+            git add -A
+            git commit -m "chore: remove merge-main-resolve-116 helper" || exit 0
+            git push
+            exit 0
+          fi
+          set +e
+          git merge origin/main --no-ff -m "fix(groups): merge main into virtualization (#116) — keep virtualization and wire onExecutionFilter"
+          merge_rc=$?
+          set -e
+          if [ "$merge_rc" -ne 0 ]; then
+            git checkout --ours -- apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+            git add -- apps/desktop/src/renderer/src/features/groups/GroupMessageList.tsx
+            left=$(git diff --name-only --diff-filter=U || true)
+            if [ -n "$left" ]; then
+              echo "Unexpected unresolved conflicts:"
+              echo "$left"
+              exit 1
+            fi
+            rm -f .github/workflows/merge-main-resolve-116.yml
+            git add -A
+            git commit --no-edit -m "fix(groups): merge main into virtualization (#116) — keep virtualization and wire onExecutionFilter"
+          else
+            rm -f .github/workflows/merge-main-resolve-116.yml
+            git add -A
+            git commit --allow-empty -m "chore: remove merge-main-resolve-116 helper" || true
+          fi
+          git push
