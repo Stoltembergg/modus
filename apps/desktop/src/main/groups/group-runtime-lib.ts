@@ -13,6 +13,11 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   GROUP_COLLAB_WAKE_PROTOCOL,
 } from "../../shared/group-collab-status";
+import { isCoordinatorModeActive } from "../../shared/group-coordinator";
+import {
+  composeSupervisedFlowSection,
+  planSupervisedCodeFlow,
+} from "../../shared/group-supervised-flow";
 import type {
   PromptAgentInput,
   PromptTurnOutcome,
@@ -663,6 +668,11 @@ export function composeGroupWakePrompt(input: {
   decisions?: readonly GroupDecision[];
   /** Coordinator mode: the Lead's "Group snapshot" (composeGroupSnapshotSection), Lead only. */
   snapshot?: string;
+  /**
+   * Coordinator Lead only: supervised plan → implement → review → deliver section
+   * (composeSupervisedFlowSection). Empty / omitted when the ask is not code work.
+   */
+  supervisedFlow?: string;
   /** The woken member's agent persona; first in the prompt when set. */
   instructions?: string;
   /** Role-scoped shared Project Model slice (consult map before broad search). */
@@ -697,6 +707,21 @@ export function composeGroupWakePrompt(input: {
   const footer = "</group_room>";
   const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
   const snapshot = input.snapshot ?? "";
+  // Coordinator Lead: inject supervised plan→implement→review→deliver (skippable).
+  // Callers may override via supervisedFlow; otherwise derive from the user trigger.
+  const supervisedFlow =
+    input.supervisedFlow?.trim() ||
+    (isCoordinatorModeActive(input.group) &&
+    input.group.leadSessionId === input.sessionId &&
+    input.trigger.authorKind === "user"
+      ? composeSupervisedFlowSection(
+          planSupervisedCodeFlow({
+            body: input.trigger.body,
+            members: input.members,
+            leadSessionId: input.sessionId,
+          }),
+        )
+      : "");
   const member = input.members.find((row) => row.sessionId === input.sessionId);
   const projectContext =
     input.projectContext?.trim() ||
@@ -708,7 +733,7 @@ export function composeGroupWakePrompt(input: {
         }) ?? "")
       : "");
   let used = estimateGroupTokens(
-    [persona, header, projectContext, snapshot, decisions, triggerBlock, footer]
+    [persona, header, projectContext, snapshot, supervisedFlow, decisions, triggerBlock, footer]
       .filter(Boolean)
       .join("\n"),
   );
@@ -725,7 +750,17 @@ export function composeGroupWakePrompt(input: {
   }
   const history =
     lines.length > 0 ? `<recent_messages>\n${lines.join("\n")}\n</recent_messages>` : "";
-  return [persona, header, projectContext, snapshot, decisions, history, triggerBlock, footer]
+  return [
+    persona,
+    header,
+    projectContext,
+    snapshot,
+    supervisedFlow,
+    decisions,
+    history,
+    triggerBlock,
+    footer,
+  ]
     .filter(Boolean)
     .join("\n");
 }
