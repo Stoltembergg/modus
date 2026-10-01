@@ -1,8 +1,10 @@
+import { z } from "zod";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
   CreateAgentGroupInput,
   GroupDecision,
+  GroupProjectContextSnapshot,
   GroupTask,
   NewGroupAgentInput,
   UpdateAgentGroupMembersInput,
@@ -14,6 +16,11 @@ import {
   groupMembersUpdateCountError,
 } from "../../shared/group-blocked";
 import { encodeGroupErrorMessage, isGroupErrorCode } from "../../shared/group-errors";
+import {
+  getGroupProjectContextSnapshot,
+  scheduleGroupProjectSetup,
+} from "../groups/group-project-setup";
+import { ensureGroupProjectSetupBridge } from "../groups/group-runtime-service";
 import { requireAgentModel } from "./agent-model-rule";
 import { IPC_CHANNELS } from "./channels";
 import {
@@ -33,6 +40,9 @@ import {
   parseIpcInput,
 } from "./schemas";
 import type { TrustedSenderEvent } from "./trusted-sender";
+
+/** Local schema so we do not enlarge the shared schemas monolith for one channel. */
+const groupProjectContextSchema = z.object({ workspaceId: z.string().min(1).max(128) }).strict();
 
 /** The group-store operations the sidebar needs (injected so the IPC layer is testable). */
 export type GroupIpcService = {
@@ -159,13 +169,22 @@ export function registerGroupIpcHandlers(
     requireProject(parsed.workspaceId);
     throwCountError(groupCreateCountError(parsed.members.length));
     for (const member of parsed.members) requireAgentModel(service.isModelAvailable, member);
-    return service.createAgentGroupWithMembers({
+    const created = service.createAgentGroupWithMembers({
       name: parsed.name,
       workspaceId: parsed.workspaceId,
       ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
       members: parsed.members.map((member) => definedMemberFields(member)),
       ...(parsed.leadName !== undefined ? { leadName: parsed.leadName } : {}),
     });
+    if (created.workspaceId) {
+      ensureGroupProjectSetupBridge();
+      scheduleGroupProjectSetup({
+        workspaceId: created.workspaceId,
+        groupId: created.id,
+        reason: "group_create",
+      });
+    }
+    return created;
   });
 
   ipc.handle(IPC_CHANNELS.groupSetWorkspace, (event, input) => {
@@ -173,7 +192,33 @@ export function registerGroupIpcHandlers(
     const parsed = parseIpcInput(groupSetWorkspaceSchema, input, IPC_CHANNELS.groupSetWorkspace);
     requireProject(parsed.workspaceId);
     service.setAgentGroupWorkspace(parsed.groupId, parsed.workspaceId);
+    if (parsed.workspaceId) {
+      ensureGroupProjectSetupBridge();
+      scheduleGroupProjectSetup({
+        workspaceId: parsed.workspaceId,
+        groupId: parsed.groupId,
+        reason: "workspace_move",
+      });
+    }
     return list();
+  });
+
+  ipc.handle(IPC_CHANNELS.groupProjectContext, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      groupProjectContextSchema,
+      input,
+      IPC_CHANNELS.groupProjectContext,
+    );
+    requireProject(parsed.workspaceId);
+    ensureGroupProjectSetupBridge();
+    // Reopen: reuse Ready when fingerprint still matches; otherwise refresh.
+    scheduleGroupProjectSetup({
+      workspaceId: parsed.workspaceId,
+      reason: "reopen",
+    });
+    return (getGroupProjectContextSnapshot(parsed.workspaceId) ??
+      null) as GroupProjectContextSnapshot | null;
   });
 
   ipc.handle(IPC_CHANNELS.groupRename, (event, input) => {

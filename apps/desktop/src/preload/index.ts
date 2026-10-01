@@ -52,6 +52,7 @@ const api: ModusApi = {
     listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
     deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),
+    projectContext: (workspaceId) => ipcRenderer.invoke("group:project-context", { workspaceId }),
     onEvent: (callback) => {
       const listener = (_event: IpcRendererEvent, event: GroupRuntimeEvent) => callback(event);
       ipcRenderer.on("group:event", listener);

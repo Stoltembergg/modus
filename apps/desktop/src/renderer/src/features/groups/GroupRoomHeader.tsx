@@ -1,7 +1,11 @@
 import { Menu } from "@base-ui/react/menu";
 import { IconDots, IconPlayerStop } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
-import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
+import type {
+  AgentGroupMode,
+  AgentGroupWithMembers,
+  GroupProjectContextStatus,
+} from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
@@ -9,6 +13,7 @@ import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { SessionStatusDot } from "../agent/SessionStatusDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
+import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
@@ -76,6 +81,7 @@ export function GroupRoomHeader({
   members,
   memberStates,
   projectName,
+  projectContextStatus,
   running,
   tasksButton,
   models,
@@ -96,6 +102,8 @@ export function GroupRoomHeader({
   members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
+  /** Compact Project Setup chip (Mapping… / Ready / Updating / Needs refresh). */
+  projectContextStatus?: GroupProjectContextStatus | undefined;
   running: boolean;
   tasksButton: ReactNode;
   models?: readonly GroupDialogModel[];
@@ -151,6 +159,7 @@ export function GroupRoomHeader({
         >
           {projectName ?? "No project"}
         </span>
+        <GroupProjectContextChip status={projectContextStatus} />
         <span className="min-w-2 flex-1" />
         <GroupAgentsPopover
           avatars={avatars}

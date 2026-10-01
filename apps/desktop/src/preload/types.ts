@@ -47,6 +47,7 @@ import type {
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
+  GroupProjectContextSnapshot,
   GroupRuntimeEvent,
   GroupTask,
   HarnessInsight,
@@ -220,6 +221,11 @@ export type ModusApi = {
     listDecisions(groupId: string): Promise<GroupDecision[]>;
     /** "Delete" a decision (physical; posts nothing in the room). */
     deleteDecision(decisionId: string): Promise<GroupDecision>;
+    /**
+     * Workspace-scoped Project Setup status (shared Project Model map).
+     * Also schedules reopen Setup (no-op when fingerprint still matches).
+     */
+    projectContext(workspaceId: string): Promise<GroupProjectContextSnapshot | null>;
     onEvent(callback: (event: GroupRuntimeEvent) => void): () => void;
   };
   /** Agents (agents model): each belongs to one group, names unique in it. */
