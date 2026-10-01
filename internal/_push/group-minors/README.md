@@ -1,1 +1,1 @@
-Payloads for apply-group-minors-restore workflow. Do not edit.
+Payloads for apply-group-minors-restore. Do not commit path stubs.
