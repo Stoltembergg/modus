@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ComposioAccountSummary,
   ComposioConnectionOperation,
+  ComposioConnectivityResult,
   ComposioDisconnectAccountInput,
   ComposioRenameAccountInput,
   ComposioSettingsState,
@@ -53,6 +54,7 @@ type ComposioServiceDependencies = {
 export interface ComposioService {
   initialize(): Promise<ComposioSettingsState>;
   getSettingsState(): Promise<ComposioSettingsState>;
+  diagnose(): Promise<ComposioConnectivityResult>;
   setProjectApiKey(apiKey: string): Promise<ComposioSettingsState>;
   removeProjectApiKey(): Promise<ComposioSettingsState>;
   refreshCatalog(): Promise<ComposioSettingsState>;
@@ -75,26 +77,109 @@ class ComposioServiceError extends Error {
 function errorFields(error: unknown): {
   code: string;
   message: string;
+  cause: unknown;
   status: number | undefined;
 } {
   if (typeof error !== "object" || error === null) {
-    return { code: "", message: String(error ?? ""), status: undefined };
+    return { code: "", message: String(error ?? ""), cause: undefined, status: undefined };
   }
   const value = error as Record<string, unknown>;
-  const code = [value.code, value.type, value.name]
+  const cause =
+    typeof value.cause === "object" && value.cause !== null
+      ? (value.cause as Record<string, unknown>)
+      : undefined;
+  const _message = [value.message, cause?.message]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
-  const message = typeof value.message === "string" ? value.message.toLowerCase() : "";
-  const rawStatus = value.statusCode ?? value.status ?? value.httpStatus;
+  const nestedResponse =
+    typeof value.response === "object" && value.response !== null
+      ? (value.response as Record<string, unknown>)
+      : undefined;
+  const nestedError =
+    typeof value.error === "object" && value.error !== null
+      ? (value.error as Record<string, unknown>)
+      : undefined;
+  const nestedDetails =
+    typeof value.details === "object" && value.details !== null
+      ? (value.details as Record<string, unknown>)
+      : undefined;
+  const rawStatus =
+    value.statusCode ??
+    value.status ??
+    value.httpStatus ??
+    nestedResponse?.status ??
+    nestedDetails?.status;
   const status = typeof rawStatus === "number" ? rawStatus : undefined;
-  return { code, message, status };
+  const rawCode = [value.code, value.type, value.name, nestedError?.code, nestedDetails?.slug]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+  const code = [rawCode, cause?.code]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+  const enrichedMessage = [
+    value.message,
+    cause?.message,
+    nestedError?.message,
+    nestedDetails?.message,
+    nestedDetails?.suggested_fix,
+  ]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+  return { code, message: enrichedMessage, cause, status };
 }
 
-function safeError(error: unknown, context: ErrorContext): ComposioUserError {
+function diagnosticText(error: unknown): string {
+  const seen = new Set<object>();
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && typeof current === "object" && current !== null; depth += 1) {
+    if (seen.has(current)) break;
+    seen.add(current);
+    const fields = current as Record<string, unknown>;
+    for (const key of ["message", "code", "syscall", "hostname", "address"]) {
+      const value = fields[key];
+      if ((typeof value === "string" || typeof value === "number") && String(value).length < 240) {
+        parts.push(String(value));
+      }
+    }
+    current = fields.cause;
+  }
+  return (
+    [...new Set(parts)]
+      .join(" ")
+      .replace(/https?:\/\/\S+/gi, "[url]")
+      .replace(/(?:cmp|comp|sk|eyJ)[_-][a-z0-9._-]{12,}/gi, "[credential]")
+      .slice(0, 600) || "detalhes técnicos não disponíveis"
+  );
+}
+
+export function safeError(error: unknown, context: ErrorContext): ComposioUserError {
   if (error instanceof ComposioServiceError) return error.userError;
-  const { code, message, status } = errorFields(error);
+  const { code, message, cause } = errorFields(error);
   const markers = `${code} ${message}`;
+  const status = (() => {
+    if (typeof error !== "object" || error === null) return undefined;
+    const fields = error as Record<string, unknown>;
+    const response =
+      typeof fields.response === "object" && fields.response !== null
+        ? (fields.response as Record<string, unknown>)
+        : undefined;
+    const details =
+      typeof fields.details === "object" && fields.details !== null
+        ? (fields.details as Record<string, unknown>)
+        : undefined;
+    const candidate =
+      fields.statusCode ??
+      fields.status ??
+      fields.httpStatus ??
+      response?.status ??
+      details?.status;
+    return typeof candidate === "number" ? candidate : undefined;
+  })();
 
   if (/cancel(?:ed|led)|user_cancel|authorization_canceled|connection_canceled/.test(markers)) {
     return {
@@ -112,9 +197,7 @@ function safeError(error: unknown, context: ErrorContext): ComposioUserError {
   }
   if (
     status === 401 ||
-    /invalid[_ -]?(?:api[_ -]?)?key|unauthorized|wrong[_ -]?project|project[_ -]?not[_ -]?found/.test(
-      markers,
-    )
+    /invalid[_ -]?(?:api[_ -]?)?key|wrong[_ -]?project|project[_ -]?not[_ -]?found/.test(markers)
   ) {
     return {
       code: "invalid_project_key",
@@ -147,7 +230,11 @@ function safeError(error: unknown, context: ErrorContext): ComposioUserError {
       };
     }
   }
-  if (status === 403 || /forbidden|permission_denied|insufficient_scope/.test(code)) {
+  if (
+    status === 403 ||
+    /forbidden|permission_denied|insufficient_scope/.test(code) ||
+    /permission|scope|unauthorized|forbidden/.test(message)
+  ) {
     if (
       context === "project-read" ||
       context === "catalog-read" ||
@@ -157,7 +244,7 @@ function safeError(error: unknown, context: ErrorContext): ComposioUserError {
       return {
         code: "missing_scope_read",
         message:
-          "A Project API Key não permite consultar o catálogo ou as contas deste projeto. Habilite o acesso de leitura correspondente na chave do Composio.",
+          "Uma Project API Key com escopo restrito pode exigir permissões de leitura de toolkits, catálogo e contas e de gerenciamento de sessões e execução de ferramentas MCP. Habilite essas permissões na chave ou use uma chave com acesso total.",
         retryable: false,
       };
     }
@@ -208,14 +295,19 @@ function safeError(error: unknown, context: ErrorContext): ComposioUserError {
     return {
       code: "composio_unavailable",
       message:
-        "O serviço Composio está temporariamente indisponível. Tente novamente em instantes.",
+        "O serviço do Composio está temporariamente indisponível. Tente novamente em instantes.",
       retryable: true,
     };
   }
-  if (/network|fetch|econn|socket|offline|connection reset/.test(markers)) {
+  if (
+    /network|fetch|econn|socket|offline|connection reset|failed to fetch|api_connection/.test(
+      markers,
+    )
+  ) {
+    const safeDiagnostic = diagnosticText(error);
     return {
       code: "network_unavailable",
-      message: "Não foi possível alcançar o Composio. Verifique a conexão e tente novamente.",
+      message: `Não foi possível alcançar o Composio. Verifique DNS, rede, proxy e TLS. Diagnóstico: ${safeDiagnostic}`,
       retryable: true,
     };
   }
@@ -631,7 +723,39 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
     );
   }
 
+  function diagnose(): Promise<ComposioConnectivityResult> {
+    return (async () => {
+      const savedKey = await dependencies.secretStore.load();
+      if (!savedKey) {
+        return {
+          apiReachable: false,
+          mcpSessionReady: false,
+          error: {
+            code: "api_key_required",
+            message: "Adicione uma Project API Key do Composio para testar a conexão.",
+            retryable: false,
+          },
+        };
+      }
+
+      const currentApi = dependencies.createComposioApi(savedKey);
+      const profile = dependencies.profileStore.load();
+      await currentApi.validateProjectReadAccess(profile.profileId);
+      const result = await currentApi.validateMcpConnectivity(profile.profileId);
+      return {
+        apiReachable: true,
+        mcpSessionReady: result.mcpSessionReady,
+        ...(result.error ? { error: safeError(result.error, "project-read") } : {}),
+      };
+    })().catch((error: unknown) => ({
+      apiReachable: false,
+      mcpSessionReady: false,
+      error: safeError(error, "project-read"),
+    }));
+  }
+
   return {
+    diagnose,
     async initialize(): Promise<ComposioSettingsState> {
       if (shutDown) return cloneSettings(settings);
       if (initializationPromise) return cloneSettings(await initializationPromise);

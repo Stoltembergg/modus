@@ -9,6 +9,7 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 
 const CHANNELS = [
   "composio:get-state",
+  "composio:diagnose",
   "composio:set-api-key",
   "composio:remove-api-key",
   "composio:refresh-catalog",
@@ -58,6 +59,7 @@ function mockService() {
   return {
     initialize: vi.fn(async () => SAFE_STATE),
     getSettingsState: vi.fn(async () => SAFE_STATE),
+    diagnose: vi.fn(async () => ({ apiReachable: true, mcpSessionReady: true })),
     setProjectApiKey: vi.fn(async (_apiKey: string) => SAFE_STATE),
     removeProjectApiKey: vi.fn(async () => SAFE_STATE),
     refreshCatalog: vi.fn(async () => SAFE_STATE),
@@ -155,6 +157,10 @@ describe("Composio IPC", () => {
     const apiKey = "composio_project_key_private";
     try {
       expect(await handlers.get("composio:get-state")?.(trusted, undefined)).toEqual(SAFE_STATE);
+      expect(await handlers.get("composio:diagnose")?.(trusted, undefined)).toEqual({
+        apiReachable: true,
+        mcpSessionReady: true,
+      });
       expect(await handlers.get("composio:set-api-key")?.(trusted, { apiKey })).toEqual(SAFE_STATE);
       expect(await handlers.get("composio:remove-api-key")?.(trusted, undefined)).toEqual(
         SAFE_STATE,

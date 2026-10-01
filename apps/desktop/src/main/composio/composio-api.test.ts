@@ -69,6 +69,32 @@ describe("Composio API adapter", () => {
     vi.useRealTimers();
   });
 
+  it("creates an empty MCP connectivity-probe session and cleans it up without enabling tools", async () => {
+    client.toolkits.get.mockResolvedValue([]);
+    client.connectedAccounts.list.mockResolvedValue({ items: [], nextCursor: null, totalPages: 1 });
+    client.sessions.create.mockResolvedValue({
+      sessionId: "probe-session",
+      configVersion: 1,
+      mcp: {
+        url: "https://mcp.composio.dev/session/probe",
+        headers: { authorization: "Bearer probe" },
+      },
+      update: vi.fn(),
+    });
+    const api = createComposioApi("project-key");
+
+    const result = await api.validateMcpConnectivity("local-profile-7");
+
+    expect(client.toolkits.get).toHaveBeenCalledOnce();
+    expect(client.connectedAccounts.list).toHaveBeenCalledOnce();
+    expect(client.sessions.create).toHaveBeenCalledWith(
+      "local-profile-7",
+      expect.objectContaining({ mcp: true, toolkits: { enable: [] } }),
+    );
+    expect(client.sessions.delete).toHaveBeenCalledWith("probe-session");
+    expect(result.apiReachable).toBe(true);
+  });
+
   it("validates catalog and local-profile account read access before a key can replace the saved key", async () => {
     client.toolkits.get.mockResolvedValue([]);
     client.connectedAccounts.list.mockResolvedValue({ items: [], nextCursor: null, totalPages: 1 });

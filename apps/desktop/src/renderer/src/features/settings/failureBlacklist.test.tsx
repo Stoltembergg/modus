@@ -170,7 +170,7 @@ describe("FailureBlacklistView", () => {
     expect(markup).not.toContain("Clear strategy");
   });
 
-  it("keeps Failure blacklist out of the Settings navigation", () => {
+  it("shows the active Failure blacklist navigation entry once", () => {
     const markup = renderToStaticMarkup(
       <SettingsSidebar
         activeSection="failure-blacklist"
@@ -181,7 +181,7 @@ describe("FailureBlacklistView", () => {
       />,
     );
 
-    expect(markup).not.toContain("Failure blacklist");
+    expect(markup.match(/Failure blacklist/g)).toHaveLength(1);
   });
 });
 

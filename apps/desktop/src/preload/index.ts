@@ -297,6 +297,7 @@ const api: ModusApi = {
   },
   composio: {
     getState: () => ipcRenderer.invoke("composio:get-state"),
+    diagnose: () => ipcRenderer.invoke("composio:diagnose"),
     setApiKey: (input) => ipcRenderer.invoke("composio:set-api-key", input),
     removeApiKey: () => ipcRenderer.invoke("composio:remove-api-key"),
     refreshCatalog: () => ipcRenderer.invoke("composio:refresh-catalog"),

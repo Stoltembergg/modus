@@ -11,6 +11,7 @@ import {
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ComposioConnectionOperation,
+  ComposioConnectivityResult,
   ComposioSettingsState,
   ComposioToolkitPolicyInput,
   ComposioToolkitSummary,
@@ -76,6 +77,8 @@ export function IntegrationsSettingsPanel() {
   const [renamedAlias, setRenamedAlias] = useState("");
   const [disconnectingAccount, setDisconnectingAccount] = useState<string | undefined>();
   const [showRemoveKey, setShowRemoveKey] = useState(false);
+  const [diagnostic, setDiagnostic] = useState<ComposioConnectivityResult | undefined>();
+  const [checkingConnectivity, setCheckingConnectivity] = useState(false);
   const mounted = useRef(true);
 
   useEffect(() => {
@@ -156,6 +159,19 @@ export function IntegrationsSettingsPanel() {
       setLocalError(errorMessage(error));
     } finally {
       setSaving(undefined);
+    }
+  }
+
+  async function diagnoseConnection(): Promise<void> {
+    setCheckingConnectivity(true);
+    setDiagnostic(undefined);
+    setLocalError(undefined);
+    try {
+      setDiagnostic(await window.modus.composio.diagnose());
+    } catch (error) {
+      setLocalError(errorMessage(error));
+    } finally {
+      setCheckingConnectivity(false);
     }
   }
 
@@ -343,23 +359,22 @@ export function IntegrationsSettingsPanel() {
         actions={
           settings?.apiKeyConfigured ? (
             <button
-              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-50"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-fg-muted hover:bg-hover disabled:opacity-50"
               disabled={saving !== undefined}
               onClick={() => void refreshCatalog()}
               type="button"
             >
-              <IconRefresh size={14} />
-              Refresh catalog
+              <IconRefresh size={14} /> Atualizar catálogo
             </button>
           ) : null
         }
-        description="Connect platforms through Composio and explicitly choose which account and operations agents can use."
-        title="Integrations"
+        description="Conecte integrações de plataformas e escolha quais contas e operações os agentes podem usar."
+        title="Composio"
       />
 
       <SettingsSection
-        description="This key belongs to your local profile. Modus stores it securely in the operating system key store and never displays it again."
-        title="Composio Project API Key"
+        description="Armazenada com segurança neste dispositivo e nunca exibida novamente. Cada conta de plataforma ainda requer sua própria autorização."
+        title="Project API Key"
       >
         <SettingsList>
           <form
@@ -372,44 +387,44 @@ export function IntegrationsSettingsPanel() {
                 autoComplete="new-password"
                 className="h-9 w-full rounded-md border border-hairline-soft bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder={settings?.apiKeyConfigured ? "Enter a replacement key" : "cmp_…"}
+                placeholder={settings?.apiKeyConfigured ? "Insira uma chave substituta" : "cmp_…"}
                 type="password"
                 value={apiKey}
               />
             </label>
             <div className="flex items-end gap-2">
               <button
-                className="h-9 rounded-md bg-active px-3 text-sm text-fg transition-colors hover:bg-hover disabled:opacity-50"
+                className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50"
                 disabled={saving !== undefined || !apiKey.trim()}
                 type="submit"
               >
                 {saving === "api-key"
-                  ? "Saving…"
+                  ? "Salvando…"
                   : settings?.apiKeyConfigured
-                    ? "Replace key"
-                    : "Save key"}
+                    ? "Substituir chave"
+                    : "Salvar chave"}
               </button>
               {settings?.apiKeyConfigured ? (
                 <button
-                  className="h-9 rounded-md px-3 text-sm text-danger transition-colors hover:bg-hover disabled:opacity-50"
+                  className="h-9 rounded-md px-3 text-sm text-danger hover:bg-hover disabled:opacity-50"
                   disabled={saving !== undefined}
                   onClick={() => setShowRemoveKey((shown) => !shown)}
                   type="button"
                 >
-                  Remove key
+                  Remover chave
                 </button>
               ) : null}
             </div>
           </form>
           {settings?.apiKeyConfigured ? (
             <div className="border-hairline-soft border-t px-4 py-3 text-xs text-success">
-              Project API Key configured for this local profile. The key cannot be read back.
+              A chave está configurada neste perfil local e não pode ser lida novamente.
             </div>
           ) : null}
           {showRemoveKey ? (
             <div className="flex items-center justify-between gap-3 border-hairline-soft border-t px-4 py-3">
               <p className="text-xs text-fg-muted">
-                Remove the local key? Existing Composio accounts remain connected.
+                Remover a chave local? As contas Composio conectadas permanecem no provedor.
               </p>
               <div className="flex gap-2">
                 <button
@@ -417,7 +432,7 @@ export function IntegrationsSettingsPanel() {
                   onClick={() => setShowRemoveKey(false)}
                   type="button"
                 >
-                  Cancel
+                  Cancelar
                 </button>
                 <button
                   className="rounded-md bg-danger/15 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/25"
@@ -425,7 +440,7 @@ export function IntegrationsSettingsPanel() {
                   onClick={() => void removeApiKey()}
                   type="button"
                 >
-                  Confirm removal
+                  Confirmar remoção
                 </button>
               </div>
             </div>
@@ -433,17 +448,60 @@ export function IntegrationsSettingsPanel() {
         </SettingsList>
       </SettingsSection>
 
+      <SettingsSection
+        description="Diagnostica separadamente a API e a conexão da sessão MCP, sem habilitar ferramentas."
+        title="Diagnóstico de conexão"
+      >
+        <SettingsList>
+          <div className="flex flex-wrap items-center gap-3 p-4">
+            <button
+              className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50"
+              disabled={checkingConnectivity || !settings?.apiKeyConfigured}
+              onClick={() => void diagnoseConnection()}
+              type="button"
+            >
+              {checkingConnectivity ? "Testando conexão…" : "Testar conexão"}
+            </button>
+            {diagnostic ? (
+              <div aria-live="polite" className="flex flex-col gap-1 text-xs">
+                <span className={diagnostic.apiReachable ? "text-success" : "text-danger"}>
+                  API Composio: {diagnostic.apiReachable ? "acessível" : "indisponível"}
+                </span>
+                <span className={diagnostic.mcpSessionReady ? "text-success" : "text-danger"}>
+                  Sessão MCP: {diagnostic.mcpSessionReady ? "conectada" : "não conectada"}
+                </span>
+                {diagnostic.error ? (
+                  <span className="max-w-xl break-words text-danger">
+                    {diagnostic.error.message}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </SettingsList>
+      </SettingsSection>
+
+      {currentError ? (
+        <div
+          aria-label="Falha na integração Composio"
+          className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+          role="alert"
+        >
+          {currentError}
+        </div>
+      ) : null}
+
       {settings?.apiKeyConfigured ? (
         <SettingsSection
-          description="Connected accounts are shared by your local profile. Agents see only the active account and operations you allow."
-          title="Platforms and permissions"
+          description="As contas são compartilhadas por este perfil local. Os agentes só veem a conta ativa e as operações que você permitir."
+          title="Plataformas e permissões"
         >
           <label className="relative block">
-            <span className="sr-only">Search platforms</span>
+            <span className="sr-only">Buscar plataformas</span>
             <input
               className="h-9 w-full rounded-md border border-hairline-soft bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
               onChange={(event) => setCatalogQuery(event.target.value)}
-              placeholder="Search platforms…"
+              placeholder="Buscar plataformas…"
               value={catalogQuery}
             />
           </label>
@@ -857,7 +915,7 @@ export function IntegrationsSettingsPanel() {
         <p
           aria-live="assertive"
           className="rounded-md border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger"
-          role="alert"
+          role="status"
         >
           {currentError}
         </p>
