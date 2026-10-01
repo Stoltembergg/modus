@@ -1,0 +1,84 @@
+name: actions-queue-triage-cancel
+
+on:
+  push:
+    branches: [cursor/actions-queue-triage-7db8]
+    paths:
+      - ".github/workflows/actions-queue-triage-cancel.yml"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel-queued-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Cancel superseded / failed-tip Package macOS runs
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Priority: free macOS arm64 for PR #111 job 110304318185.
+            // Never cancel run 36842393932 (#111).
+            // Skip any run that is no longer cancelable / already completed.
+            const runIds = [
+              // Explicit: typecheck-failed tips named by coordinator
+              36844144646, // #113 tip f282bc2 Package macOS (queued)
+              36843989188, // #115 tip 8ad899d Package macOS (queued)
+              // Superseded queued Package macOS on #109/#113/#114/#115 (no in_progress at triage)
+              36844884042, 36844830194, 36844824939, 36844662125,
+              36844266532, 36844251704, 36844167509, 36844097510,
+              36844020087, 36844011359, 36843966300, 36843929324,
+              36843826871, 36843809898, 36843759267, 36843743375,
+              36843714773, 36843706319, 36843686873, 36843654668,
+              36843653308, 36843619313, 36843583015, 36843570339,
+              36843550309, 36843544892, 36843531257, 36843526977,
+              36843428829, 36843351732, 36843277307, 36843237753,
+              36843226367, 36843194294, 36843151744, 36843101125,
+              36843049033, 36842977727, 36842932243, 36842930423,
+              36842891252, 36842817333, 36842793287, 36842689091,
+              36842443896, 36842343442, 36842307811, 36842256014,
+              36842194555, 36842179204, 36842158782, 36842123176,
+              36842114221
+            ];
+            const never = new Set([36842393932]);
+            const results = [];
+            for (const run_id of runIds) {
+              if (never.has(run_id)) {
+                results.push({ run_id, status: 'skipped_never_111' });
+                continue;
+              }
+              try {
+                const { data: run } = await github.rest.actions.getWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id
+                });
+                if (run.status === 'completed') {
+                  results.push({ run_id, status: 'already_completed', conclusion: run.conclusion });
+                  continue;
+                }
+                if (run.status === 'in_progress') {
+                  // Do not cancel in-progress runs
+                  results.push({ run_id, status: 'skipped_in_progress' });
+                  continue;
+                }
+                await github.rest.actions.cancelWorkflowRun({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  run_id
+                });
+                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name });
+                core.info(`canceled ${run_id}`);
+              } catch (e) {
+                results.push({ run_id, status: 'error', message: e.message });
+                core.warning(`fail ${run_id}: ${e.message}`);
+              }
+            }
+            core.summary
+              .addHeading('Actions queue triage cancel')
+              .addCodeBlock(JSON.stringify(results, null, 2), 'json')
+              .write();
+            console.log(JSON.stringify(results, null, 2));
