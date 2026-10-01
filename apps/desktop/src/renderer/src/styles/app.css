@@ -1975,7 +1975,8 @@ body {
  */
 .modus-markdown [data-streamdown="table-wrapper"] > div:not(:has(table)),
 .modus-markdown [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]),
-.modus-markdown [data-streamdown="mermaid-block"]
+.modus-markdown
+  [data-streamdown="mermaid-block"]
   > div:has(> [data-streamdown="mermaid-block-actions"]) {
   opacity: 0;
   pointer-events: none;
@@ -2103,8 +2104,7 @@ body {
 }
 
 /* Loading-only: collapse Streamdown min-h shells before SVG exists. */
-.modus-markdown
-  [data-streamdown="mermaid-block"]
+.modus-markdown [data-streamdown="mermaid-block"]
   > div:last-child:not(:has([data-streamdown="mermaid"]))
   [class*="min-h-"] {
   min-height: 0;
@@ -2188,7 +2188,8 @@ body > div.fixed.inset-0:has([data-streamdown="mermaid"]) [data-streamdown="merm
 
 /* Shared chrome tokens for the top-right control cluster. */
 body > div.fixed.inset-0:has([data-streamdown="mermaid"]) > button.absolute,
-body > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   display: flex;
@@ -2203,8 +2204,7 @@ body > div.fixed.inset-0:has([data-streamdown="mermaid"])
 }
 
 /* Zoom± / Reset: move from bottom-left column → top-right row, left of Close. */
-body
-  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   top: 1rem !important;
