@@ -3,7 +3,7 @@ import type { GroupMessage } from "../../shared/contracts";
 import type { GroupRuntimeIpcService } from "./group-runtime-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
-vi.mock("electron", () => ({ app: { getPath: () => "/tmp" }));
+vi.mock("electron", () => ({ app: { getPath: () => "/tmp" } }));
 
 const CHANNELS = [
   "group:post-message",
