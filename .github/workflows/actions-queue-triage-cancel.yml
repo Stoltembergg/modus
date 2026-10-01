@@ -16,22 +16,33 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel Package macOS competing with #111 arm64 (pass 3)
+      - name: Cancel Package macOS competing with #109 tip a9ae746
         uses: actions/github-script@v7
         with:
           script: |
-            // Pass 3: newly queued after tip churn on #109/#113-116. Never touch #111.
-            const never = new Set([36842393932]);
+            // Free macOS Package runners for #109 tip a9ae746 / run 36847793892.
+            // Never cancel #109.
+            const never = new Set([36847793892]);
             const cancelEvenIfInProgress = new Set([
-              36847737415, 36847722582, 36847706319, 36847689170, 36847568234,
+              36849060278, 36848998644, 36848967138, 36848865862, 36848847392, 36848822955,
+              36848660065, 36848626600, 36848600783, 36848587977, 36848528485, 36848473380,
+              36848447370, 36848425076, 36848413951, 36848341148, 36848274762, 36848250895,
+              36848237907, 36848139582, 36848088853, 36848032751, 36847996324, 36847987509,
+              36847945213, 36847918149, 36847878054, 36847805534, 36847797465, 36847573899,
+              36847549692, 36847411257, 36847224416, 36847163313, 36847155549, 36847128358,
             ]);
             const runIds = [
-              36847737415, 36847722582, 36847706319, 36847689170, 36847568234,
+              36849060278, 36848998644, 36848967138, 36848865862, 36848847392, 36848822955,
+              36848660065, 36848626600, 36848600783, 36848587977, 36848528485, 36848473380,
+              36848447370, 36848425076, 36848413951, 36848341148, 36848274762, 36848250895,
+              36848237907, 36848139582, 36848088853, 36848032751, 36847996324, 36847987509,
+              36847945213, 36847918149, 36847878054, 36847805534, 36847797465, 36847573899,
+              36847549692, 36847411257, 36847224416, 36847163313, 36847155549, 36847128358,
             ];
             const results = [];
             for (const run_id of runIds) {
               if (never.has(run_id)) {
-                results.push({ run_id, status: 'skipped_never_111' });
+                results.push({ run_id, status: 'skipped_never_109' });
                 continue;
               }
               try {
@@ -49,11 +60,15 @@ jobs:
                   repo: context.repo.repo,
                   run_id
                 });
-                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name, head_sha: run.head_sha });
-                core.info(`canceled ${run_id}`);
+                results.push({ run_id, status: 'canceled', previous: run.status, name: run.name, head_sha: run.head_sha, branch: run.head_branch });
+                core.info(`canceled ${run_id} (${run.name}, was ${run.status})`);
               } catch (e) {
                 results.push({ run_id, status: 'error', message: e.message });
+                core.warning(`fail ${run_id}: ${e.message}`);
               }
             }
-            await core.summary.addHeading('pass 3').addCodeBlock(JSON.stringify(results, null, 2), 'json').write();
+            await core.summary
+              .addHeading('Cancel Package macOS for #109')
+              .addCodeBlock(JSON.stringify(results, null, 2), 'json')
+              .write();
             console.log(JSON.stringify(results, null, 2));
