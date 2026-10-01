@@ -1,0 +1,47 @@
+name: apply-group-store-test-fix
+on:
+  push:
+    paths:
+      - .github/workflows/apply-group-store-test-fix.yml
+      - .github/patches/group-store-test-execution-id.patch
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: apply-group-store-test-fix
+  cancel-in-progress: true
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/group-execution-linking-c747
+          fetch-depth: 0
+      - name: Apply patch and verify
+        run: |
+          set -euo pipefail
+          TARGET=apps/desktop/src/main/groups/group-store.test.ts
+          EXPECT_SHA=9b7a71603f99ea4818498696ef57c9ffe293ee985cdf4290c9ea6c9d61f62292
+          patch -p1 < .github/patches/group-store-test-execution-id.patch
+          grep -F '"execution_id"' "$TARGET"
+          grep -F 'idx_group_decisions_execution' "$TARGET"
+          got=$(sha256sum "$TARGET" | awk '{print $1}')
+          echo "got_sha256=$got"
+          test "$got" = "$EXPECT_SHA"
+      - name: Commit fix and remove helper files
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/patches/group-store-test-execution-id.patch
+          rm -f .github/workflows/apply-group-store-test-fix.yml
+          git add -A apps/desktop/src/main/groups/group-store.test.ts
+          git add -u .github/patches/group-store-test-execution-id.patch \
+            .github/workflows/apply-group-store-test-fix.yml || true
+          if git diff --cached --quiet; then
+            echo "nothing_to_commit"
+            exit 0
+          fi
+          git commit -m "test(groups): expect execution_id on migrated group_decisions"
+          git push origin HEAD:cursor/group-execution-linking-c747
