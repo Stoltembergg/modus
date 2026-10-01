@@ -1,1 +1,1 @@
-PLACEHOLDER
+LOAD_FROM:/tmp/GroupRoom.test.tsx
