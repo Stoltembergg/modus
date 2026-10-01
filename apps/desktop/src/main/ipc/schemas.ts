@@ -1,1 +1,1 @@
-FILE:/tmp/gh-push/schemas.raw
+PLACEHOLDER_LOAD_FROM_FILE
