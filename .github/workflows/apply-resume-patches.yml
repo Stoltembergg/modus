@@ -9,8 +9,6 @@ on:
 jobs:
   apply:
     runs-on: ubuntu-latest
-    # Skip if staging already cleaned (workflow re-entry after our own commit)
-    if: ${{ hashFiles('internal/_push/resume/manifest.json') != '' }}
     permissions:
       contents: write
     steps:
@@ -18,7 +16,17 @@ jobs:
         with:
           ref: cursor/resume-by-execution-id-db25
           fetch-depth: 0
+      - name: Skip if staging already cleaned
+        id: guard
+        run: |
+          if [ ! -f internal/_push/resume/manifest.json ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No staging manifest; nothing to apply."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
       - name: Apply resume patches
+        if: steps.guard.outputs.skip == 'false'
         run: |
           set -euo pipefail
           python3 <<'PY'
@@ -28,6 +36,8 @@ jobs:
           for entry in manifest["files"]:
               path = Path(entry["path"])
               patch_path = Path(entry["patch_repo_path"])
+              if not patch_path.is_file():
+                  raise SystemExit(f"missing patch file: {patch_path}")
               if entry["strategy"] == "restore_from_ref_then_patch":
                   content = subprocess.check_output(
                       ["git", "show", f"{entry['base_ref']}:{entry['path']}"],
@@ -49,6 +59,7 @@ jobs:
               print(f"OK {path} {len(result)} {got[:16]}")
           PY
       - name: Commit applied files and remove staging
+        if: steps.guard.outputs.skip == 'false'
         run: |
           set -euo pipefail
           rm -rf internal/_push/resume
