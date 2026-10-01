@@ -116,6 +116,42 @@ export function groupWaitingForAgentLabel(name: string, locale?: string | null):
   }
 }
 
+/**
+ * Compact working shimmer above the composer: "Planner is working…" /
+ * "Planner está a trabalhar…" / "Planner 工作中…".
+ * Names the active agent(s); empty names → generic Working….
+ */
+export function groupAgentWorkingLabel(names: readonly string[], locale?: string | null): string {
+  const cleaned = names.map((name) => name.replace(/^@/, "").trim()).filter(Boolean);
+  const catalog = resolveGroupRoomLocale(locale);
+  if (cleaned.length === 0) return groupRoomLabel("working", locale);
+  if (cleaned.length === 1) {
+    const name = cleaned[0] ?? "";
+    switch (catalog) {
+      case "pt":
+        return `${name} está a trabalhar…`;
+      case "zh":
+        return `${name} 工作中…`;
+      default:
+        return `${name} is working…`;
+    }
+  }
+  const list =
+    catalog === "zh"
+      ? cleaned.join("、")
+      : catalog === "pt"
+        ? `${cleaned.slice(0, -1).join(", ")} e ${cleaned.at(-1)}`
+        : `${cleaned.slice(0, -1).join(", ")} and ${cleaned.at(-1)}`;
+  switch (catalog) {
+    case "pt":
+      return `${list} estão a trabalhar…`;
+    case "zh":
+      return `${list} 工作中…`;
+    default:
+      return `${list} are working…`;
+  }
+}
+
 /** Map live phase / presence into a Thinking State key. */
 export function thinkingStateKeyFromLive(input: {
   phase: string;

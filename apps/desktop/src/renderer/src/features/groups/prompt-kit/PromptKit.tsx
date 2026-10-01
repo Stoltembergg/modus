@@ -1,5 +1,5 @@
 import { IconAlertTriangle, IconInfoCircle, IconLoader2, IconX } from "@tabler/icons-react";
-import { type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import type { GroupSystemVariant } from "../../../../../shared/group-prompt-kit";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { cn } from "../../../lib/cn";
@@ -297,4 +297,41 @@ function mimeTypeLabel(mimeType: string): string {
   if (mimeType.includes("json")) return "JSON";
   if (mimeType.startsWith("text/")) return "Text";
   return "File";
+}
+
+/**
+ * Prompt Kit Text Shimmer — animated loading text for working agents above the composer.
+ * https://www.prompt-kit.com/docs/text-shimmer
+ *
+ * Sheen via the shared `.t-think` / `.t-think-text` CSS (app.css) so packaging
+ * does not depend on inline color-mix / custom keyframes.
+ */
+export function TextShimmer({
+  children,
+  duration = 4,
+  spread: _spread = 20,
+  className,
+  ...props
+}: {
+  children: ReactNode;
+  duration?: number;
+  /** Accepted for Prompt Kit API compatibility; sheen width is CSS-fixed. */
+  spread?: number;
+  className?: string;
+} & Omit<React.HTMLAttributes<HTMLSpanElement>, "children" | "className">) {
+  void _spread;
+  const label = typeof children === "string" ? children : "";
+  return (
+    <span
+      className={cn("t-think text-fg-subtle", className)}
+      data-prompt-kit="text-shimmer"
+      data-testid="group-text-shimmer"
+      style={{ ["--think-shimmer" as string]: `${duration}s` } as CSSProperties}
+      {...props}
+    >
+      <span className="t-think-text" data-text={label}>
+        {children}
+      </span>
+    </span>
+  );
 }

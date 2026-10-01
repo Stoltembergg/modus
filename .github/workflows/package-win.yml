@@ -48,9 +48,32 @@ jobs:
           ls -lah node_modules/electron/dist || ls -lah apps/desktop/node_modules/electron/dist || true
 
       - name: Build Electron app
+        shell: bash
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: npm --workspace @modus/desktop exec -- electron-vite build
+        run: |
+          set +e
+          npm --workspace @modus/desktop exec -- electron-vite build > electron-vite-build.log 2>&1
+          status=$?
+          set -e
+          echo "electron-vite exit=${status} log_bytes=$(wc -c < electron-vite-build.log | tr -d ' ')"
+          if [ "$status" -ne 0 ]; then
+            echo "::group::electron-vite build log (tail)"
+            tail -n 160 electron-vite-build.log || true
+            echo "::endgroup::"
+            MSG="$(tail -c 3000 electron-vite-build.log | tr -cd '\11\12\15\40-\176' | sed 's/::/[:]/g' | tr '\n' ' ')"
+            echo "::error title=electron-vite::${MSG}"
+            exit "$status"
+          fi
+
+      - name: Upload electron-vite log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-vite-log-win-x64-${{ github.sha }}
+          path: electron-vite-build.log
+          if-no-files-found: ignore
+          retention-days: 3
 
       - name: Package Windows x64 (unsigned)
         env:

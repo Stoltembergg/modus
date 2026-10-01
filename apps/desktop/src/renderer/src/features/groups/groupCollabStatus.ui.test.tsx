@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageRow, splitTrailingCollabStatuses } from "./GroupMessageList";
 import { GroupStageChip } from "./GroupRoomHeader";
@@ -22,7 +22,7 @@ describe("splitTrailingCollabStatuses", () => {
 });
 
 describe("GroupMessageRow collab lines", () => {
-  it("renders trailing collab statuses as natural handoff phrases", () => {
+  it("keeps user-facing prose and hides trailing orchestration handoffs", () => {
     const message: GroupMessage = {
       id: "m1",
       groupId: "g-1",
@@ -43,11 +43,9 @@ describe("GroupMessageRow collab lines", () => {
         message={message}
       />,
     );
-    expect(screen.getByTestId("group-collab-status").textContent).toContain("@Builder");
-    expect(screen.getByTestId("group-collab-status").textContent).toContain("toggle + tests");
-    expect(screen.getByTestId("group-collab-status").textContent).not.toContain("Handoff →");
-    // Without onHandoffClick the status stays a non-interactive line.
-    expect(screen.getByTestId("group-collab-status").tagName).toBe("DIV");
+    expect(screen.getByTestId("group-message").textContent).toContain("Breaking it down.");
+    expect(screen.queryByTestId("group-collab-status")).toBeNull();
+    expect(screen.getByTestId("group-message").textContent).not.toContain("Handoff →");
   });
 
   it("hides Owner/Objective packet fields from the main timeline", () => {
@@ -82,7 +80,7 @@ describe("GroupMessageRow collab lines", () => {
     );
     const row = screen.getByTestId("group-message");
     expect(row.textContent).toContain("Plan ready.");
-    expect(row.textContent).toContain("@Builder, wire the toggle");
+    expect(row.textContent).not.toContain("@Builder, wire the toggle");
     expect(row.textContent).not.toContain("Owner:");
     expect(row.textContent).not.toContain("Objective:");
     expect(row.textContent).not.toContain("Deliverable:");
@@ -91,8 +89,7 @@ describe("GroupMessageRow collab lines", () => {
     expect(row.textContent).not.toContain("Inputs:");
   });
 
-  it("handoff status is a button that reports the target when onHandoffClick is set", () => {
-    const onHandoffClick = vi.fn();
+  it("hides orchestration-only handoff messages entirely", () => {
     const message: GroupMessage = {
       id: "m2",
       groupId: "g-1",
@@ -103,7 +100,7 @@ describe("GroupMessageRow collab lines", () => {
       mentions: ["s-build"],
       createdAt: "2026-01-01T00:00:00.000Z",
     };
-    render(
+    const { container } = render(
       <GroupMessageRow
         labels={new Map([["s-lead", { title: "Planner" }]])}
         members={[
@@ -111,14 +108,11 @@ describe("GroupMessageRow collab lines", () => {
           { sessionId: "s-build", title: "Builder" },
         ]}
         message={message}
-        onHandoffClick={onHandoffClick}
+        onHandoffClick={() => undefined}
       />,
     );
-    const card = screen.getByTestId("group-collab-status");
-    expect(card.tagName).toBe("BUTTON");
-    expect(card.textContent).toBe("@Builder, toggle");
-    fireEvent.click(card);
-    expect(onHandoffClick).toHaveBeenCalledWith("Builder");
+    expect(container.firstChild).toBeNull();
+    expect(screen.queryByTestId("group-collab-status")).toBeNull();
   });
 });
 

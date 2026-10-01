@@ -7,7 +7,9 @@ import {
   isHandoffPacketLine,
   isLiveStreamReconciled,
   isNearBottom,
+  isOrchestrationOnlyRoomMessage,
   parseHandoffPacketLine,
+  shouldPersistCollabStatusInTranscript,
   shouldShowInFlightRow,
   splitRoomMessageBody,
 } from "./group-room-transcript";
@@ -172,5 +174,43 @@ describe("collectRoomMessageDetails", () => {
       { key: "Objective", value: "one" },
       { key: "Constraints", value: "none" },
     ]);
+  });
+});
+
+describe("orchestration handoff hide rule", () => {
+  it("classifies structured handoffs by collab kind (not string heuristics)", () => {
+    expect(
+      isOrchestrationOnlyRoomMessage({
+        kind: "status",
+        body: "Handoff → @Builder · fix symlink escapes",
+      }),
+    ).toBe(true);
+    expect(
+      isOrchestrationOnlyRoomMessage({
+        kind: "message",
+        body: "Handoff → @Builder · Implement the open task",
+      }),
+    ).toBe(true);
+    expect(
+      isOrchestrationOnlyRoomMessage({
+        kind: "message",
+        body: "Here is the plan for you.\nHandoff → @Builder · wire it",
+      }),
+    ).toBe(false);
+    expect(
+      isOrchestrationOnlyRoomMessage({
+        kind: "status",
+        body: "Blocked · missing design",
+      }),
+    ).toBe(false);
+    expect(shouldPersistCollabStatusInTranscript({ kind: "ready" })).toBe(false);
+    expect(
+      shouldPersistCollabStatusInTranscript({
+        kind: "handoff",
+        targetName: "Builder",
+        objective: "x",
+      }),
+    ).toBe(false);
+    expect(shouldPersistCollabStatusInTranscript({ kind: "agreed", note: "ship" })).toBe(true);
   });
 });

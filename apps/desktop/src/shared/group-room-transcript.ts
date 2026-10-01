@@ -124,9 +124,32 @@ export function formatNaturalCollabStatus(
   }
 }
 
-/** Ready is shown as an ephemeral chip — never a lasting transcript row. */
+/**
+ * Collab lines shown on the user-facing room transcript.
+ *
+ * Rule (kind / protocol markers — not string heuristics):
+ * - `handoff` → Activity / Group Runtime / peer wake only (orchestration).
+ * - `ready` → ephemeral chip / composer — never a lasting transcript row.
+ * - `blocked` / `proposed` / `agreed` → remain visible (user-facing loop states).
+ */
 export function shouldPersistCollabStatusInTranscript(status: GroupCollabStatus): boolean {
-  return status.kind !== "ready";
+  return status.kind !== "ready" && status.kind !== "handoff";
+}
+
+/**
+ * True when a room message is orchestration-only (structured handoff) and
+ * should not render in the main transcript. Persist/emit for Activity & wake.
+ */
+export function isOrchestrationOnlyRoomMessage(input: { kind: string; body: string }): boolean {
+  if (input.kind === "status") {
+    const status = parseGroupCollabStatusLine(input.body);
+    return status?.kind === "handoff";
+  }
+  if (input.kind !== "message" && input.kind !== "") return false;
+  const { prose, statuses } = splitRoomMessageBody(input.body);
+  if (prose.trim()) return false;
+  if (!statuses.some((status) => status.kind === "handoff")) return false;
+  return statuses.every((status) => status.kind === "handoff" || status.kind === "ready");
 }
 
 /**
