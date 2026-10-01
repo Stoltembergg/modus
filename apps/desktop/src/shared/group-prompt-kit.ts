@@ -43,6 +43,11 @@ export function classifyGroupSystemStatus(body: string): {
   if (/^Stopped by you/i.test(text) || /^Turn stopped/i.test(text)) {
     return { show: "system", variant: "warning" };
   }
+  // Tool-generated coordination is already represented by Decisions / Tasks.
+  // Keep its protocol log out of the conversation transcript.
+  if (/^(?:Decision|Assigned|Reassigned):/i.test(text)) {
+    return { show: "hide", variant: "action" };
+  }
   if (/^Worktree ready:/i.test(text)) {
     return { show: "hide", variant: "action" };
   }
