@@ -3,10 +3,11 @@ import type { GroupMessage } from "../../shared/contracts";
 import type { GroupRuntimeIpcService } from "./group-runtime-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
 
-vi.mock("electron", () => ({ app: { getPath: () => "/tmp" } }));
+vi.mock("electron", () => ({ app: { getPath: () => "/tmp" }));
 
 const CHANNELS = [
   "group:post-message",
+  "group:resume-execution",
   "group:list-messages",
   "group:working",
   "group:member-states",
@@ -29,6 +30,7 @@ type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
 function mockService() {
   return {
     postUserMessage: vi.fn((_input: unknown): GroupMessage => MESSAGE),
+    resumeExecution: vi.fn((_input: unknown): void => undefined),
     listGroupMessages: vi.fn((_groupId: string, _options: unknown): GroupMessage[] => [MESSAGE]),
     workingGroupIds: vi.fn((): string[] => ["g-1"]),
     memberStates: vi.fn(() => [
@@ -90,6 +92,16 @@ describe("group runtime IPC", () => {
         mentions: ["s-1"],
         replyToMessageId: "m-0",
       });
+      expect(
+        handlers.get("group:resume-execution")?.(trusted, {
+          groupId: "g-1",
+          executionId: "exec-1",
+        }),
+      ).toBeUndefined();
+      expect(service.resumeExecution).toHaveBeenCalledWith({
+        groupId: "g-1",
+        executionId: "exec-1",
+      });
       const cursor = { createdAt: MESSAGE.createdAt, id: MESSAGE.id };
       expect(
         handlers.get("group:list-messages")?.(trusted, {
@@ -123,9 +135,12 @@ describe("group runtime IPC", () => {
       ).toThrow(/Invalid IPC payload/);
       expect(() => handlers.get("group:working")?.(trusted, { x: 1 })).toThrow(/expected no input/);
       expect(() => handlers.get("group:member-states")?.(trusted, {})).toThrow(/expected no input/);
-      expect(() => handlers.get("group:stop")?.(trusted, { groupId: "" })).toThrow(
-        /Invalid IPC payload/,
-      );
+      expect(() =>
+        handlers.get("group:stop")?.(trusted, { groupId: "" }),
+      ).toThrow(/Invalid IPC payload/);
+      expect(() =>
+        handlers.get("group:resume-execution")?.(trusted, { groupId: "g-1" }),
+      ).toThrow(/Invalid IPC payload/);
       expect(service.stopGroup).not.toHaveBeenCalled();
       service.postUserMessage.mockImplementationOnce(() => {
         throw Object.assign(new Error("Session s-9 is not a member"), {
