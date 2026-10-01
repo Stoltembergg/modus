@@ -96,7 +96,6 @@ const group = {
   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
     message("posted", { body: input.body }),
   ),
-  resumeExecution: vi.fn(async (_input: unknown) => undefined),
   stop: vi.fn(async (_groupId: string) => undefined),
   listTasks: vi.fn(async (_groupId: string) => tasks),
   cancelTask: vi.fn(async (taskId: string) => {
@@ -266,7 +265,7 @@ describe("GroupRoom", () => {
     ).toBe("Private draft");
   });
 
-  it("explicitly resumes an interrupted task by execution id", async () => {
+  it("explicitly resumes an interrupted task as a new user request", async () => {
     pages = [
       [
         message("interrupted", {
@@ -275,18 +274,17 @@ describe("GroupRoom", () => {
           body: "Saved progress",
           status: "interrupted",
           error: "App restarted",
-          turnId: "exec-1",
         }),
       ],
     ];
     renderRoom();
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Resume task" }));
-    expect(group.resumeExecution).toHaveBeenCalledWith({
+    expect(group.postMessage).toHaveBeenCalledWith({
       groupId: "g-1",
-      executionId: "exec-1",
+      body: "Resume this task.",
+      replyToMessageId: "interrupted",
     });
-    expect(group.postMessage).not.toHaveBeenCalled();
     expect(screen.getByText("Interrupted")).toBeTruthy();
     expect(screen.getByText("Saved progress")).toBeTruthy();
   });
@@ -494,7 +492,6 @@ describe("GroupRoom", () => {
     const rows = screen.getAllByTestId("group-message");
     expect(rows[0]?.textContent).toContain("You");
     expect(rows[0]?.textContent).toContain("hello");
-    expect(rows[0]?.textContent).toContain("#1");
     expect(rows[0]?.textContent).toContain("~2 tokens");
     expect(rows.slice(1).map((row) => row.textContent)).toEqual([
       "Cy joined as Scribe",
@@ -585,7 +582,6 @@ describe("GroupRoom", () => {
     expect(group.postMessage).toHaveBeenCalledWith({
       groupId: "g-1",
       body: "hi @Planner and @s-rev-2 \nline two",
-      executionMode: "new",
     });
     await vi.waitFor(() => expect(input.value).toBe(""));
   });
@@ -604,11 +600,7 @@ describe("GroupRoom", () => {
       "Interrupted runs stay visible",
     );
     await user.type(screen.getByRole("textbox", { name: "Message the group" }), "later{Enter}");
-    expect(group.postMessage).toHaveBeenCalledWith({
-      groupId: "g-1",
-      body: "later",
-      executionMode: "new",
-    });
+    expect(group.postMessage).toHaveBeenCalledWith({ groupId: "g-1", body: "later" });
     act(() => {
       for (const listener of updateListeners) listener({ status: "idle" });
     });
@@ -824,20 +816,13 @@ describe("GroupRoom decisions", () => {
     expect(within(panel).getByRole("button", { name: "Delete" })).toBeTruthy();
   });
 
-  it("reloads on status messages and group.activity of this group only (not chat messages)", async () => {
+  it("reloads on group.message and group.activity of this group only", async () => {
     const user = userEvent.setup();
     renderRoom();
     const panel = await openPanel(user);
     await vi.waitFor(() => expect(group.listDecisions).toHaveBeenCalledTimes(1));
     decisions = [decision("1", "Use SQLite", { authorSessionId: "s-lead" })];
-    // Ordinary chat messages must not re-hit the DB (streaming freezes).
     await emit({ type: "group.message", groupId: "g-1", message: message("9") });
-    expect(group.listDecisions).toHaveBeenCalledTimes(1);
-    await emit({
-      type: "group.message",
-      groupId: "g-1",
-      message: { ...message("9s"), kind: "status", body: "Decision: Use SQLite" },
-    });
     await vi.waitFor(() => expect(within(panel).getByText("Use SQLite")).toBeTruthy());
     decisions = [decision("2", "Ship weekly"), ...decisions];
     await emit({ type: "group.activity", groupId: "g-2" } as GroupRuntimeEvent);
