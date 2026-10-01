@@ -275,8 +275,8 @@ export function GroupComposer({
         <fieldset
           className="mb-2 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
           data-testid="group-composer-execution-mode"
-          aria-label="Execution mode"
         >
+          <legend className="sr-only">Execution mode</legend>
           <button
             className={cn(
               "rounded-md border px-2 py-1 font-medium transition-colors",

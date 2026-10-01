@@ -165,14 +165,9 @@ export class GroupRuntime {
     ]);
     const mentions = members.map((member) => member.sessionId).filter((id) => mentioned.has(id));
     const mode = input.executionMode ?? "new";
-    let startsChain = true;
-    let chainId: string | undefined;
+    let joinExecutionId: string | undefined;
     if (mode === "complement") {
-      const target = input.executionId ?? latestGroupExecutionId(input.groupId);
-      if (target) {
-        startsChain = false;
-        chainId = target;
-      }
+      joinExecutionId = input.executionId ?? latestGroupExecutionId(input.groupId);
     }
     const message = appendGroupMessage({
       createdAt: this.stamp(),
@@ -180,7 +175,7 @@ export class GroupRuntime {
       authorKind: "user",
       body: input.body,
       mentions,
-      ...(startsChain || chainId === undefined ? { startsChain: true } : { chainId }),
+      ...(joinExecutionId ? { chainId: joinExecutionId } : { startsChain: true }),
       ...(input.replyToMessageId ? { replyToMessageId: input.replyToMessageId } : {}),
       ...(input.attachments && input.attachments.length > 0
         ? { attachments: input.attachments }
