@@ -49,7 +49,7 @@ jobs:
 
       - name: Build Electron app
         env:
-          NODE_OPTIONS: --max-old-space-size=8192
+          NODE_OPTIONS: --max-old-space-size=12288
         run: npm --workspace @modus/desktop exec -- electron-vite build
 
       - name: Package Windows x64 (unsigned)

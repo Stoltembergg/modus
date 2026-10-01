@@ -78,7 +78,7 @@ jobs:
       - name: Build Electron app
         env:
           # Large renderer (Monaco/Mermaid) can abort under default heap on GHA mac runners.
-          NODE_OPTIONS: --max-old-space-size=8192
+          NODE_OPTIONS: --max-old-space-size=12288
         run: npm --workspace @modus/desktop exec -- electron-vite build
 
       - name: Package macOS ${{ matrix.electron_arch }} (unsigned)
