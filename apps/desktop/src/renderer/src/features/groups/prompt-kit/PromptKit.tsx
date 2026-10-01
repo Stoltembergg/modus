@@ -1,5 +1,5 @@
 import { IconAlertTriangle, IconInfoCircle, IconLoader2, IconX } from "@tabler/icons-react";
-import { type ReactNode, useState } from "react";
+import { type CSSProperties, type ReactNode, useState } from "react";
 import type { GroupSystemVariant } from "../../../../../shared/group-prompt-kit";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { cn } from "../../../lib/cn";
@@ -297,4 +297,63 @@ function mimeTypeLabel(mimeType: string): string {
   if (mimeType.includes("json")) return "JSON";
   if (mimeType.startsWith("text/")) return "Text";
   return "File";
+}
+
+/**
+ * Prompt Kit Text Shimmer — animated loading text for working agents above the composer.
+ * https://www.prompt-kit.com/docs/text-shimmer
+ */
+export function TextShimmer({
+  children,
+  as: Tag = "span",
+  duration = 4,
+  spread = 20,
+  className,
+  ...props
+}: {
+  children: ReactNode;
+  as?: "span" | "p" | "div";
+  duration?: number;
+  spread?: number;
+  className?: string;
+} & Omit<React.HTMLAttributes<HTMLElement>, "as" | "children" | "className">) {
+  const dynamicSpread = Math.min(Math.max(spread, 5), 45);
+  return (
+    <>
+      <style>{`
+@keyframes prompt-kit-shimmer {
+  0% { background-position: 200% 50%; }
+  100% { background-position: -200% 50%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-prompt-kit="text-shimmer"] {
+    animation: none !important;
+    background-image: none !important;
+    color: inherit;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+`}</style>
+      <Tag
+        className={cn(
+          "bg-clip-text font-medium text-transparent [background-size:200%_auto]",
+          "animate-[prompt-kit-shimmer_var(--pk-shimmer-duration,4s)_infinite_linear]",
+          className,
+        )}
+        data-prompt-kit="text-shimmer"
+        data-testid="group-text-shimmer"
+        style={
+          {
+            backgroundImage: `linear-gradient(to right, var(--muted-foreground, var(--color-fg-faint, #888)) ${50 - dynamicSpread}%, var(--foreground, var(--color-fg, #eee)) 50%, var(--muted-foreground, var(--color-fg-faint, #888)) ${50 + dynamicSpread}%)`,
+            "--pk-shimmer-duration": `${duration}s`,
+            animationDuration: `${duration}s`,
+            WebkitBackgroundClip: "text",
+          } as CSSProperties
+        }
+        {...props}
+      >
+        {children}
+      </Tag>
+    </>
+  );
 }
