@@ -121,6 +121,24 @@ export function GroupMessageList({
         memberIds.has(row.sessionId) && !row.live.collapsed && !represented.has(row.sessionId),
     );
   }, [workingRows, roomMessages, members]);
+  const liveBySession = useMemo(
+    () => new Map(workingRows.map((row) => [row.sessionId, row])),
+    [workingRows],
+  );
+  const activeMessageBySession = useMemo(() => {
+    const active = new Map<string, string>();
+    for (const message of renderedMessages) {
+      if (
+        message.authorKind === "agent" &&
+        message.authorSessionId &&
+        message.status &&
+        ["queued", "running", "writing", "awaiting_user"].includes(message.status)
+      ) {
+        active.set(message.authorSessionId, message.id);
+      }
+    }
+    return active;
+  }, [renderedMessages]);
 
   // Prepending older pages preserves the reading position. Revisions of an
   // existing card never count as new messages or move a reader above the bottom.
@@ -195,25 +213,40 @@ export function GroupMessageList({
               {GROUP_ROOM_EMPTY_TEXT}
             </div>
           ) : null}
-          {renderedMessages.map((message) => (
-            <GroupMessageRow
-              activeWaitingSessionIds={activeWaiting}
-              avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
-              cwd={cwd}
-              key={message.id}
-              labels={labels}
-              members={members}
-              message={message}
-              onHandoffClick={onHandoffClick}
-              onOpenFile={onOpenFile}
-              onReply={onReply}
-              onRetry={onRetry}
-              replyToMessage={
-                message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
-              }
-              role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
-            />
-          ))}
+          {renderedMessages.map((message) => {
+            const liveRow =
+              message.authorKind === "agent" && message.authorSessionId
+                ? liveBySession.get(message.authorSessionId)
+                : undefined;
+            const hasActiveTurn =
+              message.authorKind === "agent" &&
+              message.authorSessionId &&
+              activeMessageBySession.get(message.authorSessionId) === message.id &&
+              liveRow &&
+              !liveRow.live.collapsed;
+            return (
+              <GroupMessageRow
+                activeWaitingSessionIds={activeWaiting}
+                avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
+                cwd={cwd}
+                key={message.id}
+                labels={labels}
+                liveTurn={
+                  hasActiveTurn && liveRow ? { mode: liveRow.mode, live: liveRow.live } : undefined
+                }
+                members={members}
+                message={message}
+                onHandoffClick={onHandoffClick}
+                onOpenFile={onOpenFile}
+                onReply={onReply}
+                onRetry={onRetry}
+                replyToMessage={
+                  message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
+                }
+                role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
+              />
+            );
+          })}
           <GroupWorkingStatus
             avatars={avatars}
             groupId={groupId}
