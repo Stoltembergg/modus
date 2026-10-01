@@ -1,1 +1,1 @@
-// PLACEHOLDER_WILL_REPLACE
+LOAD_FROM_FILE:/tmp/GroupRoom.test.tsx
