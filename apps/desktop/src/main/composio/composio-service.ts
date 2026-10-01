@@ -88,7 +88,7 @@ function errorFields(error: unknown): {
     typeof value.cause === "object" && value.cause !== null
       ? (value.cause as Record<string, unknown>)
       : undefined;
-  const message = [value.message, cause?.message]
+  const _message = [value.message, cause?.message]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
