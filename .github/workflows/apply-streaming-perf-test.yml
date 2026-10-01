@@ -1,0 +1,44 @@
+name: apply-streaming-perf-test
+on:
+  push:
+    branches: [cursor/groups-streaming-perf-60c6]
+    paths:
+      - 'internal/_push/streaming-perf/**'
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor/groups-streaming-perf-60c6
+      - name: Assemble GroupRoom.test.tsx
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE=internal/_push/streaming-perf
+          test -f "$STAGE/manifest.json"
+          python3 <<'PY'
+          import json, zlib, base64, hashlib, pathlib, subprocess, os
+          stage = pathlib.Path("internal/_push/streaming-perf")
+          manifest = json.loads((stage / "manifest.json").read_text())
+          b64 = "".join((stage / name).read_text() for name in manifest["parts"])
+          data = zlib.decompress(base64.b64decode(b64))
+          assert len(data) == manifest["bytes"], (len(data), manifest["bytes"])
+          assert hashlib.sha256(data).hexdigest() == manifest["sha256"]
+          target = pathlib.Path(manifest["target"])
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_bytes(data)
+          print("wrote", target, len(data), manifest["sha256"][:16])
+          PY
+          rm -rf internal/_push/streaming-perf
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "nothing to commit"
+            exit 0
+          fi
+          git commit -m "fix(groups): streaming perf — GroupRoom.test.tsx"
+          git push
