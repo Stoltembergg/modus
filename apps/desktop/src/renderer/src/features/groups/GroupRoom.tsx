@@ -1,9 +1,11 @@
 import { IconLayoutSidebarRight } from "@tabler/icons-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
+  GroupProjectContextSnapshot,
+  GroupRuntimeEvent,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import {
@@ -31,6 +33,7 @@ import {
   memberColor,
   StatusText,
 } from "./GroupMessageList";
+import { projectSetupEventToSnapshot } from "./GroupProjectContextChip";
 import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
 import { GroupWorkingShimmer } from "./GroupWorkingShimmer";
@@ -154,6 +157,34 @@ export function GroupRoom({
     });
   }, [messages, memberStates, group.id, titleToSessionId]);
   const coordinating = isCoordinatorModeActive(group);
+  const [projectContext, setProjectContext] = useState<GroupProjectContextSnapshot | undefined>();
+
+  useEffect(() => {
+    const workspaceId = group.workspaceId;
+    if (!workspaceId) {
+      setProjectContext(undefined);
+      return;
+    }
+    let cancelled = false;
+    const load = window.modus.group.projectContext?.(workspaceId);
+    if (load) {
+      load
+        .then((snapshot: GroupProjectContextSnapshot | null) => {
+          if (!cancelled && snapshot) setProjectContext(snapshot);
+        })
+        .catch((error: unknown) => console.warn("[groups] project context failed", error));
+    }
+    const unsubscribe = window.modus.group.onEvent((event: GroupRuntimeEvent) => {
+      if (event.type !== "group.project-setup") return;
+      if (event.workspaceId !== workspaceId) return;
+      if (event.groupId && event.groupId !== group.id) return;
+      setProjectContext(projectSetupEventToSnapshot(event));
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [group.id, group.workspaceId]);
 
   const header = (
     <GroupRoomHeader
@@ -181,6 +212,7 @@ export function GroupRoom({
           .stop(group.id)
           .catch((error: unknown) => console.warn("[groups] stop failed", error));
       }}
+      projectContextStatus={projectContext?.status}
       projectName={workspace?.displayName}
       running={running}
       tasksButton={
@@ -270,6 +302,7 @@ export function GroupRoom({
           messages={messages}
           onCancelled={replace}
           onSetMode={onSetMode}
+          projectContext={projectContext}
           stage={stage}
           tasks={tasks}
           workingRows={workingRows}
