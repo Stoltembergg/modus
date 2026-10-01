@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { groupAgentWorkingLabel } from "../../../../shared/group-room-locale";
-import { groupWorkingShimmerNames, shouldShowGroupWorkingShimmer } from "./groupWorkingShimmer";
+import { groupWorkingShimmerNames, shouldShowGroupWorkingShimmer } from "./workingShimmer";
 import type { MemberLabel } from "./memberLabels";
 import { TextShimmer } from "./prompt-kit/PromptKit";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
