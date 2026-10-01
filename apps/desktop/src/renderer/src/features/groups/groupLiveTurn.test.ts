@@ -132,3 +132,28 @@ describe("isStillWorking", () => {
     expect(isStillWorking("running", last, last + STILL_WORKING_AFTER_MS)).toBe(true);
   });
 });
+
+describe("public activity preview identity", () => {
+  it("keeps assistant messages separate and excludes user text and thought", () => {
+    const snap = buildGroupLiveTurn(
+      [
+        ev(runStarted),
+        ev({ type: "message.started", sessionId: "s", messageId: "user", role: "user" }),
+        ev({ type: "message.delta", sessionId: "s", messageId: "user", delta: "private prompt" }),
+        ev({
+          type: "thinking.delta",
+          sessionId: "s",
+          messageId: "thought",
+          delta: "private thought",
+        }),
+        ev({ type: "message.started", sessionId: "s", messageId: "first", role: "assistant" }),
+        ev({ type: "message.delta", sessionId: "s", messageId: "first", delta: "Checking." }),
+        ev({ type: "message.started", sessionId: "s", messageId: "second", role: "assistant" }),
+        ev({ type: "message.delta", sessionId: "s", messageId: "second", delta: "Done." }),
+      ],
+      "running",
+    );
+    expect(snap.streamText).toBe("Done.");
+    expect(snap.writingPreview).toBe("Done.");
+  });
+});

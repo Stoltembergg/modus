@@ -527,13 +527,17 @@ export function runGroupTool<N extends SyncGroupToolName>(
         if (!reason) {
           throw new ToolInputError("invalid-value", "reason is required.");
         }
+        if (input.taskId && !listGroupTasks(groupId).some((task) => task.id === input.taskId)) {
+          throw new ToolInputError("invalid-value", `Unknown task ${input.taskId}.`);
+        }
         const body = formatGroupCollabStatus({ kind: "blocked", reason });
         const returnTo = input.returnTo ? resolveMember(members, input.returnTo) : undefined;
         taskWakeSink?.({
           groupId,
           actorSessionId: actor,
           body,
-          ...(returnTo ? { targetSessionId: returnTo } : { wake: false }),
+          ...(returnTo ? { targetSessionId: returnTo } : {}),
+          ...(!returnTo || returnTo === actor ? { wake: false } : {}),
         });
         const taskNote = input.taskId ? ` (task ${input.taskId})` : "";
         return `Blocked${taskNote}: ${reason}`;
@@ -572,6 +576,7 @@ export function runGroupTool<N extends SyncGroupToolName>(
           actorSessionId: actor,
           targetSessionId: target,
           body,
+          ...(target === actor ? { wake: false } : {}),
         });
         return `Handed off to ${label(members, target)}: ${objective}.${taskLine}`;
       }
@@ -745,7 +750,10 @@ const schemas = {
   group_assign_task: Type.Object(
     {
       taskId: idParam,
-      memberId: Type.String({ minLength: 1, description: "Member title or session id." }),
+      memberId: Type.String({
+        minLength: 1,
+        description: "Member session id (preferred) or unique title.",
+      }),
       note: Type.Optional(Type.String({ maxLength: MAX_NOTE_CHARS })),
     },
     { additionalProperties: false },
@@ -755,7 +763,7 @@ const schemas = {
       summary: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
       taskId: Type.Optional(idParam),
       confirmer: Type.Optional(
-        Type.String({ description: "Member who should confirm (title or session id)." }),
+        Type.String({ description: "Confirmer's session id (preferred) or unique title." }),
       ),
     },
     { additionalProperties: false },
@@ -775,14 +783,19 @@ const schemas = {
       reason: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
       taskId: Type.Optional(idParam),
       returnTo: Type.Optional(
-        Type.String({ description: "Member to wake with the block (title or session id)." }),
+        Type.String({
+          description: "Member session id (preferred) or unique title to return the blocker to.",
+        }),
       ),
     },
     { additionalProperties: false },
   ),
   group_handoff: Type.Object(
     {
-      memberId: Type.String({ minLength: 1, description: "Next owner's title or session id." }),
+      memberId: Type.String({
+        minLength: 1,
+        description: "Next owner's session id (preferred) or unique title.",
+      }),
       objective: Type.String({ minLength: 1, maxLength: MAX_NOTE_CHARS }),
       taskTitle: Type.Optional(
         Type.String({
@@ -860,25 +873,25 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
     group_propose_agreement: {
       label: "Propose agreement",
       description:
-        'Post a "Proposed · …" status in the room. Optionally attach a task and wake a confirmer (moves your in_progress task to in_review).',
+        "Record a proposed agreement. With a task ID and confirmer session ID, move your in_progress task to in_review and wake that member explicitly. A summary mentioning a member does not delegate work.",
       snippet: "group_propose_agreement(summary, taskId?, confirmer?) — propose closing the loop.",
     },
     group_agree: {
       label: "Agree",
       description:
-        'Post "Agreed" in the room, record a group decision, and optionally mark a task done.',
+        "Record an agreement and a group decision, and optionally mark a task done by its ID. This closes the task without waking another member.",
       snippet: "group_agree(note?, taskId?, decision?) — agree and close the task/decision.",
     },
     group_block: {
       label: "Block agreement",
       description:
-        'Post "Blocked · …" in the room. Optionally wake the previous owner (returnTo) to fix gaps.',
+        "Record a concrete blocker, optionally referencing a task ID. Set returnTo to a member session ID to request help explicitly; reason text and @mentions do not wake members. Returning to yourself records the blocker without another turn.",
       snippet: "group_block(reason, taskId?, returnTo?) — block with a reason.",
     },
     group_handoff: {
       label: "Handoff to member",
       description:
-        'Post "Handoff → @Name · …", wake the next owner, and optionally create an open task for the work.',
+        "Delegate a concrete objective to a member using their session ID. Wakes that member explicitly and optionally creates an open task; a self handoff only records the status. Public @mentions alone do not delegate work.",
       snippet: "group_handoff(memberId, objective, taskTitle?) — hand work to the next owner.",
     },
   };

@@ -1,6 +1,6 @@
 /**
- * Typed collaboration status lines for group rooms (P0b).
- * Stable English prefixes on message/status bodies — no schema change required.
+ * Legacy collaboration status lines for group room presentation.
+ * These prefixes do not authorize delegation; member tools route explicit IDs.
  *
  *   Handoff → @Name · <objective>
  *   Blocked · <reason>
@@ -23,7 +23,7 @@ export type GroupCollabStage = "Handoff" | "Review" | "Agree" | "Ready";
 
 export const GROUP_COLLAB_NO_NEXT_OWNER = "No next owner — @mention someone or propose agreement";
 
-const HANDOFF_RE = /^Handoff\s*→\s*@([^\s·]+)(?:\s*·\s*(.*))?$/i;
+const HANDOFF_RE = /^Handoff\s*→\s*@([^·]+?)(?:\s*·\s*(.*))?$/i;
 const BLOCKED_RE = /^Blocked\s*·\s*(.+)$/i;
 const PROPOSED_RE = /^Proposed\s*·\s*(.+)$/i;
 const AGREED_RE = /^Agreed(?:\s*·\s*(.*))?$/i;
@@ -56,9 +56,11 @@ export function parseGroupCollabStatusLine(line: string): GroupCollabStatus | un
 
   const handoff = HANDOFF_RE.exec(text);
   if (handoff) {
+    const targetName = (handoff[1] ?? "").trim();
+    if (!targetName) return undefined;
     return {
       kind: "handoff",
-      targetName: handoff[1] ?? "",
+      targetName,
       objective: (handoff[2] ?? "").trim(),
     };
   }
@@ -89,15 +91,11 @@ export function lastGroupCollabStatus(body: string): GroupCollabStatus | undefin
 }
 
 /**
- * True when a successful agent reply woke nobody and did not close the loop
- * (Agreed / Blocked / Proposed / Ready). Handoff without a parseable @ still nudges
- * if mentionCount is 0.
+ * Compatibility for older runtime callers. Successful public replies never
+ * require a next-owner nudge: task tools decide whether work is delegated.
  */
-export function needsNextOwnerNudge(body: string, mentionCount: number): boolean {
-  if (mentionCount > 0) return false;
-  const last = lastGroupCollabStatus(body);
-  if (!last) return true;
-  return last.kind === "handoff";
+export function needsNextOwnerNudge(_body: string, _mentionCount: number): boolean {
+  return false;
 }
 
 export function stageFromCollabStatus(status: GroupCollabStatus): GroupCollabStage {
@@ -122,28 +120,60 @@ export type GroupCollabStageSnapshot = {
   ownerName?: string;
 };
 
-type StageMessage = {
+export type StageMessage = {
   body: string;
+  id?: string | undefined;
+  authorKind?: "user" | "agent" | "system" | undefined;
+  kind?: "message" | "status" | undefined;
+  chainId?: string | undefined;
+  status?: string | undefined;
   authorSessionId?: string | undefined;
   mentions?: readonly string[] | undefined;
 };
 
 /**
- * Derive the header stage chip from recent room messages (newest last).
- * Prefers the latest collab status line; falls back to Handoff when a member is running.
+ * Derive the header stage from the current task (newest user message onward).
+ * Live member/message state takes precedence over legacy display markers.
+ * Older messages without metadata remain readable as legacy status lines.
  */
 export function deriveGroupCollabStage(
   messages: readonly StageMessage[],
   options?: {
     runningSessionIds?: readonly string[];
+    queuedSessionIds?: readonly string[];
+    waitingSessionIds?: readonly string[];
     /** Map member display title → sessionId (case-insensitive). */
     titleToSessionId?: ReadonlyMap<string, string>;
   },
 ): GroupCollabStageSnapshot | undefined {
-  const running = options?.runningSessionIds ?? [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!message) continue;
+  const activeOwner = options?.runningSessionIds?.[0] ?? options?.queuedSessionIds?.[0];
+  if (activeOwner) return { stage: "Handoff", ownerSessionId: activeOwner };
+  const waitingOwner = options?.waitingSessionIds?.[0];
+  if (waitingOwner) return { stage: "Review", ownerSessionId: waitingOwner };
+
+  const taskIndex = messages.findLastIndex((message) => message.authorKind === "user");
+  const task = messages[taskIndex];
+  const currentChainId = task?.chainId ?? task?.id;
+  const currentMessages = messages
+    .slice(taskIndex + 1)
+    .filter((message) => !currentChainId || !message.chainId || message.chainId === currentChainId);
+
+  for (let i = currentMessages.length - 1; i >= 0; i -= 1) {
+    const message = currentMessages[i];
+    if (!message || message.authorKind === "system") continue;
+    const active =
+      message.status === "queued" || message.status === "running" || message.status === "writing";
+    if (active || message.status === "awaiting_user") {
+      return {
+        stage: active ? "Handoff" : "Review",
+        ...(message.authorSessionId ? { ownerSessionId: message.authorSessionId } : {}),
+      };
+    }
+  }
+
+  for (let i = currentMessages.length - 1; i >= 0; i -= 1) {
+    const message = currentMessages[i];
+    if (!message || ["failed", "cancelled", "interrupted"].includes(message.status ?? "")) continue;
     const status = lastGroupCollabStatus(message.body);
     if (!status) continue;
     const stage = stageFromCollabStatus(status);
@@ -162,30 +192,19 @@ export function deriveGroupCollabStage(
       ...(message.authorSessionId ? { ownerSessionId: message.authorSessionId } : {}),
     };
   }
-  if (running[0]) {
-    return { stage: "Handoff", ownerSessionId: running[0] };
-  }
   return undefined;
 }
 
-/** Lines added to every group wake prompt (handoff packet + status protocol). */
+/** Instructions added to every group wake prompt. */
 export const GROUP_COLLAB_WAKE_PROTOCOL = [
-  "Collaboration protocol — end your turn with one of these lines (English, exact prefixes):",
-  "- Handoff → @Name · <short objective>  (must @mention the next owner)",
-  "- Proposed · <summary of what you composed>",
-  "- Blocked · <what is blocking>",
-  "- Agreed  or  Agreed · <note>",
-  "- Ready for you  (human approval before external actions / PRs)",
-  "When handing off, include this packet for Activity/Details (the room hides it from the main chat):",
-  "Owner: @Name",
-  "Objective: …",
-  "Inputs: …",
-  "Deliverable: …",
-  "Constraints: …",
-  "Approval: …",
-  "Speak naturally in the main reply; keep IDs and task ids out of the conversation.",
+  "Collaboration protocol:",
+  "Delegate through group_handoff(memberId=<session ID>, objective=<concrete work>) or, as coordinator, group_assign_task(taskId=<task ID>, memberId=<session ID>).",
+  "Use group_request_review(id=<task ID>, reviewer=<session ID>) for task review; use group_propose_agreement, group_agree, or group_block to record an agreement or blocker.",
+  "Resolve task IDs with group_list_tasks and use member session IDs for unambiguous delegation. Public @mentions are visual references and do not wake peers.",
+  "A completed turn can finish naturally in the user's language. No English status marker or next-owner line is required.",
+  "Publish concise results, decisions, real blockers, questions, and material progress the user can act on. Keep internal reasoning, self narration, tool logs, and routine status chatter out of public messages.",
+  "Include concrete inputs, deliverables, and constraints in task tool arguments. Keep IDs and task IDs in tools rather than repeating them in the conversation.",
   'Do not introduce yourself (avatar, name, and role already identify you — never say "Here is @Name" / "Aqui é o @Name").',
   "Prefer short natural replies. Stay silent (empty reply) when you have nothing useful to add.",
   "Do not explore the workspace, run tools, or start work just to stay busy — only act on a real objective, pending task, handoff, review, or blockage.",
-  "If you finish with no @mention and no Agreed/Blocked/Proposed/Ready line, the room will nudge you.",
 ].join("\n");

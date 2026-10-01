@@ -1,11 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
-import { isNearBottom, shouldShowInFlightRow } from "../../../../shared/group-room-transcript";
-import { cn } from "../../lib/cn";
+import { isNearBottom } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
-import { buildGroupThreads } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
@@ -37,6 +35,7 @@ export function GroupMessageList({
   onOpenFile,
   onHandoffClick,
   onReply,
+  onRetry,
   workingRows,
   roles,
   groupId,
@@ -57,8 +56,9 @@ export function GroupMessageList({
   onOpenFile: ((path: string) => void) | undefined;
   /** Click a natural handoff phrase to seed `@Name` in the composer. */
   onHandoffClick?: ((targetName: string) => void) | undefined;
-  /** N3: start a thread reply from a room message. */
+  /** Quote a room message in the next reply. */
   onReply?: ((message: GroupMessage) => void) | undefined;
+  onRetry?: ((message: GroupMessage) => Promise<void>) | undefined;
   /** Shared live-turn rows from GroupRoom (also feeds Activity). */
   workingRows: readonly GroupMemberWorkingRow[];
   /** Optional role label per session id. */
@@ -71,77 +71,94 @@ export function GroupMessageList({
     nearBottom: true,
   });
   const labels = useMemo(() => memberLabels(members), [members]);
-  const threads = useMemo(() => buildGroupThreads(messages), [messages]);
+  const roomMessages = useMemo(
+    () => messages.filter((message) => message.groupId === groupId),
+    [messages, groupId],
+  );
+  // An agent may complete a turn silently. Keep its canonical record in the
+  // store, but leave no empty "Completed" bubble in the user's conversation.
+  const renderedMessages = useMemo(
+    () =>
+      roomMessages.filter(
+        (message) =>
+          !(
+            message.authorKind === "agent" &&
+            message.turnId &&
+            message.status === "completed" &&
+            !message.body.trim()
+          ),
+      ),
+    [roomMessages],
+  );
+  const byId = useMemo(
+    () => new Map(roomMessages.map((message) => [message.id, message])),
+    [roomMessages],
+  );
+  const [newMessageCount, setNewMessageCount] = useState(0);
+  const previousRoomRef = useRef(groupId);
+  const previousLastRef = useRef<string | undefined>(undefined);
   const activeWaiting = useMemo(() => {
     const ids = new Set<string>();
-    for (const entry of memberStates.values()) {
-      for (const sessionId of entry.waitingSessionIds) ids.add(sessionId);
-    }
+    for (const sessionId of memberStates.get(groupId)?.waitingSessionIds ?? []) ids.add(sessionId);
     return ids;
-  }, [memberStates]);
+  }, [memberStates, groupId]);
 
-  // Linger in-flight streams after the run ends until persist reconcile.
-  const [lingerBySession, setLingerBySession] = useState<
-    ReadonlyMap<string, GroupMemberWorkingRow>
-  >(() => new Map());
-  useEffect(() => {
-    setLingerBySession((previous) => {
-      const next = new Map(previous);
-      const workingIds = new Set(workingRows.map((row) => row.sessionId));
-      for (const row of workingRows) next.set(row.sessionId, row);
-      for (const [sessionId, row] of next) {
-        const stillWorking = workingIds.has(sessionId);
-        if (
-          !shouldShowInFlightRow({
-            sessionId,
-            streamText: row.live.streamText,
-            collapsed: row.live.collapsed,
-            stillWorking,
-            messages,
-          })
-        ) {
-          next.delete(sessionId);
-        }
-      }
-      return next;
-    });
-  }, [workingRows, messages]);
-
+  // Public text lives only in canonical cards. Presence is a compact fallback for
+  // active members whose canonical queued/running card has not arrived yet.
   const visibleWorkingRows = useMemo(() => {
-    const workingIds = new Set(workingRows.map((row) => row.sessionId));
-    const ordered: GroupMemberWorkingRow[] = [...workingRows];
-    for (const [sessionId, row] of lingerBySession) {
-      if (workingIds.has(sessionId)) continue;
-      if (
-        shouldShowInFlightRow({
-          sessionId,
-          streamText: row.live.streamText,
-          collapsed: row.live.collapsed,
-          stillWorking: false,
-          messages,
-        })
-      ) {
-        ordered.push(row);
-      }
-    }
-    return ordered;
-  }, [workingRows, lingerBySession, messages]);
+    const memberIds = new Set(members.map((member) => member.sessionId));
+    const represented = new Set(
+      roomMessages
+        .filter(
+          (message) =>
+            message.status &&
+            ["queued", "running", "writing", "awaiting_user"].includes(message.status),
+        )
+        .map((message) => message.authorSessionId),
+    );
+    return workingRows.filter(
+      (row) =>
+        memberIds.has(row.sessionId) && !row.live.collapsed && !represented.has(row.sessionId),
+    );
+  }, [workingRows, roomMessages, members]);
 
-  // Older page prepended: keep the view where it was. New message / working strip:
-  // follow the bottom only when the user was already near it.
+  // Prepending older pages preserves the reading position. Revisions of an
+  // existing card never count as new messages or move a reader above the bottom.
   useLayoutEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
+    // Presence changes can change the scroll height without adding public messages.
     void visibleWorkingRows;
+    if (previousRoomRef.current !== groupId) {
+      previousRoomRef.current = groupId;
+      previousLastRef.current = undefined;
+      anchorRef.current = { first: undefined, height: 0, nearBottom: true };
+      setNewMessageCount(0);
+    }
     const previous = anchorRef.current;
-    const first = messages[0]?.id;
+    const first = roomMessages[0]?.id;
+    const previousLast = previousLastRef.current;
+    const lastIndex = previousLast
+      ? roomMessages.findIndex((message) => message.id === previousLast)
+      : -1;
+    const appended = lastIndex >= 0 ? roomMessages.length - lastIndex - 1 : 0;
+    if (!previous.nearBottom && appended > 0) setNewMessageCount((count) => count + appended);
     if (previous.first && first !== previous.first && node.scrollHeight > previous.height) {
       node.scrollTop += node.scrollHeight - previous.height;
     } else if (previous.nearBottom) {
       node.scrollTop = node.scrollHeight;
     }
+    previousLastRef.current = roomMessages.at(-1)?.id;
     anchorRef.current = { first, height: node.scrollHeight, nearBottom: previous.nearBottom };
-  }, [messages, visibleWorkingRows]);
+  }, [roomMessages, visibleWorkingRows, groupId]);
+
+  function jumpToLatest(): void {
+    const node = scrollRef.current;
+    if (!node) return;
+    node.scrollTop = node.scrollHeight;
+    anchorRef.current.nearBottom = true;
+    setNewMessageCount(0);
+  }
 
   // A first page shorter than the viewport cannot be scrolled: load on.
   useEffect(() => {
@@ -151,93 +168,73 @@ export function GroupMessageList({
   }, [hasOlder, loadingOlder, loadOlder]);
 
   return (
-    <div
-      className="min-h-0 flex-1 overflow-y-auto"
-      data-testid="group-message-list"
-      onScroll={(event) => {
-        const node = event.currentTarget;
-        anchorRef.current.nearBottom = isNearBottom(
-          node.scrollHeight,
-          node.scrollTop,
-          node.clientHeight,
-        );
-        anchorRef.current.height = node.scrollHeight;
-        if (node.scrollTop < 40 && hasOlder && !loadingOlder) void loadOlder();
-      }}
-      ref={scrollRef}
-    >
-      <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-6 py-5">
-        {loadingOlder ? (
-          <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
-        ) : null}
-        {error ? <div className="text-center text-danger text-xs">{error}</div> : null}
-        {loaded && messages.length === 0 && !error && visibleWorkingRows.length === 0 ? (
-          <div className="py-16 text-center text-fg-faint text-sm" data-testid="group-room-empty">
-            {GROUP_ROOM_EMPTY_TEXT}
-          </div>
-        ) : null}
-        {threads.map((thread) => {
-          const hasReplies = thread.replies.length > 0;
-          return (
-            <div
-              className={cn("flex flex-col", hasReplies ? "gap-1.5" : "gap-0")}
-              data-testid={hasReplies ? "group-thread" : "group-message-flat"}
-              key={thread.root.id}
-            >
-              <GroupMessageRow
-                activeWaitingSessionIds={activeWaiting}
-                avatar={
-                  thread.root.authorSessionId ? avatars.get(thread.root.authorSessionId) : undefined
-                }
-                cwd={cwd}
-                labels={labels}
-                members={members}
-                message={thread.root}
-                onHandoffClick={onHandoffClick}
-                onOpenFile={onOpenFile}
-                onReply={onReply}
-                role={
-                  thread.root.authorSessionId ? roles?.get(thread.root.authorSessionId) : undefined
-                }
-              />
-              {hasReplies ? (
-                <div
-                  className="ml-4 flex flex-col gap-1.5 border-hairline border-l pl-3"
-                  data-testid="group-thread-replies"
-                >
-                  {thread.replies.map((message) => (
-                    <GroupMessageRow
-                      activeWaitingSessionIds={activeWaiting}
-                      avatar={
-                        message.authorSessionId ? avatars.get(message.authorSessionId) : undefined
-                      }
-                      cwd={cwd}
-                      key={message.id}
-                      labels={labels}
-                      members={members}
-                      message={message}
-                      onHandoffClick={onHandoffClick}
-                      onOpenFile={onOpenFile}
-                      onReply={onReply}
-                      role={
-                        message.authorSessionId ? roles?.get(message.authorSessionId) : undefined
-                      }
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </div>
+    <div className="relative flex min-h-0 min-w-0 flex-1">
+      <div
+        className="min-h-0 min-w-0 flex-1 overflow-y-auto"
+        data-testid="group-message-list"
+        onScroll={(event) => {
+          const node = event.currentTarget;
+          anchorRef.current.nearBottom = isNearBottom(
+            node.scrollHeight,
+            node.scrollTop,
+            node.clientHeight,
           );
-        })}
-        <GroupWorkingStatus
-          avatars={avatars}
-          groupId={groupId}
-          labels={labels}
-          members={members}
-          rows={visibleWorkingRows}
-          {...(roles ? { roles } : {})}
-        />
+          anchorRef.current.height = node.scrollHeight;
+          if (anchorRef.current.nearBottom) setNewMessageCount(0);
+          if (node.scrollTop < 40 && hasOlder && !loadingOlder) void loadOlder();
+        }}
+        ref={scrollRef}
+      >
+        <div className="mx-auto flex w-full max-w-[760px] flex-col gap-3 px-3 py-5 sm:px-6">
+          {loadingOlder ? (
+            <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
+          ) : null}
+          {error ? <div className="text-center text-danger text-xs">{error}</div> : null}
+          {loaded && roomMessages.length === 0 && !error && visibleWorkingRows.length === 0 ? (
+            <div className="py-16 text-center text-fg-faint text-sm" data-testid="group-room-empty">
+              {GROUP_ROOM_EMPTY_TEXT}
+            </div>
+          ) : null}
+          {renderedMessages.map((message) => (
+            <GroupMessageRow
+              activeWaitingSessionIds={activeWaiting}
+              avatar={message.authorSessionId ? avatars.get(message.authorSessionId) : undefined}
+              cwd={cwd}
+              key={message.id}
+              labels={labels}
+              members={members}
+              message={message}
+              onHandoffClick={onHandoffClick}
+              onOpenFile={onOpenFile}
+              onReply={onReply}
+              onRetry={onRetry}
+              replyToMessage={
+                message.replyToMessageId ? byId.get(message.replyToMessageId) : undefined
+              }
+              role={message.authorSessionId ? roles?.get(message.authorSessionId) : undefined}
+            />
+          ))}
+          <GroupWorkingStatus
+            avatars={avatars}
+            groupId={groupId}
+            labels={labels}
+            members={members}
+            rows={visibleWorkingRows}
+            {...(roles ? { roles } : {})}
+          />
+        </div>
       </div>
+      {newMessageCount > 0 ? (
+        <button
+          aria-label={`${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-hairline bg-elevated px-3 py-1.5 text-xs text-fg shadow-lg hover:bg-hover"
+          data-testid="group-new-messages"
+          onClick={jumpToLatest}
+          type="button"
+        >
+          {newMessageCount} new {newMessageCount === 1 ? "message" : "messages"} ↓
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { cn } from "../../../lib/cn";
 import { ICON, ICON_STROKE } from "../../../lib/uiDensity";
 
-/** Prompt Kit Message shell — avatar + identity column. */
+/** Message card with avatar and identity in the product surface palette. */
 export function PromptMessage({
   children,
   className,
@@ -15,7 +15,14 @@ export function PromptMessage({
   className?: string;
 } & React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn("flex gap-2.5", className)} data-prompt-kit="message" {...props}>
+    <div
+      className={cn(
+        "flex max-w-[94%] gap-2.5 rounded-xl border border-hairline bg-elevated/60 px-3 py-2.5 sm:max-w-[88%]",
+        className,
+      )}
+      data-prompt-kit="message"
+      {...props}
+    >
       {children}
     </div>
   );
@@ -28,7 +35,7 @@ export function PromptMessageBody({
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={cn("min-w-0 flex-1 space-y-1", className)}>{children}</div>;
+  return <div className={cn("min-w-0 flex-1 space-y-1.5", className)}>{children}</div>;
 }
 
 export function PromptMessageIdentity({

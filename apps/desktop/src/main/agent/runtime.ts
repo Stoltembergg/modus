@@ -83,7 +83,7 @@ export type HyperPlanBuildStartInput = {
  * A prompt that throws never produces a result; callers treat it as `failed`.
  */
 export type PromptTurnOutcome = "ok" | "failed" | "aborted" | "blocked";
-export type PromptTurnResult = { finalText?: string; outcome: PromptTurnOutcome };
+export type PromptTurnResult = { finalText?: string; outcome: PromptTurnOutcome; error?: string };
 
 /** A turn settled on a session, whoever started it (see `onTurnSettled`). */
 export type TurnSettledEvent = {
@@ -107,6 +107,8 @@ export type AgentRuntime = {
    * pending inside `prompt()` until the user answers); returns an unsubscribe.
    */
   onQuestionPending(listener: (sessionId: string) => void): () => void;
+  /** Observe normalized public/progress events without depending on a renderer. */
+  onEvent?(listener: (event: AgentEvent) => void): () => void;
   startPlanBuild(
     window: BrowserWindowType,
     input: HyperPlanBuildStartInput,

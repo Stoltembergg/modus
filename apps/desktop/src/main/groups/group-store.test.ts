@@ -131,7 +131,7 @@ function projectGroupFixture() {
   const workspaceId = insertWorkspace();
   const a = insertSession(workspaceId);
   const b = insertSession(workspaceId);
-  const group = createAgentGroup({ name: "Squad", workspaceId });
+  const group = createAgentGroup({ name: "Squad", workspaceId, mode: "free" });
   addAgentGroupMember({ groupId: group.id, sessionId: a, role: "implement" });
   addAgentGroupMember({ groupId: group.id, sessionId: b, role: "review" });
   return { workspaceId, a, b, group };
@@ -231,9 +231,17 @@ describe("groups", () => {
     const workspaceId = insertWorkspace();
     const projectGroup = createAgentGroup({ name: "  Build crew ", workspaceId });
     const inboxGroup = createAgentGroup({ name: "Inbox crew", workspaceId: CHATS_WORKSPACE_ID });
+    const freeWorkspaceId = insertWorkspace();
+    const freeGroup = createAgentGroup({
+      name: "Free crew",
+      workspaceId: freeWorkspaceId,
+      mode: "free",
+    });
 
-    expect(projectGroup).toMatchObject({ name: "Build crew", workspaceId, mode: "free" });
+    expect(projectGroup).toMatchObject({ name: "Build crew", workspaceId, mode: "coordinator" });
     expect(projectGroup.leadSessionId).toBeUndefined();
+    expect(inboxGroup.mode).toBe("coordinator");
+    expect(freeGroup.mode).toBe("free");
     expect(inboxGroup.workspaceId).toBeUndefined();
     expect(getAgentGroup(projectGroup.id)).toEqual(projectGroup);
     expect(listAgentGroups({ workspaceId }).map((group) => group.id)).toEqual([projectGroup.id]);
@@ -553,7 +561,7 @@ describe("message chains (startsChain) and lookup", () => {
 });
 
 describe("message pagination cursor", () => {
-  it("pages same-millisecond messages by (created_at, id) without skips or duplicates", () => {
+  it("pages messages by persisted sequence without skips or duplicates", () => {
     const { group } = projectGroupFixture();
     const sameMs = "2026-02-02T10:00:00.000Z";
     // Inserted first, but with the lexicographically LARGER id.
@@ -585,7 +593,7 @@ describe("message pagination cursor", () => {
       body: "later",
       createdAt: "2026-02-02T10:00:00.001Z",
     });
-    const expected = [earlier.id, second.id, first.id, later.id];
+    const expected = [first.id, second.id, earlier.id, later.id];
     const cursor = (m: { createdAt: string; id: string }) => ({ createdAt: m.createdAt, id: m.id });
 
     expect(listGroupMessages(group.id).map((m) => m.id)).toEqual(expected);
@@ -620,7 +628,7 @@ describe("message pagination cursor", () => {
     expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })).toEqual(
       listGroupMessages(group.id, { before: cursor(first), limit: 1 }),
     );
-    expect(listGroupMessages(group.id, { before: cursor(first), limit: 1 })[0]?.id).toBe(second.id);
+    expect(listGroupMessages(group.id, { before: cursor(second), limit: 1 })[0]?.id).toBe(first.id);
   });
 });
 
@@ -1439,7 +1447,12 @@ describe("createAgentGroupWithMembers (all or nothing)", () => {
       leadSessionId: b,
     });
 
-    expect(created).toMatchObject({ name: "Crew", workspaceId, mode: "free", leadSessionId: b });
+    expect(created).toMatchObject({
+      name: "Crew",
+      workspaceId,
+      mode: "coordinator",
+      leadSessionId: b,
+    });
     expect(created.members).toEqual([
       expect.objectContaining({ sessionId: a, role: "implement" }),
       expect.objectContaining({ sessionId: b }),

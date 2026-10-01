@@ -27,7 +27,10 @@ import type { MessageContextChip } from "./contracts-part-05";
 import type { AgentReviewResult, PlanRef } from "./contracts-part-06";
 import type { SkillSelection } from "./contracts-part-07";
 
-export type AgentEvent =
+/** Durable SQLite event position, used to merge history with live IPC safely. */
+export type AgentEvent = AgentEventPayload & { eventCursor?: number };
+
+type AgentEventPayload =
   | HarnessRouteEvent
   | { type: "harness.task_state"; sessionId: string; runId: string; state: HarnessTaskState }
   | {

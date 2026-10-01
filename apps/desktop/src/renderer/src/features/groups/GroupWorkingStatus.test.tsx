@@ -83,7 +83,7 @@ describe("GroupWorkingStatus", () => {
     expect(items[1]?.textContent).toContain("Builder");
   });
 
-  it("streams into a definitive GroupMessageRow (not a preview strip)", () => {
+  it("shows only compact Writing presence and never duplicates public stream text", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -97,12 +97,12 @@ describe("GroupWorkingStatus", () => {
       },
     ];
     renderStatus(rows);
-    expect(screen.queryByTestId("group-live-status")).toBeNull();
+    expect(screen.getByTestId("group-live-status").textContent).toContain("Writing");
     expect(screen.queryByTestId("group-live-thought")).toBeNull();
     expect(screen.queryByTestId("group-live-tools")).toBeNull();
-    expect(screen.getByTestId("group-live-writing").textContent).toContain("hand off");
-    expect(screen.getByTestId("group-message").dataset.kind).toBe("member");
-    expect(screen.getByTestId("group-member-working").dataset.streaming).toBe("true");
+    expect(screen.queryByTestId("group-live-writing")).toBeNull();
+    expect(screen.queryByTestId("group-message")).toBeNull();
+    expect(screen.queryByText(/hand off|Plan the toggle|Reading/)).toBeNull();
   });
 
   it("shows Exploring… inline before any writing arrives", () => {
@@ -126,7 +126,7 @@ describe("GroupWorkingStatus", () => {
     expect(screen.queryByTestId("group-live-writing")).toBeNull();
   });
 
-  it("keeps concurrent agent streams independent", () => {
+  it("keeps concurrent agent presence independent without a second transcript", () => {
     const rows: GroupMemberWorkingRow[] = [
       {
         sessionId: "s-lead",
@@ -151,7 +151,8 @@ describe("GroupWorkingStatus", () => {
     renderStatus(rows);
     const items = screen.getAllByTestId("group-member-working");
     expect(items).toHaveLength(2);
-    expect(items[0]?.textContent).toContain("Planner draft A");
+    expect(items[0]?.textContent).toContain("Writing");
+    expect(items[0]?.textContent).not.toContain("Planner draft A");
     expect(items[0]?.textContent).not.toContain("Exploring");
     expect(items[1]?.textContent).toContain("Exploring");
     expect(items[1]?.textContent).not.toContain("Planner draft A");
@@ -165,9 +166,9 @@ describe("GroupWorkingStatus", () => {
         live: live({ phase: "Done", collapsed: true, streamText: "should not show" }),
       },
     ];
-    // Caller filters; component still renders what it is given.
     renderStatus(rows);
-    expect(screen.getByTestId("group-live-writing").textContent).toContain("should not show");
+    expect(screen.queryByTestId("group-working-status")).toBeNull();
+    expect(screen.queryByText("should not show")).toBeNull();
   });
 
   it("shows Still working… after silence", () => {
