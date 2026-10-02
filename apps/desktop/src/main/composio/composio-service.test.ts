@@ -655,48 +655,44 @@ describe("Composio service", () => {
     [403, "Request rejected", "missing_scope_read", false],
     [429, "Request rejected", "rate_limited", true],
     [503, "Request rejected", "composio_unavailable", true],
-  ] as const)(
-    "reports HTTP %i from the SDK cause when saving a key, without storing the rejected key",
-    async (status, message, code, retryable) => {
-      const api = makeApi();
-      vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
-        new ComposioToolkitFetchError("Failed to fetch toolkits", {
-          cause: Object.assign(new Error(message), { status }),
-        }),
-      );
-      const harness = startHarness({ apiForKey: () => api.api });
+  ] as const)("reports HTTP %i from the SDK cause when saving a key, without storing the rejected key", async (status, message, code, retryable) => {
+    const api = makeApi();
+    vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
+      new ComposioToolkitFetchError("Failed to fetch toolkits", {
+        cause: Object.assign(new Error(message), { status }),
+      }),
+    );
+    const harness = startHarness({ apiForKey: () => api.api });
 
-      const state = await harness.service.setProjectApiKey(NEW_KEY);
+    const state = await harness.service.setProjectApiKey(NEW_KEY);
 
-      expect(state).toMatchObject({
-        apiKeyConfigured: false,
-        status: "error",
-        error: { code, retryable },
-      });
-      expect(harness.getSavedKey()).toBeUndefined();
-      expect(state.error?.message).not.toContain(NEW_KEY);
-    },
-  );
+    expect(state).toMatchObject({
+      apiKeyConfigured: false,
+      status: "error",
+      error: { code, retryable },
+    });
+    expect(harness.getSavedKey()).toBeUndefined();
+    expect(state.error?.message).not.toContain(NEW_KEY);
+  });
 
-  it.each([["uak_user_test_secret", "user API key"]])(
-    "explains the unsupported key type before sending %s to the project API",
-    async (key, kind) => {
-      const harness = startHarness();
+  it.each([
+    ["uak_user_test_secret", "user API key"],
+  ])("explains the unsupported key type before sending %s to the project API", async (key, kind) => {
+    const harness = startHarness();
 
-      const state = await harness.service.setProjectApiKey(key);
+    const state = await harness.service.setProjectApiKey(key);
 
-      expect(state).toMatchObject({
-        apiKeyConfigured: false,
-        status: "error",
-        error: { code: "unsupported_key_type", retryable: false },
-      });
-      expect(state.error?.message).toContain(kind);
-      expect(state.error?.message).toContain("Platform");
-      expect(state.error?.message).not.toContain(key);
-      expect(harness.createApi).not.toHaveBeenCalled();
-      expect(harness.getSavedKey()).toBeUndefined();
-    },
-  );
+    expect(state).toMatchObject({
+      apiKeyConfigured: false,
+      status: "error",
+      error: { code: "unsupported_key_type", retryable: false },
+    });
+    expect(state.error?.message).toContain(kind);
+    expect(state.error?.message).toContain("Platform");
+    expect(state.error?.message).not.toContain(key);
+    expect(harness.createApi).not.toHaveBeenCalled();
+    expect(harness.getSavedKey()).toBeUndefined();
+  });
 
   it("keeps the exact Composio endpoint, TCP, DNS, TLS, or proxy diagnostic for support", async () => {
     const api = makeApi();

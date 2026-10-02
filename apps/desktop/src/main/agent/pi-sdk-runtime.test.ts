@@ -4382,18 +4382,18 @@ describe("PiSdkRuntime", () => {
 
       await turn();
 
-      expect(
-        sessionAt().state.messages.filter((message) => message.role === "toolResult"),
-      ).toEqual([
-        expect.objectContaining({
-          content: [{ type: "text", text: "old client result" }],
-          isError: false,
-        }),
-        expect.objectContaining({
-          content: [{ type: "text", text: "reconnected client result" }],
-          isError: false,
-        }),
-      ]);
+      expect(sessionAt().state.messages.filter((message) => message.role === "toolResult")).toEqual(
+        [
+          expect.objectContaining({
+            content: [{ type: "text", text: "old client result" }],
+            isError: false,
+          }),
+          expect.objectContaining({
+            content: [{ type: "text", text: "reconnected client result" }],
+            isError: false,
+          }),
+        ],
+      );
     } finally {
       toolRegistry.unregisterTool(name);
       await runtime.releaseRuntime(sessionId);
@@ -4461,15 +4461,15 @@ describe("PiSdkRuntime", () => {
       resolvePermissionRequest(request.id, "deny");
       await pendingTurn;
 
-      expect(
-        sessionAt().state.messages.filter((message) => message.role === "toolResult"),
-      ).toEqual([
-        expect.objectContaining({
-          toolName: name,
-          isError: true,
-          content: [{ type: "text", text: "Denied by user: {}" }],
-        }),
-      ]);
+      expect(sessionAt().state.messages.filter((message) => message.role === "toolResult")).toEqual(
+        [
+          expect.objectContaining({
+            toolName: name,
+            isError: true,
+            content: [{ type: "text", text: "Denied by user: {}" }],
+          }),
+        ],
+      );
     } finally {
       toolRegistry.unregisterTool(name);
       await runtime.releaseRuntime(sessionId);
