@@ -330,7 +330,7 @@ export function GroupComposer({
             </select>
           </label>
           <button
-            className="rounded-lg bg-accent px-2.5 py-1.5 font-medium text-2xs text-white disabled:opacity-40"
+            className="rounded-lg bg-focus-ring px-2.5 py-1.5 font-medium text-2xs text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
             data-testid="group-kickoff-insert"
             disabled={!kickoffOwner.trim()}
             onClick={() => {
@@ -511,7 +511,7 @@ export function GroupComposer({
                   className={cn(
                     "rounded-md border px-2 py-1 font-medium transition-colors",
                     executionMode === "new"
-                      ? "border-accent/40 bg-accent/15 text-fg"
+                      ? "border-focus-ring/40 bg-focus-ring/15 text-fg"
                       : "border-hairline bg-elevated text-fg-muted hover:text-fg",
                   )}
                   data-testid="group-composer-mode-new"
@@ -524,7 +524,7 @@ export function GroupComposer({
                   className={cn(
                     "rounded-md border px-2 py-1 font-medium transition-colors",
                     executionMode === "complement"
-                      ? "border-accent/40 bg-accent/15 text-fg"
+                      ? "border-focus-ring/40 bg-focus-ring/15 text-fg"
                       : "border-hairline bg-elevated text-fg-muted hover:text-fg",
                   )}
                   data-testid="group-composer-mode-complement"
@@ -543,7 +543,7 @@ export function GroupComposer({
           </div>
           <button
             aria-label="Send"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-accent text-white transition-opacity disabled:opacity-40"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
             disabled={!canSend}
             onClick={() => void send()}
             type="button"

@@ -82,10 +82,13 @@ describe("Modus semantic design tokens", () => {
     expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
   });
 
-  it("gives the Groups prompt bar a shared focus glow and integrated toolbar", () => {
+  it("keeps the Groups prompt bar focus treatment neutral and its toolbar integrated", () => {
     const focusState = css.match(/\.group-prompt-bar:focus-within\s*\{([^}]+)\}/)?.[1] ?? "";
 
-    expect(focusState).toContain("box-shadow: var(--shadow-composer-focus)");
+    expect(focusState).toContain("border-color: var(--border-strong)");
+    expect(focusState).toContain("box-shadow: var(--shadow-composer)");
+    expect(focusState).not.toContain("--color-focus-ring");
+    expect(focusState).not.toContain("shadow-composer-focus");
     expect(css).toContain(".group-composer-toolbar");
   });
 

@@ -25,6 +25,7 @@ describe("GroupComposer file upload", () => {
         activeExecutionId="execution-1"
         members={[{ sessionId: "s1", title: "Planner" }]}
         onSend={vi.fn(async () => undefined)}
+        showKickoff
         updatePending={false}
       />,
     );
@@ -36,7 +37,14 @@ describe("GroupComposer file upload", () => {
     expect(toolbar.contains(screen.getByTestId("group-composer-mode-new"))).toBe(true);
     expect(toolbar.contains(screen.getByTestId("group-composer-mode-complement"))).toBe(true);
     expect(toolbar.contains(screen.getByTestId("group-composer-attach"))).toBe(true);
-    expect(toolbar.contains(screen.getByLabelText("Send"))).toBe(true);
+    const send = screen.getByLabelText("Send");
+    expect(toolbar.contains(send)).toBe(true);
+    expect(send.className).toContain("bg-focus-ring");
+    expect(screen.getByTestId("group-composer-mode-new").className).toContain("bg-focus-ring/15");
+    expect(screen.getByTestId("group-composer-mode-complement").className).not.toContain(
+      "bg-accent",
+    );
+    expect(screen.getByTestId("group-kickoff-insert").className).toContain("bg-focus-ring");
   });
 
   it("renders attach control and sends attachments with the message", async () => {
