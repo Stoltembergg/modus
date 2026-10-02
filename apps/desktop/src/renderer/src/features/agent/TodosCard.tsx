@@ -1,3 +1,17 @@
+/**
+ * To-dos card — presentation ported and adapted from 21st.dev Agent Elements
+ * (`lib/agent-ui/components/tools/todo-tool.tsx`), MIT License,
+ * Copyright (c) 2026 21st.dev. See THIRD_PARTY_NOTICES.md at the repo root
+ * for the full license text.
+ *
+ * Modus adaptations: Modus tokens + Tabler status glyphs (all five Modus
+ * statuses, including blocked with its reason), the collapsible
+ * `.timeline-wire` chrome, ShinyText (respects reduced motion) for the
+ * in-flight hints, and change detection keyed by todo id (upstream keys by
+ * index). When a list update arrives while the card is mounted, rows whose
+ * status changed (or that are new) get a short highlight + glyph pop — the
+ * upstream "pending update" diff; skipped under reduced motion.
+ */
 import {
   IconAlertCircle,
   IconChevronRight,
@@ -7,11 +21,41 @@ import {
   IconCircleX,
   IconListCheck,
 } from "@tabler/icons-react";
-import { useState } from "react";
+import { m, useReducedMotion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import type { TodoItem, TodoStatus } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { ShinyText } from "../../components/ui/ShinyText";
 import { cn } from "../../lib/cn";
+
+/** How long a changed row stays highlighted after an update arrives. */
+export const TODO_CHANGE_HIGHLIGHT_MS = 1400;
+
+export type TodoChange = {
+  id: string;
+  oldStatus?: TodoStatus;
+  newStatus: TodoStatus;
+};
+
+/**
+ * Rows that are new or whose status changed between two snapshots
+ * (upstream `detectChanges`, keyed by id so reordering isn't a change).
+ */
+export function detectTodoChanges(previous: TodoItem[], next: TodoItem[]): TodoChange[] {
+  const before = new Map(previous.map((todo) => [todo.id, todo.status]));
+  const changes: TodoChange[] = [];
+  for (const todo of next) {
+    const oldStatus = before.get(todo.id);
+    if (oldStatus !== todo.status) {
+      changes.push({
+        id: todo.id,
+        newStatus: todo.status,
+        ...(oldStatus ? { oldStatus } : {}),
+      });
+    }
+  }
+  return changes;
+}
 
 /**
  * Agent task-list snapshot (wireframe To-dos card). The timeline renders one
@@ -24,9 +68,35 @@ import { cn } from "../../lib/cn";
  */
 export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: boolean }) {
   const [open, setOpen] = useState(true);
+  const reduceMotion = useReducedMotion();
+  const previousRef = useRef(todos);
+  const [changed, setChanged] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    const previous = previousRef.current;
+    previousRef.current = todos;
+    if (previous === todos) return;
+    const changes = detectTodoChanges(previous, todos);
+    if (changes.length === 0) return;
+    setChanged(new Set(changes.map((change) => change.id)));
+  }, [todos]);
+
+  // Own effect so a no-op update (same statuses, new array) can't cancel the
+  // pending clear and leave the highlight stuck.
+  useEffect(() => {
+    if (changed.size === 0) return undefined;
+    const timeout = globalThis.setTimeout(() => setChanged(new Set()), TODO_CHANGE_HIGHLIGHT_MS);
+    return () => globalThis.clearTimeout(timeout);
+  }, [changed]);
+
+  const done = todos.filter((todo) => todo.status === "completed").length;
+  const creating = updating && todos.length === 0;
 
   return (
-    <section className="timeline-wire overflow-hidden">
+    <section
+      className="timeline-wire overflow-hidden"
+      data-todos-state={creating ? "creating" : updating ? "updating" : "settled"}
+    >
       <button
         aria-expanded={open}
         className="flex h-9 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-hover"
@@ -36,9 +106,17 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
         <IconListCheck className="shrink-0 text-fg-subtle" size={14} stroke={1.7} />
         <span className="shrink-0 text-sm text-fg-subtle">To-dos</span>
         <span className="shrink-0 text-sm text-fg-faint tabular-nums">{todos.length}</span>
+        {todos.length > 0 ? (
+          <span
+            className="shrink-0 text-fg-faint text-xs tabular-nums"
+            title={`${done} of ${todos.length} completed`}
+          >
+            · {done} done
+          </span>
+        ) : null}
         {updating ? (
           <span className="min-w-0 truncate text-xs">
-            <ShinyText>Updating to-dos…</ShinyText>
+            <ShinyText>{creating ? "Creating to-do list…" : "Updating to-dos…"}</ShinyText>
           </span>
         ) : null}
         <span className="min-w-0 flex-1" />
@@ -53,9 +131,20 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
       </button>
       <CollapsibleMotion open={open} preset="timeline">
         <ul className="border-hairline border-t px-3 py-1.5">
-          {todos.map((todo) => (
-            <TodoRow key={todo.id} todo={todo} />
-          ))}
+          {todos.length === 0 ? (
+            <li className="py-1.5 text-fg-faint text-xs" data-todos-empty>
+              {creating ? "Waiting for the first items…" : "No to-dos yet."}
+            </li>
+          ) : (
+            todos.map((todo) => (
+              <TodoRow
+                animate={!reduceMotion}
+                changed={changed.has(todo.id)}
+                key={todo.id}
+                todo={todo}
+              />
+            ))
+          )}
         </ul>
       </CollapsibleMotion>
     </section>
@@ -105,12 +194,35 @@ const TODO_ROW_STYLES: Record<
   },
 };
 
-function TodoRow({ todo }: { todo: TodoItem }) {
+function TodoRow({
+  todo,
+  changed = false,
+  animate = true,
+}: {
+  todo: TodoItem;
+  changed?: boolean;
+  animate?: boolean;
+}) {
   const { Glyph, iconClass, iconStroke, textClass } = TODO_ROW_STYLES[todo.status];
   const blocked = todo.status === "blocked";
   return (
-    <li className="flex items-start gap-2.5 py-1.5">
-      <Glyph className={cn("mt-0.5 shrink-0", iconClass)} size={14} stroke={iconStroke} />
+    <li
+      className={cn(
+        "-mx-1.5 flex items-start gap-2.5 rounded-md px-1.5 py-1.5 transition-colors duration-500",
+        changed && "bg-build/12",
+      )}
+      data-changed={changed || undefined}
+      data-status={todo.status}
+    >
+      <m.span
+        animate={{ scale: 1, opacity: 1 }}
+        className="mt-0.5 flex shrink-0"
+        initial={changed && animate ? { scale: 0.6, opacity: 0.4 } : false}
+        key={`${todo.status}-${changed ? "changed" : "steady"}`}
+        transition={{ duration: 0.22, ease: "easeOut" }}
+      >
+        <Glyph className={cn("shrink-0", iconClass)} size={14} stroke={iconStroke} />
+      </m.span>
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
           <span className={cn("text-sm leading-snug", textClass)}>{todo.content}</span>
