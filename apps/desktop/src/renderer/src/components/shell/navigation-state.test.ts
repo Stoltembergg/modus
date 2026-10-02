@@ -19,12 +19,6 @@ describe("primary navigation", () => {
     });
   });
 
-  it("opens Connections as a first-level destination without changing the settings return target", () => {
-    const settings = navigatePrimary(INITIAL_PRIMARY_NAVIGATION, "settings");
-    const connections = navigatePrimary(settings, "connections");
-    expect(connections).toEqual({ active: "connections", settingsReturnTo: "groups" });
-  });
-
   it("restores an active Direct Message before opening restored Settings", () => {
     expect(
       restorePrimaryNavigation(INITIAL_PRIMARY_NAVIGATION, {

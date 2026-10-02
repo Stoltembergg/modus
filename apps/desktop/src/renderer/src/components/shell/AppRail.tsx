@@ -1,9 +1,4 @@
-import {
-  IconCircles,
-  IconMessageCircle,
-  IconPlugConnected,
-  IconSettings,
-} from "@tabler/icons-react";
+import { IconCircles, IconMessageCircle, IconSettings } from "@tabler/icons-react";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { ModusBot } from "../ui/ModusBot";
@@ -16,7 +11,6 @@ export const APP_RAIL_WIDTH = 68;
 const DESTINATIONS = [
   { id: "groups", label: "Groups", icon: IconCircles },
   { id: "direct-messages", label: "Direct Messages", icon: IconMessageCircle },
-  { id: "connections", label: "Connections", icon: IconPlugConnected },
 ] as const;
 
 export function AppRail({
@@ -36,7 +30,7 @@ export function AppRail({
       data-shell-layer="app-rail"
     >
       <div className="app-rail-mark" data-testid="app-rail-brand" title="Modus">
-        <ModusBot className="size-5" motionScale={0.25} />
+        <ModusBot className="size-7" motionScale={0.25} />
       </div>
       <div className="flex flex-col gap-1">
         {DESTINATIONS.map(({ id, icon: Icon, label }) => (

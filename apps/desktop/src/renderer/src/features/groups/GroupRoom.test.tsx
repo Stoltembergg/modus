@@ -422,6 +422,10 @@ describe("GroupRoom", () => {
     const chrome = screen.getByTestId("fake-window-chrome");
     const header = within(chrome).getByTestId("group-room-header");
     expect(header.dataset.variant).toBe("chrome");
+    expect(
+      within(header).getByRole("searchbox", { name: "Search in conversation" }).parentElement
+        ?.className,
+    ).toContain("group-room-header-search-centered");
     const room = screen.getByTestId("group-room");
     expect(within(room).queryByTestId("group-room-header")).toBeNull();
   });

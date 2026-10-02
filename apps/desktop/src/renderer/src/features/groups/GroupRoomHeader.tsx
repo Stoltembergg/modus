@@ -108,30 +108,44 @@ export function GroupRoomHeader({
       data-variant={variant}
     >
       <div
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-2"
+        className={
+          chrome
+            ? "group-room-header-row-chrome"
+            : "flex min-w-0 flex-1 flex-nowrap items-center gap-2"
+        }
         data-testid="group-room-header-row"
       >
-        {renaming ? (
-          <GroupRenameInput
-            initial={group.name}
-            onCancel={() => setRenaming(false)}
-            onCommit={(name) => {
-              setRenaming(false);
-              const next = name.trim();
-              if (next && next !== group.name) onRename(next);
-            }}
-          />
-        ) : (
-          <h1 className="min-w-0 truncate font-medium text-fg text-sm">{group.name}</h1>
-        )}
-        <span
-          className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
-          data-testid="group-project-badge"
+        <div
+          className={
+            chrome ? "group-room-header-identity-chrome" : "flex min-w-0 items-center gap-2"
+          }
         >
-          {projectName ?? "No project"}
-        </span>
+          {renaming ? (
+            <GroupRenameInput
+              initial={group.name}
+              onCancel={() => setRenaming(false)}
+              onCommit={(name) => {
+                setRenaming(false);
+                const next = name.trim();
+                if (next && next !== group.name) onRename(next);
+              }}
+            />
+          ) : (
+            <h1 className="min-w-0 truncate font-medium text-fg text-sm">{group.name}</h1>
+          )}
+          <span
+            className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
+            data-testid="group-project-badge"
+          >
+            {projectName ?? "No project"}
+          </span>
+        </div>
         <label
-          className="app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+          className={
+            chrome
+              ? "group-room-header-search-centered app-no-drag flex min-w-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+              : "app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+          }
           data-testid="group-conversation-search"
         >
           <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
@@ -154,65 +168,71 @@ export function GroupRoomHeader({
             </button>
           ) : null}
         </label>
-        <span className="min-w-2 flex-1" />
-        <GroupAgentsPopover
-          avatars={avatars}
-          group={group}
-          memberStates={memberStates}
-          {...(defaultModelId !== undefined ? { defaultModelId } : {})}
-          {...(models !== undefined ? { models } : {})}
-          {...(onAgentsChanged ? { onAgentsChanged } : {})}
-        />
-        {running ? (
-          <button
-            className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
-            onClick={onStop}
-            title="End the chain and stop running member turns"
-            type="button"
-          >
-            <IconPlayerStop size={ICON.xs} stroke={ICON_STROKE.xs} />
-            Stop
-          </button>
-        ) : null}
-        {tasksButton}
-        <Menu.Root
-          onOpenChange={(open) => {
-            setMenuOpen(open);
-            if (!open) setConfirmDelete(false);
-          }}
-          open={menuOpen}
+        {!chrome ? <span className="min-w-2 flex-1" /> : null}
+        <div
+          className={
+            chrome ? "group-room-header-controls-chrome" : "flex shrink-0 items-center gap-2"
+          }
         >
-          <Menu.Trigger
-            aria-label="Group actions"
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted data-popup-open:bg-hover"
+          <GroupAgentsPopover
+            avatars={avatars}
+            group={group}
+            memberStates={memberStates}
+            {...(defaultModelId !== undefined ? { defaultModelId } : {})}
+            {...(models !== undefined ? { models } : {})}
+            {...(onAgentsChanged ? { onAgentsChanged } : {})}
+          />
+          {running ? (
+            <button
+              className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
+              onClick={onStop}
+              title="End the chain and stop running member turns"
+              type="button"
+            >
+              <IconPlayerStop size={ICON.xs} stroke={ICON_STROKE.xs} />
+              Stop
+            </button>
+          ) : null}
+          {tasksButton}
+          <Menu.Root
+            onOpenChange={(open) => {
+              setMenuOpen(open);
+              if (!open) setConfirmDelete(false);
+            }}
+            open={menuOpen}
           >
-            <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner align="end" side="bottom" sideOffset={4}>
-              <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
-                <GroupMenuItems
-                  agentCount={group.members.length}
-                  confirmDelete={confirmDelete}
-                  coordinator={
-                    onSetMode
-                      ? {
-                          checked: coordinating,
-                          disabled: !group.leadSessionId,
-                          onToggle: () => onSetMode(coordinating ? "free" : "coordinator"),
-                        }
-                      : undefined
-                  }
-                  onConfirmDelete={setConfirmDelete}
-                  onDelete={onDelete}
-                  onManageMembers={onManageMembers}
-                  onStartRename={() => setRenaming(true)}
-                  {...(onAddAgent ? { onAddAgent } : {})}
-                />
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+            <Menu.Trigger
+              aria-label="Group actions"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted data-popup-open:bg-hover"
+            >
+              <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="end" side="bottom" sideOffset={4}>
+                <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
+                  <GroupMenuItems
+                    agentCount={group.members.length}
+                    confirmDelete={confirmDelete}
+                    coordinator={
+                      onSetMode
+                        ? {
+                            checked: coordinating,
+                            disabled: !group.leadSessionId,
+                            onToggle: () => onSetMode(coordinating ? "free" : "coordinator"),
+                          }
+                        : undefined
+                    }
+                    onConfirmDelete={setConfirmDelete}
+                    onDelete={onDelete}
+                    onManageMembers={onManageMembers}
+                    onStartRename={() => setRenaming(true)}
+                    {...(onAddAgent ? { onAddAgent } : {})}
+                  />
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        </div>
       </div>
     </div>
   );

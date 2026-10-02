@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppRail, type PrimaryDestination } from "./AppRail";
 import { AppShell } from "./AppShell";
@@ -67,16 +67,13 @@ describe("App shell", () => {
     expect(within(navigation).queryByText("Direct Messages")).toBeNull();
     expect(within(navigation).queryByText("Groups")).toBeNull();
     expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
-    const connections = within(navigation).getByRole("button", { name: "Connections" });
-    expect(within(navigation).queryByText("Connections")).toBeNull();
+    expect(within(navigation).queryByRole("button", { name: "Connections" })).toBeNull();
     const brand = within(navigation).getByTestId("app-rail-brand");
     const mascot = within(brand).getByRole("img", { name: "Modus" });
     expect(mascot.tagName.toLowerCase()).toBe("svg");
-    expect(mascot.classList.contains("size-5")).toBe(true);
+    expect(mascot.classList.contains("size-7")).toBe(true);
     expect(brand.querySelector("img")).toBeNull();
     expect(directMessages.getAttribute("title")).toBe("Direct Messages");
-    fireEvent.click(connections);
-    expect(onNavigate).toHaveBeenCalledWith("connections");
     const settings = within(navigation).getByRole("button", { name: "Settings" });
     expect(settings.getAttribute("title")).toBe("Settings");
     expect(within(navigation).queryByText("Settings")).toBeNull();
@@ -103,7 +100,6 @@ describe("App shell", () => {
     expect(initialMetrics).toEqual([
       { label: "Groups", iconSize: "20", slotClass: true },
       { label: "Direct Messages", iconSize: "20", slotClass: true },
-      { label: "Connections", iconSize: "20", slotClass: true },
       { label: "Settings", iconSize: "20", slotClass: true },
     ]);
 

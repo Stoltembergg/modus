@@ -331,15 +331,42 @@
 }
 .app-rail-mark {
   display: grid;
-  width: 34px;
-  height: 34px;
-  margin: 0 auto 6px;
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 2px;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 11px;
   color: var(--text-primary);
   font-size: var(--type-body);
   font-weight: 600;
+}
+.group-room-header-row-chrome {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, min(220px, 28vw)) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.group-room-header-identity-chrome {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.group-room-header-search-centered {
+  width: 100%;
+  min-width: 0;
+  grid-column: 2;
+  grid-row: 1;
+}
+.group-room-header-controls-chrome {
+  display: flex;
+  min-width: 0;
+  grid-column: 3;
+  grid-row: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .group-identity-icon {
   color: hsl(
@@ -2067,8 +2094,7 @@ body {
  */
 .modus-markdown [data-streamdown="table-wrapper"] > div:not(:has(table)),
 .modus-markdown [data-streamdown="code-block"] > div:has(> [data-streamdown="code-block-actions"]),
-.modus-markdown
-  [data-streamdown="mermaid-block"]
+.modus-markdown [data-streamdown="mermaid-block"]
   > div:has(> [data-streamdown="mermaid-block-actions"]) {
   opacity: 0;
   pointer-events: none;
@@ -2196,7 +2222,8 @@ body {
 }
 
 /* Loading-only: collapse Streamdown min-h shells before SVG exists. */
-.modus-markdown [data-streamdown="mermaid-block"]
+.modus-markdown
+  [data-streamdown="mermaid-block"]
   > div:last-child:not(:has([data-streamdown="mermaid"]))
   [class*="min-h-"] {
   min-height: 0;
@@ -2280,8 +2307,7 @@ body > div.fixed.inset-0:has([data-streamdown="mermaid"]) [data-streamdown="merm
 
 /* Shared chrome tokens for the top-right control cluster. */
 body > div.fixed.inset-0:has([data-streamdown="mermaid"]) > button.absolute,
-body
-  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   display: flex;
@@ -2296,7 +2322,8 @@ body
 }
 
 /* Zoom± / Reset: move from bottom-left column → top-right row, left of Close. */
-body > div.fixed.inset-0:has([data-streamdown="mermaid"])
+body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"] {
   top: 1rem !important;

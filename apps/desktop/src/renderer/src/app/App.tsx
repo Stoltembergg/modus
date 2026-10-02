@@ -98,6 +98,7 @@ import {
 } from "../features/groups/useWorkingGroups";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import type { SettingsSectionId } from "../features/settings/settings-types";
 import {
   createUiStatePusher,
   isComposerDraftEmpty,
@@ -123,7 +124,6 @@ const WORKSPACE_GUTTER = 8;
 const loadChatPane = () => import("../features/agent/ChatPane");
 const loadInspector = () => import("../features/inspector/Inspector");
 const loadSettingsPanel = () => import("../features/settings/SettingsPanel");
-const loadConnectionsPage = () => import("../features/settings/ConnectionsPage");
 const ChatPane = lazy(() =>
   loadChatPane().then(({ ChatPane: Component }) => ({ default: Component })),
 );
@@ -137,12 +137,6 @@ const SettingsPanel = lazy(() =>
     default: Component,
   })),
 );
-const ConnectionsPage = lazy(() =>
-  loadConnectionsPage().then(({ ConnectionsPage: Component }) => ({
-    default: Component,
-  })),
-);
-
 function logInitialHydrationError(resource: string, error: unknown): void {
   console.error(`Unable to load initial ${resource}.`, error);
 }
@@ -210,10 +204,19 @@ export function App() {
   const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
   const primaryNavigationTouchedRef = useRef(false);
   const settingsOpen = primaryNavigation.active === "settings";
+  const [settingsInitialSection, setSettingsInitialSection] =
+    useState<SettingsSectionId>("model-provider");
   const navigateToPrimary = useCallback((destination: PrimaryDestination) => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => navigatePrimary(current, destination));
   }, []);
+  const openSettings = useCallback(
+    (section: SettingsSectionId = "model-provider") => {
+      setSettingsInitialSection(section);
+      navigateToPrimary("settings");
+    },
+    [navigateToPrimary],
+  );
   const closeSettings = useCallback(() => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
@@ -376,12 +379,7 @@ export function App() {
 
   useEffect(() => {
     const idleCallback = window.requestIdleCallback(() => {
-      void Promise.allSettled([
-        loadChatPane(),
-        loadInspector(),
-        loadSettingsPanel(),
-        loadConnectionsPage(),
-      ]);
+      void Promise.allSettled([loadChatPane(), loadInspector(), loadSettingsPanel()]);
     });
     return () => window.cancelIdleCallback(idleCallback);
   }, []);
@@ -683,7 +681,7 @@ export function App() {
 
   async function createSession(workspace: WorkspaceInfo | null): Promise<AgentSessionInfo | null> {
     if (!model) {
-      navigateToPrimary("settings");
+      openSettings();
       setSessionCreateError("No model is configured. Connect a provider in Settings first.");
       return null;
     }
@@ -749,8 +747,8 @@ export function App() {
   }, []);
 
   const openConnections = useCallback(() => {
-    navigateToPrimary("connections");
-  }, [navigateToPrimary]);
+    openSettings("mcp");
+  }, [openSettings]);
 
   const rememberActivePlan = useCallback(
     (plan: PlanRef) => {
@@ -1234,11 +1232,14 @@ export function App() {
                   <AppRail
                     active={primaryNavigation.active}
                     topChromeClearance={!settingsOpen}
-                    onNavigate={navigateToPrimary}
+                    onNavigate={(destination) =>
+                      destination === "settings" ? openSettings() : navigateToPrimary(destination)
+                    }
                   />
                   {settingsOpen ? (
                     <Suspense fallback={<ModusLoadingFallback />}>
                       <SettingsPanel
+                        initialSection={settingsInitialSection}
                         onClose={closeSettings}
                         onRefresh={refreshModelSettings}
                         onRefreshCatalog={refreshModelCatalog}
@@ -1247,21 +1248,6 @@ export function App() {
                         workspaceCwd={activeWorkspace?.rootPath}
                       />
                     </Suspense>
-                  ) : primaryNavigation.active === "connections" ? (
-                    <MainSurface className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0">
-                      <TopBar
-                        className={cn(
-                          "toolbar-row flex shrink-0 items-center px-4",
-                          (isMac || windowChrome === "windows-overlay") && "app-drag",
-                          windowChrome === "windows-overlay" && "pr-[138px]",
-                        )}
-                      >
-                        <h1 className="app-no-drag text-sm font-medium text-fg">Connections</h1>
-                      </TopBar>
-                      <Suspense fallback={<ModusLoadingFallback />}>
-                        <ConnectionsPage />
-                      </Suspense>
-                    </MainSurface>
                   ) : (
                     <>
                       <ContextSidebar>
@@ -1289,7 +1275,7 @@ export function App() {
                           onNewSession={() => openNewChat()}
                           onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
                           onOpenWorkspace={() => void openWorkspace()}
-                          onOpenSettings={() => navigateToPrimary("settings")}
+                          onOpenSettings={() => openSettings()}
                           onSelectSession={selectSession}
                           onWidthChange={setSidebarWidth}
                           activeSessionId={activeSessionId}
@@ -1364,7 +1350,7 @@ export function App() {
                       >
                         <TopBar
                           className={cn(
-                            "toolbar-row relative z-10 flex shrink-0 items-center px-3",
+                            "toolbar-row relative z-10 flex shrink-0 items-center pr-3 pl-1",
                             (isMac || windowChrome === "windows-overlay") && "app-drag",
                             windowChrome === "windows-overlay" && "pr-[138px]",
                             // Traffic lights sit in this row when the left sidebar is closed.
@@ -1426,7 +1412,7 @@ export function App() {
                                   branch={branch}
                                   environmentStats={environmentStats}
                                   inspectorOpen={responsiveInspectorOpen}
-                                  onOpenSettings={() => navigateToPrimary("settings")}
+                                  onOpenSettings={() => openSettings()}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}
                                 />
                               </div>
