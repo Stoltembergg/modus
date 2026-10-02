@@ -1,6 +1,7 @@
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
+  AgentAvatarShape,
   AgentGroupWithMembers,
   AgentSessionInfo,
 } from "../../../../shared/contracts";
@@ -28,6 +29,7 @@ export type GroupAgentRow = {
   role: string | undefined;
   face: AgentAvatarFace;
   color: AgentAvatarColor;
+  shape: AgentAvatarShape;
   state: AgentAvatarState;
   isLead: boolean;
   /** The agent's 1:1 chat when it exists (created on first open). */
@@ -94,6 +96,7 @@ export function groupAgentRows(
       role: member.role ?? (member.agentRole || undefined),
       face: avatar.face,
       color: avatar.color,
+      shape: avatar.shape,
       state: agentAvatarState(activity, member.archived === true),
       isLead: group.leadSessionId === member.sessionId,
       chatSessionId: chat?.id,

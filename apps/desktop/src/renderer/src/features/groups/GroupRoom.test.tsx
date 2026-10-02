@@ -14,6 +14,7 @@ import type {
   UpdateState,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
+import { AGENT_AVATAR_SHAPES } from "../../../../shared/contracts";
 import { formatClock } from "../../lib/formatClock";
 import {
   DECISIONS_EMPTY_TEXT,
@@ -331,6 +332,7 @@ describe("GroupRoom", () => {
 
     const avatar = await screen.findByRole("button", { name: "Edit Planner" });
     expect(avatar.getAttribute("title")).toBe("Planner");
+    expect(avatar.getAttribute("aria-description")).toBe("Idle");
     await user.click(avatar);
     expect(await screen.findByTestId("morphing-agent-edit")).toBeTruthy();
   });
@@ -523,7 +525,12 @@ describe("GroupRoom", () => {
     const rows = screen.getAllByTestId("group-message");
     expect(rows[0]?.textContent).toContain("You");
     expect(rows[0]?.textContent).toContain("hello");
-    expect(rows[0]?.textContent).toContain("#1");
+    expect(rows[0]?.textContent).not.toContain("#1");
+    expect(
+      rows[0]
+        ?.querySelector('[data-testid="group-execution-filter"]')
+        ?.getAttribute("data-execution-id"),
+    ).toBe("1");
     expect(rows[0]?.textContent).toContain("~2 tokens");
     expect(rows.slice(1).map((row) => row.textContent)).toEqual([
       "Cy joined as Scribe",
@@ -580,19 +587,49 @@ describe("GroupRoom", () => {
   it("shows every agent avatar when a group has ten members", async () => {
     const firstMember = GROUP.members[0];
     if (!firstMember) throw new Error("Expected the group fixture to include a member");
-    const members = Array.from({ length: 10 }, (_, index) => ({
+    const members = AGENT_AVATAR_SHAPES.map((avatarShape, index) => ({
       ...firstMember,
       sessionId: `s-agent-${index + 1}`,
       agentId: `agent-${index + 1}`,
       name: `Agent ${index + 1}`,
+      avatarShape,
+      ...(index === 3 ? { archived: true as const } : {}),
     }));
 
-    renderRoom(states(), { ...GROUP, members });
+    renderRoom(
+      states({
+        runningSessionIds: ["s-agent-1"],
+        queuedSessionIds: ["s-agent-2"],
+        waitingSessionIds: ["s-agent-3"],
+      }),
+      { ...GROUP, members },
+    );
 
     const presence = await screen.findByTestId("group-agent-presence");
     const avatars = Array.from(presence.querySelectorAll(":scope > button"));
     expect(avatars).toHaveLength(10);
     expect(avatars[9]?.getAttribute("title")).toBe("Agent 10");
+    const avatarShapes = Array.from(presence.querySelectorAll('[data-testid="agent-avatar"]')).map(
+      (avatar) => (avatar as HTMLElement).dataset.shape,
+    );
+    expect(new Set(avatarShapes).size).toBe(10);
+    expect(presence.querySelector('[data-presence="working"]')).toBeTruthy();
+    expect(presence.querySelector('[data-presence="queued"]')).toBeTruthy();
+    expect(presence.querySelector('[data-presence="waiting"]')).toBeTruthy();
+    expect(presence.querySelector('[data-presence="archived"]')).toBeTruthy();
+    expect(presence.querySelector('[data-presence="idle"]')).toBeTruthy();
+    expect(avatars[0]?.getAttribute("aria-label")).toBe("Agent 1 profile unavailable. Working");
+    expect(avatars[1]?.getAttribute("aria-label")).toBe("Agent 2 profile unavailable. Queued");
+    expect(avatars[2]?.getAttribute("aria-label")).toBe(
+      "Agent 3 profile unavailable. Waiting for you",
+    );
+    expect(presence.querySelector('[data-presence="working"]')?.className).toContain(
+      "motion-safe:animate-pulse",
+    );
+    expect(presence.querySelector('[data-presence="idle"]')?.className).not.toContain("animate");
+    expect(
+      avatars[0]?.querySelector('[data-testid="agent-avatar"]')?.getAttribute("data-size"),
+    ).toBe("24");
     expect(presence.textContent).not.toContain("+");
   });
 
@@ -962,19 +999,22 @@ describe("GroupRoom blocked groups", () => {
   it.each([
     ["no workspace", undefined],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])("a group with %s shows 'Choose a folder to continue this group' instead of the composer", async (_label, workspaceId) => {
-    const user = userEvent.setup();
-    const { workspaceId: _drop, ...rest } = GROUP;
-    const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
-    const onChooseFolder = vi.fn();
-    renderRoom(states(), roomGroup, undefined, onChooseFolder);
-    const banner = await screen.findByTestId("group-blocked-banner");
-    expect(banner.textContent).toContain("Choose a folder to continue this group");
-    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
-    await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
-    expect(onChooseFolder).toHaveBeenCalledTimes(1);
-    expect(group.postMessage).not.toHaveBeenCalled();
-  });
+  ])(
+    "a group with %s shows 'Choose a folder to continue this group' instead of the composer",
+    async (_label, workspaceId) => {
+      const user = userEvent.setup();
+      const { workspaceId: _drop, ...rest } = GROUP;
+      const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
+      const onChooseFolder = vi.fn();
+      renderRoom(states(), roomGroup, undefined, onChooseFolder);
+      const banner = await screen.findByTestId("group-blocked-banner");
+      expect(banner.textContent).toContain("Choose a folder to continue this group");
+      expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+      await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
+      expect(onChooseFolder).toHaveBeenCalledTimes(1);
+      expect(group.postMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("a group left with one agent shows 'Add a member to continue' and opens Manage members", async () => {
     const user = userEvent.setup();

@@ -42,6 +42,7 @@ export function MemberRow({
         <AgentAvatar
           color={row.color}
           face={row.face}
+          shape={row.shape}
           seed={row.agentId}
           size={16}
           state={row.state}

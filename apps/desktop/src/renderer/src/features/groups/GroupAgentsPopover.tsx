@@ -12,9 +12,13 @@ import {
   MorphingDialogTitle,
   MorphingDialogTrigger,
 } from "../../components/ui/MorphingDialog";
-import { cn } from "../../lib/cn";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog } from "../agents/AgentDialog";
+import {
+  AGENT_PRESENCE_LABEL,
+  AgentPresenceDot,
+  type AgentPresenceState,
+} from "../agents/AgentPresenceDot";
 import { agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
@@ -27,6 +31,9 @@ function AgentMorphEdit({
   defaultModelId,
   onUpdated,
   trigger,
+  triggerLabel,
+  triggerDescription,
+  triggerTitle,
   triggerClassName = "flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1.5 text-left hover:bg-hover",
 }: {
   agent: AgentInfo;
@@ -35,16 +42,20 @@ function AgentMorphEdit({
   defaultModelId?: string | undefined;
   onUpdated(): void;
   trigger: React.ReactNode;
+  triggerLabel?: string;
+  triggerDescription?: string;
+  triggerTitle?: string;
   triggerClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <MorphingDialog onOpenChange={setOpen} open={open}>
       <MorphingDialogTrigger
-        aria-label={`Edit ${agent.name}`}
+        aria-label={triggerLabel ?? `Edit ${agent.name}`}
+        aria-description={triggerDescription}
         className={triggerClassName}
         data-testid="group-agent-avatar-trigger"
-        title={agent.name}
+        title={triggerTitle ?? agent.name}
       >
         {trigger}
       </MorphingDialogTrigger>
@@ -123,6 +134,7 @@ export function GroupAgentsPopover({
             archived: member.archived === true,
           };
           const state = memberActivityState(memberStates, group.id, member.sessionId);
+          const presence: AgentPresenceState = avatar.archived ? "archived" : state;
           const label = member.name;
           const agent = agentsById.get(member.agentId);
           const face = (
@@ -138,18 +150,9 @@ export function GroupAgentsPopover({
                 size={24}
                 state={agentAvatarState(state, avatar.archived)}
               />
-              <span
-                aria-hidden
-                className={cn(
-                  "absolute right-0 bottom-0 size-2 rounded-full border border-[var(--surface-main)] transition-colors duration-[var(--motion-ui)]",
-                  state === "working"
-                    ? "bg-success"
-                    : state === "waiting"
-                      ? "bg-amber-400"
-                      : "bg-fg-faint",
-                )}
-                data-presence={state}
-                title={state === "working" ? "Working" : state === "waiting" ? "Waiting" : "Idle"}
+              <AgentPresenceDot
+                className="absolute right-0 bottom-0 transition-colors duration-[var(--motion-ui)]"
+                state={presence}
               />
             </span>
           );
@@ -168,11 +171,13 @@ export function GroupAgentsPopover({
                 onAgentsChanged?.();
               }}
               trigger={face}
+              triggerDescription={AGENT_PRESENCE_LABEL[presence]}
+              triggerTitle={label}
               triggerClassName="relative z-0 flex size-8 shrink-0 aspect-square items-center justify-center rounded-full outline-none transition-transform hover:z-10 hover:scale-105 focus-visible:z-10 focus-visible:ring-2 focus-visible:ring-focus-ring"
             />
           ) : (
             <button
-              aria-label={`${label} profile unavailable`}
+              aria-label={`${label} profile unavailable. ${AGENT_PRESENCE_LABEL[presence]}`}
               className="relative z-0 flex size-8 shrink-0 aspect-square items-center justify-center rounded-full"
               disabled
               key={member.sessionId}

@@ -30,7 +30,8 @@ describe("applyGroupActivityEvent", () => {
     expect(groupActivityState(running, "g1")).toBe("working");
     expect(isGroupRunning(running, "g1")).toBe(true);
     const queued = applyGroupActivityEvent(running, activity("g1", [], ["s2"]));
-    expect(groupActivityState(queued, "g1")).toBe("working");
+    expect(groupActivityState(queued, "g1")).toBe("queued");
+    expect(memberActivityState(queued, "g1", "s2")).toBe("queued");
     const idle = applyGroupActivityEvent(queued, activity("g1", []));
     expect(idle.has("g1")).toBe(false);
     expect(groupActivityState(idle, "g1")).toBe("idle");
@@ -50,6 +51,17 @@ describe("applyGroupActivityEvent", () => {
     const waitingOnly = applyGroupActivityEvent(states, activity("g1", [], [], ["s2"]));
     expect(isGroupRunning(waitingOnly, "g1")).toBe(true);
     expect(groupActivityState(waitingOnly, "g1")).toBe("waiting");
+  });
+
+  it("keeps queued, working and waiting member activity distinct", () => {
+    const states = applyGroupActivityEvent(
+      new Map(),
+      activity("g1", ["working"], ["queued"], ["waiting"]),
+    );
+    expect(groupActivityState(states, "g1")).toBe("waiting");
+    expect(memberActivityState(states, "g1", "working")).toBe("working");
+    expect(memberActivityState(states, "g1", "queued")).toBe("queued");
+    expect(memberActivityState(states, "g1", "waiting")).toBe("waiting");
   });
 
   it("ignores other events", () => {

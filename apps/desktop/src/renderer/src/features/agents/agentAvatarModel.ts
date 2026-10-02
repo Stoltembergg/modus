@@ -94,6 +94,7 @@ export function agentAvatarState(
   archived: boolean,
 ): AgentAvatarState {
   if (archived) return "archived";
+  if (activity === "queued") return "idle";
   return activity ?? "idle";
 }
 

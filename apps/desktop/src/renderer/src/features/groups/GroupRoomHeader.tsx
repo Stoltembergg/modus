@@ -6,7 +6,7 @@ import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-s
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
-import { SessionStatusDot } from "../agent/SessionStatusDot";
+import { AgentPresenceDot } from "../agents/AgentPresenceDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
@@ -16,26 +16,8 @@ import type { GroupActivityState, GroupMemberStatesById } from "./useWorkingGrou
 
 /** Member state dot: working orb, amber for waiting for you, nothing when idle. */
 export function GroupStateDot({ state }: { state: GroupActivityState }) {
-  if (state === "working") {
-    return (
-      <SessionStatusDot
-        activity={{ running: true, needsInput: false, unread: false, failed: false }}
-        className="-my-1"
-      />
-    );
-  }
-  if (state === "waiting") {
-    return (
-      <span
-        className="size-1.5 shrink-0 rounded-full bg-amber-400"
-        data-testid="waiting-dot"
-        title="Waiting for you"
-      >
-        <span className="sr-only">Waiting for you</span>
-      </span>
-    );
-  }
-  return null;
+  if (state === "idle") return null;
+  return <AgentPresenceDot className="-my-1" state={state} />;
 }
 
 export function GroupStageChip({
