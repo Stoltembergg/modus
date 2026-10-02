@@ -65,10 +65,6 @@ export type GroupRoomProps = {
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
   memberStates: GroupMemberStatesById;
-  /** Opens a member's hidden room session (to answer "Waiting for you"). */
-  onOpenMember(sessionId: string): void;
-  /** Opens a member's 1:1 chat from the Agents panel (explicit action). */
-  onOpenAgentChat?(agentId: string): void;
   /** "Choose folder" on a group without a Project: pick one and move the group. */
   onChooseFolder?: (() => void) | undefined;
   onRename(name: string): void;
@@ -103,8 +99,6 @@ function GroupRoomContent({
   models = [],
   defaultModelId,
   memberStates,
-  onOpenMember,
-  onOpenAgentChat,
   onChooseFolder,
   onRename,
   onSetMode,
@@ -138,6 +132,7 @@ function GroupRoomContent({
   const [managing, setManaging] = useState(false);
   const running = isGroupRunning(memberStates, group.id);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
   const [composerSeed, setComposerSeed] = useState<string | undefined>();
   const [replyTo, setReplyTo] = useState<GroupComposerReply | undefined>();
   const [executionFilter, setExecutionFilter] = useState<string | undefined>();
@@ -219,20 +214,14 @@ function GroupRoomContent({
       avatars={avatars}
       defaultModelId={defaultModelId}
       group={group}
-      members={members}
       memberStates={memberStates}
+      onSearchChange={setSearchQuery}
+      searchQuery={searchQuery}
       models={models}
       onDelete={onDelete}
       onAddAgent={onAddAgent}
       {...(onAgentsChanged ? { onAgentsChanged } : {})}
       onManageMembers={() => setManaging(true)}
-      onOpenAgentChat={(agentId) => {
-        if (onOpenAgentChat) onOpenAgentChat(agentId);
-        else {
-          const member = group.members.find((row) => row.agentId === agentId);
-          if (member) onOpenMember(member.sessionId);
-        }
-      }}
       onRename={onRename}
       onSetMode={onSetMode}
       onStop={() => {
@@ -240,7 +229,6 @@ function GroupRoomContent({
           .stop(group.id)
           .catch((error: unknown) => console.warn("[groups] stop failed", error));
       }}
-      projectContextStatus={projectContext?.status}
       projectName={workspace?.displayName}
       running={running}
       tasksButton={
@@ -301,6 +289,7 @@ function GroupRoomContent({
             });
           }}
           roles={roles}
+          searchQuery={searchQuery}
           workingRows={workingRows}
         />
         {blocked ? (

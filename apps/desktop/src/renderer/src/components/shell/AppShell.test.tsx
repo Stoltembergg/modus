@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppRail, type PrimaryDestination } from "./AppRail";
 import { AppShell } from "./AppShell";
@@ -42,6 +42,21 @@ describe("App shell", () => {
     expect(screen.getByText("Room content")).toBeTruthy();
   });
 
+  it("exposes native glass state as shell metadata without elevating the main surface", () => {
+    render(
+      <AppShell
+        glassMode="native"
+        main={<MainSurface className="surface-main">Chat</MainSurface>}
+      />,
+    );
+
+    const shell = screen.getByTestId("app-shell");
+    expect(shell.getAttribute("data-glass-mode")).toBe("native");
+    const main = shell.querySelector<HTMLElement>('[data-shell-layer="main-surface"]');
+    expect(main?.classList.contains("surface-main")).toBe(true);
+    expect(main?.classList.contains("surface-glass")).toBe(false);
+  });
+
   it("labels the primary destinations and marks the active one", () => {
     const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
     render(<AppRail active="direct-messages" onNavigate={onNavigate} />);
@@ -52,29 +67,60 @@ describe("App shell", () => {
     expect(within(navigation).queryByText("Direct Messages")).toBeNull();
     expect(within(navigation).queryByText("Groups")).toBeNull();
     expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
-    const connections = within(navigation).getByRole("button", { name: "Connections" });
-    expect(within(navigation).queryByText("Connections")).toBeNull();
-    expect(within(navigation).getByRole("img", { name: "Modus" })).toBeTruthy();
+    expect(within(navigation).queryByRole("button", { name: "Connections" })).toBeNull();
+    const brand = within(navigation).getByTestId("app-rail-brand");
+    const mascot = within(brand).getByRole("img", { name: "Modus" });
+    expect(mascot.tagName.toLowerCase()).toBe("svg");
+    expect(mascot.classList.contains("size-7")).toBe(true);
+    expect(brand.querySelector("img")).toBeNull();
     expect(directMessages.getAttribute("title")).toBe("Direct Messages");
-    fireEvent.click(connections);
-    expect(onNavigate).toHaveBeenCalledWith("connections");
     const settings = within(navigation).getByRole("button", { name: "Settings" });
     expect(settings.getAttribute("title")).toBe("Settings");
     expect(within(navigation).queryByText("Settings")).toBeNull();
   });
 
-  it("reserves native titlebar space above the rail on macOS", () => {
-    const { rerender } = render(<AppRail active="groups" nativeTitlebar onNavigate={vi.fn()} />);
+  it("keeps rail destinations in fixed slots with larger vector icons across navigation", () => {
+    const onNavigate = vi.fn<(destination: PrimaryDestination) => void>();
+    const { rerender } = render(
+      <AppRail active="groups" topChromeClearance onNavigate={onNavigate} />,
+    );
+
+    const metrics = () => {
+      const navigation = screen.getByRole("navigation", { name: "Primary navigation" });
+      return within(navigation)
+        .getAllByRole("button")
+        .map((button) => ({
+          label: button.getAttribute("title"),
+          iconSize: button.querySelector("svg")?.getAttribute("width"),
+          slotClass: button.classList.contains("app-rail-item"),
+        }));
+    };
+
+    const initialMetrics = metrics();
+    expect(initialMetrics).toEqual([
+      { label: "Groups", iconSize: "20", slotClass: true },
+      { label: "Direct Messages", iconSize: "20", slotClass: true },
+      { label: "Settings", iconSize: "20", slotClass: true },
+    ]);
+
+    rerender(<AppRail active="settings" topChromeClearance onNavigate={onNavigate} />);
+    expect(metrics()).toEqual(initialMetrics);
+  });
+
+  it("reserves top chrome space above the rail when its row starts at the window top", () => {
+    const { rerender } = render(
+      <AppRail active="groups" topChromeClearance onNavigate={vi.fn()} />,
+    );
 
     const rail = screen.getByRole("navigation", { name: "Primary navigation" });
-    expect(rail.getAttribute("data-native-titlebar-clearance")).toBe("true");
-    expect(rail.classList.contains("app-rail-native-titlebar")).toBe(true);
+    expect(rail.getAttribute("data-top-chrome-clearance")).toBe("true");
+    expect(rail.classList.contains("app-rail-top-chrome-clearance")).toBe(true);
 
     rerender(<AppRail active="groups" onNavigate={vi.fn()} />);
     expect(
       screen
         .getByRole("navigation", { name: "Primary navigation" })
-        .querySelector('[data-native-titlebar-clearance="true"]'),
+        .querySelector('[data-top-chrome-clearance="true"]'),
     ).toBeNull();
   });
 });

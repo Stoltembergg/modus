@@ -1,47 +1,23 @@
 import { Menu } from "@base-ui/react/menu";
-import { IconDots, IconPlayerStop } from "@tabler/icons-react";
+import { IconDots, IconPlayerStop, IconSearch, IconX } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
-import type {
-  AgentGroupMode,
-  AgentGroupWithMembers,
-  GroupProjectContextStatus,
-} from "../../../../shared/contracts";
+import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
-import { SessionStatusDot } from "../agent/SessionStatusDot";
+import { AgentPresenceDot } from "../agents/AgentPresenceDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
-import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
-import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 import type { GroupActivityState, GroupMemberStatesById } from "./useWorkingGroups";
 
 /** Member state dot: working orb, amber for waiting for you, nothing when idle. */
 export function GroupStateDot({ state }: { state: GroupActivityState }) {
-  if (state === "working") {
-    return (
-      <SessionStatusDot
-        activity={{ running: true, needsInput: false, unread: false, failed: false }}
-        className="-my-1"
-      />
-    );
-  }
-  if (state === "waiting") {
-    return (
-      <span
-        className="size-1.5 shrink-0 rounded-full bg-amber-400"
-        data-testid="waiting-dot"
-        title="Waiting for you"
-      >
-        <span className="sr-only">Waiting for you</span>
-      </span>
-    );
-  }
-  return null;
+  if (state === "idle") return null;
+  return <AgentPresenceDot className="-my-1" state={state} />;
 }
 
 export function GroupStageChip({
@@ -78,44 +54,39 @@ export function GroupStageChip({
 export function GroupRoomHeader({
   avatars,
   group,
-  members,
   memberStates,
   projectName,
-  projectContextStatus,
+  searchQuery,
+  onSearchChange,
   running,
   tasksButton,
   models,
   defaultModelId,
-  onOpenAgentChat,
   onStop,
   onRename,
   onSetMode,
   onManageMembers,
   onDelete,
   onAddAgent,
-  onSetLead,
   onAgentsChanged,
   variant = "standalone",
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
-  members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
-  /** Compact Project Setup chip (Mapping… / Ready / Updating / Needs refresh). */
-  projectContextStatus?: GroupProjectContextStatus | undefined;
+  searchQuery: string;
+  onSearchChange(query: string): void;
   running: boolean;
   tasksButton: ReactNode;
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
-  onOpenAgentChat(agentId: string): void;
   onStop(): void;
   onRename(name: string): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onManageMembers(): void;
   onDelete(): void;
   onAddAgent?: (() => void) | undefined;
-  onSetLead?(sessionId: string | null): void;
   onAgentsChanged?(): void;
   /** `chrome` = window toolbar strip; `standalone` = legacy internal bar (tests). */
   variant?: "chrome" | "standalone";
@@ -137,92 +108,131 @@ export function GroupRoomHeader({
       data-variant={variant}
     >
       <div
-        className="flex min-w-0 flex-1 flex-nowrap items-center gap-2"
+        className={
+          chrome
+            ? "group-room-header-row-chrome"
+            : "flex min-w-0 flex-1 flex-nowrap items-center gap-2"
+        }
         data-testid="group-room-header-row"
       >
-        {renaming ? (
-          <GroupRenameInput
-            initial={group.name}
-            onCancel={() => setRenaming(false)}
-            onCommit={(name) => {
-              setRenaming(false);
-              const next = name.trim();
-              if (next && next !== group.name) onRename(next);
-            }}
+        <div
+          className={
+            chrome ? "group-room-header-identity-chrome" : "flex min-w-0 items-center gap-2"
+          }
+        >
+          {renaming ? (
+            <GroupRenameInput
+              initial={group.name}
+              onCancel={() => setRenaming(false)}
+              onCommit={(name) => {
+                setRenaming(false);
+                const next = name.trim();
+                if (next && next !== group.name) onRename(next);
+              }}
+            />
+          ) : (
+            <h1 className="min-w-0 truncate font-medium text-fg text-sm">{group.name}</h1>
+          )}
+          <span
+            className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
+            data-testid="group-project-badge"
+          >
+            {projectName ?? "No project"}
+          </span>
+        </div>
+        <label
+          className={
+            chrome
+              ? "group-room-header-search-centered app-no-drag flex min-w-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+              : "app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
+          }
+          data-testid="group-conversation-search"
+        >
+          <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
+          <input
+            aria-label="Search in conversation"
+            className="min-w-0 flex-1 bg-transparent text-fg text-xs outline-none placeholder:text-fg-faint"
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            placeholder="Search in conversation"
+            type="search"
+            value={searchQuery}
           />
-        ) : (
-          <h1 className="min-w-0 truncate font-medium text-fg text-sm">{group.name}</h1>
-        )}
-        <span
-          className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
-          data-testid="group-project-badge"
+          {searchQuery ? (
+            <button
+              aria-label="Clear search"
+              className="shrink-0 text-fg-faint hover:text-fg"
+              onClick={() => onSearchChange("")}
+              type="button"
+            >
+              <IconX size={ICON.xs} stroke={ICON_STROKE.sm} />
+            </button>
+          ) : null}
+        </label>
+        {!chrome ? <span className="min-w-2 flex-1" /> : null}
+        <div
+          className={
+            chrome ? "group-room-header-controls-chrome" : "flex shrink-0 items-center gap-2"
+          }
         >
-          {projectName ?? "No project"}
-        </span>
-        <GroupProjectContextChip status={projectContextStatus} />
-        <span className="min-w-2 flex-1" />
-        <GroupAgentsPopover
-          avatars={avatars}
-          group={group}
-          memberStates={memberStates}
-          members={members}
-          onManageMembers={onManageMembers}
-          onOpenAgentChat={onOpenAgentChat}
-          {...(defaultModelId !== undefined ? { defaultModelId } : {})}
-          {...(models !== undefined ? { models } : {})}
-          {...(onAgentsChanged ? { onAgentsChanged } : {})}
-          {...(onSetLead ? { onSetLead } : {})}
-        />
-        {running ? (
-          <button
-            className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
-            onClick={onStop}
-            title="End the chain and stop running member turns"
-            type="button"
+          <GroupAgentsPopover
+            avatars={avatars}
+            group={group}
+            memberStates={memberStates}
+            {...(defaultModelId !== undefined ? { defaultModelId } : {})}
+            {...(models !== undefined ? { models } : {})}
+            {...(onAgentsChanged ? { onAgentsChanged } : {})}
+          />
+          {running ? (
+            <button
+              className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
+              onClick={onStop}
+              title="End the chain and stop running member turns"
+              type="button"
+            >
+              <IconPlayerStop size={ICON.xs} stroke={ICON_STROKE.xs} />
+              Stop
+            </button>
+          ) : null}
+          {tasksButton}
+          <Menu.Root
+            onOpenChange={(open) => {
+              setMenuOpen(open);
+              if (!open) setConfirmDelete(false);
+            }}
+            open={menuOpen}
           >
-            <IconPlayerStop size={ICON.xs} stroke={ICON_STROKE.xs} />
-            Stop
-          </button>
-        ) : null}
-        {tasksButton}
-        <Menu.Root
-          onOpenChange={(open) => {
-            setMenuOpen(open);
-            if (!open) setConfirmDelete(false);
-          }}
-          open={menuOpen}
-        >
-          <Menu.Trigger
-            aria-label="Group actions"
-            className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted data-popup-open:bg-hover"
-          >
-            <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner align="end" side="bottom" sideOffset={4}>
-              <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
-                <GroupMenuItems
-                  agentCount={group.members.length}
-                  confirmDelete={confirmDelete}
-                  coordinator={
-                    onSetMode
-                      ? {
-                          checked: coordinating,
-                          disabled: !group.leadSessionId,
-                          onToggle: () => onSetMode(coordinating ? "free" : "coordinator"),
-                        }
-                      : undefined
-                  }
-                  onConfirmDelete={setConfirmDelete}
-                  onDelete={onDelete}
-                  onManageMembers={onManageMembers}
-                  onStartRename={() => setRenaming(true)}
-                  {...(onAddAgent ? { onAddAgent } : {})}
-                />
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+            <Menu.Trigger
+              aria-label="Group actions"
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted data-popup-open:bg-hover"
+            >
+              <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="end" side="bottom" sideOffset={4}>
+                <Menu.Popup className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1">
+                  <GroupMenuItems
+                    agentCount={group.members.length}
+                    confirmDelete={confirmDelete}
+                    coordinator={
+                      onSetMode
+                        ? {
+                            checked: coordinating,
+                            disabled: !group.leadSessionId,
+                            onToggle: () => onSetMode(coordinating ? "free" : "coordinator"),
+                          }
+                        : undefined
+                    }
+                    onConfirmDelete={setConfirmDelete}
+                    onDelete={onDelete}
+                    onManageMembers={onManageMembers}
+                    onStartRename={() => setRenaming(true)}
+                    {...(onAddAgent ? { onAddAgent } : {})}
+                  />
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        </div>
       </div>
     </div>
   );

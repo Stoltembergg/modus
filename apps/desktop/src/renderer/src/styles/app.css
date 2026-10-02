@@ -219,11 +219,16 @@
  * these aliases automatically.
  */
 :root {
-  --surface-app: var(--color-panel);
-  --surface-sidebar: var(--color-panel);
+  --surface-app: color-mix(in srgb, var(--color-panel) 97%, transparent);
+  --surface-sidebar: color-mix(in srgb, var(--color-panel) 94%, transparent);
   --surface-main: var(--color-canvas);
+  --surface-main-glass: color-mix(in srgb, var(--color-canvas) 94%, transparent);
   --surface-raised: var(--color-elevated);
-  --surface-glass: color-mix(in oklab, var(--color-elevated) 90%, transparent);
+  /* Solid on unsupported hosts; native translucency is applied by the scoped
+     data-native-glass rules below. */
+  --surface-glass: var(--surface-raised);
+  --surface-glass-sidebar: color-mix(in srgb, var(--color-panel) 78%, transparent);
+  --surface-glass-elevated: color-mix(in srgb, var(--color-elevated) 82%, transparent);
 
   --text-primary: var(--color-fg);
   --text-secondary: var(--color-fg-muted);
@@ -245,6 +250,11 @@
 
   --space-shell-gap: 8px;
   --space-rail-width: 68px;
+  --space-rail-gap: 10px;
+  --space-rail-padding-top: 10px;
+  --space-rail-padding-inline: 6px;
+  --space-rail-padding-bottom: 8px;
+  --space-rail-item-height: 46px;
   --space-native-titlebar: 36px;
   --space-sidebar-width: clamp(224px, 18vw, 264px);
   --space-row-height: 30px;
@@ -261,8 +271,10 @@
   --motion-ui: 160ms;
   --motion-overlay: 180ms;
   --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
-  --glass-filter: blur(14px) saturate(1.14);
+  --glass-filter: blur(18px) saturate(1.12);
   --glass-scrim-filter: blur(2px);
+  --group-icon-saturation: 66%;
+  --group-icon-lightness: 72%;
   --overlay-shadow: var(--shadow-popup);
   --menu-shadow: var(--shadow-popup);
   --shadow-composer: var(--shadow-composer-edge);
@@ -287,42 +299,84 @@
   line-height: 1.5;
 }
 
-/* Shared surface primitives. Blur only appears on the explicitly elevated
-   glass surface; app chrome, transcript, and side panels stay opaque. */
+/* Shared surface primitives. Native glass is enabled per host platform below. */
 .app-shell {
   background-color: var(--surface-app);
   color: var(--text-primary);
 }
 .app-rail {
   box-sizing: border-box;
+  position: relative;
   display: flex;
   width: var(--space-rail-width);
   flex: 0 0 var(--space-rail-width);
   flex-direction: column;
-  gap: 10px;
-  padding: 10px 6px 8px;
-  border-right: 1px solid var(--border-subtle);
+  gap: var(--space-rail-gap);
+  padding: var(--space-rail-padding-top) var(--space-rail-padding-inline)
+    var(--space-rail-padding-bottom);
   background-color: var(--surface-sidebar);
 }
-.app-rail-native-titlebar {
-  padding-top: var(--space-native-titlebar);
+.app-rail::after {
+  position: absolute;
+  inset: 0 0 0 auto;
+  border-right: 1px solid var(--border-subtle);
+  content: "";
+  pointer-events: none;
+}
+.app-rail-top-chrome-clearance {
+  padding-top: calc(var(--space-native-titlebar) + var(--space-rail-padding-top));
+}
+.app-rail-top-chrome-clearance::after {
+  top: var(--space-native-titlebar);
 }
 .app-rail-mark {
   display: grid;
-  width: 34px;
-  height: 34px;
-  margin: 0 auto 6px;
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 2px;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 11px;
   color: var(--text-primary);
   font-size: var(--type-body);
   font-weight: 600;
 }
+.group-room-header-row-chrome {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, min(220px, 28vw)) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.group-room-header-identity-chrome {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.group-room-header-search-centered {
+  width: 100%;
+  min-width: 0;
+  grid-column: 2;
+  grid-row: 1;
+}
+.group-room-header-controls-chrome {
+  display: flex;
+  min-width: 0;
+  grid-column: 3;
+  grid-row: 1;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.group-identity-icon {
+  color: hsl(
+    var(--group-icon-hue, 260deg) var(--group-icon-saturation) var(--group-icon-lightness)
+  );
+}
 .app-rail-item {
   display: flex;
   min-width: 0;
-  min-height: 46px;
+  min-height: var(--space-rail-item-height);
   width: 100%;
   flex-direction: column;
   align-items: center;
@@ -352,6 +406,9 @@
 .app-rail-item-selected {
   background-color: var(--color-active);
   color: var(--text-primary);
+}
+.menu-bar {
+  height: var(--space-native-titlebar);
 }
 .surface-app {
   background-color: var(--surface-app);
@@ -384,18 +441,96 @@
   border-color: var(--state-drop-border);
   background-color: var(--state-drop-surface);
 }
+.group-prompt-bar {
+  transition:
+    border-color var(--motion-ui),
+    box-shadow var(--motion-ui),
+    background-color var(--motion-ui);
+}
+.group-prompt-bar:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-composer);
+}
+.group-composer-toolbar {
+  background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+}
+.group-empty-beams {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse at center, #000 0%, #000 38%, transparent 84%);
+}
+.group-empty-beams::before {
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(
+    ellipse at 50% 54%,
+    color-mix(in srgb, var(--color-focus-ring) 8%, transparent),
+    transparent 62%
+  );
+  content: "";
+}
+.group-empty-beam {
+  position: absolute;
+  top: -48%;
+  bottom: -48%;
+  left: 20%;
+  width: 18%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 30%,
+      color-mix(in srgb, var(--color-link) 12%, transparent) 48%,
+      transparent 60%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 22%,
+      color-mix(in srgb, var(--color-focus-ring) 8%, transparent) 35%,
+      color-mix(in srgb, var(--color-focus-ring) 28%, transparent) 50%,
+      color-mix(in srgb, var(--color-focus-ring-soft) 20%, transparent) 57%,
+      transparent 78%
+    );
+  filter: blur(18px);
+  opacity: 0.32;
+  animation: group-empty-beam-sweep 22s ease-in-out infinite alternate;
+}
+.group-empty-beam:nth-child(2) {
+  left: 48%;
+  width: 12%;
+  opacity: 0.26;
+  animation-delay: -9s;
+  animation-duration: 29s;
+}
+.group-empty-beam:nth-child(3) {
+  left: 76%;
+  width: 16%;
+  opacity: 0.22;
+  animation-delay: -17s;
+  animation-duration: 25s;
+}
+@keyframes group-empty-beam-sweep {
+  from {
+    transform: translate3d(-22vw, 0, 0) rotate(19deg);
+  }
+  to {
+    transform: translate3d(24vw, 0, 0) rotate(19deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-empty-beam {
+    animation: none;
+  }
+}
 .surface-glass {
   border: 1px solid var(--border-overlay);
   border-radius: var(--radius-overlay);
   background-color: var(--surface-glass);
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 .dialog-scrim {
   background-color: var(--overlay-scrim-color);
-  backdrop-filter: var(--glass-scrim-filter);
-  -webkit-backdrop-filter: var(--glass-scrim-filter);
 }
 
 /*
@@ -412,6 +547,7 @@
 :root[data-theme="light"] {
   color-scheme: light;
   --overlay-scrim-color: rgba(18, 24, 38, 0.18);
+  --group-icon-lightness: 42%;
 
   /* Surfaces — clean editor white + neutral panel chrome */
   --color-canvas: #ffffff; /* app base (chat / main / inspector) */
@@ -651,8 +787,6 @@
   border-radius: var(--radius-overlay);
   background: var(--surface-glass);
   box-shadow: var(--menu-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 
 /*
@@ -708,6 +842,51 @@ body {
   height: 100vh;
 }
 
+/* Desktop glass is scoped to the rail, context sidebar and raised surfaces.
+   The conversation canvas gets a light tint only; transcript content and media
+   keep their own surfaces, and the canvas itself does not add another blur. */
+:root[data-native-glass="true"] body,
+:root[data-native-glass="true"] #root,
+:root[data-native-glass="true"] .app-shell,
+:root[data-native-glass="true"] .app-layout-row {
+  background-color: transparent;
+}
+:root[data-native-glass="true"] .app-rail,
+:root[data-native-glass="true"] .app-context-sidebar {
+  background-color: var(--surface-glass-sidebar);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .app-context-sidebar-body {
+  background-color: transparent;
+}
+:root[data-native-glass="true"] .surface-main {
+  background-color: var(--surface-main-glass);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-native-glass="true"] .surface-raised,
+:root[data-native-glass="true"] .surface-glass {
+  background-color: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .popup-chrome {
+  background: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
+}
+:root[data-native-glass="true"] .dialog-scrim {
+  backdrop-filter: var(--glass-scrim-filter);
+  -webkit-backdrop-filter: var(--glass-scrim-filter);
+}
+
+:root[data-native-glass="false"] body,
+:root[data-native-glass="false"] #root,
+:root[data-native-glass="false"] .app-shell {
+  background-color: var(--surface-app);
+}
+
 /* Electron 自定义标题栏拖拽 */
 @layer utilities {
   .app-drag {
@@ -717,7 +896,7 @@ body {
     -webkit-app-region: no-drag;
   }
   .toolbar-row {
-    height: 36px;
+    height: var(--space-native-titlebar);
   }
   .toolbar-icon-button {
     color: var(--color-icon-muted);
@@ -1235,7 +1414,7 @@ body {
    * the same budget. Applied as a step (no transition) — at 1px the arrival is
    * imperceptible, and it then costs nothing while the sheet sits open.
    */
-  .subagent-preview-scrim[data-settled] {
+  :root[data-native-glass="true"] .subagent-preview-scrim[data-settled] {
     backdrop-filter: var(--glass-scrim-filter);
     -webkit-backdrop-filter: var(--glass-scrim-filter);
     will-change: auto;
@@ -2141,8 +2320,6 @@ body
   background: var(--surface-glass);
   color: var(--color-fg-subtle);
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 
 /* Zoom± / Reset: move from bottom-left column → top-right row, left of Close. */
@@ -2415,7 +2592,6 @@ body
   font-weight: 500;
   letter-spacing: 0.01em;
   box-shadow: var(--overlay-shadow);
-  backdrop-filter: var(--glass-filter);
 }
 .pdf-page-chrome__label {
   padding: 0 8px 0 4px;
@@ -2438,6 +2614,21 @@ body
 .pdf-rect-tool:hover {
   color: var(--color-fg);
   background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+
+:root[data-native-glass="true"]
+  body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+  > button.absolute,
+:root[data-native-glass="true"]
+  body
+  > div.fixed.inset-0:has([data-streamdown="mermaid"])
+  [data-streamdown="mermaid"]
+  [class*="absolute"][class*="rounded-md"],
+:root[data-native-glass="true"] .pdf-page-chrome {
+  background: var(--surface-glass-elevated);
+  backdrop-filter: var(--glass-filter);
+  -webkit-backdrop-filter: var(--glass-filter);
 }
 .pdf-rect-tool.is-active {
   color: var(--color-accent);

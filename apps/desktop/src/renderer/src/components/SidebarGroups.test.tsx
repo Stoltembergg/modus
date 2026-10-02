@@ -100,6 +100,40 @@ function groupHandlers() {
 afterEach(() => cleanup());
 
 describe("SidebarGroups", () => {
+  it("gives groups distinct, stable visual identities in the sidebar", () => {
+    const { rerender } = render(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+
+    const iconIdentities = () =>
+      screen.getAllByTestId("group-row").map((row) => {
+        const icon = within(row).getByTestId("group-identity-icon");
+        return icon.getAttribute("data-group-icon-identity");
+      });
+    const firstIdentities = iconIdentities();
+
+    expect(firstIdentities).toHaveLength(GROUPS.length);
+    expect(new Set(firstIdentities).size).toBe(GROUPS.length);
+
+    rerender(
+      <SidebarGroups
+        activityBySession={{}}
+        groups={GROUPS}
+        sessions={SESSIONS}
+        workspaces={WORKSPACES}
+        {...groupHandlers()}
+      />,
+    );
+
+    expect(iconIdentities()).toEqual(firstIdentities);
+  });
+
   it("shows each group's name and member count, with no activity dot by default", () => {
     render(
       <SidebarGroups

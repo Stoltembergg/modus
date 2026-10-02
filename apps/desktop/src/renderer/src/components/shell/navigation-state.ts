@@ -1,4 +1,4 @@
-export type PrimaryDestination = "groups" | "direct-messages" | "connections" | "settings";
+export type PrimaryDestination = "groups" | "direct-messages" | "settings";
 export type WorkDestination = Exclude<PrimaryDestination, "settings">;
 
 export type PrimaryNavigationState = {

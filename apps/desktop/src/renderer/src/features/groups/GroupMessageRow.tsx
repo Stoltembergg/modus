@@ -1,3 +1,4 @@
+import { IconFilter } from "@tabler/icons-react";
 import { useState } from "react";
 import type {
   AgentAvatarColor,
@@ -10,7 +11,7 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
-import { messageExecutionId, shortExecutionLabel } from "../../../../shared/group-execution-link";
+import { messageExecutionId } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
 import {
@@ -29,6 +30,9 @@ import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
+import { PromptSources } from "../sources/PromptSources";
+import type { RunSource } from "../sources/runSources";
+import { useRunSources } from "../sources/useRunSources";
 import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
@@ -43,7 +47,6 @@ import {
   PromptMessage,
   PromptMessageBody,
   PromptMessageIdentity,
-  PromptSource,
   PromptSystemMessage,
 } from "./prompt-kit/PromptKit";
 
@@ -239,17 +242,17 @@ function MessageMeta({
   const status = message.status;
   const executionId = messageExecutionId(message);
   const showChip = message.authorKind === "user" || Boolean(message.chainId);
-  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
   const executionChip = showChip ? (
     <button
-      className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
+      aria-label="Filter conversation to this execution"
+      className="flex size-5 shrink-0 items-center justify-center rounded text-fg-faint transition-colors hover:bg-hover hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring-soft)]"
       data-execution-id={executionId}
-      data-testid="group-execution-chip"
+      data-testid="group-execution-filter"
       onClick={() => onExecutionFilter?.(executionId)}
-      title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
+      title="Filter conversation to this execution"
       type="button"
     >
-      #{shortExecutionLabel(executionId)}
+      <IconFilter aria-hidden size={12} stroke={1.8} />
     </button>
   ) : null;
   const tokenLabel =
@@ -455,6 +458,13 @@ export function GroupMessageRow({
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
+  const runSources = useRunSources(
+    message.authorSessionId,
+    message.runId,
+    message.authorKind === "agent" &&
+      message.kind === "message" &&
+      (message.status === "completed" || message.status === undefined),
+  );
   async function retry(): Promise<void> {
     if (!onRetry || retrying) return;
     setRetrying(true);
@@ -481,8 +491,8 @@ export function GroupMessageRow({
     : undefined;
   if (message.kind === "status") {
     const collab = parseGroupCollabStatusLine(message.body);
-    // Orchestration handoffs: Activity / runtime only — never the main transcript.
-    if (collab?.kind === "handoff") return null;
+    // Keep handoffs and protocol agreement summaries out of the conversational transcript.
+    if (collab?.kind === "handoff" || collab?.kind === "agreed") return null;
     const activeWaiting = isActiveWaitingStatus(
       message.body,
       message.authorSessionId,
@@ -541,7 +551,7 @@ export function GroupMessageRow({
     return (
       <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
         <PromptMessage
-          className="flex-row-reverse border-accent/20 bg-accent/10"
+          className="flex-row-reverse"
           data-align="right"
           data-kind="user"
           data-message-id={message.id}
@@ -608,7 +618,23 @@ export function GroupMessageRow({
   ) {
     return null;
   }
-  const sources = !writing ? extractUsefulSources(prose) : [];
+  const sources = (() => {
+    if (writing || message.authorKind !== "agent") return runSources;
+    const combined = new Map<string, RunSource>();
+    for (const source of runSources) combined.set(source.id, source);
+    for (const source of extractUsefulSources(prose)) {
+      const href = source.href;
+      if (![...combined.values()].some((existing) => existing.href === href)) {
+        combined.set(`url:${href}`, {
+          id: `url:${href}`,
+          kind: "url",
+          label: source.label ?? href,
+          href,
+        });
+      }
+    }
+    return [...combined.values()].slice(0, 24);
+  })();
   const showLiveProgress = Boolean(liveTurn && !liveTurn.live.collapsed);
   return (
     <div
@@ -694,13 +720,7 @@ export function GroupMessageRow({
             </div>
           ) : null}
           {resultParsed ? <GroupFinalResultCard card={resultParsed.card} /> : null}
-          {sources.length > 0 ? (
-            <div className="flex flex-wrap gap-1" data-testid="group-message-sources">
-              {sources.map((source) => (
-                <PromptSource href={source.href} key={source.href} label={source.label} />
-              ))}
-            </div>
-          ) : null}
+          <PromptSources onOpenFile={onOpenFile} sources={sources} />
           <MessageAttachments message={message} />
           <MessageError message={message} />
           {canRetry ? (

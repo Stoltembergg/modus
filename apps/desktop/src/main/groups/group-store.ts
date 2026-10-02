@@ -20,7 +20,7 @@ import type {
   GroupTask,
   GroupTaskStatus,
 } from "../../shared/contracts";
-import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { allocateUniqueGroupAvatarShapes, CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { groupCreateCountError, groupMemberCountError } from "../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import type { GroupErrorCode } from "../../shared/group-errors";
@@ -588,7 +588,17 @@ function adoptSessionAgent(groupId: string, sessionId: string): string {
         | undefined
     )?.title?.trim() || "Agent";
   const id = randomUUID();
-  const { avatarFace, avatarColor, avatarShape } = agentAvatarForId(id);
+  const { avatarFace, avatarColor, avatarShape: preferredShape } = agentAvatarForId(id);
+  const existing = db
+    .prepare("select id, avatar_shape from agents where group_id = ? order by id")
+    .all(groupId) as Array<{ id: string; avatar_shape: AgentAvatarShape }>;
+  const assignments = allocateUniqueGroupAvatarShapes([
+    ...existing.map((member) => ({ agentId: member.id, preferredShape: member.avatar_shape })),
+    { agentId: id, preferredShape },
+  ]);
+  const avatarShape = assignments.get(id);
+  if (!avatarShape)
+    throw new GroupStoreError("invalid-value", "Could not allocate an agent avatar shape.");
   const now = new Date().toISOString();
   db.prepare(
     `insert into agents (id, group_id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
@@ -606,11 +616,17 @@ function adoptSessionAgent(groupId: string, sessionId: string): string {
   return id;
 }
 
-type AgentRef = { id: string; group_id: string | null; name: string; model_id: string | null };
+type AgentRef = {
+  id: string;
+  group_id: string | null;
+  name: string;
+  model_id: string | null;
+  avatar_shape: AgentAvatarShape;
+};
 
 function requireAgentRef(agentId: string): AgentRef {
   const row = getDatabase()
-    .prepare("select id, group_id, name, model_id from agents where id = ?")
+    .prepare("select id, group_id, name, model_id, avatar_shape from agents where id = ?")
     .get(agentId) as AgentRef | undefined;
   if (!row) throw new GroupStoreError("agent-not-found", `Agent not found: ${agentId}`);
   return row;
@@ -733,7 +749,22 @@ function insertAgentMember(
     throw new GroupStoreError("already-in-group", `Agent ${agentId} already belongs to a group.`);
   }
   if (agent.group_id === null) {
-    getDatabase().prepare("update agents set group_id = ? where id = ?").run(groupId, agentId);
+    const db = getDatabase();
+    const existing = db
+      .prepare("select id, avatar_shape from agents where group_id = ? order by id")
+      .all(groupId) as Array<{ id: string; avatar_shape: AgentAvatarShape }>;
+    const assignments = allocateUniqueGroupAvatarShapes([
+      ...existing.map((member) => ({ agentId: member.id, preferredShape: member.avatar_shape })),
+      { agentId, preferredShape: agent.avatar_shape },
+    ]);
+    const avatarShape = assignments.get(agentId);
+    if (!avatarShape)
+      throw new GroupStoreError("invalid-value", "Could not allocate an agent avatar shape.");
+    db.prepare("update agents set group_id = ?, avatar_shape = ? where id = ?").run(
+      groupId,
+      avatarShape,
+      agentId,
+    );
   }
   const sessionId = randomUUID();
   const now = new Date().toISOString();
@@ -745,6 +776,27 @@ function insertAgentMember(
     )
     .run(sessionId, project.id, agent.name, project.root, agent.model_id, now, now);
   return insertMemberRow(groupId, sessionId, role, agentId);
+}
+
+function normalizeGroupAvatarShapes(groupId: string): void {
+  const db = getDatabase();
+  const rows = db
+    .prepare(
+      `select a.id, a.avatar_shape from agents a
+       left join agent_group_members m on m.agent_id = a.id
+       where a.group_id = ?
+       order by case when m.agent_id is null then 1 else 0 end, m.joined_at, m.rowid, a.id`,
+    )
+    .all(groupId) as Array<{ id: string; avatar_shape: AgentAvatarShape }>;
+  if (rows.length > 10) return;
+  const assignments = allocateUniqueGroupAvatarShapes(
+    rows.map(({ id, avatar_shape }) => ({ agentId: id, preferredShape: avatar_shape })),
+  );
+  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  for (const row of rows) {
+    const shape = assignments.get(row.id);
+    if (shape && shape !== row.avatar_shape) update.run(shape, row.id);
+  }
 }
 
 export function createAgentGroup(input: NewGroupInput): AgentGroupInfo {
@@ -915,6 +967,7 @@ export function removeAgentFromGroupRows(
   detachMemberRows(groupId, sessionId);
   // agent_sessions.agent_id is ON DELETE SET NULL: the 1:1 chat is unlinked.
   getDatabase().prepare("delete from agents where id = ?").run(member.agentId);
+  normalizeGroupAvatarShapes(groupId);
   postMembershipEvent(groupId, GROUP_MEMBERSHIP_TEXT.left(member.name));
   touchGroup(groupId);
   return [sessionId, ...chatIds];

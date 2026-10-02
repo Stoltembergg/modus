@@ -43,12 +43,40 @@ describe("AgentAvatar", () => {
     expect(new Set(Object.values(AGENT_AVATAR_FILL)).size).toBe(AGENT_AVATAR_COLORS.length);
   });
 
+  it("supports the compact 24 px header size", () => {
+    render(<AgentAvatar color="blue" face="happy" size={24} />);
+    expect(avatar().dataset.size).toBe("24");
+    expect(avatar().querySelector("svg")?.getAttribute("width")).toBe("24");
+  });
+
   it("renders every silhouette shape", () => {
     for (const shape of AGENT_AVATAR_SHAPES) {
       const { unmount } = render(<AgentAvatar color="blue" face="happy" shape={shape} size={20} />);
       expect(avatar().dataset.shape).toBe(shape);
       expect(avatar().querySelector(".agent-avatar-fill")).not.toBeNull();
       unmount();
+    }
+  });
+
+  it("draws triangle and pentagon as vector silhouettes at compact and header sizes", () => {
+    expect(AGENT_AVATAR_SHAPES).toContain("triangle");
+    expect(AGENT_AVATAR_SHAPES).toContain("pentagon");
+
+    for (const shape of ["triangle", "pentagon"] as const) {
+      for (const size of [20, 24] as const) {
+        const { unmount } = render(
+          <AgentAvatar
+            color="blue"
+            face="happy"
+            shape={shape as (typeof AGENT_AVATAR_SHAPES)[number]}
+            size={size}
+          />,
+        );
+        const fill = avatar().querySelector(".agent-avatar-fill");
+        expect(fill?.tagName.toLowerCase()).toBe("polygon");
+        expect(avatar().querySelector("svg")?.getAttribute("width")).toBe(String(size));
+        unmount();
+      }
     }
   });
 

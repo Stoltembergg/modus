@@ -22,6 +22,7 @@ const {
 const {
   createAgent,
   createAgentFromTemplate,
+  createGroupWithNewAgents,
   deleteAgent,
   getAgent,
   listAgents,
@@ -113,6 +114,34 @@ describe("agents store", () => {
     expect(() =>
       getDatabase().prepare("update agents set avatar_face = 'angry' where id = ?").run(picked.id),
     ).toThrow(/CHECK constraint/);
+  });
+
+  it("rejects duplicate grouped shapes on create and update while allowing ungrouped duplicates", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Shape enforcement"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Shape One", modelId: "openai/gpt-5", avatarShape: "triangle" },
+        { name: "Shape Two", modelId: "openai/gpt-5", avatarShape: "pentagon" },
+      ],
+    });
+    const [first, second] = group.members;
+    if (!first || !second) throw new Error("expected two shape enforcement agents");
+
+    expectAgentError(
+      () =>
+        createAgent({ name: uid("Duplicate shape"), groupId: group.id, avatarShape: "triangle" }),
+      "agent-avatar-shape-taken",
+    );
+    expectAgentError(
+      () => updateAgent(second.agentId, { avatarShape: first.avatarShape ?? "triangle" }),
+      "agent-avatar-shape-taken",
+    );
+
+    const looseOne = createAgent({ name: uid("Loose shape one"), avatarShape: "circle" });
+    const looseTwo = createAgent({ name: uid("Loose shape two"), avatarShape: "circle" });
+    expect(looseOne.avatarShape).toBe("circle");
+    expect(looseTwo.avatarShape).toBe("circle");
   });
 
   it("picking a template creates an editable copy with template_id", () => {
@@ -344,10 +373,24 @@ describe("migration: group members become agents", () => {
         expect({
           avatarFace: row.avatar_face,
           avatarColor: row.avatar_color,
-          avatarShape: row.avatar_shape,
-        }).toEqual(agentAvatarForId(row.id));
+        }).toEqual(
+          (({ avatarShape: _avatarShape, ...avatar }) => avatar)(agentAvatarForId(row.id)),
+        );
         expect(row.template_id).toBeNull();
       }
+      const groupedShapes = db
+        .prepare(
+          `select a.group_id, a.avatar_shape from agents a
+           where a.group_id is not null order by a.group_id, a.avatar_shape`,
+        )
+        .all() as Array<{ group_id: string; avatar_shape: string }>;
+      const shapesByGroup = new Map<string, string[]>();
+      for (const row of groupedShapes) {
+        const shapes = shapesByGroup.get(row.group_id) ?? [];
+        shapes.push(row.avatar_shape);
+        shapesByGroup.set(row.group_id, shapes);
+      }
+      for (const shapes of shapesByGroup.values()) expect(new Set(shapes).size).toBe(shapes.length);
       expect((db.prepare("select count(*) as n from agents").get() as { n: number }).n).toBe(4);
       // The member keeps its session (history) and its per-group role label.
       const member = db

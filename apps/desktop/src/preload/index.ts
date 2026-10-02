@@ -11,11 +11,32 @@ import type {
   UpdateRestoreUiState,
   UpdateState,
 } from "../shared/contracts";
+import { resolveWindowAppearance } from "../shared/window-appearance";
 import type { ModusApi, SecurityState } from "./types";
+
+const windowAppearance = resolveWindowAppearance(
+  process.platform,
+  process.getSystemVersion?.() ?? "",
+);
+let nativeGlassAvailable = windowAppearance.glass === "native";
+const nativeGlassListeners = new Set<(available: boolean) => void>();
+
+ipcRenderer.on("window:glass-event", (_event: IpcRendererEvent, available: unknown) => {
+  if (typeof available !== "boolean") return;
+  nativeGlassAvailable = available;
+  for (const listener of nativeGlassListeners) listener(available);
+});
 
 const api: ModusApi = {
   app: {
     platform: process.platform,
+    windowChrome: windowAppearance.chrome,
+    nativeGlass: windowAppearance.glass === "native",
+    isNativeGlassAvailable: () => nativeGlassAvailable,
+    onNativeGlassChange(handler) {
+      nativeGlassListeners.add(handler);
+      return () => nativeGlassListeners.delete(handler);
+    },
     version: () => ipcRenderer.invoke("app:version") as Promise<string>,
     securityState: () => ipcRenderer.invoke("app:security-state") as Promise<SecurityState>,
     startupMetric: (input) => ipcRenderer.invoke("app:startup-metric", input),

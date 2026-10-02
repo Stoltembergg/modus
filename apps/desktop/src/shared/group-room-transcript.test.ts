@@ -228,6 +228,6 @@ describe("orchestration handoff hide rule", () => {
         objective: "x",
       }),
     ).toBe(false);
-    expect(shouldPersistCollabStatusInTranscript({ kind: "agreed", note: "ship" })).toBe(true);
+    expect(shouldPersistCollabStatusInTranscript({ kind: "agreed", note: "ship" })).toBe(false);
   });
 });

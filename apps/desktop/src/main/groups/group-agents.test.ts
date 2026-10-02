@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { allocateUniqueGroupAvatarShapes, CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
 /* Agents model (A2): membership by agent, the folder rule, and the A2 migration. */
 
@@ -48,6 +48,7 @@ const {
 const {
   addAgentToGroup,
   appendGroupMessage,
+  createAgentGroupWithMembers,
   deleteAgentGroup,
   getAgentGroup,
   getAgentGroupWithMembers,
@@ -103,6 +104,40 @@ function insertSession(workspaceId: string, title: string, db: DatabaseSync = ge
 
 function expectCode(fn: () => unknown, code: string): void {
   expect(fn).toThrow(expect.objectContaining({ code }));
+}
+
+function replaceAgentsWithLegacyAvatarCheck(db: DatabaseSync): void {
+  db.exec(`pragma foreign_keys = off;
+    begin;
+    create table agents_legacy_avatar_check (
+      id text primary key,
+      group_id text references agent_groups(id) on delete cascade,
+      name text not null collate nocase,
+      role text not null default '',
+      instructions text not null default '',
+      model_id text,
+      default_workspace_id text references workspaces(id) on delete set null,
+      avatar_face text not null,
+      avatar_color text not null,
+      avatar_shape text not null check (avatar_shape in (
+        'circle','squircle','roundedSquare','hexagon','capsule','blob','diamond','shield'
+      )),
+      template_id text,
+      created_at text not null,
+      updated_at text not null,
+      archived_at text,
+      unique (group_id, name)
+    );
+    insert into agents_legacy_avatar_check
+      (id, group_id, name, role, instructions, model_id, default_workspace_id,
+       avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at)
+      select id, group_id, name, role, instructions, model_id, default_workspace_id,
+       avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at
+      from agents;
+    drop table agents;
+    alter table agents_legacy_avatar_check rename to agents;
+    commit;
+    pragma foreign_keys = on;`);
 }
 
 beforeAll(async () => {
@@ -202,6 +237,91 @@ describe("one group per agent", () => {
     expect(listed).not.toContain(jennie?.sessionId);
     // Creating a group posts no join lines.
     expect(statusLines(group.id)).toEqual([]);
+  });
+
+  it("assigns unique avatar shapes when a group is built from existing sessions", () => {
+    const workspaceId = insertWorkspace();
+    const sessions = Array.from({ length: 10 }, (_, index) =>
+      insertSession(workspaceId, `Session member ${index + 1}`),
+    );
+
+    const group = createAgentGroupWithMembers({
+      name: uid("Adopt sessions"),
+      workspaceId,
+      members: sessions.map((sessionId) => ({ sessionId })),
+    });
+
+    expect(new Set(group.members.map((member) => member.avatarShape)).size).toBe(10);
+  });
+
+  it("assigns different shapes when group members share a template default", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Template shapes"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Member 1", templateId: "reviewer" },
+        { name: "Member 5", templateId: "reviewer" },
+      ],
+    });
+
+    expect(group.members.map((member) => member.avatarShape)).toEqual(["roundedSquare", "circle"]);
+    expect(new Set(group.members.map((member) => member.avatarShape)).size).toBe(2);
+  });
+
+  it("assigns an unused shape when a deterministic template default is already taken", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Template addition"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Member 1", templateId: "reviewer" },
+        { name: "Member 5", templateId: "reviewer" },
+      ],
+    });
+
+    const added = createAgentInGroup({
+      groupId: group.id,
+      name: "Member 6",
+      templateId: "reviewer",
+    });
+
+    expect(added.avatarShape).toBe("squircle");
+    expect(new Set([...group.members, added].map((member) => member.avatarShape)).size).toBe(3);
+  });
+
+  it("assigns an available shape when adopting an ungrouped agent", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Adopt shape"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Circle", modelId: MODEL, avatarShape: "circle" },
+        { name: "Pentagon", modelId: MODEL, avatarShape: "pentagon" },
+      ],
+    });
+    const legacy = createAgent({ name: uid("Legacy"), avatarShape: "circle" });
+
+    expect(group.members.map((member) => member.avatarShape)).toEqual(["circle", "pentagon"]);
+    const existing = getDatabase()
+      .prepare("select id, avatar_shape from agents where group_id = ? order by id")
+      .all(group.id) as Array<{ id: string; avatar_shape: "circle" | "pentagon" }>;
+    expect(new Set(existing.map((member) => member.avatar_shape))).toEqual(
+      new Set(["circle", "pentagon"]),
+    );
+    expect(
+      allocateUniqueGroupAvatarShapes([
+        ...existing.map((member) => ({ agentId: member.id, preferredShape: member.avatar_shape })),
+        { agentId: legacy.id, preferredShape: "circle" },
+      ]).get(legacy.id),
+    ).toBe("squircle");
+
+    addAgentToGroup({ groupId: group.id, agentId: legacy.id });
+
+    expect(getAgent(legacy.id)?.avatarShape).toBe("squircle");
+    expect(
+      new Set([
+        ...group.members.map((member) => member.avatarShape),
+        getAgent(legacy.id)?.avatarShape,
+      ]).size,
+    ).toBe(3);
   });
 
   it("names are unique per group: the same name is fine in another group", () => {
@@ -551,6 +671,127 @@ describe("1:1 chat teardown keeps its tree (A3 review)", () => {
 });
 
 describe("A3 migration and persona", () => {
+  it("widens the avatar check and repairs duplicate group shapes in membership order", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "modus-avatar-shape-migrate-"));
+    const db = new DatabaseSync(join(dir, "modus.sqlite"));
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      migrateDatabase(db);
+      db.exec("drop index if exists idx_agents_group_avatar_shape");
+      db.exec(`drop trigger if exists agents_group_avatar_shape_unique_insert;
+        drop trigger if exists agents_group_avatar_shape_unique_update;`);
+      const workspaceId = insertWorkspace(db);
+      const now = "2026-01-01T00:00:00.000Z";
+      db.prepare(
+        `insert into agent_groups (id, name, workspace_id, mode, created_at, updated_at)
+         values ('shape-group', 'Shapes', ?, 'free', ?, ?)`,
+      ).run(workspaceId, now, now);
+      const insertAgent = db.prepare(
+        `insert into agents
+          (id, group_id, name, role, instructions, model_id, default_workspace_id,
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at)
+         values (?, 'shape-group', ?, ?, ?, ?, ?, ?, ?, 'circle', ?, ?, ?, ?)`,
+      );
+      insertAgent.run(
+        "shape-first",
+        "First",
+        "Lead",
+        "Keep first instructions",
+        "openai/gpt-5",
+        workspaceId,
+        "wink",
+        "teal",
+        "template-first",
+        "created-first",
+        "updated-first",
+        null,
+      );
+      insertAgent.run(
+        "shape-second",
+        "Second",
+        "Reviewer",
+        "Keep second instructions",
+        "openai/gpt-5-mini",
+        workspaceId,
+        "curious",
+        "pink",
+        "template-second",
+        "created-second",
+        "updated-second",
+        "archived-second",
+      );
+      const firstSession = insertSession(workspaceId, "First", db);
+      const secondSession = insertSession(workspaceId, "Second", db);
+      const insertMember = db.prepare(
+        `insert into agent_group_members (group_id, session_id, role, joined_at, agent_id)
+         values ('shape-group', ?, null, ?, ?)`,
+      );
+      insertMember.run(firstSession, "2026-01-01T00:00:01.000Z", "shape-first");
+      insertMember.run(secondSession, "2026-01-01T00:00:02.000Z", "shape-second");
+      replaceAgentsWithLegacyAvatarCheck(db);
+
+      const preservedFields = db
+        .prepare(
+          `select id, group_id, name, role, instructions, model_id, default_workspace_id,
+                  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+           from agents order by id`,
+        )
+        .all();
+      migrateDatabase(db);
+
+      const snapshot = () =>
+        db
+          .prepare("select id, avatar_shape from agents where group_id = 'shape-group' order by id")
+          .all();
+      expect(
+        db
+          .prepare(
+            `select id, avatar_shape from agents where group_id = 'shape-group'
+             order by (select joined_at from agent_group_members where agent_id = agents.id), id`,
+          )
+          .all(),
+      ).toEqual([
+        { id: "shape-first", avatar_shape: "circle" },
+        { id: "shape-second", avatar_shape: "squircle" },
+      ]);
+      expect(
+        db
+          .prepare(
+            `select id, group_id, name, role, instructions, model_id, default_workspace_id,
+                    avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+             from agents order by id`,
+          )
+          .all(),
+      ).toEqual(preservedFields);
+      const afterFirstMigration = snapshot();
+      migrateDatabase(db);
+      expect(snapshot()).toEqual(afterFirstMigration);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
+
+      db.prepare("update agents set avatar_shape = 'triangle' where id = 'shape-first'").run();
+      expect(() =>
+        db.prepare("update agents set avatar_shape = 'triangle' where id = 'shape-second'").run(),
+      ).toThrow(/UNIQUE/);
+      const insertUngrouped = db.prepare(
+        `insert into agents (id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)
+         values (?, ?, 'happy', 'blue', 'pentagon', ?, ?)`,
+      );
+      insertUngrouped.run("shape-loose-one", "Loose One", now, now);
+      insertUngrouped.run("shape-loose-two", "Loose Two", now, now);
+      expect(
+        db
+          .prepare(
+            "select count(*) as count from agents where group_id is null and avatar_shape = 'pentagon'",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  });
+
   it("agent_sessions.agent_id: one 1:1 chat per agent, unlinked (not deleted) with the agent; idempotent", async () => {
     const dir = await mkdtemp(join(tmpdir(), "modus-a3-migrate-"));
     const db = new DatabaseSync(join(dir, "modus.sqlite"));

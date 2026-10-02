@@ -14,6 +14,7 @@ import {
 import { cn } from "../../lib/cn";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { GroupDecisionsSection } from "./GroupDecisions";
+import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import { GroupStageChip } from "./GroupRoomHeader";
 import { activeTaskCount, GroupTaskPanel } from "./GroupTaskPanel";
 import { MemberName } from "./MemberName";
@@ -216,9 +217,9 @@ function ActivityProjectContextSection({
   const lines = formatGroupProjectContextDetails(snapshot);
   return (
     <section className="mb-3" data-testid="group-activity-project-context">
-      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">
-        Project context
-      </h3>
+      <div className="mb-1.5 px-1">
+        <GroupProjectContextChip status={snapshot.status} />
+      </div>
       <ul className="flex flex-col gap-0.5 px-1 text-2xs text-fg-muted">
         {lines.map((line) => (
           <li key={line}>{line}</li>

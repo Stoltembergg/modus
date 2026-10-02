@@ -4,8 +4,8 @@ import type { GroupMemberStates, GroupRuntimeEvent } from "../../../../shared/co
 /** Per group: running / queued / waiting-for-you members (only groups with any). */
 export type GroupMemberStatesById = ReadonlyMap<string, GroupMemberStates>;
 
-/** Room chip / sidebar row state: waiting for you beats working. */
-export type GroupActivityState = "waiting" | "working" | "idle";
+/** Room chip / sidebar row state. */
+export type GroupActivityState = "waiting" | "working" | "queued" | "idle";
 
 function isEmpty(states: GroupMemberStates): boolean {
   return (
@@ -53,7 +53,7 @@ export function applyGroupActivityEvent(
   return next;
 }
 
-/** The whole group: amber when a member waits for the user, else working, else idle. */
+/** The whole group: waiting, running, queued, then idle. */
 export function groupActivityState(
   states: GroupMemberStatesById,
   groupId: string,
@@ -61,12 +61,11 @@ export function groupActivityState(
   const entry = states.get(groupId);
   if (!entry) return "idle";
   if (entry.waitingSessionIds.length > 0) return "waiting";
-  return entry.runningSessionIds.length > 0 || entry.queuedSessionIds.length > 0
-    ? "working"
-    : "idle";
+  if (entry.runningSessionIds.length > 0) return "working";
+  return entry.queuedSessionIds.length > 0 ? "queued" : "idle";
 }
 
-/** One member of a group (a queued wake is not "working" yet). */
+/** One member of a group (a queued wake is distinct from an active run). */
 export function memberActivityState(
   states: GroupMemberStatesById,
   groupId: string,
@@ -75,6 +74,7 @@ export function memberActivityState(
   const entry = states.get(groupId);
   if (entry?.waitingSessionIds.includes(sessionId)) return "waiting";
   if (entry?.runningSessionIds.includes(sessionId)) return "working";
+  if (entry?.queuedSessionIds.includes(sessionId)) return "queued";
   return "idle";
 }
 

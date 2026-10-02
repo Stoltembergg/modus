@@ -127,10 +127,11 @@ export function formatNaturalCollabStatus(
  * Rule (kind / protocol markers — not string heuristics):
  * - `handoff` → Activity / Group Runtime / peer wake only (orchestration).
  * - `ready` → ephemeral chip / composer — never a lasting transcript row.
- * - `blocked` / `proposed` / `agreed` → remain visible (user-facing loop states).
+ * - `blocked` / `proposed` → remain visible as actionable user-facing states.
+ * - `agreed` → hide the protocol summary from the conversational transcript.
  */
 export function shouldPersistCollabStatusInTranscript(status: GroupCollabStatus): boolean {
-  return status.kind !== "ready" && status.kind !== "handoff";
+  return status.kind !== "ready" && status.kind !== "handoff" && status.kind !== "agreed";
 }
 
 /**

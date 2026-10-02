@@ -12,6 +12,9 @@
     <script>
       try {
         document.documentElement.dataset.theme = localStorage.getItem("modus.theme") ?? "dark";
+        if (window.modus?.app?.nativeGlass) {
+          document.documentElement.dataset.nativeGlass = "true";
+        }
       } catch {}
     </script>
     <style>
@@ -31,6 +34,12 @@
         --startup-canvas: #ffffff;
         --startup-mark: rgb(36 36 36 / 34%);
         --startup-sheen: rgb(0 0 0 / 12%);
+      }
+
+      :root[data-native-glass="true"] body,
+      :root[data-native-glass="true"] #root,
+      :root[data-native-glass="true"] .startup-shell {
+        background: transparent;
       }
 
       html,

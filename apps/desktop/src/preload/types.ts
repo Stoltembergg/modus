@@ -108,8 +108,8 @@ import type {
   WorkspaceAgentsState,
   WorkspaceInfo,
 } from "../shared/contracts";
-
 import type { StartupMetricInput } from "../shared/startup";
+import type { WindowChromeMode } from "../shared/window-appearance";
 
 export type HyperPlanBuildStart = {
   sessionId: string;
@@ -142,6 +142,14 @@ export type ModusApi = {
   app: {
     /** Host OS platform (`darwin` | `win32` | `linux` …). Sync — set at preload time. */
     platform: string;
+    /** Native frame or OS controls overlay selected for this platform. */
+    windowChrome: WindowChromeMode;
+    /** Whether this host supports the native glass effect used by the shell. */
+    nativeGlass: boolean;
+    /** Current native glass state, including an OS failure discovered after startup. */
+    isNativeGlassAvailable(): boolean;
+    /** Main-process fallback when the OS declines a native glass request. */
+    onNativeGlassChange(handler: (available: boolean) => void): () => void;
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;
     startupMetric(input: StartupMetricInput): Promise<void>;

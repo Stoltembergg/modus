@@ -38,6 +38,7 @@ export function SidebarGroups({
         <div data-group-id={group.id} key={group.id}>
           <GroupRow
             expanded={false}
+            groupId={group.id}
             memberCount={group.members.length}
             name={group.name}
             onCancelRename={() => setRenamingId(null)}

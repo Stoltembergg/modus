@@ -12,6 +12,7 @@ import {
   type AgentGroupWithMembers,
   type AgentInfo,
   type AgentSessionInfo,
+  allocateUniqueGroupAvatarShapes,
   type CreateAgentInput,
   type CreateGroupAgentInput,
   type NewGroupAgentInput,
@@ -129,6 +130,54 @@ function requireAvatar<T extends string>(value: T, allowed: readonly T[], field:
   return value;
 }
 
+type AgentCreateFields = CreateAgentInput & {
+  templateId?: string;
+  groupId?: string;
+  /** A template's default shape can move to the next free silhouette in a group. */
+  preferredAvatarShape?: AgentAvatarShape;
+};
+
+function allocateNewGroupShape(
+  groupId: string,
+  agentId: string,
+  preferredShape: AgentAvatarShape,
+  explicit: boolean,
+): AgentAvatarShape {
+  const rows = getDatabase()
+    .prepare("select id, avatar_shape from agents where group_id = ? order by id")
+    .all(groupId) as Array<{ id: string; avatar_shape: AgentAvatarShape }>;
+  const owner = rows.find((row) => row.avatar_shape === preferredShape);
+  if (explicit && owner) {
+    throw new GroupStoreError(
+      "agent-avatar-shape-taken",
+      `The ${preferredShape} avatar shape is already used in this group.`,
+    );
+  }
+  if (rows.length >= AGENT_AVATAR_SHAPES.length) {
+    throw new GroupStoreError("group-max-members", "A group can contain at most 10 agents.");
+  }
+  const assignments = allocateUniqueGroupAvatarShapes([
+    ...rows.map((row) => ({ agentId: row.id, preferredShape: row.avatar_shape })),
+    { agentId, preferredShape },
+  ]);
+  const shape = assignments.get(agentId);
+  if (!shape)
+    throw new GroupStoreError("invalid-value", "Could not allocate an agent avatar shape.");
+  return shape;
+}
+
+function requireFreeGroupShape(groupId: string, agentId: string, shape: AgentAvatarShape): void {
+  const owner = getDatabase()
+    .prepare("select id from agents where group_id = ? and avatar_shape = ? and id <> ?")
+    .get(groupId, shape, agentId) as { id: string } | undefined;
+  if (owner) {
+    throw new GroupStoreError(
+      "agent-avatar-shape-taken",
+      `The ${shape} avatar shape is already used in this group.`,
+    );
+  }
+}
+
 /** Every agent (archived included, with `archivedAt`), by name. */
 export function listAgents(): AgentInfo[] {
   const rows = getDatabase()
@@ -149,13 +198,20 @@ export function getAgent(agentId: string): AgentInfo | undefined {
  * membership and its room session) is createAgentInGroup. Without a group the
  * row is a legacy-style ungrouped agent (store level only; IPC requires one).
  */
-export function createAgent(
-  input: CreateAgentInput & { templateId?: string; groupId?: string },
-): AgentInfo {
+export function createAgent(input: AgentCreateFields): AgentInfo {
   const id = randomUUID();
   const now = new Date().toISOString();
   const avatar = agentAvatarForId(id);
   const groupId = input.groupId ?? null;
+  const preferredShape = requireAvatar(
+    input.avatarShape ?? input.preferredAvatarShape ?? avatar.avatarShape,
+    AGENT_AVATAR_SHAPES,
+    "avatar shape",
+  );
+  const avatarShape =
+    groupId === null
+      ? preferredShape
+      : allocateNewGroupShape(groupId, id, preferredShape, input.avatarShape !== undefined);
   getDatabase()
     .prepare(
       `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`,
@@ -170,7 +226,7 @@ export function createAgent(
       requireWorkspace(input.defaultWorkspaceId ?? null),
       requireAvatar(input.avatarFace ?? avatar.avatarFace, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? avatar.avatarColor, AGENT_AVATAR_COLORS, "avatar color"),
-      requireAvatar(input.avatarShape ?? avatar.avatarShape, AGENT_AVATAR_SHAPES, "avatar shape"),
+      avatarShape,
       input.templateId ?? null,
       now,
       now,
@@ -182,10 +238,7 @@ export function createAgent(
  * The fields of a new agent: a template fills name (next free in the group),
  * role, instructions and avatar; explicit fields win.
  */
-function newAgentFields(
-  input: NewGroupAgentInput,
-  groupId: string | undefined,
-): CreateAgentInput & { templateId?: string; groupId?: string } {
+function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined): AgentCreateFields {
   const { templateId, ...fields } = input;
   const base = { ...fields, ...(groupId !== undefined ? { groupId } : {}) };
   if (templateId === undefined) return base;
@@ -198,8 +251,10 @@ function newAgentFields(
     instructions: template.instructions,
     avatarFace: template.avatarFace,
     avatarColor: template.avatarColor,
-    avatarShape: agentAvatarForId(`${template.id}:${fields.name ?? template.name}`).avatarShape,
     ...base,
+    preferredAvatarShape:
+      fields.avatarShape ??
+      agentAvatarForId(`${template.id}:${fields.name ?? template.name}`).avatarShape,
     name: fields.name?.trim()
       ? fields.name
       : uniqueAgentName(getDatabase(), template.name, groupId),
@@ -343,6 +398,14 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
 export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo {
   const row = requireAgentRow(agentId);
   const nextModelId = input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id;
+  const avatarShape = requireAvatar(
+    input.avatarShape ?? row.avatar_shape,
+    AGENT_AVATAR_SHAPES,
+    "avatar shape",
+  );
+  if (input.avatarShape !== undefined && row.group_id !== null) {
+    requireFreeGroupShape(row.group_id, agentId, avatarShape);
+  }
   getDatabase()
     .prepare(
       `update agents
@@ -360,7 +423,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
         : row.default_workspace_id,
       requireAvatar(input.avatarFace ?? row.avatar_face, AGENT_AVATAR_FACES, "avatar face"),
       requireAvatar(input.avatarColor ?? row.avatar_color, AGENT_AVATAR_COLORS, "avatar color"),
-      requireAvatar(input.avatarShape ?? row.avatar_shape, AGENT_AVATAR_SHAPES, "avatar shape"),
+      avatarShape,
       new Date().toISOString(),
       agentId,
     );

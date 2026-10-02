@@ -6,11 +6,7 @@ export type SettingsSectionId =
   | "skills"
   | "subagents"
   | "mcp"
-  | "rules"
-  | "project-memory"
-  | "harness-insights"
-  | "failure-blacklist"
-  | "limits";
+  | "rules";
 
 export type ModelConfigPatch = {
   thinkingVariant?: string;

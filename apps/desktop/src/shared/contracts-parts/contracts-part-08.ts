@@ -90,6 +90,8 @@ export const AGENT_AVATAR_SHAPES = [
   "blob",
   "diamond",
   "shield",
+  "triangle",
+  "pentagon",
 ] as const;
 export type AgentAvatarShape = (typeof AGENT_AVATAR_SHAPES)[number];
 
@@ -338,7 +340,6 @@ export type GroupChainEndReason =
   | "blocked"
   /** The user pressed Stop in the room (running turns are aborted). */
   | "stopped"
-  | "max-hops"
   | "max-agent-messages"
   | "max-member-wakes"
   | "input-token-budget"

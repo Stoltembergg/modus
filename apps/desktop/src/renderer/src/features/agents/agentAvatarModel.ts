@@ -10,8 +10,8 @@ import type { GroupActivityState } from "../groups/useWorkingGroups";
 /** What the avatar shows: idle (blink + float), working, waiting for you, archived (grey). */
 export type AgentAvatarState = "idle" | "working" | "waiting" | "archived";
 
-/** The three sizes the app uses: message authors / working strip, chips, dialog preview. */
-export type AgentAvatarSize = 16 | 20 | 48;
+/** The app sizes: small metadata, message / chip, compact header and dialog preview. */
+export type AgentAvatarSize = 16 | 20 | 24 | 48;
 
 /**
  * Fill per palette token. Paired with {@link AGENT_AVATAR_INK} for contrast on
@@ -94,6 +94,7 @@ export function agentAvatarState(
   archived: boolean,
 ): AgentAvatarState {
   if (archived) return "archived";
+  if (activity === "queued") return "idle";
   return activity ?? "idle";
 }
 

@@ -64,11 +64,13 @@ const GENERATED: GeneratedAgentProfile = {
 
 function renderDialog({
   agent,
+  group = GROUP,
   models = MODELS,
   generate = vi.fn(async (_input: GenerateAgentProfileInput) => GENERATED),
   create = vi.fn(async (_input: unknown) => undefined),
 }: {
   agent?: AgentInfo;
+  group?: AgentGroupWithMembers;
   models?: typeof MODELS;
   generate?: (input: GenerateAgentProfileInput) => Promise<GeneratedAgentProfile>;
   create?: ReturnType<typeof vi.fn<(input: unknown) => Promise<undefined>>>;
@@ -79,7 +81,7 @@ function renderDialog({
     <AgentDialog
       agent={agent}
       defaultModelId="m-2"
-      group={GROUP}
+      group={group}
       models={models}
       onCreate={create}
       onGenerate={generate}
@@ -147,7 +149,7 @@ describe("AgentDialog", () => {
     expect(preview?.dataset.face).toBe("sleepy");
     expect(preview?.dataset.color).toBe("violet");
     expect(within(dialog).getAllByRole("button", { name: /^Face / })).toHaveLength(8);
-    expect(within(dialog).getAllByRole("button", { name: /^Shape / })).toHaveLength(8);
+    expect(within(dialog).getAllByRole("button", { name: /^Shape / })).toHaveLength(10);
     expect(within(dialog).getAllByRole("button", { name: /^Color / })).toHaveLength(22);
   });
 
@@ -288,6 +290,24 @@ describe("AgentDialog", () => {
       avatarColor: "pink",
       avatarShape: "squircle",
     });
+  });
+
+  it("group editing disables occupied shapes and keeps the current shape selectable", () => {
+    const [firstMember, secondMember] = GROUP.members;
+    if (!firstMember || !secondMember) throw new Error("expected two group members");
+    const group: AgentGroupWithMembers = {
+      ...GROUP,
+      members: [
+        { ...firstMember, avatarShape: "triangle" },
+        { ...secondMember, avatarShape: "pentagon" },
+      ],
+    };
+    const { dialog } = renderDialog({ agent: { ...ANA, avatarShape: "triangle" }, group });
+    const currentShape = within(dialog).getByRole("button", { name: "Shape triangle" });
+    const occupiedShape = within(dialog).getByRole("button", { name: "Shape pentagon" });
+    expect(currentShape.getAttribute("aria-pressed")).toBe("true");
+    expect((currentShape as HTMLButtonElement).disabled).toBe(false);
+    expect((occupiedShape as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("an IPC error keeps the dialog open with its message", async () => {

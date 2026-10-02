@@ -17,7 +17,7 @@ export function PromptMessage({
   return (
     <div
       className={cn(
-        "flex max-w-[94%] gap-2.5 rounded-lg border border-subtle bg-elevated px-3 py-2.5 sm:max-w-[88%]",
+        "flex max-w-[94%] gap-2.5 rounded-lg bg-card px-3 py-2.5 sm:max-w-[88%]",
         className,
       )}
       data-prompt-kit="message"
@@ -133,32 +133,6 @@ export function PromptTool({
       <span className="min-w-0 truncate font-medium text-fg-muted">{name}</span>
       <span className="shrink-0 text-fg-faint">{badge}</span>
     </div>
-  );
-}
-
-/**
- * Prompt Kit Source — discreet citation chip on the final reply only.
- * Shown when the agent included a genuinely useful URL for the user.
- */
-export function PromptSource({ href, label }: { href: string; label?: string }) {
-  let domain = label ?? href;
-  try {
-    domain = label ?? new URL(href).hostname.replace(/^www\./, "");
-  } catch {
-    // keep fallback
-  }
-  return (
-    <a
-      className="inline-flex h-5 max-w-[10rem] items-center truncate rounded-md bg-elevated px-1.5 text-[10px] text-fg-faint no-underline transition-colors hover:text-fg-muted"
-      data-prompt-kit="source"
-      data-testid="group-prompt-source"
-      href={href}
-      rel="noopener noreferrer"
-      target="_blank"
-      title={href}
-    >
-      {domain}
-    </a>
   );
 }
 

@@ -19,6 +19,34 @@ beforeEach(() => {
 });
 
 describe("GroupComposer file upload", () => {
+  it("keeps attachments, execution mode and send controls inside one prompt bar", () => {
+    render(
+      <GroupComposer
+        activeExecutionId="execution-1"
+        members={[{ sessionId: "s1", title: "Planner" }]}
+        onSend={vi.fn(async () => undefined)}
+        showKickoff
+        updatePending={false}
+      />,
+    );
+
+    const promptBar = screen.getByTestId("group-composer-dropzone");
+    expect(promptBar.className).toContain("group-prompt-bar");
+    const toolbar = screen.getByTestId("group-composer-toolbar");
+    expect(promptBar.contains(toolbar)).toBe(true);
+    expect(toolbar.contains(screen.getByTestId("group-composer-mode-new"))).toBe(true);
+    expect(toolbar.contains(screen.getByTestId("group-composer-mode-complement"))).toBe(true);
+    expect(toolbar.contains(screen.getByTestId("group-composer-attach"))).toBe(true);
+    const send = screen.getByLabelText("Send");
+    expect(toolbar.contains(send)).toBe(true);
+    expect(send.className).toContain("bg-focus-ring");
+    expect(screen.getByTestId("group-composer-mode-new").className).toContain("bg-focus-ring/15");
+    expect(screen.getByTestId("group-composer-mode-complement").className).not.toContain(
+      "bg-accent",
+    );
+    expect(screen.getByTestId("group-kickoff-insert").className).toContain("bg-focus-ring");
+  });
+
   it("renders attach control and sends attachments with the message", async () => {
     const onSend = vi.fn(async () => undefined);
     render(

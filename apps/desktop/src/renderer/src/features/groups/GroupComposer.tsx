@@ -1,4 +1,4 @@
-import { IconArrowUp, IconClockPause, IconPaperclip } from "@tabler/icons-react";
+import { IconArrowUp, IconClockPause, IconPlus } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   GroupExecutionMode,
@@ -294,45 +294,6 @@ export function GroupComposer({
           </button>
         </div>
       ) : null}
-      {activeExecutionId ? (
-        <fieldset
-          className="mb-2 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
-          data-testid="group-composer-execution-mode"
-        >
-          <legend className="sr-only">Execution mode</legend>
-          <button
-            className={cn(
-              "rounded-md border px-2 py-1 font-medium transition-colors",
-              executionMode === "new"
-                ? "border-accent/40 bg-accent/15 text-fg"
-                : "border-hairline bg-elevated text-fg-muted hover:text-fg",
-            )}
-            data-testid="group-composer-mode-new"
-            onClick={() => setExecutionMode("new")}
-            type="button"
-          >
-            Nova tarefa
-          </button>
-          <button
-            className={cn(
-              "rounded-md border px-2 py-1 font-medium transition-colors",
-              executionMode === "complement"
-                ? "border-accent/40 bg-accent/15 text-fg"
-                : "border-hairline bg-elevated text-fg-muted hover:text-fg",
-            )}
-            data-testid="group-composer-mode-complement"
-            onClick={() => setExecutionMode("complement")}
-            type="button"
-          >
-            Complementar
-          </button>
-          {executionMode === "complement" ? (
-            <span className="text-fg-faint" data-testid="group-composer-active-execution">
-              · {activeExecutionTitle ?? activeExecutionId.slice(0, 8)}
-            </span>
-          ) : null}
-        </fieldset>
-      ) : null}
       {error ? <div className="mb-2 text-danger text-xs">{error}</div> : null}
       {showKickoff && !value.trim() && attachments.length === 0 ? (
         <div
@@ -369,7 +330,7 @@ export function GroupComposer({
             </select>
           </label>
           <button
-            className="rounded-lg bg-accent px-2.5 py-1.5 font-medium text-2xs text-white disabled:opacity-40"
+            className="rounded-lg bg-focus-ring px-2.5 py-1.5 font-medium text-2xs text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
             data-testid="group-kickoff-insert"
             disabled={!kickoffOwner.trim()}
             onClick={() => {
@@ -394,7 +355,7 @@ export function GroupComposer({
       ) : null}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: drag-drop is a pointer-only enhancement; keyboard users attach via the paperclip button or paste. */}
       <div
-        className={cn("composer-dock-shell relative transition-colors")}
+        className={cn("composer-dock-shell group-prompt-bar relative transition-colors")}
         data-composer-surface
         data-dragging={dragOver ? "" : undefined}
         data-testid="group-composer-dropzone"
@@ -468,7 +429,7 @@ export function GroupComposer({
         ) : null}
         <textarea
           aria-label="Message the group"
-          className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-3.5 py-3 pr-20 text-fg text-sm outline-none placeholder:text-fg-faint"
+          className="block max-h-48 min-h-[54px] w-full resize-none bg-transparent px-4 py-3 text-fg text-sm outline-none placeholder:text-fg-faint"
           onChange={(event) => {
             setValue(event.currentTarget.value);
             setCaret(event.currentTarget.selectionStart);
@@ -525,25 +486,71 @@ export function GroupComposer({
           ref={fileInputRef}
           type="file"
         />
-        <button
-          aria-label="Attach files"
-          className="absolute right-10 bottom-2 flex size-7 items-center justify-center rounded-full text-fg-faint transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
-          data-testid="group-composer-attach"
-          disabled={attachments.length >= MAX_GROUP_ATTACHMENTS || sending}
-          onClick={() => fileInputRef.current?.click()}
-          type="button"
+        <div
+          className="group-composer-toolbar flex min-h-11 items-center justify-between gap-2 border-t border-hairline-soft px-2.5 py-1.5"
+          data-testid="group-composer-toolbar"
         >
-          <IconPaperclip size={ICON.sm} stroke={ICON_STROKE.sm} />
-        </button>
-        <button
-          aria-label="Send"
-          className="absolute right-2 bottom-2 flex size-7 items-center justify-center rounded-full bg-accent text-white transition-opacity disabled:opacity-40"
-          disabled={!canSend}
-          onClick={() => void send()}
-          type="button"
-        >
-          <IconArrowUp size={ICON.sm} stroke={ICON_STROKE.sm} />
-        </button>
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            <button
+              aria-label="Attach files"
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+              data-testid="group-composer-attach"
+              disabled={attachments.length >= MAX_GROUP_ATTACHMENTS || sending}
+              onClick={() => fileInputRef.current?.click()}
+              type="button"
+            >
+              <IconPlus size={ICON.md} stroke={ICON_STROKE.md} />
+            </button>
+            {activeExecutionId ? (
+              <fieldset
+                className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
+                data-testid="group-composer-execution-mode"
+              >
+                <legend className="sr-only">Execution mode</legend>
+                <button
+                  className={cn(
+                    "rounded-md border px-2 py-1 font-medium transition-colors",
+                    executionMode === "new"
+                      ? "border-focus-ring/40 bg-focus-ring/15 text-fg"
+                      : "border-hairline bg-elevated text-fg-muted hover:text-fg",
+                  )}
+                  data-testid="group-composer-mode-new"
+                  onClick={() => setExecutionMode("new")}
+                  type="button"
+                >
+                  Nova tarefa
+                </button>
+                <button
+                  className={cn(
+                    "rounded-md border px-2 py-1 font-medium transition-colors",
+                    executionMode === "complement"
+                      ? "border-focus-ring/40 bg-focus-ring/15 text-fg"
+                      : "border-hairline bg-elevated text-fg-muted hover:text-fg",
+                  )}
+                  data-testid="group-composer-mode-complement"
+                  onClick={() => setExecutionMode("complement")}
+                  type="button"
+                >
+                  Complementar
+                </button>
+                {executionMode === "complement" ? (
+                  <span className="text-fg-faint" data-testid="group-composer-active-execution">
+                    · {activeExecutionTitle ?? activeExecutionId.slice(0, 8)}
+                  </span>
+                ) : null}
+              </fieldset>
+            ) : null}
+          </div>
+          <button
+            aria-label="Send"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
+            disabled={!canSend}
+            onClick={() => void send()}
+            type="button"
+          >
+            <IconArrowUp size={ICON.sm} stroke={ICON_STROKE.sm} />
+          </button>
+        </div>
       </div>
     </div>
   );

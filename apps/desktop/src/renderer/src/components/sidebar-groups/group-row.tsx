@@ -1,13 +1,33 @@
 import { ContextMenu } from "@base-ui/react/context-menu";
 import { Menu } from "@base-ui/react/menu";
-import { IconDots, IconUsersGroup } from "@tabler/icons-react";
+import { IconCircles, IconCube, IconDots, IconHexagon, IconUsersGroup } from "@tabler/icons-react";
+import type { CSSProperties } from "react";
 import { useState } from "react";
 import { cn } from "../../lib/cn";
 import { GroupMenuItems } from "./menu";
 import { GroupRenameInput } from "./rename";
 import { SB_ACTION, SB_ACTION_STROKE, SB_ICON, SB_RAIL, SB_ROW, SB_STROKE } from "./shared";
 
+const GROUP_ICON_VARIANTS = [IconUsersGroup, IconCircles, IconHexagon, IconCube] as const;
+
+function groupIconIdentity(groupId: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < groupId.length; index += 1) {
+    hash ^= groupId.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+
+  const variant = hash % GROUP_ICON_VARIANTS.length;
+  const hue = ((hash >>> 2) % 3600) / 10;
+  return {
+    Icon: GROUP_ICON_VARIANTS[variant] ?? IconUsersGroup,
+    identity: `${variant}:${hue.toFixed(1)}`,
+    hue,
+  };
+}
+
 export function GroupRow({
+  groupId,
   name,
   memberCount,
   working,
@@ -24,6 +44,7 @@ export function GroupRow({
   onDelete,
   onAddAgent,
 }: {
+  groupId: string;
   name: string;
   memberCount: number;
   working: boolean;
@@ -45,6 +66,20 @@ export function GroupRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const groupIcon = groupIconIdentity(groupId);
+  const GroupIcon = groupIcon.Icon;
+  const groupIconStyle = { "--group-icon-hue": `${groupIcon.hue}deg` } as CSSProperties;
+  const groupIconElement = (
+    <GroupIcon
+      aria-hidden
+      className="group-identity-icon"
+      data-group-icon-identity={groupIcon.identity}
+      data-testid="group-identity-icon"
+      size={SB_ICON}
+      stroke={SB_STROKE}
+      style={groupIconStyle}
+    />
+  );
   const items = (
     <GroupMenuItems
       agentCount={memberCount}
@@ -81,12 +116,12 @@ export function GroupRow({
             onClick={onSelect}
             type="button"
           >
-            <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
+            {groupIconElement}
             <GroupRowDot waiting={waiting} working={working} />
           </button>
         ) : (
           <span className={cn(SB_RAIL, "relative text-current")}>
-            <IconUsersGroup size={SB_ICON} stroke={SB_STROKE} />
+            {groupIconElement}
             <GroupRowDot waiting={waiting} working={working} />
           </span>
         )}

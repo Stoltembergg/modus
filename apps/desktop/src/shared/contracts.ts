@@ -8,3 +8,4 @@ export * from "./contracts-parts/contracts-part-06";
 export * from "./contracts-parts/contracts-part-07";
 export * from "./contracts-parts/contracts-part-08";
 export * from "./contracts-parts/contracts-part-09";
+export * from "./group-avatar-shapes";

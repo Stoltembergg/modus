@@ -42,6 +42,7 @@ describe("newGroupModel (A4)", () => {
         modelId: "m-1",
         avatarFace: "cheeky",
         avatarColor: "red",
+        avatarShape: "circle",
       },
       members(1),
       "c1",
@@ -55,11 +56,19 @@ describe("newGroupModel (A4)", () => {
       modelId: "m-1",
       avatarFace: "cheeky",
       avatarColor: "red",
+      avatarShape: "circle",
     });
     // A copied template agent on the app default takes the fallback model (it needs one now).
     expect(
       copyMember(
-        { name: "X", role: "", instructions: "", avatarFace: "calm", avatarColor: "sky" },
+        {
+          name: "X",
+          role: "",
+          instructions: "",
+          avatarFace: "calm",
+          avatarColor: "sky",
+          avatarShape: "circle",
+        },
         [],
         "c2",
         "m-2",

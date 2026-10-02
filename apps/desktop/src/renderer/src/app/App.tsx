@@ -61,10 +61,8 @@ import {
 } from "../components/shell/navigation-state";
 import { TopBar } from "../components/shell/TopBar";
 import { Aurora } from "../components/ui/Aurora";
-import { ChromeMoreMenu } from "../components/ui/ChromeMoreMenu";
 import { FadeContent } from "../components/ui/FadeContent";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
-import { ModusBot } from "../components/ui/ModusBot";
 import { ModusLoadingFallback } from "../components/ui/ModusLoadingMark";
 import { NativeSurfaceProvider } from "../components/ui/nativeSurface";
 import { TOOLBAR_ICON, ToolbarButton } from "../components/ui/ToolbarButton";
@@ -100,6 +98,7 @@ import {
 } from "../features/groups/useWorkingGroups";
 import { INSPECTOR_MIN_WIDTH } from "../features/inspector/inspector-layout";
 import { normalizePlan } from "../features/plan/planState";
+import type { SettingsSectionId } from "../features/settings/settings-types";
 import {
   createUiStatePusher,
   isComposerDraftEmpty,
@@ -125,7 +124,6 @@ const WORKSPACE_GUTTER = 8;
 const loadChatPane = () => import("../features/agent/ChatPane");
 const loadInspector = () => import("../features/inspector/Inspector");
 const loadSettingsPanel = () => import("../features/settings/SettingsPanel");
-const loadConnectionsPage = () => import("../features/settings/ConnectionsPage");
 const ChatPane = lazy(() =>
   loadChatPane().then(({ ChatPane: Component }) => ({ default: Component })),
 );
@@ -139,24 +137,32 @@ const SettingsPanel = lazy(() =>
     default: Component,
   })),
 );
-const ConnectionsPage = lazy(() =>
-  loadConnectionsPage().then(({ ConnectionsPage: Component }) => ({
-    default: Component,
-  })),
-);
-
 function logInitialHydrationError(resource: string, error: unknown): void {
   console.error(`Unable to load initial ${resource}.`, error);
 }
 
 export function App() {
   const reduceMotion = useReducedMotion();
+  const windowChrome = window.modus?.app.windowChrome ?? "system";
+  const [nativeGlass, setNativeGlass] = useState(
+    () => window.modus?.app.isNativeGlassAvailable?.() ?? window.modus?.app.nativeGlass === true,
+  );
   const [securityState, setSecurityState] = useState<SecurityState | null>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceInfo | null>(null);
   const [agentSessions, setAgentSessions] = useState<AgentSessionInfo[]>([]);
   const [agentGroups, setAgentGroups] = useState<AgentGroupWithMembers[]>([]);
   const groupMemberStates = useGroupMemberStates();
+  useEffect(() => {
+    const applyNativeGlass = (available: boolean): void => {
+      setNativeGlass(available);
+      document.documentElement.dataset.nativeGlass = String(available);
+    };
+    applyNativeGlass(
+      window.modus?.app.isNativeGlassAvailable?.() ?? window.modus?.app.nativeGlass === true,
+    );
+    return window.modus?.app.onNativeGlassChange(applyNativeGlass);
+  }, []);
   const isGroupWorking = useCallback(
     (group: AgentGroupWithMembers) => isGroupRunning(groupMemberStates, group.id),
     [groupMemberStates],
@@ -198,10 +204,19 @@ export function App() {
   const [primaryNavigation, setPrimaryNavigation] = useState(INITIAL_PRIMARY_NAVIGATION);
   const primaryNavigationTouchedRef = useRef(false);
   const settingsOpen = primaryNavigation.active === "settings";
+  const [settingsInitialSection, setSettingsInitialSection] =
+    useState<SettingsSectionId>("model-provider");
   const navigateToPrimary = useCallback((destination: PrimaryDestination) => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => navigatePrimary(current, destination));
   }, []);
+  const openSettings = useCallback(
+    (section: SettingsSectionId = "model-provider") => {
+      setSettingsInitialSection(section);
+      navigateToPrimary("settings");
+    },
+    [navigateToPrimary],
+  );
   const closeSettings = useCallback(() => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
@@ -364,12 +379,7 @@ export function App() {
 
   useEffect(() => {
     const idleCallback = window.requestIdleCallback(() => {
-      void Promise.allSettled([
-        loadChatPane(),
-        loadInspector(),
-        loadSettingsPanel(),
-        loadConnectionsPage(),
-      ]);
+      void Promise.allSettled([loadChatPane(), loadInspector(), loadSettingsPanel()]);
     });
     return () => window.cancelIdleCallback(idleCallback);
   }, []);
@@ -671,7 +681,7 @@ export function App() {
 
   async function createSession(workspace: WorkspaceInfo | null): Promise<AgentSessionInfo | null> {
     if (!model) {
-      navigateToPrimary("settings");
+      openSettings();
       setSessionCreateError("No model is configured. Connect a provider in Settings first.");
       return null;
     }
@@ -737,8 +747,8 @@ export function App() {
   }, []);
 
   const openConnections = useCallback(() => {
-    navigateToPrimary("connections");
-  }, [navigateToPrimary]);
+    openSettings("mcp");
+  }, [openSettings]);
 
   const rememberActivePlan = useCallback(
     (plan: PlanRef) => {
@@ -903,13 +913,6 @@ export function App() {
     // ONE all-or-nothing call (adds, removes and lead in one transaction); errors
     // propagate so the "Manage members" dialog can show them and stay open.
     setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
-  }
-
-  /** A member chip in the room: open its hidden room session (e.g. "Waiting for you"). */
-  async function openGroupMember(sessionId: string): Promise<void> {
-    const sessions = await window.modus.agent.list({ includeSessionId: sessionId });
-    const session = sessions.find((item: AgentSessionInfo) => item.id === sessionId);
-    if (session) selectSession(session);
   }
 
   /** An agent in the sidebar: open its 1:1 chat (created on first open, in the group's Project). */
@@ -1205,7 +1208,7 @@ export function App() {
       <TooltipProvider>
         <NativeSurfaceProvider>
           <ImageViewerProvider>
-            <AppShell className="app-root">
+            <AppShell className="app-root" glassMode={nativeGlass ? "native" : "solid"}>
               {/* Settings keeps a dedicated titlebar. Conversation chrome uses the
                   main toolbar as the drag/traffic-light row so there is no empty
                   band above the chat header. */}
@@ -1213,7 +1216,7 @@ export function App() {
 
               <FadeContent blur className="flex min-h-0 min-w-0 flex-1 flex-col" duration={0.7}>
                 <div
-                  className="surface-app flex min-h-0 min-w-0 flex-1"
+                  className="app-layout-row surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
                   style={
                     primaryNavigation.active === "settings"
@@ -1228,12 +1231,15 @@ export function App() {
                 >
                   <AppRail
                     active={primaryNavigation.active}
-                    nativeTitlebar={isMac && !settingsOpen}
-                    onNavigate={navigateToPrimary}
+                    topChromeClearance={!settingsOpen}
+                    onNavigate={(destination) =>
+                      destination === "settings" ? openSettings() : navigateToPrimary(destination)
+                    }
                   />
                   {settingsOpen ? (
                     <Suspense fallback={<ModusLoadingFallback />}>
                       <SettingsPanel
+                        initialSection={settingsInitialSection}
                         onClose={closeSettings}
                         onRefresh={refreshModelSettings}
                         onRefreshCatalog={refreshModelCatalog}
@@ -1242,16 +1248,6 @@ export function App() {
                         workspaceCwd={activeWorkspace?.rootPath}
                       />
                     </Suspense>
-                  ) : primaryNavigation.active === "connections" ? (
-                    <MainSurface className="surface-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0">
-                      <TopBar className="toolbar-row app-drag flex shrink-0 items-center px-4">
-                        <h1 className="app-no-drag text-sm font-medium text-fg">Connections</h1>
-                        <div className="ml-auto">{isMac ? null : <WindowControls />}</div>
-                      </TopBar>
-                      <Suspense fallback={<ModusLoadingFallback />}>
-                        <ConnectionsPage />
-                      </Suspense>
-                    </MainSurface>
                   ) : (
                     <>
                       <ContextSidebar>
@@ -1279,7 +1275,7 @@ export function App() {
                           onNewSession={() => openNewChat()}
                           onNewWorkspaceSession={(workspace) => openNewChat(workspace)}
                           onOpenWorkspace={() => void openWorkspace()}
-                          onOpenSettings={() => navigateToPrimary("settings")}
+                          onOpenSettings={() => openSettings()}
                           onSelectSession={selectSession}
                           onWidthChange={setSidebarWidth}
                           activeSessionId={activeSessionId}
@@ -1354,7 +1350,9 @@ export function App() {
                       >
                         <TopBar
                           className={cn(
-                            "toolbar-row app-drag relative z-10 flex shrink-0 items-center px-3",
+                            "toolbar-row relative z-10 flex shrink-0 items-center pr-3 pl-1",
+                            (isMac || windowChrome === "windows-overlay") && "app-drag",
+                            windowChrome === "windows-overlay" && "pr-[138px]",
                             // Traffic lights sit in this row when the left sidebar is closed.
                             isMac && !responsiveSidebarOpen && "pl-[76px]",
                           )}
@@ -1414,12 +1412,11 @@ export function App() {
                                   branch={branch}
                                   environmentStats={environmentStats}
                                   inspectorOpen={responsiveInspectorOpen}
-                                  onOpenSettings={() => navigateToPrimary("settings")}
+                                  onOpenSettings={() => openSettings()}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}
                                 />
                               </div>
                             )}
-                            {isMac ? null : <WindowControls />}
                           </div>
                         </TopBar>
 
@@ -1440,23 +1437,24 @@ export function App() {
                           {primaryNavigation.active === "groups" && !visibleGroup ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
-                              className="flex min-h-0 min-w-0 flex-1 items-center justify-center px-8"
+                              className="group-empty-state relative isolate flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden px-8"
                               exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
                               initial={reduceMotion ? false : { opacity: 0, y: 4 }}
                               key="groups-empty"
                               transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
                             >
-                              <div className="max-w-md text-center">
+                              <div aria-hidden className="group-empty-beams">
+                                <span className="group-empty-beam" />
+                                <span className="group-empty-beam" />
+                                <span className="group-empty-beam" />
+                              </div>
+                              <div className="relative z-10 max-w-md text-center">
                                 <p className="mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-fg-faint">
-                                  Persistent agent teams
+                                  AGENTIC TEAMS
                                 </p>
                                 <h1 className="text-xl font-medium tracking-tight text-fg">
                                   Keep shared work moving
                                 </h1>
-                                <p className="mt-2 text-sm leading-6 text-fg-muted">
-                                  Choose a group from the sidebar, or create one to give agents a
-                                  shared room, project, and history.
-                                </p>
                               </div>
                             </m.div>
                           ) : visibleGroup ? (
@@ -1482,8 +1480,6 @@ export function App() {
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
                                 onOpenFile={openWorkspaceFile}
-                                onOpenMember={(sessionId) => void openGroupMember(sessionId)}
-                                onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
                                 onAgentsChanged={() => void refreshGroups()}
                                 onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
                                 onRename={(name) =>
@@ -1601,9 +1597,6 @@ export function App() {
                                 speed={0.85}
                               />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
-                                <div className="mb-5 flex justify-center">
-                                  <ModusBot className="size-20" />
-                                </div>
                                 <Composer
                                   onOpenConnections={openConnections}
                                   canSubmit={canCreateSession}
@@ -1613,13 +1606,9 @@ export function App() {
                                   onDraftChange={setHeroDraft}
                                   footer={
                                     <HeroEnvironmentTray
-                                      activeWorkspace={activeWorkspace}
                                       branch={branch}
                                       cwd={activeCwd}
                                       onError={setSessionCreateError}
-                                      onOpenFolder={() => void openWorkspace()}
-                                      onSelectWorkspace={openNewChat}
-                                      workspaces={workspaces}
                                     />
                                   }
                                   mode={heroMode}
@@ -1720,20 +1709,23 @@ export function App() {
 }
 
 /**
- * Top chrome strip (44px) — settings only:
+ * Top chrome strip (36px) — settings only:
  *   - macOS: native traffic lights only; File/Edit/View/Help live in the system menu bar
- *   - Windows/Linux: frameless titlebar + in-window menu labels + WindowControls
+ *   - Windows/Linux: native controls; the renderer contributes menu labels only
  *
  * Conversation layout folds drag / traffic-light clearance into the sidebar +
  * main toolbar so the chat header sits flush with the window top.
  */
 function MenuBar() {
   const isMac = window.modus?.app.platform === "darwin";
+  const windowChrome = window.modus?.app.windowChrome ?? "system";
 
   return (
     <div
       className={cn(
-        "app-drag flex h-11 shrink-0 items-center bg-panel",
+        "menu-bar flex shrink-0 items-center bg-panel",
+        (isMac || windowChrome === "windows-overlay") && "app-drag",
+        windowChrome === "windows-overlay" && "pr-[138px]",
         // Clear native traffic lights (positioned at ~14,14 in main-window).
         isMac && "pl-[76px]",
       )}
@@ -1748,7 +1740,6 @@ function MenuBar() {
           </>
         )}
       </div>
-      {isMac ? null : <WindowControls />}
     </div>
   );
 }
@@ -1767,119 +1758,20 @@ function MenuItem({ children }: { children: string }) {
   );
 }
 
-/**
- * 自绘 Caption Buttons —— 严格被 menubar 44px 高度包覆，hover 区域不越界。
- * Windows 风格：min/max/close 三键，close hover 用 #c42b1c 高亮。
- * 命中区域 46×44（跟随自绘 menubar），但绘制完全 CSS 控制。
- */
-function WindowControls() {
-  const [maximized, setMaximized] = useState(false);
-
-  useEffect(() => {
-    if (!window.modus?.window) {
-      return;
-    }
-    void window.modus.window.getState().then((state: { maximized: boolean }) => {
-      setMaximized(state.maximized);
-    });
-    return window.modus.window.onStateChange((state: { maximized: boolean }) => {
-      setMaximized(state.maximized);
-    });
-  }, []);
-
-  return (
-    <div className="app-no-drag flex h-full shrink-0 items-stretch">
-      <CaptionButton label="Minimize" onClick={() => void window.modus?.window.minimize()}>
-        <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-          <title>Minimize</title>
-          <path d="M0 5h10" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      </CaptionButton>
-      <CaptionButton
-        label={maximized ? "Restore" : "Maximize"}
-        onClick={() => void window.modus?.window.toggleMaximize()}
-      >
-        {maximized ? (
-          <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-            <title>Restore</title>
-            <path
-              d="M2.5 0.5h7v7h-2M0.5 2.5h7v7h-7v-7"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1"
-            />
-          </svg>
-        ) : (
-          <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-            <title>Maximize</title>
-            <path d="M0.5 0.5h9v9h-9z" fill="none" stroke="currentColor" strokeWidth="1" />
-          </svg>
-        )}
-      </CaptionButton>
-      <CaptionButton danger label="Close" onClick={() => void window.modus?.window.close()}>
-        <svg aria-hidden height="10" viewBox="0 0 10 10" width="10">
-          <title>Close</title>
-          <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" />
-        </svg>
-      </CaptionButton>
-    </div>
-  );
-}
-
-function CaptionButton({
-  children,
-  label,
-  onClick,
-  danger = false,
-}: {
-  children: ReactNode;
-  label: string;
-  onClick(): void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      aria-label={label}
-      className={cn(
-        "flex h-full w-[46px] items-center justify-center text-fg-muted transition-colors",
-        danger ? "hover:bg-[#c42b1c] hover:text-white" : "hover:bg-hover hover:text-fg",
-      )}
-      onClick={onClick}
-      type="button"
-    >
-      {children}
-    </button>
-  );
-}
-
 const HERO_ENVIRONMENT_TRIGGER_CLASS =
   "flex h-7 min-w-0 items-center gap-1.5 rounded-md px-2 text-sm font-normal text-fg-muted outline-none transition-colors hover:bg-hover hover:text-fg data-popup-open:bg-hover data-popup-open:text-fg disabled:opacity-60 disabled:hover:bg-transparent";
 
 function HeroEnvironmentTray({
-  activeWorkspace,
   branch,
   cwd,
-  workspaces,
-  onSelectWorkspace,
-  onOpenFolder,
   onError,
 }: {
-  activeWorkspace: WorkspaceInfo | null;
   branch: string | undefined;
   cwd: string | undefined;
-  workspaces: WorkspaceInfo[];
-  onSelectWorkspace(workspace: WorkspaceInfo | null): void;
-  onOpenFolder(): void;
   onError(message: string): void;
 }) {
   return (
     <div className="app-no-drag flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-      <WorkspaceMenu
-        activeWorkspace={activeWorkspace}
-        onOpenFolder={onOpenFolder}
-        onSelect={onSelectWorkspace}
-        workspaces={workspaces}
-      />
       <BranchSwitcher cwd={cwd} onError={onError} triggerClassName={HERO_ENVIRONMENT_TRIGGER_CLASS}>
         <span className="toolbar-icon">
           <IconGitBranch size={18} stroke={1.7} />
@@ -2005,7 +1897,6 @@ function HeaderActions({
         environmentStats={environmentStats}
         onOpenSettings={onOpenSettings}
       />
-      <ChromeMoreMenu onOpenSettings={onOpenSettings} />
       <ToolbarButton
         active={inspectorOpen}
         label={inspectorOpen ? "Hide right sidebar" : "Show right sidebar"}

@@ -230,6 +230,7 @@ describe("NewGroupModal (A4)", () => {
       modelId: "m-1",
       avatarFace: "cheeky",
       avatarColor: "red",
+      avatarShape: "circle",
     });
   });
 
@@ -290,6 +291,18 @@ describe("NewGroupModal (A4)", () => {
     await user.click(within(modal).getByRole("button", { name: "Remove Builder 11" }));
     expect(counter(modal)).toBe("10/10");
     expect(createButton(modal).disabled).toBe(false);
+  });
+
+  it("keeps ten repeated template members on ten distinct shapes", async () => {
+    const user = userEvent.setup();
+    const { modal } = renderModal({ defaultWorkspaceId: "ws-1" });
+    for (let index = 0; index < 10; index += 1) {
+      await user.click(within(modal).getByRole("button", { name: "Add Builder" }));
+    }
+    const shapes = within(modal)
+      .getAllByTestId("new-group-member")
+      .map((row) => row.querySelector<HTMLElement>('[data-testid="agent-avatar"]')?.dataset.shape);
+    expect(new Set(shapes).size).toBe(10);
   });
 
   it("Create sends ONE group:create with every member, then closes", async () => {
