@@ -43,6 +43,12 @@ describe("AgentAvatar", () => {
     expect(new Set(Object.values(AGENT_AVATAR_FILL)).size).toBe(AGENT_AVATAR_COLORS.length);
   });
 
+  it("supports the compact 24 px header size", () => {
+    render(<AgentAvatar color="blue" face="happy" size={24} />);
+    expect(avatar().dataset.size).toBe("24");
+    expect(avatar().querySelector("svg")?.getAttribute("width")).toBe("24");
+  });
+
   it("renders every silhouette shape", () => {
     for (const shape of AGENT_AVATAR_SHAPES) {
       const { unmount } = render(<AgentAvatar color="blue" face="happy" shape={shape} size={20} />);

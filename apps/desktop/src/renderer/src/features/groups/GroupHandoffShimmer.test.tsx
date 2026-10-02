@@ -72,7 +72,7 @@ describe("GroupMessageRow hides orchestration handoffs", () => {
     expect(row.textContent).not.toContain("Handoff →");
   });
 
-  it("still shows Blocked / Agreed user-facing loop states", () => {
+  it("keeps Blocked visible and hides Agreed status from the conversation", () => {
     const blocked: GroupMessage = {
       id: "m-b",
       groupId: "g-1",
@@ -85,6 +85,17 @@ describe("GroupMessageRow hides orchestration handoffs", () => {
     };
     render(<GroupMessageRow labels={labels} members={members} message={blocked} />);
     expect(screen.getByTestId("group-message").textContent).toContain("Blocked");
+
+    cleanup();
+    const agreed: GroupMessage = {
+      ...blocked,
+      id: "m-a",
+      body: "Agreed · Builder delivered the approved change",
+    };
+    const { container } = render(
+      <GroupMessageRow labels={labels} members={members} message={agreed} />,
+    );
+    expect(container.firstChild).toBeNull();
   });
 });
 

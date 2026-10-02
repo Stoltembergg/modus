@@ -44,13 +44,14 @@ describe("GroupMessageRow Prompt Kit", () => {
         createdAt: "2026-01-01T00:00:00.000Z",
       } satisfies GroupMessage,
     ],
-  ])("renders the %s message surface without a card border", (_kind, message) => {
+  ])("renders the %s message on a visible card surface without a border", (_kind, message) => {
     const { container } = render(
       <GroupMessageRow labels={labels} members={members} message={message} />,
     );
 
     const surface = container.querySelector('[data-prompt-kit="message"]');
     expect(surface).toBeTruthy();
+    expect(surface?.className.split(/\s+/u)).toContain("bg-card");
     expect(
       surface?.className.split(/\s+/u).some((className) => className.startsWith("border")),
     ).toBe(false);
@@ -161,6 +162,22 @@ describe("GroupMessageRow Prompt Kit", () => {
     );
     expect(screen.getByTestId("group-ready-ephemeral")).toBeTruthy();
     expect(screen.queryByTestId("group-collab-status")).toBeNull();
+  });
+
+  it("keeps Agreed protocol details out of the final conversation message", () => {
+    render(
+      <GroupMessageRow
+        labels={labels}
+        members={members}
+        message={agentMessage(
+          "The review is complete.\nAgreed · Builder delivered commit 044547a and Reviewer approved",
+        )}
+      />,
+    );
+    const row = screen.getByTestId("group-message");
+    expect(row.textContent).toContain("The review is complete.");
+    expect(row.textContent).not.toContain("Agreed");
+    expect(row.textContent).not.toContain("044547a");
   });
 
   it("strips redundant self-intros from agent prose", () => {

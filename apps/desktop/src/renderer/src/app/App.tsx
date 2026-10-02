@@ -919,13 +919,6 @@ export function App() {
     setAgentGroups(await window.modus.group.updateMembers({ groupId, ...change }));
   }
 
-  /** A member chip in the room: open its hidden room session (e.g. "Waiting for you"). */
-  async function openGroupMember(sessionId: string): Promise<void> {
-    const sessions = await window.modus.agent.list({ includeSessionId: sessionId });
-    const session = sessions.find((item: AgentSessionInfo) => item.id === sessionId);
-    if (session) selectSession(session);
-  }
-
   /** An agent in the sidebar: open its 1:1 chat (created on first open, in the group's Project). */
   async function openAgentChat(agentId: string): Promise<void> {
     try {
@@ -1502,8 +1495,6 @@ export function App() {
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
                                 onOpenFile={openWorkspaceFile}
-                                onOpenMember={(sessionId) => void openGroupMember(sessionId)}
-                                onOpenAgentChat={(agentId) => void openAgentChat(agentId)}
                                 onAgentsChanged={() => void refreshGroups()}
                                 onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
                                 onRename={(name) =>

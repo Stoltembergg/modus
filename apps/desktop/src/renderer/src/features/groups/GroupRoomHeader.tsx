@@ -10,7 +10,6 @@ import { SessionStatusDot } from "../agent/SessionStatusDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
-import type { MentionMember } from "./groupMentions";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 import type { GroupActivityState, GroupMemberStatesById } from "./useWorkingGroups";
@@ -73,7 +72,6 @@ export function GroupStageChip({
 export function GroupRoomHeader({
   avatars,
   group,
-  members,
   memberStates,
   projectName,
   searchQuery,
@@ -82,20 +80,17 @@ export function GroupRoomHeader({
   tasksButton,
   models,
   defaultModelId,
-  onOpenAgentChat,
   onStop,
   onRename,
   onSetMode,
   onManageMembers,
   onDelete,
   onAddAgent,
-  onSetLead,
   onAgentsChanged,
   variant = "standalone",
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
-  members: readonly MentionMember[];
   memberStates: GroupMemberStatesById;
   projectName: string | undefined;
   searchQuery: string;
@@ -104,14 +99,12 @@ export function GroupRoomHeader({
   tasksButton: ReactNode;
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
-  onOpenAgentChat(agentId: string): void;
   onStop(): void;
   onRename(name: string): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
   onManageMembers(): void;
   onDelete(): void;
   onAddAgent?: (() => void) | undefined;
-  onSetLead?(sessionId: string | null): void;
   onAgentsChanged?(): void;
   /** `chrome` = window toolbar strip; `standalone` = legacy internal bar (tests). */
   variant?: "chrome" | "standalone";
@@ -156,7 +149,7 @@ export function GroupRoomHeader({
           {projectName ?? "No project"}
         </span>
         <label
-          className="app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md border border-default bg-elevated/70 px-2 py-1 text-fg-muted"
+          className="app-no-drag flex min-w-0 w-[min(220px,28vw)] shrink-0 items-center gap-1.5 rounded-md bg-chip px-2 py-1 text-fg-muted transition-[background-color,box-shadow] duration-[var(--motion-ui)] focus-within:ring-1 focus-within:ring-focus-ring/50"
           data-testid="group-conversation-search"
         >
           <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
@@ -184,13 +177,9 @@ export function GroupRoomHeader({
           avatars={avatars}
           group={group}
           memberStates={memberStates}
-          members={members}
-          onManageMembers={onManageMembers}
-          onOpenAgentChat={onOpenAgentChat}
           {...(defaultModelId !== undefined ? { defaultModelId } : {})}
           {...(models !== undefined ? { models } : {})}
           {...(onAgentsChanged ? { onAgentsChanged } : {})}
-          {...(onSetLead ? { onSetLead } : {})}
         />
         {running ? (
           <button

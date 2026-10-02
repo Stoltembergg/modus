@@ -490,8 +490,8 @@ export function GroupMessageRow({
     : undefined;
   if (message.kind === "status") {
     const collab = parseGroupCollabStatusLine(message.body);
-    // Orchestration handoffs: Activity / runtime only — never the main transcript.
-    if (collab?.kind === "handoff") return null;
+    // Keep handoffs and protocol agreement summaries out of the conversational transcript.
+    if (collab?.kind === "handoff" || collab?.kind === "agreed") return null;
     const activeWaiting = isActiveWaitingStatus(
       message.body,
       message.authorSessionId,
@@ -550,7 +550,7 @@ export function GroupMessageRow({
     return (
       <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
         <PromptMessage
-          className="flex-row-reverse bg-accent/10"
+          className="flex-row-reverse"
           data-align="right"
           data-kind="user"
           data-message-id={message.id}

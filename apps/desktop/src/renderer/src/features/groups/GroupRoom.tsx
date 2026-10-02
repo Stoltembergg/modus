@@ -65,10 +65,6 @@ export type GroupRoomProps = {
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
   memberStates: GroupMemberStatesById;
-  /** Opens a member's hidden room session (to answer "Waiting for you"). */
-  onOpenMember(sessionId: string): void;
-  /** Opens a member's 1:1 chat from the Agents panel (explicit action). */
-  onOpenAgentChat?(agentId: string): void;
   /** "Choose folder" on a group without a Project: pick one and move the group. */
   onChooseFolder?: (() => void) | undefined;
   onRename(name: string): void;
@@ -103,8 +99,6 @@ function GroupRoomContent({
   models = [],
   defaultModelId,
   memberStates,
-  onOpenMember,
-  onOpenAgentChat,
   onChooseFolder,
   onRename,
   onSetMode,
@@ -220,7 +214,6 @@ function GroupRoomContent({
       avatars={avatars}
       defaultModelId={defaultModelId}
       group={group}
-      members={members}
       memberStates={memberStates}
       onSearchChange={setSearchQuery}
       searchQuery={searchQuery}
@@ -229,13 +222,6 @@ function GroupRoomContent({
       onAddAgent={onAddAgent}
       {...(onAgentsChanged ? { onAgentsChanged } : {})}
       onManageMembers={() => setManaging(true)}
-      onOpenAgentChat={(agentId) => {
-        if (onOpenAgentChat) onOpenAgentChat(agentId);
-        else {
-          const member = group.members.find((row) => row.agentId === agentId);
-          if (member) onOpenMember(member.sessionId);
-        }
-      }}
       onRename={onRename}
       onSetMode={onSetMode}
       onStop={() => {
