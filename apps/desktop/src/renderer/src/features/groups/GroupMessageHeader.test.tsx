@@ -37,9 +37,13 @@ describe("GroupMessageHeader", () => {
 
 describe("GroupDeliveryFooter", () => {
   it.each([
+    ["waiting", "Waiting for you"],
+    ["working", "Working"],
     ["queued", "Queued"],
     ["delivered", "Delivered"],
-    ["working", "Working"],
+    ["failed", "Failed"],
+    ["cancelled", "Cancelled"],
+    ["noReply", "No reply"],
     ["answered", "Answered"],
   ] as const)("%s state", (state, label) => {
     const delivery: GroupDelivery = {
@@ -75,6 +79,31 @@ describe("GroupDeliveryFooter", () => {
     expect(footer.querySelector("svg")?.getAttribute("class")).toContain(
       "motion-reduce:animate-none",
     );
+  });
+
+  it("waiting for you and failed use the member card tones", () => {
+    const { unmount } = render(
+      <GroupDeliveryFooter
+        align="end"
+        delivery={{ state: "waiting", members: [{ sessionId: "s-a", state: "waiting" }] }}
+        labels={labels}
+        locale="pt-BR"
+      />,
+    );
+    const footer = screen.getByTestId("group-delivery-status");
+    expect(footer.textContent).toContain("Aguardando você");
+    expect(footer.className).toContain("text-amber-400");
+    unmount();
+    render(
+      <GroupDeliveryFooter
+        align="end"
+        delivery={{ state: "failed", members: [{ sessionId: "s-a", state: "failed" }] }}
+        labels={labels}
+        locale="pt-BR"
+      />,
+    );
+    expect(screen.getByTestId("group-delivery-status").textContent).toContain("Falhou");
+    expect(screen.getByTestId("group-delivery-status").className).toContain("text-danger");
   });
 
   it("uses Portuguese labels for pt locales", () => {
@@ -178,12 +207,26 @@ describe("GroupMessageList delivery footers", () => {
       turn("c3", "s-b", "u-working", "running"),
       message("u-answered"),
       turn("c4", "s-b", "u-answered", "completed", "All done"),
+      message("u-waiting"),
+      turn("c5", "s-a", "u-waiting", "awaiting_user"),
+      turn("c6", "s-b", "u-waiting", "running"),
+      message("u-failed"),
+      turn("c7", "s-a", "u-failed", "failed"),
+      message("u-cancelled"),
+      turn("c8", "s-a", "u-cancelled", "cancelled"),
+      message("u-silent"),
+      turn("c9", "s-a", "u-silent", "completed", ""),
     ]);
     expect(footerOf("u-delivered")?.dataset.delivery).toBe("delivered");
     expect(footerOf("u-queued")?.dataset.delivery).toBe("queued");
     expect(footerOf("u-working")?.dataset.delivery).toBe("working");
     expect(footerOf("u-working")?.textContent).toContain("Beta");
     expect(footerOf("u-answered")?.dataset.delivery).toBe("answered");
+    expect(footerOf("u-waiting")?.dataset.delivery).toBe("waiting");
+    expect(footerOf("u-failed")?.dataset.delivery).toBe("failed");
+    expect(footerOf("u-cancelled")?.dataset.delivery).toBe("cancelled");
+    // The silent card itself is hidden from the transcript, but still counts.
+    expect(footerOf("u-silent")?.dataset.delivery).toBe("noReply");
     // Turn cards themselves woke nobody: no footer.
     expect(footerOf("c4")).toBeNull();
     // Header: small avatar + name · time on every card.

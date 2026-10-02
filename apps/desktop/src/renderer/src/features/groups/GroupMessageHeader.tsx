@@ -4,9 +4,18 @@
  * Inspired by the ReUI "Message With Header and Delivery Status" pattern
  * (header `name · time` with a decorative dot, footer status line). This is a
  * rewrite on Modus tokens, not a copy: the footer only shows real room states
- * (queued / delivered / working / answered) and never a "read" receipt.
+ * (see `groupDelivery.ts`) and never a "read" receipt.
  */
-import { IconCheck, IconClock, IconLoader2, IconMessageCheck } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconBan,
+  IconCheck,
+  IconClock,
+  IconLoader2,
+  IconMessageCheck,
+  IconMessageOff,
+  IconUserQuestion,
+} from "@tabler/icons-react";
 import type { ReactNode } from "react";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
@@ -54,11 +63,23 @@ export function GroupMessageHeader({
 }
 
 const DELIVERY_ICON = {
+  waiting: IconUserQuestion,
+  working: IconLoader2,
   queued: IconClock,
   delivered: IconCheck,
-  working: IconLoader2,
+  failed: IconAlertTriangle,
+  cancelled: IconBan,
+  noReply: IconMessageOff,
   answered: IconMessageCheck,
 } satisfies Record<GroupDeliveryState, unknown>;
+
+/** Same tones as the member card: amber for "waiting for you", danger for failures. */
+function deliveryTone(state: GroupDeliveryState): string {
+  if (state === "waiting") return "text-amber-400";
+  if (state === "failed") return "text-danger";
+  if (state === "working") return "text-fg-muted";
+  return "text-fg-faint";
+}
 
 function memberTitle(sessionId: string, labels: ReadonlyMap<string, MemberLabel>): string {
   return labels.get(sessionId)?.title ?? sessionId;
@@ -98,7 +119,7 @@ export function GroupDeliveryFooter({
       className={cn(
         "flex max-w-full items-center gap-1 text-2xs",
         align === "end" ? "mr-3 self-end" : "ml-3 self-start",
-        state === "working" ? "text-fg-muted" : "text-fg-faint",
+        deliveryTone(state),
       )}
       data-delivery={state}
       data-testid="group-delivery-status"
