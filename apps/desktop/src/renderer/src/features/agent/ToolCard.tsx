@@ -25,7 +25,10 @@ type ToolCardProps = {
   output: string;
   isError?: boolean;
   isComplete?: boolean;
-  onOpenFile?: ((path: string) => void) | undefined;
+  /** `line` is optional (C2.1): search result rows open at their match. */
+  onOpenFile?: ((path: string, line?: number) => void) | undefined;
+  /** Session cwd: search rows resolve their paths in it (and never leave it). */
+  cwd?: string | undefined;
   questionRequest?: QuestionRequest;
   questionAnswers?: QuestionAnswer[];
   questionSkipped?: boolean;
@@ -52,6 +55,7 @@ export const ToolCard = memo(
     isComplete = false,
     isError = false,
     onOpenFile,
+    cwd,
     questionRequest,
     questionAnswers,
     questionSkipped,
@@ -133,6 +137,8 @@ export const ToolCard = memo(
       return (
         <SearchToolCard
           args={args}
+          {...(cwd ? { cwd } : {})}
+          {...(onOpenFile ? { onOpenFile } : {})}
           fallback={
             <FlatToolRow
               args={args}
@@ -166,6 +172,7 @@ export const ToolCard = memo(
     prev.isComplete === next.isComplete &&
     prev.isError === next.isError &&
     prev.onOpenFile === next.onOpenFile &&
+    prev.cwd === next.cwd &&
     prev.questionRequest === next.questionRequest &&
     prev.questionAnswers === next.questionAnswers &&
     prev.questionSkipped === next.questionSkipped &&

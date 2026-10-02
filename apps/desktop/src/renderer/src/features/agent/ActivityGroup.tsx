@@ -234,13 +234,16 @@ function WorkActivityGroup({
 export function WorkActivityRow({
   item,
   models,
+  cwd,
   onOpenFile,
   onOpenSubagent,
   onOpenPlan,
 }: {
   item: WorkActivityItem;
   models?: ModelInfo[];
-  onOpenFile?(path: string): void;
+  /** Session cwd: search result rows resolve and contain their paths in it. */
+  cwd?: string | undefined;
+  onOpenFile?(path: string, line?: number): void;
   onOpenSubagent?(childSessionId: string): void;
   onOpenPlan?(plan: PlanRef): void;
 }) {
@@ -289,6 +292,7 @@ export function WorkActivityRow({
   return (
     <ToolCard
       {...item}
+      {...(cwd ? { cwd } : {})}
       {...(onOpenFile ? { onOpenFile } : {})}
       {...(item.plan && onOpenPlan ? { onOpenPlan, plan: item.plan } : {})}
     />
@@ -303,6 +307,7 @@ export const WorkFold = memo(function WorkFold({
   run,
   items,
   models,
+  cwd,
   onOpenFile,
   onOpenSubagent,
   onOpenPlan,
@@ -310,7 +315,8 @@ export const WorkFold = memo(function WorkFold({
   run: RunBlockItem;
   items: WorkFoldItem[];
   models?: ModelInfo[];
-  onOpenFile?(path: string): void;
+  cwd?: string | undefined;
+  onOpenFile?(path: string, line?: number): void;
   onOpenSubagent?(childSessionId: string): void;
   onOpenPlan?(plan: PlanRef): void;
 }) {
@@ -383,6 +389,7 @@ export const WorkFold = memo(function WorkFold({
                         item={activity}
                         key={activity.id}
                         {...(models ? { models } : {})}
+                        {...(cwd ? { cwd } : {})}
                         {...(onOpenFile ? { onOpenFile } : {})}
                         {...(onOpenPlan ? { onOpenPlan } : {})}
                         {...(onOpenSubagent ? { onOpenSubagent } : {})}
@@ -397,6 +404,7 @@ export const WorkFold = memo(function WorkFold({
                     item={item}
                     key={item.id}
                     {...(models ? { models } : {})}
+                    {...(cwd ? { cwd } : {})}
                     {...(onOpenFile ? { onOpenFile } : {})}
                     {...(onOpenPlan ? { onOpenPlan } : {})}
                     {...(onOpenSubagent ? { onOpenSubagent } : {})}

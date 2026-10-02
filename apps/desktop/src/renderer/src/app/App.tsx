@@ -227,6 +227,10 @@ export function App() {
   const [inspectorWidth, setInspectorWidth] = useState(384);
   const [inspectorTab, setInspectorTab] = useState("changes");
   const [filesRevealPath, setFilesRevealPath] = useState<string | undefined>();
+  const [filesRevealLine, setFilesRevealLine] = useState<
+    { line: number; key: number } | undefined
+  >();
+  const filesRevealKeyRef = useRef(0);
   const [terminalRevealId, setTerminalRevealId] = useState<string | undefined>();
   const [reviewCwd, setReviewCwd] = useState<string | undefined>();
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | undefined>();
@@ -1191,9 +1195,12 @@ export function App() {
     [activeSession, updateSessionComposerDraft],
   );
 
-  const openWorkspaceFile = useCallback((path: string) => {
+  // `line` is optional (C2.1): every `onOpenFile(path)` caller is unchanged.
+  const openWorkspaceFile = useCallback((path: string, line?: number) => {
     setInspectorOpen(true);
     setInspectorTab("files");
+    filesRevealKeyRef.current += 1;
+    setFilesRevealLine(line ? { line, key: filesRevealKeyRef.current } : undefined);
     setFilesRevealPath(path);
   }, []);
 
@@ -1682,6 +1689,7 @@ export function App() {
                             onAddToChat={addContextToChat}
                             onRevealConsumed={() => setFilesRevealPath(undefined)}
                             onRevealTerminalConsumed={() => setTerminalRevealId(undefined)}
+                            revealLine={filesRevealLine}
                             revealPath={filesRevealPath}
                             revealTerminalId={terminalRevealId}
                             open={inspectorOpen}

@@ -451,6 +451,37 @@
   border-color: var(--border-strong);
   box-shadow: var(--shadow-composer);
 }
+/* C2.1: "open at line" flash in the code editor; re-created per flash so the fade restarts. */
+.modus-line-flash {
+  background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  animation: modus-line-flash-a 1.6s ease-out forwards;
+}
+.modus-line-flash-1 {
+  animation-name: modus-line-flash-b;
+}
+@keyframes modus-line-flash-a {
+  0%,
+  40% {
+    background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@keyframes modus-line-flash-b {
+  0%,
+  40% {
+    background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modus-line-flash {
+    animation: none;
+  }
+}
 .group-composer-toolbar {
   background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
 }

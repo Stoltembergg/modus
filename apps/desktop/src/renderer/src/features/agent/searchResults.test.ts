@@ -44,14 +44,42 @@ describe("parseGrepOutput", () => {
       ].join("\n"),
     );
     expect(parsed?.results).toEqual([
-      { kind: "file", path: "src/a.ts", matches: 2, line: 12 },
-      { kind: "file", path: "src/my-file.ts", matches: 1, line: 3 },
+      {
+        kind: "file",
+        path: "src/a.ts",
+        matches: 2,
+        line: 12,
+        matchLines: [
+          { line: 12, text: "const a = 1;" },
+          { line: 40, text: "a again" },
+        ],
+      },
+      {
+        kind: "file",
+        path: "src/my-file.ts",
+        matches: 1,
+        line: 3,
+        matchLines: [{ line: 3, text: "hit" }],
+      },
+    ]);
+  });
+
+  it("keeps each match's text exactly as grep printed it (truncation included)", () => {
+    const parsed = parseGrepOutput(
+      "src/a.ts:7: const veryLong = compute(alpha, beta, gamma… [truncated]\nsrc/a.ts:9:no-space",
+    );
+    const [first] = parsed?.results ?? [];
+    expect(first?.kind === "file" ? first.matchLines : undefined).toEqual([
+      { line: 7, text: "const veryLong = compute(alpha, beta, gamma… [truncated]" },
+      { line: 9, text: "no-space" },
     ]);
   });
 
   it("keeps the trailing notice and handles the empty output", () => {
     expect(parseGrepOutput("a.ts:1: x\n\n[100 matches limit reached]")).toEqual({
-      results: [{ kind: "file", path: "a.ts", matches: 1, line: 1 }],
+      results: [
+        { kind: "file", path: "a.ts", matches: 1, line: 1, matchLines: [{ line: 1, text: "x" }] },
+      ],
       notice: "100 matches limit reached",
     });
     expect(parseGrepOutput("No matches found")).toEqual({ results: [] });
