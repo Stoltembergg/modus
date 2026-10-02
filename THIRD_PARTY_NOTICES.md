@@ -10,6 +10,11 @@ Their original license terms are reproduced here as required.
   `lib/agent-ui/components/question/question-prompt.tsx`), upstream commit
   `b04b36cb6381a1dd1a0e86cc7c90564ddcd56d37`
 - Adapted in: `apps/desktop/src/renderer/src/components/question/QuestionCard.tsx`
+- Components: "Search Tool" (`lib/agent-ui/components/tools/search-tool.tsx`) and
+  "Tool Group" (`lib/agent-ui/components/tools/tool-group.tsx`, with
+  `tool-row-base.tsx`), same upstream commit
+- Adapted in: `apps/desktop/src/renderer/src/features/agent/SearchToolCard.tsx`,
+  `apps/desktop/src/renderer/src/features/agent/ToolGroup.tsx`
 - License: MIT
 
 ```

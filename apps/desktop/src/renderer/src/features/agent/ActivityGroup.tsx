@@ -21,6 +21,7 @@ import type {
 } from "./Timeline";
 import { TodosCard } from "./TodosCard";
 import { ToolCard } from "./ToolCard";
+import { ToolGroup } from "./ToolGroup";
 
 export function formatElapsed(end: number, start: number): string {
   const seconds = Math.max(0, Math.round((end - start) / 1000));
@@ -44,45 +45,6 @@ export function CompactionRow({ status, detail }: Pick<CompactionBlockItem, "sta
           {label}
         </span>
       )}
-    </div>
-  );
-}
-
-function FoldHeader({
-  active = false,
-  controlsId,
-  label,
-  onToggle,
-  open,
-}: {
-  active?: boolean;
-  controlsId?: string;
-  label: string;
-  onToggle(): void;
-  open: boolean;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <button
-        aria-controls={controlsId}
-        aria-expanded={open}
-        className="group/activity flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-sm text-fg-subtle transition-colors hover:text-fg-muted"
-        onClick={onToggle}
-        type="button"
-      >
-        {active ? (
-          <ShinyText className="min-w-0 truncate">{label}</ShinyText>
-        ) : (
-          <span className="min-w-0 truncate text-fg-subtle">{label}</span>
-        )}
-        <m.span
-          animate={{ rotate: open ? 90 : 0 }}
-          className="flex size-4 shrink-0 items-center justify-center text-fg-faint"
-          transition={{ duration: 0.16, ease: "easeOut" }}
-        >
-          <IconChevronRight size={12} stroke={1.8} />
-        </m.span>
-      </button>
     </div>
   );
 }
@@ -154,7 +116,30 @@ export function workActivityPresentation(items: GroupedWorkActivityItem[]) {
   return {
     label: danger && !activeItem ? `Failed: ${label}` : label,
     active: !!activeItem,
+    streamCounts: workActivityStreamCounts(items),
   };
+}
+
+const FILE_TOOLS = new Set(["read", "edit", "write"]);
+const SEARCH_TOOLS = new Set(["grep", "find", "web_search"]);
+
+/**
+ * Live counts shown next to a streaming group's label (ported from Agent
+ * Elements' tool-group): distinct files touched and searches run so far,
+ * e.g. "2 files, 1 search". Empty when the group has neither.
+ */
+export function workActivityStreamCounts(items: GroupedWorkActivityItem[]): string {
+  const files = new Set<string>();
+  let searches = 0;
+  for (const item of items) {
+    if (item.type !== "tool") continue;
+    if (FILE_TOOLS.has(item.name)) files.add(toolTarget(item) ?? item.id);
+    else if (SEARCH_TOOLS.has(item.name)) searches += 1;
+  }
+  const parts: string[] = [];
+  if (files.size > 0) parts.push(`${files.size} ${files.size === 1 ? "file" : "files"}`);
+  if (searches > 0) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
+  return parts.join(", ");
 }
 
 /**
@@ -230,21 +215,19 @@ function WorkActivityGroup({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const contentId = useId();
   const presentation = workActivityPresentation(group.items);
   return (
-    <div className="min-w-0">
-      <FoldHeader
-        active={presentation.active}
-        controlsId={contentId}
-        label={presentation.label}
-        onToggle={() => setOpen((value) => !value)}
-        open={open}
-      />
-      <CollapsibleMotion id={contentId} open={open} preset="timeline">
-        <div className="mt-1.5 space-y-2.5">{children}</div>
-      </CollapsibleMotion>
-    </div>
+    <ToolGroup
+      active={presentation.active}
+      label={presentation.label}
+      onToggle={() => setOpen((value) => !value)}
+      open={open}
+      {...(presentation.active && presentation.streamCounts
+        ? { detail: presentation.streamCounts }
+        : {})}
+    >
+      {children}
+    </ToolGroup>
   );
 }
 
