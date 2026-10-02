@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { QuestionAnswer, QuestionRequest } from "../../../../shared/contracts";
+import { QuestionCard } from "../../components/question/QuestionCard";
 import { latestPendingQuestionRequest } from "../agent/questionRequests";
-import { QuestionsCard } from "../plan/QuestionsCard";
 import { useGroupAgentEvents } from "./groupAgentEvents";
 import { type MemberLabel, memberLabelText } from "./memberLabels";
 
@@ -55,10 +55,11 @@ export function GroupMemberQuestions({
         return (
           <div data-member-session={sessionId} key={request.id}>
             <div className="mb-1.5 text-2xs text-fg-faint">{name} · Waiting for you</div>
-            <QuestionsCard
-              onSkip={() => void respond(request, [], true)}
-              onSubmit={(answers) => void respond(request, answers, false)}
-              request={request}
+            <QuestionCard
+              mode="question"
+              onSkip={() => respond(request, [], true)}
+              onSubmit={(answers) => respond(request, answers, false)}
+              questions={request.questions}
             />
           </div>
         );

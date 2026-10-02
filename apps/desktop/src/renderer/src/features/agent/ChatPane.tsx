@@ -1526,8 +1526,8 @@ export function ChatPane({
                 {pendingQuestion ? (
                   <QuestionsCard
                     key={pendingQuestion.id}
-                    onSkip={() => void respondQuestion([], true)}
-                    onSubmit={(answers) => void respondQuestion(answers, false)}
+                    onSkip={() => respondQuestion([], true)}
+                    onSubmit={(answers) => respondQuestion(answers, false)}
                     request={pendingQuestion}
                   />
                 ) : null}
