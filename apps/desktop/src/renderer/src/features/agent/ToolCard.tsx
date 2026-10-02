@@ -13,6 +13,8 @@ import { cn } from "../../lib/cn";
 import { PlanTimelineCard } from "../plan/PlanTimelineCard";
 import { DiffToolCard } from "./diff/DiffToolCard";
 import { QuestionToolCard } from "./QuestionToolCard";
+import { SearchToolCard } from "./SearchToolCard";
+import { isSearchToolName } from "./searchResults";
 import { TerminalToolCard } from "./terminal/TerminalToolCard";
 import { toolIcon } from "./toolIcons";
 import { VisualToolCard } from "./VisualToolCard";
@@ -123,6 +125,29 @@ export const ToolCard = memo(
 
     if (render === "visual") {
       return <VisualToolCard args={args} isComplete={isComplete} isError={isError} />;
+    }
+
+    if (render === "flat" && isSearchToolName(name)) {
+      // grep / find / web_search get the Search Tool card; it renders the
+      // generic row itself when the call failed or the output can't be parsed.
+      return (
+        <SearchToolCard
+          args={args}
+          fallback={
+            <FlatToolRow
+              args={args}
+              isComplete={isComplete}
+              isError={isError}
+              name={name}
+              output={output}
+            />
+          }
+          isComplete={isComplete}
+          isError={isError}
+          name={name}
+          output={output}
+        />
+      );
     }
 
     return (
