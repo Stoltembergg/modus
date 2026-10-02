@@ -1,4 +1,4 @@
-import type { AgentTemplate } from "../../../../shared/agent-templates";
+import { type AgentTemplate, agentAvatarForId } from "../../../../shared/agent-templates";
 import type {
   AgentAvatarColor,
   AgentAvatarFace,
@@ -7,6 +7,7 @@ import type {
   CreateAgentGroupInput,
   NewGroupAgentInput,
 } from "../../../../shared/contracts";
+import { AGENT_AVATAR_SHAPES, allocateUniqueGroupAvatarShapes } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 
 /*
@@ -113,7 +114,7 @@ export function applyCollabPipeline(
 export function copyMember(
   agent: Pick<
     AgentInfo,
-    "name" | "role" | "instructions" | "modelId" | "avatarFace" | "avatarColor"
+    "name" | "role" | "instructions" | "modelId" | "avatarFace" | "avatarColor" | "avatarShape"
   >,
   members: readonly NewGroupMember[],
   key: string,
@@ -131,7 +132,27 @@ export function copyMember(
     modelId: agent.modelId ?? fallbackModelId,
     avatarFace: agent.avatarFace,
     avatarColor: agent.avatarColor,
+    avatarShape: agent.avatarShape,
   };
+}
+
+/** Assign stable, unique draft silhouettes while allowing the modal to show 11/10. */
+export function assignNewGroupAvatarShapes(members: readonly NewGroupMember[]): NewGroupMember[] {
+  const inLimit = members.slice(0, AGENT_AVATAR_SHAPES.length);
+  const assignments = allocateUniqueGroupAvatarShapes(
+    inLimit.map((member) => ({
+      agentId: member.key,
+      preferredShape:
+        member.avatarShape ?? agentAvatarForId(member.templateId ?? member.key).avatarShape,
+    })),
+  );
+  return members.map((member) => ({
+    ...member,
+    avatarShape:
+      assignments.get(member.key) ??
+      member.avatarShape ??
+      agentAvatarForId(member.templateId ?? member.key).avatarShape,
+  }));
 }
 
 /** A member from the agent dialog (Customize on a card, or New agent). */

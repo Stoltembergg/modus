@@ -44,6 +44,8 @@ export type AgentDialogDraftTarget = {
   takenNames: readonly string[];
   /** Roles already chosen in the modal (generation complements them). */
   roles: readonly string[];
+  /** Shapes already assigned to draft members. */
+  takenAvatarShapes?: readonly AgentAvatarShape[];
   /** Avatar seed for a fresh custom agent. */
   seed: string;
   /** Prefill ("Customize" on a template card carries its `templateId`). */
@@ -109,22 +111,37 @@ export function AgentDialog(props: AgentDialogProps) {
   const custom = !(agent?.templateId ?? initial?.templateId);
   // Mounted per open (the parent renders it only while open): state starts from the agent.
   const surface = props.surface ?? "dialog";
+  const occupiedShapes = useMemo(() => {
+    const shapes =
+      target?.takenAvatarShapes ??
+      (group?.members ?? [])
+        .filter((member) => member.agentId !== agent?.id)
+        .flatMap((member) => (member.avatarShape ? [member.avatarShape] : []));
+    return new Set(shapes);
+  }, [target?.takenAvatarShapes, group?.members, agent?.id]);
   const [initialAvatar] = useState(() => {
+    const seededAvatar = agentAvatarForId(
+      target ? target.seed : `${group?.id}:${group?.members.length}`,
+    );
+    const availableShape = (preferred: AgentAvatarShape) => {
+      if (!occupiedShapes.has(preferred)) return preferred;
+      return AGENT_AVATAR_SHAPES.find((option) => !occupiedShapes.has(option)) ?? preferred;
+    };
     if (agent) {
       return {
         avatarFace: agent.avatarFace,
         avatarColor: agent.avatarColor,
-        avatarShape: agent.avatarShape,
+        avatarShape: availableShape(agent.avatarShape),
       };
     }
     if (initial?.avatarFace && initial.avatarColor) {
       return {
         avatarFace: initial.avatarFace,
         avatarColor: initial.avatarColor,
-        avatarShape: initial.avatarShape ?? agentAvatarForId(target?.seed ?? "draft").avatarShape,
+        avatarShape: availableShape(initial.avatarShape ?? seededAvatar.avatarShape),
       };
     }
-    return agentAvatarForId(target ? target.seed : `${group?.id}:${group?.members.length}`);
+    return { ...seededAvatar, avatarShape: availableShape(seededAvatar.avatarShape) };
   });
   const [name, setName] = useState(agent?.name ?? initial?.name ?? "");
   const [role, setRole] = useState(agent?.role ?? initial?.role ?? "");
@@ -438,12 +455,16 @@ export function AgentDialog(props: AgentDialogProps) {
                 aria-pressed={shape === option}
                 className={cn(
                   "flex size-8 items-center justify-center rounded-md border transition-colors",
-                  shape === option
-                    ? "border-accent bg-accent/10"
-                    : "border-transparent hover:bg-hover",
+                  occupiedShapes.has(option) && shape !== option
+                    ? "cursor-not-allowed border-transparent opacity-35"
+                    : shape === option
+                      ? "border-accent bg-accent/10"
+                      : "border-transparent hover:bg-hover",
                 )}
+                disabled={occupiedShapes.has(option) && shape !== option}
                 key={option}
                 onClick={() => setShape(option)}
+                title={occupiedShapes.has(option) ? "Used by another agent in this group" : option}
                 type="button"
               >
                 <AgentAvatar color={color} face={face} seed={option} shape={option} size={20} />

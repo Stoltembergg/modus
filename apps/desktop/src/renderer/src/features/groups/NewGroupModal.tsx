@@ -23,6 +23,7 @@ import type { GroupDialogModel } from "./CreateGroupDialog";
 import { describeGroupError } from "./groupErrors";
 import {
   applyCollabPipeline,
+  assignNewGroupAvatarShapes,
   copyMember,
   dialogMember,
   NEW_GROUP_DEFAULT_NAME,
@@ -157,7 +158,7 @@ export function NewGroupModal({
   }, []);
 
   function add(member: NewGroupMember, lead: boolean): void {
-    setMembers((current) => [...current, member]);
+    setMembers((current) => assignNewGroupAvatarShapes([...current, member]));
     if (lead) setLeadKey((current) => current ?? member.key);
     setError(undefined);
   }
@@ -168,7 +169,9 @@ export function NewGroupModal({
 
   function addCollabPipeline(): void {
     setMembers((current) => {
-      const next = applyCollabPipeline(AGENT_TEMPLATES, current, nextKey);
+      const next = assignNewGroupAvatarShapes(
+        applyCollabPipeline(AGENT_TEMPLATES, current, nextKey),
+      );
       const planner = next.find((member) => member.templateId === "planner");
       if (planner) setLeadKey((lead) => lead ?? planner.key);
       return next;
@@ -177,7 +180,9 @@ export function NewGroupModal({
   }
 
   function remove(key: string): void {
-    setMembers((current) => current.filter((member) => member.key !== key));
+    setMembers((current) =>
+      assignNewGroupAvatarShapes(current.filter((member) => member.key !== key)),
+    );
     if (leadKey === key) setLeadKey(null);
   }
 
@@ -250,6 +255,9 @@ export function NewGroupModal({
         title: name.trim() || NEW_GROUP_DEFAULT_NAME,
         takenNames: members.map((member) => member.name),
         roles: members.map((member) => member.role),
+        takenAvatarShapes: members.flatMap((member) =>
+          member.avatarShape ? [member.avatarShape] : [],
+        ),
         seed: `new-group:${keySeq.current + 1}`,
         ...(agentDialog.initial ? { initial: agentDialog.initial } : {}),
         onAdd: (input) =>
@@ -385,6 +393,7 @@ export function NewGroupModal({
                               <AgentAvatar
                                 color={template.avatarColor}
                                 face={template.avatarFace}
+                                shape={agentAvatarForId(template.id).avatarShape}
                                 seed={template.id}
                                 size={48}
                               />
@@ -474,6 +483,7 @@ export function NewGroupModal({
                               <AgentAvatar
                                 color={agent.avatarColor}
                                 face={agent.avatarFace}
+                                shape={agent.avatarShape}
                                 seed={agent.id}
                                 size={20}
                               />
@@ -543,6 +553,10 @@ export function NewGroupModal({
                           <AgentAvatar
                             color={member.avatarColor}
                             face={member.avatarFace}
+                            shape={
+                              member.avatarShape ??
+                              agentAvatarForId(member.templateId ?? member.key).avatarShape
+                            }
                             seed={member.key}
                             size={20}
                           />
