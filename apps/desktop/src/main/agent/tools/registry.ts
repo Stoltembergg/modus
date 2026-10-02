@@ -134,6 +134,12 @@ export class ToolRegistry {
   private readonly entries = new Map<string, ToolCatalogEntry>();
   private readonly definitions = new Map<string, ToolDefinition>();
   private readonly classifiers = new Map<string, ToolClassifier>();
+  private customToolsRevision = 0;
+
+  /** Changes whenever custom registration changes, including same-name replacements. */
+  get revision(): number {
+    return this.customToolsRevision;
+  }
 
   constructor(builtins: ToolCatalogEntry[] = BUILTIN_TOOL_CATALOG) {
     for (const entry of builtins) {
@@ -150,6 +156,7 @@ export class ToolRegistry {
     if (input.classify) {
       this.classifiers.set(entry.name, input.classify);
     }
+    this.customToolsRevision += 1;
   }
 
   /** Remove a previously registered custom tool (no-op for builtins/unknown). */
@@ -160,6 +167,7 @@ export class ToolRegistry {
     this.entries.delete(name);
     this.definitions.delete(name);
     this.classifiers.delete(name);
+    this.customToolsRevision += 1;
   }
 
   /** Active tool names for a profile → `createAgentSession({ tools })`. */

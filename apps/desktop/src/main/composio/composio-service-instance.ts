@@ -1,6 +1,10 @@
 import { app, safeStorage, shell } from "electron";
 import type { ComposioSettingsState } from "../../shared/contracts";
-import { registerComposioMcpSession, unregisterComposioMcpSession } from "../mcp/mcp-service";
+import {
+  inspectComposioMcpSession,
+  registerComposioMcpSession,
+  unregisterComposioMcpSession,
+} from "../mcp/mcp-service";
 import { createComposioApi } from "./composio-api";
 import { createComposioProfileStore } from "./composio-profile-store";
 import { createComposioSecretStore } from "./composio-secret-store";
@@ -19,7 +23,7 @@ export function getComposioService(): ComposioService {
     profileStore: createComposioProfileStore({ userDataPath: app.getPath("userData") }),
     createComposioApi,
     openExternal: (url) => shell.openExternal(url),
-    mcp: { registerComposioMcpSession, unregisterComposioMcpSession },
+    mcp: { inspectComposioMcpSession, registerComposioMcpSession, unregisterComposioMcpSession },
   });
   return service;
 }

@@ -4,6 +4,16 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import {
+  type AssistantMessage,
+  createAssistantMessageEventStream,
+  Type,
+} from "@earendil-works/pi-ai";
+import type {
+  AgentSession,
+  SettingsManager,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, PlanRef } from "../../shared/contracts";
@@ -38,6 +48,9 @@ const mocks = vi.hoisted(() => {
     },
     sessionManagerCreate: vi.fn(() => ({ kind: "create" })),
     sessionManagerOpen: vi.fn(() => ({ kind: "open" })),
+    settingsManagerInMemory: vi.fn(
+      (_settings?: Parameters<typeof SettingsManager.inMemory>[0]) => ({}),
+    ),
     resourceLoaderOptions: [] as unknown[],
     globalGuidance: undefined as string | undefined,
     allowlistedMcpToolNames: [] as string[],
@@ -81,7 +94,7 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
     open: mocks.sessionManagerOpen,
   },
   SettingsManager: {
-    inMemory: vi.fn(() => ({})),
+    inMemory: mocks.settingsManagerInMemory,
   },
 }));
 
@@ -212,6 +225,105 @@ function createMockPiSession(overrides: Record<string, unknown> = {}): Record<st
     }),
     ...sessionOverrides,
   };
+}
+
+/** Real PI tool registration/execution, with only the provider stream replaced. */
+async function useOfflinePiToolSessions() {
+  const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
+  );
+  const authStorage = sdk.AuthStorage.inMemory({
+    mock: { type: "api_key", key: "offline-test-only" },
+  });
+  const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
+  const sessions: AgentSession[] = [];
+  let requestedTool: string | undefined;
+  mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
+  mocks.settingsManagerInMemory.mockImplementation((settings) =>
+    sdk.SettingsManager.inMemory(settings),
+  );
+  mocks.createAgentSession.mockImplementation(async (options) => {
+    const loaderOptions = mocks.resourceLoaderOptions.at(-1) as ConstructorParameters<
+      typeof sdk.DefaultResourceLoader
+    >[0];
+    const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
+    await resourceLoader.reload();
+    const { session } = await sdk.createAgentSession({
+      ...options,
+      authStorage,
+      modelRegistry,
+      resourceLoader,
+      model: {
+        api: "openai-completions",
+        baseUrl: "https://offline.invalid",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 1000,
+        ...options.model,
+      },
+    });
+    session.agent.streamFn = (model, context) => {
+      const stream = createAssistantMessageEventStream();
+      const toolName = context.messages.at(-1)?.role !== "toolResult" ? requestedTool : undefined;
+      const callTool = Boolean(toolName);
+      const message: AssistantMessage = {
+        role: "assistant",
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        content: toolName
+          ? [{ type: "toolCall", id: crypto.randomUUID(), name: toolName, arguments: {} }]
+          : [{ type: "text", text: "Done." }],
+        stopReason: callTool ? "toolUse" : "stop",
+        usage: {
+          input: 1,
+          output: 1,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 2,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        timestamp: Date.now(),
+      };
+      stream.push({ type: "done", reason: callTool ? "toolUse" : "stop", message });
+      // The installed SDK and app resolve different pi-ai patch versions.
+      return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
+    };
+    sessions.push(session);
+    return { session };
+  });
+  return {
+    sessionAt: (index = -1) => {
+      const session = sessions.at(index);
+      if (!session) throw new Error("Expected an offline PI session.");
+      return session;
+    },
+    requestTool: (name: string) => {
+      requestedTool = name;
+    },
+  };
+}
+
+function registerOfflineMcpTool(name: string, output: string, dangerous = false): void {
+  const definition: ToolDefinition = {
+    name,
+    label: "Offline MCP lookup",
+    description: "Look up an offline fixture.",
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [{ type: "text", text: output }], details: {} }),
+  };
+  toolRegistry.registerTool({
+    entry: {
+      name,
+      profiles: ["chat", "plan"],
+      permission: { danger: dangerous ? "dangerous" : "safe", action: "mcp.call" },
+      capabilities: ["read"],
+      ui: { verb: "Lookup" },
+    },
+    definition,
+  });
 }
 
 function insertSession(
@@ -351,8 +463,9 @@ beforeEach(async () => {
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
   mocks.setPiSubscriber(undefined);
-  mocks.sessionManagerCreate.mockClear();
+  mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({ kind: "create" }));
   mocks.sessionManagerOpen.mockClear();
+  mocks.settingsManagerInMemory.mockReset().mockImplementation(() => ({}));
   mocks.resourceLoaderOptions = [];
   mocks.globalGuidance = undefined;
   mocks.allowlistedMcpToolNames = [];
@@ -4206,6 +4319,162 @@ describe("PiSdkRuntime", () => {
       .prepare("select updated_at from agent_sessions where id = ?")
       .get(sessionId) as { updated_at: string };
     expect(row.updated_at).toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  it("uses an MCP tool added after the first chat turn and preserves the live history", async () => {
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const name = "mcp_added_after_turn";
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const turn = () => runtime.prompt(window, { context: [], message: "hello", sessionId });
+    try {
+      await turn();
+      const first = sessionAt(0);
+      const previousMessages = [...first.state.messages];
+      first.setThinkingLevel("high");
+      first.agent.thinkingBudgets = { high: 1234 };
+      first.settingsManager.setCompactionEnabled(false);
+      const clearTodos = vi.spyOn(todoToolRuntime, "clearTodoSessionCache");
+      registerOfflineMcpTool(name, "new connection result");
+      requestTool(name);
+      await Promise.all([runtime.ensure(window, sessionId), runtime.ensure(window, sessionId)]);
+      expect(clearTodos).not.toHaveBeenCalledWith(sessionId);
+
+      await turn();
+
+      const current = sessionAt();
+      expect(current.state.messages.slice(0, previousMessages.length)).toEqual(previousMessages);
+      expect(current.state.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "toolResult",
+            toolName: name,
+            isError: false,
+            content: [{ type: "text", text: "new connection result" }],
+          }),
+        ]),
+      );
+      expect(current.sessionManager).toBe(first.sessionManager);
+      expect(current.thinkingLevel).toBe("high");
+      expect(current.agent.thinkingBudgets).toEqual({ high: 1234 });
+      expect(current.autoCompactionEnabled).toBe(false);
+    } finally {
+      toolRegistry.unregisterTool(name);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("uses the replacement MCP definition after reconnecting with the same tool name", async () => {
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const name = "mcp_reconnected_lookup";
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const turn = () => runtime.prompt(window, { context: [], message: "hello", sessionId });
+    registerOfflineMcpTool(name, "old client result");
+    requestTool(name);
+    try {
+      await turn();
+      registerOfflineMcpTool(name, "reconnected client result");
+
+      await turn();
+
+      expect(
+        sessionAt().state.messages.filter((message) => message.role === "toolResult"),
+      ).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: "old client result" }],
+          isError: false,
+        }),
+        expect.objectContaining({
+          content: [{ type: "text", text: "reconnected client result" }],
+          isError: false,
+        }),
+      ]);
+    } finally {
+      toolRegistry.unregisterTool(name);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps a removed MCP tool unavailable on the next chat turn", async () => {
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const name = "mcp_removed_lookup";
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const turn = () => runtime.prompt(window, { context: [], message: "hello", sessionId });
+    registerOfflineMcpTool(name, "before removal");
+    requestTool(name);
+    try {
+      await turn();
+      toolRegistry.unregisterTool(name);
+
+      await turn();
+
+      const current = sessionAt();
+      expect(current.getAllTools().map((tool) => tool.name)).not.toContain(name);
+      expect(current.state.messages.filter((message) => message.role === "toolResult")).toEqual([
+        expect.objectContaining({
+          content: [{ type: "text", text: "before removal" }],
+          isError: false,
+        }),
+        expect.objectContaining({ toolName: name, isError: true }),
+      ]);
+    } finally {
+      toolRegistry.unregisterTool(name);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("requires mcp.call approval before executing a newly registered dangerous tool", async () => {
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const { setProjectApprovalMode } = await import("../permissions/permission-store");
+    const { resolvePermissionRequest } = await import("../permissions/permission-broker");
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const name = "mcp_added_dangerous_lookup";
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setProjectApprovalMode(cwd, "request-approval");
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const events: AgentEvent[] = [];
+    runtime.onEvent((event) => events.push(event));
+    const turn = () => runtime.prompt(window, { context: [], message: "hello", sessionId });
+    let pendingTurn: ReturnType<typeof turn> | undefined;
+    try {
+      await turn();
+      registerOfflineMcpTool(name, "must not execute when denied", true);
+      requestTool(name);
+
+      pendingTurn = turn();
+      await vi.waitFor(() => {
+        expect(events.some((event) => event.type === "permission.requested")).toBe(true);
+      });
+      const requested = events.find((event) => event.type === "permission.requested");
+      if (!requested) throw new Error("Expected an MCP approval request.");
+      const request = requested.request;
+      expect(request.action).toBe("mcp.call");
+      resolvePermissionRequest(request.id, "deny");
+      await pendingTurn;
+
+      expect(
+        sessionAt().state.messages.filter((message) => message.role === "toolResult"),
+      ).toEqual([
+        expect.objectContaining({
+          toolName: name,
+          isError: true,
+          content: [{ type: "text", text: "Denied by user: {}" }],
+        }),
+      ]);
+    } finally {
+      toolRegistry.unregisterTool(name);
+      await runtime.releaseRuntime(sessionId);
+      await pendingTurn?.catch(() => undefined);
+    }
   });
 
   it("rebuilds an idle cached SDK session in the moved cwd (member worktree), keeping to-dos", async () => {

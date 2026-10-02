@@ -264,7 +264,7 @@ export function createComposioApi(apiKey: string): ComposioApi {
             error: {
               code: "mcp_transport_failed",
               message:
-                "A API do Composio respondeu, mas a sessão MCP não conectou. Verifique proxy, DNS, TLS e a permissão de executar ferramentas de sessão na Project API Key.",
+                "The Composio API responded, but the MCP session could not connect. Check proxy, DNS, TLS, and permission to execute session tools for the Project API Key.",
               retryable: true,
             },
           };

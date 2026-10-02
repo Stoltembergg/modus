@@ -229,6 +229,7 @@ type SdkRuntimeSession = {
   info: AgentSessionInfo;
   session: AgentSession;
   profile: ToolProfileName;
+  toolRegistryRevision: number;
   unsubscribe: () => void;
   emit: EmitAgentEvent;
   emitVolatile: EmitAgentEvent;
@@ -1704,24 +1705,36 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
     sessionId: string,
   ): Promise<SdkRuntimeSession | undefined> {
+    const pending = this.resumePromises.get(sessionId);
+    if (pending) {
+      return await pending;
+    }
     const existing = this.sessions.get(sessionId);
+    let previousSession: SdkRuntimeSession | undefined;
+    let disposing: Promise<void> | undefined;
     if (existing) {
-      if (!this.storedCwdMoved(sessionId, existing) && !this.personaChanged(sessionId, existing)) {
+      const resourcesChanged =
+        this.storedCwdMoved(sessionId, existing) || this.personaChanged(sessionId, existing);
+      const toolsChanged =
+        existing.toolRegistryRevision !== toolRegistry.revision &&
+        this.isIdleForRebuild(sessionId, existing);
+      if (!resourcesChanged && !toolsChanged) {
         return existing;
       }
       // The stored cwd moved (an Agent Group member entered or left its
       // worktree), or a 1:1 chat's agent was edited (A3): rebuild the SDK
       // session so its tools, permission extension, Project rules and persona
       // are current for this turn. The in-memory to-dos stay.
-      await this.disposeSessionOnly(sessionId, { keepTodos: true });
+      // PI has no public custom-definition setter. A tool-only refresh reuses
+      // the live SessionManager: its branch may not have reached disk yet.
+      if (toolsChanged && !resourcesChanged) previousSession = existing;
+      // Publish the rebuild promise before yielding so concurrent ensure/prompt
+      // calls cannot resume from disk and discard the live branch.
+      disposing = this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
-    const pending = this.resumePromises.get(sessionId);
-    if (pending) {
-      return await pending;
-    }
-
-    const next = this.createRuntimeSession(window, sessionId).finally(() => {
+    const resume = () => this.createRuntimeSession(window, sessionId, previousSession);
+    const next = (disposing ? disposing.then(resume) : resume()).finally(() => {
       this.resumePromises.delete(sessionId);
     });
     this.resumePromises.set(sessionId, next);
@@ -1778,15 +1791,18 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     emit: EmitAgentEvent,
     agentDir: string,
+    previousSettingsManager?: SettingsManager,
   ): Promise<{ settingsManager: SettingsManager; loader: DefaultResourceLoader }> {
     // Inject a cross-platform-resolved POSIX shell so the bash tool works out of
     // the box (notably on Windows, where PI's default picks the broken WSL stub),
     // and tell the model which shell it's actually driving.
     const shell = resolveAgentShell();
-    const settingsManager = SettingsManager.inMemory({
-      compaction: { enabled: true },
-      ...(shell.shellPath ? { shellPath: shell.shellPath } : {}),
-    });
+    const settingsManager =
+      previousSettingsManager ??
+      SettingsManager.inMemory({
+        compaction: { enabled: true },
+        ...(shell.shellPath ? { shellPath: shell.shellPath } : {}),
+      });
     // Project rules (AGENTS.md / .cursor/rules alwaysApply) ride the system
     // prompt so they apply to every turn without re-paying per-message tokens.
     const globalGuidancePrompt = resolveGlobalGuidancePrompt();
@@ -1830,6 +1846,7 @@ export class PiSdkRuntime implements AgentRuntime {
     thinkingLevel: NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"];
     thinkingBudget?: number;
   }): Promise<SdkRuntimeSession> {
+    const toolRegistryRevision = toolRegistry.revision;
     const sessionOptions: Parameters<typeof createAgentSession>[0] = {
       cwd: params.info.cwd,
       agentDir: params.agentDir,
@@ -1985,6 +2002,7 @@ export class PiSdkRuntime implements AgentRuntime {
       info: updated,
       session,
       profile: "chat",
+      toolRegistryRevision,
       unsubscribe,
       emit: params.emit,
       emitVolatile: params.emitVolatile,
@@ -2065,6 +2083,7 @@ export class PiSdkRuntime implements AgentRuntime {
   private async createRuntimeSession(
     window: BrowserWindowType,
     sessionId: string,
+    previousSession?: SdkRuntimeSession,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
     if (!info) {
@@ -2083,26 +2102,38 @@ export class PiSdkRuntime implements AgentRuntime {
       info.id,
       emit,
       agentDir,
+      previousSession?.session.settingsManager,
     );
 
-    const selectedModel = findModel(info.model) ?? getDefaultModel();
+    const selectedModel =
+      previousSession?.session.model ?? findModel(info.model) ?? getDefaultModel();
     if (!selectedModel) {
       throw new Error(
         "No model is configured. Open Settings and connect a provider before resuming this chat.",
       );
     }
-    const selectedThinking = selectedModel ? resolveModelThinking(selectedModel) : undefined;
+    const selectedThinking = previousSession
+      ? {
+          model: selectedModel,
+          thinkingLevel: previousSession.session.thinkingLevel,
+          thinkingBudget: previousSession.session.agent.thinkingBudgets?.high,
+        }
+      : resolveModelThinking(selectedModel);
     const sessionFile =
       info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
     let sessionManager: SessionManager;
-    try {
-      sessionManager = sessionFile
-        ? SessionManager.open(sessionFile, sessionDir, info.cwd)
-        : SessionManager.create(info.cwd, sessionDir);
-    } catch {
-      sessionManager = SessionManager.create(info.cwd, sessionDir);
+    if (previousSession) {
+      sessionManager = previousSession.session.sessionManager;
+    } else {
+      try {
+        sessionManager = sessionFile
+          ? SessionManager.open(sessionFile, sessionDir, info.cwd)
+          : SessionManager.create(info.cwd, sessionDir);
+      } catch {
+        sessionManager = SessionManager.create(info.cwd, sessionDir);
+      }
     }
-    return this.assembleSession({
+    const resumed = await this.assembleSession({
       info,
       emit,
       emitVolatile,
@@ -2116,6 +2147,8 @@ export class PiSdkRuntime implements AgentRuntime {
         ? { thinkingBudget: selectedThinking.thinkingBudget }
         : {}),
     });
+    if (previousSession) resumed.lastCompactionEnd = previousSession.lastCompactionEnd;
+    return resumed;
   }
 
   async prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult> {

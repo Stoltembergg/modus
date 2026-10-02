@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type {
   ComposioAccountSummary,
   ComposioConnectionOperation,
@@ -10,6 +12,7 @@ import type {
   ComposioToolkitPolicyInput,
   ComposioToolSummary,
   ComposioUserError,
+  McpToolInfo,
 } from "../../shared/contracts";
 import type { ComposioMcpBridge } from "../mcp/mcp-service";
 import type {
@@ -24,6 +27,8 @@ import { reconcileComposioSession } from "./composio-session-sync";
 
 const MAX_ACCOUNTS_PER_TOOLKIT = 5;
 const CONNECTION_TIMEOUT_MS = 60_000;
+const FOR_YOU_TOOLKIT = "composio-for-you";
+const FOR_YOU_MCP_URL = "https://connect.composio.dev/mcp";
 const DEFAULT_SETTINGS: ComposioSettingsState = {
   apiKeyConfigured: false,
   status: "unconfigured",
@@ -31,6 +36,7 @@ const DEFAULT_SETTINGS: ComposioSettingsState = {
 };
 
 type ErrorContext =
+  | "consumer"
   | "project-read"
   | "catalog-read"
   | "account-read"
@@ -77,21 +83,16 @@ class ComposioServiceError extends Error {
 function errorFields(error: unknown): {
   code: string;
   message: string;
-  cause: unknown;
   status: number | undefined;
 } {
   if (typeof error !== "object" || error === null) {
-    return { code: "", message: String(error ?? ""), cause: undefined, status: undefined };
+    return { code: "", message: String(error ?? ""), status: undefined };
   }
   const value = error as Record<string, unknown>;
   const cause =
     typeof value.cause === "object" && value.cause !== null
       ? (value.cause as Record<string, unknown>)
       : undefined;
-  const _message = [value.message, cause?.message]
-    .filter((part): part is string => typeof part === "string")
-    .join(" ")
-    .toLowerCase();
   const nestedResponse =
     typeof value.response === "object" && value.response !== null
       ? (value.response as Record<string, unknown>)
@@ -109,7 +110,14 @@ function errorFields(error: unknown): {
     value.status ??
     value.httpStatus ??
     nestedResponse?.status ??
-    nestedDetails?.status;
+    nestedDetails?.status ??
+    cause?.statusCode ??
+    cause?.status ??
+    cause?.httpStatus ??
+    (error instanceof StreamableHTTPError ? error.code : undefined) ??
+    (error instanceof UnauthorizedError ? 401 : undefined) ??
+    (value.cause instanceof StreamableHTTPError ? value.cause.code : undefined) ??
+    (value.cause instanceof UnauthorizedError ? 401 : undefined);
   const status = typeof rawStatus === "number" ? rawStatus : undefined;
   const rawCode = [value.code, value.type, value.name, nestedError?.code, nestedDetails?.slug]
     .filter((part): part is string => typeof part === "string")
@@ -129,7 +137,7 @@ function errorFields(error: unknown): {
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase();
-  return { code, message: enrichedMessage, cause, status };
+  return { code, message: enrichedMessage, status };
 }
 
 function diagnosticText(error: unknown): string {
@@ -152,46 +160,27 @@ function diagnosticText(error: unknown): string {
     [...new Set(parts)]
       .join(" ")
       .replace(/https?:\/\/\S+/gi, "[url]")
-      .replace(/(?:cmp|comp|sk|eyJ)[_-][a-z0-9._-]{12,}/gi, "[credential]")
-      .slice(0, 600) || "detalhes técnicos não disponíveis"
+      .replace(/(?:cmp|comp|sk|eyJ|ck|ak|uak)[_-][a-z0-9._-]+/gi, "[credential]")
+      .slice(0, 600) || "technical details unavailable"
   );
 }
 
 export function safeError(error: unknown, context: ErrorContext): ComposioUserError {
   if (error instanceof ComposioServiceError) return error.userError;
-  const { code, message, cause } = errorFields(error);
+  const { code, message, status } = errorFields(error);
   const markers = `${code} ${message}`;
-  const status = (() => {
-    if (typeof error !== "object" || error === null) return undefined;
-    const fields = error as Record<string, unknown>;
-    const response =
-      typeof fields.response === "object" && fields.response !== null
-        ? (fields.response as Record<string, unknown>)
-        : undefined;
-    const details =
-      typeof fields.details === "object" && fields.details !== null
-        ? (fields.details as Record<string, unknown>)
-        : undefined;
-    const candidate =
-      fields.statusCode ??
-      fields.status ??
-      fields.httpStatus ??
-      response?.status ??
-      details?.status;
-    return typeof candidate === "number" ? candidate : undefined;
-  })();
 
   if (/cancel(?:ed|led)|user_cancel|authorization_canceled|connection_canceled/.test(markers)) {
     return {
       code: "connection_canceled",
-      message: "A autorização foi cancelada. Inicie a conexão novamente quando quiser.",
+      message: "Authorization was canceled. Start the connection again when you are ready.",
       retryable: true,
     };
   }
   if (/expir|timed? ?out|timeout/.test(markers) || status === 408) {
     return {
       code: "connection_expired",
-      message: "A autorização expirou ou demorou demais. Inicie uma nova conexão.",
+      message: "Authorization expired or timed out. Start a new connection.",
       retryable: true,
     };
   }
@@ -199,17 +188,25 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     status === 401 ||
     /invalid[_ -]?(?:api[_ -]?)?key|wrong[_ -]?project|project[_ -]?not[_ -]?found/.test(markers)
   ) {
+    if (context === "consumer") {
+      return {
+        code: "invalid_consumer_key",
+        message:
+          "Composio rejected the For You API Key. Check that the key is active in Composio For You → Settings → Sessions & API Key and try again.",
+        retryable: false,
+      };
+    }
     return {
       code: "invalid_project_key",
       message:
-        "A Project API Key é inválida, foi revogada ou pertence a outro projeto Composio. Confirme a chave e o projeto e tente novamente.",
+        "Composio rejected the Project API Key or its permissions. Check that the key is active and has the required access. Scoped keys can return this error even when they are valid.",
       retryable: false,
     };
   }
   if (/revok/.test(markers)) {
     return {
       code: "account_revoked",
-      message: "A autorização desta conta foi revogada. Conecte a conta novamente antes de usá-la.",
+      message: "Authorization for this account was revoked. Reconnect the account before using it.",
       retryable: true,
     };
   }
@@ -218,14 +215,14 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       return {
         code: "auth_config_unavailable",
         message:
-          "Não existe uma configuração de autenticação utilizável para esta plataforma. Configure uma no projeto Composio e tente novamente.",
+          "No usable authentication configuration exists for this platform. Configure one in your Composio project and try again.",
         retryable: false,
       };
     }
     if (context === "catalog-read") {
       return {
         code: "toolkit_unavailable",
-        message: "Esta plataforma não está disponível no catálogo do projeto Composio.",
+        message: "This platform is not available in your Composio project's catalog.",
         retryable: false,
       };
     }
@@ -235,6 +232,14 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     /forbidden|permission_denied|insufficient_scope/.test(code) ||
     /permission|scope|unauthorized|forbidden/.test(message)
   ) {
+    if (context === "consumer") {
+      return {
+        code: "consumer_access_denied",
+        message:
+          "This For You API Key does not have access to the personal Composio MCP. Check the key and access in Composio For You.",
+        retryable: false,
+      };
+    }
     if (
       context === "project-read" ||
       context === "catalog-read" ||
@@ -244,7 +249,7 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       return {
         code: "missing_scope_read",
         message:
-          "Uma Project API Key com escopo restrito pode exigir permissões de leitura de toolkits, catálogo e contas e de gerenciamento de sessões e execução de ferramentas MCP. Habilite essas permissões na chave ou use uma chave com acesso total.",
+          "The Project API Key lacks required access. Check permissions to read toolkits, the catalog, and connected accounts, and to manage sessions and execute MCP session tools in your Composio project.",
         retryable: false,
       };
     }
@@ -252,7 +257,7 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       return {
         code: "missing_scope_write",
         message:
-          "A chave não pode criar Auth Configs neste projeto. Habilite a permissão de escrita de Auth Configs ou configure uma autenticação compatível no Composio e tente novamente. Se esta chave substituiu outra que funcionava, reinsira a chave anterior.",
+          "The key cannot create Auth Configs in this project. Enable Auth Config write permission or configure compatible authentication in Composio and try again. If this key replaced a working key, restore the previous key.",
         retryable: false,
       };
     }
@@ -260,14 +265,14 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
       return {
         code: "missing_scope_write",
         message:
-          "A chave não pode revogar Connected Accounts. Habilite a permissão para gerenciar contas conectadas na chave do Composio. Se esta chave substituiu outra que funcionava, reinsira a chave anterior.",
+          "The key cannot revoke Connected Accounts. Enable connected account management permission for the Composio key. If this key replaced a working key, restore the previous key.",
         retryable: false,
       };
     }
     return {
       code: "missing_scope_write",
       message:
-        "A chave não pode criar Connected Accounts neste projeto. Habilite a permissão para criar contas conectadas na chave do Composio e tente novamente. Se esta chave substituiu outra que funcionava, reinsira a chave anterior.",
+        "The key cannot create Connected Accounts in this project. Enable permission to create connected accounts for the Composio key and try again. If this key replaced a working key, restore the previous key.",
       retryable: false,
     };
   }
@@ -279,23 +284,21 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     return {
       code: "auth_config_unavailable",
       message:
-        "Esta plataforma exige uma configuração de autenticação personalizada. Configure-a no projeto Composio e tente conectar novamente.",
+        "This platform requires a custom authentication configuration. Configure it in your Composio project and try connecting again.",
       retryable: false,
     };
   }
   if (status === 429 || /rate.?limit|too many requests/.test(markers)) {
     return {
       code: "rate_limited",
-      message:
-        "O Composio limitou temporariamente as solicitações. Aguarde um pouco e tente novamente.",
+      message: "Composio temporarily limited requests. Wait a moment and try again.",
       retryable: true,
     };
   }
   if (status !== undefined && status >= 500) {
     return {
       code: "composio_unavailable",
-      message:
-        "O serviço do Composio está temporariamente indisponível. Tente novamente em instantes.",
+      message: "The Composio service is temporarily unavailable. Try again in a moment.",
       retryable: true,
     };
   }
@@ -307,7 +310,7 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     const safeDiagnostic = diagnosticText(error);
     return {
       code: "network_unavailable",
-      message: `Não foi possível alcançar o Composio. Verifique DNS, rede, proxy e TLS. Diagnóstico: ${safeDiagnostic}`,
+      message: `Could not reach Composio. Check DNS, network, proxy, and TLS settings. Diagnostic: ${safeDiagnostic}`,
       retryable: true,
     };
   }
@@ -315,7 +318,7 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     return {
       code: "auth_config_unavailable",
       message:
-        "Não foi possível preparar a autenticação desta plataforma. Configure uma Auth Config no Composio e tente novamente.",
+        "Could not prepare authentication for this platform. Configure an Auth Config in Composio and try again.",
       retryable: false,
     };
   }
@@ -323,7 +326,14 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     return {
       code: "session_sync_failed",
       message:
-        "A conexão foi salva, mas a sincronização das ferramentas do Composio falhou. Atualize as integrações antes de usar os agentes.",
+        "The connection was saved, but Composio tool synchronization failed. Refresh integrations before using agents.",
+      retryable: true,
+    };
+  }
+  if (context === "consumer") {
+    return {
+      code: "consumer_mcp_failed",
+      message: "Could not synchronize Composio For You tools. Refresh integrations and try again.",
       retryable: true,
     };
   }
@@ -331,14 +341,13 @@ export function safeError(error: unknown, context: ErrorContext): ComposioUserEr
     return {
       code: "local_storage_failed",
       message:
-        "O Modus não conseguiu acessar o armazenamento seguro local. Verifique o acesso ao armazenamento do sistema e tente novamente.",
+        "Modus could not access local secure storage. Check access to the system's secure storage and try again.",
       retryable: true,
     };
   }
   return {
     code: "composio_operation_failed",
-    message:
-      "O Composio não conseguiu concluir esta operação. Verifique as permissões do projeto e tente novamente.",
+    message: "Composio could not complete this operation. Check project permissions and try again.",
     retryable: true,
   };
 }
@@ -382,7 +391,7 @@ function validateAlias(alias: string): string {
   if (normalized.length === 0 || normalized.length > 80) {
     throw new ComposioServiceError({
       code: "invalid_alias",
-      message: "O nome da conta deve ter entre 1 e 80 caracteres.",
+      message: "The account name must contain between 1 and 80 characters.",
       retryable: false,
     });
   }
@@ -396,7 +405,7 @@ function validateConnectLink(rawUrl: string): string {
   } catch {
     throw new ComposioServiceError({
       code: "invalid_connect_link",
-      message: "O Composio não retornou um link de conexão válido. Tente novamente.",
+      message: "Composio did not return a valid connection link. Try again.",
       retryable: true,
     });
   }
@@ -409,7 +418,8 @@ function validateConnectLink(rawUrl: string): string {
   ) {
     throw new ComposioServiceError({
       code: "invalid_connect_link",
-      message: "O link de conexão não pertence ao domínio seguro do Composio e não foi aberto.",
+      message:
+        "The connection link does not belong to Composio's trusted domain and was not opened.",
       retryable: false,
     });
   }
@@ -475,6 +485,7 @@ function isUsableAuthConfig(config: ComposioAuthConfigRecord): boolean {
 
 export function createComposioService(dependencies: ComposioServiceDependencies): ComposioService {
   let api: ComposioApi | undefined;
+  let consumerKey: string | undefined;
   let initialized = false;
   let shutDown = false;
   let initializationPromise: Promise<ComposioSettingsState> | undefined;
@@ -490,8 +501,10 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
   function requireApi(): ComposioApi {
     if (!api) {
       throw new ComposioServiceError({
-        code: "api_key_required",
-        message: "Adicione e valide sua Project API Key do Composio antes de continuar.",
+        code: consumerKey ? "project_operation_unavailable" : "api_key_required",
+        message: consumerKey
+          ? "Manage personal connections through Composio For You tools. Project account management requires a Platform Project API Key."
+          : "Add and validate your Composio API Key before continuing.",
         retryable: false,
       });
     }
@@ -558,7 +571,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
         });
       },
     }).then((state) => {
-      settings = { ...state, apiKeyConfigured: hasKey };
+      settings = { ...state, apiKeyConfigured: hasKey, keyType: "project" };
       return cloneSettings(settings);
     });
   }
@@ -569,6 +582,81 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
     } catch (error) {
       return setSettingsError(error, "session-sync");
     }
+  }
+
+  function consumerCredentials(key: string) {
+    return { url: FOR_YOU_MCP_URL, headers: { "x-consumer-api-key": key } };
+  }
+
+  function consumerToolSummaries(tools: McpToolInfo[]): ComposioToolSummary[] {
+    return tools.map((tool) => ({
+      toolkitSlug: FOR_YOU_TOOLKIT,
+      slug: tool.name,
+      name: tool.name,
+      ...(tool.description ? { description: tool.description } : {}),
+    }));
+  }
+
+  async function reconcileConsumer(
+    key: string,
+    discovered?: McpToolInfo[],
+  ): Promise<ComposioSettingsState> {
+    try {
+      const tools = consumerToolSummaries(
+        discovered ?? (await dependencies.mcp.inspectComposioMcpSession(consumerCredentials(key))),
+      );
+      if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+      const policy = dependencies.profileStore.load().forYou ?? {
+        enabled: false,
+        selectedToolSlugs: [],
+      };
+      const knownTools = new Set(tools.map((tool) => tool.slug));
+      const selectedToolSlugs = [...new Set(policy.selectedToolSlugs)].filter((slug) =>
+        knownTools.has(slug),
+      );
+      // A changed catalog must never silently widen a saved selection.
+      const enabled =
+        policy.enabled &&
+        selectedToolSlugs.length > 0 &&
+        selectedToolSlugs.length === policy.selectedToolSlugs.length;
+      if (enabled) {
+        await dependencies.mcp.registerComposioMcpSession({
+          ...consumerCredentials(key),
+          allowedToolSlugs: selectedToolSlugs,
+        });
+      } else {
+        await dependencies.mcp.unregisterComposioMcpSession();
+      }
+      if (shutDown) {
+        await dependencies.mcp.unregisterComposioMcpSession().catch(() => undefined);
+        return cloneSettings(DEFAULT_SETTINGS);
+      }
+      settings = {
+        apiKeyConfigured: hasKey,
+        keyType: "consumer",
+        status: "ready",
+        toolkits: [],
+        consumer: { enabled, selectedToolSlugs, tools },
+      };
+      return cloneSettings(settings);
+    } catch (error) {
+      await dependencies.mcp.unregisterComposioMcpSession().catch(() => undefined);
+      if (settings.consumer) settings.consumer.enabled = false;
+      return setSettingsError(error, "consumer");
+    }
+  }
+
+  function cancelPendingConnections(message: string): void {
+    for (const operation of operations.values()) {
+      if (operation.status !== "pending") continue;
+      setOperation({
+        ...operation,
+        status: "canceled",
+        error: { code: "connection_canceled", message, retryable: true },
+      });
+    }
+    for (const controller of connectionAbortControllers.values())
+      controller.abort(new Error(message));
   }
 
   function setOperation(operation: ComposioConnectionOperation): ComposioConnectionOperation {
@@ -627,7 +715,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
         throw new ComposioServiceError({
           code: "foreign_toolkit_account",
           message:
-            "O Composio retornou uma conta de outra plataforma. Ela não foi ativada no Modus.",
+            "Composio returned an account for another platform. It was not activated in Modus.",
           retryable: false,
         });
       }
@@ -638,7 +726,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           status: "expired",
           error: {
             code: "connection_expired",
-            message: "A autorização expirou. Inicie uma nova conexão.",
+            message: "Authorization expired. Start a new connection.",
             retryable: true,
           },
         });
@@ -649,8 +737,8 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           code: status === "revoked" ? "connection_canceled" : "connection_failed",
           message:
             status === "revoked"
-              ? "A autorização foi cancelada ou revogada. Inicie uma nova conexão."
-              : "O Composio não confirmou uma conta ativa. Tente conectar novamente.",
+              ? "Authorization was canceled or revoked. Start a new connection."
+              : "Composio did not confirm an active account. Try connecting again.",
           retryable: status !== "disabled",
         };
         setOperation({ ...currentOperation, status: operationStatusForError(error), error });
@@ -724,6 +812,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
   }
 
   function diagnose(): Promise<ComposioConnectivityResult> {
+    let context: ErrorContext = "project-read";
     return (async () => {
       const savedKey = await dependencies.secretStore.load();
       if (!savedKey) {
@@ -732,10 +821,16 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           mcpSessionReady: false,
           error: {
             code: "api_key_required",
-            message: "Adicione uma Project API Key do Composio para testar a conexão.",
+            message: "Add a Composio API Key to test the connection.",
             retryable: false,
           },
         };
+      }
+
+      if (savedKey.startsWith("ck_")) {
+        context = "consumer";
+        await dependencies.mcp.inspectComposioMcpSession(consumerCredentials(savedKey));
+        return { apiReachable: true, mcpSessionReady: true };
       }
 
       const currentApi = dependencies.createComposioApi(savedKey);
@@ -750,7 +845,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
     })().catch((error: unknown) => ({
       apiReachable: false,
       mcpSessionReady: false,
-      error: safeError(error, "project-read"),
+      error: safeError(error, context),
     }));
   }
 
@@ -769,6 +864,18 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           if (!savedKey) {
             settings = cloneSettings(DEFAULT_SETTINGS);
             return cloneSettings(settings);
+          }
+          if (savedKey.startsWith("ck_")) {
+            consumerKey = savedKey;
+            api = undefined;
+            settings = {
+              apiKeyConfigured: true,
+              keyType: "consumer",
+              status: "loading",
+              toolkits: [],
+              consumer: { enabled: false, selectedToolSlugs: [], tools: [] },
+            };
+            return await reconcileConsumer(savedKey);
           }
           const profile = dependencies.profileStore.load();
           const savedApi = dependencies.createComposioApi(savedKey);
@@ -798,26 +905,70 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
     },
 
     async getSettingsState(): Promise<ComposioSettingsState> {
+      if (initializationPromise) await initializationPromise;
       return initialized ? cloneSettings(settings) : await this.initialize();
     },
 
     async setProjectApiKey(apiKey: string): Promise<ComposioSettingsState> {
       return await withPolicyLock(async () => {
         if (shutDown) return setSettingsError(new Error("service closed"), "storage");
-        if (!initialized) await this.initialize();
+        await this.initialize();
+        if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
         const candidateKey = apiKey.trim();
         if (!candidateKey) {
           return setSettingsError(
             new ComposioServiceError({
               code: "invalid_project_key",
-              message: "Informe uma Project API Key do Composio.",
+              message: "Enter a Composio API Key.",
               retryable: false,
             }),
             "project-read",
           );
         }
+        if (candidateKey.startsWith("uak_")) {
+          return setSettingsError(
+            new ComposioServiceError({
+              code: "unsupported_key_type",
+              message:
+                "This is a Composio user API key. Use a For You API Key from Settings → Sessions & API Key or a Platform Project API Key from your project's Settings → API Keys.",
+              retryable: false,
+            }),
+            "project-read",
+          );
+        }
+        if (candidateKey.startsWith("ck_")) {
+          let context: ErrorContext = "consumer";
+          try {
+            const tools = await dependencies.mcp.inspectComposioMcpSession(
+              consumerCredentials(candidateKey),
+            );
+            if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+            context = "storage";
+            await dependencies.mcp.unregisterComposioMcpSession();
+            if (settings.consumer) settings.consumer.enabled = false;
+            await dependencies.secretStore.save(candidateKey);
+            if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+            cancelPendingConnections(
+              "The connection was interrupted because the Composio API Key changed.",
+            );
+            api = undefined;
+            consumerKey = candidateKey;
+            hasKey = true;
+            settings = {
+              apiKeyConfigured: true,
+              keyType: "consumer",
+              status: "loading",
+              toolkits: [],
+              consumer: { enabled: false, selectedToolSlugs: [], tools: [] },
+            };
+            return await reconcileConsumer(candidateKey, tools);
+          } catch (error) {
+            return setSettingsError(error, context);
+          }
+        }
         try {
           await dependencies.mcp.unregisterComposioMcpSession();
+          if (settings.consumer) settings.consumer.enabled = false;
         } catch (error) {
           return setSettingsError(error, "session-sync");
         }
@@ -828,10 +979,31 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           const profile = dependencies.profileStore.load();
           const candidateApi = dependencies.createComposioApi(candidateKey);
           await candidateApi.validateProjectReadAccess(profile.profileId);
+          if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
           context = "storage";
+          const previousKey = await dependencies.secretStore.load();
+          if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+          if (previousKey !== candidateKey) {
+            // A hosted session belongs to the credential's project, not to the local policy.
+            dependencies.profileStore.update((current) => {
+              const { sessionId: _sessionId, ...withoutSessionId } = current;
+              return withoutSessionId;
+            });
+          }
           await dependencies.secretStore.save(candidateKey);
+          if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+          cancelPendingConnections(
+            "The connection was interrupted because the Composio API Key changed.",
+          );
           api = candidateApi;
+          consumerKey = undefined;
           hasKey = true;
+          settings = {
+            apiKeyConfigured: true,
+            keyType: "project",
+            status: "loading",
+            toolkits: [],
+          };
           return await refreshCatalogWith(candidateApi);
         } catch (error) {
           return setSettingsError(error, context);
@@ -841,7 +1013,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
 
     async removeProjectApiKey(): Promise<ComposioSettingsState> {
       return await withPolicyLock(async () => {
-        if (!initialized && !shutDown) await this.initialize();
+        if (!shutDown) await this.initialize();
         try {
           await dependencies.mcp.unregisterComposioMcpSession();
         } catch (error) {
@@ -857,19 +1029,9 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
             sessionDeleteError = error;
           }
         }
-        for (const operation of operations.values()) {
-          if (operation.status === "pending") {
-            setOperation({
-              ...operation,
-              status: "canceled",
-              error: {
-                code: "connection_canceled",
-                message: "A conexão foi interrompida porque a Project API Key foi removida.",
-                retryable: true,
-              },
-            });
-          }
-        }
+        cancelPendingConnections(
+          "The connection was interrupted because the Composio API Key was removed.",
+        );
         try {
           dependencies.profileStore.update((current) => {
             const { sessionId: _sessionId, ...withoutSessionId } = current;
@@ -880,6 +1042,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           return setSettingsError(error, "storage");
         }
         api = undefined;
+        consumerKey = undefined;
         hasKey = false;
         settings = cloneSettings(DEFAULT_SETTINGS);
         if (sessionDeleteError) {
@@ -889,7 +1052,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
             error: {
               code: "session_sync_failed",
               message:
-                "A chave foi removida, mas a sessão remota não pôde ser encerrada. As contas conectadas foram mantidas no Composio.",
+                "The key was removed, but the remote session could not be closed. Connected accounts were kept in Composio.",
               retryable: true,
             },
           };
@@ -900,9 +1063,23 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
 
     async refreshCatalog(): Promise<ComposioSettingsState> {
       return await withPolicyLock(async () => {
-        if (!initialized) await this.initialize();
+        await this.initialize();
+        if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+        if (consumerKey) return await reconcileConsumer(consumerKey);
         if (!api) {
-          if (hasKey) return cloneSettings(settings);
+          if (hasKey) {
+            try {
+              const savedKey = await dependencies.secretStore.load();
+              if (!savedKey) throw new Error("Saved Composio key unavailable.");
+              const savedApi = dependencies.createComposioApi(savedKey);
+              await savedApi.validateProjectReadAccess(dependencies.profileStore.load().profileId);
+              if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+              api = savedApi;
+              return await refreshCatalogWith(savedApi);
+            } catch (error) {
+              return setSettingsError(error, "project-read");
+            }
+          }
           settings = cloneSettings(DEFAULT_SETTINGS);
           return cloneSettings(settings);
         }
@@ -912,10 +1089,16 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
 
     async listToolkitTools(toolkitSlug: string): Promise<ComposioToolSummary[]> {
       try {
+        await this.initialize();
+        if (consumerKey && toolkitSlug === FOR_YOU_TOOLKIT) {
+          return consumerToolSummaries(
+            await dependencies.mcp.inspectComposioMcpSession(consumerCredentials(consumerKey)),
+          );
+        }
         if (!toolkitSlug.trim())
           throw new ComposioServiceError({
             code: "toolkit_unavailable",
-            message: "Selecione uma plataforma válida do catálogo Composio.",
+            message: "Select a valid platform from the Composio catalog.",
             retryable: false,
           });
         const currentApi = requireApi();
@@ -935,13 +1118,13 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
     async setToolkitPolicy(input: ComposioToolkitPolicyInput): Promise<ComposioSettingsState> {
       return await withPolicyLock(async () => {
         try {
-          if (!initialized) await this.initialize();
+          await this.initialize();
           if (shutDown) throw new Error("service closed");
           const toolkitSlug = input.toolkitSlug.trim();
           if (!toolkitSlug || toolkitSlug.length > 120) {
             throw new ComposioServiceError({
               code: "toolkit_unavailable",
-              message: "Selecione uma plataforma válida do catálogo Composio.",
+              message: "Select a valid platform from the Composio catalog.",
               retryable: false,
             });
           }
@@ -954,9 +1137,41 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           ) {
             throw new ComposioServiceError({
               code: "toolkit_unavailable",
-              message: "A seleção contém ferramentas inválidas ou excede o limite permitido.",
+              message: "The selection contains invalid tools or exceeds the allowed limit.",
               retryable: false,
             });
+          }
+          if (consumerKey && toolkitSlug === FOR_YOU_TOOLKIT) {
+            if (input.selectedAccountId || (input.enabled && selectedToolSlugs.length === 0)) {
+              throw new ComposioServiceError({
+                code: "invalid_consumer_policy",
+                message:
+                  "Select at least one For You MCP tool before enabling it. Personal MCP tools do not use a project account selection.",
+                retryable: false,
+              });
+            }
+            const tools = input.enabled
+              ? await dependencies.mcp.inspectComposioMcpSession(consumerCredentials(consumerKey))
+              : (settings.consumer?.tools ?? []).map((tool) => ({
+                  name: tool.slug,
+                  registeredName: tool.slug,
+                  description: tool.description,
+                }));
+            const knownTools = new Set(tools.map((tool) => tool.name));
+            if (input.enabled && selectedToolSlugs.some((slug) => !knownTools.has(slug))) {
+              throw new ComposioServiceError({
+                code: "invalid_consumer_policy",
+                message:
+                  "The selection contains unavailable For You MCP tools. Refresh integrations and try again.",
+                retryable: false,
+              });
+            }
+            if (shutDown) return cloneSettings(DEFAULT_SETTINGS);
+            dependencies.profileStore.update((current) => ({
+              ...current,
+              forYou: { enabled: input.enabled, selectedToolSlugs },
+            }));
+            return await reconcileConsumer(consumerKey, tools);
           }
           const currentApi = requireApi();
           const profile = dependencies.profileStore.load();
@@ -965,7 +1180,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
             throw new ComposioServiceError({
               code: "toolkit_unavailable",
               message:
-                "Selecione uma conta ativa e pelo menos uma operação antes de habilitar a plataforma.",
+                "Select an active account and at least one operation before enabling the platform.",
               retryable: false,
             });
           }
@@ -978,7 +1193,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
             if (!toolkits.some((toolkit) => toolkit.slug === toolkitSlug)) {
               throw new ComposioServiceError({
                 code: "toolkit_unavailable",
-                message: "Esta plataforma não está disponível no catálogo do projeto Composio.",
+                message: "This platform is not available in your Composio project's catalog.",
                 retryable: false,
               });
             }
@@ -987,7 +1202,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
               throw new ComposioServiceError({
                 code: "toolkit_unavailable",
                 message:
-                  "A seleção contém ferramentas que não pertencem a esta plataforma. Atualize o catálogo e tente novamente.",
+                  "The selection contains tools that do not belong to this platform. Refresh the catalog and try again.",
                 retryable: false,
               });
             }
@@ -996,14 +1211,14 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
               throw new ComposioServiceError({
                 code: "account_not_found",
                 message:
-                  "A conta selecionada não pertence a este perfil local ou não está mais conectada.",
+                  "The selected account does not belong to this local profile or is no longer connected.",
                 retryable: false,
               });
             }
             if (accountStatus(selectedAccount.status) !== "active") {
               throw new ComposioServiceError({
                 code: "account_revoked",
-                message: "Conecte novamente esta conta antes de habilitá-la para os agentes.",
+                message: "Reconnect this account before enabling it for agents.",
                 retryable: false,
               });
             }
@@ -1028,9 +1243,17 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           }));
           return await reconcileWith(currentApi);
         } catch (error) {
+          if (consumerKey) {
+            await dependencies.mcp.unregisterComposioMcpSession().catch(() => undefined);
+            if (settings.consumer) settings.consumer.enabled = false;
+          }
           return setSettingsError(
             error,
-            errorFields(error).status === 403 ? "account-read" : "session-sync",
+            consumerKey
+              ? "consumer"
+              : errorFields(error).status === 403
+                ? "account-read"
+                : "session-sync",
           );
         }
       });
@@ -1056,7 +1279,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           toolkitSlug,
           alias,
           "toolkit_unavailable",
-          "Selecione uma plataforma válida e tente novamente.",
+          "Select a valid platform and try again.",
         );
       }
 
@@ -1077,7 +1300,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
                 toolkitSlug,
                 alias,
                 "service_closed",
-                "O Modus está encerrando. Inicie a conexão novamente ao reabrir o aplicativo.",
+                "Modus is shutting down. Start the connection again after reopening the app.",
               );
             }
             currentApi = requireApi();
@@ -1095,7 +1318,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
                 toolkitSlug,
                 alias,
                 "toolkit_unavailable",
-                "Esta plataforma não está disponível no catálogo do projeto Composio.",
+                "This platform is not available in your Composio project's catalog.",
               );
             }
             if (
@@ -1106,7 +1329,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
                 toolkitSlug,
                 alias,
                 "account_limit",
-                "Cada plataforma pode ter até cinco contas. Remova uma conta existente ou aguarde uma conexão pendente terminar.",
+                "Each platform supports up to five accounts. Remove an existing account or wait for a pending connection to finish.",
               );
             }
             operation = setOperation(operation);
@@ -1124,7 +1347,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
               throw new ComposioServiceError({
                 code: "auth_config_unavailable",
                 message:
-                  "Esta plataforma exige uma configuração de autenticação no projeto Composio antes de conectar.",
+                  "This platform requires an authentication configuration in your Composio project before connecting.",
                 retryable: false,
               });
             }
@@ -1142,7 +1365,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
                 status: "canceled",
                 error: {
                   code: "connection_canceled",
-                  message: "A conexão foi interrompida ao encerrar o Modus.",
+                  message: "The connection was interrupted when Modus shut down.",
                   retryable: true,
                 },
               });
@@ -1155,7 +1378,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
             } catch (_error) {
               throw new ComposioServiceError({
                 code: "connect_link_open_failed",
-                message: "Não foi possível abrir o link seguro de conexão. Tente novamente.",
+                message: "Could not open the secure connection link. Try again.",
                 retryable: true,
               });
             }
@@ -1198,7 +1421,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
         status: "failed",
         error: {
           code: "connection_operation_not_found",
-          message: "Esta operação de conexão não está mais disponível. Inicie uma nova conexão.",
+          message: "This connection operation is no longer available. Start a new connection.",
           retryable: true,
         },
       };
@@ -1218,7 +1441,8 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           if (!accounts.some((account) => account.id === input.accountId)) {
             throw new ComposioServiceError({
               code: "account_not_found",
-              message: "A conta não pertence a este perfil local ou não está mais conectada.",
+              message:
+                "The account does not belong to this local profile or is no longer connected.",
               retryable: false,
             });
           }
@@ -1246,7 +1470,8 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           if (!accounts.some((account) => account.id === input.accountId)) {
             throw new ComposioServiceError({
               code: "account_not_found",
-              message: "A conta não pertence a este perfil local ou não está mais conectada.",
+              message:
+                "The account does not belong to this local profile or is no longer connected.",
               retryable: false,
             });
           }
@@ -1306,7 +1531,7 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
           status: "canceled",
           error: {
             code: "connection_canceled",
-            message: "A conexão foi interrompida ao encerrar o Modus.",
+            message: "The connection was interrupted when Modus shut down.",
             retryable: true,
           },
         });
@@ -1322,6 +1547,10 @@ export function createComposioService(dependencies: ComposioServiceDependencies)
         settings = cloneSettings(DEFAULT_SETTINGS);
         await withPolicyLock(async () => {
           await dependencies.mcp.unregisterComposioMcpSession().catch(() => undefined);
+          api = undefined;
+          consumerKey = undefined;
+          hasKey = false;
+          settings = cloneSettings(DEFAULT_SETTINGS);
         });
       })();
       await shutdownPromise;

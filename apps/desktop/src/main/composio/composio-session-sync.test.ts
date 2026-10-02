@@ -101,6 +101,7 @@ function makeHarness(
     }),
   } as unknown as ComposioApi & Record<string, ReturnType<typeof vi.fn>>;
   const mcp: ComposioMcpBridge = {
+    inspectComposioMcpSession: vi.fn(async () => []),
     unregisterComposioMcpSession: vi.fn(async () => {
       sequence.push("unregister");
     }),
@@ -322,7 +323,7 @@ describe("reconcileComposioSession", () => {
 
     expect(state.status).toBe("error");
     expect(state.error).toMatchObject({ code: "missing_scope_write", retryable: false });
-    expect(state.error?.message).toMatch(/permissão de escrita/i);
+    expect(state.error?.message).toMatch(/write permission/i);
     expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
   });
 

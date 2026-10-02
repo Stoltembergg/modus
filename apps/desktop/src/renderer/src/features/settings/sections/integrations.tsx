@@ -21,6 +21,7 @@ import { cn } from "../../../lib/cn";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 const MAX_ALLOWED_TOOLS = 500;
+const CONSUMER_TOOLKIT_SLUG = "composio-for-you";
 const CONNECTION_POLL_INTERVAL_MS = 500;
 const CONNECTION_POLL_ATTEMPTS = 240;
 
@@ -69,6 +70,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   const [toolsByToolkit, setToolsByToolkit] = useState<Record<string, ComposioToolSummary[]>>({});
   const [toolsLoading, setToolsLoading] = useState<string | undefined>();
   const [toolQueries, setToolQueries] = useState<Record<string, string>>({});
+  const [consumerQuery, setConsumerQuery] = useState("");
   const [localError, setLocalError] = useState<string | undefined>();
   const [operation, setOperation] = useState<ComposioConnectionOperation | undefined>();
   const [connectionToolkit, setConnectionToolkit] = useState<string | undefined>();
@@ -80,6 +82,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   const [diagnostic, setDiagnostic] = useState<ComposioConnectivityResult | undefined>();
   const [checkingConnectivity, setCheckingConnectivity] = useState(false);
   const mounted = useRef(true);
+  const credentialVersion = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -111,21 +114,48 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   }, [catalogQuery, settings?.toolkits]);
 
   const currentError = localError ?? settings?.error?.message;
+  const consumerMode = settings?.keyType === "consumer";
+  const consumer = consumerMode ? settings?.consumer : undefined;
+  const consumerTools = consumer?.tools ?? [];
+  const consumerSelectedToolSlugs = consumer?.selectedToolSlugs ?? [];
+  const visibleConsumerTools = filterTools(consumerTools, consumerQuery);
+  const everyVisibleConsumerToolSelected =
+    visibleConsumerTools.length > 0 &&
+    visibleConsumerTools.every((tool) => consumerSelectedToolSlugs.includes(tool.slug));
 
   function applySettings(next: ComposioSettingsState): void {
     setSettings(next);
     if (next.status !== "error" || !next.error) setLocalError(undefined);
   }
 
+  function resetCredentialViews(): void {
+    credentialVersion.current += 1;
+    setToolsByToolkit({});
+    setToolsLoading(undefined);
+    setExpandedToolkit(undefined);
+    setCatalogQuery("");
+    setToolQueries({});
+    setConsumerQuery("");
+    setOperation(undefined);
+    setConnectionToolkit(undefined);
+    setConnectionAlias("");
+    setRenamingAccount(undefined);
+    setRenamedAlias("");
+    setDisconnectingAccount(undefined);
+    setDiagnostic(undefined);
+    setCheckingConnectivity(false);
+  }
+
   async function saveApiKey(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     const value = apiKey.trim();
     if (!value) {
-      setLocalError("Enter a Composio Project API Key before saving.");
+      setLocalError("Enter a Composio API Key before saving.");
       return;
     }
     setSaving("api-key");
     setLocalError(undefined);
+    resetCredentialViews();
     try {
       applySettings(await window.modus.composio.setApiKey({ apiKey: value }));
     } catch (error) {
@@ -139,10 +169,10 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   async function removeApiKey(): Promise<void> {
     setSaving("api-key");
     setLocalError(undefined);
+    resetCredentialViews();
     try {
       applySettings(await window.modus.composio.removeApiKey());
       setShowRemoveKey(false);
-      setToolsByToolkit({});
     } catch (error) {
       setLocalError(errorMessage(error));
     } finally {
@@ -153,6 +183,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   async function refreshCatalog(): Promise<void> {
     setSaving("catalog");
     setLocalError(undefined);
+    resetCredentialViews();
     try {
       applySettings(await window.modus.composio.refreshCatalog());
     } catch (error) {
@@ -163,19 +194,22 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   }
 
   async function diagnoseConnection(): Promise<void> {
+    const version = credentialVersion.current;
     setCheckingConnectivity(true);
     setDiagnostic(undefined);
     setLocalError(undefined);
     try {
-      setDiagnostic(await window.modus.composio.diagnose());
+      const result = await window.modus.composio.diagnose();
+      if (version === credentialVersion.current) setDiagnostic(result);
     } catch (error) {
-      setLocalError(errorMessage(error));
+      if (version === credentialVersion.current) setLocalError(errorMessage(error));
     } finally {
-      setCheckingConnectivity(false);
+      if (version === credentialVersion.current) setCheckingConnectivity(false);
     }
   }
 
   async function openToolkit(toolkit: ComposioToolkitSummary): Promise<void> {
+    const version = credentialVersion.current;
     if (expandedToolkit === toolkit.slug) {
       setExpandedToolkit(undefined);
       return;
@@ -186,24 +220,32 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
     setLocalError(undefined);
     try {
       const tools = await window.modus.composio.listTools({ toolkitSlug: toolkit.slug });
-      setToolsByToolkit((current) => ({ ...current, [toolkit.slug]: tools }));
+      if (version === credentialVersion.current) {
+        setToolsByToolkit((current) => ({ ...current, [toolkit.slug]: tools }));
+      }
     } catch (error) {
-      setLocalError(errorMessage(error));
+      if (version === credentialVersion.current) setLocalError(errorMessage(error));
     } finally {
-      setToolsLoading(undefined);
+      if (version === credentialVersion.current) setToolsLoading(undefined);
     }
   }
 
   async function savePolicy(input: ComposioToolkitPolicyInput): Promise<void> {
+    const consumerPolicy = consumerMode && input.toolkitSlug === CONSUMER_TOOLKIT_SLUG;
     if (input.selectedToolSlugs.length > MAX_ALLOWED_TOOLS) {
       setLocalError(
         "Select 500 operations or fewer. Search the operation list and allow only what agents need.",
       );
       return;
     }
-    if (input.enabled && (!input.selectedAccountId || input.selectedToolSlugs.length === 0)) {
+    if (
+      input.enabled &&
+      ((!consumerPolicy && !input.selectedAccountId) || input.selectedToolSlugs.length === 0)
+    ) {
       setLocalError(
-        "Select one active account and at least one allowed operation before enabling this platform for agents.",
+        consumerPolicy
+          ? "Select at least one MCP tool before enabling Composio For You for agents."
+          : "Select one active account and at least one allowed operation before enabling this platform for agents.",
       );
       return;
     }
@@ -217,6 +259,24 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
     } finally {
       setSaving(undefined);
     }
+  }
+
+  async function saveConsumerPolicy(
+    selectedToolSlugs: string[],
+    enabled = consumer?.enabled ?? false,
+  ): Promise<void> {
+    await savePolicy({
+      toolkitSlug: CONSUMER_TOOLKIT_SLUG,
+      enabled: enabled && selectedToolSlugs.length > 0,
+      selectedToolSlugs,
+    });
+  }
+
+  async function toggleConsumerTool(toolSlug: string, checked: boolean): Promise<void> {
+    const selected = new Set(consumerSelectedToolSlugs);
+    if (checked) selected.add(toolSlug);
+    else selected.delete(toolSlug);
+    await saveConsumerPolicy([...selected]);
   }
 
   async function selectAccount(toolkit: ComposioToolkitSummary, accountId: string): Promise<void> {
@@ -258,19 +318,23 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
   }
 
   async function loadLatestState(): Promise<void> {
+    const version = credentialVersion.current;
     try {
-      applySettings(await window.modus.composio.getState());
+      const next = await window.modus.composio.getState();
+      if (version === credentialVersion.current) applySettings(next);
     } catch (error) {
-      setLocalError(errorMessage(error));
+      if (version === credentialVersion.current) setLocalError(errorMessage(error));
     }
   }
 
   async function pollConnection(operationId: string): Promise<void> {
+    const version = credentialVersion.current;
     for (let attempt = 0; attempt < CONNECTION_POLL_ATTEMPTS; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, CONNECTION_POLL_INTERVAL_MS));
-      if (!mounted.current) return;
+      if (!mounted.current || version !== credentialVersion.current) return;
       try {
         const next = await window.modus.composio.getConnectionOperation({ operationId });
+        if (version !== credentialVersion.current) return;
         setOperation(next);
         if (next.status !== "pending") {
           if (next.status === "active") await loadLatestState();
@@ -364,30 +428,42 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
               onClick={() => void refreshCatalog()}
               type="button"
             >
-              <IconRefresh size={14} /> Atualizar catálogo
+              <IconRefresh size={14} /> Refresh catalog
             </button>
           ) : null
         }
-        description="Conecte integrações de plataformas e escolha quais contas e operações os agentes podem usar."
+        description={
+          consumerMode
+            ? "Choose which Composio For You MCP tools agents can use with your personal connected apps."
+            : "Connect Composio For You or Platform and choose which tools agents can use."
+        }
         title={standalone ? "Connections" : "Composio"}
       />
 
       <SettingsSection
-        description="Armazenada com segurança neste dispositivo e nunca exibida novamente. Cada conta de plataforma ainda requer sua própria autorização."
-        title="Project API Key"
+        description="Stored securely on this device and never displayed again. The connection mode is detected automatically from your key."
+        title="Composio API Key"
       >
         <SettingsList>
+          <p className="border-hairline-soft border-b px-4 py-3 text-xs text-fg-muted">
+            Use a Composio For You key (ck_…) from Settings → Sessions &amp; API Key, or a Composio
+            Platform Project API Key from your project → Settings → API Keys.
+          </p>
           <form
             className="flex flex-col gap-3 p-4 sm:flex-row"
             onSubmit={(event) => void saveApiKey(event)}
           >
             <label className="flex-1 text-xs text-fg-muted">
-              <span className="mb-1.5 block">Composio Project API Key</span>
+              <span className="mb-1.5 block">Composio API Key</span>
               <input
                 autoComplete="new-password"
                 className="h-9 w-full rounded-md border border-hairline-soft bg-canvas px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
                 onChange={(event) => setApiKey(event.target.value)}
-                placeholder={settings?.apiKeyConfigured ? "Insira uma chave substituta" : "cmp_…"}
+                placeholder={
+                  settings?.apiKeyConfigured
+                    ? "Enter a replacement key"
+                    : "Paste a For You or Platform Project API Key"
+                }
                 type="password"
                 value={apiKey}
               />
@@ -399,10 +475,10 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                 type="submit"
               >
                 {saving === "api-key"
-                  ? "Salvando…"
+                  ? "Saving…"
                   : settings?.apiKeyConfigured
-                    ? "Substituir chave"
-                    : "Salvar chave"}
+                    ? "Replace key"
+                    : "Save key"}
               </button>
               {settings?.apiKeyConfigured ? (
                 <button
@@ -411,20 +487,23 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                   onClick={() => setShowRemoveKey((shown) => !shown)}
                   type="button"
                 >
-                  Remover chave
+                  Remove key
                 </button>
               ) : null}
             </div>
           </form>
           {settings?.apiKeyConfigured ? (
             <div className="border-hairline-soft border-t px-4 py-3 text-xs text-success">
-              A chave está configurada neste perfil local e não pode ser lida novamente.
+              <p>The key is configured for this local profile and cannot be read back.</p>
+              <p className="mt-1">
+                Connected mode: {consumerMode ? "Composio For You" : "Composio Platform"}
+              </p>
             </div>
           ) : null}
           {showRemoveKey ? (
             <div className="flex items-center justify-between gap-3 border-hairline-soft border-t px-4 py-3">
               <p className="text-xs text-fg-muted">
-                Remover a chave local? As contas Composio conectadas permanecem no provedor.
+                Remove the local key? Connected accounts will remain in Composio.
               </p>
               <div className="flex gap-2">
                 <button
@@ -432,7 +511,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                   onClick={() => setShowRemoveKey(false)}
                   type="button"
                 >
-                  Cancelar
+                  Cancel
                 </button>
                 <button
                   className="rounded-md bg-danger/15 px-2.5 py-1.5 text-xs text-danger hover:bg-danger/25"
@@ -440,7 +519,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
                   onClick={() => void removeApiKey()}
                   type="button"
                 >
-                  Confirmar remoção
+                  Confirm removal
                 </button>
               </div>
             </div>
@@ -449,26 +528,32 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
       </SettingsSection>
 
       <SettingsSection
-        description="Diagnostica separadamente a API e a conexão da sessão MCP, sem habilitar ferramentas."
-        title="Diagnóstico de conexão"
+        description={
+          consumerMode
+            ? "Check the Composio For You MCP connection without enabling tools."
+            : "Check API access and MCP session connectivity separately without enabling tools."
+        }
+        title="Connection diagnostics"
       >
         <SettingsList>
           <div className="flex flex-wrap items-center gap-3 p-4">
             <button
               className="h-9 rounded-md bg-active px-3 text-sm text-fg hover:bg-hover disabled:opacity-50"
-              disabled={checkingConnectivity || !settings?.apiKeyConfigured}
+              disabled={checkingConnectivity || saving !== undefined || !settings?.apiKeyConfigured}
               onClick={() => void diagnoseConnection()}
               type="button"
             >
-              {checkingConnectivity ? "Testando conexão…" : "Testar conexão"}
+              {checkingConnectivity ? "Testing connection…" : "Test connection"}
             </button>
             {diagnostic ? (
               <div aria-live="polite" className="flex flex-col gap-1 text-xs">
                 <span className={diagnostic.apiReachable ? "text-success" : "text-danger"}>
-                  API Composio: {diagnostic.apiReachable ? "acessível" : "indisponível"}
+                  {consumerMode ? "Composio For You MCP" : "Composio API"}:{" "}
+                  {diagnostic.apiReachable ? "reachable" : "unavailable"}
                 </span>
                 <span className={diagnostic.mcpSessionReady ? "text-success" : "text-danger"}>
-                  Sessão MCP: {diagnostic.mcpSessionReady ? "conectada" : "não conectada"}
+                  {consumerMode ? "MCP connection" : "MCP session"}:{" "}
+                  {diagnostic.mcpSessionReady ? "connected" : "not connected"}
                 </span>
                 {diagnostic.error ? (
                   <span className="max-w-xl break-words text-danger">
@@ -483,7 +568,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
 
       {currentError ? (
         <div
-          aria-label="Falha na integração Composio"
+          aria-label="Composio integration error"
           className="rounded-md border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
           role="alert"
         >
@@ -491,17 +576,133 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
         </div>
       ) : null}
 
-      {settings?.apiKeyConfigured ? (
+      {settings?.apiKeyConfigured && consumerMode ? (
         <SettingsSection
-          description="As contas são compartilhadas por este perfil local. Os agentes só veem a conta ativa e as operações que você permitir."
-          title="Plataformas e permissões"
+          description="MCP discovery and execution tools can access your personal connected apps. Selection controls which MCP tools agents can call; it does not restrict the app actions available inside an execution tool. Manage connected apps in Composio For You."
+          title="Composio For You tools"
+        >
+          <SettingsList>
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div>
+                <p className="text-xs text-fg">Allowed MCP tools</p>
+                <p className="mt-1 text-xs text-fg-muted">
+                  {consumerSelectedToolSlugs.length} selected · select tools, then explicitly enable
+                  them for agents.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-md px-2.5 py-1.5 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50"
+                  disabled={
+                    saving !== undefined ||
+                    everyVisibleConsumerToolSelected ||
+                    visibleConsumerTools.length === 0
+                  }
+                  onClick={() =>
+                    void saveConsumerPolicy([
+                      ...new Set([
+                        ...consumerSelectedToolSlugs,
+                        ...visibleConsumerTools.map((tool) => tool.slug),
+                      ]),
+                    ])
+                  }
+                  type="button"
+                >
+                  Select all
+                </button>
+                <button
+                  className="rounded-md px-2.5 py-1.5 text-xs text-fg-muted hover:bg-hover hover:text-fg disabled:opacity-50"
+                  disabled={saving !== undefined || consumerSelectedToolSlugs.length === 0}
+                  onClick={() => void saveConsumerPolicy([], false)}
+                  type="button"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <div className="border-hairline-soft border-t px-4 py-3">
+              <label className="block">
+                <span className="sr-only">Search Composio For You tools</span>
+                <input
+                  className="h-8 w-full rounded-md border border-hairline-soft bg-canvas px-2.5 text-xs text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
+                  onChange={(event) => setConsumerQuery(event.target.value)}
+                  placeholder="Search MCP tools…"
+                  value={consumerQuery}
+                />
+              </label>
+              {visibleConsumerTools.length ? (
+                <div className="mt-2 max-h-72 divide-y divide-hairline-soft overflow-y-auto rounded-md border border-hairline-soft">
+                  {visibleConsumerTools.map((tool) => (
+                    <label
+                      className="flex cursor-pointer items-start gap-2.5 px-3 py-2.5 hover:bg-hover"
+                      key={tool.slug}
+                    >
+                      <input
+                        checked={consumerSelectedToolSlugs.includes(tool.slug)}
+                        className="mt-0.5 accent-[var(--color-focus-ring)]"
+                        disabled={saving !== undefined}
+                        onChange={(event) =>
+                          void toggleConsumerTool(tool.slug, event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs text-fg">{tool.name}</span>
+                        <span className="mt-0.5 block break-words font-mono text-[10px] text-fg-faint">
+                          {tool.slug}
+                        </span>
+                        {tool.description ? (
+                          <span className="mt-1 block text-[11px] text-fg-muted">
+                            {tool.description}
+                          </span>
+                        ) : null}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-fg-muted">
+                  {consumerTools.length
+                    ? "No MCP tools match your search."
+                    : "No MCP tools discovered yet. Refresh the catalog to try again."}
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-hairline-soft border-t p-4">
+              <div>
+                <p className="text-xs text-fg">Allow agents to use Composio For You</p>
+                <p className="mt-1 text-[11px] text-fg-faint">
+                  Requires at least one selected MCP tool. Tools remain disabled until you enable
+                  them here.
+                </p>
+              </div>
+              <label className="inline-flex items-center gap-2 text-xs text-fg">
+                <input
+                  aria-checked={consumer?.enabled ?? false}
+                  checked={consumer?.enabled ?? false}
+                  disabled={saving !== undefined || consumerSelectedToolSlugs.length === 0}
+                  onChange={(event) =>
+                    void saveConsumerPolicy(consumerSelectedToolSlugs, event.target.checked)
+                  }
+                  role="switch"
+                  type="checkbox"
+                />
+                Enable for agents
+              </label>
+            </div>
+          </SettingsList>
+        </SettingsSection>
+      ) : settings?.apiKeyConfigured ? (
+        <SettingsSection
+          description="Accounts are shared within this local profile. Agents only see the active account and the operations you allow."
+          title="Platforms and permissions"
         >
           <label className="relative block">
-            <span className="sr-only">Buscar plataformas</span>
+            <span className="sr-only">Search platforms</span>
             <input
               className="h-9 w-full rounded-md border border-hairline-soft bg-panel px-3 text-sm text-fg outline-none placeholder:text-fg-faint focus-visible:ring-2 focus-visible:ring-focus-ring/35"
               onChange={(event) => setCatalogQuery(event.target.value)}
-              placeholder="Buscar plataformas…"
+              placeholder="Search platforms…"
               value={catalogQuery}
             />
           </label>
@@ -880,7 +1081,7 @@ export function IntegrationsSettingsPanel({ standalone = false }: { standalone?:
       ) : (
         <div className="rounded-lg border border-dashed border-hairline-soft bg-panel px-5 py-8 text-center">
           <IconPlugConnected className="mx-auto text-fg-faint" size={22} />
-          <p className="mt-3 text-sm text-fg">Add a Project API Key to connect platforms</p>
+          <p className="mt-3 text-sm text-fg">Add a Composio API Key to connect your apps</p>
           <p className="mt-1 text-xs text-fg-muted">
             The generic MCP settings remain available separately for custom servers.
           </p>
