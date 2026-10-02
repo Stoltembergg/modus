@@ -14,6 +14,7 @@ import {
 import { messageExecutionId } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
+import { groupMemberCardText, groupStatusLabel } from "../../../../shared/group-room-locale";
 import {
   collabStatusTone,
   extractUsefulSources,
@@ -234,8 +235,10 @@ function MessageMeta({
   message,
   executionTokenTotal,
   onExecutionFilter,
+  locale,
 }: {
   message: GroupMessage;
+  locale?: string | null | undefined;
   executionTokenTotal?: number | undefined;
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
 }) {
@@ -279,14 +282,19 @@ function MessageMeta({
       </span>
     );
   }
-  const label = {
-    queued: "Queued",
-    awaiting_user: "Waiting for you",
-    completed: "Completed",
-    failed: "Failed",
-    cancelled: "Cancelled",
-    interrupted: "Interrupted",
-  }[status];
+  const label = groupStatusLabel(
+    (
+      {
+        queued: "queued",
+        awaiting_user: "waitingForYou",
+        completed: "completed",
+        failed: "failed",
+        cancelled: "cancelled",
+        interrupted: "interrupted",
+      } as const
+    )[status],
+    locale,
+  );
   const warning = status === "failed" || status === "interrupted";
   return (
     <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
@@ -396,16 +404,19 @@ function MessageError({ message }: { message: GroupMessage }) {
   );
 }
 
-function fallbackProgressLabel(status: GroupMessage["status"]): string | undefined {
+function fallbackProgressLabel(
+  status: GroupMessage["status"],
+  locale?: string | null,
+): string | undefined {
   switch (status) {
     case "queued":
-      return "Waiting for its turn";
+      return groupMemberCardText("waitingForTurn", locale);
     case "running":
-      return "Working on the task";
+      return groupMemberCardText("workingOnTask", locale);
     case "writing":
-      return "Writing a reply";
+      return groupMemberCardText("writingReply", locale);
     case "awaiting_user":
-      return "Waiting for you";
+      return groupStatusLabel("waitingForYou", locale);
     default:
       return undefined;
   }
@@ -429,6 +440,7 @@ export function GroupMessageRow({
   replyToMessage,
   executionTokenTotal,
   delivery,
+  locale,
 }: {
   message: GroupMessage;
   replyToMessage?: GroupMessage | undefined;
@@ -455,6 +467,8 @@ export function GroupMessageRow({
   streaming?: boolean | undefined;
   /** Delivery footer (queued / delivered / working / answered), derived by the list. */
   delivery?: GroupDelivery | undefined;
+  /** Room locale override (tests); defaults to the browser locale like the rest of the room. */
+  locale?: string | null | undefined;
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
@@ -575,6 +589,7 @@ export function GroupMessageRow({
               trailing={
                 <MessageMeta
                   executionTokenTotal={executionTokenTotal}
+                  locale={locale}
                   message={message}
                   onExecutionFilter={onExecutionFilter}
                 />
@@ -590,7 +605,9 @@ export function GroupMessageRow({
             <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
-        {delivery ? <GroupDeliveryFooter align="end" delivery={delivery} labels={labels} /> : null}
+        {delivery ? (
+          <GroupDeliveryFooter align="end" delivery={delivery} labels={labels} locale={locale} />
+        ) : null}
         <MessageActions align="end" copyText={message.body} message={message} onReply={onReply} />
       </div>
     );
@@ -611,7 +628,9 @@ export function GroupMessageRow({
     rawStatuses.some((status) => status.kind === "ready") &&
     statuses.length === 0;
   const fallbackProgress =
-    !liveTurn && message.authorKind === "agent" ? fallbackProgressLabel(message.status) : undefined;
+    !liveTurn && message.authorKind === "agent"
+      ? fallbackProgressLabel(message.status, locale)
+      : undefined;
   // Hide Planner→peer handoff dumps that have no user-facing prose.
   if (
     !writing &&
@@ -689,6 +708,7 @@ export function GroupMessageRow({
                 ) : null}
                 <MessageMeta
                   executionTokenTotal={executionTokenTotal}
+                  locale={locale}
                   message={message}
                   onExecutionFilter={onExecutionFilter}
                 />
@@ -736,7 +756,10 @@ export function GroupMessageRow({
               onClick={() => void retry()}
               type="button"
             >
-              {retrying ? "Sending…" : message.status === "failed" ? "Retry task" : "Resume task"}
+              {groupMemberCardText(
+                retrying ? "sending" : message.status === "failed" ? "retryTask" : "resumeTask",
+                locale,
+              )}
             </button>
           ) : null}
           {retryError ? (
@@ -755,7 +778,9 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
-      {delivery ? <GroupDeliveryFooter align="start" delivery={delivery} labels={labels} /> : null}
+      {delivery ? (
+        <GroupDeliveryFooter align="start" delivery={delivery} labels={labels} locale={locale} />
+      ) : null}
       <MessageActions
         align="start"
         copyText={prose || message.body}

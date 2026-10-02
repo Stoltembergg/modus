@@ -100,7 +100,7 @@ export function GroupDeliveryFooter({
   delivery: GroupDelivery;
   labels: ReadonlyMap<string, MemberLabel>;
   align: "start" | "end";
-  locale?: string | null;
+  locale?: string | null | undefined;
 }) {
   const { state, members } = delivery;
   const Icon = DELIVERY_ICON[state];
