@@ -4,9 +4,9 @@ import {
   IconPlugConnected,
   IconSettings,
 } from "@tabler/icons-react";
-import modusLogo from "../../assets/modus-logo.png";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { ModusBot } from "../ui/ModusBot";
 import type { PrimaryDestination } from "./navigation-state";
 
 export type { PrimaryDestination } from "./navigation-state";
@@ -35,8 +35,8 @@ export function AppRail({
       data-top-chrome-clearance={topChromeClearance ? "true" : undefined}
       data-shell-layer="app-rail"
     >
-      <div className="app-rail-mark" title="Modus">
-        <img alt="Modus" className="size-5 object-contain" src={modusLogo} />
+      <div className="app-rail-mark" data-testid="app-rail-brand" title="Modus">
+        <ModusBot className="size-5" motionScale={0.25} />
       </div>
       <div className="flex flex-col gap-1">
         {DESTINATIONS.map(({ id, icon: Icon, label }) => (

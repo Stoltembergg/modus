@@ -27,6 +27,8 @@ type ModusBotProps = {
   className?: string;
   /** Run the animation loop. When false, the bot settles into a static rest pose. Defaults to true. */
   active?: boolean;
+  /** Scales pixel-distance motion for compact placements such as the app rail. */
+  motionScale?: number;
   /**
    * "Busy" cadence — continuous walk↔hop with tight beats, for the
    * "Working for Xs" indicator. When false, a calmer idle-led personality loop.
@@ -38,6 +40,7 @@ type ModusBotProps = {
 export const ModusBot = memo(function ModusBot({
   className,
   active = true,
+  motionScale = 1,
   busy = false,
   color = PURPLE,
 }: ModusBotProps) {
@@ -80,7 +83,7 @@ export const ModusBot = memo(function ModusBot({
         .finished;
     }
     async function lookAround() {
-      const dir = Math.random() < 0.5 ? -2.5 : 2.5;
+      const dir = (Math.random() < 0.5 ? -2.5 : 2.5) * motionScale;
       await run(
         animate(
           "#mb-eyes",
@@ -116,7 +119,7 @@ export const ModusBot = memo(function ModusBot({
     async function walk() {
       const step = 0.34;
       const reps = 3;
-      const lift = { y: [0, -2.6, 0] };
+      const lift = { y: [0, -2.6 * motionScale, 0] };
       const legOpts = { duration: step, repeat: reps, ease: "easeInOut" as const };
       run(animate("#mb-leg-1", lift, legOpts));
       run(animate("#mb-leg-2", lift, { ...legOpts, delay: step / 3 }));
@@ -124,7 +127,7 @@ export const ModusBot = memo(function ModusBot({
       run(
         animate(
           "#mb-body",
-          { y: [0, -0.9, 0] },
+          { y: [0, -0.9 * motionScale, 0] },
           { duration: step / 2, repeat: reps * 2, ease: "easeInOut" },
         ),
       );
@@ -145,15 +148,17 @@ export const ModusBot = memo(function ModusBot({
         run(
           animate(
             "#mb-body",
-            { scaleY: 0.82, scaleX: 1.08, y: 2 },
+            { scaleY: 0.82, scaleX: 1.08, y: 2 * motionScale },
             { duration: 0.12, ease: "easeIn" },
           ),
         ).finished,
-        run(animate("#mb-legs", { y: 2 }, { duration: 0.12, ease: "easeIn" })).finished,
+        run(animate("#mb-legs", { y: 2 * motionScale }, { duration: 0.12, ease: "easeIn" }))
+          .finished,
       ]);
       // Launch up + stretch (sine-out feel = gravity decel on the way up).
       await Promise.all([
-        run(animate("#mb-root", { y: -15 }, { duration: 0.3, ease: "circOut" })).finished,
+        run(animate("#mb-root", { y: -15 * motionScale }, { duration: 0.3, ease: "circOut" }))
+          .finished,
         run(
           animate(
             "#mb-body",
@@ -161,7 +166,8 @@ export const ModusBot = memo(function ModusBot({
             { duration: 0.2, ease: "easeOut" },
           ),
         ).finished,
-        run(animate("#mb-legs", { y: -1.5 }, { duration: 0.2, ease: "easeOut" })).finished,
+        run(animate("#mb-legs", { y: -1.5 * motionScale }, { duration: 0.2, ease: "easeOut" }))
+          .finished,
       ]);
       // Fall (power-in feel = gravity accel on the way down).
       await run(animate("#mb-root", { y: 0 }, { duration: 0.24, ease: "circIn" })).finished;
@@ -170,11 +176,16 @@ export const ModusBot = memo(function ModusBot({
         run(
           animate(
             "#mb-body",
-            { scaleY: [0.78, 1.06, 1], scaleX: [1.12, 0.97, 1], y: [2, 0, 0] },
+            {
+              scaleY: [0.78, 1.06, 1],
+              scaleX: [1.12, 0.97, 1],
+              y: [2 * motionScale, 0, 0],
+            },
             { duration: 0.34, ease: "easeOut", times: [0, 0.55, 1] },
           ),
         ).finished,
-        run(animate("#mb-legs", { y: [1.5, 0] }, { duration: 0.22, ease: "easeOut" })).finished,
+        run(animate("#mb-legs", { y: [1.5 * motionScale, 0] }, { duration: 0.22, ease: "easeOut" }))
+          .finished,
       ]);
     }
 
@@ -211,7 +222,7 @@ export const ModusBot = memo(function ModusBot({
         controls.stop();
       }
     };
-  }, [animate, prefersReduced, active, busy]);
+  }, [animate, prefersReduced, active, busy, motionScale]);
 
   return (
     <svg

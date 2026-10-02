@@ -82,6 +82,20 @@ describe("Modus semantic design tokens", () => {
     expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
   });
 
+  it("adds only a light translucent tint to app surfaces", () => {
+    expect(css).toMatch(
+      /--surface-app:\s*color-mix\(in srgb, var\(--color-panel\) 97%, transparent\)/,
+    );
+    expect(css).toMatch(
+      /--surface-sidebar:\s*color-mix\(in srgb, var\(--color-panel\) 94%, transparent\)/,
+    );
+    expect(css).toMatch(
+      /--surface-main:\s*color-mix\(in srgb, var\(--color-canvas\) 98%, transparent\)/,
+    );
+    const mainSurface = css.match(/(?:^|\n)\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
+    expect(mainSurface).not.toContain("backdrop-filter");
+  });
+
   it("keeps the Groups prompt bar focus treatment neutral and its toolbar integrated", () => {
     const focusState = css.match(/\.group-prompt-bar:focus-within\s*\{([^}]+)\}/)?.[1] ?? "";
 
@@ -142,8 +156,12 @@ describe("Modus semantic design tokens", () => {
   it("uses the same semantic surface aliases in dark, light, and dark-plus themes", () => {
     expect(css).toContain(':root[data-theme="light"]');
     expect(css).toContain(':root[data-theme="dark-plus"]');
-    expect(css).toMatch(/--surface-app:\s*var\(--color-panel\)/);
-    expect(css).toMatch(/--surface-sidebar:\s*var\(--color-panel\)/);
+    expect(css).toMatch(
+      /--surface-app:\s*color-mix\(in srgb, var\(--color-panel\) 97%, transparent\)/,
+    );
+    expect(css).toMatch(
+      /--surface-sidebar:\s*color-mix\(in srgb, var\(--color-panel\) 94%, transparent\)/,
+    );
     expect(css).toMatch(/--surface-raised:\s*var\(--color-elevated\)/);
   });
 });

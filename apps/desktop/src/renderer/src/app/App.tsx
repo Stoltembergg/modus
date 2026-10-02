@@ -63,7 +63,6 @@ import { TopBar } from "../components/shell/TopBar";
 import { Aurora } from "../components/ui/Aurora";
 import { FadeContent } from "../components/ui/FadeContent";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
-import { ModusBot } from "../components/ui/ModusBot";
 import { ModusLoadingFallback } from "../components/ui/ModusLoadingMark";
 import { NativeSurfaceProvider } from "../components/ui/nativeSurface";
 import { TOOLBAR_ICON, ToolbarButton } from "../components/ui/ToolbarButton";
@@ -1612,9 +1611,6 @@ export function App() {
                                 speed={0.85}
                               />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
-                                <div className="mb-5 flex justify-center">
-                                  <ModusBot className="size-20" />
-                                </div>
                                 <Composer
                                   onOpenConnections={openConnections}
                                   canSubmit={canCreateSession}

@@ -69,7 +69,11 @@ describe("App shell", () => {
     expect(within(navigation).getByRole("button", { name: "Groups" })).toBeTruthy();
     const connections = within(navigation).getByRole("button", { name: "Connections" });
     expect(within(navigation).queryByText("Connections")).toBeNull();
-    expect(within(navigation).getByRole("img", { name: "Modus" })).toBeTruthy();
+    const brand = within(navigation).getByTestId("app-rail-brand");
+    const mascot = within(brand).getByRole("img", { name: "Modus" });
+    expect(mascot.tagName.toLowerCase()).toBe("svg");
+    expect(mascot.classList.contains("size-5")).toBe(true);
+    expect(brand.querySelector("img")).toBeNull();
     expect(directMessages.getAttribute("title")).toBe("Direct Messages");
     fireEvent.click(connections);
     expect(onNavigate).toHaveBeenCalledWith("connections");
