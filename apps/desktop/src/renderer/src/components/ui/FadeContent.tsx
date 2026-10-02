@@ -44,7 +44,10 @@ export function FadeContent({
               filter: blur ? "blur(10px)" : "blur(0px)",
             }
       }
-      animate={{ opacity: 1, filter: "blur(0px)" }}
+      // Keep the post-animation value as `none`: even blur(0px) establishes a
+      // backdrop root and prevents nested glass surfaces from sampling native
+      // window vibrancy behind this wrapper.
+      animate={{ opacity: 1, filter: "none" }}
       transition={{
         duration: reduce ? 0 : seconds,
         delay: reduce ? 0 : delaySeconds,
