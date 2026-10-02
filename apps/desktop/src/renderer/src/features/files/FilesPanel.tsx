@@ -37,7 +37,9 @@ import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { MarkdownExcerptPreview } from "../preview/MarkdownExcerptPreview";
 import { PreviewHost } from "../preview/PreviewHost";
 import { materialIconForEntry } from "./fileIcons";
+import { FILES_DIRTY_COPY } from "./filesDirtyCopy";
 import { hasLiveFilesWatch } from "./hasLiveFilesWatch";
+import { UnsavedChangesDialog } from "./UnsavedChangesDialog";
 
 /**
  * VS-Code-style file panel: a lazy directory tree on the left, Monaco editor
@@ -63,6 +65,17 @@ type FilesPanelProps = {
 };
 
 type FlatNode = { entry: FileEntry; depth: number };
+
+/** A switch away from a dirty file, waiting on Save / Discard / Cancel (C2.2). */
+type PendingSwitch = { proceed: () => void };
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function fileNameOf(file: FileReadResult | undefined): string {
+  return file?.relativePath.split("/").filter(Boolean).at(-1) ?? "";
+}
 
 const DEFAULT_TREE_WIDTH = 240;
 const MIN_TREE_WIDTH = 180;
@@ -123,6 +136,23 @@ export function FilesPanel({
   const [fileError, setFileError] = useState<string | undefined>();
   const [query, setQuery] = useState("");
   const [wordWrap, setWordWrap] = useState(false);
+  /** Reveal of the open dirty file kept the draft: the line may have moved. */
+  const [keptDraftNotice, setKeptDraftNotice] = useState(false);
+  const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | undefined>();
+  const [switchError, setSwitchError] = useState<string | undefined>();
+  const [switchBusy, setSwitchBusy] = useState(false);
+
+  const dirty =
+    selectedFile !== undefined &&
+    savedContent !== undefined &&
+    draftContent !== undefined &&
+    draftContent !== savedContent;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  // Read via ref: the parent passes an inline callback, which must not re-run
+  // the reveal effect (that would re-read / re-prompt on every parent render).
+  const onRevealConsumedRef = useRef(onRevealConsumed);
+  onRevealConsumedRef.current = onRevealConsumed;
 
   // Tree width as a motion value (live drag writes straight to the DOM, no React
   // re-render per frame) + the committed width that the open animation targets.
@@ -168,6 +198,9 @@ export function FilesPanel({
     setSavedContent(undefined);
     setDraftContent(undefined);
     setFileError(undefined);
+    setKeptDraftNotice(false);
+    setPendingSwitch(undefined);
+    setSwitchError(undefined);
     if (!cwd) {
       return;
     }
@@ -266,10 +299,12 @@ export function FilesPanel({
             ) {
               return;
             }
+            // Out of scope for C2.2: disk / AI still wins over a dirty draft here.
             setSelectedFile(file);
             setSavedContent(nextText);
             setDraftContent(nextText);
             setFileError(undefined);
+            setKeptDraftNotice(false);
           } catch (error: unknown) {
             if (cancelled) {
               return;
@@ -356,15 +391,17 @@ export function FilesPanel({
     [childrenByPath, cwd],
   );
 
-  const openFile = useCallback(
-    (entry: FileEntry) => {
+  /** Load a file from disk into the viewer (drops any draft: callers guard). */
+  const loadFile = useCallback(
+    (path: string) => {
       if (!cwd) {
         return;
       }
       setFileError(undefined);
       setLineTarget(undefined);
+      setKeptDraftNotice(false);
       void window.modus.files
-        .read({ cwd, path: entry.path })
+        .read({ cwd, path })
         .then((file: FileReadResult) => {
           setSelectedFile(file);
           setSavedContent(file.binary || file.truncated ? undefined : file.content);
@@ -374,61 +411,140 @@ export function FilesPanel({
           setSelectedFile(undefined);
           setSavedContent(undefined);
           setDraftContent(undefined);
-          setFileError(error instanceof Error ? error.message : String(error));
+          setFileError(errorText(error));
         });
     },
     [cwd],
   );
 
-  // External reveal (chat file chip): expand ancestors + open the file.
+  /**
+   * Run `proceed` now, or, when the open file is dirty and `targetPath` is a
+   * different file, only after Save / Discard (Cancel drops it).
+   */
+  const guardSwitch = useCallback((targetPath: string, proceed: () => void) => {
+    const current = selectedPathRef.current;
+    if (dirtyRef.current && current && !samePath(current, targetPath)) {
+      setSwitchError(undefined);
+      setPendingSwitch({ proceed });
+      return;
+    }
+    proceed();
+  }, []);
+
+  const openFile = useCallback(
+    (entry: FileEntry) => {
+      if (!cwd) {
+        return;
+      }
+      const current = selectedPathRef.current;
+      // Re-clicking the open dirty file keeps the draft (it used to reload it).
+      if (dirtyRef.current && current && samePath(current, entry.path)) {
+        return;
+      }
+      guardSwitch(entry.path, () => loadFile(entry.path));
+    },
+    [cwd, guardSwitch, loadFile],
+  );
+
+  /** Expand the tree down to `file` (reveal). False when cancelled midway. */
+  const expandAncestors = useCallback(
+    async (file: FileReadResult, isCancelled: () => boolean): Promise<boolean> => {
+      if (!cwd) return false;
+      const parts = file.relativePath.split("/").filter(Boolean);
+      let acc = "";
+      for (let i = 0; i < parts.length - 1; i += 1) {
+        acc = acc ? `${acc}/${parts[i]}` : (parts[i] ?? "");
+        const entries = await window.modus.files.list({ cwd, dir: acc });
+        if (isCancelled()) {
+          return false;
+        }
+        const dirAbs = joinWorkspacePath(cwd, acc);
+        setChildrenByPath((map) => new Map(map).set(dirAbs, entries));
+        setExpanded((set) => new Set(set).add(dirAbs));
+      }
+      return true;
+    },
+    [cwd],
+  );
+
+  const showRevealed = useCallback(
+    async (
+      file: FileReadResult,
+      line: { line: number; key: number } | undefined,
+      isCancelled: () => boolean,
+    ) => {
+      if (!(await expandAncestors(file, isCancelled))) {
+        return;
+      }
+      setSelectedFile(file);
+      setSavedContent(file.binary || file.truncated ? undefined : file.content);
+      setDraftContent(file.binary || file.truncated ? undefined : file.content);
+      setFileError(undefined);
+      setKeptDraftNotice(false);
+      setLineTarget(line);
+    },
+    [expandAncestors],
+  );
+
+  // External reveal (search result row or chat file chip): expand ancestors +
+  // open the file. C2.2: the open dirty file keeps its draft (jump + notice);
+  // a different file while dirty asks Save / Discard / Cancel first. The reveal
+  // is always consumed, so the next click on the same result fires again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per cwd; consumed via ref.
   useEffect(() => {
     if (!cwd || !revealPath) {
       return;
     }
     let cancelled = false;
+    const isCancelled = () => cancelled;
     void (async () => {
       try {
         const file = await window.modus.files.read({ cwd, path: revealPath });
         if (cancelled) {
           return;
         }
-        const parts = file.relativePath.split("/").filter(Boolean);
-        let acc = "";
-        for (let i = 0; i < parts.length - 1; i += 1) {
-          acc = acc ? `${acc}/${parts[i]}` : (parts[i] ?? "");
-          const entries = await window.modus.files.list({ cwd, dir: acc });
-          if (cancelled) {
+        const line = revealLineRef.current;
+        const current = selectedPathRef.current;
+        if (dirtyRef.current && current && samePath(current, file.path)) {
+          // Same file with unsaved edits: keep the draft, just jump.
+          if (!(await expandAncestors(file, isCancelled))) {
             return;
           }
-          const dirAbs = joinWorkspacePath(cwd, acc);
-          setChildrenByPath((map) => new Map(map).set(dirAbs, entries));
-          setExpanded((set) => new Set(set).add(dirAbs));
+          setFileError(undefined);
+          setLineTarget(line);
+          setKeptDraftNotice(true);
+          return;
         }
-        setSelectedFile(file);
-        setSavedContent(file.binary || file.truncated ? undefined : file.content);
-        setDraftContent(file.binary || file.truncated ? undefined : file.content);
-        setFileError(undefined);
-        setLineTarget(revealLineRef.current);
+        if (dirtyRef.current && current && !samePath(current, file.path)) {
+          // Different file while dirty: ask first. Proceeding re-reads, since
+          // the dialog may have been open for a while.
+          setSwitchError(undefined);
+          setPendingSwitch({
+            proceed: () => {
+              void window.modus.files
+                .read({ cwd, path: file.path })
+                .then((fresh: FileReadResult) => showRevealed(fresh, line, () => false))
+                .catch((error: unknown) => setFileError(errorText(error)));
+            },
+          });
+          return;
+        }
+        // Clean (or nothing open): exactly as before.
+        await showRevealed(file, line, isCancelled);
       } catch (error: unknown) {
         if (!cancelled) {
-          setFileError(error instanceof Error ? error.message : String(error));
+          setFileError(errorText(error));
         }
       } finally {
         if (!cancelled) {
-          onRevealConsumed?.();
+          onRevealConsumedRef.current?.();
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [cwd, revealPath, onRevealConsumed]);
-
-  const dirty =
-    selectedFile !== undefined &&
-    savedContent !== undefined &&
-    draftContent !== undefined &&
-    draftContent !== savedContent;
+  }, [cwd, revealPath]);
 
   const saveFile = useCallback(async () => {
     if (!cwd || !selectedFile || draftContent === undefined) {
@@ -443,6 +559,7 @@ export function FilesPanel({
       content: draftContent,
     });
     setSavedContent(draftContent);
+    setKeptDraftNotice(false);
     setSelectedFile({
       ...selectedFile,
       content: draftContent,
@@ -451,6 +568,37 @@ export function FilesPanel({
       binary: false,
     });
   }, [cwd, draftContent, selectedFile]);
+
+  const resolveSwitch = useCallback(
+    async (choice: "save" | "discard" | "cancel") => {
+      const pending = pendingSwitch;
+      if (!pending) return;
+      if (choice === "cancel") {
+        setPendingSwitch(undefined);
+        setSwitchError(undefined);
+        return;
+      }
+      if (choice === "save") {
+        setSwitchBusy(true);
+        setSwitchError(undefined);
+        try {
+          await saveFile();
+        } catch (error: unknown) {
+          // Stay on the current file, draft intact, error shown; no switch.
+          setSwitchError(errorText(error));
+          return;
+        } finally {
+          setSwitchBusy(false);
+        }
+      } else {
+        setDraftContent(savedContent);
+      }
+      setPendingSwitch(undefined);
+      setSwitchError(undefined);
+      pending.proceed();
+    },
+    [pendingSwitch, saveFile, savedContent],
+  );
 
   // Flatten the expanded tree into the visible rows (DFS, dirs already sorted).
   const rows = useMemo<FlatNode[]>(() => {
@@ -573,6 +721,16 @@ export function FilesPanel({
         ) : null}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {keptDraftNotice && dirty ? (
+            <div
+              className="flex shrink-0 items-center gap-1.5 border-hairline-soft border-b px-3 py-1 text-2xs text-fg-muted"
+              data-kept-draft-notice=""
+              role="status"
+            >
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-fg-muted/70" />
+              {FILES_DIRTY_COPY.keptDraftNotice}
+            </div>
+          ) : null}
           <FileViewer
             cwd={cwd}
             error={fileError}
@@ -585,6 +743,15 @@ export function FilesPanel({
           />
         </div>
       </div>
+      <UnsavedChangesDialog
+        busy={switchBusy}
+        error={switchError}
+        fileName={fileNameOf(selectedFile)}
+        onCancel={() => void resolveSwitch("cancel")}
+        onDiscard={() => void resolveSwitch("discard")}
+        onSave={() => void resolveSwitch("save")}
+        open={pendingSwitch !== undefined}
+      />
     </div>
   );
 }
