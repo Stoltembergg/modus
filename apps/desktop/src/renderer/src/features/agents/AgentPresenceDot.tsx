@@ -36,6 +36,7 @@ export function AgentPresenceDot({
         className,
       )}
       data-presence={state}
+      title={AGENT_PRESENCE_LABEL[state]}
     />
   );
 }

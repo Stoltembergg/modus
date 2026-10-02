@@ -618,6 +618,11 @@ describe("GroupRoom", () => {
     expect(presence.querySelector('[data-presence="waiting"]')).toBeTruthy();
     expect(presence.querySelector('[data-presence="archived"]')).toBeTruthy();
     expect(presence.querySelector('[data-presence="idle"]')).toBeTruthy();
+    expect(
+      Array.from(presence.querySelectorAll("[data-presence]"))
+        .slice(0, 5)
+        .map((dot) => dot.getAttribute("title")),
+    ).toEqual(["Working", "Queued", "Waiting for you", "Archived", "Idle"]);
     expect(avatars[0]?.getAttribute("aria-label")).toBe("Agent 1 profile unavailable. Working");
     expect(avatars[1]?.getAttribute("aria-label")).toBe("Agent 2 profile unavailable. Queued");
     expect(avatars[2]?.getAttribute("aria-label")).toBe(
