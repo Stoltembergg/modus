@@ -44,7 +44,7 @@ import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
-import { archivedMemberIds, replyAuthorOf } from "./groupModelChip";
+import { archivedMemberIds, replyAuthorOf } from "./groupModelChipRules";
 import { replyPreview } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";

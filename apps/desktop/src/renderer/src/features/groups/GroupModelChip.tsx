@@ -3,7 +3,7 @@ import { groupModelChipText } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { MODEL_CHIP_BASE, MODEL_CHIP_TONE } from "../composer/modelChipStyle";
-import type { GroupModelChip as GroupModelChipData } from "./groupModelChip";
+import type { GroupModelChip as GroupModelChipData } from "./groupModelChipRules";
 
 /**
  * Read-only chip: plain text, no button, no tab stop, no menu. The tooltip

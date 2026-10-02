@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { groupModelChip, mentionedSessionIds, modelDisplayName } from "./groupModelChip";
+import { groupModelChip, mentionedSessionIds, modelDisplayName } from "./groupModelChipRules";
 
 const members = [
   { sessionId: "lead", title: "Lead" },

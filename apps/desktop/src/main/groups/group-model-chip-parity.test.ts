@@ -13,7 +13,7 @@ import {
   archivedMemberIds,
   groupModelChip,
   replyAuthorOf,
-} from "../../renderer/src/features/groups/groupModelChip";
+} from "../../renderer/src/features/groups/groupModelChipRules";
 
 let userData: string;
 

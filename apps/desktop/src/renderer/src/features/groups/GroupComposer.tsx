@@ -28,7 +28,7 @@ import {
   type MentionSuggestion,
   mentionSuggestions,
 } from "./groupMentions";
-import { type GroupModelChipModel, groupModelChip } from "./groupModelChip";
+import { type GroupModelChipModel, groupModelChip } from "./groupModelChipRules";
 import { MemberName } from "./MemberName";
 import { memberLabels } from "./memberLabels";
 import { AttachmentChip } from "./prompt-kit/PromptKit";
