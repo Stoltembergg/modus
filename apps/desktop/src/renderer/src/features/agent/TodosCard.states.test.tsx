@@ -76,6 +76,28 @@ describe("TodosCard states", () => {
     expect(document.querySelectorAll("[data-changed]")).toHaveLength(0);
   });
 
+  it("pending update: a no-op update mid-highlight does not leave the highlight stuck", () => {
+    vi.useFakeTimers();
+    const { rerender } = render(<TodosCard todos={list("in_progress", "pending")} updating />);
+    rerender(<TodosCard todos={list("completed", "in_progress")} updating={false} />);
+    expect(document.querySelectorAll("[data-changed]")).toHaveLength(2);
+
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    const edited = list("completed", "in_progress").map((todo) => ({
+      ...todo,
+      content: `${todo.content} (edited)`,
+    }));
+    rerender(<TodosCard todos={edited} updating={false} />);
+    expect(screen.getByText("Task 0 (edited)")).toBeTruthy();
+
+    act(() => {
+      vi.advanceTimersByTime(TODO_CHANGE_HIGHLIGHT_MS);
+    });
+    expect(document.querySelectorAll("[data-changed]")).toHaveLength(0);
+  });
+
   it("keeps the collapse toggle", () => {
     render(<TodosCard todos={list("pending")} updating={false} />);
     const toggle = screen.getByRole("button");

@@ -75,13 +75,19 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
   useEffect(() => {
     const previous = previousRef.current;
     previousRef.current = todos;
-    if (previous === todos) return undefined;
+    if (previous === todos) return;
     const changes = detectTodoChanges(previous, todos);
-    if (changes.length === 0) return undefined;
+    if (changes.length === 0) return;
     setChanged(new Set(changes.map((change) => change.id)));
+  }, [todos]);
+
+  // Own effect so a no-op update (same statuses, new array) can't cancel the
+  // pending clear and leave the highlight stuck.
+  useEffect(() => {
+    if (changed.size === 0) return undefined;
     const timeout = globalThis.setTimeout(() => setChanged(new Set()), TODO_CHANGE_HIGHLIGHT_MS);
     return () => globalThis.clearTimeout(timeout);
-  }, [todos]);
+  }, [changed]);
 
   const done = todos.filter((todo) => todo.status === "completed").length;
   const creating = updating && todos.length === 0;
