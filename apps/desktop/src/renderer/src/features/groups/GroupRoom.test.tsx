@@ -329,7 +329,9 @@ describe("GroupRoom", () => {
     const user = userEvent.setup();
     renderRoom();
 
-    await user.click(await screen.findByRole("button", { name: "Edit Planner" }));
+    const avatar = await screen.findByRole("button", { name: "Edit Planner" });
+    expect(avatar.getAttribute("title")).toBe("Planner");
+    await user.click(avatar);
     expect(await screen.findByTestId("morphing-agent-edit")).toBeTruthy();
   });
 
@@ -566,9 +568,32 @@ describe("GroupRoom", () => {
       expect(trigger.querySelector("[data-testid=agent-avatar]")?.className).not.toContain(
         "scale-125",
       );
+      expect(trigger.className).not.toContain("ring-2 ring-[var(--surface-main)]");
+      expect(
+        trigger.querySelector("[data-testid=agent-avatar]")?.parentElement?.className,
+      ).not.toContain("ring-2 ring-[var(--surface-main)]");
     }
     expect(within(presence).queryByTestId("group-agent-actions-button")).toBeNull();
     expect(screen.queryByTestId("group-agents-popover")).toBeNull();
+  });
+
+  it("shows every agent avatar when a group has ten members", async () => {
+    const firstMember = GROUP.members[0];
+    if (!firstMember) throw new Error("Expected the group fixture to include a member");
+    const members = Array.from({ length: 10 }, (_, index) => ({
+      ...firstMember,
+      sessionId: `s-agent-${index + 1}`,
+      agentId: `agent-${index + 1}`,
+      name: `Agent ${index + 1}`,
+    }));
+
+    renderRoom(states(), { ...GROUP, members });
+
+    const presence = await screen.findByTestId("group-agent-presence");
+    const avatars = Array.from(presence.querySelectorAll(":scope > button"));
+    expect(avatars).toHaveLength(10);
+    expect(avatars[9]?.getAttribute("title")).toBe("Agent 10");
+    expect(presence.textContent).not.toContain("+");
   });
 
   it("keeps Stop available while a member waits or runs, and stops the group", async () => {

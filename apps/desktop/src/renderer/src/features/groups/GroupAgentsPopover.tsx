@@ -44,6 +44,7 @@ function AgentMorphEdit({
         aria-label={`Edit ${agent.name}`}
         className={triggerClassName}
         data-testid="group-agent-avatar-trigger"
+        title={agent.name}
       >
         {trigger}
       </MorphingDialogTrigger>
@@ -107,7 +108,6 @@ export function GroupAgentsPopover({
   }, []);
 
   const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
-  const visibleMembers = group.members.slice(0, 4);
 
   return (
     <div className="flex w-fit shrink-0 items-center">
@@ -116,7 +116,7 @@ export function GroupAgentsPopover({
         className="m-0 flex shrink-0 items-center border-0 p-0 -space-x-2"
         data-testid="group-agent-presence"
       >
-        {visibleMembers.map((member) => {
+        {group.members.map((member) => {
           const avatar = avatars.get(member.sessionId) ?? {
             agentId: member.agentId,
             ...memberAvatar(member),
@@ -127,7 +127,7 @@ export function GroupAgentsPopover({
           const agent = agentsById.get(member.agentId);
           const face = (
             <span
-              className="relative flex size-8 shrink-0 aspect-square items-center justify-center rounded-full ring-2 ring-[var(--surface-main)]"
+              className="relative flex size-8 shrink-0 aspect-square items-center justify-center rounded-full"
               key={member.sessionId}
             >
               <AgentAvatar
@@ -173,21 +173,16 @@ export function GroupAgentsPopover({
           ) : (
             <button
               aria-label={`${label} profile unavailable`}
-              className="relative z-0 flex size-8 shrink-0 aspect-square items-center justify-center rounded-full ring-2 ring-[var(--surface-main)]"
+              className="relative z-0 flex size-8 shrink-0 aspect-square items-center justify-center rounded-full"
               disabled
               key={member.sessionId}
-              title={`${label} profile unavailable`}
+              title={label}
               type="button"
             >
               {face}
             </button>
           );
         })}
-        {group.members.length > visibleMembers.length ? (
-          <span className="flex size-8 shrink-0 aspect-square items-center justify-center rounded-full bg-elevated text-2xs text-fg-muted ring-2 ring-[var(--surface-main)]">
-            +{group.members.length - visibleMembers.length}
-          </span>
-        ) : null}
       </fieldset>
     </div>
   );

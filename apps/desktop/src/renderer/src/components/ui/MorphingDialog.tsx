@@ -89,11 +89,13 @@ export function MorphingDialogTrigger({
   className,
   style,
   "aria-label": ariaLabel,
+  title,
 }: {
   children: ReactNode;
   className?: string;
   style?: MotionStyle;
   "aria-label"?: string;
+  title?: string;
 }) {
   const { setIsOpen, isOpen, uniqueId, triggerRef } = useMorphingDialog();
   return (
@@ -106,6 +108,7 @@ export function MorphingDialogTrigger({
       layoutId={`dialog-${uniqueId}`}
       onClick={() => setIsOpen(!isOpen)}
       ref={triggerRef}
+      title={title}
       {...(style !== undefined ? { style } : {})}
       type="button"
     >
