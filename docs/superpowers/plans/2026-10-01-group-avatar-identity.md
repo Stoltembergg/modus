@@ -85,4 +85,4 @@
 - [x] Run avatar, editor, store, migration, and presence tests together, then desktop typecheck, Biome, and the Electron Vite production build. The `pnpm --filter @modus/desktop build` wrapper was blocked by pnpm's ignored-build policy for `esbuild`; Electron Vite was run directly against the installed dependencies.
   **Expected:** all listed focused regression tests, typecheck, lint, and the desktop production bundle complete successfully.
 - [x] Review the diff for unchanged avatar dimensions, stable shape identity, migration idempotency, and intact runtime contracts. An independent review found and the patch now covers visible hover labels for each presence state.
-- [ ] Push the task commits to the existing PR #124; do not merge it.
+- [x] Push the task commits to the existing PR #124; do not merge it.

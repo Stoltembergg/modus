@@ -54,4 +54,4 @@
 - [x] Run both focused test groups, desktop typecheck, Biome, and the Electron Vite production build. The `pnpm --filter @modus/desktop build` wrapper was blocked by pnpm's ignored-build policy for `esbuild`; Electron Vite was run directly against the installed dependencies.
   **Expected:** all listed focused regression tests, typecheck, lint, and the desktop production bundle complete successfully.
 - [x] Review the diff for unchanged send/filter behavior and confirm no raw execution ID or purple composer focus treatment remains.
-- [ ] Push the task commits to the existing PR #124; do not merge it.
+- [x] Push the task commits to the existing PR #124; do not merge it.
