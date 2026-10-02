@@ -1,10 +1,7 @@
-import { IconArrowsMaximize, IconListCheck } from "@tabler/icons-react";
+import { IconArrowsMaximize } from "@tabler/icons-react";
 import type { PlanRef } from "../../../../shared/contracts";
 import { CopyButton } from "../../components/ui/CopyButton";
-import { ShinyText } from "../../components/ui/ShinyText";
-import { cn } from "../../lib/cn";
-import { useClipFade } from "../../lib/useClipFade";
-import { MarkdownMessage } from "../agent/MarkdownMessage";
+import { type PlanStep, PlanToolCard } from "./PlanTool";
 
 function textArg(args: unknown, key: string): string {
   if (!args || typeof args !== "object") return "";
@@ -12,6 +9,17 @@ function textArg(args: unknown, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
+function baseName(path: string | undefined): string | undefined {
+  const name = path?.split(/[\\/]/).filter(Boolean).at(-1);
+  return name || undefined;
+}
+
+/**
+ * Transcript card for the plan tool — thin adapter over the ported Plan Tool
+ * card (PlanTool.tsx): "Writing the plan" while the call streams, "Plan" /
+ * "Plan failed" after; copy + open actions once the plan is ready; the plan's
+ * tasks appear in the expanded view.
+ */
 export function PlanTimelineCard({
   args,
   isComplete,
@@ -30,56 +38,40 @@ export function PlanTimelineCard({
   const content = plan?.content ?? textArg(args, "content");
   const preview = content || overview;
   const ready = isComplete && !isError && plan !== undefined;
-  const { boxRef, contentRef, clipped } = useClipFade();
+  const steps: PlanStep[] = (plan?.todos ?? []).map((todo) => ({
+    id: todo.id,
+    content: todo.content,
+    status: todo.status,
+  }));
+  const fileName = baseName(plan?.path);
 
   return (
-    <article className="group/plan min-w-0 overflow-hidden rounded-xl border border-hairline-soft bg-card px-4 py-3.5">
-      <header className="flex min-h-6 items-center gap-2 text-xs">
-        <IconListCheck className="shrink-0 text-fg-faint" size={14} stroke={1.7} />
-        {isComplete ? (
-          <span className={isError ? "text-danger" : "text-fg-subtle"}>
-            {isError ? "Plan failed" : "Plan"}
-          </span>
-        ) : (
-          <ShinyText>Writing the plan</ShinyText>
-        )}
-        <span className="flex-1" />
-        {ready ? (
-          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/plan:opacity-100 group-focus-within/plan:opacity-100">
-            <CopyButton label="Copy plan" text={plan.content} />
-            {onOpen ? (
-              <button
-                aria-label="Open plan"
-                className="flex size-6 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg-muted"
-                onClick={() => onOpen(plan)}
-                title="Open plan"
-                type="button"
-              >
-                <IconArrowsMaximize size={13} stroke={1.75} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </header>
-
-      <div className={cn("mt-4 max-h-48 overflow-hidden", clipped && "clip-fade")} ref={boxRef}>
-        <div ref={contentRef}>
-          {title ? (
-            <h2 className="mb-4 font-bold text-[1.75rem] text-fg leading-tight tracking-[-0.025em]">
-              {title}
-            </h2>
-          ) : null}
-          {preview ? (
-            <MarkdownMessage
-              className="modus-plan-markdown"
-              content={preview}
-              streaming={!isComplete}
-            />
-          ) : title ? null : (
-            <div className="h-20" />
-          )}
-        </div>
-      </div>
-    </article>
+    <PlanToolCard
+      {...(title ? { title } : {})}
+      {...(preview ? { content: preview } : {})}
+      {...(fileName ? { fileName } : {})}
+      {...(ready
+        ? {
+            actions: (
+              <>
+                <CopyButton label="Copy plan" text={plan.content} />
+                {onOpen ? (
+                  <button
+                    aria-label="Open plan"
+                    className="flex size-6 items-center justify-center rounded-md text-fg-faint transition-colors hover:bg-hover hover:text-fg-muted"
+                    onClick={() => onOpen(plan)}
+                    title="Open plan"
+                    type="button"
+                  >
+                    <IconArrowsMaximize size={13} stroke={1.75} />
+                  </button>
+                ) : null}
+              </>
+            ),
+          }
+        : {})}
+      state={isComplete ? (isError ? "failed" : "ready") : "writing"}
+      steps={steps}
+    />
   );
 }

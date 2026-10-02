@@ -15,6 +15,10 @@ Their original license terms are reproduced here as required.
   `tool-row-base.tsx`), same upstream commit
 - Adapted in: `apps/desktop/src/renderer/src/features/agent/SearchToolCard.tsx`,
   `apps/desktop/src/renderer/src/features/agent/ToolGroup.tsx`
+- Components: "Todo Tool" (`lib/agent-ui/components/tools/todo-tool.tsx`) and
+  "Plan Tool" (`lib/agent-ui/components/tools/plan-tool.tsx`), same upstream commit
+- Adapted in: `apps/desktop/src/renderer/src/features/agent/TodosCard.tsx`,
+  `apps/desktop/src/renderer/src/features/plan/PlanTool.tsx`
 - License: MIT
 
 ```

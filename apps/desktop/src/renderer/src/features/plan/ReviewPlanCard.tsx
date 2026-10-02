@@ -4,6 +4,7 @@ import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../../../s
 import hpModeGif from "../../assets/hp-mode.gif";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
+import { PlanStepList } from "./PlanTool";
 import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
 
 type HyperPlanDraftPreview = { draftId: string; revision: HyperPlanRevision };
@@ -353,34 +354,26 @@ function HyperPlanChoiceCard({
           className="modus-plan-markdown text-sm"
           content={preview.revision.content}
         />
-        {preview.revision.todos.length ? (
-          <section aria-label="Revised plan tasks" className="mt-4 border-t border-hairline pt-3">
-            <h2 className="font-semibold text-fg text-sm">Tasks</h2>
-            <ul className="mt-2 space-y-2">
-              {preview.revision.todos.map((todo) => (
-                <li
-                  className="rounded-lg border border-hairline bg-surface/50 p-2.5 text-sm text-fg-subtle"
-                  key={todo.id}
-                >
-                  <p className="break-words">{todo.content}</p>
-                  {todo.acceptanceCriterionIds?.length ? (
-                    <p className="mt-1 break-words text-xs text-fg-faint">
-                      Acceptance criteria:{" "}
-                      {todo.acceptanceCriterionIds
-                        .map(
-                          (id) =>
-                            preview.revision.spec.acceptanceCriteria.find(
-                              (criterion) => criterion.id === id,
-                            )?.description ?? id,
-                        )
-                        .join(" · ")}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
+        <PlanStepList
+          className="mt-4 border-t border-hairline pt-3"
+          label="Revised plan tasks"
+          steps={preview.revision.todos.map((todo) => ({
+            id: todo.id,
+            content: todo.content,
+            ...(todo.acceptanceCriterionIds?.length
+              ? {
+                  detail: `Acceptance criteria: ${todo.acceptanceCriterionIds
+                    .map(
+                      (id) =>
+                        preview.revision.spec.acceptanceCriteria.find(
+                          (criterion) => criterion.id === id,
+                        )?.description ?? id,
+                    )
+                    .join(" · ")}`,
+                }
+              : {}),
+          }))}
+        />
         <RevisionSpec spec={preview.revision.spec} />
       </div>
 
