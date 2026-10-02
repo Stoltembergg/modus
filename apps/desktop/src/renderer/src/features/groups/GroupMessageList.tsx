@@ -14,6 +14,7 @@ import {
 import { isNearBottom } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
+import { deriveGroupDelivery, indexTurnRepliesByTrigger } from "./groupDelivery";
 import type { MentionMember } from "./groupMentions";
 import { memberLabels } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
@@ -141,6 +142,8 @@ export function GroupMessageList({
     () => new Map(roomMessages.map((message) => [message.id, message])),
     [roomMessages],
   );
+  // Delivery footers read every loaded turn card, even ones the filters hide.
+  const repliesByTrigger = useMemo(() => indexTurnRepliesByTrigger(roomMessages), [roomMessages]);
   const [newMessageCount, setNewMessageCount] = useState(0);
   const previousRoomRef = useRef(groupId);
   const previousLastRef = useRef<string | undefined>(undefined);
@@ -305,6 +308,7 @@ export function GroupMessageList({
       activeWaitingSessionIds: activeWaiting,
       avatar: message.authorSessionId ? avatars.get(message.authorSessionId) : undefined,
       cwd,
+      delivery: deriveGroupDelivery(message, repliesByTrigger.get(message.id)),
       executionTokenTotal: tokenAnchors.has(message.id)
         ? tokenTotals.get(message.chainId ?? message.id)
         : undefined,
