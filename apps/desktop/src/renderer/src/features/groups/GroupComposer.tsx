@@ -1,6 +1,7 @@
 import { IconArrowUp, IconClockPause, IconPaperclip } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
+  AgentGroupMode,
   GroupExecutionMode,
   GroupMessageAttachment,
   GroupMessageContextItem,
@@ -104,6 +105,8 @@ export function GroupComposer({
   archivedSessionIds,
   models = NO_MODELS,
   locale,
+  mode,
+  replyAuthorSessionId,
 }: {
   groupId?: string;
   members: readonly MentionMember[];
@@ -133,6 +136,10 @@ export function GroupComposer({
   models?: readonly GroupModelChipModel[];
   /** Room locale override (tests); defaults to the browser locale. */
   locale?: string | null | undefined;
+  /** Room mode, for the chip's coordinator rule. */
+  mode?: AgentGroupMode | undefined;
+  /** Author of the message in `replyTo` (the runtime's thread-reply rule). */
+  replyAuthorSessionId?: string | undefined;
 }) {
   const [value, setValue] = useState(() => (groupId ? readGroupComposerDraft(groupId) : ""));
   const [caret, setCaret] = useState(() => {
@@ -230,9 +237,23 @@ export function GroupComposer({
             archivedSessionIds,
             models,
             locale,
+            mode,
+            // Only an open reply is sent with replyToMessageId.
+            replyAuthorSessionId: replyTo ? replyAuthorSessionId : undefined,
           })
         : undefined,
-    [value, members, memberModels, leadSessionId, archivedSessionIds, models, locale],
+    [
+      value,
+      members,
+      memberModels,
+      leadSessionId,
+      archivedSessionIds,
+      models,
+      locale,
+      mode,
+      replyTo,
+      replyAuthorSessionId,
+    ],
   );
 
   function pick(suggestion: MentionSuggestion): void {

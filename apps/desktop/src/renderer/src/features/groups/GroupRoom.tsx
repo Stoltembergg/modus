@@ -44,6 +44,7 @@ import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
+import { archivedMemberIds, replyAuthorOf } from "./groupModelChip";
 import { replyPreview } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
@@ -151,15 +152,7 @@ function GroupRoomContent({
       ),
     [group.members, agentModels],
   );
-  const archivedSessionIds = useMemo(
-    () =>
-      new Set(
-        group.members
-          .filter((member) => member.archived === true)
-          .map((member) => member.sessionId),
-      ),
-    [group.members],
-  );
+  const archivedSessionIds = useMemo(() => archivedMemberIds(group.members), [group.members]);
   const handleAgentsChanged = () => {
     setAgentsRefresh((value) => value + 1);
     onAgentsChanged?.();
@@ -183,6 +176,8 @@ function GroupRoomContent({
   }
   const { tasks, replace } = useGroupTasks(group.id);
   const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
+  // Thread reply rule: the runtime wakes the replied-to message's author.
+  const replyAuthorSessionId = replyAuthorOf(messages, replyTo?.messageId);
   const workingRows = useGroupMemberWorking(group.id, memberStates);
   const labels = useMemo(() => memberLabels(members), [members]);
   const activeExecutionId = useMemo(() => latestExecutionId(messages), [messages]);
@@ -346,6 +341,7 @@ function GroupRoomContent({
             leadSessionId={group.leadSessionId}
             memberModels={memberModels}
             members={members}
+            mode={group.mode}
             models={models}
             onClearReply={() => setReplyTo(undefined)}
             onSeedConsumed={() => setComposerSeed(undefined)}
@@ -360,6 +356,7 @@ function GroupRoomContent({
                 ...(payload.executionId ? { executionId: payload.executionId } : {}),
               });
             }}
+            replyAuthorSessionId={replyAuthorSessionId}
             replyTo={replyTo}
             seed={composerSeed}
             showKickoff={loaded && messages.length === 0 && !replyTo}

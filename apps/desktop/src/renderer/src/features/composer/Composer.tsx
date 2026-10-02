@@ -49,7 +49,7 @@ import { ProviderLogo } from "../settings/ProviderLogo";
 import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
 import { MentionEditor, type MentionEditorHandle, type MentionEditorPart } from "./MentionEditor";
-import { MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE } from "./modelChipStyle";
+import { MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE, MODEL_CHIP_TONE } from "./modelChipStyle";
 import { SlashMenu } from "./SlashMenu";
 import {
   type ComposerImage,
@@ -916,7 +916,7 @@ export function ModelSelect({
   );
 
   // C5: same chip look as the group composer's read-only model chip.
-  const chipClass = cn(MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE);
+  const chipClass = cn(MODEL_CHIP_BASE, MODEL_CHIP_TONE, MODEL_CHIP_INTERACTIVE);
   // Prompt Bar: both model + effort chips turn spark purple at max effort.
   const chipMaxClass =
     "text-[color:var(--color-focus-ring-soft)] hover:text-[color:var(--color-focus-ring-soft)]";

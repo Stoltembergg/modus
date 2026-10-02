@@ -275,7 +275,21 @@ export function groupMemberCardText(key: GroupMemberCardTextKey, locale?: string
 }
 
 /** Group composer read-only model chip copy (C5). */
-export type GroupModelChipTextKey = "model" | "leadDefault" | "noLead" | "defaultModel";
+export type GroupModelChipTextKey =
+  | "model"
+  | "leadDefault"
+  | "noLead"
+  | "defaultModel"
+  | "coordinatorLead"
+  | "replyAuthor"
+  | "archived"
+  | "leadArchived"
+  | "noTarget"
+  | "nobody"
+  | "archivedHint"
+  | "leadArchivedHint"
+  | "noTargetHint"
+  | "archivedSkipped";
 
 const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, string>> = {
   en: {
@@ -283,18 +297,48 @@ const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, str
     leadDefault: "Lead answers by default",
     noLead: "No Lead: the room picks who answers",
     defaultModel: "Default model",
+    coordinatorLead: "Coordinator mode: the Lead answers",
+    replyAuthor: "Reply goes to the message author",
+    archived: "Archived",
+    leadArchived: "Lead archived",
+    noTarget: "No recipient",
+    nobody: "Nobody will answer",
+    archivedHint: "Mention an active member or unarchive the agent",
+    leadArchivedHint: "Mention an active member or unarchive the Lead",
+    noTargetHint: "The author is no longer in the room. Mention an active member",
+    archivedSkipped: "Archived, will not be woken",
   },
   pt: {
     model: "Modelo",
     leadDefault: "Lead responde por padrão",
     noLead: "Sem Lead: a sala escolhe quem responde",
     defaultModel: "Modelo padrão",
+    coordinatorLead: "Modo coordenador: o Lead responde",
+    replyAuthor: "A resposta vai para o autor da mensagem",
+    archived: "Arquivado",
+    leadArchived: "Lead arquivado",
+    noTarget: "Sem destinatário",
+    nobody: "Ninguém vai responder",
+    archivedHint: "Mencione um membro ativo ou desarquive o agente",
+    leadArchivedHint: "Mencione um membro ativo ou desarquive o Lead",
+    noTargetHint: "O autor não está mais na sala. Mencione um membro ativo",
+    archivedSkipped: "Arquivado, não será acordado",
   },
   zh: {
     model: "模型",
     leadDefault: "默认由 Lead 回答",
     noLead: "没有 Lead：由群组决定谁回答",
     defaultModel: "默认模型",
+    coordinatorLead: "协调模式：由 Lead 回答",
+    replyAuthor: "回复将发给该消息的作者",
+    archived: "已归档",
+    leadArchived: "Lead 已归档",
+    noTarget: "没有接收者",
+    nobody: "没有人会回答",
+    archivedHint: "请提及一位活跃成员，或取消归档该智能体",
+    leadArchivedHint: "请提及一位活跃成员，或取消归档 Lead",
+    noTargetHint: "作者已不在群组中。请提及一位活跃成员",
+    archivedSkipped: "已归档，不会被唤醒",
   },
 };
 

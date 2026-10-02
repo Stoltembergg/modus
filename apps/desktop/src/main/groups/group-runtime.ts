@@ -16,6 +16,11 @@ import {
 } from "../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { bindSessionExecution, unbindSessionExecution } from "../../shared/group-execution-link";
+import {
+  memberWakeTargets,
+  partitionArchivedWakeTargets,
+  resolveUserWakeRule,
+} from "../../shared/group-wake-rules";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
@@ -793,13 +798,14 @@ export class GroupRuntime {
       : undefined;
     let targets: string[];
     if (message.authorKind === "user") {
-      if (message.mentions.length > 0) {
-        targets = [...message.mentions];
-      } else if (repliedAuthor) {
-        // Thread reply without @ — continue with the person being answered.
-        targets = [repliedAuthor];
-      } else if (isCoordinatorModeActive(group) && group.leadSessionId) {
-        targets = [group.leadSessionId];
+      // Shared with the renderer's model chip (C5): mentions → reply author → coordinator Lead.
+      const rule = resolveUserWakeRule({
+        mentions: message.mentions,
+        repliedAuthorSessionId: repliedAuthor,
+        group,
+      });
+      if (rule.rule !== "autonomous") {
+        targets = rule.wanted;
       } else {
         const openTasks = listGroupTasks(group.id).filter(
           (task) =>
@@ -817,9 +823,7 @@ export class GroupRuntime {
     } else {
       targets = [];
     }
-    return [...new Set(targets)].filter(
-      (id) => memberIds.has(id) && id !== message.authorSessionId,
-    );
+    return memberWakeTargets(targets, memberIds, message.authorSessionId);
   }
 
   /**
@@ -840,11 +844,8 @@ export class GroupRuntime {
     if (groupBlockedReason(group, members)) return;
     const wanted = this.wakeTargets(group, message, explicitTargets, allowSelf);
     // An archived agent stays a member but is never woken: say so instead.
-    const archived = wanted.filter(
-      (id) => members.find((member) => member.sessionId === id)?.archived,
-    );
+    const { archived, targets } = partitionArchivedWakeTargets(wanted, members);
     for (const id of archived) this.postArchived(chain, members, id);
-    const targets = wanted.filter((id) => !archived.includes(id));
     if (targets.length === 0) return;
     const history = listGroupMessages(group.id, {
       before: { createdAt: message.createdAt, id: message.id },

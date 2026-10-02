@@ -103,6 +103,110 @@ describe("groupModelChip", () => {
     expect(chip?.kind).toBe("noLead");
   });
 
+  it("thread reply without @ uses the replied-to author, before the room mode", () => {
+    const chip = groupModelChip({
+      ...base,
+      mode: "coordinator",
+      replyAuthorSessionId: "dev",
+      draft: "and the tests?",
+    });
+    expect(chip).toMatchObject({ kind: "reply", rule: "reply", label: "Claude Sonnet" });
+    expect(chip?.tooltip).toBe("Reply goes to the message author\nDev: Claude Sonnet");
+    expect(chip?.targets).toEqual(["dev"]);
+    // A mention still wins over the reply.
+    expect(
+      groupModelChip({ ...base, replyAuthorSessionId: "dev", draft: "@QA look" })?.targets,
+    ).toEqual(["qa"]);
+  });
+
+  it("thread reply to an archived author warns that nobody will answer", () => {
+    const chip = groupModelChip({
+      ...base,
+      archivedSessionIds: new Set(["dev"]),
+      replyAuthorSessionId: "dev",
+      draft: "ok?",
+    });
+    expect(chip).toMatchObject({ kind: "nobody", warning: true, label: "Archived", targets: [] });
+    expect(chip?.tooltip.split("\n")[0]).toBe(
+      "Nobody will answer. Mention an active member or unarchive the agent",
+    );
+  });
+
+  it("thread reply to an author who left the room: nobody (no fallback), like the runtime", () => {
+    const chip = groupModelChip({ ...base, replyAuthorSessionId: "gone", draft: "ok?" });
+    expect(chip).toMatchObject({ kind: "nobody", label: "No recipient", targets: [] });
+  });
+
+  it("coordinator mode: the Lead, or an amber warning when the Lead is archived", () => {
+    expect(groupModelChip({ ...base, mode: "coordinator", draft: "plan it" })).toMatchObject({
+      kind: "lead",
+      rule: "coordinator",
+      label: "GPT-5",
+      tooltip: "Coordinator mode: the Lead answers\nLead: GPT-5",
+    });
+    const archived = groupModelChip({
+      ...base,
+      mode: "coordinator",
+      archivedSessionIds: new Set(["lead"]),
+      draft: "plan it",
+    });
+    expect(archived).toMatchObject({ kind: "nobody", warning: true, label: "Lead archived" });
+    expect(archived?.tooltip).toBe(
+      "Nobody will answer. Mention an active member or unarchive the Lead",
+    );
+    const pt = groupModelChip({
+      ...base,
+      locale: "pt-BR",
+      mode: "coordinator",
+      archivedSessionIds: new Set(["lead"]),
+      draft: "",
+    });
+    expect(pt?.label).toBe("Lead arquivado");
+    expect(pt?.tooltip).toBe(
+      "Ninguém vai responder. Mencione um membro ativo ou desarquive o Lead",
+    );
+  });
+
+  it("autonomous mode with an archived Lead: no-Lead case, active members only", () => {
+    const chip = groupModelChip({
+      ...base,
+      archivedSessionIds: new Set(["lead", "old"]),
+      draft: "",
+    });
+    expect(chip?.kind).toBe("noLead");
+    expect(chip?.targets).toEqual(["dev", "qa"]);
+    expect(chip?.label).toBe("2 models");
+  });
+
+  it("counts only ACTIVE mentioned members; all archived → amber 'Archived'", () => {
+    const mixed = groupModelChip({
+      ...base,
+      archivedSessionIds: new Set(["qa"]),
+      draft: "@Dev @QA go",
+    });
+    expect(mixed).toMatchObject({ kind: "single", label: "Claude Sonnet", targets: ["dev"] });
+    expect(mixed?.tooltip).toBe("Dev: Claude Sonnet\nArchived, will not be woken: QA");
+    const all = groupModelChip({
+      ...base,
+      archivedSessionIds: new Set(["dev", "qa"]),
+      draft: "@Dev @QA go",
+    });
+    expect(all).toMatchObject({ kind: "nobody", warning: true, label: "Archived", targets: [] });
+    expect(
+      groupModelChip({ ...base, locale: "zh", archivedSessionIds: new Set(["dev"]), draft: "@Dev" })
+        ?.label,
+    ).toBe("已归档");
+  });
+
+  it("every room is archived: nobody", () => {
+    const chip = groupModelChip({
+      ...base,
+      archivedSessionIds: new Set(["lead", "dev", "qa", "old"]),
+      draft: "hi",
+    });
+    expect(chip).toMatchObject({ kind: "nobody", label: "Archived" });
+  });
+
   it("returns nothing for a room without members", () => {
     expect(
       groupModelChip({ ...base, members: [], memberModels: new Map(), draft: "" }),

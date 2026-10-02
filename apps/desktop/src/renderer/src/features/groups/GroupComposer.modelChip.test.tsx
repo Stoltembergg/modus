@@ -67,7 +67,8 @@ describe("GroupComposer read-only model chip", () => {
     fireEvent.change(textarea, { target: { value: "@Dev and @Lead" } });
     expect(screen.getByTestId("group-model-chip-label").textContent).toBe("2 models");
     expect(screen.getByTestId("group-model-chip").getAttribute("title")).toBe(
-      "Dev: Default model\nLead: GPT-5",
+      // Member order, exactly like the runtime's parseGroupMentions.
+      "Lead: GPT-5\nDev: Default model",
     );
   });
 
@@ -87,6 +88,67 @@ describe("GroupComposer read-only model chip", () => {
     expect(screen.queryByRole("menu")).toBeNull();
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("follows an open thread reply and warns in amber when nobody would answer", () => {
+    const { rerender } = render(
+      <GroupComposer
+        groupId="g-chip-reply"
+        leadSessionId="lead"
+        locale="pt-BR"
+        memberModels={memberModels}
+        members={members}
+        models={models}
+        onSend={vi.fn()}
+        replyAuthorSessionId="dev"
+        replyTo={{ messageId: "m1", preview: "done" }}
+        updatePending={false}
+      />,
+    );
+    const chip = () => screen.getByTestId("group-model-chip");
+    expect(chip().getAttribute("data-kind")).toBe("reply");
+    expect(screen.getByTestId("group-model-chip-label").textContent).toBe("Modelo padrão");
+    // Without an open reply the author is ignored (nothing sends replyToMessageId).
+    rerender(
+      <GroupComposer
+        groupId="g-chip-reply"
+        leadSessionId="lead"
+        locale="pt-BR"
+        memberModels={memberModels}
+        members={members}
+        models={models}
+        onSend={vi.fn()}
+        replyAuthorSessionId="dev"
+        updatePending={false}
+      />,
+    );
+    expect(chip().getAttribute("data-kind")).toBe("lead");
+    // Coordinator mode with an archived Lead: amber "Lead arquivado".
+    rerender(
+      <GroupComposer
+        archivedSessionIds={new Set(["lead"])}
+        groupId="g-chip-reply"
+        leadSessionId="lead"
+        locale="pt-BR"
+        memberModels={memberModels}
+        members={members}
+        mode="coordinator"
+        models={models}
+        onSend={vi.fn()}
+        updatePending={false}
+      />,
+    );
+    expect(chip().getAttribute("data-kind")).toBe("nobody");
+    expect(chip().hasAttribute("data-warning")).toBe(true);
+    expect(chip().className).toContain("text-amber-400");
+    // No competing neutral tone (cn does not merge classes).
+    expect(chip().className).not.toContain("text-fg-muted");
+    expect(screen.getByTestId("group-model-chip-label").textContent).toBe("Lead arquivado");
+    expect(chip().getAttribute("title")).toBe(
+      "Ninguém vai responder. Mencione um membro ativo ou desarquive o Lead",
+    );
+    expect(chip().tagName).toBe("SPAN");
+    expect(chip().hasAttribute("tabindex")).toBe(false);
   });
 
   it("still sends the mention text unchanged", () => {
