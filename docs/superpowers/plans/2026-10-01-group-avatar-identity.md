@@ -10,12 +10,12 @@
 
 **Spec:** [Group Avatar and Composer Polish](../specs/2026-10-01-group-avatar-and-composer-polish-design.md)
 
-**Global constraints:** Keep existing shapes stable, add `triangle` and `pentagon` for ten total, keep all header avatars at 24 px, never change face/color identity, and do not alter Group Runtime or message persistence.
+**Global constraints:** Keep existing shapes stable, add `triangle` and `pentagon` for ten total, keep all header avatars at 24 px, never change face/color identity, and do not alter Group Runtime or message persistence. Preserve legacy groups already over ten members so they can still load and shrink; regular groups up to ten use unique shapes.
 
 **Review Focus:**
 1. Ten members render ten unique shapes at 24 px — `GroupRoom.test.tsx`.
 2. Existing duplicate shapes normalize deterministically while all other data and foreign keys survive — migration cases in `group-agents.test.ts`.
-3. Stores and SQLite reject duplicate shapes within a group but allow duplicate shapes for ungrouped agents — `agents-store.test.ts` and `group-agents.test.ts`.
+3. Stores and SQLite reject duplicate shapes in groups of up to ten, preserve over-cap legacy groups, and allow duplicate shapes for ungrouped agents — `agents-store.test.ts` and `group-agents.test.ts`.
 4. Occupied shapes cannot be selected in existing or draft groups — `AgentDialog.test.tsx` and `NewGroupModal.test.tsx`.
 5. Queued, working, waiting, idle, archived, and reduced-motion states remain distinguishable and accessible — `GroupRoom.test.tsx` and `useWorkingGroups.test.ts`.
 
@@ -40,15 +40,16 @@
 **Files:** `apps/desktop/src/main/db/database.ts`, `apps/desktop/src/main/agents/agents-store.ts`, `apps/desktop/src/main/groups/group-store.ts`, `apps/desktop/src/shared/group-errors.ts`, `apps/desktop/src/main/groups/group-agents.test.ts`, `apps/desktop/src/main/agents/agents-store.test.ts`, relevant IPC tests.
 
 **Consumes:** Task 1 shape contract and allocator.
-**Produces:** Idempotent normalization migration, SQLite uniqueness enforcement, and typed store validation.
+**Produces:** Idempotent shape migration, SQLite collision guards for in-limit groups, and typed store validation.
 
-- [ ] Add failing migration and store cases for stable duplicate repair, preserved fields, foreign-key validity, uniqueness rejection, and allowed ungrouped duplicates.
-- [ ] Add an idempotent table rebuild migration that accepts ten shapes, repairs only collisions in membership order, then creates the `(group_id, avatar_shape)` unique index.
-- [ ] Allocate free shapes for create, add-member/adopt, and update paths; return a typed validation error for collisions while retaining the database constraint as the final guard.
-- [ ] Run focused tests:
+- [x] Add failing migration and store cases for stable duplicate repair, preserved fields, foreign-key validity, uniqueness rejection, and allowed ungrouped duplicates.
+- [x] Add an idempotent table rebuild migration that accepts ten shapes and repairs collisions in membership order for groups up to ten. Preserve pre-existing over-cap legacy groups, whose extra members cannot all have unique shapes.
+- [x] Add SQLite insert/update guards that reject duplicate shapes for groups up to ten while leaving over-cap legacy rows readable; normalize a legacy group as it shrinks back to ten.
+- [x] Allocate free shapes for create, add-member/adopt, and update paths; return a typed validation error for collisions while retaining the database constraint as the final guard.
+- [x] Run focused tests:
   `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-agents.test.ts apps/desktop/src/main/agents/agents-store.test.ts apps/desktop/src/main/ipc/agents-ipc.test.ts`
-  **Expected:** grouped collisions are repaired/rejected as specified, ungrouped duplicates remain valid, and unrelated fields plus foreign keys survive migration.
-- [ ] Commit: `feat(agents): enforce unique group avatar shapes`.
+  **Expected:** in-limit grouped collisions are repaired/rejected as specified, oversized legacy groups remain loadable and can shrink, ungrouped duplicates remain valid, and unrelated fields plus foreign keys survive migration.
+- [x] Commit: `feat(agents): enforce unique group avatar shapes`.
 
 ### Task 3: Keep both agent editors within the group shape set
 
@@ -57,12 +58,12 @@
 **Consumes:** Tasks 1–2 shared shape allocation and store enforcement.
 **Produces:** Existing and draft group editors that only offer free member shapes.
 
-- [ ] Add failing tests proving occupied shapes are disabled, a member's current shape remains selectable, and draft members cannot reuse one another's shapes.
-- [ ] Pass occupied shapes into existing-group editing and new-group draft editing; use the shared allocator before insertion so templates with repeated defaults still create valid groups.
-- [ ] Run focused tests:
+- [x] Add failing tests proving occupied shapes are disabled, a member's current shape remains selectable, and draft members cannot reuse one another's shapes.
+- [x] Pass occupied shapes into existing-group editing and new-group draft editing; use the shared allocator before insertion so templates with repeated defaults still create valid groups.
+- [x] Run focused tests:
   `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/renderer/src/features/agents/AgentDialog.test.tsx apps/desktop/src/renderer/src/features/groups/NewGroupModal.test.tsx`
   **Expected:** occupied choices are disabled, the current choice remains selectable, and generated groups keep unique shapes.
-- [ ] Commit: `feat(agents): prevent duplicate shapes in group editors`.
+- [x] Commit: `feat(agents): prevent duplicate shapes in group editors`.
 
 ### Task 4: Add accessible agent presence dots and verify the room header
 
@@ -71,17 +72,17 @@
 **Consumes:** Tasks 1–3 persisted identities plus the existing runtime activity state.
 **Produces:** Ten visible 24 px header avatars and accessible, reduced-motion-aware status indicators.
 
-- [ ] Add failing tests for all ten members, unique `data-shape`, agent-name hover/accessibility labels, each activity mapping, and reduced-motion behavior.
-- [ ] Replace the outline status span with a reusable local status-dot component for idle, queued, working, waiting, and archived. Remove the dark outline, animate only working/waiting, honor reduced motion, and preserve current header spacing and avatar size.
-- [ ] Map queued sessions explicitly without adding intermediate execution details to persistent chat content.
-- [ ] Run focused tests:
+- [x] Add failing tests for all ten members, unique `data-shape`, agent-name hover/accessibility labels, each activity mapping, and reduced-motion behavior.
+- [x] Replace the outline status span with a reusable local status-dot component for idle, queued, working, waiting, and archived. Remove the dark outline, animate only working/waiting, honor reduced motion, and preserve current header spacing and avatar size.
+- [x] Map queued sessions explicitly without adding intermediate execution details to persistent chat content.
+- [x] Run focused tests:
   `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx apps/desktop/src/renderer/src/features/groups/useWorkingGroups.test.ts`
   **Expected:** ten unique silhouettes and every documented state are visible and accessible; reduced motion suppresses status animation.
-- [ ] Commit: `feat(groups): show accessible agent presence states`.
+- [x] Commit: `feat(groups): show accessible agent presence states`.
 
 ### Task 5: Verify the complete avatar change and update PR #124
 
-- [ ] Run avatar, editor, store, migration, and presence tests together, then desktop typecheck, Biome, and `npm run build --workspace @modus/desktop`.
-  **Expected:** the focused/full test suites, typecheck, lint, and desktop build complete successfully.
-- [ ] Review the diff for unchanged avatar dimensions, stable shape identity, migration idempotency, and intact runtime contracts.
+- [x] Run avatar, editor, store, migration, and presence tests together, then desktop typecheck, Biome, and the Electron Vite production build. The `pnpm --filter @modus/desktop build` wrapper was blocked by pnpm's ignored-build policy for `esbuild`; Electron Vite was run directly against the installed dependencies.
+  **Expected:** all listed focused regression tests, typecheck, lint, and the desktop production bundle complete successfully.
+- [x] Review the diff for unchanged avatar dimensions, stable shape identity, migration idempotency, and intact runtime contracts. An independent review found and the patch now covers visible hover labels for each presence state.
 - [ ] Push the task commits to the existing PR #124; do not merge it.
