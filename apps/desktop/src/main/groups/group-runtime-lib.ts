@@ -18,6 +18,10 @@ import {
   composeSupervisedFlowSection,
   planSupervisedCodeFlow,
 } from "../../shared/group-supervised-flow";
+import {
+  autonomousWakeEligible,
+  parseGroupMentions as parseSharedGroupMentions,
+} from "../../shared/group-wake-rules";
 import type {
   PromptAgentInput,
   PromptTurnOutcome,
@@ -264,45 +268,12 @@ export function modelIdOf(groupId: string, sessionId: string): string | undefine
   return modelId || undefined;
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
- * Member session ids mentioned in `text` as `@<session title>` (case-insensitive,
- * longest title first) or `@<session id>`, in member order.
+ * Member session ids mentioned in `text` (moved to `shared/group-wake-rules`
+ * so the renderer's model chip parses mentions exactly like the runtime).
  */
 export function parseGroupMentions(text: string, members: readonly MemberRef[]): string[] {
-  const found = new Set<string>();
-  // Members sharing a title (case-insensitive) are all woken by `@Title`.
-  const byTitle = new Map<string, { title: string; sessionIds: string[] }>();
-  for (const member of members) {
-    const title = member.title.trim();
-    if (!title) continue;
-    const key = title.toLocaleLowerCase();
-    const entry = byTitle.get(key) ?? { title, sessionIds: [] };
-    entry.sessionIds.push(member.sessionId);
-    byTitle.set(key, entry);
-  }
-  const handles = [
-    ...[...byTitle.values()].map((entry) => ({
-      handle: entry.title,
-      sessionIds: entry.sessionIds,
-    })),
-    ...members.map((member) => ({ handle: member.sessionId, sessionIds: [member.sessionId] })),
-  ].sort((a, b) => b.handle.length - a.handle.length);
-  // P2: `@everyone` stays in the transcript (broadcast) but never mass-wakes.
-  let rest = text.replace(/@everyone(?![\p{L}\p{N}_-])/giu, " ");
-  for (const { handle, sessionIds } of handles) {
-    if (!handle.trim()) continue;
-    const pattern = new RegExp(`@${escapeRegExp(handle)}(?![\\p{L}\\p{N}_-])`, "giu");
-    if (pattern.test(rest)) {
-      for (const id of sessionIds) found.add(id);
-      // Consume it so a shorter handle that prefixes this one does not match too.
-      rest = rest.replace(pattern, " ");
-    }
-  }
-  return members.map((member) => member.sessionId).filter((id) => found.has(id));
+  return parseSharedGroupMentions(text, members);
 }
 
 function escapeText(text: string): string {
@@ -562,10 +533,7 @@ export function selectAutonomousWakeTargets(input: {
   /** Cap simultaneous wakes from one untargeted user message (default 1). */
   maxTargets?: number;
 }): string[] {
-  const excluded = new Set(input.excludeSessionIds ?? []);
-  const eligible = input.members.filter(
-    (member) => !member.archived && !excluded.has(member.sessionId),
-  );
+  const eligible = autonomousWakeEligible(input.members, input.excludeSessionIds);
   if (eligible.length === 0) return [];
 
   const social = isSimpleSocialMessage(input.body);

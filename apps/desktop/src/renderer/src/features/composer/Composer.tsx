@@ -49,6 +49,7 @@ import { ProviderLogo } from "../settings/ProviderLogo";
 import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
 import { MentionEditor, type MentionEditorHandle, type MentionEditorPart } from "./MentionEditor";
+import { MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE, MODEL_CHIP_TONE } from "./modelChipStyle";
 import { SlashMenu } from "./SlashMenu";
 import {
   type ComposerImage,
@@ -846,7 +847,7 @@ function ModePill({
   );
 }
 
-function ModelSelect({
+export function ModelSelect({
   model,
   models,
   onModelChange,
@@ -914,8 +915,8 @@ function ModelSelect({
       .values(),
   );
 
-  const chipClass =
-    "app-no-drag inline-flex h-7 min-w-0 flex-none cursor-pointer touch-manipulation items-center gap-1 rounded-lg px-2 text-xs font-medium text-fg-muted outline-none transition-colors select-none hover:bg-hover hover:text-fg data-popup-open:bg-hover data-popup-open:text-fg data-disabled:pointer-events-none data-disabled:opacity-45";
+  // C5: same chip look as the group composer's read-only model chip.
+  const chipClass = cn(MODEL_CHIP_BASE, MODEL_CHIP_TONE, MODEL_CHIP_INTERACTIVE);
   // Prompt Bar: both model + effort chips turn spark purple at max effort.
   const chipMaxClass =
     "text-[color:var(--color-focus-ring-soft)] hover:text-[color:var(--color-focus-ring-soft)]";
