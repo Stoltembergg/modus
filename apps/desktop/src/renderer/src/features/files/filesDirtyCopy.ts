@@ -1,15 +1,15 @@
 /**
  * Copy for the Files panel's unsaved-draft guards (C2.2). The Files panel does
- * not use an i18n catalog (its other strings are inline), so these stay local,
- * in the pt-BR wording that was specified for them, and in one place so they
- * are easy to move into a catalog later.
+ * not use an i18n catalog (its other strings are inline English), so these stay
+ * local, in English like the rest of the panel, and in one place so C6 can move
+ * them into the catalog.
  */
 export const FILES_DIRTY_COPY = {
-  keptDraftNotice: "Edições não salvas — a linha pode ter mudado",
-  dialogTitle: (name: string) => `Salvar as alterações em ${name}?`,
-  dialogDescription: "Você tem edições não salvas. Se descartar, elas serão perdidas.",
-  save: "Salvar",
-  discard: "Descartar",
-  cancel: "Cancelar",
-  saveFailed: (message: string) => `Não foi possível salvar: ${message}`,
+  keptDraftNotice: "Unsaved changes — the line may have moved",
+  dialogTitle: (name: string) => `Save changes to ${name}?`,
+  dialogDescription: "You have unsaved changes. If you discard them, they will be lost.",
+  save: "Save",
+  discard: "Discard",
+  cancel: "Cancel",
+  saveFailed: (message: string) => `Couldn't save: ${message}`,
 } as const;

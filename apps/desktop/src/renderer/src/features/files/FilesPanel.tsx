@@ -506,13 +506,14 @@ export function FilesPanel({
         const line = revealLineRef.current;
         const current = selectedPathRef.current;
         if (dirtyRef.current && current && samePath(current, file.path)) {
-          // Same file with unsaved edits: keep the draft, just jump.
+          // Same file with unsaved edits: keep the draft, just jump. The
+          // notice only matters when there is a line to jump to (chip: none).
           if (!(await expandAncestors(file, isCancelled))) {
             return;
           }
           setFileError(undefined);
           setLineTarget(line);
-          setKeptDraftNotice(true);
+          setKeptDraftNotice(line !== undefined);
           return;
         }
         if (dirtyRef.current && current && !samePath(current, file.path)) {

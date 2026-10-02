@@ -137,21 +137,37 @@ describe("FilesPanel: same file, dirty draft, reveal (C2.2)", () => {
     expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
     expect(dialog()).toBeNull();
     expect(seen.revealLines.at(-1)).toEqual({ line: 12, key: 1 });
-    expect(notice()?.textContent).toBe("Edições não salvas — a linha pode ter mudado");
+    expect(notice()?.textContent).toBe("Unsaved changes — the line may have moved");
     expect(notice()?.getAttribute("role")).toBe("status");
     expect(consumedCount).toBe(1);
     // Nothing was written behind the user's back.
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("chat file chip (no line) on the same dirty file behaves the same", async () => {
+  it("chat file chip (no line) on the same dirty file keeps the draft without the notice", async () => {
     await dirtyA();
+    disk.set("a.ts", "A2 on disk");
     await doReveal("a.ts");
+    // Draft kept (still dirty, disk content not loaded), no dialog, no write.
     expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
+    expect(code().getAttribute("data-path")).toBe("a.ts");
+    expect(code().getAttribute("data-content")).toBe("A1");
     expect(dialog()).toBeNull();
-    expect(notice()).toBeTruthy();
+    expect(write).not.toHaveBeenCalled();
+    // No line to jump to, so no "line may have moved" notice.
+    expect(notice()).toBeNull();
     expect(seen.revealLines.at(-1)).toBeUndefined();
     expect(consumedCount).toBe(1);
+  });
+
+  it("a no-line reveal after a line reveal clears the notice and still keeps the draft", async () => {
+    await dirtyA();
+    await doReveal("/repo/a.ts", 12);
+    expect(notice()).toBeTruthy();
+    await doReveal("/repo/a.ts");
+    expect(notice()).toBeNull();
+    expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("re-clicking the open dirty file in the tree keeps the draft", async () => {
@@ -195,25 +211,25 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     ["tree", async () => openFromTree("b.ts")],
     ["search reveal", async () => doReveal("/repo/b.ts", 7)],
     ["chat file chip", async () => doReveal("b.ts")],
-  ])("%s → dialog with Salvar / Descartar / Cancelar; nothing switches yet", async (_label, go) => {
+  ])("%s → dialog with Save / Discard / Cancel; nothing switches yet", async (_label, go) => {
     await dirtyA();
     await go();
     const d = dialog();
     expect(d).toBeTruthy();
-    expect(d?.textContent).toContain("Salvar as alterações em a.ts?");
-    for (const name of ["Salvar", "Descartar", "Cancelar"]) {
+    expect(d?.textContent).toContain("Save changes to a.ts?");
+    for (const name of ["Save", "Discard", "Cancel"]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
     // Save has initial focus inside the (trapped) dialog.
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Salvar" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Save" }));
     expect(code().getAttribute("data-path")).toBe("a.ts");
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("Salvar (tree) writes the draft, then switches", async () => {
+  it("Save (tree) writes the draft, then switches", async () => {
     await dirtyA();
     await openFromTree("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await flush();
     expect(write).toHaveBeenCalledWith({ cwd: "/repo", path: "/repo/a.ts", content: "A1 EDITED" });
     expect(disk.get("a.ts")).toBe("A1 EDITED");
@@ -221,20 +237,20 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     expect(dialog()).toBeNull();
   });
 
-  it("Salvar (reveal) writes, then opens the revealed file at its line", async () => {
+  it("Save (reveal) writes, then opens the revealed file at its line", async () => {
     await dirtyA();
     await doReveal("/repo/b.ts", 7);
-    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await flush();
     expect(disk.get("a.ts")).toBe("A1 EDITED");
     expect(code().getAttribute("data-path")).toBe("b.ts");
     expect(seen.revealLines.at(-1)).toEqual({ line: 7, key: 1 });
   });
 
-  it("Descartar (tree) drops the draft and switches without writing", async () => {
+  it("Discard (tree) drops the draft and switches without writing", async () => {
     await dirtyA();
     await openFromTree("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Descartar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await flush();
     expect(write).not.toHaveBeenCalled();
     expect(disk.get("a.ts")).toBe("A1");
@@ -245,19 +261,19 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     expect(screen.queryByRole("img", { name: "Unsaved changes" })).toBeNull();
   });
 
-  it("Descartar (reveal / chip) drops the draft and opens the revealed file", async () => {
+  it("Discard (reveal / chip) drops the draft and opens the revealed file", async () => {
     await dirtyA();
     await doReveal("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Descartar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await flush();
     expect(write).not.toHaveBeenCalled();
     expect(code().getAttribute("data-path")).toBe("b.ts");
   });
 
-  it("Cancelar (tree) stays on the dirty file with the draft", async () => {
+  it("Cancel (tree) stays on the dirty file with the draft", async () => {
     await dirtyA();
     await openFromTree("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flush();
     expect(dialog()).toBeNull();
     expect(code().getAttribute("data-path")).toBe("a.ts");
@@ -265,7 +281,7 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     expect(write).not.toHaveBeenCalled();
   });
 
-  it("Esc acts as Cancelar", async () => {
+  it("Esc acts as Cancel", async () => {
     await dirtyA();
     await openFromTree("b.ts");
     fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Escape" });
@@ -275,11 +291,11 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
   });
 
-  it("Cancelar (reveal) does not reveal, consumes revealPath, and the same click fires again", async () => {
+  it("Cancel (reveal) does not reveal, consumes revealPath, and the same click fires again", async () => {
     await dirtyA();
     await doReveal("/repo/b.ts", 7);
     expect(consumedCount).toBe(1);
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flush();
     expect(code().getAttribute("data-path")).toBe("a.ts");
     expect(seen.revealLines.at(-1)).toBeUndefined();
@@ -287,44 +303,42 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     await doReveal("/repo/b.ts", 7);
     expect(consumedCount).toBe(2);
     expect(dialog()).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Descartar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
     await flush();
     expect(code().getAttribute("data-path")).toBe("b.ts");
     expect(seen.revealLines.at(-1)).toEqual({ line: 7, key: 2 });
   });
 
-  it("Cancelar (chat chip) consumes too, and a second chip click re-prompts", async () => {
+  it("Cancel (chat chip) consumes too, and a second chip click re-prompts", async () => {
     await dirtyA();
     await doReveal("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flush();
     await doReveal("b.ts");
     expect(consumedCount).toBe(2);
     expect(dialog()).toBeTruthy();
   });
 
-  it("Salvar that fails keeps the current file and draft, shows the error, no switch", async () => {
+  it("Save that fails keeps the current file and draft, shows the error, no switch", async () => {
     await dirtyA();
     write.mockRejectedValueOnce(new Error("EACCES: permission denied"));
     await doReveal("/repo/b.ts", 7);
-    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await flush();
-    expect(screen.getByRole("alert").textContent).toBe(
-      "Não foi possível salvar: EACCES: permission denied",
-    );
+    expect(screen.getByRole("alert").textContent).toBe("Couldn't save: EACCES: permission denied");
     expect(dialog()).toBeTruthy();
     expect(code().getAttribute("data-path")).toBe("a.ts");
     expect(disk.get("a.ts")).toBe("A1");
     // (The modal hides the rest of the panel from the a11y tree meanwhile.)
     expect(screen.getByRole("img", { name: "Unsaved changes", hidden: true })).toBeTruthy();
     // Cancel after the failure: still the dirty a.ts, draft intact.
-    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await flush();
     expect(code().getAttribute("data-path")).toBe("a.ts");
     expect(screen.getByRole("img", { name: "Unsaved changes" })).toBeTruthy();
-    // The draft survived: a later successful Salvar writes exactly it.
+    // The draft survived: a later successful Save writes exactly it.
     await openFromTree("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await flush();
     expect(write).toHaveBeenLastCalledWith({
       cwd: "/repo",
@@ -338,9 +352,9 @@ describe("FilesPanel: switching away from a dirty file asks first", () => {
     await dirtyA();
     await doReveal("/repo/a.ts", 4);
     expect(notice()).toBeTruthy();
-    // Switch away with Salvar: notice is gone with the draft saved.
+    // Switch away with Save: notice is gone with the draft saved.
     await openFromTree("b.ts");
-    fireEvent.click(screen.getByRole("button", { name: "Salvar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await flush();
     expect(notice()).toBeNull();
   });
