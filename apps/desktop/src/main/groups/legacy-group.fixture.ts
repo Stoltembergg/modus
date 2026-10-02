@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { agentAvatarForId } from "../../shared/agent-templates";
-import type { AgentGroupWithMembers } from "../../shared/contracts";
+import { AGENT_AVATAR_SHAPES, type AgentGroupWithMembers } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { createAgentGroup, getAgentGroupWithMembers } from "./group-store";
 
@@ -17,12 +17,14 @@ export function insertLegacyGroup(input: {
 }): AgentGroupWithMembers {
   const group = createAgentGroup({ name: input.name, workspaceId: input.workspaceId });
   const db = getDatabase();
-  for (const sessionId of input.sessionIds) {
+  for (const [index, sessionId] of input.sessionIds.entries()) {
     const row = db.prepare("select title from agent_sessions where id = ?").get(sessionId) as
       | { title: string }
       | undefined;
     const agentId = randomUUID();
-    const { avatarFace, avatarColor, avatarShape } = agentAvatarForId(agentId);
+    const { avatarFace, avatarColor } = agentAvatarForId(agentId);
+    // Legacy over-cap fixtures may model more members than the ten current shapes.
+    const avatarShape = AGENT_AVATAR_SHAPES[index % AGENT_AVATAR_SHAPES.length] ?? "circle";
     const now = new Date().toISOString();
     db.prepare(
       `insert into agents (id, group_id, name, avatar_face, avatar_color, avatar_shape, created_at, updated_at)

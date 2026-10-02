@@ -8,6 +8,7 @@ import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
   AGENT_AVATAR_SHAPES,
+  allocateUniqueGroupAvatarShapes,
 } from "../../shared/contracts";
 
 let database: DatabaseSync | undefined;
@@ -491,10 +492,17 @@ export function migrateDatabase(db: DatabaseSync): void {
   // members point at it through agent_group_members.agent_id (unique: 1:1);
   // the room runtime stays keyed by the member's session_id.
   db.exec(`create table if not exists agents (${AGENTS_TABLE_BODY});`);
+  // Membership migrations may temporarily reassign an agent before the N6
+  // normalization runs. Remove the final-write guards while migrating, then
+  // migrateAgentAvatarShapesN6 restores them after all group links are stable.
+  db.exec(`drop trigger if exists agents_group_avatar_shape_unique_insert;
+    drop trigger if exists agents_group_avatar_shape_unique_update;
+    drop index if exists idx_agents_group_avatar_shape;`);
   migrateGroupMembersToAgents(db);
   migrateMembershipByAgent(db);
   migrateAgentsToOneGroup(db);
   migrateAgentAvatarsN5(db);
+  migrateAgentAvatarShapesN6(db);
   // A3: an agent's 1:1 chat is a normal 'chat' session in its group's Project,
   // linked by agent_id (at most one per agent, made on first open). Deleting
   // the agent (with its group) only unlinks the row: the caller then runs the
@@ -671,6 +679,109 @@ function migrateAgentAvatarsN5(db: DatabaseSync): void {
     }
   } finally {
     if (foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+/** N6: accept ten silhouettes, repair in-limit collisions and guard future writes. */
+function migrateAgentAvatarShapesN6(db: DatabaseSync): void {
+  const schema = db
+    .prepare("select sql from sqlite_master where type = 'table' and name = 'agents'")
+    .get() as { sql: string } | undefined;
+  const rebuild =
+    !schema || AGENT_AVATAR_SHAPES.some((shape) => !schema.sql.includes(`'${shape}'`));
+  const indexExists =
+    db
+      .prepare(
+        "select 1 from sqlite_master where type = 'index' and name = 'idx_agents_group_avatar_shape'",
+      )
+      .get() !== undefined;
+  const triggerCount = (
+    db
+      .prepare(
+        `select count(*) as count from sqlite_master where type = 'trigger'
+         and name in ('agents_group_avatar_shape_unique_insert', 'agents_group_avatar_shape_unique_update')`,
+      )
+      .get() as { count: number }
+  ).count;
+  if (!rebuild && !indexExists && triggerCount === 2) return;
+
+  const foreignKeys = (db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number })
+    .foreign_keys;
+  if (rebuild) db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("begin");
+    try {
+      if (rebuild) {
+        db.exec(`create table agents_replacement (${AGENTS_TABLE_BODY});
+          insert into agents_replacement (group_id, ${AGENT_COPY_COLUMNS}, avatar_shape)
+            select group_id, ${AGENT_COPY_COLUMNS}, avatar_shape from agents;
+          drop table agents;
+          alter table agents_replacement rename to agents;`);
+      }
+      if (indexExists) db.exec("drop index idx_agents_group_avatar_shape");
+      normalizeGroupedAvatarShapes(db);
+      db.exec(`create trigger if not exists agents_group_avatar_shape_unique_insert
+        before insert on agents
+        when new.group_id is not null
+          and (select count(*) from agents where group_id = new.group_id) < 10
+          and exists (select 1 from agents where group_id = new.group_id and avatar_shape = new.avatar_shape)
+        begin
+          select raise(abort, 'UNIQUE constraint failed: agents.group_id, agents.avatar_shape');
+        end;
+        create trigger if not exists agents_group_avatar_shape_unique_update
+        before update of group_id, avatar_shape on agents
+        when new.group_id is not null
+          and (select count(*) from agents where group_id = new.group_id) <= 10
+          and exists (select 1 from agents where group_id = new.group_id and avatar_shape = new.avatar_shape and id <> new.id)
+        begin
+          select raise(abort, 'UNIQUE constraint failed: agents.group_id, agents.avatar_shape');
+        end;`);
+      if (db.prepare("PRAGMA foreign_key_check").all().length > 0) {
+        throw new Error("agent avatar-shape migration left dangling foreign keys");
+      }
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  } finally {
+    if (rebuild && foreignKeys) db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function normalizeGroupedAvatarShapes(db: DatabaseSync): void {
+  const rows = db
+    .prepare(
+      `select a.id, a.group_id, a.avatar_shape
+       from agents a left join agent_group_members m on m.agent_id = a.id
+       where a.group_id is not null
+       order by a.group_id, case when m.agent_id is null then 1 else 0 end,
+         m.joined_at, m.rowid, a.id`,
+    )
+    .all() as Array<{
+    id: string;
+    group_id: string;
+    avatar_shape: (typeof AGENT_AVATAR_SHAPES)[number];
+  }>;
+  const byGroup = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const members = byGroup.get(row.group_id) ?? [];
+    members.push(row);
+    byGroup.set(row.group_id, members);
+  }
+
+  const update = db.prepare("update agents set avatar_shape = ? where id = ?");
+  for (const members of byGroup.values()) {
+    // Old app builds could leave groups over the current 10-member limit. Keep
+    // those extra rows intact; there are only ten shapes to assign uniquely.
+    const inLimitMembers = members.slice(0, AGENT_AVATAR_SHAPES.length);
+    const allocated = allocateUniqueGroupAvatarShapes(
+      inLimitMembers.map(({ id, avatar_shape }) => ({ agentId: id, preferredShape: avatar_shape })),
+    );
+    for (const member of inLimitMembers) {
+      const shape = allocated.get(member.id);
+      if (shape && shape !== member.avatar_shape) update.run(shape, member.id);
+    }
   }
 }
 

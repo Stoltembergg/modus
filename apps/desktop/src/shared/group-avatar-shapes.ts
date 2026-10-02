@@ -14,12 +14,21 @@ export function allocateUniqueGroupAvatarShapes(
   }
 
   const used = new Set<AgentAvatarShape>();
+  const preferredOwners = new Set<AgentAvatarShape>();
   const assignments = new Map<string, AgentAvatarShape>();
 
+  // Reserve the first owner of each preferred shape before resolving collisions.
+  // This keeps every later unique preference stable when an earlier member collides.
   for (const member of members) {
-    const shape = used.has(member.preferredShape)
-      ? AGENT_AVATAR_SHAPES.find((candidate) => !used.has(candidate))
-      : member.preferredShape;
+    if (preferredOwners.has(member.preferredShape)) continue;
+    preferredOwners.add(member.preferredShape);
+    used.add(member.preferredShape);
+    assignments.set(member.agentId, member.preferredShape);
+  }
+
+  for (const member of members) {
+    if (assignments.has(member.agentId)) continue;
+    const shape = AGENT_AVATAR_SHAPES.find((candidate) => !used.has(candidate));
     if (!shape) {
       throw new RangeError(`No avatar shape remains for agent ${member.agentId}`);
     }
@@ -27,5 +36,13 @@ export function allocateUniqueGroupAvatarShapes(
     assignments.set(member.agentId, shape);
   }
 
-  return assignments;
+  return new Map(
+    members.map((member) => {
+      const shape = assignments.get(member.agentId);
+      if (!shape) {
+        throw new RangeError(`No avatar shape was assigned to agent ${member.agentId}`);
+      }
+      return [member.agentId, shape];
+    }),
+  );
 }

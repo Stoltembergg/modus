@@ -37,6 +37,7 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "group-max-members": "A group can have at most 10 agents.",
   "agent-model-required": "Choose a model for this agent.",
   "agent-model-unavailable": "That model is not available. Connect its provider or choose another.",
+  "agent-avatar-shape-taken": "Another agent in this group already uses that shape.",
 };
 
 /**

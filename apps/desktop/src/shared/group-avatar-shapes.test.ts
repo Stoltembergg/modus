@@ -35,6 +35,24 @@ describe("group avatar shape allocation", () => {
     );
   });
 
+  it("reserves a later unique preference before resolving an earlier collision", () => {
+    const allocate = allocator();
+
+    const result = allocate([
+      { agentId: "a", preferredShape: "circle" },
+      { agentId: "b", preferredShape: "circle" },
+      { agentId: "c", preferredShape: "squircle" },
+    ]);
+
+    expect(result).toEqual(
+      new Map([
+        ["a", "circle"],
+        ["b", "roundedSquare"],
+        ["c", "squircle"],
+      ]),
+    );
+  });
+
   it("assigns all ten silhouettes once in stable member order", () => {
     const allocate = allocator();
     const preferences: GroupMemberShapePreference[] = Array.from({ length: 10 }, (_, index) => ({
