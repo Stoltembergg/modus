@@ -58,6 +58,28 @@ describe("AgentAvatar", () => {
     }
   });
 
+  it("draws triangle and pentagon as vector silhouettes at compact and header sizes", () => {
+    expect(AGENT_AVATAR_SHAPES).toContain("triangle");
+    expect(AGENT_AVATAR_SHAPES).toContain("pentagon");
+
+    for (const shape of ["triangle", "pentagon"] as const) {
+      for (const size of [20, 24] as const) {
+        const { unmount } = render(
+          <AgentAvatar
+            color="blue"
+            face="happy"
+            shape={shape as (typeof AGENT_AVATAR_SHAPES)[number]}
+            size={size}
+          />,
+        );
+        const fill = avatar().querySelector(".agent-avatar-fill");
+        expect(fill?.tagName.toLowerCase()).toBe("polygon");
+        expect(avatar().querySelector("svg")?.getAttribute("width")).toBe(String(size));
+        unmount();
+      }
+    }
+  });
+
   it("idle and working animate; waiting adds the amber ring and brow; archived is grey", () => {
     const { rerender } = render(<AgentAvatar color="blue" face="happy" seed="a-1" />);
     expect(avatar().dataset.state).toBe("idle");

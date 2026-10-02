@@ -90,6 +90,8 @@ export const AGENT_AVATAR_SHAPES = [
   "blob",
   "diamond",
   "shield",
+  "triangle",
+  "pentagon",
 ] as const;
 export type AgentAvatarShape = (typeof AGENT_AVATAR_SHAPES)[number];
 

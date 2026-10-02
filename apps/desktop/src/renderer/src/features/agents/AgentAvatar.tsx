@@ -156,6 +156,22 @@ function ShapeFill({
       const pts = hexPoints(24, 24, r);
       return <polygon className="agent-avatar-fill" fill={fill} points={pts} />;
     }
+    case "triangle":
+      return (
+        <polygon
+          className="agent-avatar-fill"
+          fill={fill}
+          points={regularPolygonPoints(24, 24, r, 3, -90)}
+        />
+      );
+    case "pentagon":
+      return (
+        <polygon
+          className="agent-avatar-fill"
+          fill={fill}
+          points={regularPolygonPoints(24, 24, r, 5, -90)}
+        />
+      );
     case "capsule":
       return (
         <rect
@@ -261,6 +277,26 @@ function ShapeRing({ shape, strokeWidth }: { shape: AgentAvatarShape; strokeWidt
           strokeWidth={strokeWidth}
         />
       );
+    case "triangle":
+      return (
+        <polygon
+          className={cn("agent-avatar-ring", ANIMATED)}
+          fill="none"
+          points={regularPolygonPoints(24, 24, r, 3, -90)}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
+      );
+    case "pentagon":
+      return (
+        <polygon
+          className={cn("agent-avatar-ring", ANIMATED)}
+          fill="none"
+          points={regularPolygonPoints(24, 24, r, 5, -90)}
+          stroke={stroke}
+          strokeWidth={strokeWidth}
+        />
+      );
     case "capsule":
       return (
         <rect
@@ -323,6 +359,19 @@ function ShapeRing({ shape, strokeWidth }: { shape: AgentAvatarShape; strokeWidt
 function hexPoints(cx: number, cy: number, radius: number): string {
   return Array.from({ length: 6 }, (_, index) => {
     const angle = ((index * 60 - 30) * Math.PI) / 180;
+    return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
+  }).join(" ");
+}
+
+function regularPolygonPoints(
+  cx: number,
+  cy: number,
+  radius: number,
+  sides: number,
+  rotation: number,
+): string {
+  return Array.from({ length: sides }, (_, index) => {
+    const angle = ((index * 360) / sides + rotation) * (Math.PI / 180);
     return `${cx + radius * Math.cos(angle)},${cy + radius * Math.sin(angle)}`;
   }).join(" ");
 }
