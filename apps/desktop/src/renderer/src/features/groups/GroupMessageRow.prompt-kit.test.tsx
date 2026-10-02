@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GroupMessage } from "../../../../shared/contracts";
 import { GroupMessageRow } from "./GroupMessageRow";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
@@ -178,6 +178,30 @@ describe("GroupMessageRow Prompt Kit", () => {
     expect(row.textContent).toContain("The review is complete.");
     expect(row.textContent).not.toContain("Agreed");
     expect(row.textContent).not.toContain("044547a");
+  });
+
+  it("hides raw execution ids but keeps the accessible filter action and metadata", () => {
+    const onExecutionFilter = vi.fn();
+    render(
+      <GroupMessageRow
+        labels={labels}
+        members={members}
+        message={{
+          ...agentMessage("Ready to ship."),
+          chainId: "exec-1234567890-full",
+          status: "completed",
+        }}
+        onExecutionFilter={onExecutionFilter}
+      />,
+    );
+
+    const row = screen.getByTestId("group-message");
+    const filter = screen.getByRole("button", { name: "Filter conversation to this execution" });
+    expect(row.textContent).not.toContain("#exec-");
+    expect(row.textContent).toContain("Completed");
+    expect(row.querySelector("time")).toBeTruthy();
+    fireEvent.click(filter);
+    expect(onExecutionFilter).toHaveBeenCalledWith("exec-1234567890-full");
   });
 
   it("strips redundant self-intros from agent prose", () => {

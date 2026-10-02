@@ -1,3 +1,4 @@
+import { IconFilter } from "@tabler/icons-react";
 import { useState } from "react";
 import type {
   AgentAvatarColor,
@@ -10,7 +11,7 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   parseGroupCollabStatusLine,
 } from "../../../../shared/group-collab-status";
-import { messageExecutionId, shortExecutionLabel } from "../../../../shared/group-execution-link";
+import { messageExecutionId } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
 import {
@@ -241,17 +242,17 @@ function MessageMeta({
   const status = message.status;
   const executionId = messageExecutionId(message);
   const showChip = message.authorKind === "user" || Boolean(message.chainId);
-  const chipTitle = message.authorKind === "user" ? message.body.trim().slice(0, 80) : undefined;
   const executionChip = showChip ? (
     <button
-      className="rounded-sm border border-hairline px-1 py-px font-mono text-fg-muted hover:border-accent/40 hover:text-fg"
+      aria-label="Filter conversation to this execution"
+      className="flex size-5 shrink-0 items-center justify-center rounded text-fg-faint transition-colors hover:bg-hover hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring-soft)]"
       data-execution-id={executionId}
-      data-testid="group-execution-chip"
+      data-testid="group-execution-filter"
       onClick={() => onExecutionFilter?.(executionId)}
-      title={chipTitle ? `Filter to: ${chipTitle}` : "Filter transcript to this execution"}
+      title="Filter conversation to this execution"
       type="button"
     >
-      #{shortExecutionLabel(executionId)}
+      <IconFilter aria-hidden size={12} stroke={1.8} />
     </button>
   ) : null;
   const tokenLabel =
