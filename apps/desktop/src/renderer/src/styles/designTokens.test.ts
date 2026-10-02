@@ -10,6 +10,7 @@ describe("Modus semantic design tokens", () => {
       "--surface-app",
       "--surface-sidebar",
       "--surface-main",
+      "--surface-main-glass",
       "--surface-raised",
       "--surface-glass",
       "--text-primary",
@@ -90,7 +91,13 @@ describe("Modus semantic design tokens", () => {
       /--surface-sidebar:\s*color-mix\(in srgb, var\(--color-panel\) 94%, transparent\)/,
     );
     expect(css).toMatch(
-      /--surface-main:\s*color-mix\(in srgb, var\(--color-canvas\) 98%, transparent\)/,
+      /--surface-main:\s*var\(--color-canvas\)/,
+    );
+    expect(css).toMatch(
+      /--surface-main-glass:\s*color-mix\(in srgb, var\(--color-canvas\) 94%, transparent\)/,
+    );
+    expect(css).toMatch(
+      /:root\[data-native-glass="true"\] \.surface-main\s*\{\s*background-color: var\(--surface-main-glass\)/,
     );
     const mainSurface = css.match(/(?:^|\n)\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
     expect(mainSurface).not.toContain("backdrop-filter");
