@@ -49,8 +49,11 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       await mcpMock.connect?.();
     }
     setNotificationHandler(): void {}
-    async listTools(): Promise<{ tools: Array<Record<string, unknown>> }> {
-      if (mcpMock.listTools) return await mcpMock.listTools();
+    async listTools(params?: { cursor?: string }): Promise<{
+      tools: Array<Record<string, unknown>>;
+      nextCursor?: string;
+    }> {
+      if (mcpMock.listTools) return await mcpMock.listTools(params);
       return { tools: mcpMock.tools };
     }
     async callTool(
@@ -111,6 +114,7 @@ vi.mock("../agent/agent-run-store", () => ({
 
 import {
   disposeAllMcp,
+  inspectComposioMcpSession,
   listAllMcpTools,
   listAllowlistedMcpToolNames,
   listMcpServers,
@@ -341,6 +345,52 @@ async function writeLifecycleConfig(enabled: boolean): Promise<void> {
 }
 
 describe("MCP registered tool identity", () => {
+  it("preserves the existing encoding for short identities", () => {
+    expect(mcpToolName("docs", "search", "allowlisted")).toBe(
+      "mcp_v1_allowlisted_4_646f6373_6_736561726368",
+    );
+  });
+
+  it("keeps long Composio identities within model tool-name limits and distinct", () => {
+    const tool = "COMPOSIO_MULTI_EXECUTE_TOOL";
+    const name = mcpToolName("__modus_composio", tool);
+    const names = [
+      name,
+      mcpToolName("__modus_composio", "COMPOSIO_SEARCH_TOOLS"),
+      mcpToolName("other_composio_server", tool),
+      mcpToolName("__modus_composio", tool, "allowlisted"),
+      mcpToolName("a", "bc".repeat(30)),
+      mcpToolName("ab", "c".repeat(60)),
+    ];
+
+    for (const registeredName of names) {
+      expect(registeredName.length).toBeLessThanOrEqual(64);
+      expect(registeredName).toMatch(/^mcp_v1_(?:dangerous|allowlisted)_[A-Za-z0-9_-]+$/);
+    }
+    expect(new Set(names).size).toBe(names.length);
+    expect(mcpToolName("__modus_composio", tool)).toBe(name);
+  });
+
+  it("keeps long allowlisted identities separate from dangerous registrations", async () => {
+    const rawName = "COMPOSIO_MULTI_EXECUTE_TOOL";
+    mcpMock.tools = [{ name: rawName, inputSchema: { type: "object" } }];
+    await configureServer([rawName]);
+    const safeName = listAllowlistedMcpToolNames()[0];
+    expect(safeName?.length).toBeLessThanOrEqual(64);
+    expect(toolRegistry.getEntry(safeName ?? "")?.permission).toEqual({ danger: "safe" });
+
+    await configureServer([]);
+    const dangerousName = listMcpServers()[0]?.tools[0]?.registeredName;
+
+    expect(dangerousName?.length).toBeLessThanOrEqual(64);
+    expect(dangerousName).not.toBe(safeName);
+    expect(toolRegistry.getEntry(safeName ?? "")).toBeUndefined();
+    expect(toolRegistry.getEntry(dangerousName ?? "")?.permission).toEqual({
+      danger: "dangerous",
+      action: "mcp.call",
+    });
+  });
+
   it("uses injective names and permission-specific versions for raw identities", () => {
     const dotted = mcpToolName("docs.v1", "search", "allowlisted");
     const underscored = mcpToolName("docs_v1", "search", "allowlisted");
@@ -595,6 +645,217 @@ describe("Composio MCP bridge", () => {
     url: "https://mcp.composio.dev/session/secret-path",
     headers: { "x-session-key": "session-secret" },
     allowedToolSlugs,
+  });
+
+  it.each([
+    {
+      url: "https://connect.composio.dev/mcp",
+      headers: { "x-consumer-api-key": "ck_consumer-secret" },
+    },
+    {
+      url: "https://mcp.composio.dev/session/secret-path",
+      headers: { "x-session-key": "session-secret" },
+    },
+  ])("inspects $url with its authentication header and closes the probe", async (input) => {
+    mcpMock.tools = [
+      {
+        name: "COMPOSIO_SEARCH_TOOLS",
+        description: "Find available tools",
+        inputSchema: { type: "object", properties: { query: { type: "string" } } },
+        annotations: { readOnlyHint: true },
+      },
+    ];
+
+    const discovered = await inspectComposioMcpSession(input);
+
+    expect(discovered).toEqual([
+      {
+        name: "COMPOSIO_SEARCH_TOOLS",
+        description: "Find available tools",
+        registeredName: expect.stringMatching(/^mcp_v1_dangerous_/),
+      },
+    ]);
+    expect(mcpMock.streamableHttpCalls).toHaveLength(1);
+    expect(mcpMock.streamableHttpCalls[0]).toMatchObject({
+      url: input.url,
+      options: { requestInit: { headers: input.headers, redirect: "error" } },
+    });
+    expect(getMockClient().close).toHaveBeenCalledOnce();
+    expect(getMockTransport(getMockClient()).close).toHaveBeenCalledOnce();
+    expect(toolRegistry.getEntry(discovered[0]?.registeredName ?? "")).toBeUndefined();
+    expect(mcpMock.sseCalls).toEqual([]);
+  });
+
+  it("discovers every paginated tool without registering or closing the active session", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    const activeTools = await registerComposioMcpSession(
+      sessionInput(["GITHUB_LIST_REPOSITORIES"]),
+    );
+    const activeClient = getMockClient();
+    const activeTransport = getMockTransport(activeClient);
+    const activeDefinition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === activeTools[0]?.registeredName);
+    const definitionsBefore = toolRegistry.getCustomToolDefinitions("chat");
+    const cursors: Array<string | undefined> = [];
+    mcpMock.listTools = async (params) => {
+      cursors.push(params?.cursor);
+      return params?.cursor === "next"
+        ? { tools: [{ name: "COMPOSIO_MULTI_EXECUTE_TOOL", inputSchema: { type: "object" } }] }
+        : {
+            tools: [{ name: "COMPOSIO_SEARCH_TOOLS", inputSchema: { type: "object" } }],
+            nextCursor: "next",
+          };
+    };
+
+    const discovered = await inspectComposioMcpSession({
+      url: "https://connect.composio.dev/mcp",
+      headers: { "x-consumer-api-key": "ck_probe" },
+    });
+
+    expect(discovered.map((tool) => tool.name)).toEqual([
+      "COMPOSIO_SEARCH_TOOLS",
+      "COMPOSIO_MULTI_EXECUTE_TOOL",
+    ]);
+    expect(cursors).toEqual([undefined, "next"]);
+    expect(activeClient.close).not.toHaveBeenCalled();
+    expect(activeTransport.close).not.toHaveBeenCalled();
+    expect(toolRegistry.getCustomToolDefinitions("chat")).toEqual(definitionsBefore);
+    expect(
+      toolRegistry
+        .getCustomToolDefinitions("chat")
+        .find((tool) => tool.name === activeTools[0]?.registeredName),
+    ).toBe(activeDefinition);
+    expect(getMockClient(1).close).toHaveBeenCalledOnce();
+    expect(getMockTransport(getMockClient(1)).close).toHaveBeenCalledOnce();
+  });
+
+  it("does not supersede a Composio registration that is still connecting", async () => {
+    const connecting = deferred<void>();
+    const started = deferred<void>();
+    let connections = 0;
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    mcpMock.connect = async () => {
+      connections += 1;
+      if (connections === 1) {
+        started.resolve();
+        await connecting.promise;
+      }
+    };
+    const registration = registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+    await started.promise;
+
+    await inspectComposioMcpSession({
+      url: "https://connect.composio.dev/mcp",
+      headers: { "x-consumer-api-key": "ck_probe" },
+    });
+    connecting.resolve();
+    const registered = await registration;
+
+    expect(registered.map((tool) => tool.name)).toEqual(["GITHUB_LIST_REPOSITORIES"]);
+    expect(toolRegistry.getEntry(registered[0]?.registeredName ?? "")).toBeDefined();
+    expect(getMockClient().close).not.toHaveBeenCalled();
+    expect(getMockTransport(getMockClient()).close).not.toHaveBeenCalled();
+    expect(getMockClient(1).close).toHaveBeenCalledOnce();
+  });
+
+  it.each(["connect", "list"])("closes client and transport when probe %s fails", async (stage) => {
+    const failure = async () => {
+      throw new Error(`probe ${stage} failed`);
+    };
+    if (stage === "connect") mcpMock.connect = failure;
+    else mcpMock.listTools = failure;
+
+    await expect(
+      inspectComposioMcpSession({
+        url: "https://connect.composio.dev/mcp",
+        headers: { "x-consumer-api-key": "ck_probe" },
+      }),
+    ).rejects.toThrow(`probe ${stage} failed`);
+
+    expect(getMockClient().close).toHaveBeenCalled();
+    expect(getMockTransport(getMockClient()).close).toHaveBeenCalled();
+    expect(mcpMock.sseCalls).toEqual([]);
+  });
+
+  it("rejects invalid probe credentials without touching an active registration", async () => {
+    mcpMock.tools = [{ name: "GITHUB_LIST_REPOSITORIES", inputSchema: { type: "object" } }];
+    const registered = await registerComposioMcpSession(sessionInput(["GITHUB_LIST_REPOSITORIES"]));
+    const activeClient = getMockClient();
+
+    for (const input of [
+      { url: "invalid", headers: { "x-consumer-api-key": "ck_probe" } },
+      { url: "http://connect.composio.dev/mcp", headers: { "x-consumer-api-key": "ck_probe" } },
+      {
+        url: "https://user:secret@connect.composio.dev/mcp",
+        headers: { "x-consumer-api-key": "ck_probe" },
+      },
+      { url: "https://connect.composio.dev/mcp", headers: {} },
+    ]) {
+      await expect(inspectComposioMcpSession(input)).rejects.toThrow(/URL|HTTPS|headers/);
+    }
+
+    expect(mcpMock.clients).toHaveLength(1);
+    expect(activeClient.close).not.toHaveBeenCalled();
+    expect(toolRegistry.getEntry(registered[0]?.registeredName ?? "")).toBeDefined();
+  });
+
+  it("closes the probe when a pagination cursor repeats", async () => {
+    mcpMock.listTools = async () => ({ tools: [], nextCursor: "repeat" });
+
+    await expect(
+      inspectComposioMcpSession({
+        url: "https://connect.composio.dev/mcp",
+        headers: { "x-consumer-api-key": "ck_probe" },
+      }),
+    ).rejects.toThrow(/cursor/i);
+
+    expect(getMockClient().close).toHaveBeenCalledOnce();
+    expect(getMockTransport(getMockClient()).close).toHaveBeenCalledOnce();
+  });
+
+  it("closes a probe whose tool listing times out", async () => {
+    vi.useFakeTimers();
+    try {
+      mcpMock.listTools = () => new Promise(() => {});
+      const probe = inspectComposioMcpSession({
+        url: "https://connect.composio.dev/mcp",
+        headers: { "x-consumer-api-key": "ck_probe" },
+      });
+      const settlement = probe.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await settlement).toMatchObject({ message: expect.stringMatching(/timed out/i) });
+      expect(getMockClient().close).toHaveBeenCalledOnce();
+      expect(getMockTransport(getMockClient()).close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes a timed-out probe even when its connection completes later", async () => {
+    vi.useFakeTimers();
+    try {
+      const connecting = deferred<void>();
+      mcpMock.connect = () => connecting.promise;
+      const probe = inspectComposioMcpSession({
+        url: "https://connect.composio.dev/mcp",
+        headers: { "x-consumer-api-key": "ck_probe" },
+      });
+      const settlement = probe.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await settlement).toMatchObject({ message: expect.stringMatching(/timed out/i) });
+      connecting.resolve();
+      await Promise.resolve();
+
+      expect(getMockClient().close).toHaveBeenCalled();
+      expect(getMockTransport(getMockClient()).close).toHaveBeenCalled();
+      expect(toolRegistry.getCustomToolDefinitions("chat")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("registers exactly the selected tools for chat through dangerous mcp.call permissions", async () => {

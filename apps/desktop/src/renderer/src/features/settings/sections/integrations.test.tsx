@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -48,6 +48,34 @@ function tool(slug: string, name = slug): ComposioToolSummary {
   return { toolkitSlug: "github", slug, name };
 }
 
+function consumerState(
+  overrides: Partial<NonNullable<ComposioSettingsState["consumer"]>> = {},
+): ComposioSettingsState {
+  return {
+    ...readyState({ toolkits: [] }),
+    keyType: "consumer",
+    consumer: {
+      enabled: false,
+      selectedToolSlugs: [],
+      tools: [
+        {
+          toolkitSlug: "composio-for-you",
+          slug: "COMPOSIO_SEARCH_TOOLS",
+          name: "Search tools",
+          description: "Discover tools in your connected apps.",
+        },
+        {
+          toolkitSlug: "composio-for-you",
+          slug: "COMPOSIO_MULTI_EXECUTE_TOOL",
+          name: "Execute tools",
+          description: "Run tools in your connected apps.",
+        },
+      ],
+      ...overrides,
+    },
+  };
+}
+
 function installComposioApi() {
   type ComposioApi = Window["modus"]["composio"];
   const api: ComposioApi = {
@@ -61,6 +89,7 @@ function installComposioApi() {
     setToolkitPolicy: vi.fn<ComposioApi["setToolkitPolicy"]>(),
     renameAccount: vi.fn<ComposioApi["renameAccount"]>(),
     disconnectAccount: vi.fn<ComposioApi["disconnectAccount"]>(),
+    diagnose: vi.fn<ComposioApi["diagnose"]>(),
   };
   Object.defineProperty(window, "modus", {
     configurable: true,
@@ -75,7 +104,7 @@ describe("IntegrationsSettingsPanel", () => {
     vi.unstubAllGlobals();
   });
 
-  it("shows the unconfigured profile state with a password-masked Project API Key field", async () => {
+  it("shows the unconfigured profile state with a password-masked Composio API Key field", async () => {
     const api = installComposioApi();
     api.getState.mockResolvedValue({
       apiKeyConfigured: false,
@@ -85,9 +114,9 @@ describe("IntegrationsSettingsPanel", () => {
 
     render(<IntegrationsSettingsPanel />);
 
-    const keyInput = await screen.findByLabelText("Composio Project API Key");
+    const keyInput = await screen.findByLabelText("Composio API Key");
     expect((keyInput as HTMLInputElement).type).toBe("password");
-    expect(screen.getByText(/armazenada com segurança neste dispositivo/i)).toBeTruthy();
+    expect(screen.getByText(/stored securely on this device/i)).toBeTruthy();
   });
 
   it("submits and clears the key without reading it back into the interface", async () => {
@@ -101,9 +130,9 @@ describe("IntegrationsSettingsPanel", () => {
     const user = userEvent.setup();
 
     render(<IntegrationsSettingsPanel />);
-    const keyInput = await screen.findByLabelText("Composio Project API Key");
+    const keyInput = await screen.findByLabelText("Composio API Key");
     await user.type(keyInput, "cmp_test_secret_value");
-    await user.click(screen.getByRole("button", { name: "Salvar chave" }));
+    await user.click(screen.getByRole("button", { name: "Save key" }));
 
     await waitFor(() =>
       expect(api.setApiKey).toHaveBeenCalledWith({ apiKey: "cmp_test_secret_value" }),
@@ -111,6 +140,207 @@ describe("IntegrationsSettingsPanel", () => {
     await waitFor(() => expect((keyInput as HTMLInputElement).value).toBe(""));
     expect(document.body.textContent).not.toContain("cmp_test_secret_value");
     expect(screen.queryByDisplayValue("cmp_test_secret_value")).toBeNull();
+  });
+
+  it("shows consumer discovery tools disabled without platform account controls", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(consumerState());
+
+    render(<IntegrationsSettingsPanel />);
+
+    const searchTool = await screen.findByRole("checkbox", { name: /search tools/i });
+    expect((searchTool as HTMLInputElement).checked).toBe(false);
+    expect(
+      (screen.getByRole("switch", { name: /enable for agents/i }) as HTMLInputElement).checked,
+    ).toBe(false);
+    expect(
+      (screen.getByRole("switch", { name: /enable for agents/i }) as HTMLInputElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/connected mode: composio for you/i)).toBeTruthy();
+    expect(screen.queryByText("Platforms and permissions")).toBeNull();
+    expect(screen.queryByLabelText("Search platforms")).toBeNull();
+    expect(screen.queryByRole("radio")).toBeNull();
+    expect(api.listTools).not.toHaveBeenCalled();
+    expect(api.setToolkitPolicy).not.toHaveBeenCalled();
+  });
+
+  it("saves explicit consumer selections and enables agents without an account ID", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(consumerState());
+    api.setToolkitPolicy.mockImplementation(async (input: ComposioToolkitPolicyInput) =>
+      consumerState({ enabled: input.enabled, selectedToolSlugs: input.selectedToolSlugs }),
+    );
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.click(await screen.findByRole("checkbox", { name: /search tools/i }));
+    await waitFor(() =>
+      expect(api.setToolkitPolicy).toHaveBeenLastCalledWith({
+        toolkitSlug: "composio-for-you",
+        enabled: false,
+        selectedToolSlugs: ["COMPOSIO_SEARCH_TOOLS"],
+      }),
+    );
+    const enabled = screen.getByRole("switch", { name: /enable for agents/i });
+    await user.click(enabled);
+    await waitFor(() =>
+      expect(api.setToolkitPolicy).toHaveBeenLastCalledWith({
+        toolkitSlug: "composio-for-you",
+        enabled: true,
+        selectedToolSlugs: ["COMPOSIO_SEARCH_TOOLS"],
+      }),
+    );
+    await waitFor(() => expect((enabled as HTMLInputElement).checked).toBe(true));
+
+    await user.click(screen.getByRole("checkbox", { name: /search tools/i }));
+    await waitFor(() =>
+      expect(api.setToolkitPolicy).toHaveBeenLastCalledWith({
+        toolkitSlug: "composio-for-you",
+        enabled: false,
+        selectedToolSlugs: [],
+      }),
+    );
+    await waitFor(() => expect((enabled as HTMLInputElement).checked).toBe(false));
+  });
+
+  it("selects consumer tools matching search and clears the whole selection", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(consumerState());
+    api.setToolkitPolicy.mockImplementation(async (input: ComposioToolkitPolicyInput) =>
+      consumerState({ enabled: input.enabled, selectedToolSlugs: input.selectedToolSlugs }),
+    );
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.type(await screen.findByLabelText("Search Composio For You tools"), "execute");
+    expect(screen.queryByRole("checkbox", { name: /search tools/i })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    await waitFor(() =>
+      expect(api.setToolkitPolicy).toHaveBeenLastCalledWith({
+        toolkitSlug: "composio-for-you",
+        enabled: false,
+        selectedToolSlugs: ["COMPOSIO_MULTI_EXECUTE_TOOL"],
+      }),
+    );
+    expect(
+      (screen.getByRole("checkbox", { name: /execute tools/i }) as HTMLInputElement).checked,
+    ).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() =>
+      expect(api.setToolkitPolicy).toHaveBeenLastCalledWith({
+        toolkitSlug: "composio-for-you",
+        enabled: false,
+        selectedToolSlugs: [],
+      }),
+    );
+    expect(
+      (screen.getByRole("checkbox", { name: /execute tools/i }) as HTMLInputElement).checked,
+    ).toBe(false);
+  });
+
+  it("shows consumer connection diagnostics without claiming project API access", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(consumerState());
+    api.diagnose.mockResolvedValue({ apiReachable: true, mcpSessionReady: true });
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+
+    expect(await screen.findByText("Composio For You MCP: reachable")).toBeTruthy();
+    expect(screen.getByText("MCP connection: connected")).toBeTruthy();
+    expect(screen.queryByText(/^Composio API:/)).toBeNull();
+  });
+
+  it("switches to consumer mode on credential save without enabling tools or keeping diagnostics", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(readyState());
+    api.setApiKey.mockResolvedValue(consumerState());
+    api.diagnose.mockResolvedValue({ apiReachable: true, mcpSessionReady: true });
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+    await screen.findByText("Composio API: reachable");
+    const keyInput = screen.getByLabelText("Composio API Key");
+    await user.type(keyInput, "ck_test_secret_value");
+    await user.click(screen.getByRole("button", { name: "Replace key" }));
+
+    await screen.findByRole("checkbox", { name: /search tools/i });
+    expect(screen.queryByText("Platforms and permissions")).toBeNull();
+    expect(screen.queryByText(/^Composio API:/)).toBeNull();
+    expect(screen.queryByText(/^Composio For You MCP:/)).toBeNull();
+    expect((keyInput as HTMLInputElement).value).toBe("");
+    expect(api.setToolkitPolicy).not.toHaveBeenCalled();
+    expect(
+      (screen.getByRole("switch", { name: /enable for agents/i }) as HTMLInputElement).checked,
+    ).toBe(false);
+  });
+
+  it("discards cached project tools when catalog refresh changes the credential mode", async () => {
+    const api = installComposioApi();
+    api.getState.mockResolvedValue(readyState());
+    api.listTools
+      .mockResolvedValueOnce([tool("GITHUB_OLD_TOOL", "Old project tool")])
+      .mockResolvedValueOnce([tool("GITHUB_NEW_TOOL", "New project tool")]);
+    api.refreshCatalog.mockResolvedValue(consumerState());
+    api.setApiKey.mockResolvedValue(readyState());
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.click(await screen.findByRole("button", { name: "Configure" }));
+    await screen.findByRole("checkbox", { name: /old project tool/i });
+    await user.click(screen.getByRole("button", { name: "Refresh catalog" }));
+    await screen.findByRole("checkbox", { name: /search tools/i });
+    await user.type(screen.getByLabelText("Composio API Key"), "cmp_replacement_test");
+    await user.click(screen.getByRole("button", { name: "Replace key" }));
+    await user.click(await screen.findByRole("button", { name: "Configure" }));
+
+    expect(await screen.findByRole("checkbox", { name: /new project tool/i })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /old project tool/i })).toBeNull();
+    expect(api.listTools).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not restore an obsolete project view when authorization polling finishes after a key change", async () => {
+    const api = installComposioApi();
+    let finishProjectRefresh!: (state: ComposioSettingsState) => void;
+    api.getState.mockResolvedValueOnce(readyState()).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishProjectRefresh = resolve;
+        }),
+    );
+    api.setApiKey.mockResolvedValue(consumerState());
+    api.startConnection.mockResolvedValue({
+      id: "safe-operation-id",
+      toolkitSlug: "github",
+      alias: "Second account",
+      status: "pending",
+    });
+    api.getConnectionOperation.mockResolvedValue({
+      id: "safe-operation-id",
+      toolkitSlug: "github",
+      alias: "Second account",
+      status: "active",
+    });
+    const user = userEvent.setup();
+
+    render(<IntegrationsSettingsPanel />);
+    await user.click(await screen.findByRole("button", { name: "Configure" }));
+    await user.click(screen.getByRole("button", { name: /connect another account/i }));
+    await user.type(screen.getByLabelText("Account name"), "Second account");
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => expect(api.getState).toHaveBeenCalledTimes(2), { timeout: 1500 });
+    await user.type(screen.getByLabelText("Composio API Key"), "ck_replacement_test");
+    await user.click(screen.getByRole("button", { name: "Replace key" }));
+    await screen.findByRole("checkbox", { name: /search tools/i });
+
+    await act(async () => {
+      finishProjectRefresh(readyState());
+    });
+    await waitFor(() => expect(screen.queryByText("Platforms and permissions")).toBeNull());
+    expect(screen.getByRole("checkbox", { name: /search tools/i })).toBeTruthy();
+    expect(screen.queryByText(/connected second account/i)).toBeNull();
   });
 
   it("lets agents use exactly one selected account when a toolkit has multiple accounts", async () => {

@@ -41,6 +41,12 @@ export type ComposioConnectionOperation = {
 
 export type ComposioSettingsState = {
   apiKeyConfigured: boolean;
+  keyType?: "project" | "consumer";
+  consumer?: {
+    enabled: boolean;
+    selectedToolSlugs: string[];
+    tools: ComposioToolSummary[];
+  };
   status: "unconfigured" | "loading" | "ready" | "error";
   toolkits: ComposioToolkitSummary[];
   error?: ComposioUserError;

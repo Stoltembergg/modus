@@ -55,6 +55,17 @@ describe("Composio profile store", () => {
     expect(() => createComposioProfileStore({ userDataPath }).load()).toThrow(/profile/i);
   });
 
+  it("persists a separate For You selection alongside the legacy project policy", () => {
+    const store = createComposioProfileStore({ userDataPath });
+    const profile = store.load();
+    const saved = {
+      ...profile,
+      forYou: { enabled: false, selectedToolSlugs: ["COMPOSIO_SEARCH_TOOLS"] },
+    };
+    store.save(saved);
+    expect(createComposioProfileStore({ userDataPath }).load()).toEqual(saved);
+  });
+
   it("rejects schema-invalid persisted policy instead of widening access", () => {
     mkdirSync(join(userDataPath, "composio"), { recursive: true });
     writeFileSync(

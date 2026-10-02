@@ -1,13 +1,5 @@
 import { randomUUID } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -25,6 +17,13 @@ const profileConfigSchema = z
     version: z.literal(1),
     profileId: z.string().uuid(),
     sessionId: z.string().min(1).optional(),
+    forYou: z
+      .object({
+        enabled: z.boolean(),
+        selectedToolSlugs: z.array(z.string().min(1).max(160)).max(500),
+      })
+      .strict()
+      .optional(),
     toolkits: z.record(z.string().min(1), toolkitPolicySchema),
   })
   .strict();

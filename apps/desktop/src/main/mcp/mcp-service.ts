@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
@@ -79,6 +80,9 @@ export type ComposioMcpSessionInput = {
 };
 
 export interface ComposioMcpBridge {
+  inspectComposioMcpSession(
+    input: Pick<ComposioMcpSessionInput, "url" | "headers">,
+  ): Promise<McpToolInfo[]>;
   registerComposioMcpSession(input: ComposioMcpSessionInput): Promise<McpToolInfo[]>;
   unregisterComposioMcpSession(): Promise<void>;
 }
@@ -106,7 +110,13 @@ export function mcpToolName(
   tool: string,
   permissionMode: McpToolPermissionMode = "dangerous",
 ): string {
-  return `mcp_v1_${permissionMode}_${encodeMcpIdentityPart(server)}_${encodeMcpIdentityPart(tool)}`;
+  const prefix = `mcp_v1_${permissionMode}_`;
+  const identity = `${encodeMcpIdentityPart(server)}_${encodeMcpIdentityPart(tool)}`;
+  const encodedName = `${prefix}${identity}`;
+  if (encodedName.length <= 64) return encodedName;
+  // The full digest keeps long raw identities distinct within model name limits.
+  // Its marker cannot overlap the length-prefixed encoding used by short names.
+  return `${prefix}h_${createHash("sha256").update(identity).digest("base64url")}`;
 }
 
 function configKey(config: McpServerConfig): string {
@@ -618,6 +628,58 @@ export async function unregisterComposioMcpSession(): Promise<void> {
   await closeComposioSession(previous);
 }
 
+function validateComposioMcpCredentials(input: Pick<ComposioMcpSessionInput, "url" | "headers">): {
+  url: URL;
+  headers: Record<string, string>;
+} {
+  let url: URL;
+  try {
+    url = new URL(input.url);
+  } catch {
+    throw new Error("Composio returned an invalid MCP session URL.");
+  }
+  if (url.protocol !== "https:" || url.username.length > 0 || url.password.length > 0) {
+    throw new Error("Composio MCP sessions must use a credential-free HTTPS URL.");
+  }
+  const headers = Object.fromEntries(
+    Object.entries(input.headers).filter(
+      ([name, value]) => name.trim().length > 0 && typeof value === "string" && value.length > 0,
+    ),
+  );
+  if (Object.keys(headers).length === 0) {
+    throw new Error("Composio MCP session headers are missing.");
+  }
+  return { url, headers };
+}
+
+/** Discover hosted tools using a temporary connection, without changing registrations. */
+export async function inspectComposioMcpSession(
+  input: Pick<ComposioMcpSessionInput, "url" | "headers">,
+): Promise<McpToolInfo[]> {
+  const { url, headers } = validateComposioMcpCredentials(input);
+  const client = new Client({ name: "modus", version: "0.1.0" });
+  let transport: StreamableHTTPClientTransport | undefined;
+  try {
+    transport = new StreamableHTTPClientTransport(url, {
+      requestInit: { headers, redirect: "error" },
+    });
+    await connectWithCleanup(
+      client,
+      transport as unknown as Parameters<Client["connect"]>[0],
+      "connect Composio MCP inspection",
+    );
+    const tools = await listAllMcpTools(client, COMPOSIO_MCP_SERVER_NAME);
+    return tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      registeredName: mcpToolName(COMPOSIO_MCP_SERVER_NAME, tool.name),
+    }));
+  } finally {
+    if (transport) await closeClientAndTransport(client, transport);
+    else await client.close().catch(() => {});
+  }
+}
+
 /**
  * Connect the single hosted session used by Composio, exposing only exact
  * selected operation slugs through the normal dangerous `mcp.call` path.
@@ -643,23 +705,7 @@ export async function registerComposioMcpSession(
   }
   if (selectedToolSlugs.length === 0) return [];
 
-  let url: URL;
-  try {
-    url = new URL(input.url);
-  } catch {
-    throw new Error("Composio returned an invalid MCP session URL.");
-  }
-  if (url.protocol !== "https:" || url.username.length > 0 || url.password.length > 0) {
-    throw new Error("Composio MCP sessions must use a credential-free HTTPS URL.");
-  }
-  const headers = Object.fromEntries(
-    Object.entries(input.headers).filter(
-      ([name, value]) => name.trim().length > 0 && typeof value === "string" && value.length > 0,
-    ),
-  );
-  if (Object.keys(headers).length === 0) {
-    throw new Error("Composio MCP session headers are missing.");
-  }
+  const { url, headers } = validateComposioMcpCredentials(input);
 
   const client = new Client({ name: "modus", version: "0.1.0" });
   const transport = new StreamableHTTPClientTransport(url, {

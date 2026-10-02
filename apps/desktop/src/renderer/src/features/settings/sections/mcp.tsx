@@ -360,7 +360,7 @@ export function McpSettingsPanel({
       />
 
       <SettingsSection
-        description="Teste API e MCP em camadas separadas; o teste não altera ferramentas nem autorizações existentes."
+        description="Test API access and MCP connectivity separately. The test preserves existing tools and authorizations."
         title="Composio"
       >
         <IntegrationsSettingsPanel />

@@ -1,3 +1,6 @@
+import { ComposioToolkitFetchError } from "@composio/core";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
+import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComposioMcpBridge } from "../mcp/mcp-service";
 import type { ComposioApi, ComposioConnectionRequest, ComposioSession } from "./composio-api";
@@ -8,6 +11,8 @@ import { createComposioService } from "./composio-service";
 const PROFILE_ID = "00000000-0000-4000-8000-000000000001";
 const OLD_KEY = "composio_project_key_old_secret";
 const NEW_KEY = "composio_project_key_new_secret";
+const CONSUMER_KEY = "ck_consumer_test_secret";
+const CONSUMER_TOOLS = ["COMPOSIO_SEARCH_TOOLS", "COMPOSIO_MULTI_EXECUTE_TOOL"] as const;
 const RAW_CONNECT_URL = "https://connect.composio.dev/link/short-lived-secret";
 
 type ServiceHarness = ReturnType<typeof createServiceHarness>;
@@ -126,6 +131,9 @@ function createServiceHarness(
   const createApi = vi.fn((key: string) => options.apiForKey?.(key) ?? defaultApi.api);
   const openExternal = vi.fn(async (_url: string) => {});
   const mcp: ComposioMcpBridge = {
+    inspectComposioMcpSession: vi.fn(async () =>
+      CONSUMER_TOOLS.map((name) => ({ name, registeredName: `composio_${name}` })),
+    ),
     registerComposioMcpSession: vi.fn(
       async (input: Parameters<ComposioMcpBridge["registerComposioMcpSession"]>[0]) =>
         input.allowedToolSlugs.map((slug) => ({
@@ -181,6 +189,369 @@ afterEach(async () => {
 });
 
 describe("Composio service", () => {
+  it("validates and saves a For You key through personal MCP without calling the project API", async () => {
+    const harness = startHarness();
+    const state = await harness.service.setProjectApiKey(` ${CONSUMER_KEY} `);
+
+    expect(state).toMatchObject({
+      apiKeyConfigured: true,
+      status: "ready",
+      keyType: "consumer",
+      toolkits: [],
+      consumer: {
+        enabled: false,
+        selectedToolSlugs: [],
+        tools: CONSUMER_TOOLS.map((slug) => ({ slug, toolkitSlug: "composio-for-you" })),
+      },
+    });
+    expect(harness.mcp.inspectComposioMcpSession).toHaveBeenCalledWith({
+      url: "https://connect.composio.dev/mcp",
+      headers: { "x-consumer-api-key": CONSUMER_KEY },
+    });
+    expect(harness.createApi).not.toHaveBeenCalled();
+    expect(harness.getSavedKey()).toBe(CONSUMER_KEY);
+    expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+    expect(JSON.stringify(state)).not.toContain(CONSUMER_KEY);
+    expect(JSON.stringify(harness.getProfile())).not.toContain(CONSUMER_KEY);
+  });
+
+  it("restores a For You policy independently of existing project account policies", async () => {
+    const projectPolicy = {
+      enabled: true,
+      selectedToolSlugs: ["GITHUB_LIST_REPOSITORIES"],
+      selectedAccountId: "account-1",
+      aliases: {},
+    };
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        toolkits: { github: projectPolicy },
+        forYou: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+      },
+    });
+    const state = await harness.service.initialize();
+
+    expect(state).toMatchObject({
+      keyType: "consumer",
+      status: "ready",
+      consumer: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+    });
+    expect(harness.mcp.registerComposioMcpSession).toHaveBeenCalledWith({
+      url: "https://connect.composio.dev/mcp",
+      headers: { "x-consumer-api-key": CONSUMER_KEY },
+      allowedToolSlugs: [CONSUMER_TOOLS[0]],
+    });
+    expect(harness.getProfile().toolkits.github).toEqual(projectPolicy);
+    expect(harness.createApi).not.toHaveBeenCalled();
+  });
+
+  it("enables selected personal MCP tools without a project account and unregisters when disabled", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    await harness.service.initialize();
+    const state = await harness.service.setToolkitPolicy({
+      toolkitSlug: "composio-for-you",
+      enabled: true,
+      selectedToolSlugs: [CONSUMER_TOOLS[1]],
+    });
+
+    expect(state).toMatchObject({
+      status: "ready",
+      consumer: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[1]] },
+    });
+    expect(harness.getProfile().forYou).toEqual({
+      enabled: true,
+      selectedToolSlugs: [CONSUMER_TOOLS[1]],
+    });
+    expect(harness.getProfile().toolkits).toEqual({});
+    expect(harness.mcp.registerComposioMcpSession).toHaveBeenLastCalledWith(
+      expect.objectContaining({ allowedToolSlugs: [CONSUMER_TOOLS[1]] }),
+    );
+    vi.mocked(harness.mcp.unregisterComposioMcpSession).mockClear();
+    const disabled = await harness.service.setToolkitPolicy({
+      toolkitSlug: "composio-for-you",
+      enabled: false,
+      selectedToolSlugs: [],
+    });
+    expect(disabled).toMatchObject({
+      status: "ready",
+      consumer: { enabled: false, selectedToolSlugs: [] },
+    });
+    expect(harness.mcp.unregisterComposioMcpSession).toHaveBeenCalled();
+    expect(harness.createApi).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown personal MCP tools and requires an explicit selection before enabling", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    await harness.service.initialize();
+    for (const selectedToolSlugs of [[], ["COMPOSIO_NOT_IN_CATALOG"]]) {
+      const state = await harness.service.setToolkitPolicy({
+        toolkitSlug: "composio-for-you",
+        enabled: true,
+        selectedToolSlugs,
+      });
+      expect(state.status).toBe("error");
+    }
+    expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+    expect(harness.getProfile().forYou).toBeUndefined();
+  });
+
+  it("keeps the previous key when personal MCP authentication fails and hides the candidate", async () => {
+    const harness = startHarness({ initialKey: OLD_KEY });
+    await harness.service.initialize();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockRejectedValue(
+      Object.assign(new Error(`invalid key ${CONSUMER_KEY}`), { status: 401 }),
+    );
+    const state = await harness.service.setProjectApiKey(CONSUMER_KEY);
+    expect(state.error).toMatchObject({ code: "invalid_consumer_key", retryable: false });
+    expect(state.error?.message).not.toContain(CONSUMER_KEY);
+    expect(harness.getSavedKey()).toBe(OLD_KEY);
+    expect(harness.secretStore.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [new UnauthorizedError("No auth provider"), "invalid_consumer_key", false],
+    [new StreamableHTTPError(401, "Error POSTing to endpoint"), "invalid_consumer_key", false],
+    [new StreamableHTTPError(403, "Error POSTing to endpoint"), "consumer_access_denied", false],
+    [new StreamableHTTPError(429, "Error POSTing to endpoint"), "rate_limited", true],
+    [new StreamableHTTPError(503, "Error POSTing to endpoint"), "composio_unavailable", true],
+  ])("classifies actual personal MCP transport errors: %s", async (error, code, retryable) => {
+    const harness = startHarness();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockRejectedValue(error);
+    const state = await harness.service.setProjectApiKey(CONSUMER_KEY);
+    expect(state.error).toMatchObject({ code, retryable });
+    expect(harness.getSavedKey()).toBeUndefined();
+  });
+
+  it("retries personal MCP discovery on refresh after a startup network failure", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockRejectedValueOnce(
+      new Error(`fetch failed x-consumer-api-key ${CONSUMER_KEY}`),
+    );
+    const initial = await harness.service.initialize();
+    expect(initial.status).toBe("error");
+    expect(initial.error?.message).not.toContain(CONSUMER_KEY);
+    const state = await harness.service.refreshCatalog();
+    expect(state).toMatchObject({ keyType: "consumer", status: "ready" });
+    expect(harness.mcp.inspectComposioMcpSession).toHaveBeenCalledTimes(2);
+    expect(harness.createApi).not.toHaveBeenCalled();
+  });
+
+  it("diagnoses For You using a temporary MCP probe without exposing tools", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    expect(await harness.service.diagnose()).toEqual({ apiReachable: true, mcpSessionReady: true });
+    expect(harness.mcp.inspectComposioMcpSession).toHaveBeenCalled();
+    expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+    expect(harness.createApi).not.toHaveBeenCalled();
+  });
+
+  it("waits for personal MCP startup before reporting settings", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    const inspection = deferred<Array<{ name: string; registeredName: string }>>();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockImplementation(() => inspection.promise);
+    const initialization = harness.service.initialize();
+    const read = harness.service.getSettingsState();
+    inspection.resolve(CONSUMER_TOOLS.map((name) => ({ name, registeredName: name })));
+    const states = await Promise.all([initialization, read]);
+    expect(states.map((state) => state.status)).toEqual(["ready", "ready"]);
+  });
+
+  it("removes an enabled For You key without touching project sessions or connected accounts", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        sessionId: "project-session",
+        toolkits: {},
+        forYou: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+      },
+    });
+    await harness.service.initialize();
+    const state = await harness.service.removeProjectApiKey();
+    expect(state).toEqual({ apiKeyConfigured: false, status: "unconfigured", toolkits: [] });
+    expect(harness.getSavedKey()).toBeUndefined();
+    expect(harness.mcp.unregisterComposioMcpSession).toHaveBeenCalled();
+    expect(harness.defaultApi.api.deleteSession).not.toHaveBeenCalled();
+    expect(harness.defaultApi.api.deleteAccount).not.toHaveBeenCalled();
+  });
+
+  it("does not let pending personal startup restore tools after key removal", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        toolkits: {},
+        forYou: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+      },
+    });
+    const inspection = deferred<Array<{ name: string; registeredName: string }>>();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockImplementation(() => inspection.promise);
+    const initialization = harness.service.initialize();
+    await vi.waitFor(() => expect(harness.mcp.inspectComposioMcpSession).toHaveBeenCalled());
+    const removal = harness.service.removeProjectApiKey();
+    // Finish startup only after the concurrently requested removal had a chance to run.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    inspection.resolve(CONSUMER_TOOLS.map((name) => ({ name, registeredName: name })));
+    await Promise.all([initialization, removal]);
+    expect(await harness.service.getSettingsState()).toEqual({
+      apiKeyConfigured: false,
+      status: "unconfigured",
+      toolkits: [],
+    });
+    expect(harness.getSavedKey()).toBeUndefined();
+    expect(
+      vi.mocked(harness.mcp.unregisterComposioMcpSession).mock.invocationCallOrder.at(-1),
+    ).toBeGreaterThan(
+      vi.mocked(harness.mcp.registerComposioMcpSession).mock.invocationCallOrder.at(-1) ?? 0,
+    );
+  });
+
+  it("shows project mode if switching from For You succeeds but project synchronization fails", async () => {
+    const harness = startHarness({ initialKey: CONSUMER_KEY });
+    await harness.service.initialize();
+    vi.mocked(harness.profileStore.load)
+      .mockReturnValueOnce(harness.getProfile())
+      .mockImplementation(() => {
+        throw new Error("profile unavailable during reconciliation");
+      });
+    const state = await harness.service.setProjectApiKey(NEW_KEY);
+    expect(state).toMatchObject({
+      apiKeyConfigured: true,
+      keyType: "project",
+      status: "error",
+      toolkits: [],
+    });
+    expect(state.consumer).toBeUndefined();
+    expect(harness.getSavedKey()).toBe(NEW_KEY);
+  });
+
+  it("does not start a new personal key probe if shutdown begins during initialization", async () => {
+    const harness = startHarness();
+    const loading = deferred<string | undefined>();
+    vi.mocked(harness.secretStore.load).mockImplementation(() => loading.promise);
+    const saving = harness.service.setProjectApiKey(CONSUMER_KEY);
+    await vi.waitFor(() => expect(harness.secretStore.load).toHaveBeenCalled());
+    const shutdown = harness.service.shutdown();
+    loading.resolve(undefined);
+    await Promise.all([saving, shutdown]);
+    expect(harness.mcp.inspectComposioMcpSession).not.toHaveBeenCalled();
+    expect(harness.getSavedKey()).toBeUndefined();
+  });
+
+  it("does not reuse a previous project's session when switching from For You to a new project key", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        sessionId: "foreign-project-session",
+        toolkits: {},
+      },
+    });
+    await harness.service.initialize();
+    vi.mocked(harness.defaultApi.api.deleteSession).mockRejectedValue(
+      Object.assign(new Error("wrong project"), { status: 401 }),
+    );
+    const state = await harness.service.setProjectApiKey(NEW_KEY);
+    expect(state).toMatchObject({ keyType: "project", status: "ready" });
+    expect(harness.defaultApi.api.deleteSession).not.toHaveBeenCalled();
+    expect(harness.defaultApi.api.useSession).not.toHaveBeenCalled();
+    expect(harness.getProfile().sessionId).toBeUndefined();
+  });
+
+  it("fails closed if For You discovery fails while changing an enabled policy", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        toolkits: {},
+        forYou: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+      },
+    });
+    await harness.service.initialize();
+    vi.mocked(harness.mcp.unregisterComposioMcpSession).mockClear();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockRejectedValue(new Error("fetch failed"));
+    const state = await harness.service.setToolkitPolicy({
+      toolkitSlug: "composio-for-you",
+      enabled: true,
+      selectedToolSlugs: [CONSUMER_TOOLS[1]],
+    });
+    expect(state).toMatchObject({ status: "error", consumer: { enabled: false } });
+    expect(harness.mcp.unregisterComposioMcpSession).toHaveBeenCalled();
+    expect(harness.getProfile().forYou?.selectedToolSlugs).toEqual([CONSUMER_TOOLS[0]]);
+  });
+
+  it("can disable personal tools even while Composio is offline", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        toolkits: {},
+        forYou: { enabled: true, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+      },
+    });
+    await harness.service.initialize();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockRejectedValue(new Error("fetch failed"));
+    const state = await harness.service.setToolkitPolicy({
+      toolkitSlug: "composio-for-you",
+      enabled: false,
+      selectedToolSlugs: [CONSUMER_TOOLS[0]],
+    });
+    expect(state).toMatchObject({ status: "ready", consumer: { enabled: false } });
+    expect(harness.getProfile().forYou?.enabled).toBe(false);
+  });
+
+  it("deactivates an unavailable personal catalog without silently expanding the saved selection", async () => {
+    const harness = startHarness({
+      initialKey: CONSUMER_KEY,
+      profile: {
+        version: 1,
+        profileId: PROFILE_ID,
+        toolkits: {},
+        forYou: { enabled: true, selectedToolSlugs: [...CONSUMER_TOOLS] },
+      },
+    });
+    await harness.service.initialize();
+    vi.mocked(harness.mcp.registerComposioMcpSession).mockClear();
+    vi.mocked(harness.mcp.inspectComposioMcpSession).mockResolvedValue([
+      { name: CONSUMER_TOOLS[0], registeredName: "search" },
+    ]);
+    const state = await harness.service.refreshCatalog();
+    expect(state).toMatchObject({
+      status: "ready",
+      consumer: { enabled: false, selectedToolSlugs: [CONSUMER_TOOLS[0]] },
+    });
+    expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
+    expect(harness.getProfile().forYou?.selectedToolSlugs).toEqual([...CONSUMER_TOOLS]);
+  });
+
+  it("cancels pending project authorization when switching to For You", async () => {
+    const api = makeApi();
+    const pending = deferred<ReturnType<typeof makeAccount>>();
+    api.waitForConnection.mockImplementation(() => pending.promise);
+    const harness = startHarness({ initialKey: OLD_KEY, apiForKey: () => api.api });
+    await harness.service.initialize();
+    const operation = await harness.service.startConnection({
+      toolkitSlug: "github",
+      alias: "Work",
+    });
+    expect(operation.status).toBe("pending");
+    const state = await harness.service.setProjectApiKey(CONSUMER_KEY);
+    expect(state).toMatchObject({ status: "ready", keyType: "consumer", toolkits: [] });
+    expect(await harness.service.getConnectionOperation(operation.id)).toMatchObject({
+      status: "canceled",
+    });
+    expect(api.waitForConnection.mock.calls[0]?.[1]?.aborted).toBe(true);
+    pending.resolve(makeAccount("late-account"));
+    await Promise.resolve();
+    expect(harness.getProfile().toolkits.github?.aliases["late-account"]).toBeUndefined();
+  });
+
   it("shares one startup reconciliation between concurrent initialize callers", async () => {
     const api = makeApi();
     const validation = deferred<void>();
@@ -240,7 +611,7 @@ describe("Composio service", () => {
 
     expect(state.status).toBe("error");
     expect(state.error?.code).toBe("missing_scope_read");
-    expect(state.error?.message).toMatch(/sessões.*MCP|MCP.*sessões|sessões.*execução.*MCP/i);
+    expect(state.error?.message).toMatch(/sessions.*MCP|MCP.*sessions/i);
     expect(harness.mcp.registerComposioMcpSession).not.toHaveBeenCalled();
   });
 
@@ -277,6 +648,50 @@ describe("Composio service", () => {
     const state = await harness.service.initialize();
 
     expect(state.error?.code).toBe("composio_unavailable");
+  });
+
+  it.each([
+    [401, "Unauthorized", "invalid_project_key", false],
+    [403, "Request rejected", "missing_scope_read", false],
+    [429, "Request rejected", "rate_limited", true],
+    [503, "Request rejected", "composio_unavailable", true],
+  ] as const)("reports HTTP %i from the SDK cause when saving a key, without storing the rejected key", async (status, message, code, retryable) => {
+    const api = makeApi();
+    vi.mocked(api.api.validateProjectReadAccess).mockRejectedValue(
+      new ComposioToolkitFetchError("Failed to fetch toolkits", {
+        cause: Object.assign(new Error(message), { status }),
+      }),
+    );
+    const harness = startHarness({ apiForKey: () => api.api });
+
+    const state = await harness.service.setProjectApiKey(NEW_KEY);
+
+    expect(state).toMatchObject({
+      apiKeyConfigured: false,
+      status: "error",
+      error: { code, retryable },
+    });
+    expect(harness.getSavedKey()).toBeUndefined();
+    expect(state.error?.message).not.toContain(NEW_KEY);
+  });
+
+  it.each([
+    ["uak_user_test_secret", "user API key"],
+  ])("explains the unsupported key type before sending %s to the project API", async (key, kind) => {
+    const harness = startHarness();
+
+    const state = await harness.service.setProjectApiKey(key);
+
+    expect(state).toMatchObject({
+      apiKeyConfigured: false,
+      status: "error",
+      error: { code: "unsupported_key_type", retryable: false },
+    });
+    expect(state.error?.message).toContain(kind);
+    expect(state.error?.message).toContain("Platform");
+    expect(state.error?.message).not.toContain(key);
+    expect(harness.createApi).not.toHaveBeenCalled();
+    expect(harness.getSavedKey()).toBeUndefined();
   });
 
   it("keeps the exact Composio endpoint, TCP, DNS, TLS, or proxy diagnostic for support", async () => {
@@ -676,7 +1091,7 @@ describe("Composio service", () => {
     expect(harness.getSavedKey()).toBe(OLD_KEY);
     expect(harness.secretStore.save).not.toHaveBeenCalled();
     expect(state.error).toMatchObject({ code: "missing_scope_read", retryable: false });
-    expect(state.error?.message).toMatch(/leitura/i);
+    expect(state.error?.message).toMatch(/read/i);
     expect(JSON.stringify(state)).not.toMatch(new RegExp(`${NEW_KEY}|${OLD_KEY}`));
   });
 
@@ -716,9 +1131,9 @@ describe("Composio service", () => {
 
     expect(operation.status).toBe("failed");
     expect(operation.error).toMatchObject({ code: "missing_scope_write", retryable: false });
-    expect(operation.error?.message).toMatch(/Auth Config|configuração de autenticação/i);
-    expect(operation.error?.message).toMatch(/permissão|habilite|chave/i);
-    expect(operation.error?.message).toMatch(/reinsira a chave anterior/i);
+    expect(operation.error?.message).toMatch(/Auth Config|authentication configuration/i);
+    expect(operation.error?.message).toMatch(/permission|enable|key/i);
+    expect(operation.error?.message).toMatch(/restore the previous key/i);
     expect(JSON.stringify(operation)).not.toMatch(new RegExp(`${NEW_KEY}|${RAW_CONNECT_URL}`));
   });
 

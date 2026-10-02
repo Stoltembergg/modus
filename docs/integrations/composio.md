@@ -1,77 +1,65 @@
-# Integrações Composio
+# Composio integrations
 
-O Modus usa o Composio para conectar plataformas externas e disponibilizar aos agentes somente as operações escolhidas pelo usuário. A configuração é local ao perfil do Modus: cada usuário fornece sua própria Project API Key e autentica suas contas diretamente com o Composio.
+Modus supports both **Composio For You API Keys** (`ck_…`) and **Composio Platform Project API Keys**. Open **Settings → MCP & Integrations → Composio**, paste the key, and choose **Save key**. Modus detects the connection mode and validates the key before replacing the saved credential. User API Keys (`uak_…`) are not supported.
 
-O MCP genérico continua separado. O Modus não grava endpoints ou credenciais do Composio em `mcp.json`.
+The generic MCP configuration is separate. Modus does not save Composio credentials or session endpoints in `mcp.json`.
 
-## Configuração inicial
+## Composio For You
 
-1. No dashboard do Composio, crie uma **Project API Key** para o projeto que contém as plataformas que você quer conectar.
-2. Conceda à chave apenas as permissões necessárias para descobrir plataformas e operações, listar e conectar contas, criar e sincronizar sessões, e executar as operações selecionadas. A tabela abaixo descreve cada capacidade. Os nomes exatos das permissões podem variar conforme a tela atual do Composio; consulte [Project API Key permissions](https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions).
-3. No Modus, abra **Configurações → Integrações**, cole a chave e salve.
-4. Escolha uma plataforma, conecte uma conta e selecione explicitamente as operações que os agentes poderão usar.
+Get your personal key from **Composio For You → Settings → Sessions & API Key**. Modus connects to the official personal MCP endpoint, `https://connect.composio.dev/mcp`, using the `x-consumer-api-key` header. See [Composio Connect](https://docs.composio.dev/docs/composio-connect) and [For You navigation](https://docs.composio.dev/kb/guide/dashboard-for-you-navigation).
 
-O Modus valida a chave com chamadas de leitura ao catálogo de plataformas e à lista de contas do perfil local. Essa validação não prova que a chave pode executar gravações. Se faltar uma permissão de escrita, o Modus informa o problema quando você tentar conectar uma conta, criar uma configuração de autenticação gerenciada ou sincronizar uma sessão. A chave anterior é preservada quando a leitura de validação falha.
+After saving the key:
 
-## Permissões mínimas da Project API Key
+1. Review the discovered **Composio For You tools**.
+2. Select the MCP tools agents can call.
+3. Turn on **Enable for agents**.
 
-| Recurso/capacidade | Acesso necessário | Uso no Modus |
+New profiles start with no selected tools and agent access disabled. A saved selection is restored when the app restarts. Clearing the selection or disabling agent access removes the tools from the local bridge. Disabling tools works even if Composio is offline.
+
+For You exposes discovery and execution tools such as `COMPOSIO_SEARCH_TOOLS`, `COMPOSIO_GET_TOOL_SCHEMAS`, and `COMPOSIO_MULTI_EXECUTE_TOOL`. These tools discover app operations and use your personal connected apps. Selection controls which **MCP tools** an agent can call; it does **not** restrict the app actions available inside an execution tool. The Platform workflow below provides selection of individual app operations. Manage personal connections in Composio For You or through its connection tools.
+
+Personal connections belong to the Composio consumer identity associated with your key. Modus does not invent Platform accounts for them or call the project API with a personal key. Personal and project configurations are kept separately; see [consumer and project boundaries](https://docs.composio.dev/kb/guide/consumer-project-boundaries-and-auth-selection).
+
+## Composio Platform
+
+Get a Project API Key from **Composio Platform → your project → Settings → API Keys**. Modus validates read access to toolkits and the local profile's connected accounts. This initial check does not prove write access; a missing write permission is reported when the corresponding operation runs.
+
+| Resource | Required access | Used for |
 | --- | --- | --- |
-| Toolkits e tools | Leitura | Exibir o catálogo de plataformas e listar operações disponíveis para cada uma. |
-| Connected Accounts | Leitura e escrita | Listar contas do perfil local, criar o fluxo de conexão e remover uma conta quando o usuário desconecta. |
-| Auth Configs | Leitura; escrita se for necessário criar uma configuração gerenciada | Procurar uma configuração de autenticação utilizável. Quando nenhuma existe, o Modus tenta criar uma configuração Composio-managed. |
-| Sessões | Leitura e escrita | Criar, atualizar e encerrar a sessão hospedada vinculada à allowlist escolhida. |
-| Execução de ferramentas da sessão | Escrita | Permitir que a sessão MCP execute as operações selecionadas pelos agentes. |
+| Toolkits and tools | Read | Discovering platforms and their operations. |
+| Connected Accounts | Read and write | Listing, connecting, and disconnecting accounts. |
+| Auth Configs | Read; write when creating a managed configuration | Preparing authentication for a platform. |
+| Sessions | Read and write | Creating and synchronizing the hosted MCP session. |
+| Session tool execution | Write | Executing the selected operations through MCP. |
 
-Não habilite permissões de proxy/execução ou escopos MCP legados para esta integração: o Modus usa uma sessão Composio hospedada e encaminha cada chamada pelo bridge MCP interno. As permissões de sessão e de execução são distintas; consulte a seção de sessões da [documentação de Project API Key permissions](https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions).
+Permission names and availability are documented in [Project API Key permissions](https://docs.composio.dev/reference/authenticating-to-composio/project-api-key-permissions). Scoped keys can receive a generic 401 when a required permission is missing, even if the key is valid. A 401 alone does not prove the key was revoked. Existing scoped key permissions cannot be edited; create a replacement key with the required access.
 
-Uma chave pode ter leitura suficiente para ser salva e ainda não ter as permissões de escrita. O Composio não oferece ao Modus uma validação não mutável que comprove todos os escopos de escrita sem iniciar uma operação real. Portanto, o primeiro erro de conexão ou sessão pode apontar um escopo ausente. Escopos de uma chave já criada não podem ser alterados: crie uma nova chave com as permissões necessárias e substitua a atual em **Configurações → Integrações**.
+To connect a platform, Modus selects a usable managed Auth Config or another enabled configuration. If necessary, it creates a managed configuration. Some platforms require your own OAuth app or additional setup in the Composio dashboard. See [Custom Auth Configs](https://docs.composio.dev/docs/auth-configuration/custom-auth-configs).
 
-## Conectar plataformas e contas
+Complete authorization in the browser and return to Modus. Pending connections expire after one minute. The local limit is five accounts per platform, including pending connections. Aliases are local display names; platform credentials remain with Composio.
 
-O Modus procura primeiro uma configuração Composio-managed utilizável e depois outra configuração habilitada no projeto. Se nenhuma estiver disponível, tenta criar uma configuração gerenciada. Algumas plataformas exigem credenciais de um OAuth app próprio ou configuração adicional no dashboard do Composio; nesses casos, configure a autenticação da plataforma no Composio antes de repetir a conexão. Veja [Custom Auth Configs](https://docs.composio.dev/docs/auth-configuration/custom-auth-configs) e o guia de [conexão de contas](https://docs.composio.dev/reference/sdk-reference/typescript/connected-accounts).
+To enable a platform for agents, choose one active account, select at least one operation, and enable the platform. Connected accounts are not automatically enabled. The hosted session and local bridge expose the selected operations. Disconnecting an account revokes it in Composio and requires authentication to reconnect.
 
-Ao conectar, o Modus abre o fluxo de autenticação do Composio no navegador padrão. Conclua a autorização na plataforma e retorne ao Modus. Uma conexão pendente pode levar até um minuto; não inicie outra conexão para a mesma conta enquanto ela ainda estiver pendente. O limite local é de cinco contas por plataforma, incluindo conexões pendentes.
+## Storage and tool lifecycle
 
-É possível conectar várias contas da mesma plataforma. Dê um nome reconhecível a cada conta e escolha **uma conta ativa por plataforma** para os agentes. Os nomes são aliases locais do Modus; a autenticação e os tokens da plataforma ficam no Composio. Alterar a conta ativa atualiza a próxima sessão sincronizada. Desconectar uma conta remove/revoga a conta conectada no Composio e não pode ser desfeito sem autenticar novamente.
+- Keys are encrypted by Electron `safeStorage` in the main process. The renderer receives configured state, never the saved key. No plaintext fallback is used when system encryption is unavailable.
+- Profile metadata stores selections, project account aliases, and the project session ID. Personal selections are stored independently. Files use restricted permissions and contain no API key or platform token.
+- MCP URLs and authentication headers stay in the main process and are not returned in settings state or tool metadata.
+- Calls use the normal Modus `mcp.call` permission flow. Tool definitions are refreshed for the next turn in existing chats when registrations change.
+- Changing the key cancels pending project authorization. Closing Modus unregisters local tools and cancels pending connections. Removing the key clears the encrypted credential; project sessions are closed when possible. Personal connected apps remain in Composio.
 
-## Allowlist de operações
+The Platform profile uses a stable opaque local identifier. For You uses the personal identity associated with the consumer key. Agents in a local Modus profile share its configured integrations.
 
-Uma plataforma conectada não fica automaticamente disponível aos agentes. Para expô-la:
+## Troubleshooting
 
-1. Escolha a conta ativa da plataforma.
-2. Selecione as operações específicas que os agentes poderão chamar. **Selecionar todas** só tem efeito quando acionado explicitamente pelo usuário.
-3. Ative a plataforma.
-
-Sem uma conta ativa e ao menos uma operação selecionada, o Modus mantém a plataforma fora da sessão e do bridge MCP. A sessão envia a lista completa das plataformas, operações e contas selecionadas; operações não escolhidas não são registradas. Cada execução passa pela chamada interna `mcp.call` e pelas aprovações já existentes no Modus. O Composio não recebe autorização para habilitar outras operações por padrão.
-
-O usuário pode trocar a conta ativa ou editar a allowlist a qualquer momento. Se a última operação for removida, o Modus desregistra o bridge e encerra a sessão remota sem desconectar a conta da plataforma.
-
-Para detalhes sobre as sessões hospedadas e seu uso como MCP, consulte [configuração de sessões](https://docs.composio.dev/docs/configuring-sessions), [sessões via MCP](https://docs.composio.dev/docs/sessions-via-mcp) e a [referência TypeScript de Sessions](https://docs.composio.dev/reference/sdk-reference/typescript/sessions).
-
-## Armazenamento e privacidade
-
-- A Project API Key é criptografada pelo `safeStorage` do Electron no processo principal, usando o armazenamento de credenciais do sistema operacional. Enquanto você digita, ela existe temporariamente no campo de senha e é enviada pela IPC ao processo principal; depois de salva, o renderer recebe apenas o estado “chave configurada”, nunca a chave de volta. O Modus não persiste a chave em texto simples.
-- Um identificador aleatório estável representa o perfil local do Modus ao Composio. A lista de contas é consultada nesse identificador; perfis locais diferentes não compartilham a identidade Composio.
-- O arquivo de perfil local guarda o ID da sessão, aliases, conta ativa e allowlist. Ele não contém tokens das plataformas. O diretório e o arquivo são gravados com permissões restritas no armazenamento de dados do Modus.
-- URL e headers MCP da sessão ficam no processo principal e não são gravados em `mcp.json`, no estado do renderer, nos logs ou nos metadados das ferramentas.
-- Durante o uso, os agentes compartilham as integrações configuradas para este perfil local do Modus.
-
-Fechar o aplicativo encerra o bridge local e cancela conexões pendentes; o Modus mantém o ID da sessão Composio para reutilizá-la quando abrir novamente. Remover a Project API Key nas configurações encerra a sessão remota quando possível e apaga a chave local. As contas conectadas no Composio permanecem; para revogar uma delas, desconecte-a individualmente antes ou depois.
-
-O `safeStorage` depende do suporte de criptografia do sistema operacional. Se esse suporte não estiver disponível, o Modus não salva a chave em texto simples nem ativa a integração. Consulte [Electron safeStorage](https://www.electronjs.org/docs/latest/api/safe-storage).
-
-## Solução de problemas
-
-| Sintoma | O que conferir |
+| Symptom | What to check |
 | --- | --- |
-| Chave recusada ao salvar | Confirme que é uma Project API Key ativa, pertence ao projeto esperado e inclui leitura de toolkits e connected accounts. Se a leitura falhar, a chave salva anteriormente é mantida. |
-| Chave salva, mas conectar falha por permissão | A validação inicial verifica somente leitura. Habilite escrita de Connected Accounts; habilite escrita de Auth Configs se o projeto não tiver uma configuração utilizável; tente novamente. |
-| Plataforma exige configuração de autenticação | Crie ou habilite a configuração necessária no dashboard do Composio. Se usar seu próprio OAuth app, confira callback/redirect e credenciais conforme as instruções do Composio para essa plataforma. |
-| OAuth foi concluído, mas a conta não aparece | Atualize Integrações e aguarde alguns segundos. Se o fluxo expirou ou foi cancelado, inicie uma conexão nova. Conexões pendentes expiram após até um minuto. |
-| Plataforma aparece, mas nenhum agente consegue usá-la | Selecione uma conta ativa, marque uma ou mais operações e ative a plataforma. Depois confira as permissões de leitura e escrita da sessão e de execução de ferramentas da sessão na chave. |
-| Ferramentas desapareceram após alterar a allowlist | O Modus mantém as ferramentas ocultas até a sincronização segura terminar. Confira conexão e escopos da chave e use a ação de atualizar/tentar novamente em Integrações. |
-| Não consegue adicionar outra conta | O limite é de cinco contas por plataforma e inclui conexões pendentes. Aguarde a pendência terminar ou desconecte uma conta que não usa mais. |
-| Chave não pode ser substituída ou removida | Confirme o suporte do `safeStorage` e verifique se o diretório de dados do Modus permite gravação. O Modus não usa arquivo plaintext como fallback. |
+| For You key is rejected | Use the active key from **Sessions & API Key**. Check access to the personal MCP endpoint. **Test connection** performs temporary discovery without enabling tools. |
+| Project key is rejected | Check that the key is active and has the required project permissions. Scoped permission failures may also return 401. |
+| Key saves but project connection fails | Check Connected Account write access and Auth Config access; session management and execution require their own permissions. |
+| Personal tools are unavailable | Select MCP tools and turn on **Enable for agents**. Refresh the catalog after a network failure. |
+| Project operations are unavailable | Choose an active account, select operations, and enable the platform. Check session execution permissions. |
+| Catalog changes or synchronization fails | Tools are disabled when a saved consumer selection is unavailable or synchronization fails. Refresh and review the selection before enabling again. |
+| Key cannot be saved or removed | Check system secure storage and write access to Modus's data directory. |
 
-Se um escopo da Project API Key estiver faltando, crie uma chave nova no dashboard: as permissões de uma chave existente não são editáveis. Remover a chave no Modus não exclui as contas conectadas do Composio.
+**Refresh catalog** retries discovery and synchronization. **Test connection** checks connectivity without registering tools. A failed candidate validation preserves the previous encrypted key.

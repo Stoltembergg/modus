@@ -67,7 +67,7 @@ function mapSyncError(error: unknown, writeOperation: boolean): ComposioUserErro
     return {
       code: "invalid_project_key",
       message:
-        "A Project API Key é inválida ou não pode acessar esta sessão Composio. Confirme o projeto e a chave.",
+        "Composio rejected access to this session. Check that the Project API Key is active, belongs to this session's project, and has Session management permissions.",
       retryable: false,
     };
   }
@@ -75,16 +75,15 @@ function mapSyncError(error: unknown, writeOperation: boolean): ComposioUserErro
     return {
       code: writeOperation ? "missing_scope_write" : "missing_scope_read",
       message: writeOperation
-        ? "A chave do projeto não pode gerenciar sessões do Composio. Habilite a permissão de escrita de sessões na Project API Key. Se esta chave substituiu outra que funcionava, reinsira a chave anterior."
-        : "A Project API Key não permite consultar as integrações necessárias. Habilite as permissões de leitura correspondentes no Composio.",
+        ? "The project key cannot manage Composio sessions. Enable session write permission for the Project API Key. If this key replaced a working key, restore the previous key."
+        : "The Project API Key cannot read the required integrations. Enable the corresponding read permissions in Composio.",
       retryable: false,
     };
   }
   if (status === 429 || /rate.?limit|too many requests/.test(markers)) {
     return {
       code: "rate_limited",
-      message:
-        "O Composio limitou temporariamente esta sincronização. Tente novamente em instantes.",
+      message: "Composio temporarily limited this synchronization. Try again in a moment.",
       retryable: true,
     };
   }
@@ -94,8 +93,7 @@ function mapSyncError(error: unknown, writeOperation: boolean): ComposioUserErro
   ) {
     return {
       code: "network_unavailable",
-      message:
-        "Não foi possível sincronizar a sessão do Composio. Verifique a conexão e tente novamente.",
+      message: "Could not synchronize the Composio session. Check your connection and try again.",
       retryable: true,
     };
   }
@@ -103,14 +101,14 @@ function mapSyncError(error: unknown, writeOperation: boolean): ComposioUserErro
     return {
       code: "session_not_found",
       message:
-        "A sessão do Composio não existe mais. Atualize as integrações para criar uma sessão segura.",
+        "The Composio session no longer exists. Refresh integrations to create a secure session.",
       retryable: true,
     };
   }
   return {
     code: "session_sync_failed",
     message:
-      "Não foi possível sincronizar com segurança as ferramentas selecionadas do Composio. As ferramentas permanecerão ocultas até você tentar novamente.",
+      "Could not safely synchronize the selected Composio tools. Tools will remain hidden until you try again.",
     retryable: true,
   };
 }
@@ -224,7 +222,7 @@ function buildSettingsState(
       alias:
         profile.toolkits[account.toolkitSlug]?.aliases[account.id]?.trim() ||
         account.alias?.trim() ||
-        "Conta conectada",
+        "Connected account",
       status: accountStatus(account.status),
     });
   }
