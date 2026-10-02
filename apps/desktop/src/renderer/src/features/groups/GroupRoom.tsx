@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
+  AgentInfo,
   GroupProjectContextSnapshot,
   GroupRuntimeEvent,
   WorkspaceInfo,
@@ -124,6 +125,45 @@ function GroupRoomContent({
       ),
     [group.members],
   );
+  // Read-only model chip: each member agent's own modelId (no group-level model).
+  const [agentModels, setAgentModels] = useState<ReadonlyMap<string, string | undefined>>(
+    () => new Map(),
+  );
+  const [agentsRefresh, setAgentsRefresh] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refetch when the group or its agents change.
+  useEffect(() => {
+    let cancelled = false;
+    const list = window.modus.agents?.list?.();
+    if (!list) return;
+    void Promise.resolve(list)
+      .then((agents: AgentInfo[]) => {
+        if (!cancelled) setAgentModels(new Map(agents.map((agent) => [agent.id, agent.modelId])));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [group, agentsRefresh]);
+  const memberModels = useMemo(
+    () =>
+      new Map<string, string | undefined>(
+        group.members.map((member) => [member.sessionId, agentModels.get(member.agentId)]),
+      ),
+    [group.members, agentModels],
+  );
+  const archivedSessionIds = useMemo(
+    () =>
+      new Set(
+        group.members
+          .filter((member) => member.archived === true)
+          .map((member) => member.sessionId),
+      ),
+    [group.members],
+  );
+  const handleAgentsChanged = () => {
+    setAgentsRefresh((value) => value + 1);
+    onAgentsChanged?.();
+  };
   const blocked = groupBlockedReason(group, group.members);
   const workspace = group.workspaceId
     ? workspaces.find((item) => item.id === group.workspaceId)
@@ -220,7 +260,7 @@ function GroupRoomContent({
       models={models}
       onDelete={onDelete}
       onAddAgent={onAddAgent}
-      {...(onAgentsChanged ? { onAgentsChanged } : {})}
+      onAgentsChanged={handleAgentsChanged}
       onManageMembers={() => setManaging(true)}
       onRename={onRename}
       onSetMode={onSetMode}
@@ -301,8 +341,12 @@ function GroupRoomContent({
           <GroupComposer
             activeExecutionId={activeExecutionId}
             activeExecutionTitle={activeExecutionTitle}
+            archivedSessionIds={archivedSessionIds}
             groupId={group.id}
+            leadSessionId={group.leadSessionId}
+            memberModels={memberModels}
             members={members}
+            models={models}
             onClearReply={() => setReplyTo(undefined)}
             onSeedConsumed={() => setComposerSeed(undefined)}
             onSend={async (payload) => {

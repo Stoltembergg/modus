@@ -273,3 +273,43 @@ const MEMBER_CARD_TEXT: Record<GroupRoomLocale, Record<GroupMemberCardTextKey, s
 export function groupMemberCardText(key: GroupMemberCardTextKey, locale?: string | null): string {
   return MEMBER_CARD_TEXT[resolveGroupRoomLocale(locale)][key];
 }
+
+/** Group composer read-only model chip copy (C5). */
+export type GroupModelChipTextKey = "model" | "leadDefault" | "noLead" | "defaultModel";
+
+const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, string>> = {
+  en: {
+    model: "Model",
+    leadDefault: "Lead answers by default",
+    noLead: "No Lead: the room picks who answers",
+    defaultModel: "Default model",
+  },
+  pt: {
+    model: "Modelo",
+    leadDefault: "Lead responde por padrão",
+    noLead: "Sem Lead: a sala escolhe quem responde",
+    defaultModel: "Modelo padrão",
+  },
+  zh: {
+    model: "模型",
+    leadDefault: "默认由 Lead 回答",
+    noLead: "没有 Lead：由群组决定谁回答",
+    defaultModel: "默认模型",
+  },
+};
+
+export function groupModelChipText(key: GroupModelChipTextKey, locale?: string | null): string {
+  return MODEL_CHIP_TEXT[resolveGroupRoomLocale(locale)][key];
+}
+
+/** "3 models" / "3 modelos" / "3 个模型". */
+export function groupModelCountLabel(count: number, locale?: string | null): string {
+  switch (resolveGroupRoomLocale(locale)) {
+    case "pt":
+      return `${count} modelos`;
+    case "zh":
+      return `${count} 个模型`;
+    default:
+      return `${count} models`;
+  }
+}

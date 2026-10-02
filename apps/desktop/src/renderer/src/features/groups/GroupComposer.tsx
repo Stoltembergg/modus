@@ -1,4 +1,4 @@
-import { IconArrowUp, IconClockPause, IconPlus } from "@tabler/icons-react";
+import { IconArrowUp, IconClockPause, IconPaperclip } from "@tabler/icons-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   GroupExecutionMode,
@@ -15,6 +15,7 @@ import { groupRoomLabel } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
+import { GroupModelChip } from "./GroupModelChip";
 import {
   COLLAB_PIPELINE_APPROVAL,
   COLLAB_PIPELINE_NEXT,
@@ -26,6 +27,7 @@ import {
   type MentionSuggestion,
   mentionSuggestions,
 } from "./groupMentions";
+import { type GroupModelChipModel, groupModelChip } from "./groupModelChip";
 import { MemberName } from "./MemberName";
 import { memberLabels } from "./memberLabels";
 import { AttachmentChip } from "./prompt-kit/PromptKit";
@@ -83,6 +85,8 @@ export type GroupComposerSendPayload = {
   executionId?: string;
 };
 
+const NO_MODELS: readonly GroupModelChipModel[] = [];
+
 export function GroupComposer({
   groupId,
   members,
@@ -95,6 +99,11 @@ export function GroupComposer({
   onClearReply,
   activeExecutionId,
   activeExecutionTitle,
+  memberModels,
+  leadSessionId,
+  archivedSessionIds,
+  models = NO_MODELS,
+  locale,
 }: {
   groupId?: string;
   members: readonly MentionMember[];
@@ -112,6 +121,18 @@ export function GroupComposer({
   activeExecutionId?: string | undefined;
   /** Short label for the active execution chip. */
   activeExecutionTitle?: string | undefined;
+  /**
+   * sessionId → the member agent's `modelId` (from `agents:list`). When set, a
+   * READ-ONLY model chip describes the models of the mentioned agents (or the
+   * Lead's). It never routes: specialty routing may still pick another member.
+   */
+  memberModels?: ReadonlyMap<string, string | undefined> | undefined;
+  leadSessionId?: string | undefined;
+  archivedSessionIds?: ReadonlySet<string> | undefined;
+  /** Configured models, for display names (unknown ids show raw). */
+  models?: readonly GroupModelChipModel[];
+  /** Room locale override (tests); defaults to the browser locale. */
+  locale?: string | null | undefined;
 }) {
   const [value, setValue] = useState(() => (groupId ? readGroupComposerDraft(groupId) : ""));
   const [caret, setCaret] = useState(() => {
@@ -198,6 +219,21 @@ export function GroupComposer({
   const open = suggestions.length > 0;
   const active = Math.min(highlight, Math.max(0, suggestions.length - 1));
   const canSend = Boolean(value.trim() || hasReady) && !sending;
+  const modelChip = useMemo(
+    () =>
+      memberModels
+        ? groupModelChip({
+            draft: value,
+            members,
+            memberModels,
+            leadSessionId,
+            archivedSessionIds,
+            models,
+            locale,
+          })
+        : undefined,
+    [value, members, memberModels, leadSessionId, archivedSessionIds, models, locale],
+  );
 
   function pick(suggestion: MentionSuggestion): void {
     if (!query) return;
@@ -411,7 +447,7 @@ export function GroupComposer({
         ) : null}
         {attachments.length > 0 ? (
           <div
-            className="flex flex-wrap gap-1.5 px-3 pt-3"
+            className="flex flex-wrap gap-1.5 px-3 pt-3 pb-0.5"
             data-testid="group-composer-attachments"
           >
             {attachments.map((item) => (
@@ -429,7 +465,7 @@ export function GroupComposer({
         ) : null}
         <textarea
           aria-label="Message the group"
-          className="block max-h-48 min-h-[54px] w-full resize-none bg-transparent px-4 py-3 text-fg text-sm outline-none placeholder:text-fg-faint"
+          className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14px] text-fg leading-[1.6] outline-none placeholder:text-fg-faint"
           onChange={(event) => {
             setValue(event.currentTarget.value);
             setCaret(event.currentTarget.selectionStart);
@@ -487,19 +523,19 @@ export function GroupComposer({
           type="file"
         />
         <div
-          className="group-composer-toolbar flex min-h-11 items-center justify-between gap-2 border-t border-hairline-soft px-2.5 py-1.5"
+          className="group-composer-toolbar flex min-h-10 items-center justify-between gap-2 rounded-b-[inherit] px-2 pt-1 pb-2"
           data-testid="group-composer-toolbar"
         >
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <button
               aria-label="Attach files"
-              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
+              className="flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
               data-testid="group-composer-attach"
               disabled={attachments.length >= MAX_GROUP_ATTACHMENTS || sending}
               onClick={() => fileInputRef.current?.click()}
               type="button"
             >
-              <IconPlus size={ICON.md} stroke={ICON_STROKE.md} />
+              <IconPaperclip size={ICON.md} stroke={ICON_STROKE.md} />
             </button>
             {activeExecutionId ? (
               <fieldset
@@ -541,15 +577,18 @@ export function GroupComposer({
               </fieldset>
             ) : null}
           </div>
-          <button
-            aria-label="Send"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-colors hover:bg-focus-ring-soft disabled:opacity-40"
-            disabled={!canSend}
-            onClick={() => void send()}
-            type="button"
-          >
-            <IconArrowUp size={ICON.sm} stroke={ICON_STROKE.sm} />
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {modelChip ? <GroupModelChip chip={modelChip} locale={locale} /> : null}
+            <button
+              aria-label="Send"
+              className="flex size-7 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-[background-color,transform,opacity] duration-150 hover:bg-focus-ring-soft active:scale-95 disabled:opacity-40 motion-reduce:transition-none"
+              disabled={!canSend}
+              onClick={() => void send()}
+              type="button"
+            >
+              <IconArrowUp size={ICON.sm} stroke={ICON_STROKE.sm} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
