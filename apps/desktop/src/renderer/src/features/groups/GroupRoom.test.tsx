@@ -364,9 +364,11 @@ describe("GroupRoom", () => {
     expect(within(userRow as HTMLElement).getByTestId("group-user-avatar")).toBeTruthy();
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
-    // The author's avatar (A3): still in a list, the member's face and color.
+    // The author's avatar (A3): still in a list, the member's face and color,
+    // now small inside the `name · time` header (C4).
     const authorAvatar = within(memberRow as HTMLElement).getByTestId("agent-avatar");
-    expect(authorAvatar.dataset.size).toBe("20");
+    expect(authorAvatar.dataset.size).toBe("16");
+    expect(authorAvatar.closest('[data-testid="group-message-header"]')).toBeTruthy();
     expect(authorAvatar.dataset.animated).toBe("false");
     // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });

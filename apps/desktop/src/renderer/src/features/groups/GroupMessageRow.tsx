@@ -26,7 +26,6 @@ import {
 } from "../../../../shared/group-room-transcript";
 import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
-import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
@@ -35,6 +34,8 @@ import type { RunSource } from "../sources/runSources";
 import { useRunSources } from "../sources/useRunSources";
 import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
+import { GroupDeliveryFooter, GroupMessageHeader } from "./GroupMessageHeader";
+import type { GroupDelivery } from "./groupDelivery";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
 import { replyPreview } from "./groupThreads";
@@ -46,7 +47,6 @@ import {
   PromptChainOfThought,
   PromptMessage,
   PromptMessageBody,
-  PromptMessageIdentity,
   PromptSystemMessage,
 } from "./prompt-kit/PromptKit";
 
@@ -261,13 +261,12 @@ function MessageMeta({
       : "";
   // Live turns already show concrete phases — do not stamp opaque "Working".
   // Hoist executionChip so running/writing rows still expose the filter control.
-  if (!status || status === "running" || status === "writing")
+  // The time lives in the header (`name · time`).
+  if (!status || status === "running" || status === "writing") {
+    if (!executionChip && !tokenLabel) return null;
     return (
-      <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+      <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
         {executionChip}
-        <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
-          {formatClock(Date.parse(message.createdAt))}
-        </time>
         {tokenLabel ? (
           <span
             className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
@@ -279,6 +278,7 @@ function MessageMeta({
         ) : null}
       </span>
     );
+  }
   const label = {
     queued: "Queued",
     awaiting_user: "Waiting for you",
@@ -289,11 +289,8 @@ function MessageMeta({
   }[status];
   const warning = status === "failed" || status === "interrupted";
   return (
-    <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+    <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
       {executionChip}
-      <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
-        {formatClock(Date.parse(message.createdAt))}
-      </time>
       {tokenLabel ? (
         <span
           className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
@@ -431,6 +428,7 @@ export function GroupMessageRow({
   streaming,
   replyToMessage,
   executionTokenTotal,
+  delivery,
 }: {
   message: GroupMessage;
   replyToMessage?: GroupMessage | undefined;
@@ -455,6 +453,8 @@ export function GroupMessageRow({
   liveTurn?: { mode: "running" | "queued"; live: GroupLiveTurnSnapshot } | undefined;
   /** Marks public text as streaming for transient fallback cards. */
   streaming?: boolean | undefined;
+  /** Delivery footer (queued / delivered / working / answered), derived by the list. */
+  delivery?: GroupDelivery | undefined;
 }) {
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
@@ -551,7 +551,6 @@ export function GroupMessageRow({
     return (
       <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
         <PromptMessage
-          className="flex-row-reverse"
           data-align="right"
           data-kind="user"
           data-message-id={message.id}
@@ -559,17 +558,20 @@ export function GroupMessageRow({
           data-testid="group-message"
           id={`group-message-${message.id}`}
         >
-          <span
-            aria-hidden
-            className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-fg-muted text-2xs"
-            data-testid="group-user-avatar"
-          >
-            Y
-          </span>
           <PromptMessageBody>
-            <PromptMessageIdentity
+            <GroupMessageHeader
+              avatar={
+                <span
+                  aria-hidden
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-[9px] text-fg-muted"
+                  data-testid="group-user-avatar"
+                >
+                  Y
+                </span>
+              }
+              createdAt={message.createdAt}
               name="You"
-              role={role?.trim() || "Human"}
+              memberRole={role?.trim() || "Human"}
               trailing={
                 <MessageMeta
                   executionTokenTotal={executionTokenTotal}
@@ -588,6 +590,7 @@ export function GroupMessageRow({
             <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
+        {delivery ? <GroupDeliveryFooter align="end" delivery={delivery} labels={labels} /> : null}
         <MessageActions align="end" copyText={message.body} message={message} onReply={onReply} />
       </div>
     );
@@ -650,30 +653,33 @@ export function GroupMessageRow({
         data-testid="group-message"
         id={`group-message-${message.id}`}
       >
-        {avatar ? (
-          <AgentAvatar
-            animated={false}
-            className="mt-0.5"
-            color={avatar.color}
-            face={avatar.face}
-            seed={avatar.agentId}
-            shape={avatar.shape}
-            size={20}
-            state={avatar.archived ? "archived" : "idle"}
-          />
-        ) : (
-          <span
-            aria-hidden
-            className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
-            style={{ backgroundColor: memberColor(sessionId) }}
-          >
-            {title.trim().charAt(0).toLocaleUpperCase() || "?"}
-          </span>
-        )}
         <PromptMessageBody>
-          <PromptMessageIdentity
+          <GroupMessageHeader
+            avatar={
+              avatar ? (
+                <AgentAvatar
+                  animated={false}
+                  color={avatar.color}
+                  face={avatar.face}
+                  seed={avatar.agentId}
+                  shape={avatar.shape}
+                  size={16}
+                  state={avatar.archived ? "archived" : "idle"}
+                />
+              ) : (
+                <span
+                  aria-hidden
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full font-medium text-[9px] text-white"
+                  data-testid="group-member-initial"
+                  style={{ backgroundColor: memberColor(sessionId) }}
+                >
+                  {title.trim().charAt(0).toLocaleUpperCase() || "?"}
+                </span>
+              )
+            }
+            createdAt={message.createdAt}
             name={<MemberName label={label} />}
-            role={role?.trim() || "Agent"}
+            memberRole={role?.trim() || "Agent"}
             trailing={
               <>
                 {toLabel ? (
@@ -749,6 +755,7 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
+      {delivery ? <GroupDeliveryFooter align="start" delivery={delivery} labels={labels} /> : null}
       <MessageActions
         align="start"
         copyText={prose || message.body}
