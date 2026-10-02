@@ -1,10 +1,6 @@
 import {
   IconArrowLeft,
-  IconBan,
-  IconBrain,
-  IconBulb,
   IconCube,
-  IconGauge,
   IconGavel,
   IconPalette,
   IconPlugConnected,
@@ -24,14 +20,10 @@ const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   "model-provider": <IconServerCog size={16} stroke={1.7} />,
   appearance: <IconPalette size={16} stroke={1.7} />,
   personalization: <IconUser size={16} stroke={1.7} />,
-  "project-memory": <IconBrain size={16} stroke={1.7} />,
-  "harness-insights": <IconBulb size={16} stroke={1.7} />,
-  "failure-blacklist": <IconBan size={16} stroke={1.7} />,
   mcp: <IconPlugConnected size={16} stroke={1.7} />,
   skills: <IconCube size={16} stroke={1.7} />,
   subagents: <IconUsers size={16} stroke={1.7} />,
   rules: <IconGavel size={16} stroke={1.7} />,
-  limits: <IconGauge size={16} stroke={1.7} />,
 };
 
 export function SettingsSidebar({

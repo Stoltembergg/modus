@@ -82,9 +82,34 @@ describe("Modus semantic design tokens", () => {
     expect(composerDock).toContain("box-shadow: var(--shadow-composer)");
   });
 
+  it("gives the Groups prompt bar a shared focus glow and integrated toolbar", () => {
+    const focusState = css.match(/\.group-prompt-bar:focus-within\s*\{([^}]+)\}/)?.[1] ?? "";
+
+    expect(focusState).toContain("box-shadow: var(--shadow-composer-focus)");
+    expect(css).toContain(".group-composer-toolbar");
+  });
+
   it("does not render custom caption controls in the application chrome", () => {
     expect(app).not.toContain("WindowControls");
     expect(app).not.toContain("CaptionButton");
+  });
+
+  it("keeps the Groups empty state concise with beams confined to its background", () => {
+    const emptyState = app.split('key="groups-empty"')[1]?.split(") : visibleGroup ?")[0] ?? "";
+
+    expect(emptyState).toContain("AGENTIC TEAMS");
+    expect(emptyState).not.toContain("Choose a group from the sidebar");
+    expect(emptyState).toContain("group-empty-beams");
+    expect(css).toContain(".group-empty-beams");
+    expect(css).toContain("@keyframes group-empty-beam-sweep");
+    expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  });
+
+  it("removes the top overflow menu because Settings lives in the app rail", () => {
+    const headerActions =
+      app.split("function HeaderActions(")[1]?.split("function EnvironmentPopover(")[0] ?? "";
+
+    expect(headerActions).not.toContain("<ChromeMoreMenu");
   });
 
   it("keeps the rail aligned with the top chrome across routes and platforms", () => {

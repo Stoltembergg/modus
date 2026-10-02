@@ -61,7 +61,6 @@ import {
 } from "../components/shell/navigation-state";
 import { TopBar } from "../components/shell/TopBar";
 import { Aurora } from "../components/ui/Aurora";
-import { ChromeMoreMenu } from "../components/ui/ChromeMoreMenu";
 import { FadeContent } from "../components/ui/FadeContent";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
 import { ModusBot } from "../components/ui/ModusBot";
@@ -1453,23 +1452,24 @@ export function App() {
                           {primaryNavigation.active === "groups" && !visibleGroup ? (
                             <m.div
                               animate={{ opacity: 1, y: 0 }}
-                              className="flex min-h-0 min-w-0 flex-1 items-center justify-center px-8"
+                              className="group-empty-state relative isolate flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden px-8"
                               exit={reduceMotion ? { opacity: 1 } : { opacity: 0, y: -3 }}
                               initial={reduceMotion ? false : { opacity: 0, y: 4 }}
                               key="groups-empty"
                               transition={{ duration: reduceMotion ? 0 : 0.12, ease: "easeOut" }}
                             >
-                              <div className="max-w-md text-center">
+                              <div aria-hidden className="group-empty-beams">
+                                <span className="group-empty-beam" />
+                                <span className="group-empty-beam" />
+                                <span className="group-empty-beam" />
+                              </div>
+                              <div className="relative z-10 max-w-md text-center">
                                 <p className="mb-2 text-2xs font-medium uppercase tracking-[0.14em] text-fg-faint">
-                                  Persistent agent teams
+                                  AGENTIC TEAMS
                                 </p>
                                 <h1 className="text-xl font-medium tracking-tight text-fg">
                                   Keep shared work moving
                                 </h1>
-                                <p className="mt-2 text-sm leading-6 text-fg-muted">
-                                  Choose a group from the sidebar, or create one to give agents a
-                                  shared room, project, and history.
-                                </p>
                               </div>
                             </m.div>
                           ) : visibleGroup ? (
@@ -1915,7 +1915,6 @@ function HeaderActions({
         environmentStats={environmentStats}
         onOpenSettings={onOpenSettings}
       />
-      <ChromeMoreMenu onOpenSettings={onOpenSettings} />
       <ToolbarButton
         active={inspectorOpen}
         label={inspectorOpen ? "Hide right sidebar" : "Show right sidebar"}

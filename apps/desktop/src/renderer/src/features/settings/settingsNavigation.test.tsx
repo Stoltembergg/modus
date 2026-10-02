@@ -14,27 +14,15 @@ const NAV_LABELS = [
   "Model & Provider",
   "Appearance",
   "Personalization",
-  "Project memory",
-  "Harness Insights",
-  "Failure blacklist",
   "MCP & Integrations",
   "Skills",
   "Subagents",
   "Rules",
-  "Limits",
 ] as const;
 
 const GROUPED_NAV = {
-  Workspace: [
-    "Project memory",
-    "Harness Insights",
-    "Failure blacklist",
-    "MCP & Integrations",
-    "Skills",
-    "Subagents",
-    "Rules",
-  ],
-  "Models & limits": ["Model & Provider", "Limits"],
+  Workspace: ["MCP & Integrations", "Skills", "Subagents", "Rules"],
+  Models: ["Model & Provider"],
   Interface: ["General", "Appearance", "Personalization"],
 } as const;
 
@@ -103,9 +91,7 @@ describe("filterSettingsNav", () => {
 
   it("matches case-insensitively", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "mcp").map((item) => item.id)).toEqual(["mcp"]);
-    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "HARNESS").map((item) => item.id)).toEqual([
-      "harness-insights",
-    ]);
+    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "HARNESS")).toEqual([]);
   });
 
   it("keeps Composio setup inside MCP rather than exposing a separate Integrations tab", () => {
@@ -114,10 +100,21 @@ describe("filterSettingsNav", () => {
     expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "composio").map((item) => item.id)).toEqual([]);
   });
 
+  it("does not expose internal memory, harness controls, failure blacklist, or Limits", () => {
+    const hiddenIds = ["project-memory", "harness-insights", "failure-blacklist", "limits"];
+    const hiddenLabels = ["Project memory", "Harness Insights", "Failure blacklist", "Limits"];
+
+    for (const id of hiddenIds) {
+      expect(SETTINGS_NAV_ITEMS.map((item) => item.id)).not.toContain(id);
+    }
+    for (const label of hiddenLabels) {
+      expect(SETTINGS_NAV_ITEMS.map((item) => item.label)).not.toContain(label);
+      expect(navLabels(renderSidebar({ query: label }))).toEqual([]);
+    }
+  });
+
   it("trims surrounding whitespace from the query", () => {
-    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "  limits  ").map((item) => item.id)).toEqual([
-      "limits",
-    ]);
+    expect(filterSettingsNav(SETTINGS_NAV_ITEMS, "  limits  ")).toEqual([]);
   });
 
   it("returns no items when nothing matches", () => {
@@ -126,7 +123,7 @@ describe("filterSettingsNav", () => {
 });
 
 describe("groupSettingsNav", () => {
-  it("assigns every nav item to Workspace, Models & limits, or Interface in display order", () => {
+  it("assigns every nav item to Workspace, Models, or Interface in display order", () => {
     expect(SETTINGS_NAV_GROUPS.map((group) => group.title)).toEqual(Object.keys(GROUPED_NAV));
     expect(
       groupSettingsNav(SETTINGS_NAV_ITEMS).map(({ group, items }) => [
@@ -138,7 +135,7 @@ describe("groupSettingsNav", () => {
 });
 
 describe("Settings navigation search", () => {
-  it("shows all thirteen nav items when the query is empty", () => {
+  it("shows only user-facing nav items when the query is empty", () => {
     const markup = renderSidebar({ query: "" });
 
     expect(navLabels(markup)).toEqual(RENDERED_NAV_LABELS);
@@ -148,7 +145,7 @@ describe("Settings navigation search", () => {
 
   it("filters nav items by a partial, case-insensitive, trimmed query", () => {
     expect(navLabels(renderSidebar({ query: "mod" }))).toEqual(["Model & Provider"]);
-    expect(navLabels(renderSidebar({ query: "PROJECT" }))).toEqual(["Project memory"]);
+    expect(navLabels(renderSidebar({ query: "PROJECT" }))).toEqual([]);
 
     const trimmed = renderSidebar({ query: "  skills " });
     expect(navLabels(trimmed)).toEqual(["Skills"]);
@@ -161,16 +158,16 @@ describe("Settings navigation search", () => {
     expect(navLabels(appear)).toEqual(["Appearance"]);
 
     const limit = renderSidebar({ query: "limit" });
-    expect(groupHeadings(limit)).toEqual(["Models & limits"]);
-    expect(navLabels(limit)).toEqual(["Limits"]);
-    expect(limit).not.toContain("No settings match");
+    expect(groupHeadings(limit)).toEqual([]);
+    expect(navLabels(limit)).toEqual([]);
+    expect(limit).toContain("No settings match");
   });
 
   it("keeps the heading of every group that still has a partial match", () => {
     const markup = renderSidebar({ query: "li" });
 
-    expect(groupHeadings(markup)).toEqual(["Workspace", "Models & limits", "Interface"]);
-    expect(navLabels(markup)).toEqual(["Failure blacklist", "Limits", "Personalization"]);
+    expect(groupHeadings(markup)).toEqual(["Interface"]);
+    expect(navLabels(markup)).toEqual(["Personalization"]);
 
     const acrossAll = renderSidebar({ query: "en" });
     expect(groupHeadings(acrossAll)).toEqual(["Workspace", "Interface"]);
@@ -188,15 +185,15 @@ describe("Settings navigation search", () => {
 
   it("keeps the active section when it is filtered out of the nav", () => {
     const onSectionChange = vi.fn();
-    const markup = renderSidebar({ activeSection: "limits", onSectionChange, query: "model" });
+    const markup = renderSidebar({ activeSection: "subagents", onSectionChange, query: "model" });
 
     expect(navLabels(markup)).toEqual(["Model & Provider"]);
     expect(activeNavLabel(markup)).toBeUndefined();
     expect(onSectionChange).not.toHaveBeenCalled();
 
-    const cleared = renderSidebar({ activeSection: "limits", onSectionChange, query: "" });
+    const cleared = renderSidebar({ activeSection: "subagents", onSectionChange, query: "" });
     expect(navLabels(cleared)).toEqual(RENDERED_NAV_LABELS);
-    expect(activeNavLabel(cleared)).toBe("Limits");
+    expect(activeNavLabel(cleared)).toBe("Subagents");
     expect(onSectionChange).not.toHaveBeenCalled();
   });
 });

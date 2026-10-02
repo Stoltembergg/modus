@@ -406,6 +406,88 @@
   border-color: var(--state-drop-border);
   background-color: var(--state-drop-surface);
 }
+.group-prompt-bar {
+  transition:
+    border-color var(--motion-ui),
+    box-shadow var(--motion-ui),
+    background-color var(--motion-ui);
+}
+.group-prompt-bar:focus-within {
+  border-color: var(--color-focus-ring);
+  box-shadow: var(--shadow-composer-focus);
+}
+.group-composer-toolbar {
+  background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
+}
+.group-empty-beams {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse at center, #000 0%, #000 38%, transparent 84%);
+}
+.group-empty-beams::before {
+  position: absolute;
+  inset: -20%;
+  background: radial-gradient(
+    ellipse at 50% 54%,
+    color-mix(in srgb, var(--color-focus-ring) 8%, transparent),
+    transparent 62%
+  );
+  content: "";
+}
+.group-empty-beam {
+  position: absolute;
+  top: -48%;
+  bottom: -48%;
+  left: 20%;
+  width: 18%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 30%,
+      color-mix(in srgb, var(--color-link) 12%, transparent) 48%,
+      transparent 60%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 22%,
+      color-mix(in srgb, var(--color-focus-ring) 8%, transparent) 35%,
+      color-mix(in srgb, var(--color-focus-ring) 28%, transparent) 50%,
+      color-mix(in srgb, var(--color-focus-ring-soft) 20%, transparent) 57%,
+      transparent 78%
+    );
+  filter: blur(18px);
+  opacity: 0.32;
+  animation: group-empty-beam-sweep 22s ease-in-out infinite alternate;
+}
+.group-empty-beam:nth-child(2) {
+  left: 48%;
+  width: 12%;
+  opacity: 0.26;
+  animation-delay: -9s;
+  animation-duration: 29s;
+}
+.group-empty-beam:nth-child(3) {
+  left: 76%;
+  width: 16%;
+  opacity: 0.22;
+  animation-delay: -17s;
+  animation-duration: 25s;
+}
+@keyframes group-empty-beam-sweep {
+  from {
+    transform: translate3d(-22vw, 0, 0) rotate(19deg);
+  }
+  to {
+    transform: translate3d(24vw, 0, 0) rotate(19deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-empty-beam {
+    animation: none;
+  }
+}
 .surface-glass {
   border: 1px solid var(--border-overlay);
   border-radius: var(--radius-overlay);
