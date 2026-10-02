@@ -58,6 +58,8 @@ type FilesPanelProps = {
   revealPath?: string | undefined;
   /** Cleared by parent after reveal is consumed so the same path can re-trigger. */
   onRevealConsumed?: (() => void) | undefined;
+  /** Line to open `revealPath` at (C2.1); `key` changes per request. */
+  revealLine?: { line: number; key: number } | undefined;
 };
 
 type FlatNode = { entry: FileEntry; depth: number };
@@ -99,7 +101,17 @@ function openFileAffected(openPath: string, changed: string[]): boolean {
   });
 }
 
-export function FilesPanel({ cwd, onAddToChat, revealPath, onRevealConsumed }: FilesPanelProps) {
+export function FilesPanel({
+  cwd,
+  onAddToChat,
+  revealPath,
+  onRevealConsumed,
+  revealLine,
+}: FilesPanelProps) {
+  // Read at reveal time (the reveal effect is keyed on the path only).
+  const revealLineRef = useRef(revealLine);
+  revealLineRef.current = revealLine;
+  const [lineTarget, setLineTarget] = useState<{ line: number; key: number } | undefined>();
   const [rootEntries, setRootEntries] = useState<FileEntry[]>([]);
   const [childrenByPath, setChildrenByPath] = useState<Map<string, FileEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -350,6 +362,7 @@ export function FilesPanel({ cwd, onAddToChat, revealPath, onRevealConsumed }: F
         return;
       }
       setFileError(undefined);
+      setLineTarget(undefined);
       void window.modus.files
         .read({ cwd, path: entry.path })
         .then((file: FileReadResult) => {
@@ -395,6 +408,7 @@ export function FilesPanel({ cwd, onAddToChat, revealPath, onRevealConsumed }: F
         setSavedContent(file.binary || file.truncated ? undefined : file.content);
         setDraftContent(file.binary || file.truncated ? undefined : file.content);
         setFileError(undefined);
+        setLineTarget(revealLineRef.current);
       } catch (error: unknown) {
         if (!cancelled) {
           setFileError(error instanceof Error ? error.message : String(error));
@@ -565,6 +579,7 @@ export function FilesPanel({ cwd, onAddToChat, revealPath, onRevealConsumed }: F
             file={selectedFile}
             onChange={setDraftContent}
             onSave={() => void saveFile()}
+            revealLine={lineTarget}
             wordWrap={wordWrap}
             {...(onAddToChat ? { onAddToChat } : {})}
           />
@@ -800,8 +815,10 @@ function FileViewer({
   onChange,
   onSave,
   onAddToChat,
+  revealLine,
 }: {
   cwd: string | undefined;
+  revealLine?: { line: number; key: number } | undefined;
   file: FileReadResult | undefined;
   error: string | undefined;
   wordWrap: boolean;
@@ -853,6 +870,7 @@ function FileViewer({
       onSave={readOnly ? undefined : onSave}
       path={file.relativePath}
       readOnly={readOnly}
+      revealLine={revealLine}
       wordWrap={wordWrap}
     />
   );

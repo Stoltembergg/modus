@@ -15,7 +15,14 @@ export type FileSearchResult = {
   matches?: number;
   /** First matching line number (grep). */
   line?: number;
+  /**
+   * Every matching line (grep), in output order. `text` is exactly what grep
+   * printed after `path:line: ` (the tool may already have truncated it).
+   */
+  matchLines?: SearchMatchLine[];
 };
+
+export type SearchMatchLine = { line: number; text: string };
 
 export type WebSearchResult = {
   kind: "web";
@@ -61,7 +68,7 @@ function splitNotice(output: string): { body: string; notice?: string } {
   return { body: trimmed.slice(0, match.index), ...(notice ? { notice } : {}) };
 }
 
-const GREP_MATCH = /^(.+?):(\d+): ?/;
+const GREP_MATCH = /^(.+?):(\d+): ?(.*)$/;
 const GREP_CONTEXT = /^(.+?)-(\d+)- ?/;
 
 /** PI grep output: `path:line: text` matches, `path-line- text` context lines. */
@@ -77,9 +84,20 @@ export function parseGrepOutput(output: string): ParsedSearch | undefined {
     if (match?.[1] && match[2]) {
       const path = match[1];
       const lineNumber = Number(match[2]);
+      const matchLine = { line: lineNumber, text: match[3] ?? "" };
       const existing = byPath.get(path);
-      if (existing) existing.matches = (existing.matches ?? 0) + 1;
-      else byPath.set(path, { kind: "file", path, matches: 1, line: lineNumber });
+      if (existing) {
+        existing.matches = (existing.matches ?? 0) + 1;
+        existing.matchLines?.push(matchLine);
+      } else {
+        byPath.set(path, {
+          kind: "file",
+          path,
+          matches: 1,
+          line: lineNumber,
+          matchLines: [matchLine],
+        });
+      }
       continue;
     }
     if (GREP_CONTEXT.test(line)) continue;

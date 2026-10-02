@@ -60,7 +60,7 @@ type TimelineProps = {
   onOpenSubagent?(childSessionId: string): void;
   onOpenPlan?(plan: PlanRef): void;
   /** Open a workspace file path in the Files inspector. */
-  onOpenFile?(path: string): void;
+  onOpenFile?(path: string, line?: number): void;
   workspaceId?: string | undefined;
   /** Tighter padding when embedded in the subagent preview sheet (no composer clearance). */
   embedded?: boolean | undefined;
@@ -1436,6 +1436,7 @@ export function Timeline({
                       <WorkFold
                         items={block.items}
                         {...(models ? { models } : {})}
+                        {...(cwd ? { cwd } : {})}
                         run={block.run}
                         {...(onOpenFile ? { onOpenFile } : {})}
                         {...(onOpenPlan ? { onOpenPlan } : {})}
@@ -1469,6 +1470,7 @@ export function Timeline({
                       <WorkActivityRow
                         item={block}
                         {...(models ? { models } : {})}
+                        {...(cwd ? { cwd } : {})}
                         {...(onOpenFile ? { onOpenFile } : {})}
                         {...(onOpenPlan ? { onOpenPlan } : {})}
                         {...(onOpenSubagent ? { onOpenSubagent } : {})}

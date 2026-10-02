@@ -387,7 +387,7 @@ type ChatPaneProps = {
   /** Explicitly open a completed timeline plan in the inspector. */
   onOpenPlan?(plan: PlanRef): void;
   /** Open a workspace file in the Files inspector panel. */
-  onOpenFile?(path: string): void;
+  onOpenFile?(path: string, line?: number): void;
   /** Open a background terminal in the Terminal inspector panel. */
   onOpenTerminal?(terminalId: string): void;
   /**

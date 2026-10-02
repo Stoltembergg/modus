@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib/cn";
 import { loadMonaco, MONACO_THEME, type Monaco, watchModusTheme } from "../../lib/monaco";
+import { clampLine, createLineFlash, type LineFlash } from "./lineFlash";
 
 type MonacoEditor = import("monaco-editor").editor.IStandaloneCodeEditor;
 type MonacoTextModel = import("monaco-editor").editor.ITextModel;
@@ -27,6 +28,12 @@ export type CodeViewerProps = {
   onSave?: ((value: string) => void) | undefined;
   /** Fires when the user adds the current selection to chat (button or Ctrl/Cmd+L). */
   onAddToChat?: ((input: { path: string; range: CodeSelectionRange }) => void) | undefined;
+  /**
+   * Open at this line (C2.1): centre it, put the cursor on it and flash it
+   * briefly. `key` changes on every request so the same line can re-trigger.
+   * A line beyond the end of the file opens at the last line.
+   */
+  revealLine?: { line: number; key: number } | undefined;
   className?: string | undefined;
 };
 
@@ -62,11 +69,13 @@ export function CodeViewer({
   onChange,
   onSave,
   onAddToChat,
+  revealLine,
   className,
 }: CodeViewerProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<MonacoEditor | null>(null);
   const modelRef = useRef<MonacoTextModel | null>(null);
+  const flashRef = useRef<LineFlash | null>(null);
   const onChangeRef = useRef(onChange);
   const onSaveRef = useRef(onSave);
   const onAddToChatRef = useRef(onAddToChat);
@@ -133,6 +142,25 @@ export function CodeViewer({
         stickyScroll: { enabled: false },
       });
       editorRef.current = editor;
+      const flashDecorations = editor.createDecorationsCollection();
+      let flashCount = 0;
+      flashRef.current = createLineFlash({
+        // Alternate two classes (two keyframe names) so a re-flash of the same
+        // line restarts the CSS fade even if Monaco reuses the overlay node.
+        apply: (line) => {
+          flashCount += 1;
+          flashDecorations.set([
+            {
+              range: new monaco.Range(line, 1, line, 1),
+              options: {
+                isWholeLine: true,
+                className: `modus-line-flash modus-line-flash-${flashCount % 2}`,
+              },
+            },
+          ]);
+        },
+        clear: () => flashDecorations.clear(),
+      });
       disposeTheme = watchModusTheme(monaco);
 
       const shortcut =
@@ -252,6 +280,8 @@ export function CodeViewer({
       cancelled = true;
       disposeTheme?.();
       for (const disposer of disposers) disposer.dispose();
+      flashRef.current?.dispose();
+      flashRef.current = null;
       editorRef.current?.dispose();
       editorRef.current = null;
       modelRef.current?.dispose();
@@ -272,6 +302,18 @@ export function CodeViewer({
   useEffect(() => {
     editorRef.current?.updateOptions({ wordWrap: wordWrap ? "on" : "off" });
   }, [wordWrap]);
+
+  // Open at a line: centre, cursor, short flash. Waits for the editor (ready).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run per request key, not per object identity.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = modelRef.current;
+    if (!ready || !editor || !model || !revealLine) return;
+    const line = clampLine(revealLine.line, model.getLineCount());
+    editor.setPosition({ lineNumber: line, column: 1 });
+    editor.revealLineInCenter(line);
+    flashRef.current?.flash(line);
+  }, [ready, revealLine?.key, revealLine?.line]);
 
   useEffect(() => {
     editorRef.current?.updateOptions({ readOnly, domReadOnly: readOnly, contextmenu: !readOnly });
