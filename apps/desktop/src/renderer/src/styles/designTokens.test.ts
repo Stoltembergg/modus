@@ -90,9 +90,7 @@ describe("Modus semantic design tokens", () => {
     expect(css).toMatch(
       /--surface-sidebar:\s*color-mix\(in srgb, var\(--color-panel\) 94%, transparent\)/,
     );
-    expect(css).toMatch(
-      /--surface-main:\s*var\(--color-canvas\)/,
-    );
+    expect(css).toMatch(/--surface-main:\s*var\(--color-canvas\)/);
     expect(css).toMatch(
       /--surface-main-glass:\s*color-mix\(in srgb, var\(--color-canvas\) 94%, transparent\)/,
     );
