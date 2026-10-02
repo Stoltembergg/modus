@@ -1,5 +1,5 @@
 import type { GroupMessage } from "../../../../shared/contracts";
-import { groupRoomLabel, resolveGroupRoomLocale } from "../../../../shared/group-room-locale";
+import { groupStatusLabel, resolveGroupRoomLocale } from "../../../../shared/group-room-locale";
 
 /**
  * Delivery state of a room message, derived ONLY from the canonical turn cards
@@ -135,46 +135,34 @@ export function deriveGroupDelivery(
   return { state: highest(members.map((member) => member.state)) ?? "delivered", members };
 }
 
-type DeliveryLocale = "en" | "pt" | "zh";
-
-/** States with no existing room key; the rest reuse `group-room-locale`. */
+/** States with no room key of their own; the rest share the card's labels. */
 const OWN_LABELS: Record<
-  DeliveryLocale,
-  Record<"queued" | "delivered" | "working" | "cancelled" | "noReply" | "answered", string>
+  "en" | "pt" | "zh",
+  Record<"delivered" | "working" | "noReply" | "answered", string>
 > = {
-  en: {
-    queued: "Queued",
-    delivered: "Delivered",
-    working: "Working",
-    cancelled: "Cancelled",
-    noReply: "No reply",
-    answered: "Answered",
-  },
+  en: { delivered: "Delivered", working: "Working", noReply: "No reply", answered: "Answered" },
   pt: {
-    queued: "Na fila",
     delivered: "Entregue",
     working: "Trabalhando",
-    cancelled: "Cancelado",
     noReply: "Sem resposta",
     answered: "Respondida",
   },
-  zh: {
-    queued: "排队中",
-    delivered: "已送达",
-    working: "工作中",
-    cancelled: "已取消",
-    noReply: "无回复",
-    answered: "已回复",
-  },
+  zh: { delivered: "已送达", working: "工作中", noReply: "无回复", answered: "已回复" },
 };
 
-/** Room catalog labels end in "…" for live indicators; a footer state does not. */
-function roomLabel(key: "waitingForYou" | "failed", locale?: string | null): string {
-  return groupRoomLabel(key, locale).replace(/…$/u, "");
-}
-
+/**
+ * Footer labels. Waiting / queued / failed / cancelled use `groupStatusLabel`,
+ * the same function as the member card badge, so both read the same words.
+ */
 export function groupDeliveryLabel(state: GroupDeliveryState, locale?: string | null): string {
-  if (state === "waiting") return roomLabel("waitingForYou", locale);
-  if (state === "failed") return roomLabel("failed", locale);
-  return OWN_LABELS[resolveGroupRoomLocale(locale)][state];
+  switch (state) {
+    case "waiting":
+      return groupStatusLabel("waitingForYou", locale);
+    case "queued":
+    case "failed":
+    case "cancelled":
+      return groupStatusLabel(state, locale);
+    default:
+      return OWN_LABELS[resolveGroupRoomLocale(locale)][state];
+  }
 }

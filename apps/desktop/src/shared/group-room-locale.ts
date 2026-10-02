@@ -203,3 +203,73 @@ export function thinkingStateKeyFromLive(input: {
   }
   return "waitingOnModel";
 }
+
+/**
+ * Static state labels (message card badges, delivery footer). These reuse the
+ * live-indicator keys where one exists (`queued`, `waitingForYou`, `failed`) so
+ * the card and the footer say exactly the same words, but drop the trailing
+ * "…": a badge names a state, it does not animate an ongoing one.
+ */
+export type GroupStatusLabelKey =
+  | "queued"
+  | "waitingForYou"
+  | "failed"
+  | "completed"
+  | "cancelled"
+  | "interrupted";
+
+const STATUS_ONLY_LABELS: Record<
+  GroupRoomLocale,
+  Record<"completed" | "cancelled" | "interrupted", string>
+> = {
+  en: { completed: "Completed", cancelled: "Cancelled", interrupted: "Interrupted" },
+  pt: { completed: "Concluído", cancelled: "Cancelado", interrupted: "Interrompido" },
+  zh: { completed: "已完成", cancelled: "已取消", interrupted: "已中断" },
+};
+
+export function groupStatusLabel(key: GroupStatusLabelKey, locale?: string | null): string {
+  if (key === "queued" || key === "waitingForYou" || key === "failed") {
+    return groupRoomLabel(key, locale).replace(/…$/u, "");
+  }
+  return STATUS_ONLY_LABELS[resolveGroupRoomLocale(locale)][key];
+}
+
+/** Member turn card copy: fallback progress line and the retry button. */
+export type GroupMemberCardTextKey =
+  | "waitingForTurn"
+  | "workingOnTask"
+  | "writingReply"
+  | "retryTask"
+  | "resumeTask"
+  | "sending";
+
+const MEMBER_CARD_TEXT: Record<GroupRoomLocale, Record<GroupMemberCardTextKey, string>> = {
+  en: {
+    waitingForTurn: "Waiting for its turn",
+    workingOnTask: "Working on the task",
+    writingReply: "Writing a reply",
+    retryTask: "Retry task",
+    resumeTask: "Resume task",
+    sending: "Sending…",
+  },
+  pt: {
+    waitingForTurn: "Aguardando a vez",
+    workingOnTask: "Trabalhando na tarefa",
+    writingReply: "Escrevendo uma resposta",
+    retryTask: "Tentar de novo",
+    resumeTask: "Retomar tarefa",
+    sending: "Enviando…",
+  },
+  zh: {
+    waitingForTurn: "等待轮到它",
+    workingOnTask: "正在处理任务",
+    writingReply: "正在撰写回复",
+    retryTask: "重试任务",
+    resumeTask: "继续任务",
+    sending: "发送中…",
+  },
+};
+
+export function groupMemberCardText(key: GroupMemberCardTextKey, locale?: string | null): string {
+  return MEMBER_CARD_TEXT[resolveGroupRoomLocale(locale)][key];
+}
