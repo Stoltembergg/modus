@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../../shared/contracts";
 import type { PromptAgentInput, PromptTurnResult } from "../agent/runtime";
+import type { GroupRuntimeOptions } from "./group-runtime";
 
 let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
@@ -56,7 +57,10 @@ function squad() {
   return { group, a: members[0]!.sessionId, b: members[1]!.sessionId, c: members[2]!.sessionId };
 }
 
-function setup(updatePending = false, options: Record<string, number> = {}) {
+function setup(
+  updatePending = false,
+  options: Omit<Partial<GroupRuntimeOptions>, "runtime" | "host"> = {},
+) {
   const calls: Array<{ input: PromptAgentInput; resolve: (value: PromptTurnResult) => void }> = [];
   const aborted: string[] = [];
   const listeners = new Set<(event: AgentEvent) => void>();
@@ -77,8 +81,9 @@ function setup(updatePending = false, options: Record<string, number> = {}) {
     onTurnSettled: () => () => {},
     onQuestionPending: () => () => {},
   };
+  const state = { windowAvailable: true };
   const host = {
-    getWindow: () => ({}) as never,
+    getWindow: () => (state.windowAvailable ? ({} as never) : undefined),
     isUpdatePending: () => updatePending,
     emit: () => {},
   };
@@ -90,6 +95,7 @@ function setup(updatePending = false, options: Record<string, number> = {}) {
     calls,
     aborted,
     host,
+    state,
     emit: (event: AgentEvent) => {
       for (const listener of listeners) listener(event);
     },
@@ -126,6 +132,41 @@ describe("Groups runtime audit", () => {
     );
     expect(env.calls).toHaveLength(1);
     expect(env.calls[0]!.input.sessionId).toBe(group.leadSessionId);
+  });
+  it("F04 recovers admitted queue entries after a resource limit across app restart", async () => {
+    const { group, a, b } = squad();
+    const env = setup(false, {
+      limits: { maxAgentMessages: 1 },
+      maxConcurrentTurns: 1,
+    });
+    const user = env.groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha @Beta @Gamma complete the shared task",
+    });
+    expect(env.calls.map((call) => call.input.sessionId)).toEqual([a]);
+
+    env.state.windowAvailable = false;
+    env.calls[0]!.resolve({ outcome: "ok", finalText: "Alpha finished." });
+    await flush();
+    expect(
+      listGroupMessages(group.id)
+        .filter((message) => message.authorSessionId === b)
+        .every((message) => message.status !== "cancelled"),
+    ).toBe(true);
+
+    env.groups.dispose();
+    env.state.windowAvailable = true;
+    const recovered = new GroupRuntime({
+      runtime: env.runtime,
+      host: env.host,
+      recoverPending: true,
+      maxConcurrentTurns: 1,
+    });
+    instances.push(recovered);
+    recovered.kick();
+
+    expect(env.calls.map((call) => call.input.sessionId)).toEqual([a, b]);
+    expect(listGroupMessages(group.id).find((message) => message.id === user.id)).toBeTruthy();
   });
   it("F06 Stop aborts a member whose only turn is gated on a question", () => {
     const { group, a } = squad();

@@ -444,7 +444,7 @@ describe("GroupRoom", () => {
         message("3", {
           authorKind: "system",
           kind: "status",
-          body: "Waiting for you: this chain reached its limit of 6 turns.",
+          body: "Automatic handoffs paused: this chain reached its limit of 20 agent messages. Already queued turns will finish.",
         }),
         message("4", { authorKind: "system", kind: "status", body: "Turn failed" }),
       ],

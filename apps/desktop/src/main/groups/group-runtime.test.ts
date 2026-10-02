@@ -208,7 +208,6 @@ afterAll(async () => {
 describe("group runtime constants", () => {
   it("exports the agreed chain limits and concurrency", () => {
     expect(GROUP_CHAIN_LIMITS).toEqual({
-      maxHops: 6,
       maxAgentMessages: 20,
       maxWakesPerMember: 3,
       maxEstimatedInputTokens: 150_000,
@@ -600,7 +599,7 @@ describe("chain limits", () => {
       chainId,
       body: (GROUP_STATUS_TEXT.limit as Record<string, string>)[reason],
     });
-    expect(limit[0]?.body.startsWith("Waiting for you")).toBe(true);
+    expect(limit[0]?.body.startsWith("Automatic handoffs paused")).toBe(true);
     expect(
       room(groupId)
         .filter((message) => message.authorKind === "agent" && message.kind === "message")
@@ -609,14 +608,24 @@ describe("chain limits", () => {
     expect(runtime.pendingSessions()).toEqual([]);
   }
 
-  it(`stops after ${GROUP_CHAIN_LIMITS.maxHops} hops`, async () => {
-    const { group, user, runtime, groups } = await pingPong({ maxWakesPerMember: 99 }, 20);
-    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 6, ended: "max-hops" });
-    expectStopped(group.id, user.id, "max-hops", runtime);
+  it("continues beyond six handoffs while the resource budgets allow it", async () => {
+    const { group, user, runtime, groups } = await pingPong(
+      { maxWakesPerMember: 99, maxAgentMessages: 99 },
+      8,
+    );
+
+    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 9 });
+    expect(groups.chainSnapshot(user.id).ended).toBeUndefined();
+    expect(runtime.pendingSessions()).toHaveLength(1);
+    expect(
+      room(group.id).filter(
+        (message) => message.authorKind === "agent" && message.status === "cancelled",
+      ),
+    ).toEqual([]);
   });
 
   it(`stops at ${GROUP_CHAIN_LIMITS.maxWakesPerMember} wakes per member`, async () => {
-    const { group, user, runtime, groups } = await pingPong({ maxHops: 99 }, 20);
+    const { group, user, runtime, groups } = await pingPong({}, 20);
     // Alpha: 3 wakes (1 by the user + 2 hand-offs), then Beta's 3rd hand-off is refused.
     expect(groups.chainSnapshot(user.id)).toMatchObject({ ended: "max-member-wakes" });
     expectStopped(group.id, user.id, "max-member-wakes", runtime);
@@ -624,11 +633,11 @@ describe("chain limits", () => {
 
   it("stops at the agent-message limit", async () => {
     const { group, user, runtime, groups } = await pingPong(
-      { maxAgentMessages: 2, maxWakesPerMember: 99, maxHops: 99 },
+      { maxAgentMessages: 2, maxWakesPerMember: 99 },
       20,
     );
     expect(groups.chainSnapshot(user.id)).toMatchObject({
-      agentMessages: 2,
+      agentMessages: 3,
       ended: "max-agent-messages",
     });
     expectStopped(group.id, user.id, "max-agent-messages", runtime);
@@ -661,45 +670,51 @@ describe("chain limits", () => {
     expect(ctx.groups.chainSnapshot(huge.id).ended).toBe("context-too-large");
   });
 
-  it("a limit drops the chain's queued wakes; a running turn posts but wakes nobody", async () => {
+  it("lets already queued turns finish after a resource budget is reached", async () => {
     const { group, alpha, beta, gamma } = squad();
-    const { runtime, groups } = setup({ limits: { maxHops: 4 } });
+    const { runtime, groups } = setup({ limits: { maxAgentMessages: 1 } });
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta @Gamma go" });
-    // Hops 1-3 admitted; Alpha and Beta run, Gamma is queued.
+    // All three wakes were admitted; Alpha and Beta run, Gamma is queued.
     expect(runtime.pendingSessions()).toEqual([alpha, beta]);
-    groups.handleTaskWake({
-      groupId: group.id,
-      actorSessionId: alpha,
-      targetSessionId: beta,
-      body: "Review next",
-    });
-    groups.handleTaskWake({
-      groupId: group.id,
-      actorSessionId: alpha,
-      targetSessionId: gamma,
-      body: "Verify next",
-    });
-    runtime.take(alpha).resolve({ outcome: "ok", finalText: "@Beta then @Gamma" });
+    runtime.take(alpha).resolve({ outcome: "ok", finalText: "Alpha finished." });
     await flush();
-    // Beta's 2nd wake is hop 4 (queued behind its running turn); Gamma's would be hop 5.
-    const snapshot = groups.chainSnapshot(user.id);
-    expect(snapshot).toMatchObject({ hops: 4, ended: "max-hops" });
-    // Gamma's first wake and Beta's second were both queued: discarded.
-    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(groups.chainSnapshot(user.id)).toMatchObject({ ended: "max-agent-messages" });
+    // The limit prevents more handoffs, but the previously admitted Gamma turn still starts.
+    expect(runtime.pendingSessions()).toEqual([beta, gamma]);
+    expect(runtime.started).toEqual([alpha, beta, gamma]);
+    expect(
+      room(group.id).some(
+        (message) => message.body === "The task chain ended before this turn started.",
+      ),
+    ).toBe(false);
     expect(groups.isGroupWorking(group.id)).toBe(true);
-    runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Alpha @Gamma look" });
+    runtime.take(beta).resolve({ outcome: "ok", finalText: "Beta finished." });
+    runtime.take(gamma).resolve({ outcome: "ok", finalText: "Gamma finished." });
     await flush();
     expect(
-      room(group.id).find(
-        (message) => message.authorSessionId === beta && message.status === "completed",
+      room(group.id).filter(
+        (message) => message.kind === "message" && message.authorKind === "agent",
       ),
-    ).toMatchObject({ body: "Done, @Alpha @Gamma look", chainId: user.id });
-    expect(room(group.id).filter((message) => message.authorSessionId === gamma)).toEqual([
-      expect.objectContaining({ status: "cancelled", body: "", chainId: user.id }),
-    ]);
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          authorSessionId: alpha,
+          body: "Alpha finished.",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          authorSessionId: beta,
+          body: "Beta finished.",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          authorSessionId: gamma,
+          body: "Gamma finished.",
+          status: "completed",
+        }),
+      ]),
+    );
     expect(runtime.pendingSessions()).toEqual([]);
-    expect(runtime.started).toEqual([alpha, beta]);
-    expect(runtime.started).not.toContain(gamma);
     expect(groups.isGroupWorking(group.id)).toBe(false);
   });
 

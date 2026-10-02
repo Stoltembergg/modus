@@ -614,7 +614,8 @@ export class GroupRuntime {
       }
       if (
         !chain ||
-        chain.ended ||
+        chain.ended === "blocked" ||
+        chain.ended === "stopped" ||
         !membersOf(wake.groupId).some((m) => m.sessionId === wake.sessionId && !m.archived)
       ) {
         updateGroupJob(wake, "cancelled");
@@ -858,10 +859,6 @@ export class GroupRuntime {
         this.endChain(chain, "max-agent-messages");
         break;
       }
-      if (chain.hops + 1 > this.limits.maxHops) {
-        this.endChain(chain, "max-hops");
-        break;
-      }
       if ((chain.wakesByMember.get(sessionId) ?? 0) + 1 > this.limits.maxWakesPerMember) {
         this.endChain(chain, "max-member-wakes");
         break;
@@ -935,26 +932,27 @@ export class GroupRuntime {
   }
 
   /**
-   * Ends a chain (blocked, gate or any limit): nothing new is woken in it and
-   * its queued (not yet started) wakes are dropped; turns already running
-   * finish and post but wake nobody.
+   * Stops new handoffs in a chain. Human blocks and explicit Stop also cancel
+   * queued work; resource limits let already admitted turns drain normally.
    */
   private endChain(chain: ChainState, reason: GroupChainEndReason): void {
     if (chain.ended) return;
     chain.ended = reason;
     persistGroupChain(chain);
-    for (const [sessionId, queue] of this.queues) {
-      for (const wake of queue.filter((wake) => wake.chainId === chain.chainId)) {
-        updateGroupJob(wake, "cancelled");
-        this.transcript.setState(
-          wake,
-          "cancelled",
-          "The task chain ended before this turn started.",
-        );
+    if (reason === "blocked" || reason === "stopped") {
+      for (const [sessionId, queue] of this.queues) {
+        for (const wake of queue.filter((wake) => wake.chainId === chain.chainId)) {
+          updateGroupJob(wake, "cancelled");
+          this.transcript.setState(
+            wake,
+            "cancelled",
+            "The task chain ended before this turn started.",
+          );
+        }
+        const kept = queue.filter((wake) => wake.chainId !== chain.chainId);
+        if (kept.length === 0) this.queues.delete(sessionId);
+        else this.queues.set(sessionId, kept);
       }
-      const kept = queue.filter((wake) => wake.chainId !== chain.chainId);
-      if (kept.length === 0) this.queues.delete(sessionId);
-      else this.queues.set(sessionId, kept);
     }
     if (this.queuedCount() === 0) this.clearRetry();
     // blocked / stopped: the member (or the user) already said why.

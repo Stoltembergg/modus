@@ -274,16 +274,6 @@ describe("task tool wakes", () => {
     });
   });
 
-  it("respects the hop limit", async () => {
-    const { group, alpha, beta } = squad();
-    const { runtime, groups } = setup({ limits: { maxHops: 1 } });
-    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
-    groups.handleTaskWake(review(group.id, alpha, beta));
-    expect(runtime.pendingSessions()).toEqual([alpha]);
-    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 1, ended: "max-hops" });
-    expect(room(group.id).at(-1)?.body).toBe(GROUP_STATUS_TEXT.limit["max-hops"]);
-  });
-
   it("a changes wake of the owner respects the per-member wake limit", async () => {
     const { group, alpha, beta } = squad();
     const { runtime, groups } = setup({ limits: { maxWakesPerMember: 1 } });
@@ -669,24 +659,6 @@ describe("worktree re-wake (group_start_worktree)", () => {
     expect(afterReply).toHaveLength(4);
     expect(afterReply.some((message) => message.body === "Starting my worktree.")).toBe(false);
     expect(runtime.pendingSessions()).toEqual([]);
-  });
-
-  it("at the hop limit nobody is woken (the chain ends with its limit status)", async () => {
-    const { group, alpha } = squad();
-    const { runtime, groups } = setup({ limits: { maxHops: 1 } });
-    const user = groups.postUserMessage({ groupId: group.id, body: "go" });
-    expect(groups.handleWorktreeReady(ready(group.id, alpha))).toBe(true);
-    runtime.take(alpha).resolve({ outcome: "ok" });
-    await flush();
-    expect(runtime.pendingSessions()).toEqual([]);
-    expect(groups.chainSnapshot(user.id)).toMatchObject({ hops: 1, ended: "max-hops" });
-    expect(room(group.id).map((message) => message.body)).toEqual([
-      "go",
-      "",
-      `Worktree ready: \`group/${group.id}/alpha\``,
-      GROUP_STATUS_TEXT.limit["max-hops"],
-    ]);
-    expect(room(group.id)[1]).toMatchObject({ body: "", status: "completed" });
   });
 
   it("at the member's wake limit nobody is woken", async () => {

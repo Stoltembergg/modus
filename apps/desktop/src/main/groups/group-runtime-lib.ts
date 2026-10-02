@@ -33,8 +33,9 @@ import { listAgentGroupMembers } from "./group-store";
  * ordinary `normal` prompts and posts their replies back into the room.
  *
  * A *chain* is everything that follows one user action (a user message, or the
- * user unblocking a member). Every limit below is per chain; hitting one posts
- * a "Waiting for you: …" status and stops the chain until the user acts again.
+ * user unblocking a member). Resource limits are per chain. Reaching one stops
+ * new handoffs while already queued turns finish; explicit blocks and Stop
+ * still cancel queued work.
  */
 /**
  * Token limits are ESTIMATES (characters / 4, see estimateGroupTokens) of the
@@ -50,8 +51,6 @@ export const GROUP_PROMPT_DECISIONS_MAX_TOKENS = 2_000;
 export const GROUP_PROMPT_SNAPSHOT_MAX_TOKENS = 1_500;
 
 export const GROUP_CHAIN_LIMITS = {
-  /** Member turns per chain (every woken turn, and an unblocked member's result, is one hop). */
-  maxHops: 6,
   /** Agent messages posted per chain. */
   maxAgentMessages: 20,
   /** Times the same member is woken per chain. */
@@ -84,11 +83,10 @@ export const GROUP_STATUS_TEXT = {
   worktreeReady: (branch: string) => `Worktree ready: \`${branch}\``,
   archived: (name: string) => `${name} is archived`,
   limit: {
-    "max-hops": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxHops} turns.`,
-    "max-agent-messages": `Waiting for you: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxAgentMessages} agent messages.`,
-    "max-member-wakes": `Waiting for you: a member was already woken ${GROUP_CHAIN_LIMITS.maxWakesPerMember} times in this chain.`,
-    "input-token-budget": `Waiting for you: this chain used its estimated ${ESTIMATED_INPUT_TOKENS_PER_CHAIN / 1000}k-token budget of group prompts.`,
-    "context-too-large": `Waiting for you: the message does not fit the estimated ${ESTIMATED_CONTEXT_TOKENS_PER_WAKE / 1000}k-token group context of a turn.`,
+    "max-agent-messages": `Automatic handoffs paused: this chain reached its limit of ${GROUP_CHAIN_LIMITS.maxAgentMessages} agent messages. Already queued turns will finish.`,
+    "max-member-wakes": `Automatic handoffs paused: a member was already woken ${GROUP_CHAIN_LIMITS.maxWakesPerMember} times in this chain. Already queued turns will finish.`,
+    "input-token-budget": `Automatic handoffs paused: this chain used its estimated ${ESTIMATED_INPUT_TOKENS_PER_CHAIN / 1000}k-token budget of group prompts. Already queued turns will finish.`,
+    "context-too-large": `Automatic handoffs paused: the message does not fit the estimated ${ESTIMATED_CONTEXT_TOKENS_PER_WAKE / 1000}k-token group context of a turn. Already queued turns will finish.`,
   } satisfies Record<Exclude<GroupChainEndReason, "blocked" | "stopped">, string>,
 } as const;
 

@@ -340,7 +340,6 @@ export type GroupChainEndReason =
   | "blocked"
   /** The user pressed Stop in the room (running turns are aborted). */
   | "stopped"
-  | "max-hops"
   | "max-agent-messages"
   | "max-member-wakes"
   | "input-token-budget"

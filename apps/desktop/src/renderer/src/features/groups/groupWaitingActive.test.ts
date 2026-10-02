@@ -9,7 +9,7 @@ describe("isActiveWaitingStatus", () => {
     expect(isActiveWaitingStatus("Turn stopped", "s-build", ["s-build"])).toBe(false);
     expect(
       isActiveWaitingStatus(
-        "Waiting for you: this chain reached its limit of 6 turns.",
+        "Automatic handoffs paused: this chain reached its agent-message limit.",
         undefined,
         ["s-build"],
       ),
