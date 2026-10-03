@@ -28,6 +28,24 @@ Secrets are listed in [`.env.example`](.env.example). For the local stack, copy 
 
 **Deploy:** set `STRIPE_ENABLED` explicitly in the function secrets: `supabase secrets set STRIPE_ENABLED=false`, or `true` to sell through Stripe again. The flag is read per request.
 
-**L1c:** the planned billing catalog can call `isStripeEnabled(Deno.env)` to report which providers are enabled.
+## Billing catalog and the DB Stripe flag (L1c)
+
+`public.get_billing_catalog()` is an RPC that anon and authenticated can call. It returns the active paid plans with their enabled providers. Each row has: plan, name, monthly_credits, provider, currency, amount_minor and sort_order. It never returns Stripe price ids or lookup keys, Mercado Pago ids, collector ids or credentials. Inactive plans (pro, max and ultra after L1a) and `free` are excluded.
+
+The providers come from `private.billing_settings`, a single-row table:
+- `stripe_enabled` defaults to `false`.
+- `mercadopago_enabled` defaults to `true`.
+
+Only a migration or service_role can change the table: anon and authenticated have no grant and no policy on it.
+
+**Enabling Stripe takes TWO steps, and both are required:**
+1. **DB flag (UI visibility):** set `private.billing_settings.stripe_enabled = true` through a migration or service_role. The catalog then lists the Stripe (USD) price, so the UI offers it.
+2. **Env flag (checkout):** set `supabase secrets set STRIPE_ENABLED=true` (see above). `stripe-checkout` then accepts requests.
+
+If the two flags disagree, nothing is sold through Stripe:
+- DB `true` with env not `true`: the UI shows Stripe, but checkout answers 503 `stripe_disabled`.
+- DB `false` with env `true`: the UI does not offer Stripe at all.
+
+To disable Stripe, turn off both, starting with the env, which is the hard block.
 
 **Tests and CI:** no test needs `STRIPE_ENABLED`. Handler tests inject `stripeEnabled`, and the SQL / integration tests (`supabase/tests/run.sh`) call `db.ts` and the RPCs directly, never the HTTP Functions. The desktop app's billing tests mock the backend.
