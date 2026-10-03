@@ -41,7 +41,13 @@ describe("Modus semantic design tokens", () => {
       "--motion-fast",
       "--motion-ui",
       "--motion-overlay",
+      "--glass-alpha-chrome",
+      "--glass-alpha-overlay",
+      "--glass-alpha-canvas",
+      "--glass-blur",
+      "--glass-saturate",
       "--glass-filter",
+      "--glass-scrim-blur",
       "--glass-scrim-filter",
       "--overlay-scrim-color",
       "--overlay-shadow",
@@ -92,8 +98,9 @@ describe("Modus semantic design tokens", () => {
     );
     expect(css).toMatch(/--surface-main:\s*var\(--color-canvas\)/);
     expect(css).toMatch(
-      /--surface-main-glass:\s*color-mix\(in srgb, var\(--color-canvas\) 94%, transparent\)/,
+      /--surface-main-glass:\s*color-mix\(\s*in srgb,\s*var\(--color-canvas\) var\(--glass-alpha-canvas\),\s*transparent\s*\)/,
     );
+    expect(css).toMatch(/--glass-alpha-canvas:\s*94%;/);
     expect(css).toMatch(
       /:root\[data-native-glass="true"\] \.surface-main\s*\{\s*background-color: var\(--surface-main-glass\)/,
     );
