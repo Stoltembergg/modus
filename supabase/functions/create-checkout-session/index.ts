@@ -1,6 +1,6 @@
 import { createGetUser } from "../_shared/auth.ts";
 import {
-  loadBillingUrls,
+  lazyBillingUrls,
   loadSupabaseConfig,
   requireTestModeStripeKey,
 } from "../_shared/config.ts";
@@ -17,6 +17,6 @@ Deno.serve(
     stripe: createStripeClient(stripeKey),
     db: createPostgresBillingDb(supabase.dbUrl),
     getUser: createGetUser(supabase),
-    urls: loadBillingUrls(Deno.env),
+    urls: lazyBillingUrls(Deno.env),
   }),
 );

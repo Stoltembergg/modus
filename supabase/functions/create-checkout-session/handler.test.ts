@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
+import { type BillingUrls, ConfigError, loadBillingUrls } from "../_shared/config.ts";
+import { env, recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
 import { createCheckoutHandler } from "./handler.ts";
 
 const STARTER_PRICE = "price_1UMIyDKAHtqpope6RahtIgRw";
@@ -11,11 +12,12 @@ function setup({
   sessionUrl = "https://checkout.stripe.com/c/pay/cs_test_1",
   sessionLivemode = false,
   user = USER as typeof USER | null,
+  urls = (() => URLS) as () => BillingUrls,
 } = {}) {
   const rec = recorder();
   const handler = createCheckoutHandler({
     getUser: rec.record("getUser", async () => user),
-    urls: URLS,
+    urls,
     db: {
       getPurchasablePlan: rec.record("getPurchasablePlan", async (plan: string) =>
         plan === "starter" ? { plan: "starter", stripePriceId: STARTER_PRICE } : null,
@@ -143,5 +145,55 @@ Deno.test("checkout: an unexpected session (live or non-Stripe URL) is not retur
   for (const options of [{ sessionLivemode: true }, { sessionUrl: "https://evil.example/pay" }]) {
     const res = await setup(options).handler(request({ plan: "starter" }));
     assertEquals(res.status, 502);
+  }
+});
+
+Deno.test("checkout: fails closed (503) without BILLING_RETURN_URL, before auth, DB or Stripe", async () => {
+  for (const value of [undefined, "", "http://modus.example/billing/return", "not a url"]) {
+    const { handler, rec } = setup({
+      urls: () => loadBillingUrls(env(value === undefined ? {} : { BILLING_RETURN_URL: value })),
+    });
+    const res = await handler(request({ plan: "starter" }));
+    assertEquals(res.status, 503);
+    assertEquals(await res.json(), { error: "billing_not_configured" });
+    assertEquals(rec.calls, []);
+  }
+  const thrown = setup({
+    urls: () => {
+      throw new ConfigError("BILLING_RETURN_URL is not set.");
+    },
+  });
+  assertEquals((await thrown.handler(request({ plan: "starter" }))).status, 503);
+});
+
+Deno.test("checkout: request headers and body cannot change success/cancel URLs", async () => {
+  const { handler, rec } = setup({ storedCustomer: "cus_existing" });
+  const req = new Request("https://evil.example/fn?success_url=https://evil.example", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer token.from.supabase",
+      origin: "https://evil.example",
+      referer: "https://evil.example/page",
+      "x-forwarded-host": "evil.example",
+    },
+    body: JSON.stringify({ plan: "starter" }),
+  });
+  assertEquals((await handler(req)).status, 200);
+  const params = rec.calls.find((c) => c.name === "sessions.create")?.args[0] as Record<
+    string,
+    unknown
+  >;
+  assertEquals(params.success_url, URLS.successUrl);
+  assertEquals(params.cancel_url, URLS.cancelUrl);
+  assert(!JSON.stringify(params).includes("evil"));
+  for (const body of [
+    { plan: "starter", success_url: "https://evil.example" },
+    { plan: "starter", cancel_url: "https://evil.example" },
+    { plan: "starter", return_url: "https://evil.example" },
+  ]) {
+    const again = setup();
+    assertEquals((await again.handler(request(body))).status, 400);
+    assert(!again.rec.names().includes("sessions.create"));
   }
 });

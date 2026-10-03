@@ -49,26 +49,30 @@ export function loadSupabaseConfig(env: EnvSource): SupabaseConfig {
 }
 
 /**
- * Where Stripe sends the browser back. Stripe Checkout / Portal need an https
- * page (custom schemes such as modus:// are not documented as accepted), so the
- * base is an https page that forwards to modus://billing/return?status=…
- * (template: supabase/billing-return/index.html). Never taken from the client.
+ * Where Stripe sends the browser back: BILLING_RETURN_URL, e.g.
+ * https://<site domain>/billing/return (apps/site/billing/return.html). Stripe Checkout /
+ * Portal need an http(s) page, so that page forwards to the fixed modus://billing/return.
+ * Required, with NO default: unset, empty or invalid fails closed (the session Functions answer
+ * 503 billing_not_configured before touching Stripe). https only; http only for
+ * localhost / 127.0.0.1 (local stack). success_url, cancel_url and the Portal return_url are
+ * built from this value alone, never from the request.
  */
-export const DEFAULT_BILLING_RETURN_URL = "https://github.com/Stoltembergg/modus";
-
 export type BillingUrls = { successUrl: string; cancelUrl: string; portalReturnUrl: string };
 
 export function loadBillingUrls(env: EnvSource): BillingUrls {
-  const raw = env.get("BILLING_RETURN_URL")?.trim() || DEFAULT_BILLING_RETURN_URL;
+  const raw = env.get("BILLING_RETURN_URL")?.trim();
+  if (!raw) throw new ConfigError("BILLING_RETURN_URL is not set.");
   let base: URL;
   try {
     base = new URL(raw);
   } catch {
     throw new ConfigError("BILLING_RETURN_URL is not a valid URL.");
   }
-  if (base.protocol !== "https:" || base.search || base.hash || base.username || base.password) {
+  const local = base.hostname === "localhost" || base.hostname === "127.0.0.1";
+  const schemeOk = base.protocol === "https:" || (base.protocol === "http:" && local);
+  if (!schemeOk || base.search || base.hash || base.username || base.password) {
     throw new ConfigError(
-      "BILLING_RETURN_URL must be a plain https URL without query or fragment.",
+      "BILLING_RETURN_URL must be a plain https URL (http only for localhost) without query, fragment or credentials.",
     );
   }
   const withStatus = (status: string) => {
@@ -80,5 +84,18 @@ export function loadBillingUrls(env: EnvSource): BillingUrls {
     successUrl: withStatus("success"),
     cancelUrl: withStatus("cancel"),
     portalReturnUrl: withStatus("portal"),
+  };
+}
+
+/**
+ * Resolves the return URLs once, on first use. A ConfigError is logged (message only, no
+ * values) and turned into a 503 so a misconfigured deploy fails closed per request instead of
+ * sending users to an unknown page.
+ */
+export function lazyBillingUrls(env: EnvSource): () => BillingUrls {
+  let cached: BillingUrls | undefined;
+  return () => {
+    cached ??= loadBillingUrls(env);
+    return cached;
   };
 }

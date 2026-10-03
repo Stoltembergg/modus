@@ -45,6 +45,17 @@ export async function readJsonObject(
   return value as Record<string, unknown>;
 }
 
+/** Billing return URLs from server config only; a missing/invalid BILLING_RETURN_URL is a 503. */
+export function requireBillingUrls<T>(resolve: () => T): T {
+  try {
+    return resolve();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid config";
+    console.error(`[billing] configuration error: ${message}`);
+    throw new HttpError(503, "billing_not_configured");
+  }
+}
+
 export function errorResponse(error: unknown): Response {
   if (error instanceof HttpError) return json(error.status, { error: error.code });
   console.error("[billing] unexpected error:", error instanceof Error ? error.name : typeof error);

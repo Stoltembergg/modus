@@ -16,9 +16,10 @@
     "catalog:generate": "node scripts/generate-model-catalog.mjs",
     "check": "biome check . && npm run typecheck --workspaces --if-present",
     "format": "biome check --write .",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm run test:site",
     "test:supabase": "bash supabase/tests/run.sh",
-    "test:functions": "cd supabase/functions && deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import && deno check */index.ts */*.test.ts _shared/*.ts && deno lint"
+    "test:functions": "cd supabase/functions && deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import && deno check */index.ts */*.test.ts _shared/*.ts && deno lint",
+    "test:site": "node --test apps/site/billing/forward.test.js"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",

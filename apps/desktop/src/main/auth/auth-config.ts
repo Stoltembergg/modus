@@ -6,9 +6,9 @@ import type { OAuthTransport } from "./oauth-callback";
  *
  * Sources, first match wins:
  * - runtime env: MODUS_SUPABASE_URL, MODUS_SUPABASE_ANON_KEY, MODUS_AUTH_OAUTH_PROVIDERS,
- *   MODUS_AUTH_OAUTH_TRANSPORT
+ *   MODUS_AUTH_OAUTH_TRANSPORT, MODUS_AUTH_EMAIL_REDIRECT_URL
  * - build-time env (electron-vite, main only): MAIN_VITE_SUPABASE_URL, MAIN_VITE_SUPABASE_ANON_KEY,
- *   MAIN_VITE_AUTH_OAUTH_PROVIDERS, MAIN_VITE_AUTH_OAUTH_TRANSPORT
+ *   MAIN_VITE_AUTH_OAUTH_PROVIDERS, MAIN_VITE_AUTH_OAUTH_TRANSPORT, MAIN_VITE_AUTH_EMAIL_REDIRECT_URL
  *
  * The anon / publishable key is public by design (RLS protects the data), but it is still never
  * committed: builds receive it from env. A service_role / secret key is refused outright.
@@ -23,6 +23,11 @@ export type AuthConfig = {
    * "deep-link": modus://auth/callback (allow-list entry `modus://auth/callback`).
    */
   oauthTransport?: OAuthTransport;
+  /**
+   * Where the sign-up confirmation email lands (apps/site /auth/confirmed). Unset: Supabase's
+   * Site URL. Must also be in the Supabase redirect allow-list.
+   */
+  emailRedirectUrl?: string;
 };
 
 export type AuthConfigEnv = Record<string, string | undefined>;
@@ -78,8 +83,14 @@ export function parseSupabaseUrl(raw: string): string {
   return url.origin;
 }
 
+/**
+ * Providers used when the build does not set MODUS_/MAIN_VITE_AUTH_OAUTH_PROVIDERS: GitHub and
+ * Google are configured in Supabase (2026-10-03). "none" disables OAuth.
+ */
+export const DEFAULT_OAUTH_PROVIDERS: readonly AuthOAuthProviderId[] = ["github", "google"];
+
 export function parseOAuthProviders(raw: string | undefined): AuthOAuthProviderId[] {
-  if (!raw) return [];
+  if (raw === undefined) return [...DEFAULT_OAUTH_PROVIDERS];
   const wanted = new Set(
     raw
       .split(",")
@@ -89,8 +100,32 @@ export function parseOAuthProviders(raw: string | undefined): AuthOAuthProviderI
   return AUTH_OAUTH_PROVIDER_IDS.filter((id) => wanted.has(id));
 }
 
+/** https only (http on localhost / 127.0.0.1 for a local stack); no credentials or fragment. */
+export function parseEmailRedirectUrl(raw: string | undefined): string | undefined {
+  if (!raw) return undefined;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error("The email redirect URL is not a valid URL.");
+  }
+  const local = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
+    throw new Error("The email redirect URL must use https.");
+  }
+  if (url.username || url.password || url.hash) {
+    throw new Error("The email redirect URL must not carry credentials or a fragment.");
+  }
+  return url.href;
+}
+
 export function parseOAuthTransport(raw: string | undefined): OAuthTransport {
   return raw?.trim().toLowerCase() === "deep-link" ? "deep-link" : "loopback";
+}
+
+function optionalEmailRedirect(raw: string | undefined): { emailRedirectUrl?: string } {
+  const url = parseEmailRedirectUrl(raw);
+  return url ? { emailRedirectUrl: url } : {};
 }
 
 /** undefined when the build has no Supabase settings: the Account UI then reports "unavailable". */
@@ -111,6 +146,9 @@ export function resolveAuthConfig(
     ),
     oauthTransport: parseOAuthTransport(
       first(merged, "MODUS_AUTH_OAUTH_TRANSPORT", "MAIN_VITE_AUTH_OAUTH_TRANSPORT"),
+    ),
+    ...optionalEmailRedirect(
+      first(merged, "MODUS_AUTH_EMAIL_REDIRECT_URL", "MAIN_VITE_AUTH_EMAIL_REDIRECT_URL"),
     ),
   };
 }

@@ -31,7 +31,31 @@ describe("auth config", () => {
     });
     expect(
       resolveAuthConfig({}, { MAIN_VITE_SUPABASE_URL: URL, MAIN_VITE_SUPABASE_ANON_KEY: "k" }),
-    ).toMatchObject({ anonKey: "k", oauthProviders: [] });
+    ).toMatchObject({ anonKey: "k", oauthProviders: ["github", "google"] });
+  });
+
+  it("defaults OAuth to GitHub and Google; an explicit list or none overrides it", () => {
+    const base = { MODUS_SUPABASE_URL: URL, MODUS_SUPABASE_ANON_KEY: "k" };
+    expect(resolveAuthConfig(base)?.oauthProviders).toEqual(["github", "google"]);
+    expect(
+      resolveAuthConfig({ ...base, MODUS_AUTH_OAUTH_PROVIDERS: "none" })?.oauthProviders,
+    ).toEqual([]);
+    expect(
+      resolveAuthConfig({ ...base, MODUS_AUTH_OAUTH_PROVIDERS: "github" })?.oauthProviders,
+    ).toEqual(["github"]);
+  });
+
+  it("accepts an https email redirect (the site's /auth/confirmed) and refuses others", () => {
+    const base = { MODUS_SUPABASE_URL: URL, MODUS_SUPABASE_ANON_KEY: "k" };
+    expect(resolveAuthConfig(base)).not.toHaveProperty("emailRedirectUrl");
+    expect(
+      resolveAuthConfig(base, {
+        MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: "https://modus.example/auth/confirmed",
+      })?.emailRedirectUrl,
+    ).toBe("https://modus.example/auth/confirmed");
+    for (const bad of ["http://modus.example/auth/confirmed", "modus://auth", "nope"]) {
+      expect(() => resolveAuthConfig({ ...base, MODUS_AUTH_EMAIL_REDIRECT_URL: bad })).toThrow();
+    }
   });
 
   it("selects the deep-link OAuth transport only when asked", () => {

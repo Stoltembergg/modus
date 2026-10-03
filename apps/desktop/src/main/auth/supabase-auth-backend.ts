@@ -125,7 +125,15 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
 
   return {
     async signUp(email, password) {
-      const data = await run(() => client.auth.signUp({ email, password }));
+      const data = await run(() =>
+        client.auth.signUp({
+          email,
+          password,
+          ...(config.emailRedirectUrl
+            ? { options: { emailRedirectTo: config.emailRedirectUrl } }
+            : {}),
+        }),
+      );
       return { session: data.session ? await started(data.session) : null };
     },
 

@@ -2,7 +2,13 @@ import type Stripe from "npm:stripe@23.0.0";
 import type { GetUser } from "../_shared/auth.ts";
 import type { BillingUrls } from "../_shared/config.ts";
 import type { BillingDb } from "../_shared/db.ts";
-import { errorResponse, HttpError, json, readJsonObject } from "../_shared/http.ts";
+import {
+  errorResponse,
+  HttpError,
+  json,
+  readJsonObject,
+  requireBillingUrls,
+} from "../_shared/http.ts";
 import type { StripeApi } from "../_shared/stripe.ts";
 
 export type CheckoutDeps = {
@@ -12,7 +18,8 @@ export type CheckoutDeps = {
     "getPurchasablePlan" | "getStripeCustomerId" | "hasLiveSubscription" | "claimStripeCustomer"
   >;
   getUser: GetUser;
-  urls: BillingUrls;
+  /** From BILLING_RETURN_URL (server env) only; throws when unset or invalid. */
+  urls: () => BillingUrls;
 };
 
 const PLAN_KEY = /^[a-z][a-z0-9_]{0,31}$/;
@@ -45,7 +52,8 @@ export function checkoutSessionParams(input: {
     automatic_tax: { enabled: false },
     allow_promotion_codes: false,
     payment_method_collection: "always",
-    // The SDK documents submit_type for payment AND subscription mode.
+    // submit_type, integration_identifier and origin_context: accepted by the sandbox API
+    // (test Checkout Session, 2026-10-03 01:30 BRT).
     submit_type: "auto",
     integration_identifier: "hosted_mobile_app_0001",
     origin_context: "mobile_app",
@@ -56,6 +64,8 @@ export function createCheckoutHandler(deps: CheckoutDeps): (req: Request) => Pro
   return async (req) => {
     try {
       if (req.method !== "POST") throw new HttpError(405, "method_not_allowed");
+      // Fail closed before auth, the database or Stripe when the return page is not configured.
+      const urls = requireBillingUrls(deps.urls);
       const user = await deps.getUser(req);
       if (!user) throw new HttpError(401, "unauthorized");
 
@@ -96,7 +106,7 @@ export function createCheckoutHandler(deps: CheckoutDeps): (req: Request) => Pro
           plan: plan.plan,
           priceId: plan.stripePriceId,
           customerId,
-          urls: deps.urls,
+          urls,
         }),
       );
       if (
