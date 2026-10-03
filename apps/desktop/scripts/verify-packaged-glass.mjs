@@ -130,6 +130,13 @@ const MEASURE = `(() => {
   });
 })()`;
 
+/**
+ * `os` pins the accessibility media queries Chrome would otherwise read from
+ * the host. The GitHub macOS runner reports Reduce transparency / more contrast,
+ * which (correctly) turns the CSS solid fallback on; glass scenarios must
+ * measure a desktop with those settings off, and the `os` scenarios prove the
+ * fallback itself.
+ */
 export const SCENARIOS = [
   { theme: "dark", glass: true, mode: "sidebar" },
   { theme: "dark-plus", glass: true, mode: "sidebar" },
@@ -137,7 +144,31 @@ export const SCENARIOS = [
   { theme: "dark", glass: true, mode: "full" },
   { theme: "dark", glass: false, mode: "off" },
   { theme: "light", glass: false, mode: "off" },
+  { theme: "dark", glass: true, mode: "sidebar", os: "reduced-transparency" },
+  { theme: "dark", glass: true, mode: "full", os: "more-contrast" },
+  { theme: "light", glass: true, mode: "full", os: "forced-colors" },
 ];
+
+/** CDP media features for a scenario: everything off unless `os` turns one on. */
+export function mediaFor(os) {
+  return [
+    {
+      name: "prefers-reduced-transparency",
+      value: os === "reduced-transparency" ? "reduce" : "no-preference",
+    },
+    { name: "prefers-contrast", value: os === "more-contrast" ? "more" : "no-preference" },
+    { name: "forced-colors", value: os === "forced-colors" ? "active" : "none" },
+  ];
+}
+
+/** What the host OS reports before any emulation (logged for diagnosis). */
+const HOST_MEDIA = `JSON.stringify({
+  reducedTransparency: matchMedia("(prefers-reduced-transparency: reduce)").matches,
+  moreContrast: matchMedia("(prefers-contrast: more)").matches,
+  forcedColors: matchMedia("(forced-colors: active)").matches,
+  colorScheme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+  backdropFilter: CSS.supports("backdrop-filter", "blur(1px)") || CSS.supports("-webkit-backdrop-filter", "blur(1px)"),
+})`;
 
 function pageFor(indexHtml, { theme, glass, mode }) {
   const initial = { glass, glassMode: glass ? mode : "off", transparency: mode, theme };
@@ -155,7 +186,12 @@ window.modus = { app: { platform: "darwin", windowChrome: "macos", nativeGlass: 
 }
 
 /** Loads each scenario page in headless Chrome over CDP and returns the measurements. */
-async function measureScenarios(rendererDir, chrome) {
+export async function measureScenarios(
+  rendererDir,
+  chrome,
+  scenarios = SCENARIOS,
+  { pinMedia = true } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "modus-packaged-glass-"));
   const site = join(dir, "renderer");
   cpSync(rendererDir, site, { recursive: true });
@@ -205,10 +241,12 @@ async function measureScenarios(rendererDir, chrome) {
       (await send("Runtime.evaluate", { expression, returnByValue: true })).result?.result?.value;
 
     await send("Page.enable");
+    const host = JSON.parse(await evaluate(HOST_MEDIA));
     const results = [];
-    for (const [index, scenario] of SCENARIOS.entries()) {
+    for (const [index, scenario] of scenarios.entries()) {
       const file = join(site, `glass-probe-${index}.html`);
       writeFileSync(file, pageFor(indexHtml, scenario));
+      if (pinMedia) await send("Emulation.setEmulatedMedia", { features: mediaFor(scenario.os) });
       await send("Page.navigate", { url: pathToFileURL(file).href });
       for (let tries = 0; tries < 100; tries += 1) {
         if ((await evaluate('document.readyState === "complete"')) === true) break;
@@ -218,7 +256,7 @@ async function measureScenarios(rendererDir, chrome) {
     }
     void send("Browser.close");
     socket.close();
-    return results;
+    return { host, results };
   } finally {
     const timer = setTimeout(() => browser.kill("SIGKILL"), 5_000);
     if (browser.exitCode === null) await new Promise((ok) => browser.once("exit", ok));
@@ -234,7 +272,7 @@ async function measureScenarios(rendererDir, chrome) {
 export function renderFailures(results) {
   const failures = [];
   for (const { scenario, measured: m } of results) {
-    const tag = `renderer ${scenario.theme}/${scenario.mode}/glass=${scenario.glass}`;
+    const tag = `renderer ${scenario.theme}/${scenario.mode}/glass=${scenario.glass}${scenario.os ? `/os=${scenario.os}` : ""}`;
     const expect = (ok, message) => {
       if (!ok) failures.push(`${tag}: ${message}`);
     };
@@ -243,7 +281,12 @@ export function renderFailures(results) {
       m.nativeGlass === String(scenario.glass),
       `first frame set data-native-glass="${m.nativeGlass}"`,
     );
-    if (scenario.glass) {
+    if (scenario.os) {
+      // OS accessibility wins in CSS too: solid even with native glass on.
+      for (const layer of ["rail", "sidebar", "main"]) {
+        expect(m[layer] === 1, `${layer} not opaque under ${scenario.os} (${m[layer]})`);
+      }
+    } else if (scenario.glass) {
       for (const layer of ["html", "body", "root", "shell"]) {
         expect(m[layer] === 0, `<${layer}> background alpha ${m[layer]} hides the window material`);
       }
@@ -263,9 +306,10 @@ export function renderFailures(results) {
 
 export async function verifyPackagedGlass(outDir, { chrome = findChrome() } = {}) {
   const failures = checkMainBundle(outDir);
-  if (!chrome) return { failures: [...failures, "renderer: no Chrome found"], results: [] };
-  const results = await measureScenarios(join(outDir, "renderer"), chrome);
-  return { failures: [...failures, ...renderFailures(results)], results };
+  if (!chrome)
+    return { failures: [...failures, "renderer: no Chrome found"], results: [], host: null };
+  const { host, results } = await measureScenarios(join(outDir, "renderer"), chrome);
+  return { failures: [...failures, ...renderFailures(results)], results, host };
 }
 
 const sameFile = (a, b) =>
@@ -278,7 +322,8 @@ if (process.argv[1] && sameFile(fileURLToPath(import.meta.url), process.argv[1])
     console.error(`No electron-vite build at ${outDir}`);
     process.exit(2);
   }
-  const { failures, results } = await verifyPackagedGlass(outDir);
+  const { failures, results, host } = await verifyPackagedGlass(outDir);
+  console.log(`host media (before emulation): ${JSON.stringify(host)}`);
   for (const { scenario, measured } of results)
     console.log(JSON.stringify({ ...scenario, ...measured }));
   if (failures.length > 0) {
