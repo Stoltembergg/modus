@@ -117,9 +117,10 @@ Deno.test("portal: STRIPE_ENABLED off + existing Stripe subscription -> opens (m
   ]);
 });
 
-Deno.test("portal: STRIPE_ENABLED off + no (or only a canceled) Stripe subscription -> 503 stripe_disabled", async () => {
-  // hasStripeSubscription is false both without a row and with only a canceled row
-  // (db.ts query; asserted against Postgres in db.integration.ts).
+Deno.test("portal: STRIPE_ENABLED off + no Stripe subscription in an allowed status -> 503 stripe_disabled", async () => {
+  // hasStripeSubscription is false without a row and for any status outside the allowlist
+  // (canceled, incomplete, incomplete_expired, ...; asserted against Postgres in
+  // db.integration.ts).
   const { handler, rec } = setup({ stripeEnabled: false, stripeSubscription: false });
   const res = await handler(request({}));
   assertEquals(res.status, 503);

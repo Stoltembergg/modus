@@ -208,12 +208,23 @@ Deno.test({
         false,
         "another user's row never counts",
       );
-      for (const status of ["past_due", "trialing", "incomplete"]) {
+      // Allowlist: active / trialing / past_due / unpaid open the Portal; everything else
+      // (incomplete, incomplete_expired, paused, canceled, unknown) fails closed.
+      const expected: Array<[string, boolean]> = [
+        ["active", true],
+        ["trialing", true],
+        ["past_due", true],
+        ["unpaid", true],
+        ["incomplete", false],
+        ["incomplete_expired", false],
+        ["paused", false],
+        ["some_future_status", false],
+        ["canceled", false],
+      ];
+      for (const [status, allowed] of expected) {
         await admin`update public.subscriptions set status = ${status} where stripe_subscription_id = 'sub_IT'`;
-        assertEquals(await db.hasStripeSubscription(userId), true, status);
+        assertEquals(await db.hasStripeSubscription(userId), allowed, status);
       }
-      await admin`update public.subscriptions set status = 'canceled' where stripe_subscription_id = 'sub_IT'`;
-      assertEquals(await db.hasStripeSubscription(userId), false, "canceled row -> false");
     } finally {
       await admin.end();
     }

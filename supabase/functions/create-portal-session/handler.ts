@@ -34,7 +34,8 @@ export function createPortalHandler(deps: PortalDeps): (req: Request) => Promise
       if (!user) throw new HttpError(401, "unauthorized");
       const body = await readJsonObject(req, { allowEmpty: true });
       if (Object.keys(body).length > 0) throw new HttpError(400, "invalid_body");
-      // L1b: Stripe off -> only a user with a non-canceled Stripe subscription row (looked up
+      // L1b: Stripe off -> only a user with a Stripe subscription row in an allowed status
+      // (active / trialing / past_due / unpaid; db.hasStripeSubscription, looked up
       // server-side for the authenticated user, never from the request) may open the Portal.
       if (!deps.stripeEnabled() && !(await deps.db.hasStripeSubscription(user.id))) {
         throw new HttpError(503, "stripe_disabled");

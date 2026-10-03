@@ -20,7 +20,7 @@ Secrets are listed in [`.env.example`](.env.example). For the local stack, copy 
 
 **When disabled**
 - `create-checkout-session` answers `503 {"error":"stripe_disabled"}`. It does so right after the method check, before auth, the database or Stripe.
-- `create-portal-session` still opens for a user with a non-canceled `subscriptions` row that has a `stripe_subscription_id`. The row is looked up server-side for the authenticated user (`db.hasStripeSubscription`), never from the request. Such a user can still manage or cancel. Everyone else gets `503 stripe_disabled`.
+- `create-portal-session` still opens for a user with a `subscriptions` row that has a `stripe_subscription_id` and a status in the allowlist `active`, `trialing`, `past_due` or `unpaid` (`STRIPE_PORTAL_SUBSCRIPTION_STATUSES` in `_shared/db.ts`). `incomplete`, `incomplete_expired`, `paused`, `canceled` and any unknown status fail closed. The row is looked up server-side for the authenticated user (`db.hasStripeSubscription`), never from the request. Such a user can still manage or cancel. Everyone else gets `503 stripe_disabled`.
 - `stripe-webhook` is not gated. Existing Stripe subscriptions keep syncing, renewing (see L1a) and leaving audit rows in `stripe_events`.
 
 **Unchanged**

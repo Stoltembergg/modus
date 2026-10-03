@@ -36,9 +36,9 @@ export interface BillingDb {
   getStripeCustomerId(userId: string): Promise<string | null>;
   hasLiveSubscription(userId: string): Promise<boolean>;
   /**
-   * L1b: the user has a subscriptions row with a stripe_subscription_id that is not canceled
-   * (any other status counts). Lets an existing Stripe subscriber open the Portal while
-   * STRIPE_ENABLED is off.
+   * L1b: the user has a subscriptions row with a stripe_subscription_id whose status is in
+   * STRIPE_PORTAL_SUBSCRIPTION_STATUSES (allowlist). Lets an existing Stripe subscriber open
+   * the Portal while STRIPE_ENABLED is off.
    */
   hasStripeSubscription(userId: string): Promise<boolean>;
   /** private.claim_stripe_customer: keeps the stored customer when there is one. */
@@ -85,6 +85,13 @@ export const LIVE_SUBSCRIPTION_STATUSES = [
   "paused",
 ];
 
+/**
+ * L1b: Stripe statuses that may open the Customer Portal while STRIPE_ENABLED is off. An
+ * ALLOWLIST: incomplete, incomplete_expired, paused, canceled and any future / unknown status
+ * fail closed (subscriptions.status has no CHECK constraint, so the list lives here).
+ */
+export const STRIPE_PORTAL_SUBSCRIPTION_STATUSES = ["active", "trialing", "past_due", "unpaid"];
+
 export function createPostgresBillingDb(dbUrl: string): BillingDb {
   const sql = postgres(dbUrl, { max: 1, idle_timeout: 20, prepare: false });
 
@@ -115,7 +122,7 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
         const rows = await tx`
           select 1 from public.subscriptions
            where user_id = ${userId} and stripe_subscription_id is not null
-             and status <> 'canceled'
+             and status = any(${STRIPE_PORTAL_SUBSCRIPTION_STATUSES})
            limit 1`;
         return rows.length > 0;
       }),
