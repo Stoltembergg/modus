@@ -19,7 +19,8 @@
     "package:win": "npm run prepare:fast-codebase && electron-builder --win --config electron-builder.config.ts",
     "package:linux": "npm run prepare:fast-codebase && electron-builder --linux --config electron-builder.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --root ../.. apps/desktop/src apps/desktop/scripts"
+    "test": "vitest run --root ../.. apps/desktop/src apps/desktop/scripts",
+    "check:case": "vitest run --root ../.. apps/desktop/scripts/case-collisions"
   },
   "devDependencies": {
     "@colbymchenry/codegraph": "^1.1.1",

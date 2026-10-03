@@ -12,6 +12,7 @@
     "electron.vite.config.ts",
     "electron-builder.config.ts",
     "src/**/*.ts",
-    "src/**/*.tsx"
+    "src/**/*.tsx",
+    "scripts/case-collisions*.ts"
   ]
 }
