@@ -27,7 +27,7 @@ export function getBillingService(): BillingService {
 export const billingIpcService: BillingIpcService = {
   getState: () => getBillingService().getState(),
   refresh: () => getBillingService().refresh(),
-  startCheckout: (plan) => getBillingService().startCheckout(plan),
+  startCheckout: (plan, provider) => getBillingService().startCheckout(plan, provider),
   openPortal: () => getBillingService().openPortal(),
 };
 

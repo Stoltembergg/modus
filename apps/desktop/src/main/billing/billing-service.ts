@@ -1,13 +1,16 @@
 import type { AuthState } from "../../shared/auth";
 import {
   BILLING_PLAN_KEY_PATTERN,
+  type BillingProvider,
   type BillingReturnStatus,
   type BillingState,
+  isBillingProvider,
 } from "../../shared/billing";
 import { AuthBackendError } from "../auth/auth-backend";
 import {
   type BillingBackend,
-  CHECKOUT_URL_PREFIX,
+  CHECKOUT_FUNCTIONS,
+  CHECKOUT_URL_PREFIXES,
   isStripeHostedUrl,
   PORTAL_URL_PREFIX,
 } from "./billing-backend";
@@ -15,8 +18,11 @@ import {
 export interface BillingService {
   getState(): BillingState;
   refresh(): Promise<BillingState>;
-  /** Opens Stripe Checkout for a plan key (the Function maps it to the price). */
-  startCheckout(plan: string): Promise<BillingState>;
+  /**
+   * Opens the provider's checkout (Mercado Pago by default) for a plan key the catalog offers
+   * with that provider; the Function maps it to the price.
+   */
+  startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
   /** Opens the Stripe Customer Portal (upgrade / downgrade / cancel / payment method). */
   openPortal(): Promise<BillingState>;
   /** modus://billing/return: refresh now and again while the webhook catches up. */
@@ -40,7 +46,11 @@ type Deps = {
 };
 
 const ERRORS: Record<string, string> = {
-  already_subscribed: "You already have a subscription. Use Manage billing to change plans.",
+  already_subscribed: "You already have a subscription.",
+  checkout_conflict: "A checkout is already being created. Try again in a moment.",
+  email_required: "Add an email address to your account before subscribing.",
+  mercadopago_unavailable: "Mercado Pago is unavailable right now. Try again in a few minutes.",
+  stripe_disabled: "Card payments through Stripe are turned off right now.",
   no_billing_account: "No billing account yet. Choose a plan first.",
   unknown_plan: "This plan is not available.",
   unauthorized: "Sign in again to manage billing.",
@@ -58,6 +68,7 @@ function emptyState(status: BillingState["status"]): BillingState {
   return {
     status,
     plans: [],
+    catalog: null,
     subscription: null,
     wallet: null,
     currentPlan: "free",
@@ -115,6 +126,7 @@ export function createBillingService(deps: Deps): BillingService {
       return setState({
         status: "ready",
         plans: data.plans,
+        catalog: data.catalog,
         subscription: data.subscription,
         wallet: data.wallet,
         currentPlan: data.subscription?.plan ?? "free",
@@ -129,18 +141,22 @@ export function createBillingService(deps: Deps): BillingService {
     }
   }
 
-  async function openSession(kind: "checkout" | "portal", plan?: string): Promise<BillingState> {
+  async function openSession(
+    kind: "checkout" | "portal",
+    plan?: string,
+    provider: BillingProvider = "mercadopago",
+  ): Promise<BillingState> {
     if (!backend || !signedInUser()) {
       return setState({ error: ERRORS.unauthorized ?? GENERIC_ERROR });
     }
     try {
       const result =
         kind === "checkout"
-          ? await backend.createBillingSession("create-checkout-session", { plan: plan ?? "" })
+          ? await backend.createBillingSession(CHECKOUT_FUNCTIONS[provider], { plan: plan ?? "" })
           : await backend.createBillingSession("create-portal-session", {});
       if (!result.ok)
         return setState({ pending: null, error: ERRORS[result.code] ?? GENERIC_ERROR });
-      const prefix = kind === "checkout" ? CHECKOUT_URL_PREFIX : PORTAL_URL_PREFIX;
+      const prefix = kind === "checkout" ? CHECKOUT_URL_PREFIXES[provider] : PORTAL_URL_PREFIX;
       if (!isStripeHostedUrl(result.url, prefix)) {
         return setState({ pending: null, error: GENERIC_ERROR });
       }
@@ -171,15 +187,25 @@ export function createBillingService(deps: Deps): BillingService {
     getState: snapshot,
     refresh,
 
-    startCheckout(plan) {
-      if (typeof plan !== "string" || !BILLING_PLAN_KEY_PATTERN.test(plan)) {
+    startCheckout(plan, provider = "mercadopago") {
+      if (
+        typeof plan !== "string" ||
+        !BILLING_PLAN_KEY_PATTERN.test(plan) ||
+        !isBillingProvider(provider)
+      ) {
         return Promise.resolve(setState({ error: ERRORS.unknown_plan ?? GENERIC_ERROR }));
       }
-      const known = state.plans.find((entry) => entry.plan === plan);
-      if (state.status === "ready" && !known?.purchasable) {
+      // Only what the catalog currently sells (Stripe only while its DB flag is on).
+      const offered = state.catalog?.some(
+        (entry) => entry.plan === plan && entry.provider === provider,
+      );
+      if (state.status !== "ready" || !offered) {
         return Promise.resolve(setState({ error: ERRORS.unknown_plan ?? GENERIC_ERROR }));
       }
-      return openSession("checkout", plan);
+      if (state.subscription) {
+        return Promise.resolve(setState({ error: ERRORS.already_subscribed ?? GENERIC_ERROR }));
+      }
+      return openSession("checkout", plan, provider);
     },
 
     openPortal() {

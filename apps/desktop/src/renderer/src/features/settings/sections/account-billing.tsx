@@ -1,6 +1,11 @@
-import { IconCreditCard, IconExternalLink, IconRefresh } from "@tabler/icons-react";
+import { IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
-import type { BillingPlan, BillingState } from "../../../../../shared/billing";
+import type {
+  BillingCatalogEntry,
+  BillingPlan,
+  BillingProvider,
+  BillingState,
+} from "../../../../../shared/billing";
 import { ReadOnlyPill, SettingsList, SettingsRow, SettingsSection } from "../settings-layout";
 
 const SECONDARY_BUTTON =
@@ -9,7 +14,7 @@ const PRIMARY_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40";
 
 const RETURN_NOTICES: Record<string, string> = {
-  success: "Payment received. Your plan updates as soon as Stripe confirms it.",
+  success: "Payment received. Your plan updates as soon as the payment is confirmed.",
   cancel: "Checkout was cancelled. Nothing was charged.",
   portal: "Back from billing. Showing the latest plan.",
 };
@@ -22,6 +27,59 @@ export function formatPrice(cents: number): string {
   return cents === 0 ? "Free" : `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}/mo`;
 }
 
+/** Minor units → localized money: BRL as "R$ 49,90" (pt-BR), other currencies in en-US. */
+export function formatMoney(amountMinor: number, currency: string): string {
+  const locale = currency === "BRL" ? "pt-BR" : "en-US";
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+      .format(amountMinor / 100)
+      .replace(/\u00a0/g, " ");
+  } catch {
+    return `${currency} ${(amountMinor / 100).toFixed(2)}`;
+  }
+}
+
+const PROVIDER_LABEL: Record<BillingProvider, string> = {
+  mercadopago: "Subscribe with Mercado Pago",
+  stripe: "Pay by card (Stripe)",
+};
+
+type CatalogPlan = {
+  plan: string;
+  name: string;
+  monthlyCredits: number;
+  offers: BillingCatalogEntry[];
+};
+
+/** Catalog rows → one entry per plan (catalog order), Mercado Pago offer first. */
+export function groupCatalog(catalog: BillingCatalogEntry[]): CatalogPlan[] {
+  const byPlan = new Map<string, CatalogPlan>();
+  const sorted = [...catalog].sort(
+    (a, b) => a.sortOrder - b.sortOrder || a.plan.localeCompare(b.plan),
+  );
+  for (const entry of sorted) {
+    const group = byPlan.get(entry.plan) ?? {
+      plan: entry.plan,
+      name: entry.name,
+      monthlyCredits: entry.monthlyCredits,
+      offers: [],
+    };
+    group.offers.push(entry);
+    byPlan.set(entry.plan, group);
+  }
+  for (const group of byPlan.values()) {
+    group.offers.sort((a, b) =>
+      a.provider === "mercadopago" ? -1 : b.provider === "mercadopago" ? 1 : 0,
+    );
+  }
+  return [...byPlan.values()];
+}
+
 function formatDate(value: string | null): string | null {
   if (!value) return null;
   const date = new Date(value);
@@ -31,7 +89,7 @@ function formatDate(value: string | null): string | null {
 type ViewProps = {
   state: BillingState | undefined;
   busy: boolean;
-  onCheckout(plan: string): void;
+  onCheckout(plan: string, provider: BillingProvider): void;
   onPortal(): void;
   onRefresh(): void;
 };
@@ -44,12 +102,13 @@ export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefres
   );
   const subscribed = Boolean(state.subscription);
   const renews = formatDate(state.subscription?.currentPeriodEnd ?? null);
-  const purchasable = state.plans.filter((plan) => plan.purchasable);
   const loading = state.status === "loading";
+  const catalog = state.catalog ? groupCatalog(state.catalog) : null;
+  const stripeSubscription = state.subscription?.provider === "stripe";
 
   return (
     <SettingsSection
-      description="Plans are paid through Stripe in your browser. Upgrades add the difference in credits right away; downgrades apply at the end of the period."
+      description="Plans are paid through Mercado Pago in your browser, billed monthly in Brazilian reais. Credits are added as soon as the payment is confirmed."
       title="Plan & credits"
     >
       {state.error ? <p className="mb-3 text-danger text-xs">{state.error}</p> : null}
@@ -108,38 +167,67 @@ export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefres
           title="Credits"
         />
         {subscribed ? (
-          <SettingsRow
-            control={
-              <button
-                className={PRIMARY_BUTTON}
-                disabled={busy || loading}
-                onClick={onPortal}
-                type="button"
-              >
-                <IconExternalLink size={13} stroke={2} />
-                Manage billing
-              </button>
-            }
-            description="Upgrade, downgrade, cancel or update the payment method in Stripe."
-            title="Change plan"
-          />
-        ) : (
-          purchasable.map((plan) => (
+          stripeSubscription ? (
             <SettingsRow
               control={
                 <button
                   className={PRIMARY_BUTTON}
-                  disabled={busy || loading || Boolean(state.pending)}
-                  onClick={() => onCheckout(plan.plan)}
+                  disabled={busy || loading}
+                  onClick={onPortal}
                   type="button"
                 >
-                  <IconCreditCard size={13} stroke={2} />
-                  {`Choose ${plan.name}`}
+                  <IconExternalLink size={13} stroke={2} />
+                  Manage billing
                 </button>
+              }
+              description="Upgrade, downgrade, cancel or update the payment method in Stripe."
+              title="Change plan"
+            />
+          ) : (
+            <SettingsRow
+              control={null}
+              description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
+              title="Billing"
+            />
+          )
+        ) : loading ? null : catalog === null ? (
+          <SettingsRow
+            control={null}
+            description="Plans couldn't be loaded. Refresh to try again."
+            title="Plans unavailable"
+          />
+        ) : catalog.length === 0 ? (
+          <SettingsRow
+            control={null}
+            description="No plans are on sale right now. Check back later."
+            title="No plans available"
+          />
+        ) : (
+          catalog.map((plan) => (
+            <SettingsRow
+              control={
+                <div className="flex items-center gap-2">
+                  {plan.offers.map((offer) => (
+                    <button
+                      className={
+                        offer.provider === "mercadopago" ? PRIMARY_BUTTON : SECONDARY_BUTTON
+                      }
+                      disabled={busy || loading || Boolean(state.pending)}
+                      key={`${offer.provider}:${offer.currency}`}
+                      onClick={() => onCheckout(plan.plan, offer.provider)}
+                      type="button"
+                    >
+                      <IconExternalLink size={13} stroke={2} />
+                      {PROVIDER_LABEL[offer.provider]}
+                    </button>
+                  ))}
+                </div>
               }
               description={`${formatCredits(plan.monthlyCredits)} credits per month`}
               key={plan.plan}
-              title={`${plan.name} · ${formatPrice(plan.priceUsdCents)}`}
+              title={`${plan.name} · ${plan.offers
+                .map((offer) => `${formatMoney(offer.amountMinor, offer.currency)}/mo`)
+                .join(" or ")}`}
             />
           ))
         )}
@@ -183,7 +271,9 @@ export function AccountBillingSection() {
   return (
     <BillingSectionView
       busy={busy}
-      onCheckout={(plan) => void run(() => window.modus.billing.checkout({ plan }))}
+      onCheckout={(plan, provider) =>
+        void run(() => window.modus.billing.checkout({ plan, provider }))
+      }
       onPortal={() => void run(() => window.modus.billing.openPortal())}
       onRefresh={() => void run(() => window.modus.billing.refresh())}
       state={state}

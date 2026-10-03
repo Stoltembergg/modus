@@ -1,7 +1,8 @@
 /**
- * Billing (Stripe via Supabase Edge Functions) contract shared by main, preload and renderer.
+ * Billing (Mercado Pago, optionally Stripe, via Supabase Edge Functions) contract shared by main,
+ * preload and renderer.
  *
- * Only display data crosses IPC. The Supabase access token, Stripe customer / subscription ids
+ * Only display data crosses IPC. The Supabase access token, provider customer / subscription ids
  * and the Checkout / Portal URLs stay in the main process (see main/billing/billing-service.ts).
  */
 
@@ -17,8 +18,36 @@ export type BillingPlan = {
   purchasable: boolean;
 };
 
+/** Checkout providers the catalog may offer (public.get_billing_catalog().provider). */
+export type BillingProvider = "mercadopago" | "stripe";
+
+export const BILLING_PROVIDERS: readonly BillingProvider[] = ["mercadopago", "stripe"];
+
+export function isBillingProvider(value: unknown): value is BillingProvider {
+  return typeof value === "string" && (BILLING_PROVIDERS as readonly string[]).includes(value);
+}
+
+/**
+ * One sellable (plan, provider, currency) row from public.get_billing_catalog() (L1c): public
+ * data only. Stripe rows exist only while the DB flag private.billing_settings.stripe_enabled is
+ * on; checkout is still gated server-side by STRIPE_ENABLED.
+ */
+export type BillingCatalogEntry = {
+  plan: string;
+  name: string;
+  monthlyCredits: number;
+  provider: BillingProvider;
+  /** ISO 4217, e.g. "BRL". */
+  currency: string;
+  /** Minor units (centavos / cents). */
+  amountMinor: number;
+  sortOrder: number;
+};
+
 export type BillingSubscription = {
   plan: string;
+  /** Who bills this subscription; decides whether the Stripe Portal applies. */
+  provider: BillingProvider;
   status: string;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
@@ -50,6 +79,8 @@ export type BillingStatus = "unavailable" | "signed-out" | "loading" | "ready" |
 export type BillingState = {
   status: BillingStatus;
   plans: BillingPlan[];
+  /** Sellable offers from get_billing_catalog(); null when the catalog could not be loaded. */
+  catalog: BillingCatalogEntry[] | null;
   /** The live subscription (active, trialing, past_due, unpaid, incomplete), if any. */
   subscription: BillingSubscription | null;
   wallet: BillingWallet | null;
@@ -61,4 +92,5 @@ export type BillingState = {
   error: string | null;
 };
 
-export type BillingCheckoutInput = { plan: string };
+/** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
+export type BillingCheckoutInput = { plan: string; provider?: BillingProvider };

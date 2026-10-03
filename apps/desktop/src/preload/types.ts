@@ -744,13 +744,14 @@ export type ModusApi = {
     onStateChange(listener: (state: AuthState) => void): () => void;
   };
   /**
-   * Plan and credits (Stripe via Supabase Edge Functions). Checkout / Portal open in the default
-   * browser; replies carry display data only, never tokens, Stripe ids or session URLs.
+   * Plan and credits (Mercado Pago, optionally Stripe, via Supabase Edge Functions). Checkout /
+   * Portal open in the default browser; replies carry display data only, never tokens, provider
+   * ids or session URLs.
    */
   billing: {
     getState(): Promise<BillingState>;
     refresh(): Promise<BillingState>;
-    /** Only a plan key; the server maps it to the Stripe price. */
+    /** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
     checkout(input: BillingCheckoutInput): Promise<BillingState>;
     openPortal(): Promise<BillingState>;
     onStateChange(listener: (state: BillingState) => void): () => void;
