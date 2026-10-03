@@ -24,15 +24,37 @@ language sql as $$
 $$;
 grant execute on function pg_temp.snapshot() to service_role;
 
+create function pg_temp.line(p_price text, p_proration boolean, p_sub text, p_amount int)
+returns jsonb language sql as $$
+  select jsonb_build_object(
+    'price', jsonb_build_object('id', p_price), 'proration', p_proration,
+    'subscription', p_sub, 'amount', p_amount,
+    'period', jsonb_build_object('start', 1790000000, 'end', 1792592000))
+$$;
+grant execute on function pg_temp.line(text, boolean, text, int) to service_role;
+-- Any invoice: reason, amount_paid, subscription, lines.
+create function pg_temp.invoice_x(p_id text, p_customer text, p_reason text, p_paid int, p_sub text,
+                                  p_lines jsonb)
+returns jsonb language sql as $$
+  select jsonb_build_object(
+    'id', p_id, 'object', 'invoice', 'customer', p_customer, 'status', 'paid',
+    'billing_reason', p_reason, 'amount_paid', p_paid, 'subscription', p_sub,
+    'livemode', false, 'lines', jsonb_build_object('data', p_lines))
+$$;
+grant execute on function pg_temp.invoice_x(text, text, text, int, text, jsonb) to service_role;
+
+-- A paid renewal invoice (subscription_cycle, amount_paid > 0) with one
+-- non-proration line for p_price on subscription 'sub_<customer>'.
 create function pg_temp.invoice(p_id text, p_customer text, p_price text, p_livemode boolean default false,
                                 p_metadata jsonb default '{}')
 returns jsonb language sql as $$
   select jsonb_build_object(
     'id', p_id, 'object', 'invoice', 'customer', p_customer, 'status', 'paid',
+    'billing_reason', 'subscription_cycle', 'amount_paid', 900,
+    'subscription', 'sub_' || coalesce(p_customer, 'none'),
     'livemode', p_livemode, 'metadata', p_metadata,
-    'lines', jsonb_build_object('data', jsonb_build_array(jsonb_build_object(
-      'price', jsonb_build_object('id', p_price),
-      'period', jsonb_build_object('start', 1790000000, 'end', 1792592000)))))
+    'lines', jsonb_build_object('data', jsonb_build_array(pg_temp.line(
+      p_price, false, 'sub_' || coalesce(p_customer, 'none'), 900))))
 $$;
 grant execute on function pg_temp.invoice(text, text, text, boolean, jsonb) to service_role;
 create function pg_temp.sub(p_id text, p_customer text, p_price text, p_status text default 'active',
@@ -85,9 +107,13 @@ select is(pg_temp.balance(:'a'), 11000::bigint, 'same invoice: still granted onc
 -- Newer API shape: price under pricing.price_details.price.
 select is(private.process_stripe_event('evt_inv_new', 'invoice.paid', jsonb_build_object(
   'id', 'in_new', 'object', 'invoice', 'customer', 'cus_B', 'status', 'paid', 'livemode', false,
+  'billing_reason', 'subscription_create', 'amount_paid', 2000,
+  'parent', jsonb_build_object('subscription_details', jsonb_build_object('subscription', 'sub_new_B')),
   'lines', jsonb_build_object('data', jsonb_build_array(jsonb_build_object(
+    'parent', jsonb_build_object('subscription_item_details',
+      jsonb_build_object('subscription', 'sub_new_B', 'proration', false)),
     'pricing', jsonb_build_object('price_details', jsonb_build_object('price', :'pro'))))))) ->> 'code',
-  'credits_granted', 'invoice with pricing.price_details.price is understood');
+  'credits_granted', 'invoice in the newer API shape (parent.*, pricing.price_details.price) is understood');
 select is(pg_temp.balance(:'b'), 26000::bigint, 'B +25000 (pro)');
 
 -- Metadata is never read: metadata naming B does not move A's invoice to B.
@@ -168,6 +194,103 @@ select is(private.process_stripe_event('evt_other', 'checkout.session.completed'
 select is((select status || ':' || result from public.stripe_events where event_id = 'evt_other'),
   'processed:ignored', 'ignored event recorded as processed');
 select is(pg_temp.snapshot() = :'before2', false, 'only stripe_events changed');
+
+-- invoice.paid grant rules (Debbie block on 76911bd).
+select tests.clear_authentication();
+select tests.create_user('c@example.com', true) as c \gset
+update public.profiles set stripe_customer_id = 'cus_C' where id = :'c';
+select tests.as_service_role();
+select private.process_stripe_event('evt_c_sub', 'customer.subscription.created',
+  pg_temp.sub('sub_C', 'cus_C', :'starter')) \gset ignore_
+select private.process_stripe_event('evt_c_first', 'invoice.paid',
+  pg_temp.invoice_x('in_c1', 'cus_C', 'subscription_create', 900, 'sub_C',
+    jsonb_build_array(pg_temp.line(:'starter', false, 'sub_C', 900)))) \gset ignore_
+select is(pg_temp.balance(:'c'), 11000::bigint, 'C: subscription_create grants starter 10000 once');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
+  'C: plan_allowance 10000');
+
+-- Upgrade starter -> pro mid-cycle: proration invoice, nothing in B1.
+select private.process_stripe_event('evt_c_up_sub', 'customer.subscription.updated',
+  pg_temp.sub('sub_C', 'cus_C', :'pro')) \gset ignore_
+select pg_temp.snapshot() as before_up \gset
+select (private.process_stripe_event('evt_c_prorate', 'invoice.paid',
+  pg_temp.invoice_x('in_c_prorate', 'cus_C', 'subscription_update', 1100, 'sub_C', jsonb_build_array(
+    pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', true, 'sub_C', 2000)))))::text as up \gset
+select is(:'up'::jsonb ->> 'code', 'not_grantable', 'proration invoice (subscription_update): not_grantable');
+select is((:'up'::jsonb ->> 'granted')::boolean, false, 'proration invoice: granted false');
+select is(:'up'::jsonb ->> 'reason', 'not_grantable', 'proration invoice: reason not_grantable');
+select is(pg_temp.balance(:'c'), 11000::bigint, 'proration invoice: no credits');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
+  'proration invoice: wallet plan_allowance unchanged');
+select is((select status || ':' || result from public.stripe_events where event_id = 'evt_c_prorate'),
+  'processed:not_grantable', 'proration invoice recorded as processed / not_grantable');
+select is((select count(*)::int from public.credit_transactions where idempotency_key = 'invoice:in_c_prorate'),
+  0, 'proration invoice: no ledger row');
+select is(private.process_stripe_event('evt_c_update_plain', 'invoice.paid',
+  pg_temp.invoice_x('in_c_upd2', 'cus_C', 'subscription_update', 2000, 'sub_C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code', 'not_grantable',
+  'subscription_update with a non-proration line still grants nothing in B1');
+
+-- $0 paid invoice (e.g. downgrade, 100% coupon): nothing.
+select is(private.process_stripe_event('evt_c_zero', 'invoice.paid',
+  pg_temp.invoice_x('in_c_zero', 'cus_C', 'subscription_cycle', 0, 'sub_C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 0)))) ->> 'code', 'not_grantable',
+  'amount_paid 0 subscription_cycle: not_grantable');
+select is(private.process_stripe_event('evt_c_manual', 'invoice.paid',
+  pg_temp.invoice_x('in_c_manual', 'cus_C', 'manual', 5000, 'sub_C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 5000)))) ->> 'code', 'not_grantable',
+  'billing_reason manual: not_grantable');
+select is(pg_temp.balance(:'c'), 11000::bigint, '$0 / manual invoices: no credits');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
+  '$0 / manual invoices: wallet unchanged');
+
+-- Renewal whose FIRST line is a negative proration of the old price and the
+-- second the new price (non-proration): the new plan's credits, once.
+select (private.process_stripe_event('evt_c_cycle', 'invoice.paid',
+  pg_temp.invoice_x('in_c_cycle', 'cus_C', 'subscription_cycle', 1100, 'sub_C', jsonb_build_array(
+    pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', false, 'sub_C', 2000)))))::text as cy \gset
+select is(:'cy'::jsonb ->> 'code', 'credits_granted', 'mixed renewal: credits_granted');
+select is(:'cy'::jsonb ->> 'plan', 'pro', 'mixed renewal: plan from the non-proration line (pro), not the first line');
+select is(pg_temp.balance(:'c'), 36000::bigint, 'mixed renewal: +25000 (pro)');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
+  'mixed renewal: plan_allowance 25000');
+select is(private.process_stripe_event('evt_c_cycle', 'invoice.paid',
+  pg_temp.invoice_x('in_c_cycle', 'cus_C', 'subscription_cycle', 1100, 'sub_C', jsonb_build_array(
+    pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code',
+  'duplicate', 'mixed renewal: repeated event is a no-op');
+select is(private.process_stripe_event('evt_c_cycle_again', 'invoice.paid',
+  pg_temp.invoice_x('in_c_cycle', 'cus_C', 'subscription_cycle', 1100, 'sub_C', jsonb_build_array(
+    pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code',
+  'already_granted', 'mixed renewal: another event for the same invoice -> already_granted');
+select is(pg_temp.balance(:'c'), 36000::bigint, 'mixed renewal: granted exactly once (invoice:<id>)');
+select is((select count(*)::int from public.credit_transactions where idempotency_key = 'invoice:in_c_cycle'),
+  1, 'one ledger row invoice:in_c_cycle');
+
+-- Server state wins: the subscription is on pro, the invoice only carries a
+-- non-proration starter line -> error (the Function retries after the
+-- subscription event), nothing written.
+select pg_temp.snapshot() as before_stale \gset
+select throws_ok($q$select private.process_stripe_event('evt_c_stale', 'invoice.paid',
+  pg_temp.invoice_x('in_c_stale', 'cus_C', 'subscription_cycle', 900, 'sub_C',
+    jsonb_build_array(pg_temp.line('price_1UMISRDuKWPSLmWmyVh3aXHh', false, 'sub_C', 900))))$q$,
+  'P0404', null, 'no non-proration line with the subscription price -> error');
+select throws_ok($q$select private.process_stripe_event('evt_c_othersub', 'invoice.paid',
+  pg_temp.invoice_x('in_c_other', 'cus_C', 'subscription_cycle', 2000, 'sub_C',
+    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, 'sub_other', 2000))))$q$,
+  'P0404', null, 'a line of another subscription is never used');
+select throws_ok($q$select private.process_stripe_event('evt_c_onlyprorate', 'invoice.paid',
+  pg_temp.invoice_x('in_c_op', 'cus_C', 'subscription_cycle', 2000, 'sub_C',
+    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', true, 'sub_C', 2000))))$q$,
+  'P0404', null, 'only proration lines -> error');
+select throws_ok($q$select private.process_stripe_event('evt_c_nosub', 'invoice.paid',
+  pg_temp.invoice_x('in_c_nosub', 'cus_C', 'subscription_cycle', 2000, null,
+    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, null, 2000))))$q$,
+  '22023', null, 'renewal invoice without a subscription id -> error');
+select throws_ok($q$select private.process_stripe_event('evt_c_foreign_sub', 'invoice.paid',
+  pg_temp.invoice_x('in_c_fs', 'cus_C', 'subscription_cycle', 2000, 'sub_A',
+    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, 'sub_A', 2000))))$q$,
+  'P0403', null, 'invoice of C pointing at A''s subscription -> error');
+select is(pg_temp.snapshot(), :'before_stale', 'stale / foreign / proration-only invoices: nothing changed');
 select tests.clear_authentication();
 
 -- Clients cannot execute it (also covered in 01).

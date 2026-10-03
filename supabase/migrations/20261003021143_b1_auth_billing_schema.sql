@@ -676,7 +676,10 @@ create trigger subscriptions_set_updated_at
 --   * user: ONLY from profiles.stripe_customer_id (never metadata);
 --   * plan: ONLY from plans.stripe_price_id (never metadata);
 --   * livemode must be exactly false;
---   * credits only on invoice.paid, idempotent by 'invoice:<invoice id>';
+--   * credits only on invoice.paid with billing_reason subscription_create /
+--     subscription_cycle and amount_paid > 0, for the non-proration line of
+--     the subscription's price; idempotent by 'invoice:<invoice id>'. Other
+--     paid invoices are recorded as processed with code 'not_grantable';
 --   * customer.subscription.created / updated / deleted upsert subscriptions;
 --   * any other event type is recorded as processed with code 'ignored';
 --   * an event_id already processed returns {processed: false, code: duplicate}.
@@ -698,6 +701,10 @@ declare
   v_end timestamptz;
   v_grant jsonb;
   v_result jsonb;
+  v_sub_id text;
+  v_sub_price text;
+  v_reason text;
+  v_amount_paid numeric;
 begin
   if p_event_id is null or p_type is null or p_payload is null
      or pg_catalog.jsonb_typeof(p_payload) <> 'object' then
@@ -782,14 +789,67 @@ begin
     if p_payload ->> 'status' is distinct from 'paid' then
       raise exception 'invoice is not paid' using errcode = '22023';
     end if;
-    select coalesce(l -> 'price' ->> 'id', l #>> '{pricing,price_details,price}'),
-           pg_catalog.to_timestamp((l #>> '{period,end}')::double precision)
-      into v_price, v_end
-      from pg_catalog.jsonb_array_elements(coalesce(p_payload #> '{lines,data}', '[]'::jsonb)) as l
-     where coalesce(l -> 'price' ->> 'id', l #>> '{pricing,price_details,price}') is not null
+    -- Only a paid first / renewal invoice of a subscription grants the plan's
+    -- credits. Proration invoices (subscription_update: upgrades) and $0
+    -- invoices (e.g. downgrades, 100% coupons) are recorded but grant
+    -- nothing; mid-cycle upgrade credits are B3.
+    v_reason := p_payload ->> 'billing_reason';
+    v_amount_paid := case when pg_catalog.jsonb_typeof(p_payload -> 'amount_paid') = 'number'
+                          then (p_payload ->> 'amount_paid')::numeric end;
+    if v_reason is null or v_reason not in ('subscription_create', 'subscription_cycle')
+       or v_amount_paid is null or v_amount_paid <= 0 then
+      update public.stripe_events e
+         set status = 'processed', result = 'not_grantable', processed_at = pg_catalog.now()
+       where e.event_id = p_event_id;
+      return pg_catalog.jsonb_build_object(
+        'processed', true, 'event_id', p_event_id, 'code', 'not_grantable',
+        'granted', false, 'reason', 'not_grantable', 'user_id', v_user,
+        'billing_reason', v_reason, 'amount_paid', v_amount_paid);
+    end if;
+
+    v_sub_id := coalesce(p_payload ->> 'subscription',
+                         p_payload #>> '{parent,subscription_details,subscription}');
+    if v_sub_id is null then
+      raise exception 'subscription invoice without a subscription id' using errcode = '22023';
+    end if;
+
+    -- Server state first: the plan price of the subscription we already know.
+    select su.user_id, pl.stripe_price_id into v_owner, v_sub_price
+      from public.subscriptions su
+      join public.plans pl on pl.plan = su.plan
+     where su.stripe_subscription_id = v_sub_id;
+    if v_owner is not null and v_owner <> v_user then
+      raise exception 'subscription belongs to another user' using errcode = 'P0403';
+    end if;
+
+    -- The line that pays for the plan: not a proration, belongs to this
+    -- subscription, and (when the server knows the subscription) carries its
+    -- price. Never "the first priced line".
+    select x.price, x.period_end into v_price, v_end
+      from (
+        select coalesce(l -> 'price' ->> 'id', l #>> '{pricing,price_details,price}') as price,
+               pg_catalog.to_timestamp((l #>> '{period,end}')::double precision) as period_end,
+               coalesce((l ->> 'proration')::boolean,
+                        (l #>> '{parent,subscription_item_details,proration}')::boolean,
+                        false) as proration,
+               coalesce(l ->> 'subscription',
+                        l #>> '{parent,subscription_item_details,subscription}') as sub_id,
+               o.n
+          from pg_catalog.jsonb_array_elements(coalesce(p_payload #> '{lines,data}', '[]'::jsonb))
+               with ordinality as o (l, n)
+      ) x
+     where not x.proration
+       and x.price is not null
+       and (x.sub_id = v_sub_id or (x.sub_id is null and v_sub_price is not null))
+       and (v_sub_price is null or x.price = v_sub_price)
+     order by x.n
      limit 1;
+    if v_price is null then
+      raise exception 'invoice has no non-proration line for the subscription price'
+        using errcode = 'P0404';
+    end if;
     select * into v_plan from public.plans pl where pl.stripe_price_id = v_price;
-    if v_price is null or not found then
+    if not found then
       raise exception 'unknown stripe price' using errcode = 'P0404';
     end if;
 
@@ -803,6 +863,7 @@ begin
 
     v_result := pg_catalog.jsonb_build_object(
       'code', case when (v_grant ->> 'granted')::boolean then 'credits_granted' else 'already_granted' end,
+      'granted', (v_grant ->> 'granted')::boolean,
       'user_id', v_user, 'plan', v_plan.plan, 'credits', v_plan.monthly_credits,
       'balance', v_grant -> 'balance');
 
