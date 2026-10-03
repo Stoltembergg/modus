@@ -1,5 +1,12 @@
 import { readFileSync } from "node:fs";
+import { optimize } from "@tailwindcss/node";
 import { describe, expect, it } from "vitest";
+import {
+  resolveAppearance,
+  SOLID_WINDOW_BACKGROUND,
+  WINDOW_SYMBOL_COLOR,
+} from "../../../shared/appearance";
+import { resolveWindowAppearance } from "../../../shared/window-appearance";
 
 /**
  * D1 glass tokens. (a) pins the token table (a value change is a deliberate
@@ -207,6 +214,101 @@ describe("glass tokens (D1)", () => {
     );
     for (const m of css.matchAll(/(?<![-(])backdrop-filter:\s*([^;]+);/g)) {
       expect(m[1]).toMatch(/^(none|var\(--glass-(scrim-)?filter\))$/);
+    }
+  });
+});
+
+/**
+ * D2 acceptance gate (Debbie, 2026-10-03). With nativeTheme synced, the OS
+ * material behind a dark app is the dark material. Provisional worst case for
+ * it: #cccccc (dark app, white wallpaper / white window behind). A real P95
+ * sample from macOS / Win11 may only make this darker in reality; the gate
+ * never loosens past #cccccc.
+ */
+const OS_BACKDROP_DARK: Rgb = [0xcc, 0xcc, 0xcc];
+const D2_GATE = 4.5;
+
+function themesWithGlass(): Theme[] {
+  const os = { dark: true, reducedTransparency: false, highContrast: false };
+  return THEMES.filter((theme) =>
+    [
+      resolveWindowAppearance("darwin", "15.0.0"),
+      resolveWindowAppearance("win32", "10.0.22631"),
+    ].some(
+      (window) =>
+        resolveAppearance({ window, preferences: { theme, transparency: "auto" }, os }).glass,
+    ),
+  );
+}
+
+describe("glass in production (D2)", () => {
+  it("(d) every backdrop-filter is preceded by its -webkit- twin so Lightning CSS keeps both", () => {
+    const rules = [...css.matchAll(/\{([^{}]*)\}/g)].map((m) => m[1] ?? "");
+    let checked = 0;
+    for (const body of rules) {
+      const standard = body.search(/(?<![-\w])backdrop-filter:\s*var\(/);
+      if (standard === -1) continue;
+      const prefixed = body.indexOf("-webkit-backdrop-filter:");
+      expect(prefixed, body.trim()).toBeGreaterThan(-1);
+      expect(prefixed, body.trim()).toBeLessThan(standard);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThanOrEqual(5);
+  });
+
+  it("(e) the production minifier (Lightning CSS via Tailwind) emits the standard property", () => {
+    // Every innermost rule body that sets a glass backdrop-filter, re-wrapped and
+    // run through the same optimize() step `electron-vite build` uses.
+    const bodies = [...css.matchAll(/\{([^{}]*backdrop-filter:\s*var\(--glass[^{}]*)\}/g)].map(
+      (m, i) => `.r${i}{${m[1]}}`,
+    );
+    expect(bodies.length).toBeGreaterThanOrEqual(5);
+    const out = optimize(bodies.join("\n"), { minify: true }).code;
+    for (let i = 0; i < bodies.length; i += 1) {
+      const rule = out.match(new RegExp(`\\.r${i}\\{([^}]*)\\}`))?.[1] ?? "";
+      expect(rule, `rule ${i}`).toMatch(/(^|;)backdrop-filter:var\(--glass/);
+      expect(rule, `rule ${i}`).toMatch(/-webkit-backdrop-filter:var\(--glass/);
+    }
+  });
+
+  it("(f) the rail and sidebar leave the blur to the OS material (no CSS backdrop-filter)", () => {
+    const chrome = block(
+      ':root[data-native-glass="true"] .app-rail,\n:root[data-native-glass="true"] .app-context-sidebar {',
+    ).body;
+    expect(chrome).toContain("var(--surface-glass-sidebar)");
+    expect(chrome).not.toMatch(/backdrop-filter/);
+  });
+
+  it("(g) only dark and dark-plus can get glass; light is always solid", () => {
+    expect(themesWithGlass()).toEqual(["dark", "dark-plus"]);
+  });
+
+  it("(h) fg and muted >= 4.5:1 on every glass tier over the #cccccc OS backdrop", () => {
+    const results: string[] = [];
+    for (const theme of themesWithGlass()) {
+      for (const tier of Object.keys(TIERS) as (keyof typeof TIERS)[]) {
+        for (const text of ["--color-fg", "--color-fg-muted"]) {
+          const ratio = worst(theme, tier, text, [OS_BACKDROP_DARK]);
+          results.push(`${theme} ${tier} ${text} ${ratio.toFixed(2)}`);
+          expect(ratio, `${theme} ${tier} ${text}`).toBeGreaterThanOrEqual(D2_GATE);
+        }
+      }
+    }
+    expect(results).toHaveLength(12);
+    // Negative control: without the sync (light material / white desktop behind a
+    // dark app) the same tokens fail, which is why D2 couples glass to nativeTheme.
+    expect(worst("dark", "--glass-alpha-overlay", "--color-fg-muted", [WHITE])).toBeLessThan(
+      D2_GATE,
+    );
+  });
+
+  it("(i) native window colours mirror the palette tokens", () => {
+    for (const theme of THEMES) {
+      const hex = (rgb: Rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
+      expect(SOLID_WINDOW_BACKGROUND[theme], `${theme} canvas`).toBe(
+        hex(color(theme, "--color-canvas")),
+      );
+      expect(WINDOW_SYMBOL_COLOR[theme], `${theme} fg`).toBe(hex(color(theme, "--color-fg")));
     }
   });
 });

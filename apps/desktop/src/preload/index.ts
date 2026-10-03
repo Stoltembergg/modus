@@ -1,5 +1,6 @@
 import type { IpcRendererEvent } from "electron";
 import { contextBridge, ipcRenderer } from "electron";
+import type { AppearanceState } from "../shared/appearance";
 import type { AuthState } from "../shared/auth";
 import type { BillingState } from "../shared/billing";
 import type {
@@ -20,13 +21,30 @@ const windowAppearance = resolveWindowAppearance(
   process.platform,
   process.getSystemVersion?.() ?? "",
 );
-let nativeGlassAvailable = windowAppearance.glass === "native";
-const nativeGlassListeners = new Set<(available: boolean) => void>();
+const APPEARANCE_ARGUMENT_PREFIX = "--modus-appearance=";
 
-ipcRenderer.on("window:glass-event", (_event: IpcRendererEvent, available: unknown) => {
-  if (typeof available !== "boolean") return;
-  nativeGlassAvailable = available;
-  for (const listener of nativeGlassListeners) listener(available);
+function readInitialAppearance(): AppearanceState | null {
+  const raw = process.argv.find((arg) => arg.startsWith(APPEARANCE_ARGUMENT_PREFIX));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(APPEARANCE_ARGUMENT_PREFIX.length)) as AppearanceState;
+    return typeof parsed?.glass === "boolean" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const initialAppearance = readInitialAppearance();
+let nativeGlassAvailable = initialAppearance?.glass ?? windowAppearance.glass === "native";
+const nativeGlassListeners = new Set<(available: boolean) => void>();
+const appearanceListeners = new Set<(state: AppearanceState) => void>();
+
+ipcRenderer.on("appearance:event", (_event: IpcRendererEvent, state: AppearanceState) => {
+  if (typeof state?.glass !== "boolean") return;
+  for (const listener of appearanceListeners) listener(state);
+  if (state.glass === nativeGlassAvailable) return;
+  nativeGlassAvailable = state.glass;
+  for (const listener of nativeGlassListeners) listener(state.glass);
 });
 
 const api: ModusApi = {
@@ -38,6 +56,15 @@ const api: ModusApi = {
     onNativeGlassChange(handler) {
       nativeGlassListeners.add(handler);
       return () => nativeGlassListeners.delete(handler);
+    },
+    appearance: {
+      initial: initialAppearance,
+      get: () => ipcRenderer.invoke("appearance:get") as Promise<AppearanceState>,
+      set: (input) => ipcRenderer.invoke("appearance:set", input) as Promise<AppearanceState>,
+      onChange(handler) {
+        appearanceListeners.add(handler);
+        return () => appearanceListeners.delete(handler);
+      },
     },
     version: () => ipcRenderer.invoke("app:version") as Promise<string>,
     securityState: () => ipcRenderer.invoke("app:security-state") as Promise<SecurityState>,

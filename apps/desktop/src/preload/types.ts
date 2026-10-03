@@ -1,3 +1,4 @@
+import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
 import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
 import type { BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
@@ -148,10 +149,21 @@ export type ModusApi = {
     windowChrome: WindowChromeMode;
     /** Whether this host supports the native glass effect used by the shell. */
     nativeGlass: boolean;
-    /** Current native glass state, including an OS failure discovered after startup. */
+    /**
+     * Whether glass is on right now: host support, the Transparency preference,
+     * the theme (light is solid) and OS accessibility settings all agree.
+     */
     isNativeGlassAvailable(): boolean;
-    /** Main-process fallback when the OS declines a native glass request. */
+    /** Fires whenever the effective glass state flips (preference, theme, OS or a native failure). */
     onNativeGlassChange(handler: (available: boolean) => void): () => void;
+    /** Theme / Transparency preferences mirrored in the main process (nativeTheme + window material). */
+    appearance: {
+      /** State at window creation, read synchronously for a flash-free first paint. */
+      initial: AppearanceState | null;
+      get(): Promise<AppearanceState>;
+      set(input: AppearanceSetInput): Promise<AppearanceState>;
+      onChange(handler: (state: AppearanceState) => void): () => void;
+    };
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;
     startupMetric(input: StartupMetricInput): Promise<void>;

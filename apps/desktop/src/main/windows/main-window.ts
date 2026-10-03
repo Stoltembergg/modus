@@ -12,6 +12,7 @@ import {
   invalidateHyperPlanDraftOwner,
   registerHyperPlanDraftOwner,
 } from "../agent/harness/hyperplan-draft-store";
+import type { AppearanceController } from "../appearance/appearance-controller";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { isTrustedRendererUrl, registerTrustedSender } from "../ipc/trusted-sender";
 import type { StartupTimeline } from "../startup/startup-timeline";
@@ -60,16 +61,18 @@ function resolveRendererTarget(
 
 export function createMainWindow({
   startupTimeline,
+  appearance,
 }: {
   startupTimeline: StartupTimeline;
+  appearance: Pick<AppearanceController, "attach" | "rendererArgument">;
 }): BrowserWindowType {
   const preloadPath = fileURLToPath(new URL("../preload/index.cjs", import.meta.url));
   const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const width = Math.min(1180, workArea.width);
   const height = Math.min(760, workArea.height);
 
-  const appearance = resolveWindowAppearance(process.platform, process.getSystemVersion?.() ?? "");
-  let nativeGlassAvailable = appearance.glass === "native";
+  const host = resolveWindowAppearance(process.platform, process.getSystemVersion?.() ?? "");
+  let nativeGlassAvailable = host.glass === "native";
   const createWindow = (glass: "native" | "solid"): BrowserWindowType =>
     new BrowserWindow({
       x: workArea.x + Math.round((workArea.width - width) / 2),
@@ -79,48 +82,29 @@ export function createMainWindow({
       minWidth: Math.min(1120, width),
       minHeight: Math.min(720, height),
       title: "Modus",
-      ...(appearance.chrome === "macos" ? {} : { icon: appIconPath }),
+      ...(host.chrome === "macos" ? {} : { icon: appIconPath }),
       show: true,
-      ...windowChromeOptionsFor({ ...appearance, glass }),
+      ...windowChromeOptionsFor({ ...host, glass }),
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
         webSecurity: true,
+        additionalArguments: [appearance.rendererArgument()],
       },
     });
 
   let window: BrowserWindowType;
   try {
-    window = createWindow(appearance.glass);
+    window = createWindow(host.glass);
   } catch (error) {
     if (!nativeGlassAvailable) throw error;
     nativeGlassAvailable = false;
     window = createWindow("solid");
   }
-  if (appearance.chrome === "windows-overlay" && nativeGlassAvailable) {
-    try {
-      window.setBackgroundMaterial("mica");
-    } catch {
-      // OS build detection normally guarantees support; keep startup usable if
-      // DWM declines the effect and paint the same solid fallback as Linux.
-      try {
-        window.setBackgroundMaterial("none");
-      } catch {
-        // The fallback color and renderer surfaces remain available without DWM.
-      }
-      nativeGlassAvailable = false;
-      window.setBackgroundColor("#131314");
-    }
-  }
-  if (appearance.glass === "native") {
-    window.webContents.once("did-finish-load", () => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(IPC_CHANNELS.windowGlassEvent, nativeGlassAvailable);
-      }
-    });
-  }
+  // Material, colours and the glass-off sequencing live in the appearance controller.
+  appearance.attach(window, { nativeGlassAvailable });
   const ownerEpoch = registerHyperPlanDraftOwner(window.webContents.id);
   startupTimeline.mark("main.window-created");
 

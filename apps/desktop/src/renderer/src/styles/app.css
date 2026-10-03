@@ -904,34 +904,35 @@ body {
 :root[data-native-glass="true"] .app-layout-row {
   background-color: transparent;
 }
+/* No CSS blur on chrome: backdrop-filter samples only page pixels, and behind
+ * the rail/sidebar there is none, just the OS material (vibrancy / Mica), which
+ * already blurs the desktop. A CSS blur here would cost GPU for nothing (D2). */
 :root[data-native-glass="true"] .app-rail,
 :root[data-native-glass="true"] .app-context-sidebar {
   background-color: var(--surface-glass-sidebar);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .app-context-sidebar-body {
   background-color: transparent;
 }
 :root[data-native-glass="true"] .surface-main {
   background-color: var(--surface-main-glass);
-  backdrop-filter: none;
   -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 :root[data-native-glass="true"] .surface-raised,
 :root[data-native-glass="true"] .surface-glass {
   background-color: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .popup-chrome {
   background: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .dialog-scrim {
-  backdrop-filter: var(--glass-scrim-filter);
   -webkit-backdrop-filter: var(--glass-scrim-filter);
+  backdrop-filter: var(--glass-scrim-filter);
 }
 
 :root[data-native-glass="false"] body,
@@ -1468,8 +1469,8 @@ body {
    * imperceptible, and it then costs nothing while the sheet sits open.
    */
   :root[data-native-glass="true"] .subagent-preview-scrim[data-settled] {
-    backdrop-filter: var(--glass-scrim-filter);
     -webkit-backdrop-filter: var(--glass-scrim-filter);
+    backdrop-filter: var(--glass-scrim-filter);
     will-change: auto;
   }
 
@@ -2680,8 +2681,8 @@ body
   [class*="absolute"][class*="rounded-md"],
 :root[data-native-glass="true"] .pdf-page-chrome {
   background: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .pdf-rect-tool.is-active {
   color: var(--color-accent);
