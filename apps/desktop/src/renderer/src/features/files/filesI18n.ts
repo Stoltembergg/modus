@@ -11,7 +11,7 @@ import { useGroupRoomLocale } from "../groups/groupRoomI18n";
 /**
  * Files panel / Search Tool card copy (C6.1). Same locale source as the room
  * (C6): an explicit `locale` prop wins, then the enclosing room's locale (when
- * rendered inside a group room), else the renderer locale (`navigator.language`).
+ * rendered inside a group room), else English (C6.2: never the system locale).
  */
 export type FilesTextFn = {
   (key: FilesSearchTextKey, vars?: GroupTextVars): string;

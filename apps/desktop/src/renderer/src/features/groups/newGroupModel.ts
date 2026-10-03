@@ -276,8 +276,8 @@ export function newGroupCreateInput(
     leadKey: string | null;
   },
   /**
-   * Room locale of the blank-name default (the modal's placeholder). Omitted =
-   * English, as before; `null` = the renderer locale (`navigator.language`).
+   * Room locale of the blank-name default (the modal's placeholder). Omitted or
+   * `null` = English (C6.2: no explicit locale means the en catalog).
    */
   locale: string | null = "en",
 ): CreateAgentGroupInput {

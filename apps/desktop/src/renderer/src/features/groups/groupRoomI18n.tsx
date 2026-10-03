@@ -8,9 +8,9 @@ import {
 } from "../../../../shared/group-room-locale";
 
 /**
- * Room locale for everything under `GroupRoom` (C6). `undefined` = the
- * renderer locale (`navigator.language`), the same rule as the catalog
- * (`resolveGroupRoomLocale`). A component's own `locale` prop still wins.
+ * Room locale for everything under `GroupRoom` (C6). `undefined` = English
+ * text (C6.2, `resolveGroupRoomLocale`) with system-locale dates and clocks.
+ * A component's own `locale` prop still wins.
  */
 const GroupRoomLocaleContext = createContext<string | null | undefined>(undefined);
 

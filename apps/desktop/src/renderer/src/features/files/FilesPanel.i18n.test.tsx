@@ -141,11 +141,13 @@ describe("FilesPanel copy in pt / zh (C6.1)", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: buttons[0] ?? "" }));
   });
 
-  it("without a locale prop it follows navigator.language (same fallback as the room)", async () => {
+  it("without a locale prop it is English even on a pt system (C6.2)", async () => {
     vi.spyOn(navigator, "language", "get").mockReturnValue("pt-BR");
     render(<Host />);
     await flush();
-    expect(screen.getByText("Nenhum arquivo aberto")).toBeTruthy();
+    expect(screen.getByText("No file open")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Filter files...")).toBeTruthy();
+    expect(screen.queryByText("Nenhum arquivo aberto")).toBeNull();
   });
 
   it("en is unchanged", async () => {

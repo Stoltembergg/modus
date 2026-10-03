@@ -358,7 +358,7 @@ describe("NewGroupModal (A4)", () => {
 
 describe("NewGroupModal blank name in the room locale (C6)", () => {
   async function createBlank(
-    locale: string,
+    locale: string | undefined,
     labels: { folder: string; add: string; create: string },
   ) {
     const user = userEvent.setup();
@@ -413,5 +413,20 @@ describe("NewGroupModal blank name in the room locale (C6)", () => {
       create: "Create",
     });
     expect(input.name).toBe("New group");
+  });
+
+  it("no locale on a pt system: placeholder and stored name are New group (C6.2)", async () => {
+    const spy = vi.spyOn(navigator, "language", "get").mockReturnValue("pt-BR");
+    try {
+      const { modal, input } = await createBlank(undefined, {
+        folder: "Folder",
+        add: "Add",
+        create: "Create",
+      });
+      expect(within(modal).getByPlaceholderText("New group")).toBeTruthy();
+      expect(input.name).toBe("New group");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
