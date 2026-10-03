@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Case 4: concurrent reservations on one wallet, from separate connections.
+# Case 4: concurrent reservations on one wallet, from separate connections;
+# plus release_expired_reservations racing settle_usage (no deadlock).
 # Called by run.sh (PGHOST / PGPORT / PGUSER / PGDATABASE and PSQL set).
 set -euo pipefail
 PSQL="${PSQL:-psql}"
@@ -70,5 +71,73 @@ echo "same request_id x5: created=$created repeats=$repeats balance=$balance3"
 [[ "$created" == 1 && "$repeats" == 4 && "$balance3" == 900 ]] \
   || { cat "$out"/d*; fail "concurrent duplicates: one reservation, deducted once"; }
 echo "ok - 5 concurrent calls with the same request_id: one reservation, deducted once"
+
+# 4) release_expired_reservations(user) vs settle_usage on the same expired
+#    reservation. Session 1 takes the wallet lock first (settle_usage's order:
+#    wallet -> reservation) and holds it; session 2 starts the release while
+#    the wallet is held; then session 1 settles. If release touched the
+#    reservation before locking the wallet, this is a guaranteed deadlock.
+uid4="$(q "select tests.create_user('race4@example.com', true)")"
+q "set role service_role; select private.reserve_credits('$uid4', 'exp-x', 100)" >/dev/null
+q "update public.credit_reservations set expires_at = now() - interval '1 second' where user_id = '$uid4'"
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/r1" 2>&1 <<SQL
+begin;
+set local role service_role;
+select 'locked' from public.credit_wallets where user_id = '$uid4' for update;
+select pg_sleep(1.5);
+select private.settle_usage('$uid4', 'exp-x', 30, 'm', 'p') ->> 'code';
+commit;
+SQL
+  echo "exit=$?" >>"$out/r1" ) &
+sleep 0.4
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/r2" 2>&1 <<SQL
+set role service_role;
+select 'released=' || private.release_expired_reservations('$uid4');
+SQL
+  echo "exit=$?" >>"$out/r2" ) &
+wait
+grep -qi deadlock "$out/r1" "$out/r2" && { cat "$out/r1" "$out/r2"; fail "release vs settle: deadlock"; }
+grep -q '^exit=0$' "$out/r1" && grep -q '^exit=0$' "$out/r2" \
+  || { cat "$out/r1" "$out/r2"; fail "release vs settle: both sessions succeed"; }
+settle_code="$(grep -E '^(reservation_expired|settled)$' "$out/r1" || true)"
+released="$(grep '^released=' "$out/r2" || true)"
+state4="$(q "select balance || '/' || reserved from public.credit_wallets where user_id = '$uid4'")"
+usage4="$(q "select status || ':' || credits from public.usage_events where user_id = '$uid4'")"
+echo "release vs settle: settle=$settle_code $released wallet=$state4 usage=$usage4"
+[[ "$settle_code" == reservation_expired && "$released" == released=0 && "$state4" == 1000/0 \
+   && "$usage4" == unbilled:0 ]] || fail "release vs settle: consistent result"
+echo "ok - release_expired_reservations racing settle_usage on the same reservation: no deadlock, refunded once, not charged"
+
+# 5) Burst: 10 expired + 10 active reservations; for each one a settle and a
+#    direct release start at the same time. No deadlock, and the wallet adds
+#    up: 1000 - 10 x 10 charged on the active ones = 900, nothing reserved.
+uid5="$(q "select tests.create_user('race5@example.com', true)")"
+for i in $(seq 1 10); do
+  q "set role service_role; select private.reserve_credits('$uid5', 'old-$i', 50)" >/dev/null
+done
+q "update public.credit_reservations set expires_at = now() - interval '1 second' where user_id = '$uid5'"
+for i in $(seq 1 10); do
+  q "set role service_role; select private.reserve_credits('$uid5', 'new-$i', 40)" >/dev/null
+done
+for i in $(seq 1 10); do
+  for kind in old new; do
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select private.settle_usage('$uid5', '$kind-$i', 10, 'm', 'p') ->> 'code'" \
+        >"$out/m-$kind-$i" 2>&1 || true ) &
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select private.release_expired_reservations('$uid5')" \
+        >"$out/m-rel-$kind-$i" 2>&1 || true ) &
+  done
+done
+wait
+deadlocks="$(cat "$out"/m-* | grep -ci deadlock || true)"
+errors="$(cat "$out"/m-* | grep -c 'ERROR' || true)"
+expired5="$(cat "$out"/m-old-* | grep -c '^reservation_expired$' || true)"
+settled5="$(cat "$out"/m-new-* | grep -c '^settled$' || true)"
+state5="$(q "select balance || '/' || reserved from public.credit_wallets where user_id = '$uid5'")"
+ledger5="$(q "select sum(amount) from public.credit_transactions where user_id = '$uid5'")"
+echo "release/settle burst: deadlocks=$deadlocks errors=$errors expired=$expired5 settled=$settled5 wallet=$state5 ledger=$ledger5"
+[[ "$deadlocks" == 0 && "$errors" == 0 && "$expired5" == 10 && "$settled5" == 10 \
+   && "$state5" == 900/0 && "$ledger5" == 900 ]] \
+  || { cat "$out"/m-* | sort | uniq -c; fail "release/settle burst: no deadlock, consistent balance"; }
+echo "ok - 20 settles racing 20 direct releases: no deadlock, balance 900 = ledger, nothing reserved"
 
 rm -rf "$out"

@@ -11,8 +11,10 @@
 --     anon, authenticated and service_role, and Postgres' own default
 --     EXECUTE-to-PUBLIC on functions (left untouched);
 --   * pgTAP in schema extensions.
--- Not emulated: GoTrue, PostgREST, storage, pg_cron (the migration skips the
--- cron job when the extension is not available).
+--   * role supabase_admin as a second grantor of those default privileges
+--     (on hosted Supabase it is the superuser; here postgres is).
+-- Not emulated: GoTrue, PostgREST, storage, pg_cron (the cron migration does
+-- nothing when the extension is not installed).
 
 create role anon nologin noinherit;
 create role authenticated nologin noinherit;
@@ -20,6 +22,7 @@ create role service_role nologin noinherit bypassrls;
 create role authenticator login noinherit;
 grant anon, authenticated, service_role to authenticator;
 create role supabase_auth_admin nologin noinherit;
+create role supabase_admin nologin;
 
 create schema extensions;
 grant usage on schema extensions to public;
@@ -69,8 +72,12 @@ $$;
 
 grant execute on function auth.jwt(), auth.uid(), auth.role() to anon, authenticated, service_role;
 
--- Supabase defaults for objects created by postgres in public.
+-- Supabase defaults for objects created by postgres / supabase_admin in public.
 grant usage on schema public to anon, authenticated, service_role;
-alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
-alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
-alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+grant create on schema public to supabase_admin;
+alter default privileges for role postgres in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges for role postgres in schema public grant all on functions to anon, authenticated, service_role;
+alter default privileges for role supabase_admin in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges for role supabase_admin in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges for role supabase_admin in schema public grant all on functions to anon, authenticated, service_role;

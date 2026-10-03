@@ -16,6 +16,8 @@ select throws_ok(format($q$select private.grant_credits(%L, 5, 'k')$q$, :'uid'),
   '42501', null, 'anon: grant_credits denied');
 select throws_ok($q$select private.release_expired_reservations()$q$,
   '42501', null, 'anon: release_expired_reservations denied');
+select throws_ok($q$select private.process_stripe_event('evt_x', 'invoice.paid', '{"livemode": false}')$q$,
+  '42501', null, 'anon: process_stripe_event denied');
 select tests.clear_authentication();
 
 select tests.authenticate_as(:'uid');
@@ -27,6 +29,8 @@ select throws_ok(format($q$select private.grant_credits(%L, 5, 'k')$q$, :'uid'),
   '42501', null, 'authenticated: grant_credits denied');
 select throws_ok($q$select private.release_expired_reservations()$q$,
   '42501', null, 'authenticated: release_expired_reservations denied');
+select throws_ok($q$select private.process_stripe_event('evt_x', 'invoice.paid', '{"livemode": false}')$q$,
+  '42501', null, 'authenticated: process_stripe_event denied');
 select tests.clear_authentication();
 
 -- Denied at the function level too, not only by the schema: even with USAGE
@@ -55,8 +59,9 @@ select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private' and has_function_privilege('service_role', p.oid, 'execute')),
-  array['grant_credits', 'release_expired_reservations', 'reserve_credits', 'settle_usage'],
-  'service_role can execute exactly the four RPCs (not the trigger functions)');
+  array['grant_credits', 'process_stripe_event', 'release_expired_reservations', 'reserve_credits',
+        'settle_usage'],
+  'service_role can execute exactly the five RPCs (not the trigger functions)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -67,19 +72,30 @@ select is((private.reserve_credits(:'uid', 'svc-r1', 10) ->> 'created')::boolean
 select is((private.settle_usage(:'uid', 'svc-r1', 4, 'm', 'p') ->> 'charged')::bigint, 4::bigint,
   'service_role: settle_usage works');
 select is(private.release_expired_reservations(), 0, 'service_role: release_expired_reservations works');
+select is(private.process_stripe_event('evt_priv', 'charge.succeeded', '{"livemode": false}') ->> 'code',
+  'ignored', 'service_role: process_stripe_event works');
 select tests.clear_authentication();
 
 -- Case 9: SECURITY DEFINER + search_path='' on every private function.
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  6, 'six functions in private (4 RPCs + 2 trigger functions)');
+  8, 'eight functions in private (5 RPCs + 3 trigger functions)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  6, 'all private functions are SECURITY DEFINER with search_path=""');
+  8, 'all private functions are SECURITY DEFINER with search_path=""');
+select is(
+  (select array_agg(p.proname::text order by p.proname)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'private'
+      and p.prosecdef
+      and p.proconfig @> array['search_path=""']),
+  array['grant_credits', 'grant_free_initial_credits', 'handle_new_user', 'process_stripe_event',
+        'release_expired_reservations', 'reserve_credits', 'set_updated_at', 'settle_usage'],
+  'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');
 
 -- Hijack attempt: a caller-controlled search_path with decoy objects must not
 -- change what the function touches.

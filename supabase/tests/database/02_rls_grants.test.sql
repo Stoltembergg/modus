@@ -117,6 +117,34 @@ select throws_ok(format($q$update public.profiles set id = %L$q$, :'b'), '42501'
   'A cannot change profiles.id');
 select tests.clear_authentication();
 
+-- avatar_url must be https (CHECK), for clients and everyone else.
+select tests.authenticate_as(:'a');
+select throws_ok($q$update public.profiles set avatar_url = 'http://x/a.png'$q$, '23514', null,
+  'A cannot set an http:// avatar_url');
+select throws_ok($q$update public.profiles set avatar_url = 'javascript:alert(1)'$q$, '23514', null,
+  'A cannot set a javascript: avatar_url');
+select throws_ok($q$update public.profiles set avatar_url = 'HTTPS://x/a.png'$q$, '23514', null,
+  'scheme check is exact (lowercase https:// only)');
+select lives_ok($q$update public.profiles set avatar_url = null$q$, 'A can clear avatar_url');
+select tests.clear_authentication();
+select is((select avatar_url from public.profiles where id = :'a'), null, 'A avatar_url cleared');
+
+-- profiles.updated_at is maintained by a trigger.
+set local session_replication_role = replica;
+update public.profiles set updated_at = '2000-01-01T00:00:00Z' where id in (:'a', :'b');
+set local session_replication_role = origin;
+select tests.authenticate_as(:'a');
+update public.profiles set display_name = 'Alice 3';
+select tests.clear_authentication();
+select is((select updated_at from public.profiles where id = :'a'), now(),
+  'updated_at bumped by the trigger on a client update');
+select is((select updated_at from public.profiles where id = :'b'), '2000-01-01T00:00:00Z'::timestamptz,
+  'untouched row keeps its updated_at');
+select tests.authenticate_as(:'a');
+select throws_ok($q$update public.profiles set updated_at = '1999-01-01'$q$, '42501', null,
+  'clients cannot write updated_at directly');
+select tests.clear_authentication();
+
 -- Column privileges are exactly display_name / avatar_url.
 select is(
   (select array_agg(column_name::text order by column_name)

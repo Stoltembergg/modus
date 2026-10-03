@@ -21,6 +21,14 @@ select is((select stripe_customer_id from public.profiles where id = :'u'), null
 select is(pg_temp.balance(:'u'), 0::bigint, 'unconfirmed: wallet with balance 0');
 select is(pg_temp.free_grants(:'u'), 0, 'unconfirmed: no free grant');
 
+-- A non-https avatar in the OAuth metadata is dropped, not a failed signup.
+select tests.create_user('js@example.com', true, '{"avatar_url": "javascript:alert(1)"}') as js \gset
+select is((select avatar_url from public.profiles where id = :'js'), null,
+  'javascript: avatar in metadata -> profile created with avatar_url null');
+select tests.create_user('http@example.com', false, '{"avatar_url": "http://x/a.png"}') as hu \gset
+select is((select avatar_url from public.profiles where id = :'hu'), null,
+  'http:// avatar in metadata -> avatar_url null');
+
 -- Other updates while unconfirmed do not grant.
 update auth.users set raw_user_meta_data = '{"x": 1}', updated_at = now() where id = :'u';
 select is(pg_temp.balance(:'u'), 0::bigint, 'metadata update: still 0');

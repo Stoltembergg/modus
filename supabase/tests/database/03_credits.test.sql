@@ -67,8 +67,14 @@ select is((select status from public.credit_reservations where user_id = :'a' an
   'settled', 'reservation marked settled');
 select is((select credits from public.usage_events where user_id = :'a' and request_id = 'req-1'),
   40::bigint, 'usage_events row with 40 credits');
+select is((select status from public.usage_events where user_id = :'a' and request_id = 'req-1'),
+  'billed', 'usage_events row status billed');
+select is((:'s1'::jsonb ->> 'code'), 'settled', 'settle code: settled');
 select (private.settle_usage(:'a', 'req-1', 999, 'gpt-x', 'openai'))::text as s2 \gset
 select is((:'s2'::jsonb ->> 'settled_now')::boolean, false, 'second settle is a no-op');
+select is((:'s2'::jsonb ->> 'code'), 'already_settled', 'repeat code: already_settled');
+select is((private.reserve_credits(:'a', 'req-1', 100) ->> 'created')::boolean, false,
+  'reserving a settled request_id again: created false (router: 409 idempotency_conflict)');
 select is((:'s2'::jsonb ->> 'charged')::bigint, 40::bigint, 'and reports the original charge');
 select is(pg_temp.balance(:'a'), 960::bigint, 'balance unchanged by the repeat');
 select is((select count(*)::int from public.usage_events where user_id = :'a' and request_id = 'req-1'),
@@ -99,11 +105,48 @@ select is((select status from public.credit_reservations where user_id = :'b' an
 select is(pg_temp.reserved(:'b'), 10::bigint, 'reserved = only the new 10');
 select is((select amount from public.credit_transactions where user_id = :'b' and idempotency_key = 'expire:req-1'),
   100::bigint, 'ledger refund row expire:req-1');
-select throws_ok(format($q$select private.settle_usage(%L, 'req-1', 5, 'm', 'p')$q$, :'b'),
-  'P0410', 'reservation expired', 'settling an expired (already refunded) reservation fails');
-select is(pg_temp.balance(:'b'), 990::bigint, 'and does not charge');
+-- Settling an expired (already refunded) reservation does not raise and does
+-- not charge: reservation_expired + a 0-credit 'unbilled' usage row, once.
+select (private.settle_usage(:'b', 'req-1', 5, 'm', 'p', 10, 20))::text as x1 \gset
+select is((:'x1'::jsonb ->> 'settled_now')::boolean, false, 'expired settle: settled_now false');
+select is(:'x1'::jsonb ->> 'code', 'reservation_expired', 'expired settle: code reservation_expired');
+select is((:'x1'::jsonb ->> 'charged')::bigint, 0::bigint, 'expired settle: charged 0');
+select is(pg_temp.balance(:'b'), 990::bigint, 'expired settle: no charge');
+select is(pg_temp.reserved(:'b'), 10::bigint, 'expired settle: reserved untouched');
+select is((select credits from public.usage_events where user_id = :'b' and request_id = 'req-1'),
+  0::bigint, 'expired settle: usage row with 0 credits');
+select is((select status from public.usage_events where user_id = :'b' and request_id = 'req-1'),
+  'unbilled', 'expired settle: usage row status unbilled');
+select (private.settle_usage(:'b', 'req-1', 50, 'm', 'p'))::text as x2 \gset
+select is(:'x2'::jsonb ->> 'code', 'reservation_expired', 'repeat expired settle: same answer');
+select is((select count(*)::int from public.usage_events where user_id = :'b' and request_id = 'req-1'),
+  1, 'repeat expired settle: still one usage row (UNIQUE (user_id, request_id))');
+select is(pg_temp.balance(:'b'), 990::bigint, 'repeat expired settle: still no charge');
 select is((private.reserve_credits(:'b', 'req-1', 100) ->> 'created')::boolean, false,
-  'the expired request_id stays taken (idempotency key is not reused)');
+  'the expired request_id stays taken: created false (router: 409 idempotency_conflict)');
+select is((private.reserve_credits(:'b', 'req-1', 7) ->> 'created')::boolean, false,
+  'expired request_id with a different amount: created false');
+select is(pg_temp.balance(:'b'), 990::bigint, 'and nothing deducted');
+select throws_ok(
+  format($q$insert into public.usage_events (user_id, request_id, model, provider, credits, status) values (%L, 'bad', 'm', 'p', 5, 'unbilled')$q$, :'b'),
+  '23514', null, 'CHECK: unbilled usage rows carry 0 credits');
+select throws_ok(
+  format($q$insert into public.usage_events (user_id, request_id, model, provider, credits, status) values (%L, 'bad', 'm', 'p', 0, 'completed')$q$, :'b'),
+  '23514', null, 'CHECK: usage status is billed / unbilled');
+
+-- Expired but not swept yet: settle releases it itself (refund) and does
+-- not charge.
+select private.reserve_credits(:'b', 'late', 40) \gset ignore_
+select is(pg_temp.balance(:'b'), 950::bigint, 'B: 40 reserved (late)');
+update public.credit_reservations set expires_at = now() - interval '1 second'
+ where user_id = :'b' and request_id = 'late';
+select is(private.settle_usage(:'b', 'late', 30, 'm', 'p') ->> 'code', 'reservation_expired',
+  'unswept expired settle: reservation_expired');
+select is(pg_temp.balance(:'b'), 990::bigint, 'unswept expired settle: 40 refunded, 0 charged');
+select is((select status from public.credit_reservations where user_id = :'b' and request_id = 'late'),
+  'expired', 'unswept expired settle: reservation marked expired');
+select is((select amount from public.credit_transactions where user_id = :'b' and idempotency_key = 'expire:late'),
+  40::bigint, 'unswept expired settle: ledger refund row');
 
 -- An expired reservation also lets a reserve that needed those credits pass.
 select private.reserve_credits(:'b', 'big', 990) \gset ignore_
