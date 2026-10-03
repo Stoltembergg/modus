@@ -231,6 +231,13 @@ export const IPC_CHANNELS = {
   updateSaveUiState: "update:save-ui-state",
   updateTakeRestoredUiState: "update:take-restored-ui-state",
   updateStateEvent: "update:state-event",
+  authGetState: "auth:get-state",
+  authSignUp: "auth:sign-up",
+  authSignInPassword: "auth:sign-in-password",
+  authSignInOAuth: "auth:sign-in-oauth",
+  authCancelOAuth: "auth:cancel-oauth",
+  authSignOut: "auth:sign-out",
+  authStateEvent: "auth:state-event",
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];
