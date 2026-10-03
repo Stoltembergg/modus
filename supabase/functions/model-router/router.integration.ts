@@ -117,7 +117,9 @@ Deno.test({
         completionRequest({ model: FLASH, messages: MESSAGES, max_tokens: 2000 }, { key: "it-ok" }),
       );
       assertEquals(ok.status, 200);
-      assertEquals((await ok.json()).model, "deepseek-v4.1-flash");
+      const okText = await ok.text();
+      assertEquals(JSON.parse(okText).model, FLASH, "responses name the Modus id");
+      assert(!okText.includes("deepseek-v4.1-flash"), "never the gateway model name");
       const charged = creditsFor(
         MODEL_CATALOG[0],
         { promptTokens: 120, cachedTokens: 20, completionTokens: 80 },

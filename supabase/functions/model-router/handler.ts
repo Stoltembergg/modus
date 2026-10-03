@@ -488,6 +488,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       abort.signal,
     );
     const timeoutResponse = () => json(504, { error: "upstream_timeout" });
+    // Responses always name the Modus model id, never the gateway's model name.
+    const reportedModel = { reported: ctx.model.id, upstream: ctx.model.upstreamId };
 
     // Step 2: while output arrives, the running estimate at most every
     // progressIntervalMs (stream AND non-stream). A killed worker leaves the last value
@@ -542,8 +544,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         if (!(opened instanceof Response) || !opened.body) {
           return opened instanceof Response ? json(502, { error: "upstream_error" }) : opened.error;
         }
-        const assembler = new CompletionAssembler();
-        const tracker = new SseUsageTracker(assembler);
+        const assembler = new CompletionAssembler(ctx.model.id);
+        const tracker = new SseUsageTracker(assembler, reportedModel);
         const reader = opened.body.getReader();
         try {
           for (;;) {
@@ -582,7 +584,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       return opened instanceof Response ? json(502, { error: "upstream_error" }) : opened.error;
     }
 
-    const tracker = new SseUsageTracker();
+    const tracker = new SseUsageTracker(undefined, reportedModel);
     const reader = opened.body.getReader();
     let clientGone = false;
     let settled: Promise<void> | undefined;
@@ -612,27 +614,34 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
 
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
-        let chunk: ReadableStreamReadResult<Uint8Array>;
-        try {
-          chunk = await reader.read();
-        } catch {
-          if (clientGone) return; // drain() settles
-          await finish(ourAbort ?? "upstream_error");
-          controller.error(new Error("upstream stream failed"));
-          return;
+        // Read until there are complete (rewritten) lines to forward, or the end.
+        for (;;) {
+          let chunk: ReadableStreamReadResult<Uint8Array>;
+          try {
+            chunk = await reader.read();
+          } catch {
+            if (clientGone) return; // drain() settles
+            const tail = tracker.end();
+            await finish(ourAbort ?? "upstream_error");
+            if (tail.byteLength > 0) controller.enqueue(tail);
+            controller.error(new Error("upstream stream failed"));
+            return;
+          }
+          const out = chunk.done ? tracker.end() : tracker.push(chunk.value);
+          if (!chunk.done) onProgress(tracker.usage, tracker.outputChars);
+          if (clientGone) return; // drain() owns the rest
+          if (chunk.done) {
+            // Settle before closing so the runtime keeps the request alive for it.
+            await finish("complete");
+            if (out.byteLength > 0) controller.enqueue(out);
+            controller.close();
+            return;
+          }
+          if (out.byteLength > 0) {
+            controller.enqueue(out);
+            return;
+          }
         }
-        if (!chunk.done) {
-          tracker.push(chunk.value);
-          onProgress(tracker.usage, tracker.outputChars);
-        }
-        if (clientGone) return; // drain() owns the rest
-        if (chunk.done) {
-          // Settle before closing so the runtime keeps the request alive for it.
-          await finish("complete");
-          controller.close();
-          return;
-        }
-        controller.enqueue(chunk.value);
       },
       cancel() {
         clientGone = true;

@@ -144,6 +144,8 @@ type ChoiceParts = {
  * id / type / function.name seen and the concatenated function.arguments.
  */
 export class CompletionAssembler {
+  /** Reported `model` (the Modus id); the upstream's own model name never leaves. */
+  #reportedModel: string | undefined;
   #id: unknown;
   #created: unknown;
   #model: unknown;
@@ -151,6 +153,10 @@ export class CompletionAssembler {
   #hasFingerprint = false;
   #usage: unknown;
   #choices = new Map<number, ChoiceParts>();
+
+  constructor(reportedModel?: string) {
+    this.#reportedModel = reportedModel;
+  }
 
   push(chunk: Record<string, unknown>): void {
     this.#id ??= chunk.id;
@@ -243,7 +249,7 @@ export class CompletionAssembler {
       id: this.#id,
       object: "chat.completion",
       created: this.#created,
-      model: this.#model,
+      model: this.#reportedModel ?? this.#model,
       choices,
     };
     if (this.#usage !== undefined) out.usage = this.#usage;
@@ -268,49 +274,99 @@ export class SseUsageTracker {
   #sawData = false;
   #raw = "";
   #assembler: CompletionAssembler | undefined;
+  #model: { reported: string; upstream: string } | undefined;
+  #encoder = new TextEncoder();
+  #ended = false;
 
-  constructor(assembler?: CompletionAssembler) {
+  /**
+   * `model`: when set, every `data:` JSON line is re-serialized with `model` = the Modus
+   * id (push / end return the rewritten bytes to forward), and so is `jsonBody`.
+   */
+  constructor(assembler?: CompletionAssembler, model?: { reported: string; upstream: string }) {
     this.#assembler = assembler;
+    this.#model = model;
   }
 
-  push(chunk: Uint8Array): void {
+  /**
+   * Feeds upstream bytes. Returns the bytes to forward: only COMPLETE lines (buffered
+   * across arbitrary chunk boundaries), with `model` rewritten on `data:` JSON lines;
+   * `data: [DONE]`, comments and any other line are forwarded byte for byte.
+   */
+  push(chunk: Uint8Array): Uint8Array {
     const text = this.#decoder.decode(chunk, { stream: true });
     if (!this.#sawData && this.#raw.length < RAW_LIMIT) this.#raw += text;
     this.#buffer += text;
+    let out = "";
     let newline = this.#buffer.indexOf("\n");
     while (newline >= 0) {
-      this.#line(this.#buffer.slice(0, newline));
+      out += `${this.#line(this.#buffer.slice(0, newline))}\n`;
       this.#buffer = this.#buffer.slice(newline + 1);
       newline = this.#buffer.indexOf("\n");
     }
-    // A single absurdly long line is not ours to buffer forever.
+    // A single absurdly long line is not ours to buffer forever: count it and forward
+    // it with the upstream model name replaced textually.
     if (this.#buffer.length > RAW_LIMIT) {
       this.outputChars += this.#buffer.length;
+      out += this.#scrub(this.#buffer);
       this.#buffer = "";
     }
+    return this.#encoder.encode(out);
   }
 
-  /** End of the upstream body (or of what we got): flush the last line. */
-  end(): void {
+  /** End of the upstream body (or of what we got): flush the last line; returns its bytes. */
+  end(): Uint8Array {
+    if (this.#ended) return new Uint8Array();
+    this.#ended = true;
     this.#buffer += this.#decoder.decode();
-    if (this.#buffer) this.#line(this.#buffer);
+    const out = this.#buffer ? this.#line(this.#buffer) : "";
     this.#buffer = "";
     if (!this.#sawData && this.#raw.trim().startsWith("{")) {
       const inspected = inspectCompletion(this.#raw);
       this.usage = inspected.usage;
       this.outputChars = inspected.outputChars;
-      this.jsonBody = this.#raw;
+      this.jsonBody = this.#withModel(this.#raw);
     }
     this.#raw = "";
+    return this.#encoder.encode(out);
   }
 
-  #line(rawLine: string): void {
+  /** A JSON document with `model` replaced (textual scrub if it does not parse). */
+  #withModel(json: string): string {
+    if (!this.#model) return json;
+    try {
+      const value = JSON.parse(json);
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        value.model = this.#model.reported;
+        return JSON.stringify(value);
+      }
+    } catch {
+      // fall through
+    }
+    return this.#scrub(json);
+  }
+
+  #scrub(text: string): string {
+    if (!this.#model) return text;
+    return text.replaceAll(
+      JSON.stringify(this.#model.upstream),
+      JSON.stringify(this.#model.reported),
+    );
+  }
+
+  /** Tracks one line; returns it as it must be forwarded (without the newline). */
+  #line(rawLine: string): string {
     const line = rawLine.trim();
-    if (!line.startsWith("data:")) return;
+    // Comments / blank / event: lines pass untouched; anything else non-SSE (an upstream
+    // that answered JSON to a stream request) gets the model name scrubbed.
+    if (!line.startsWith("data:")) {
+      return line === "" || line.startsWith(":") || /^(event|id|retry):/.test(line)
+        ? rawLine
+        : this.#scrub(rawLine);
+    }
     this.#sawData = true;
     this.#raw = "";
     const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") return;
+    if (!data || data === "[DONE]") return rawLine;
     try {
       const value = JSON.parse(data) as Record<string, unknown>;
       const usage = parseUsage(value.usage);
@@ -321,9 +377,15 @@ export class SseUsageTracker {
         }
       }
       this.#assembler?.push(value);
+      if (this.#model && value && typeof value === "object" && "model" in value) {
+        value.model = this.#model.reported;
+        return `data: ${JSON.stringify(value)}${rawLine.endsWith("\r") ? "\r" : ""}`;
+      }
+      return rawLine;
     } catch {
       // Not JSON: count it as output so a garbled stream is never free.
       this.outputChars += data.length;
+      return this.#scrub(rawLine);
     }
   }
 }

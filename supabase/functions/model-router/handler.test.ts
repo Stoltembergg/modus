@@ -857,7 +857,7 @@ Deno.test("pre-fetch cost store fails -> 503 billing_unavailable, upstream never
   }
 });
 
-Deno.test("upstream that ignores stream:true and answers JSON: passed through, real usage billed", async () => {
+Deno.test("upstream that ignores stream:true and answers JSON: passed through (model = Modus id), usage billed", async () => {
   const body = {
     id: "cmpl-json",
     object: "chat.completion",
@@ -875,10 +875,70 @@ Deno.test("upstream that ignores stream:true and answers JSON: passed through, r
       db,
       up.baseUrl,
     )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "js1" }));
-    assertEquals(await res.json(), body);
+    const text = await res.text();
+    assertEquals(text.includes(FLASH.upstreamId), false, "the gateway model name never leaves");
+    assertEquals(JSON.parse(text), { ...body, model: FLASH.id });
     assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [12, 34]);
   } finally {
     await up.close();
+  }
+});
+
+Deno.test("stream: every chunk names the Modus model id, across arbitrary byte splits", async () => {
+  const head = { id: "c9", object: "chat.completion.chunk", created: 3, model: FLASH.upstreamId };
+  const raw =
+    ": keep-alive\n\n" +
+    sse([
+      { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "Olá, " } }] },
+      { ...head, choices: [{ index: 0, delta: { content: "mundo — ✓" } }] },
+      { ...head, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+      { ...head, choices: [], usage: { prompt_tokens: 21, completion_tokens: 13 } },
+    ]);
+  const bytes = new TextEncoder().encode(raw);
+  for (const step of [1, 3, 7, 64, bytes.length]) {
+    const up = fakeUpstream(
+      () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let i = 0; i < bytes.length; i += step)
+                controller.enqueue(bytes.slice(i, i + step));
+              controller.close();
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+    );
+    try {
+      const db = new FakeDb(1e9);
+      const res = await handler(
+        db,
+        up.baseUrl,
+      )(
+        completionRequest(
+          { model: FLASH.id, messages: MESSAGES, stream: true },
+          { key: `sp${step}` },
+        ),
+      );
+      const text = await res.text();
+      assertEquals(text.includes(FLASH.upstreamId), false, `split ${step}: no gateway model name`);
+      const lines = text.split("\n");
+      assertEquals(lines[0], ": keep-alive", "comments untouched");
+      assert(lines.includes("data: [DONE]"), "[DONE] untouched");
+      const chunks = lines
+        .filter((l) => l.startsWith("data: {"))
+        .map((l) => JSON.parse(l.slice(6)));
+      assertEquals(chunks.length, 4);
+      for (const chunk of chunks) assertEquals(chunk.model, FLASH.id);
+      assertEquals(
+        chunks.map((c) => c.choices[0]?.delta?.content ?? "").join(""),
+        "Olá, mundo — ✓",
+        "content intact",
+      );
+      assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [21, 13]);
+    } finally {
+      await up.close();
+    }
   }
 });
 

@@ -133,7 +133,7 @@ Deno.test("tracker feeds the assembler across arbitrary byte splits", () => {
   assertEquals(tracker.jsonBody, null);
 });
 
-Deno.test("router, non-stream client: the JSON response deep-equals the non-stream fixture", async () => {
+Deno.test("router, non-stream client: the JSON response deep-equals the fixture (model = Modus id)", async () => {
   const up = fakeUpstream(
     () => new Response(sse(STREAM_CHUNKS), { headers: { "content-type": "text/event-stream" } }),
   );
@@ -151,7 +151,10 @@ Deno.test("router, non-stream client: the JSON response deep-equals the non-stre
     );
     assertEquals(res.status, 200);
     assertEquals(res.headers.get("content-type"), "application/json; charset=utf-8");
-    assertEquals(await res.json(), NON_STREAM_FIXTURE);
+    const text = await res.text();
+    assertEquals(text.includes(FLASH.upstreamId), false, "the gateway model name never leaves");
+    // The one legitimate difference: `model` is the Modus id the client sent.
+    assertEquals(JSON.parse(text), { ...NON_STREAM_FIXTURE, model: FLASH.id });
     assertEquals(up.seen[0].body.stream, true);
     assertEquals(up.seen[0].body.stream_options, { include_usage: true });
     assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [50, 30]);
