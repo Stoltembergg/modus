@@ -173,6 +173,17 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
       if (error) throw toBackendError(error);
     },
 
+    async getAccessToken() {
+      const data = await run(() => client.auth.getSession());
+      return data.session?.access_token ?? null;
+    },
+
+    async refreshAccessToken() {
+      const data = await run(() => client.auth.refreshSession());
+      if (!data.session?.access_token) throw new AuthBackendError("rejected", "no session");
+      return data.session.access_token;
+    },
+
     async fetchProfile(userId): Promise<AuthBackendProfile | null> {
       const { data, error } = await client
         .from("profiles")

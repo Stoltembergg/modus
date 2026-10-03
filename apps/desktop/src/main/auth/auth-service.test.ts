@@ -240,6 +240,92 @@ describe("auth service", () => {
     await vi.waitFor(() => expect(service.getState().status).toBe("signed-out"));
     await expect(readFile(tokenFile())).rejects.toMatchObject({ code: "ENOENT" });
   });
+  describe("Modus router session (B4b, main only)", () => {
+    it("hands out the access token only while signed in", async () => {
+      const { service, fake } = setup();
+      await service.initialize();
+      await expect(service.getAccessToken()).resolves.toBeNull();
+      await service.signInWithPassword(CREDENTIALS);
+      await expect(service.getAccessToken()).resolves.toBe("access-token-SECRET-a1");
+      await service.signOut();
+      await expect(service.getAccessToken()).resolves.toBeNull();
+      expect(fake.backend.getAccessToken).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshAccessToken is single-flight and skips a refresh when the token already moved on", async () => {
+      const { service, fake } = setup();
+      await service.initialize();
+      await service.signInWithPassword(CREDENTIALS);
+      let release: (() => void) | undefined;
+      fake.backend.refreshAccessToken.mockImplementation(
+        () =>
+          new Promise<string>((resolve) => {
+            release = () => resolve("access-token-SECRET-a2");
+          }),
+      );
+      const all = Promise.all([
+        service.refreshAccessToken("access-token-SECRET-a1"),
+        service.refreshAccessToken("access-token-SECRET-a1"),
+        service.refreshAccessToken(),
+      ]);
+      await vi.waitFor(() => expect(release).toBeDefined());
+      release?.();
+      await expect(all).resolves.toEqual([
+        "access-token-SECRET-a2",
+        "access-token-SECRET-a2",
+        "access-token-SECRET-a2",
+      ]);
+      expect(fake.backend.refreshAccessToken).toHaveBeenCalledTimes(1);
+      // A late 401 for the old token: the current token is already newer, no new refresh.
+      fake.backend.getAccessToken.mockResolvedValue("access-token-SECRET-a2");
+      await expect(service.refreshAccessToken("access-token-SECRET-a1")).resolves.toBe(
+        "access-token-SECRET-a2",
+      );
+      expect(fake.backend.refreshAccessToken).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to refresh when signed out", async () => {
+      const { service, fake } = setup();
+      await service.initialize();
+      await expect(service.refreshAccessToken("x")).rejects.toMatchObject({ kind: "rejected" });
+      expect(fake.backend.refreshAccessToken).not.toHaveBeenCalled();
+    });
+
+    it("expireSession signs the account out with the session-expired notice and clears the stored token", async () => {
+      const { service, fake, store } = setup();
+      await service.initialize();
+      await service.signInWithPassword(CREDENTIALS);
+      const state = await service.expireSession();
+      expect(state).toMatchObject({ status: "signed-out", user: null, notice: "session-expired" });
+      expect(fake.backend.signOut).toHaveBeenCalledTimes(1);
+      await expect(store.load()).resolves.toBeUndefined();
+      // Idempotent: a second expiring stream does nothing more.
+      await service.expireSession();
+      expect(fake.backend.signOut).toHaveBeenCalledTimes(1);
+      // The next sign-in clears the notice.
+      const next = await service.signInWithPassword(CREDENTIALS);
+      expect(next.notice).toBeNull();
+    });
+
+    it("expireSession after supabase-js already dropped the session still shows the notice", async () => {
+      const { service, fake } = setup();
+      await service.initialize();
+      await service.signInWithPassword(CREDENTIALS);
+      fake.emitSession(null);
+      await vi.waitFor(() => expect(service.getState().status).toBe("signed-out"));
+      const state = await service.expireSession();
+      expect(state.notice).toBe("session-expired");
+    });
+
+    it("a manual sign-out is not turned into a session-expired notice", async () => {
+      const { service } = setup();
+      await service.initialize();
+      await service.signInWithPassword(CREDENTIALS);
+      await service.signOut();
+      const state = await service.expireSession();
+      expect(state.notice).toBeNull();
+    });
+  });
 });
 
 // Against the real Supabase project (public URL; no key or secret involved). A full round trip

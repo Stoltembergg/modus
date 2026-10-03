@@ -41,6 +41,14 @@ export interface AuthBackend {
   restore(refreshToken: string): Promise<AuthBackendSession>;
   signOut(): Promise<void>;
   fetchProfile(userId: string): Promise<AuthBackendProfile | null>;
+  /**
+   * The current access token (supabase-js refreshes it first when it is about to expire), or
+   * null without a session. Main process only: the model router adapter (B4b) reads it per
+   * request; it never crosses IPC and is never persisted.
+   */
+  getAccessToken(): Promise<string | null>;
+  /** Forces a refresh of the current session; resolves with the new access token. */
+  refreshAccessToken(): Promise<string>;
   /** Token refreshes and server-side sign-outs; null = signed out. */
   onSessionChange(listener: (session: AuthBackendSession | null) => void): () => void;
   dispose(): void;

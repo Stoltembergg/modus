@@ -42,12 +42,14 @@ import {
   parseModelCatalog,
   startModelCatalogUpdates,
 } from "./model-catalog-service";
+import type { ModusProvider } from "./modus-provider";
 import { createAntigravityStream } from "./providers/antigravity-adapter";
 import {
   createAntigravityOAuthProvider,
   shutdownAntigravityAuth,
 } from "./providers/antigravity-oauth";
 import { commandCodeStream } from "./providers/commandcode-adapter";
+import { MODUS_PROVIDER_ID } from "./providers/modus-router-adapter";
 import {
   ANTIGRAVITY_API_ID,
   COMMANDCODE_API_ID,
@@ -127,6 +129,7 @@ const DEFAULT_MAX_TOKENS = 16_384;
 const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const DEFAULT_MODEL_INPUT: ModelInputKind[] = ["text"];
 const DEFAULT_PROVIDER_ORDER = [
+  MODUS_PROVIDER_ID,
   "anthropic",
   "openai",
   "google",
@@ -202,6 +205,23 @@ function registerAntigravityOAuth(modelRegistry: ModelRegistry): void {
 
 const nativeProviders = new Set<string>();
 
+/** B4b: the Modus provider (installed by main once auth exists; absent in tests / no auth). */
+let modusProvider: ModusProvider | undefined;
+
+export function setModusProvider(provider: ModusProvider | undefined): void {
+  modusProvider = provider;
+  if (!registry) return;
+  if (!provider) registry.unregisterProvider(MODUS_PROVIDER_ID);
+  applyModelCatalog(registry, activeCatalog);
+}
+
+/** "modus" is reserved for the router provider: no BYOK key, base URL, headers or custom id. */
+function assertNotModusProvider(provider: string): void {
+  if (provider.trim().toLowerCase() === MODUS_PROVIDER_ID) {
+    throw new Error("Modus models use your Modus account and cannot be configured here.");
+  }
+}
+
 function assertNoNativeProviderCollisions(
   modelRegistry: ModelRegistry,
   catalog: ModelCatalog,
@@ -218,6 +238,9 @@ function assertNoNativeProviderCollisions(
     const ids = bundledIds.get(model.provider) ?? new Set<string>();
     ids.add(model.id);
     bundledIds.set(model.provider, ids);
+  }
+  if (catalog.providers[MODUS_PROVIDER_ID]) {
+    throw new Error(`Native provider collision: ${MODUS_PROVIDER_ID}`);
   }
   const entries = Object.entries(nativeProviderManifest.providers);
   for (const [provider, manifest] of entries) {
@@ -457,6 +480,7 @@ function applyModelCatalog(modelRegistry: ModelRegistry, catalog: ModelCatalog):
   }
   for (const [provider, config] of providers) modelRegistry.registerProvider(provider, config);
   registerNativeProviders(modelRegistry, catalog);
+  modusProvider?.register(modelRegistry);
   catalogProviders = nextProviders;
   catalogReasoningCapabilities = new Map(
     Object.entries(catalog.providers).flatMap(([provider, models]) =>
@@ -481,6 +505,8 @@ export function startRemoteModelCatalog(onChanged: () => void): void {
     currentCatalog: activeCatalog,
     onCatalog: (catalog) => {
       applyModelCatalog(modelRegistry, catalog);
+      // B4b: a failed /v1/models is retried once per catalog load (no loop).
+      modusProvider?.retryIfUnavailable();
       onChanged();
     },
   });
@@ -493,6 +519,7 @@ export function stopRemoteModelCatalog(): void {
 
 export async function refreshRemoteModelCatalog(): Promise<ModelSettingsState> {
   await forceModelCatalogRefresh();
+  modusProvider?.retryIfUnavailable();
   return getModelSettings();
 }
 
@@ -975,13 +1002,16 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
   const source = config?.source ?? "builtin";
   const contextWindow = config?.context_window ?? model.contextWindow;
   const maxTokens = config?.max_tokens ?? model.maxTokens;
+  const modus = model.provider === MODUS_PROVIDER_ID;
+  const locked = modus && modusProvider?.lockedIds().has(id);
   return {
     id,
     provider: model.provider,
     providerName: getModelRegistry().getProviderDisplayName(model.provider),
     name: config?.display_name ?? model.name ?? model.id,
     available,
-    enabled: Boolean(config?.enabled),
+    // Modus models are on by default (no BYOK step); a config row can still turn one off.
+    enabled: config ? Boolean(config.enabled) : modus,
     configured: Boolean(config),
     source,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -992,6 +1022,7 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
     thinkingVariant: thinking.selected.value,
     thinkingOptions: thinking.options,
     ...(thinking.budget ? { thinkingBudget: thinking.budget } : {}),
+    ...(locked ? { locked: "upgrade" as const } : {}),
   };
 }
 
@@ -1010,7 +1041,12 @@ function listModelsFromRegistry(modelRegistry: ModelRegistry): ModelInfo[] {
     const providerOrder =
       providerSortIndex(a.provider) - providerSortIndex(b.provider) ||
       (a.providerName ?? a.provider).localeCompare(b.providerName ?? b.provider);
-    return providerOrder || a.name.localeCompare(b.name);
+    // Locked (not in plan) Modus models go after the usable ones.
+    return (
+      providerOrder ||
+      Number(Boolean(a.locked)) - Number(Boolean(b.locked)) ||
+      a.name.localeCompare(b.name)
+    );
   });
 
   return configuredInfos;
@@ -1160,6 +1196,7 @@ export function getModelSettings(): ModelSettingsState {
     providers: listProvidersFromRegistry(modelRegistry),
     models,
     ...(defaultModel ? { defaultModel } : {}),
+    ...(modusProvider && modusProvider.status() !== "off" ? { modus: modusProvider.status() } : {}),
   };
 }
 
@@ -1218,6 +1255,7 @@ export function startProviderAuth(
   openExternal: (url: string) => Promise<void>,
   options: { riskAcknowledged?: true } = {},
 ): ProviderAuthOperationState {
+  assertNotModusProvider(provider);
   const id = provider.trim();
   if (id === "antigravity" && options.riskAcknowledged !== true) {
     throw new Error("Antigravity sign-in requires risk acknowledgement.");
@@ -1461,6 +1499,7 @@ export async function configureProvider(
   if (!provider) {
     throw new Error("Provider is required.");
   }
+  assertNotModusProvider(provider);
   const modelRegistry = refreshRegistry();
   const providerName = modelRegistry.getProviderDisplayName(provider);
 
@@ -1558,6 +1597,7 @@ export async function upsertCustomProvider(
   input: UpsertCustomProviderInput,
 ): Promise<ModelProviderDetail> {
   const provider = sanitizeProviderId(input.provider);
+  assertNotModusProvider(provider);
   const name = input.name.trim();
   const baseUrl = input.baseUrl.trim();
   if (!provider) throw new Error("Provider id is required.");
@@ -1944,6 +1984,7 @@ function clearProviderConnectionState(
 
 export async function disconnectProvider(provider: string): Promise<void> {
   const id = provider.trim();
+  assertNotModusProvider(id);
   if (id === "antigravity") {
     if (antigravityDisconnecting.has(id))
       throw new Error("Antigravity disconnect is already in progress.");
@@ -2132,17 +2173,20 @@ export function getDefaultModel(): Model<Api> | undefined {
     return configuredDefault;
   }
 
-  const firstEnabled = listModels().find((model) => model.available);
+  const firstEnabled = listModels().find((model) => model.available && !model.locked);
   return findModel(firstEnabled?.id);
 }
 
 export function getDefaultModelId(models = listModels()): string | undefined {
   const configured = readSetting("model.default");
-  if (configured && models.some((model) => model.id === configured && model.enabled)) {
+  if (
+    configured &&
+    models.some((model) => model.id === configured && model.enabled && !model.locked)
+  ) {
     return configured;
   }
 
-  return models[0]?.id;
+  return (models.find((model) => !model.locked) ?? models[0])?.id;
 }
 
 export function getModelThinkingLevel(modelId: string | undefined): ThinkingLevel {
@@ -2404,20 +2448,23 @@ export async function completeWithModel(request: {
   if (!model) throw new Error(`Model not available: ${request.modelId}`);
   const auth = await getModelRegistry().getApiKeyAndHeaders(model);
   if (!auth.ok) throw new Error(auth.error);
-  const message = await completeSimple(
-    model,
-    {
-      systemPrompt: request.systemPrompt,
-      messages: [{ role: "user", content: request.prompt, timestamp: Date.now() }],
-    },
-    {
-      ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
-      ...(auth.headers ? { headers: auth.headers } : {}),
-      ...(request.signal ? { signal: request.signal } : {}),
-      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
-      maxRetries: 0,
-    },
-  );
+  const context = {
+    systemPrompt: request.systemPrompt,
+    messages: [{ role: "user" as const, content: request.prompt, timestamp: Date.now() }],
+  };
+  const options = {
+    ...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
+    ...(auth.headers ? { headers: auth.headers } : {}),
+    ...(request.signal ? { signal: request.signal } : {}),
+    ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
+    maxRetries: 0,
+  };
+  // B4b: the Modus API is registered in pi-coding-agent's own pi-ai copy, not the root one
+  // `completeSimple` reads, so Modus models go straight to the adapter.
+  const message =
+    model.provider === MODUS_PROVIDER_ID && modusProvider
+      ? await modusProvider.stream(model, context, options).result()
+      : await completeSimple(model, context, options);
   if (message.stopReason === "error" || message.stopReason === "aborted") {
     throw new Error(message.errorMessage ?? "The provider returned an error.");
   }

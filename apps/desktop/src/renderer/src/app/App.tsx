@@ -85,6 +85,10 @@ import {
   createEmptyComposerDraft,
 } from "../features/composer/Composer";
 import { contextItemKey } from "../features/composer/composerTokens";
+import {
+  setModusPickerStatus,
+  setModusUpgradeHandler,
+} from "../features/composer/modusPickerState";
 import { BranchSwitcher } from "../features/git/BranchSwitcher";
 import type { GroupMembersChange } from "../features/groups/CreateGroupDialog";
 import { BlockedBanner, GroupRoom } from "../features/groups/GroupRoom";
@@ -364,13 +368,23 @@ export function App() {
   const applyModelSettings = useCallback((settings: ModelSettingsState): void => {
     setModelSettings(settings);
     setModels(settings.models);
+    setModusPickerStatus(settings.modus);
     setModel((current) => {
-      if (current && settings.models.some((item: ModelInfo) => item.id === current)) {
+      if (
+        current &&
+        settings.models.some((item: ModelInfo) => item.id === current && !item.locked)
+      ) {
         return current;
       }
       return settings.defaultModel ?? settings.models[0]?.id ?? "";
     });
   }, []);
+
+  // B4b: the picker's "Upgrade" on a locked Modus model opens Settings › Account.
+  useEffect(() => {
+    setModusUpgradeHandler(() => openSettings("account"));
+    return () => setModusUpgradeHandler(undefined);
+  }, [openSettings]);
 
   const refreshModelSettings = useCallback(async (): Promise<void> => {
     const settings = await window.modus.model.settings();
