@@ -153,6 +153,7 @@ describe("Account billing section", () => {
         status: "active",
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
+        cancelRequestedAt: null,
       },
       wallet: { balance: 11000, reserved: 0, planAllowance: 10000, periodEnd: null },
       lastReturn: "success",
@@ -173,6 +174,7 @@ describe("Account billing section", () => {
         status: "active",
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
+        cancelRequestedAt: null,
       },
     });
     expect(stripe).toContain("Manage billing");
@@ -241,6 +243,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     status: "active",
     currentPeriodEnd: "2026-11-03T00:00:00Z",
     cancelAtPeriodEnd: false,
+    cancelRequestedAt: null,
   };
   const subscribed = (
     sub: Partial<BillingSubscription> = {},
@@ -312,6 +315,17 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(screen.queryByRole("button", { name: "Cancel subscription" })).toBeNull();
   });
 
+  it("the requested state comes from cancelRequestedAt, not cancelAtPeriodEnd", () => {
+    const requested = markup(subscribed({ cancelRequestedAt: "2026-10-03T23:50:00Z" }));
+    expect(requested).toContain("Waiting for Mercado Pago to confirm");
+    expect(requested).toContain("Check again");
+    expect(requested).not.toContain("Subscribe</button>");
+    // cancel_at_period_end is Stripe's / L1g's: it never means "cancel requested" for MP.
+    const periodEnd = markup(subscribed({ cancelAtPeriodEnd: true }));
+    expect(periodEnd).not.toContain("Waiting for Mercado Pago to confirm");
+    expect(periodEnd).toContain("Cancel subscription");
+  });
+
   it("Stripe subscribers get no Mercado Pago cancel button", () => {
     const html = markup(subscribed({ provider: "stripe" }));
     expect(html).not.toContain("Cancel subscription");
@@ -333,7 +347,7 @@ describe("Mercado Pago cancel (L1e)", () => {
 
   it("cancel not confirmed yet: Subscribe stays blocked until the status leaves the live set", async () => {
     const confirm = stubConfirm().mockReturnValue(true);
-    const requested = subscribed({ cancelAtPeriodEnd: true });
+    const requested = subscribed({ cancelRequestedAt: "2026-10-03T23:50:00Z" });
     const { push } = mount(subscribed(), async () => requested);
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
     await screen.findByText(/Waiting for Mercado Pago to confirm/);
@@ -341,6 +355,12 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
     // A refresh that still reads the live row keeps it blocked.
     push(requested);
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
+    // A late `authorized` webhook (status active again, request kept): still requested, blocked.
+    push(subscribed({ status: "active", cancelRequestedAt: "2026-10-03T23:50:00Z" }));
+    expect(screen.getByText(/Waiting for Mercado Pago to confirm/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Cancel subscription" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     // The webhook confirms: the live subscription is gone, Subscribe is back.
     push(READY);

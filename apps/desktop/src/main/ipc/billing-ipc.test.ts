@@ -146,6 +146,7 @@ describe("billing IPC", () => {
       status: "active",
       currentPeriodEnd: "2026-11-03T00:00:00Z",
       cancelAtPeriodEnd: false,
+      cancelRequestedAt: null,
     };
     backend.fetchBilling.mockImplementation(async () => snapshot({ subscription: mp }));
     await call("billing:refresh");

@@ -1,9 +1,10 @@
 -- L1e: Mercado Pago cancellation helpers for the mp-cancel Function.
 -- mp_cancel_targets(user) lists only the user's own live Mercado Pago rows
 -- (the preapproval id never comes from the client); mp_mark_cancel_requested
--- flags a pending cancellation without touching the status; the final
--- 'canceled' comes from process_mp_preapproval (webhook / re-fetch), after
--- which a new checkout is possible again ("Cancel and try again").
+-- sets subscriptions.cancel_requested_at without touching the status or
+-- cancel_at_period_end; later webhooks that keep the row live keep the flag;
+-- the final 'canceled' comes from process_mp_preapproval (webhook / re-fetch),
+-- which clears it, after which a new checkout is possible again.
 begin;
 set local search_path = public, extensions;
 select no_plan();
@@ -37,7 +38,8 @@ end $$;
 grant execute on function pg_temp.checkout(uuid, text) to service_role;
 create function pg_temp.sub(p_pre text) returns text
 language sql as $$
-  select status || ':' || cancel_at_period_end from public.subscriptions
+  select status || ':' || cancel_at_period_end || ':' || (cancel_requested_at is not null)
+    from public.subscriptions
    where provider = 'mercadopago' and provider_subscription_id = p_pre
 $$;
 grant execute on function pg_temp.sub(text) to service_role;
@@ -74,6 +76,36 @@ select ok(has_function_privilege('service_role', 'private.mp_cancel_targets(uuid
   'service_role: mp_cancel_targets');
 select ok(has_function_privilege('service_role', 'private.mp_mark_cancel_requested(uuid, text)', 'execute'),
   'service_role: mp_mark_cancel_requested');
+-- process_mp_preapproval was replaced by L1e: same security and grants as B6a.
+select ok((select prosecdef and proconfig @> array['search_path=""'] from pg_proc
+            where oid = 'private.process_mp_preapproval(jsonb, jsonb, text)'::regprocedure),
+  'process_mp_preapproval (replaced): SECURITY DEFINER, search_path=""');
+select is(
+  (select count(*)::int from (values ('anon'), ('authenticated')) r (role)
+    where has_function_privilege(r.role, 'private.process_mp_preapproval(jsonb, jsonb, text)', 'execute')),
+  0, 'process_mp_preapproval (replaced): no anon / authenticated EXECUTE');
+select is(
+  (select count(*)::int from pg_proc p, lateral aclexplode(p.proacl) a
+    where p.oid = 'private.process_mp_preapproval(jsonb, jsonb, text)'::regprocedure and a.grantee = 0),
+  0, 'process_mp_preapproval (replaced): no EXECUTE for PUBLIC');
+select ok(has_function_privilege('service_role', 'private.process_mp_preapproval(jsonb, jsonb, text)', 'execute'),
+  'process_mp_preapproval (replaced): service_role');
+
+-- subscriptions.cancel_requested_at: readable by the owner (select-own policy), never writable.
+select col_type_is('public', 'subscriptions', 'cancel_requested_at', 'timestamp with time zone',
+  'cancel_requested_at is timestamptz');
+select col_is_null('public', 'subscriptions', 'cancel_requested_at', 'cancel_requested_at is nullable');
+select col_hasnt_default('public', 'subscriptions', 'cancel_requested_at', 'cancel_requested_at has no default');
+select is(
+  (select count(*)::int
+     from (values ('anon'), ('authenticated')) r (role),
+          (values ('INSERT'), ('UPDATE'), ('REFERENCES')) p (priv)
+    where has_column_privilege(r.role, 'public.subscriptions', 'cancel_requested_at', p.priv)),
+  0, 'anon / authenticated cannot write cancel_requested_at');
+select ok(has_column_privilege('authenticated', 'public.subscriptions', 'cancel_requested_at', 'SELECT'),
+  'authenticated can read cancel_requested_at (own rows via RLS)');
+select ok(not has_column_privilege('anon', 'public.subscriptions', 'cancel_requested_at', 'SELECT'),
+  'anon cannot read cancel_requested_at');
 
 select tests.create_user('l1e-a@example.com', true) as a \gset
 select tests.create_user('l1e-b@example.com', true) as b \gset
@@ -123,15 +155,38 @@ select is((select count(*)::int from jsonb_array_elements(private.mp_cancel_targ
 -- ---------------------------------------------------------------------------
 select is(private.mp_mark_cancel_requested(:'a', 'PRELB1') ->> 'code', 'not_found',
   'A cannot flag B''s subscription');
-select is(pg_temp.sub('PRELB1'), 'active:false', 'B untouched by A''s call');
+select is(pg_temp.sub('PRELB1'), 'active:false:false', 'B untouched by A''s call');
 select is(private.mp_mark_cancel_requested(:'b', 'PRELB1') ->> 'code', 'marked', 'B: cancel requested');
-select is(pg_temp.sub('PRELB1'), 'active:true', 'B: status stays active (final status only from MP)');
+select is(pg_temp.sub('PRELB1'), 'active:false:true',
+  'B: cancel_requested_at set; status stays active, cancel_at_period_end untouched');
+-- coalesce: a repeat keeps the first request time.
+update public.subscriptions set cancel_requested_at = '2026-10-01T12:00:00Z'
+ where provider_subscription_id = 'PRELB1';
 select is(private.mp_mark_cancel_requested(:'b', 'PRELB1') ->> 'code', 'marked', 'B: repeat is harmless');
+select is((select cancel_requested_at from public.subscriptions where provider_subscription_id = 'PRELB1'),
+  '2026-10-01T12:00:00Z'::timestamptz, 'B: repeat keeps the first cancel_requested_at');
 select is(pg_temp.targets(:'b'), 'PRELB1:active:true', 'B: target reports cancel_requested');
+
+-- Later webhooks that keep the row live never clear the request.
+select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'authorized'), :'expect') ->> 'code',
+  'subscription_active', 'B: late authorized webhook after the cancel request');
+select is(pg_temp.sub('PRELB1'), 'active:false:true', 'B: authorized webhook keeps cancel_requested_at');
+select is((select cancel_requested_at from public.subscriptions where provider_subscription_id = 'PRELB1'),
+  '2026-10-01T12:00:00Z'::timestamptz, 'B: ... with the same timestamp');
+select is(private.process_mp_payment(pg_temp.pay('91001', :'cob'), pg_temp.pre('PRELB1', :'cob'), :'expect') ->> 'code',
+  'already_credited', 'B: a repeated payment webhook');
+select is(pg_temp.sub('PRELB1'), 'active:false:true', 'B: payment webhook keeps cancel_requested_at');
+select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'paused'), :'expect') ->> 'code',
+  'subscription_paused', 'B: paused (still live)');
+select is(pg_temp.sub('PRELB1'), 'paused:false:true', 'B: paused keeps cancel_requested_at');
+select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'authorized'), :'expect') ->> 'code',
+  'subscription_active', 'B: authorized again -> active');
+select is(pg_temp.sub('PRELB1'), 'active:false:true', 'B: still requested');
 select is(private.mp_mark_cancel_requested(:'s', 'subL1ES') ->> 'code', 'not_found',
   'Stripe row: not flagged by the Mercado Pago path');
-select is((select cancel_at_period_end from public.subscriptions where stripe_subscription_id = 'sub_L1E_S'),
-  false, 'Stripe row untouched');
+select is((select cancel_at_period_end::text || ':' || (cancel_requested_at is null)::text
+             from public.subscriptions where stripe_subscription_id = 'sub_L1E_S'),
+  'false:true', 'Stripe row untouched');
 select throws_ok(format($q$select private.mp_mark_cancel_requested(%L, 'bad id!')$q$, :'b'), '22023', null,
   'malformed preapproval id rejected');
 select is((select count(*)::int from public.credit_transactions where user_id = :'b'), 2,
@@ -143,7 +198,8 @@ select is((select count(*)::int from public.credit_transactions where user_id = 
 select (select balance from public.credit_wallets where user_id = :'b') as b_bal \gset
 select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'canceled'), :'expect') ->> 'code',
   'subscription_canceled', 'B: MP canceled -> subscription_canceled');
-select is(pg_temp.sub('PRELB1'), 'canceled:false', 'B: canceled, flag cleared');
+select is(pg_temp.sub('PRELB1'), 'canceled:false:false',
+  'B: status left the live set -> cancel_requested_at cleared');
 select is(pg_temp.targets(:'b'), '', 'B: no target left (cancel again is a no-op)');
 select is((select balance from public.credit_wallets where user_id = :'b'), :'b_bal'::bigint,
   'B: credits kept, no refund / debit');
@@ -156,13 +212,26 @@ select is(private.mp_create_checkout(:'b', 'starter') ->> 'code', 'created',
 
 -- Incomplete: "Cancel and try again".
 select is(private.mp_mark_cancel_requested(:'a', 'PRELA1') ->> 'code', 'marked', 'A: incomplete flagged');
-select is(pg_temp.sub('PRELA1'), 'incomplete:true', 'A: still incomplete until MP confirms');
+select is(pg_temp.sub('PRELA1'), 'incomplete:false:true', 'A: still incomplete until MP confirms');
+select is(private.process_mp_preapproval(pg_temp.pre('PRELA1', :'coa', 'authorized'), :'expect') ->> 'code',
+  'subscription_incomplete', 'A: late authorized webhook');
+select is(pg_temp.sub('PRELA1'), 'incomplete:false:true', 'A: still requested after it');
 select is(private.process_mp_preapproval(pg_temp.pre('PRELA1', :'coa', 'canceled'), :'expect') ->> 'code',
   'subscription_canceled', 'A: MP canceled -> canceled');
+select is(pg_temp.sub('PRELA1'), 'canceled:false:false', 'A: canceled, request cleared');
 select is((select status from public.billing_checkouts where id = :'coa'), 'canceled',
   'A: its checkout record is closed');
 select is(private.mp_create_checkout(:'a', 'starter') ->> 'code', 'created',
   'A: try again -> a fresh checkout');
+select tests.clear_authentication();
+
+-- The owner reads the flag, but can never write it (RLS + no UPDATE grant).
+select tests.authenticate_as(:'a');
+select is((select count(*)::int from public.subscriptions where cancel_requested_at is null), 1,
+  'A reads own cancel_requested_at');
+select throws_ok(
+  $q$update public.subscriptions set cancel_requested_at = now()$q$, '42501', null,
+  'authenticated: cannot set cancel_requested_at');
 select tests.clear_authentication();
 
 select * from finish();

@@ -61,7 +61,8 @@ Deploy with `verify_jwt = true`. The handler also validates the JWT itself (`cre
 1. `PUT /preapproval/{id}` with `{"status":"canceled"}`. Mercado Pago spells it `canceled`; `cancelled` from MP is normalized to the same status.
 2. If that answer is not `canceled` (or the PUT failed), `GET /preapproval/{id}` re-reads it.
 3. If MP reads `canceled`, the preapproval goes through `private.process_mp_preapproval`, the same path as `mp-webhook`. That is the only place the status changes.
-4. A row still live afterwards is only flagged (`private.mp_mark_cancel_requested`: `cancel_at_period_end = true`). It stays live, so a new checkout stays blocked until the webhook confirms.
+4. A row still live afterwards is only flagged (`private.mp_mark_cancel_requested`: `subscriptions.cancel_requested_at = coalesce(cancel_requested_at, now())`). It stays live, so a new checkout stays blocked until the webhook confirms. `cancel_at_period_end` (Stripe's field; L1g's "access until the period end") is never written by L1e.
+5. Later Mercado Pago webhooks keep `cancel_requested_at` while the row stays live (a late `authorized`, `paused`, or a payment). `process_mp_preapproval` clears it only when the status leaves the live set (L1e replaces the B6a function with that single change).
 
 **Response** (never an id): `200 {"code":"no_subscription"}` (nothing live: a no-op), `200 {"code":"canceled"}`, `200 {"code":"cancel_requested"}` (not confirmed yet), or `502 mercadopago_unavailable` when MP neither accepted the PUT nor reads `canceled` (nothing changed). Repeats are safe. No refund: credits already granted stay.
 

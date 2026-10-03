@@ -60,6 +60,7 @@ describe("billing service", () => {
           status: "active",
           currentPeriodEnd: "2026-11-03T03:00:00Z",
           cancelAtPeriodEnd: false,
+          cancelRequestedAt: null,
         },
       }),
     );
@@ -136,6 +137,7 @@ describe("billing service", () => {
           status: "active",
           currentPeriodEnd: null,
           cancelAtPeriodEnd: false,
+          cancelRequestedAt: null,
         },
       }),
     );
@@ -231,6 +233,7 @@ describe("billing service", () => {
       status: "active",
       currentPeriodEnd: "2026-11-03T00:00:00Z",
       cancelAtPeriodEnd: false,
+      cancelRequestedAt: null,
     };
 
     async function ready(subscription: BillingSubscription | null = MP_SUB) {
@@ -254,16 +257,26 @@ describe("billing service", () => {
       const { service, backend, timers } = await ready();
       backend.cancelSubscription.mockResolvedValue({ ok: true, code: "cancel_requested" });
       backend.fetchBilling.mockResolvedValue(
-        snapshot({ subscription: { ...MP_SUB, cancelAtPeriodEnd: true } }),
+        snapshot({ subscription: { ...MP_SUB, cancelRequestedAt: "2026-10-03T23:50:00Z" } }),
       );
       const state = await service.cancelSubscription();
-      expect(state.subscription).toMatchObject({ status: "active", cancelAtPeriodEnd: true });
+      expect(state.subscription).toMatchObject({
+        status: "active",
+        cancelAtPeriodEnd: false,
+        cancelRequestedAt: "2026-10-03T23:50:00Z",
+      });
       expect(state.error).toBeNull();
+      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      expect(backend.createBillingSession).not.toHaveBeenCalled();
+      // A late `authorized` webhook keeps the row live and the request set: still blocked.
+      timers[0]?.run();
+      await vi.waitFor(() => expect(backend.fetchBilling).toHaveBeenCalledTimes(4));
+      expect(service.getState().subscription?.cancelRequestedAt).toBe("2026-10-03T23:50:00Z");
       expect((await service.startCheckout("starter")).error).toMatch(/already have/);
       expect(backend.createBillingSession).not.toHaveBeenCalled();
       // The webhook lands later: a scheduled refresh picks it up.
       backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
-      timers[0]?.run();
+      timers[1]?.run();
       await vi.waitFor(() => expect(service.getState().subscription).toBeNull());
     });
 
@@ -383,6 +396,7 @@ describe("billing backend helpers", () => {
         status: "active",
         current_period_end: null,
         cancel_at_period_end: true,
+        cancel_requested_at: null,
       },
       wallet: { balance: 26000, reserved: 0, plan_allowance: 25000, period_end: null },
     });
@@ -394,6 +408,7 @@ describe("billing backend helpers", () => {
       plan: "pro",
       provider: "stripe",
       cancelAtPeriodEnd: true,
+      cancelRequestedAt: null,
     });
     expect(mapped.catalog).toEqual([MP_STARTER]);
     expect(mapped.wallet).toMatchObject({ balance: 26000, planAllowance: 25000 });
@@ -440,5 +455,33 @@ describe("billing catalog mapping", () => {
     });
     expect(mapped.catalog).toBeNull();
     expect(mapped.subscription).toMatchObject({ plan: "starter", provider: "mercadopago" });
+  });
+
+  it("maps cancel_requested_at to cancelRequestedAt (a time only, no ids)", () => {
+    const row = {
+      plan: "starter",
+      provider: "mercadopago",
+      status: "active",
+      cancel_at_period_end: false,
+      cancel_requested_at: "2026-10-03T23:50:00+00:00",
+      provider_subscription_id: "SECRET_preapproval",
+    };
+    const mapped = mapBillingRows({ plans: [], catalog: null, subscription: row, wallet: null });
+    expect(mapped.subscription).toEqual({
+      plan: "starter",
+      provider: "mercadopago",
+      status: "active",
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      cancelRequestedAt: "2026-10-03T23:50:00+00:00",
+    });
+    expect(JSON.stringify(mapped)).not.toContain("SECRET_preapproval");
+    const none = mapBillingRows({
+      plans: [],
+      catalog: null,
+      subscription: { ...row, cancel_requested_at: null },
+      wallet: null,
+    });
+    expect(none.subscription?.cancelRequestedAt).toBeNull();
   });
 });

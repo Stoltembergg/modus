@@ -125,7 +125,7 @@ export function BillingSectionView({
   const mpSubscription = state.subscription?.provider === "mercadopago";
   /** Requested (in flight, or flagged and waiting for Mercado Pago's confirmation). */
   const mpCancelling =
-    mpSubscription && (state.cancelling || Boolean(state.subscription?.cancelAtPeriodEnd));
+    mpSubscription && (state.cancelling || Boolean(state.subscription?.cancelRequestedAt));
   const paymentPending = mpSubscription && state.subscription?.status === "incomplete";
   const planName = current?.name ?? state.currentPlan;
   const statusLabel = paymentPending ? "payment pending" : (state.subscription?.status ?? "");

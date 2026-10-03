@@ -200,7 +200,9 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
         client.rpc("get_billing_catalog"),
         client
           .from("subscriptions")
-          .select("plan, provider, status, current_period_end, cancel_at_period_end, updated_at")
+          .select(
+            "plan, provider, status, current_period_end, cancel_at_period_end, cancel_requested_at, updated_at",
+          )
           .eq("user_id", userId)
           .in("status", [...LIVE_SUBSCRIPTION_STATUSES])
           .order("updated_at", { ascending: false })

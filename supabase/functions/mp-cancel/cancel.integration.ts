@@ -103,9 +103,12 @@ Deno.test({
         return (await res.json()).code;
       };
       const row = async () => {
-        const [r] = await admin`select status, cancel_at_period_end from public.subscriptions
+        const [r] = await admin`select status, cancel_at_period_end,
+                                        cancel_requested_at is not null as requested
+                                   from public.subscriptions
                                  where provider_subscription_id = ${PRE}`;
-        return [r.status, r.cancel_at_period_end];
+        // [status, cancel_at_period_end (never written by L1e), cancel requested]
+        return [r.status, r.cancel_at_period_end, r.requested];
       };
 
       // Authorized in MP, no approved payment: incomplete (the L1d "no way out" case).
@@ -113,7 +116,7 @@ Deno.test({
       if (!first) throw new Error("fake MP: no preapproval");
       first.status = "authorized";
       assertEquals(await notify("l1e-1"), "subscription_incomplete");
-      assertEquals(await row(), ["incomplete", false]);
+      assertEquals(await row(), ["incomplete", false, false]);
 
       const cancelFor = (id: string) =>
         createMpCancelHandler({
@@ -130,12 +133,15 @@ Deno.test({
 
       // MP accepted the PUT but still reads authorized: flagged, status untouched (still live).
       assertEquals(await (await cancel(post({}))).json(), { code: "cancel_requested" });
-      assertEquals(await row(), ["incomplete", true]);
+      assertEquals(await row(), ["incomplete", false, true]);
+      // A late `authorized` webhook keeps the request (the row is still live).
+      assertEquals(await notify("l1e-late"), "subscription_incomplete");
+      assertEquals(await row(), ["incomplete", false, true]);
 
       // MP confirms: applied through process_mp_preapproval (the webhook path).
       putStatus = "canceled";
       assertEquals(await (await cancel(post({}))).json(), { code: "canceled" });
-      assertEquals(await row(), ["canceled", false]);
+      assertEquals(await row(), ["canceled", false, false]);
       assertEquals(puts, [PRE, PRE]);
 
       // Repeat: no-op; the late webhook for the same preapproval does not revive it.

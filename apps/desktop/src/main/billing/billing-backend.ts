@@ -169,6 +169,7 @@ export function mapBillingRows(rows: {
             status: str(sub.status) ?? "unknown",
             currentPeriodEnd: str(sub.current_period_end),
             cancelAtPeriodEnd: sub.cancel_at_period_end === true,
+            cancelRequestedAt: str(sub.cancel_requested_at),
           }
         : null,
     wallet: wallet
