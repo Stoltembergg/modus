@@ -2,7 +2,13 @@ import type { GetUser } from "../_shared/auth.ts";
 import { errorResponse, HttpError, json } from "../_shared/http.ts";
 import { type CatalogModel, findModel } from "../_shared/model-catalog.ts";
 import { ReserveError, type RouterDb } from "../_shared/router-db.ts";
-import type { RouterConfig, UpstreamConfig } from "./config.ts";
+import {
+  type DurationLimits,
+  type RouterConfig,
+  SETTLE_RETRIES,
+  SETTLE_RETRY_DELAY_MS,
+  type UpstreamConfig,
+} from "./config.ts";
 import {
   affordableMaxTokens,
   creditsFor,
@@ -18,8 +24,10 @@ import { buildOpenAiCompletionsRequest, inspectCompletion, SseUsageTracker } fro
  *   POST /v1/chat/completions   GET /v1/models
  * Order for a completion:
  *   1. JWT (401)                       2. server config: CREDIT_MARKUP (503
- *      pricing_not_configured), upstream URL / key (503 provider_not_configured),
- *      checked before the key is claimed so a fixed deploy can be retried
+ *      pricing_not_configured), MODUS_ROUTER_MAX_DURATION_MS (503 router_not_configured),
+ *      upstream URL and the key of the model's vibi group (503 provider_not_configured,
+ *      never another group's key), checked before the key is claimed so a fixed deploy
+ *      can be retried
  *   3. Idempotency-Key (400 missing / malformed), body <= 1 MB (413), JSON (400/415)
  *   4. claim the key: a repeat is ALWAYS 409 (same body sha256 -> idempotency_replay,
  *      different body -> idempotency_conflict), whatever the first attempt returned
@@ -34,21 +42,21 @@ import { buildOpenAiCompletionsRequest, inspectCompletion, SseUsageTracker } fro
  *   8. upstream (adapter by catalog api; stream_options.include_usage when streaming)
  *   9. settle (billing rule): full release ONLY when the upstream provably did not take
  *      the request (fetch failed without our abort, or non-2xx). After a 2xx, and on our
- *      own timeouts (stream headers 60 s, 10 min cap), real usage or the conservative
+ *      own timeouts (stream headers min(60 s, cap), the MODUS_ROUTER_MAX_DURATION_MS cap,
+ *      default 120 s, counted from the request's arrival), real usage or the conservative
  *      estimate (pricing.ts), capped at the reservation. A client disconnect does not
  *      stop the upstream: it is drained under waitUntil and settled with its usage.
  *      settle_usage is retried 2 times, then the cost is stored for the expiry sweep.
+ *      The cost is also stored BEFORE the fetch (prompt estimate) and refreshed while
+ *      streaming (<= every 5 s), so a worker killed by the 150 s wall clock is still
+ *      charged by the sweep; a full release zeroes the stored cost first.
  * Logs only ids, model, token counts and credits: never prompts, responses or keys.
  */
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const MIN_OUTPUT_TOKENS = 256;
 export const MAX_ACTIVE_RESERVATIONS = 4;
-/** Reservation TTL (B1 sweep refunds after it); longer than the stream cap. */
-export const STREAM_CAP_MS = 10 * 60 * 1000;
-/** settle_usage retries before the cost is stored for the sweep. */
-export const SETTLE_RETRIES = 2;
-/** Streaming only: time to the upstream response headers. */
-export const HEADERS_TIMEOUT_MS = 60 * 1000;
+/** While streaming, the stored cost is refreshed at most this often. */
+export const PROGRESS_INTERVAL_MS = 5_000;
 
 const KEY = /^[A-Za-z0-9._:-]{1,200}$/;
 const MODEL_ID = /^[a-z0-9][a-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:-]*$/;
@@ -67,9 +75,10 @@ export type RouterDeps = {
   log?: RouterLog;
   limits?: Partial<{
     maxBodyBytes: number;
+    /** Lower bound override for tests; the effective value is min(this, the cap). */
     headersTimeoutMs: number;
-    streamCapMs: number;
     maxActive: number;
+    progressIntervalMs: number;
     settleRetries: number;
     settleRetryDelayMs: number;
   }>;
@@ -126,6 +135,16 @@ function positiveInt(value: unknown, field: string): number | undefined {
   return value;
 }
 
+/** The model id of a JSON body, or undefined (full validation happens after the claim). */
+function peekModel(bytes: Uint8Array): string | undefined {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes));
+    return typeof value?.model === "string" ? value.model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type Parsed = {
   body: Record<string, unknown>;
   modelId: string;
@@ -180,11 +199,11 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
   const log: RouterLog = deps.log ?? ((event) => console.log(JSON.stringify(event)));
   const limits = {
     maxBodyBytes: MAX_BODY_BYTES,
-    headersTimeoutMs: HEADERS_TIMEOUT_MS,
-    streamCapMs: STREAM_CAP_MS,
+    headersTimeoutMs: Number.POSITIVE_INFINITY,
     maxActive: MAX_ACTIVE_RESERVATIONS,
+    progressIntervalMs: PROGRESS_INTERVAL_MS,
     settleRetries: SETTLE_RETRIES,
-    settleRetryDelayMs: 200,
+    settleRetryDelayMs: SETTLE_RETRY_DELAY_MS,
     ...deps.limits,
   };
 
@@ -205,14 +224,29 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     });
   }
 
-  async function completion(req: Request, userId: string): Promise<Response> {
+  /** The key of the model's own vibi group; missing -> 503 (never another group's key). */
+  function upstreamFor(model: CatalogModel, baseUrl: string): UpstreamConfig {
+    const apiKey = configOr503(
+      () => deps.config.upstreamKey(model.upstreamGroup),
+      "provider_not_configured",
+    );
+    return { baseUrl, apiKey };
+  }
+
+  async function completion(req: Request, userId: string, startedAt: number): Promise<Response> {
     const markup = configOr503(deps.config.markup, "pricing_not_configured");
-    const upstream = configOr503(deps.config.upstream, "provider_not_configured");
+    const duration = configOr503(deps.config.duration, "router_not_configured");
+    const baseUrl = configOr503(deps.config.baseUrl, "provider_not_configured");
 
     const key = req.headers.get("idempotency-key");
     if (!key) throw new HttpError(400, "idempotency_key_required");
     if (!KEY.test(key)) throw new HttpError(400, "invalid_idempotency_key");
     const bytes = await readBody(req, limits.maxBodyBytes);
+    // Config check before the claim too: a missing group key is a deploy problem, and the
+    // client must be able to retry with the same Idempotency-Key once it is fixed.
+    const peeked = peekModel(bytes);
+    const peekedModel = peeked === undefined ? undefined : findModel(deps.catalog, peeked);
+    if (peekedModel) upstreamFor(peekedModel, baseUrl);
 
     const claim = await deps.db.claimRequest(userId, key, await sha256Hex(bytes));
     if (claim !== "claimed") throw new HttpError(409, claim);
@@ -225,6 +259,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       throw new HttpError(listed ? 503 : 404, listed ? "model_not_configured" : "model_not_found");
     if (plan.allowedModels !== null && !listed) throw new HttpError(403, "model_not_in_plan");
     if (model.api !== "openai-completions") throw new HttpError(503, "provider_not_configured");
+    const upstream = upstreamFor(model, baseUrl);
 
     const promptTokens = estimateTokens(parsed.promptChars);
     if (promptTokens > model.contextWindow) throw new HttpError(400, "context_length_exceeded");
@@ -265,6 +300,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       maxTokens,
       reserved,
       promptTokens,
+      duration,
+      deadline: startedAt + duration.maxDurationMs,
     });
   }
 
@@ -278,7 +315,41 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     maxTokens: number;
     reserved: number;
     promptTokens: number;
+    duration: DurationLimits;
+    /** Absolute end of the request budget (Date.now() based). */
+    deadline: number;
   };
+
+  const capped = (ctx: Ctx, credits: number) => Math.max(0, Math.min(credits, ctx.reserved));
+  const int = (n: number) => Math.min(2147483647, Math.max(0, Math.floor(n)));
+
+  /** usage, or the conservative estimate (prompt chars/4 + ceil(out chars/4 * 1.10)). */
+  function usageOrEstimate(ctx: Ctx, usage: Usage | null, outputChars: number): Usage {
+    return (
+      usage ?? {
+        promptTokens: ctx.promptTokens,
+        cachedTokens: 0,
+        completionTokens: estimateOutputTokens(outputChars),
+      }
+    );
+  }
+
+  /** router_store_cost: what the expiry sweep charges if this worker dies. */
+  async function storeCost(ctx: Ctx, final: Usage, credits: number): Promise<boolean> {
+    try {
+      return await deps.db.storeCost({
+        userId: ctx.userId,
+        requestId: ctx.key,
+        credits: capped(ctx, credits),
+        model: ctx.model.id,
+        provider: ctx.model.provider,
+        inputTokens: int(final.promptTokens),
+        outputTokens: int(final.completionTokens),
+      });
+    } catch {
+      return false;
+    }
+  }
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -295,17 +366,15 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     usage: Usage | null,
     outputChars: number,
     release = false,
+    pending: Promise<unknown> = Promise.resolve(),
   ): Promise<void> {
+    // A periodic cost store still in flight must not land after this settlement's own.
+    await pending.catch(() => {});
     const estimated = !release && usage === null;
     const final: Usage = release
       ? { promptTokens: 0, cachedTokens: 0, completionTokens: 0 }
-      : (usage ?? {
-          promptTokens: ctx.promptTokens,
-          cachedTokens: 0,
-          completionTokens: estimateOutputTokens(outputChars),
-        });
+      : usageOrEstimate(ctx, usage, outputChars);
     const credits = release ? 0 : creditsFor(ctx.model, final, ctx.markup);
-    const int = (n: number) => Math.min(2147483647, Math.max(0, Math.floor(n)));
     const args = {
       userId: ctx.userId,
       requestId: ctx.key,
@@ -331,6 +400,9 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     for (let attempt = 0; attempt <= limits.settleRetries; attempt++) {
       if (attempt > 0) await sleep(limits.settleRetryDelayMs * attempt);
       try {
+        // Release: first zero the cost stored before the fetch, so even if settle never
+        // lands the sweep cannot charge a request the upstream rejected.
+        if (release && !(await deps.db.storeCost(args))) throw new Error("cost not cleared");
         const result = await deps.db.settle(args);
         log({
           event: "model_router.settled",
@@ -346,14 +418,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     }
     // Settle kept failing. Keep the cost for the expiry sweep (B4a release_expired_reservations
     // charges a stored cost, capped at the reservation); with nothing stored it refunds.
-    let stored = false;
-    if (!release) {
-      try {
-        stored = await deps.db.storeCost(args);
-      } catch {
-        stored = false;
-      }
-    }
+    const stored = release ? false : await storeCost(ctx, final, credits);
     log({
       event: "model_router.settle_failed",
       ...base,
@@ -366,7 +431,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
   /**
    * Billing rule: full release ONLY when the upstream provably did not take the request
    * (fetch failed without our own abort, or a non-2xx status). Anything after a 2xx, and
-   * our own timeouts (headers timeout, 10 min cap), pays real usage or the estimate.
+   * our own timeouts (headers timeout, total cap), pays real usage or the estimate.
    * Client disconnects never abort the upstream (it bills the full response anyway): the
    * work continues under waitUntil and settles with the final usage. request.signal is
    * not used at all (Deno.serve aborts it after a successful response too), so a
@@ -379,11 +444,15 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       ourAbort ??= why;
       abort.abort(why);
     };
-    const cap = setTimeout(() => stop("stream_cap"), limits.streamCapMs);
-    // Streams must start within headersTimeoutMs. A non-stream gateway answers only when
+    // The cap counts from the request's arrival (MODUS_ROUTER_MAX_DURATION_MS), so the
+    // whole request + settle fits the 150 s worker wall clock.
+    const remaining = Math.max(0, ctx.deadline - Date.now());
+    const cap = setTimeout(() => stop("stream_cap"), remaining);
+    // Streams must start within min(60 s, cap). A non-stream gateway answers only when
     // the completion is done, so those are bounded by the total cap alone.
+    const headersMs = Math.min(ctx.duration.headersTimeoutMs, limits.headersTimeoutMs, remaining);
     const headersTimer = ctx.parsed.stream
-      ? setTimeout(() => stop("upstream_timeout"), limits.headersTimeoutMs)
+      ? setTimeout(() => stop("upstream_timeout"), headersMs)
       : undefined;
     const cleanup = () => {
       clearTimeout(cap);
@@ -398,6 +467,37 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       abort.signal,
     );
     const timeoutResponse = () => json(504, { error: "upstream_timeout" });
+
+    // Progressive cost persistence: BEFORE the fetch, the minimum (prompt estimate); while
+    // streaming, the running estimate at most every progressIntervalMs. If the worker is
+    // killed (wall clock) the expiry sweep charges the last stored value, capped.
+    const promptOnly: Usage = {
+      promptTokens: ctx.promptTokens,
+      cachedTokens: 0,
+      completionTokens: 0,
+    };
+    let storedCredits = capped(ctx, creditsFor(ctx.model, promptOnly, ctx.markup));
+    if (!(await storeCost(ctx, promptOnly, storedCredits))) {
+      log({
+        event: "model_router.cost_store_failed",
+        request_id: ctx.key,
+        user_id: ctx.userId,
+        phase: "prefetch",
+      });
+    }
+    let progress: Promise<unknown> = Promise.resolve();
+    let lastProgressAt = Date.now();
+    const onProgress = (usage: Usage | null, outputChars: number) => {
+      const now = Date.now();
+      if (now - lastProgressAt < limits.progressIntervalMs) return;
+      lastProgressAt = now;
+      const current = usageOrEstimate(ctx, usage, outputChars);
+      const credits = capped(ctx, creditsFor(ctx.model, current, ctx.markup));
+      if (credits <= storedCredits) return;
+      storedCredits = credits;
+      progress = progress.then(() => storeCost(ctx, current, credits));
+      deps.waitUntil?.(progress);
+    };
 
     /** Response headers, or a finished error Response (already settled). */
     async function open(): Promise<Response | { error: Response }> {
@@ -468,7 +568,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     const finish = (outcome: string) => {
       settled ??= (async () => {
         cleanup();
-        await settle(ctx, outcome, tracker.usage, tracker.outputChars);
+        await settle(ctx, outcome, tracker.usage, tracker.outputChars, false, progress);
       })();
       deps.waitUntil?.(settled);
       return settled;
@@ -480,6 +580,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
           const chunk = await reader.read();
           if (chunk.done) break;
           tracker.push(chunk.value);
+          onProgress(tracker.usage, tracker.outputChars);
         }
         await finish("client_disconnect");
       } catch {
@@ -498,7 +599,10 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
           controller.error(new Error("upstream stream failed"));
           return;
         }
-        if (!chunk.done) tracker.push(chunk.value);
+        if (!chunk.done) {
+          tracker.push(chunk.value);
+          onProgress(tracker.usage, tracker.outputChars);
+        }
         if (clientGone) return; // drain() owns the rest
         if (chunk.done) {
           // Settle before closing so the runtime keeps the request alive for it.
@@ -524,6 +628,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
   }
 
   return async (req) => {
+    const startedAt = Date.now();
     try {
       const route = ROUTE.exec(new URL(req.url).pathname)?.[1];
       if (!route) throw new HttpError(404, "not_found");
@@ -531,7 +636,9 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       if (req.method !== method) throw new HttpError(405, "method_not_allowed");
       const user = await deps.getUser(req);
       if (!user) throw new HttpError(401, "unauthorized");
-      return route === "/v1/models" ? await listModels(user.id) : await completion(req, user.id);
+      return route === "/v1/models"
+        ? await listModels(user.id)
+        : await completion(req, user.id, startedAt);
     } catch (error) {
       return errorResponse(error);
     }

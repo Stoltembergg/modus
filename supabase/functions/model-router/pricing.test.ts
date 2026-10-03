@@ -2,7 +2,6 @@ import { assertEquals, assertThrows } from "jsr:@std/assert@1";
 import { ConfigError } from "../_shared/config.ts";
 import type { CatalogModel } from "../_shared/model-catalog.ts";
 import { env } from "../_shared/test-helpers.ts";
-import { loadUpstreamConfig } from "./config.ts";
 import {
   affordableMaxTokens,
   creditsFor,
@@ -20,6 +19,7 @@ const MODEL: CatalogModel = {
   contextWindow: 1000000,
   maxTokens: 384000,
   enableGroups: ["model - china"],
+  upstreamGroup: "model - china",
   groupRatio: 1,
   cost: { input: 2.2, output: 8.5, cacheRead: 0.3 },
 };
@@ -122,31 +122,4 @@ Deno.test("affordableMaxTokens: largest cap whose worst case fits the balance", 
     creditsFor(MODEL, { promptTokens: 100, cachedTokens: 0, completionTokens: out }, M125);
   assertEquals(cost(cap) <= 1000 && cost(cap + 1) > 1000, true);
   assertEquals(affordableMaxTokens(MODEL, 1e6, 10, 0, M125), 0);
-});
-
-Deno.test("upstream config: https only, default vibi, key required", () => {
-  assertEquals(loadUpstreamConfig(env({ MODUS_UPSTREAM_API_KEY: "k" })), {
-    baseUrl: "https://vibi.top/v1",
-    apiKey: "k",
-  });
-  assertEquals(
-    loadUpstreamConfig(
-      env({ MODUS_UPSTREAM_API_KEY: "k", MODUS_UPSTREAM_BASE_URL: "https://x.example/v1/" }),
-    ).baseUrl,
-    "https://x.example/v1",
-  );
-  for (const base of [
-    "http://vibi.top/v1",
-    "",
-    "not a url",
-    "https://u:p@x.example/v1",
-    "https://x.example/v1?a=1",
-  ]) {
-    assertThrows(
-      () => loadUpstreamConfig(env({ MODUS_UPSTREAM_API_KEY: "k", MODUS_UPSTREAM_BASE_URL: base })),
-      ConfigError,
-    );
-  }
-  assertThrows(() => loadUpstreamConfig(env({})), ConfigError, "MODUS_UPSTREAM_API_KEY");
-  assertThrows(() => loadUpstreamConfig(env({ MODUS_UPSTREAM_API_KEY: "  " })), ConfigError);
 });

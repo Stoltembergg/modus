@@ -99,7 +99,12 @@ Deno.test("config fails closed with 503 before the key is claimed or anything is
     [routerConfig("http://x", { markup: "abc" }), "pricing_not_configured"],
     [routerConfig("http://x", { markup: "" }), "pricing_not_configured"],
     [routerConfig("http://x", { markup: "0.9" }), "pricing_not_configured"],
-    [routerConfig("http://x", { apiKey: "" }), "provider_not_configured"],
+    [routerConfig("http://x", { keys: {} }), "provider_not_configured"],
+    [routerConfig("http://x", { keys: { claude: "k-claude" } }), "provider_not_configured"],
+    [routerConfig("http://x", { maxDurationMs: "abc" }), "router_not_configured"],
+    [routerConfig("http://x", { maxDurationMs: "0" }), "router_not_configured"],
+    [routerConfig("http://x", { maxDurationMs: "600000" }), "router_not_configured"],
+    [routerConfig("http://x", { maxDurationMs: "145000" }), "router_not_configured"],
   ] as const) {
     const db = new FakeDb();
     const res = await handler(db, "http://x", { config })(
@@ -701,9 +706,9 @@ Deno.test("non-stream: a slow upstream is bounded by the total cap, not the head
     );
     assertEquals(slow.status, 200);
     await slow.json();
-    const capped = await handler(db, up.baseUrl, { limits: { streamCapMs: 30 } })(
-      completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "t3" }),
-    );
+    const capped = await handler(db, up.baseUrl, {
+      config: routerConfig(up.baseUrl, { maxDurationMs: "30" }),
+    })(completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "t3" }));
     assertEquals(await errorOf(capped), { status: 504, error: "upstream_timeout" });
     assertEquals(
       chargedOf(reservationOf(db, "t3")),
@@ -749,7 +754,7 @@ Deno.test("stream cap: a stream past the total limit is cut and settled by estim
     const res = await handler(
       db,
       up.baseUrl,
-      { limits: { streamCapMs: 100 } },
+      { config: routerConfig(up.baseUrl, { maxDurationMs: "100" }) },
       logs,
     )(
       completionRequest(
@@ -845,7 +850,7 @@ Deno.test("settle is retried 2 times: a transient failure still settles", async 
     await res.json();
     assertEquals(db.settleAttempts, 3);
     assertEquals(reservationOf(db, "f0").status, "settled");
-    assertEquals(db.stored.size, 0);
+    assertEquals(db.storeHistory.length, 1, "only the pre-fetch minimum was stored");
     assertEquals(logs.at(-1)?.attempts, 3);
   } finally {
     await up.close();
@@ -885,7 +890,7 @@ Deno.test("settle keeps failing: the computed cost is stored for the sweep, logg
   }
 });
 
-Deno.test("settle failure on a release (non-2xx): nothing stored, the sweep refunds", async () => {
+Deno.test("settle failure on a release (non-2xx): stored cost zeroed, the sweep refunds", async () => {
   const up = fakeUpstream(() => new Response("no", { status: 503 }));
   try {
     const db = new FakeDb(1e9);
@@ -899,8 +904,166 @@ Deno.test("settle failure on a release (non-2xx): nothing stored, the sweep refu
         logs,
       )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "f2" }))
     ).json();
-    assertEquals(db.stored.size, 0);
+    assertEquals(db.stored.get("f2")?.credits, 0);
     assertEquals(logs.at(-1)?.cost_stored, false);
+  } finally {
+    await up.close();
+  }
+});
+
+const CLAUDE_MODEL = {
+  ...GLM,
+  id: "anthropic/claude-test",
+  provider: "anthropic",
+  upstreamId: "claude-test",
+  enableGroups: ["claude"],
+  upstreamGroup: "claude" as const,
+};
+
+Deno.test("upstream key: the model's own vibi group key, 503 when missing, never another group's", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 5, completion_tokens: 2 }));
+  try {
+    const paid = () => new FakeDb(1e9, { plan: "pro", allowedModels: null });
+    const both = routerConfig(up.baseUrl, {
+      keys: { "model - china": "k-china", claude: "k-claude" },
+    });
+    const catalog = [FLASH, GLM, CLAUDE_MODEL];
+    for (const [model, key] of [
+      [FLASH.id, "Bearer k-china"],
+      [CLAUDE_MODEL.id, "Bearer k-claude"],
+    ]) {
+      const res = await handler(paid(), up.baseUrl, { config: both, catalog })(
+        completionRequest(
+          { model, messages: MESSAGES },
+          { key: `g-${key.length}-${model.length}` },
+        ),
+      );
+      assertEquals(res.status, 200);
+      await res.json();
+      assertEquals(up.seen.at(-1)?.headers.get("authorization"), key);
+    }
+    const calls = up.seen.length;
+    for (const [model, keys] of [
+      [CLAUDE_MODEL.id, { "model - china": "k-china", "codex pro": "k-pro" }],
+      [FLASH.id, { claude: "k-claude", "codex plus": "k-plus" }],
+    ] as const) {
+      const db = paid();
+      const res = await handler(db, up.baseUrl, {
+        config: routerConfig(up.baseUrl, { keys }),
+        catalog,
+      })(completionRequest({ model, messages: MESSAGES }, { key: "g-missing" }));
+      assertEquals(await errorOf(res), { status: 503, error: "provider_not_configured" });
+      assertEquals(db.claims.size, 0, "checked before the Idempotency-Key is claimed");
+      assertEquals(db.reservations.size, 0);
+    }
+    assertEquals(up.seen.length, calls, "no request went out with another group's key");
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("cost is stored BEFORE the upstream fetch (prompt estimate, capped)", async () => {
+  const db = new FakeDb(1e9);
+  let storedAtFetch: number | undefined;
+  const up = fakeUpstream(() => {
+    storedAtFetch = db.stored.get("pre1")?.credits;
+    return okCompletion({ prompt_tokens: 5, completion_tokens: 2 });
+  });
+  try {
+    const res = await handler(
+      db,
+      up.baseUrl,
+    )(completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "pre1" }));
+    await res.json();
+    assertGreater(promptOnly(), 0);
+    assertEquals(storedAtFetch, promptOnly(), "minimum cost stored before the fetch");
+    assertEquals(db.storeHistory[0].requestId, "pre1");
+    assertEquals(
+      [db.storeHistory[0].inputTokens, db.storeHistory[0].outputTokens],
+      [PROMPT_TOKENS, 0],
+    );
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("killed worker: the stored cost is refreshed while streaming and the sweep charges it", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  const up = fakeUpstream(() => {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          for (let i = 0; i < 4; i++) {
+            controller.enqueue(
+              enc.encode(
+                sse([{ choices: [{ delta: { content: "k".repeat(400) } }] }], { done: false }),
+              ),
+            );
+            await new Promise((r) => setTimeout(r, 30));
+          }
+          await hold; // the worker is "killed" here: no final usage, no settle
+          controller.close();
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  });
+  try {
+    const db = new FakeDb(1e9);
+    const later: Promise<unknown>[] = [];
+    const res = await handler(db, up.baseUrl, {
+      waitUntil: (p) => later.push(p),
+      limits: { progressIntervalMs: 20 },
+    })(
+      completionRequest(
+        { model: FLASH.id, messages: MESSAGES, stream: true, max_tokens: 5000 },
+        { key: "kill1" },
+      ),
+    );
+    const reader = bodyOf(res).getReader();
+    for (let i = 0; i < 4; i++) await reader.read();
+    await Promise.all(later);
+    const credits = db.storeHistory.filter((s) => s.requestId === "kill1").map((s) => s.credits);
+    assertEquals(credits[0], promptOnly(), "first store: before the fetch");
+    assertGreater(credits.length, 2, `periodic updates: ${credits}`);
+    for (let i = 1; i < credits.length; i++) assertGreater(credits[i], credits[i - 1]);
+    const last = db.stored.get("kill1");
+    assertEquals(last?.inputTokens, PROMPT_TOKENS);
+    assertGreater(last?.outputTokens ?? 0, 0);
+    // Worker dies (wall clock): reservation still active, the sweep charges the stored cost.
+    const r = reservationOf(db, "kill1");
+    assertEquals(r.status, "active");
+    db.sweep();
+    assertEquals(r.charged, Math.min(last?.credits ?? -1, r.amount));
+    assertLessOrEqual(chargedOf(r), r.amount);
+    release();
+    await reader.cancel().catch(() => {});
+    await drainAll(later);
+  } finally {
+    release?.();
+    await up.close();
+  }
+});
+
+Deno.test("rejected by the upstream (non-2xx / unreachable): stored cost zeroed, sweep charges nothing", async () => {
+  const up = fakeUpstream(() => new Response("no", { status: 500 }));
+  try {
+    for (const base of [up.baseUrl, "http://127.0.0.1:1/v1"]) {
+      const db = new FakeDb(5000);
+      db.settleFailures = Infinity; // settle never lands: only the sweep is left
+      const res = await handler(db, base, { config: routerConfig(base) })(
+        completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "rej" }),
+      );
+      assertEquals(res.status, 502);
+      await res.body?.cancel();
+      assertEquals(db.storeHistory[0].credits, promptOnly(), "minimum stored before the fetch");
+      assertEquals(db.stored.get("rej")?.credits, 0, "zeroed by the release");
+      db.sweep();
+      assertEquals(reservationOf(db, "rej").charged, 0);
+      assertEquals(db.balance, 5000);
+    }
   } finally {
     await up.close();
   }

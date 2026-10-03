@@ -9,6 +9,7 @@ select no_plan();
 
 select tests.create_user('router-a@example.com', true) as a \gset
 select tests.create_user('router-b@example.com', true) as b \gset
+select tests.create_user('router-c@example.com', true) as c \gset
 
 -- Table: RLS on, no policy, nothing for anon / authenticated.
 select ok((select relrowsecurity from pg_class where oid = 'public.router_requests'::regclass),
@@ -141,6 +142,35 @@ select results_eq(
 select is(private.settle_usage(:'b', 'sc', 120, 'deepseek/deepseek-flash', 'deepseek') ->> 'code',
   'already_settled', 'a late settle after the sweep does not charge twice');
 select is(private.release_expired_reservations(:'b'), 0, 'sweep is idempotent');
+
+-- Progressive cost (round 2): the router stores the prompt estimate BEFORE the
+-- fetch and refreshes it while streaming; a killed worker leaves the last value,
+-- which the sweep charges (capped). A rejected request (non-2xx) is zeroed first.
+select private.router_claim_request(:'c', 'pk', repeat('d', 64));
+select private.router_claim_request(:'c', 'pz', repeat('d', 64));
+select private.router_reserve(:'c', 'pk', 400);
+select private.router_reserve(:'c', 'pz', 100);
+select is(private.router_store_cost(:'c', 'pk', 30, 'deepseek/deepseek-flash', 'deepseek', 20, 0), true,
+  'progressive: minimum (prompt estimate) stored before the fetch');
+select is(private.router_store_cost(:'c', 'pk', 90, 'deepseek/deepseek-flash', 'deepseek', 20, 70), true,
+  'progressive: updated while streaming');
+select is((select settle_credits || ':' || settle_output_tokens from public.router_requests
+            where user_id = :'c' and idempotency_key = 'pk'), '90:70',
+  'progressive: the row holds the latest value');
+select private.router_store_cost(:'c', 'pz', 10, 'deepseek/deepseek-flash', 'deepseek', 20, 0);
+select is(private.router_store_cost(:'c', 'pz', 0, 'deepseek/deepseek-flash', 'deepseek', 0, 0), true,
+  'release: the stored minimum is zeroed');
+update public.credit_reservations set expires_at = now() - interval '1 second'
+ where user_id = :'c' and status = 'active';
+select is(private.release_expired_reservations(:'c'), 2, 'killed worker: the sweep handles both');
+select is((select status || ':' || settled_amount from public.credit_reservations
+            where user_id = :'c' and request_id = 'pk'), 'settled:90',
+  'killed worker: charged the last stored cost');
+select is((select settled_amount from public.credit_reservations
+            where user_id = :'c' and request_id = 'pz'), 0::bigint,
+  'rejected request: zeroed cost -> nothing charged');
+select is((select balance from public.credit_wallets where user_id = :'c'), 910::bigint,
+  'balance: 1000 - 90');
 select tests.clear_authentication();
 
 -- Free plan models (B4a migration).

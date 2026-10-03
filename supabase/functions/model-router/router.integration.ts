@@ -8,7 +8,7 @@ import postgres from "npm:postgres@3.4.9";
 import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
 import { createPostgresRouterDb } from "../_shared/router-db.ts";
 import { createRouterHandler } from "./handler.ts";
-import { creditsFor, parseCreditMarkup } from "./pricing.ts";
+import { creditsFor, estimateTokens, parseCreditMarkup } from "./pricing.ts";
 import { completionRequest, fakeUpstream, routerConfig, sse } from "./test-fakes.ts";
 
 const dbUrl = Deno.env.get("MODUS_TEST_DB_URL");
@@ -75,6 +75,13 @@ Deno.test({
         const [w] =
           await admin`select balance, reserved from public.credit_wallets where user_id = ${userId}`;
         return { balance: Number(w.balance), reserved: Number(w.reserved) };
+      };
+      const storedCost = async (key: string) => {
+        const [row] = await admin`select settle_credits from public.router_requests
+                                   where user_id = ${userId} and idempotency_key = ${key}`;
+        return row?.settle_credits === null || row === undefined
+          ? null
+          : Number(row.settle_credits);
       };
       const reservation = async (key: string) =>
         (
@@ -173,6 +180,7 @@ Deno.test({
       await failed.body?.cancel();
       const rf = await reservation("it-fail");
       assertEquals([rf.status, Number(rf.settled_amount)], ["settled", 0]);
+      assertEquals(await storedCost("it-fail"), 0, "release zeroes the pre-fetch stored cost");
       assertEquals(await wallet(), { balance, reserved: 0 });
 
       // 5) Stream cut by the client: the upstream is drained under waitUntil and the
@@ -187,6 +195,20 @@ Deno.test({
       if (!stream.body) throw new Error("no stream body");
       const reader = stream.body.getReader();
       await reader.read();
+      const promptCredits = creditsFor(
+        MODEL_CATALOG[0],
+        {
+          promptTokens: estimateTokens(JSON.stringify(MESSAGES).length),
+          cachedTokens: 0,
+          completionTokens: 0,
+        },
+        M125,
+      );
+      assertEquals(
+        await storedCost("it-cut"),
+        promptCredits,
+        "minimum cost stored before the fetch",
+      );
       await reader.cancel();
       release?.();
       for (let seen = -1; seen !== settled.length; ) {

@@ -1,5 +1,6 @@
 // Test doubles for the model-router (imported by tests only).
-import type { CatalogModel } from "../_shared/model-catalog.ts";
+import { ConfigError } from "../_shared/config.ts";
+import type { CatalogModel, UpstreamGroup } from "../_shared/model-catalog.ts";
 import {
   type ClaimResult,
   ReserveError,
@@ -8,7 +9,7 @@ import {
   type SettleResult,
   type UserPlan,
 } from "../_shared/router-db.ts";
-import type { RouterConfig } from "./config.ts";
+import { parseMaxDuration, type RouterConfig } from "./config.ts";
 import { parseCreditMarkup } from "./pricing.ts";
 
 export const FLASH: CatalogModel = {
@@ -20,6 +21,7 @@ export const FLASH: CatalogModel = {
   contextWindow: 1000000,
   maxTokens: 384000,
   enableGroups: ["model - china"],
+  upstreamGroup: "model - china",
   groupRatio: 1,
   cost: { input: 2.2, output: 8.5, cacheRead: 0.3 },
 };
@@ -32,6 +34,7 @@ export const GLM: CatalogModel = {
   contextWindow: 1000000,
   maxTokens: 131072,
   enableGroups: ["model - china"],
+  upstreamGroup: "model - china",
   groupRatio: 1,
   cost: { input: 1.2, output: 3.975, cacheRead: 0.4 },
 };
@@ -51,6 +54,7 @@ export class FakeDb implements RouterDb {
   settleAttempts = 0;
   /** router_store_cost rows (sweep input); storeError makes it fail too. */
   stored = new Map<string, SettleArgs>();
+  storeHistory: SettleArgs[] = [];
   storeError = false;
 
   constructor(balance: number | null = 100000, plan?: UserPlan) {
@@ -112,7 +116,20 @@ export class FakeDb implements RouterDb {
     if (this.storeError) return Promise.reject(new Error("db down"));
     if (!this.claims.has(args.requestId)) return Promise.resolve(false);
     this.stored.set(args.requestId, args);
+    this.storeHistory.push(args);
     return Promise.resolve(true);
+  }
+
+  /** The expiry sweep (B4a release_expired_reservations) as if every reservation expired. */
+  sweep(): void {
+    for (const [requestId, r] of this.reservations) {
+      if (r.status !== "active") continue;
+      const stored = this.stored.get(requestId);
+      const charged = stored ? Math.min(stored.credits, r.amount) : 0;
+      r.status = "settled";
+      r.charged = charged;
+      this.balance = (this.balance ?? 0) + (r.amount - charged);
+    }
   }
 
   active(): number {
@@ -122,15 +139,28 @@ export class FakeDb implements RouterDb {
 
 export function routerConfig(
   baseUrl: string,
-  { apiKey = "upstream-secret", markup }: { apiKey?: string; markup?: string } = {},
+  {
+    keys = { "model - china": "upstream-secret" },
+    markup,
+    maxDurationMs,
+  }: {
+    keys?: Partial<Record<UpstreamGroup, string>>;
+    markup?: string;
+    maxDurationMs?: string;
+  } = {},
 ): RouterConfig {
   const values: Record<string, string> = {};
   if (markup !== undefined) values.CREDIT_MARKUP = markup;
+  if (maxDurationMs !== undefined) values.MODUS_ROUTER_MAX_DURATION_MS = maxDurationMs;
+  const source = { get: (k: string) => values[k] };
   return {
-    markup: () => parseCreditMarkup({ get: (k) => values[k] }),
-    upstream: () => {
-      if (!apiKey) throw new Error("MODUS_UPSTREAM_API_KEY is not set.");
-      return { baseUrl, apiKey };
+    markup: () => parseCreditMarkup(source),
+    duration: () => parseMaxDuration(source),
+    baseUrl: () => baseUrl,
+    upstreamKey: (group) => {
+      const key = keys[group];
+      if (!key) throw new ConfigError(`no key for ${group}`);
+      return key;
     },
   };
 }

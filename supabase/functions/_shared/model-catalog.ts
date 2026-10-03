@@ -4,9 +4,9 @@
  * snapshot: the router never fetches pricing at runtime (model-catalog.test.ts
  * greps the router code for that).
  *
- * Upstream: a single OpenAI-compatible New API gateway (vibi.top). Its base URL and
- * key come ONLY from env (MODUS_UPSTREAM_BASE_URL, MODUS_UPSTREAM_API_KEY); moving
- * to another provider is env + this table, no code.
+ * Upstream: a single OpenAI-compatible New API gateway (vibi.top). Its base URL
+ * (MODUS_UPSTREAM_BASE_URL) and keys come ONLY from env, one key per vibi group
+ * (UPSTREAM_GROUPS below); moving to another provider is env + this table, no code.
  *
  * Ids are `<native provider>/<native model id>` from catalog/models.json and are what
  * plans.allowed_models stores; `upstreamId` is the gateway's model name. Context
@@ -24,22 +24,29 @@
  *     cache  US$/1M = model_ratio * cache_ratio * 2 * group_ratio   (when listed)
  *   Models billed with `billing_expr` (tiered_expr) state US$/1M coefficients
  *   directly (none of the models below).
- *   group_ratio: per model, `groupRatio` = max(1.0, highest group_ratio among the
- *   model's enable_groups in the snapshot): conservative, never below cost.
+ *   group_ratio: the vibi group is FIXED per API key, so every model names the group it
+ *   is called through (`upstreamGroup`, which must be one of its enable_groups) and
+ *   `groupRatio` is exactly that group's snapshot ratio (UPSTREAM_GROUPS; pinned by
+ *   model-catalog.test.ts). One env key per group, never a fallback to another key.
  *   Snapshot group_ratio: auto 1, claude 1, "codex plus" 0.6, "codex pro" 0.9,
  *   "gemini ultra" 3, "grok heavy" 0.8, "image - 2k" 1, "image - 4k" 5.5,
  *   "model - china" 0.8, "Claude Max 20x Account" 6 (SNAPSHOT_GROUP_RATIOS).
- *   Our key is in group "auto" (ratio 1), which may route these models to
- *   "model - china" (0.8). Change a groupRatio only after comparing a real debit in
- *   the vibi panel with our usage (pinned by model-catalog.test.ts).
+ *   Re-fetched 2026-10-03 03:58 BRT (same pricing_version, same ratios). Groups then:
+ *     "model - china": deepseek-v4.1-flash, glm-5.3-flash, qwen3.8-flash
+ *     "codex plus":    gpt-5.6-sol, gpt-5.6-terra, gpt-6-sol, gpt-6.1-sol
+ *     "codex pro":     used ONLY for gpt-6-astra, gpt-5.5, codex-auto-review
+ *     "claude":        10 Claude models
+ *   The 0.8 of "model - china" is confirmed only after the post-deploy smoke compares
+ *   the real debit in the vibi panel with usage x price; if higher, back to 1.0.
  *
  *   deepseek-v4.1-flash  model_ratio 1.1   completion_ratio 3.863636363636
  *                        cache_ratio 0.136363636364  enable_groups ["model - china"]
- *                        -> 2.2 / 8.5 / 0.3 US$ per 1M (input / output / cache read)
+ *                        -> x 0.8 ("model - china"): 1.76 / 6.8 / 0.24 US$ per 1M
+ *                        (input / output / cache read)
  *   glm-5.3-flash        model_ratio 0.6   completion_ratio 3.3125
  *                        cache_ratio 0.333333333333  create_cache_ratio 1
  *                        enable_groups ["model - china"]
- *                        -> 1.2 / 3.975 / 0.4 US$ per 1M
+ *                        -> x 0.8: 0.96 / 3.18 / 0.32 US$ per 1M
  *   (derived values rounded to 6 decimals)
  */
 
@@ -57,15 +64,26 @@ export const SNAPSHOT_GROUP_RATIOS: Readonly<Record<string, number>> = {
   "model - china": 0.8,
 };
 
-/** max(1.0, highest snapshot group_ratio among the model's enable_groups). */
-export function groupRatioFor(enableGroups: readonly string[]): number {
-  return Math.max(1, ...enableGroups.map((group) => SNAPSHOT_GROUP_RATIOS[group] ?? Infinity));
-}
+/** A vibi group we hold an API key for. */
+export type UpstreamGroup = "model - china" | "claude" | "codex plus" | "codex pro";
+
+/**
+ * vibi group -> env var holding the key of that group, and the group's snapshot ratio.
+ * The router picks the key ONLY from the model's upstreamGroup (missing -> 503).
+ */
+export const UPSTREAM_GROUPS: Readonly<Record<UpstreamGroup, { envKey: string; ratio: number }>> = {
+  "model - china": { envKey: "MODUS_UPSTREAM_KEY_CHINA", ratio: 0.8 },
+  claude: { envKey: "MODUS_UPSTREAM_KEY_CLAUDE", ratio: 1 },
+  "codex plus": { envKey: "MODUS_UPSTREAM_KEY_CODEX_PLUS", ratio: 0.6 },
+  "codex pro": { envKey: "MODUS_UPSTREAM_KEY_CODEX_PRO", ratio: 0.9 },
+};
 
 export const PRICING_SNAPSHOT = {
   version: "vibi-2026-10-03",
   source: "https://vibi.top/api/pricing",
   fetchedAt: "2026-10-03T03:28:05-03:00",
+  /** Group ratios / enable_groups re-checked (unchanged pricing_version). */
+  recheckedAt: "2026-10-03T03:58:34-03:00",
   pricingVersion: "a42d372ccf0b5dd13ecf71203521f9d2",
 } as const;
 
@@ -86,9 +104,11 @@ export type CatalogModel = {
   api: ModelApi;
   contextWindow: number;
   maxTokens: number;
-  /** Snapshot enable_groups of the upstream model (audit trail for groupRatio). */
+  /** Snapshot enable_groups of the upstream model (audit trail). */
   enableGroups: readonly string[];
-  /** Applied to the upstream price: max(1.0, highest group_ratio of enableGroups). */
+  /** vibi group the model is called through (selects the API key). */
+  upstreamGroup: UpstreamGroup;
+  /** Exactly UPSTREAM_GROUPS[upstreamGroup].ratio (the snapshot group_ratio). */
   groupRatio: number;
   cost: TokenPrice;
   /** Higher price when the prompt is above `inputTokensAbove` tokens. */
@@ -113,6 +133,7 @@ export function newApiPrice(ratios: {
 }
 
 const CHINA = ["model - china"] as const;
+const CHINA_RATIO = UPSTREAM_GROUPS["model - china"].ratio;
 
 export const MODEL_CATALOG: readonly CatalogModel[] = [
   {
@@ -124,12 +145,13 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     contextWindow: 1000000,
     maxTokens: 384000,
     enableGroups: CHINA,
-    groupRatio: groupRatioFor(CHINA),
+    upstreamGroup: "model - china",
+    groupRatio: CHINA_RATIO,
     cost: newApiPrice({
       modelRatio: 1.1,
       completionRatio: 3.863636363636,
       cacheRatio: 0.136363636364,
-      groupRatio: groupRatioFor(CHINA),
+      groupRatio: CHINA_RATIO,
     }),
   },
   {
@@ -141,12 +163,13 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
     contextWindow: 1000000,
     maxTokens: 131072,
     enableGroups: CHINA,
-    groupRatio: groupRatioFor(CHINA),
+    upstreamGroup: "model - china",
+    groupRatio: CHINA_RATIO,
     cost: newApiPrice({
       modelRatio: 0.6,
       completionRatio: 3.3125,
       cacheRatio: 0.333333333333,
-      groupRatio: groupRatioFor(CHINA),
+      groupRatio: CHINA_RATIO,
     }),
   },
 ];

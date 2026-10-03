@@ -1,11 +1,11 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
 import {
-  groupRatioFor,
   MODEL_CATALOG,
   newApiPrice,
   PRICING_SNAPSHOT,
   SERVER_ONLY_MODELS,
   SNAPSHOT_GROUP_RATIOS,
+  UPSTREAM_GROUPS,
 } from "./model-catalog.ts";
 
 const root = new URL("../../../", import.meta.url);
@@ -94,35 +94,46 @@ Deno.test("every seeded plans.allowed_models id is in the model table with a pri
   }
 });
 
-Deno.test("groupRatio: pinned per model, >= 1.0, = max(1, highest ratio of enable_groups)", () => {
-  const pinned: Record<string, number> = {
-    "deepseek/deepseek-flash": 1.0,
-    "zai/glm-5.3-flash": 1.0,
+Deno.test("groupRatio: pinned per model, EXACTLY the snapshot ratio of its upstreamGroup", () => {
+  const pinned: Record<string, (string | number)[]> = {
+    "deepseek/deepseek-flash": ["model - china", 0.8],
+    "zai/glm-5.3-flash": ["model - china", 0.8],
   };
-  assertEquals(Object.fromEntries(MODEL_CATALOG.map((m) => [m.id, m.groupRatio])), pinned);
-  for (const model of MODEL_CATALOG) {
-    assert(model.groupRatio >= 1.0, `${model.id} groupRatio below 1.0`);
-    assert(Number.isFinite(model.groupRatio), `${model.id} has a group missing from the snapshot`);
-    assert(model.enableGroups.length > 0, `${model.id} has no enable_groups`);
-    assertEquals(model.groupRatio, groupRatioFor(model.enableGroups), model.id);
-  }
-  assertEquals(SNAPSHOT_GROUP_RATIOS["model - china"], 0.8);
-  assertEquals(groupRatioFor(["model - china"]), 1);
-  assertEquals(groupRatioFor(["image - 4k", "auto"]), 5.5);
   assertEquals(
-    groupRatioFor(["unknown group"]),
-    Infinity,
-    "an unknown group never prices below cost",
+    Object.fromEntries(MODEL_CATALOG.map((m) => [m.id, [m.upstreamGroup as string, m.groupRatio]])),
+    pinned,
   );
+  for (const model of MODEL_CATALOG) {
+    assert(
+      model.enableGroups.includes(model.upstreamGroup),
+      `${model.id}: ${model.upstreamGroup} not in its snapshot enable_groups`,
+    );
+    assertEquals(model.groupRatio, SNAPSHOT_GROUP_RATIOS[model.upstreamGroup], model.id);
+    assertEquals(model.groupRatio, UPSTREAM_GROUPS[model.upstreamGroup].ratio, model.id);
+  }
+});
+
+Deno.test("UPSTREAM_GROUPS: one env key per vibi group, ratios = snapshot (pinned)", () => {
+  assertEquals(UPSTREAM_GROUPS, {
+    "model - china": { envKey: "MODUS_UPSTREAM_KEY_CHINA", ratio: 0.8 },
+    claude: { envKey: "MODUS_UPSTREAM_KEY_CLAUDE", ratio: 1 },
+    "codex plus": { envKey: "MODUS_UPSTREAM_KEY_CODEX_PLUS", ratio: 0.6 },
+    "codex pro": { envKey: "MODUS_UPSTREAM_KEY_CODEX_PRO", ratio: 0.9 },
+  });
+  for (const [group, { ratio }] of Object.entries(UPSTREAM_GROUPS)) {
+    assertEquals(ratio, SNAPSHOT_GROUP_RATIOS[group], group);
+  }
+  const envKeys = Object.values(UPSTREAM_GROUPS).map((g) => g.envKey);
+  assertEquals(new Set(envKeys).size, envKeys.length, "env keys are distinct");
 });
 
 Deno.test("prices: the vibi 2026-10-03 snapshot derived with the New API premise", () => {
   assertEquals(PRICING_SNAPSHOT.version, "vibi-2026-10-03");
   const byId = Object.fromEntries(MODEL_CATALOG.map((m) => [m.id, m]));
   assertEquals(byId["deepseek/deepseek-flash"].upstreamId, "deepseek-v4.1-flash");
-  assertEquals(byId["deepseek/deepseek-flash"].cost, { input: 2.2, output: 8.5, cacheRead: 0.3 });
+  assertEquals(byId["deepseek/deepseek-flash"].cost, { input: 1.76, output: 6.8, cacheRead: 0.24 });
   assertEquals(byId["zai/glm-5.3-flash"].upstreamId, "glm-5.3-flash");
-  assertEquals(byId["zai/glm-5.3-flash"].cost, { input: 1.2, output: 3.975, cacheRead: 0.4 });
+  assertEquals(byId["zai/glm-5.3-flash"].cost, { input: 0.96, output: 3.18, cacheRead: 0.32 });
   assertEquals(newApiPrice({ modelRatio: 1, completionRatio: 1, cacheRatio: 0.1, groupRatio: 1 }), {
     input: 2,
     output: 2,
