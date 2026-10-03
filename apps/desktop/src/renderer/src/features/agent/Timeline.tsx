@@ -1,5 +1,5 @@
 import { IconAlertCircle, IconCircleDashed, IconListCheck } from "@tabler/icons-react";
-import { Fragment, type ReactNode, type RefObject, useMemo } from "react";
+import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
 import type { AgentEventItem } from "../../../../shared/agent-events";
 import type {
   CompactionReason,
@@ -17,7 +17,7 @@ import type {
 } from "../../../../shared/contracts";
 import { getToolUiMeta, toolRenderKind } from "../../../../shared/tools";
 import { CopyButton } from "../../components/ui/CopyButton";
-import { ScrollReveal } from "../../components/ui/ScrollReveal";
+import { RevealOnMount } from "../../components/ui/RevealOnMount";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
@@ -64,8 +64,6 @@ type TimelineProps = {
   workspaceId?: string | undefined;
   /** Tighter padding when embedded in the subagent preview sheet (no composer clearance). */
   embedded?: boolean | undefined;
-  /** Chat scrollport — drives React Bits–style ScrollReveal as turns enter view. */
-  scrollContainerRef?: RefObject<HTMLElement | null>;
 };
 
 export type MessageBlockItem = {
@@ -1360,10 +1358,10 @@ export function Timeline({
   onOpenPlan,
   onOpenFile,
   embedded = false,
-  scrollContainerRef,
 }: TimelineProps) {
   const renderKeys = useMemo(() => blockRenderKeys(blocks), [blocks]);
   const turns = useMemo(() => segmentTurns(blocks, renderKeys), [blocks, renderKeys]);
+  const freshKeys = useFreshKeys(renderKeys);
 
   if (blocks.length === 0) {
     return null;
@@ -1390,13 +1388,13 @@ export function Timeline({
               if (block.type === "message" && block.role === "user") {
                 if (block.planBuild) {
                   return (
-                    <TimelineReveal key={key} scrollContainerRef={scrollContainerRef}>
+                    <RevealOnMount animate={freshKeys.has(key)} key={key}>
                       <PlanBuildCard planBuild={block.planBuild} />
-                    </TimelineReveal>
+                    </RevealOnMount>
                   );
                 }
                 return (
-                  <TimelineReveal key={key} scrollContainerRef={scrollContainerRef}>
+                  <RevealOnMount animate={freshKeys.has(key)} key={key}>
                     <MessageBlock
                       {...(block.attachments ? { attachments: block.attachments } : {})}
                       {...(block.contextChips ? { contextChips: block.contextChips } : {})}
@@ -1419,18 +1417,12 @@ export function Timeline({
                       streaming={block.streaming ?? false}
                       workspaceId={workspaceId}
                     />
-                  </TimelineReveal>
+                  </RevealOnMount>
                 );
               }
 
-              const streaming = block.type === "message" && Boolean(block.streaming);
-
               return (
-                <TimelineReveal
-                  disabled={streaming}
-                  key={key}
-                  scrollContainerRef={scrollContainerRef}
-                >
+                <RevealOnMount animate={freshKeys.has(key)} key={key}>
                   <div className="w-full px-8">
                     {block.type === "work-fold" ? (
                       <WorkFold
@@ -1477,7 +1469,7 @@ export function Timeline({
                       />
                     ) : null}
                   </div>
-                </TimelineReveal>
+                </RevealOnMount>
               );
             })}
             <TurnFooter {...(models ? { models } : {})} turn={turn} />
@@ -1488,25 +1480,38 @@ export function Timeline({
   );
 }
 
-/** React Bits ScrollReveal — skip while a block is still streaming tokens. */
-function TimelineReveal({
-  children,
-  scrollContainerRef,
-  disabled = false,
-}: {
-  children: ReactNode;
-  scrollContainerRef?: RefObject<HTMLElement | null> | undefined;
-  disabled?: boolean | undefined;
-}) {
-  if (disabled || !scrollContainerRef) {
-    return children;
+/**
+ * Keys that arrived after the timeline first rendered this chat. Everything present at
+ * mount (opening / remounting a chat with history) counts as history and never animates.
+ * A render that shares no key with the previous one is treated as a different chat, and
+ * so is a large batch landing on an empty timeline (history loading in). The seen set is
+ * updated after commit, so the render itself stays pure (StrictMode-safe).
+ */
+const HISTORY_BATCH_THRESHOLD = 2;
+
+export function useFreshKeys(list: readonly string[]): ReadonlySet<string> {
+  const seenRef = useRef<Set<string> | null>(null);
+  const seen = seenRef.current;
+  let fresh: ReadonlySet<string> = EMPTY_KEYS;
+  if (seen !== null) {
+    const overlaps = list.some((key) => seen.has(key));
+    const isHistoryBatch = seen.size === 0 && list.length > HISTORY_BATCH_THRESHOLD;
+    if (overlaps || (seen.size === 0 && !isHistoryBatch)) {
+      fresh = new Set(list.filter((key) => !seen.has(key)));
+    }
   }
-  return (
-    <ScrollReveal blurStrength={5} offsetY={16} once scrollContainerRef={scrollContainerRef}>
-      {children}
-    </ScrollReveal>
-  );
+  useEffect(() => {
+    const current = seenRef.current;
+    if (current === null || (current.size > 0 && !list.some((key) => current.has(key)))) {
+      seenRef.current = new Set(list);
+      return;
+    }
+    for (const key of list) current.add(key);
+  }, [list]);
+  return fresh;
 }
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 function visualIdFromArgs(args: unknown): string | undefined {
   if (!args || typeof args !== "object") return undefined;

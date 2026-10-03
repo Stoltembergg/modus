@@ -4,7 +4,7 @@
  * MIT License, Copyright (c) 2026 21st.dev. See THIRD_PARTY_NOTICES.md at the
  * repo root for the full license text.
  *
- * Modus adaptations: Modus theme tokens, ShinyText (respects reduced motion)
+ * Modus adaptations: Modus theme tokens, WorkingText (respects reduced motion)
  * instead of the injected shimmer keyframes, CollapsibleMotion instead of the
  * base-ui Collapsible, and file-first results: each row is a FILE with its
  * relative path truncated in the middle (filename stays visible) and the match
@@ -30,7 +30,7 @@ import {
   useState,
 } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { type FilesTextFn, useFilesText } from "../files/filesI18n";
@@ -387,9 +387,9 @@ export const SearchToolCard = memo(function SearchToolCard({
   if (searching) {
     return (
       <div className="flex min-w-0 items-center gap-2 py-0.5 text-sm" data-search-state="searching">
-        <ShinyText className="shrink-0">
+        <WorkingText className="shrink-0">
           {name === "web_search" ? t("search.searchingWeb") : t("search.searching")}
-        </ShinyText>
+        </WorkingText>
         {query ? (
           <span className="min-w-0 flex-1 truncate font-mono text-fg-faint text-xs" title={query}>
             {query}

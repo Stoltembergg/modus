@@ -55,7 +55,6 @@ export function ActivityTimeline({
             blocks={activityBlocks}
             cwd={cwd}
             embedded
-            scrollContainerRef={scrollContainerRef}
             {...(onOpenFile ? { onOpenFile } : {})}
             {...(onOpenPlan ? { onOpenPlan } : {})}
             {...(onOpenSubagent ? { onOpenSubagent } : {})}

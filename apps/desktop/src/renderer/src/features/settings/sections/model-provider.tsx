@@ -20,8 +20,8 @@ import type {
   ProviderModelConfig,
 } from "../../../../../shared/contracts";
 import { EmptyState } from "../../../components/ui/Panel";
-import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { CustomProviderForm } from "../CustomProviderForm";
 import { ProviderLogo } from "../ProviderLogo";
 import { ReadOnlyPill, SettingsPageHeader } from "../settings-layout";
@@ -614,7 +614,7 @@ function ProviderAuthDialog({
 
         {operation.status === "pending" ? (
           <div className="mt-6 text-sm text-fg-faint">
-            <ShinyText>Waiting for provider…</ShinyText>
+            <WorkingText>Waiting for provider…</WorkingText>
           </div>
         ) : null}
       </div>

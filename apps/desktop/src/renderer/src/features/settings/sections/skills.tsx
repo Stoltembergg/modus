@@ -2,7 +2,7 @@ import { IconCube, IconPlus, IconWorld } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { SkillInfo } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../../components/ui/ShinyText";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
 
 export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
@@ -146,7 +146,11 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
               onClick={() => void saveSkill()}
               type="button"
             >
-              {saving ? <ShinyText className="text-canvas">Creating…</ShinyText> : "Create skill"}
+              {saving ? (
+                <WorkingText className="text-canvas">Creating…</WorkingText>
+              ) : (
+                "Create skill"
+              )}
             </button>
           </div>
         </div>
@@ -159,7 +163,7 @@ export function SkillsSettingsPanel({ cwd }: { cwd: string | undefined }) {
           </div>
         ) : loading && skills.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-            <ShinyText>Discovering skills…</ShinyText>
+            <WorkingText>Discovering skills…</WorkingText>
           </div>
         ) : skills.length === 0 ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">

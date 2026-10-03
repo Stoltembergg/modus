@@ -16,8 +16,8 @@ import { type FormEvent, type ReactNode, useEffect, useMemo, useState } from "re
 import { joinCommandLine, splitCommandLine } from "../../../../../shared/command-line";
 import type { McpServerInfo, WorkspaceInfo } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
 import { SelectField } from "../form-controls";
 import { SettingsList, SettingsPageHeader, SettingsSection } from "../settings-layout";
@@ -338,7 +338,7 @@ export function McpSettingsPanel({
               type="button"
             >
               <IconRefresh size={14} stroke={1.7} />
-              {syncing ? <ShinyText>Connecting…</ShinyText> : "Reload"}
+              {syncing ? <WorkingText>Connecting…</WorkingText> : "Reload"}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -821,7 +821,7 @@ export function McpServerForm({
             type="submit"
           >
             {busy ? (
-              <ShinyText className="text-canvas">Connecting…</ShinyText>
+              <WorkingText className="text-canvas">Connecting…</WorkingText>
             ) : isNew ? (
               "Add server"
             ) : (

@@ -2,8 +2,8 @@ import { Menu } from "@base-ui/react/menu";
 import { IconCheck, IconGitBranch } from "@tabler/icons-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import type { GitBranchSummary } from "../../../../shared/contracts";
-import { BranchedMenu, type BranchedMenuItem } from "../../components/ui/BranchedMenu";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
+import { cn } from "../../lib/cn";
 
 type BranchSwitcherProps = {
   /** Repo working dir whose branches are listed / checked out. Undefined → disabled. */
@@ -25,8 +25,8 @@ type BranchSwitcherProps = {
 
 /**
  * Local-branch viewer + switcher shared by the Changes panel and the workspace
- * top bar. Uses a React Bits BranchedMenu tree so local / remote / worktree
- * refs read as one animated hierarchy.
+ * top bar. A plain grouped Base UI menu: Local / Remote / Worktrees groups, one
+ * item per branch (icon + name + optional meta), the current branch checked.
  */
 export function BranchSwitcher({
   cwd,
@@ -95,51 +95,10 @@ export function BranchSwitcher({
   const remotes = branches?.remote ?? [];
   const current = locals.find((branch) => branch.current)?.name ?? branches?.current;
 
-  const menuItems = useMemo((): BranchedMenuItem[] => {
-    const localChildren = locals.map((branch) => {
-      const meta = branch.worktreePath ? "worktree" : branch.current ? "current" : undefined;
-      return {
-        value: `local:${branch.name}`,
-        label: busy === branch.name ? `${branch.name}…` : branch.name,
-        icon: branch.current ? (
-          <IconCheck size={13} stroke={2} />
-        ) : (
-          <IconGitBranch size={13} stroke={1.7} />
-        ),
-        ...(meta ? { meta } : {}),
-      };
-    });
-    const remoteChildren = remotes.map((branch) => ({
-      value: `remote:${branch.name}`,
-      label: branch.name,
-      icon: <IconGitBranch size={13} stroke={1.7} />,
-      meta: "remote",
-    }));
-    const items: BranchedMenuItem[] = [
-      {
-        label: "Local",
-        children:
-          localChildren.length > 0
-            ? localChildren
-            : [{ value: "local:none", label: "No local branches" }],
-      },
-    ];
-    if (remoteChildren.length > 0) {
-      items.push({ label: "Remote", children: remoteChildren });
-    }
-    const worktreeChildren = locals
-      .filter((branch) => Boolean(branch.worktreePath))
-      .map((branch) => ({
-        value: `worktree:${branch.name}`,
-        label: branch.name,
-        icon: <IconGitBranch size={13} stroke={1.7} />,
-        meta: "linked",
-      }));
-    if (worktreeChildren.length > 0) {
-      items.push({ label: "Worktrees", children: worktreeChildren });
-    }
-    return items;
-  }, [locals, remotes, busy]);
+  const groups = useMemo(
+    () => branchMenuGroups(locals, remotes, current, busy),
+    [locals, remotes, current, busy],
+  );
 
   return (
     <Menu.Root onOpenChange={setOpen} open={open}>
@@ -151,29 +110,149 @@ export function BranchSwitcher({
           <Menu.Popup className="origin-(--transform-origin) min-w-[260px] popup-chrome popup-motion p-2">
             {!branches ? (
               <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">
-                <ShinyText>Loading…</ShinyText>
+                <WorkingText>Loading…</WorkingText>
               </div>
             ) : locals.length === 0 && remotes.length === 0 ? (
               <div className="px-2.5 py-3 text-center text-2xs text-fg-faint">No branches</div>
             ) : (
-              <BranchedMenu
-                defaultActive={current ? `local:${current}` : ""}
-                defaultOpen={[0]}
-                fontSize={12}
-                items={menuItems}
+              <BranchMenuGroups
+                groups={groups}
                 onSelect={(value) => {
-                  if (value.endsWith(":none")) return;
-                  const name = value.replace(/^(local|remote|worktree):/, "");
+                  const name = branchNameFromValue(value);
                   if (!name || name === current) return;
                   void switchTo(name);
                 }}
-                rowHeight={28}
-                width={248}
               />
             )}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
+  );
+}
+
+export type BranchMenuEntry = {
+  /** `local:<name>` | `remote:<name>` | `worktree:<name>`. */
+  value: string;
+  label: string;
+  meta?: string;
+  current?: boolean;
+  /** Placeholder rows ("No local branches") are shown but not selectable. */
+  disabled?: boolean;
+};
+
+export type BranchMenuGroup = { label: "Local" | "Remote" | "Worktrees"; items: BranchMenuEntry[] };
+
+type BranchList = GitBranchSummary["local"];
+type RemoteBranchList = GitBranchSummary["remote"];
+
+/** Builds the Local / Remote / Worktrees groups. Local always shows (with a placeholder). */
+export function branchMenuGroups(
+  locals: BranchList,
+  remotes: RemoteBranchList,
+  current: string | undefined,
+  busy: string | undefined,
+): BranchMenuGroup[] {
+  const localItems: BranchMenuEntry[] = locals.map((branch) => {
+    const meta = branch.worktreePath ? "worktree" : undefined;
+    return {
+      value: `local:${branch.name}`,
+      label: busy === branch.name ? `${branch.name}…` : branch.name,
+      ...(meta ? { meta } : {}),
+      ...(branch.name === current ? { current: true } : {}),
+    };
+  });
+  const groups: BranchMenuGroup[] = [
+    {
+      label: "Local",
+      items:
+        localItems.length > 0
+          ? localItems
+          : [{ value: "local:none", label: "No local branches", disabled: true }],
+    },
+  ];
+  if (remotes.length > 0) {
+    groups.push({
+      label: "Remote",
+      items: remotes.map((branch) => ({
+        value: `remote:${branch.name}`,
+        label: branch.name,
+        meta: "remote",
+      })),
+    });
+  }
+  const worktrees = locals.filter((branch) => Boolean(branch.worktreePath));
+  if (worktrees.length > 0) {
+    groups.push({
+      label: "Worktrees",
+      items: worktrees.map((branch) => ({
+        value: `worktree:${branch.name}`,
+        label: branch.name,
+        meta: "linked",
+      })),
+    });
+  }
+  return groups;
+}
+
+/** Strips the `local:|remote:|worktree:` scheme; undefined for placeholders. */
+export function branchNameFromValue(value: string): string | undefined {
+  if (value.endsWith(":none")) return undefined;
+  const name = value.replace(/^(local|remote|worktree):/, "");
+  return name || undefined;
+}
+
+/** Grouped menu body; must render inside a Base UI `Menu.Popup`. */
+export function BranchMenuGroups({
+  groups,
+  onSelect,
+}: {
+  groups: BranchMenuGroup[];
+  onSelect: (value: string) => void;
+}) {
+  return (
+    <div className="flex w-[248px] flex-col gap-1">
+      {groups.map((group) => (
+        <Menu.Group className="flex flex-col" key={group.label}>
+          <Menu.GroupLabel className="px-2 pt-1 pb-0.5 text-2xs font-medium text-fg-faint">
+            {group.label}
+          </Menu.GroupLabel>
+          {group.items.map((item) => (
+            <Menu.Item
+              aria-checked={item.disabled ? undefined : Boolean(item.current)}
+              className={cn(
+                "flex h-7 min-w-0 items-center gap-2 rounded-md px-2 text-xs outline-none",
+                "data-[highlighted]:bg-hover data-[disabled]:cursor-default data-[disabled]:text-fg-faint",
+                item.current ? "text-fg" : "text-fg-muted",
+              )}
+              closeOnClick={false}
+              data-value={item.value}
+              disabled={Boolean(item.disabled)}
+              key={item.value}
+              label={item.label}
+              onClick={() => {
+                if (!item.disabled) onSelect(item.value);
+              }}
+              {...(item.disabled ? {} : { role: "menuitemradio" })}
+            >
+              <span
+                aria-hidden="true"
+                className="flex size-[13px] shrink-0 items-center justify-center"
+              >
+                {item.current ? (
+                  <IconCheck size={13} stroke={2} />
+                ) : (
+                  <IconGitBranch size={13} stroke={1.7} />
+                )}
+              </span>
+              <span className="min-w-0 flex-1 truncate">{item.label}</span>
+              {item.meta ? (
+                <span className="shrink-0 text-2xs text-fg-faint">{item.meta}</span>
+              ) : null}
+            </Menu.Item>
+          ))}
+        </Menu.Group>
+      ))}
+    </div>
   );
 }

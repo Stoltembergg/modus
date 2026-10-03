@@ -34,9 +34,9 @@ import type {
   SkillSelection,
   ThinkingOption,
 } from "../../../../shared/contracts";
-import { GradientWaves } from "../../components/ui/GradientWaves";
+import { ComposerRunningSweep } from "../../components/ui/ComposerRunningSweep";
 import { ImageThumb } from "../../components/ui/ImageViewer";
-import { PromptSendGlyph } from "../../components/ui/PromptSendGlyph";
+import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
 import {
@@ -591,16 +591,7 @@ export function Composer({
         onDrop={handleDrop}
       >
         <AnimatePresence>
-          {isRunning ? (
-            <GradientWaves
-              key="composer-waves"
-              detail="medium"
-              fadeDuration={0.45}
-              grain
-              opacity={0.6}
-              speed={0.45}
-            />
-          ) : null}
+          {isRunning ? <ComposerRunningSweep key="composer-running" /> : null}
         </AnimatePresence>
         <div
           className="relative z-10"
@@ -783,7 +774,7 @@ export function Composer({
                 stroke={ICON_STROKE.sm}
               />
             ) : (
-              <PromptSendGlyph busy={isRunning} className="block size-3.5 origin-center" />
+              <SendStopIcon busy={isRunning} className="size-3.5" />
             )}
           </button>
         </div>

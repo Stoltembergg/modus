@@ -6,7 +6,7 @@ import type {
   RuleSource,
   WorkspaceAgentsState,
 } from "../../../../../shared/contracts";
-import { ShinyText } from "../../../components/ui/ShinyText";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
 import {
   ReadOnlyPill,
@@ -108,7 +108,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
               type="button"
             >
               <IconRefresh size={14} stroke={1.7} />
-              {loading ? <ShinyText>Refreshing…</ShinyText> : "Refresh"}
+              {loading ? <WorkingText>Refreshing…</WorkingText> : "Refresh"}
             </button>
             <button
               className="flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40"
@@ -118,7 +118,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
             >
               <IconCheck size={13} stroke={2} />
               {saving ? (
-                <ShinyText className="text-canvas">Saving…</ShinyText>
+                <WorkingText className="text-canvas">Saving…</WorkingText>
               ) : agents?.exists ? (
                 "Save"
               ) : (
@@ -200,7 +200,7 @@ export function RulesSettingsPanel({ cwd }: { cwd: string | undefined }) {
           </div>
         ) : loading && rules.length === 0 && !agents ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-            <ShinyText>Scanning workspace…</ShinyText>
+            <WorkingText>Scanning workspace…</WorkingText>
           </div>
         ) : rules.length === 0 ? (
           <div className="flex flex-col items-start gap-2 rounded-lg border border-hairline-soft bg-panel px-5 py-6">

@@ -6,7 +6,7 @@
  *
  * Modus adaptations: Modus tokens + Tabler status glyphs (all five Modus
  * statuses, including blocked with its reason), the collapsible
- * `.timeline-wire` chrome, ShinyText (respects reduced motion) for the
+ * `.timeline-wire` chrome, WorkingText (respects reduced motion) for the
  * in-flight hints, and change detection keyed by todo id (upstream keys by
  * index). When a list update arrives while the card is mounted, rows whose
  * status changed (or that are new) get a short highlight + glyph pop — the
@@ -25,7 +25,7 @@ import { m, useReducedMotion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import type { TodoItem, TodoStatus } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 
 /** How long a changed row stays highlighted after an update arrives. */
@@ -116,7 +116,7 @@ export function TodosCard({ todos, updating }: { todos: TodoItem[]; updating: bo
         ) : null}
         {updating ? (
           <span className="min-w-0 truncate text-xs">
-            <ShinyText>{creating ? "Creating to-do list…" : "Updating to-dos…"}</ShinyText>
+            <WorkingText>{creating ? "Creating to-do list…" : "Updating to-dos…"}</WorkingText>
           </span>
         ) : null}
         <span className="min-w-0 flex-1" />

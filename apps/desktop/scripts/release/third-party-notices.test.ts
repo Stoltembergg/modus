@@ -1,87 +1,102 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const desktopDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const repoRoot = resolve(desktopDir, "../..");
-const uiDir = "apps/desktop/src/renderer/src/components/ui";
+const rendererDir = join(desktopDir, "src/renderer/src");
+const uiDir = join(rendererDir, "components/ui");
 
-// ShinyText.tsx is adapted from React Bits "Shiny Text" but has no source header.
-const REACT_BITS_WITHOUT_HEADER = ["ShinyText.tsx"];
+// The upstream mark, assembled so this guard does not itself carry it.
+const MARK = new RegExp(["react", "[\\s-]?", "bits"].join(""), "i");
 
-function reactBitsSection(): string {
-  const notices = readFileSync(join(repoRoot, "THIRD_PARTY_NOTICES.md"), "utf8");
-  const start = notices.indexOf("## React Bits");
-  expect(start).toBeGreaterThanOrEqual(0);
-  const end = notices.indexOf("\n## ", start + 1);
-  return notices.slice(start, end === -1 ? undefined : end);
+// L0 (clean-room): the ten adapted components were deleted and rewritten from specs.
+// None of these names may come back anywhere in the renderer.
+const REMOVED_COMPONENTS = [
+  "Aurora",
+  "BranchedMenu",
+  "FadeContent",
+  "GradientWaves",
+  "PromptSendGlyph",
+  "ScrollReveal",
+  "ShinyText",
+  "SpringCheck",
+  "TextType",
+  "ThoughtLine",
+];
+
+function walk(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? walk(path) : [path];
+  });
 }
 
-function listedComponentFiles(): string[] {
-  const listed = reactBitsSection().match(/`apps\/desktop\/[^`]+\.tsx`/g) ?? [];
-  return listed.map((path) => path.slice(1, -1)).sort();
+function read(path: string): string {
+  return readFileSync(path, "utf8");
 }
 
-function reactBitsFilesInUi(): string[] {
-  return readdirSync(join(repoRoot, uiDir))
-    .filter((name) => name.endsWith(".tsx") && !name.includes(".test."))
-    .filter(
-      (name) =>
-        REACT_BITS_WITHOUT_HEADER.includes(name) ||
-        /react ?bits|reactbits\.dev/i.test(readFileSync(join(repoRoot, uiDir, name), "utf8")),
-    )
-    .map((name) => `${uiDir}/${name}`)
-    .sort();
-}
-
-const UI_PATH = /apps\/desktop\/src\/renderer\/src\/components\/ui\/[A-Za-z]+\.tsx/g;
-
-/** React Bits files listed in the LICENSE exception block (after the Apache text). */
-function licenseExceptionFiles(): string[] {
-  const license = readFileSync(join(repoRoot, "LICENSE"), "utf8");
-  const start = license.indexOf("THIRD-PARTY FILES NOT COVERED BY THE APACHE LICENSE ABOVE");
-  expect(start).toBeGreaterThan(license.indexOf("limitations under the License."));
-  return [...new Set(license.slice(start).match(UI_PATH) ?? [])].sort();
-}
-
-/** React Bits files listed under a README's License section. */
-function readmeExceptionFiles(readme: string): string[] {
-  const text = readFileSync(join(repoRoot, readme), "utf8");
-  const start = text.indexOf("## License");
-  expect(start).toBeGreaterThanOrEqual(0);
-  const end = text.indexOf("\n## ", start + 1);
-  const section = text.slice(start, end === -1 ? undefined : end);
-  expect(section).toContain("THIRD_PARTY_NOTICES.md");
-  expect(section).toContain("MIT + Commons Clause");
-  return [...new Set(section.match(UI_PATH) ?? [])].sort();
-}
-
-describe("THIRD_PARTY_NOTICES.md React Bits entry", () => {
-  it("lists only component files that still exist", () => {
-    for (const path of listedComponentFiles()) {
-      expect(existsSync(join(repoRoot, path)), path).toBe(true);
-    }
+describe("no third-party component marks left in components/ui", () => {
+  it("no file under components/ui carries the upstream mark", () => {
+    const marked = walk(uiDir)
+      .filter((path) => MARK.test(read(path)))
+      .map((path) => relative(repoRoot, path));
+    expect(marked).toEqual([]);
   });
 
-  it("lists every React Bits component file in components/ui", () => {
-    expect(listedComponentFiles()).toEqual(reactBitsFilesInUi());
+  it("the removed component files do not come back (any extension, any folder)", () => {
+    const names = new Set(REMOVED_COMPONENTS);
+    const back = walk(rendererDir)
+      .filter((path) => names.has((path.split("/").pop() ?? "").split(".")[0] ?? ""))
+      .map((path) => relative(repoRoot, path));
+    expect(back).toEqual([]);
+  });
+
+  it("nothing imports a removed component", () => {
+    const importOf = new RegExp(`/(${REMOVED_COMPONENTS.join("|")})["']`);
+    const offenders = walk(join(desktopDir, "src"))
+      .filter((path) => /\.(ts|tsx|mts|mjs)$/.test(path))
+      .filter((path) => importOf.test(read(path)))
+      .map((path) => relative(repoRoot, path));
+    expect(offenders).toEqual([]);
+  });
+
+  it("app.css has no rules marked with the upstream name", () => {
+    expect(read(join(rendererDir, "styles/app.css"))).not.toMatch(MARK);
   });
 });
 
-describe("React Bits license marking", () => {
-  it("keeps the Apache-2.0 text first and unmodified at the top of LICENSE", () => {
-    const license = readFileSync(join(repoRoot, "LICENSE"), "utf8");
+describe("license files after L0", () => {
+  it("LICENSE is the plain Apache-2.0 text with no third-party exception block", () => {
+    const license = read(join(repoRoot, "LICENSE"));
     expect(license.trimStart().startsWith("Apache License")).toBe(true);
     expect(license).toContain("http://www.apache.org/licenses/LICENSE-2.0");
+    expect(license.trimEnd().endsWith("limitations under the License.")).toBe(true);
+    expect(license).not.toContain("THIRD-PARTY FILES NOT COVERED");
+    expect(license).not.toMatch(MARK);
+    expect(license).not.toContain("Commons Clause");
   });
 
-  it("LICENSE lists exactly the React Bits files as outside Apache-2.0", () => {
-    expect(licenseExceptionFiles()).toEqual(reactBitsFilesInUi());
-    expect(licenseExceptionFiles()).toEqual(listedComponentFiles());
+  it.each(["README.md", "README.zh-CN.md"])("%s License section is plain Apache-2.0", (readme) => {
+    const text = read(join(repoRoot, readme));
+    const start = text.indexOf("## License");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = text.indexOf("\n## ", start + 1);
+    const section = text.slice(start, end === -1 ? undefined : end);
+    expect(section).toContain("Apache-2.0");
+    expect(section).not.toMatch(MARK);
+    expect(section).not.toContain("Commons Clause");
+    expect(section).not.toMatch(/components\/ui\//);
   });
 
-  it.each(["README.md", "README.zh-CN.md"])("%s lists exactly the React Bits files", (readme) => {
-    expect(readmeExceptionFiles(readme)).toEqual(reactBitsFilesInUi());
+  it("THIRD_PARTY_NOTICES.md keeps Agent Elements and drops the removed entry", () => {
+    const notices = read(join(repoRoot, "THIRD_PARTY_NOTICES.md"));
+    expect(notices).toContain("## Agent Elements (21st.dev)");
+    expect(notices).not.toMatch(MARK);
+    expect(notices).not.toContain("Commons Clause");
+    for (const path of notices.match(/`apps\/desktop\/[^`]+`/g) ?? []) {
+      expect(existsSync(join(repoRoot, path.slice(1, -1))), path).toBe(true);
+    }
   });
 });

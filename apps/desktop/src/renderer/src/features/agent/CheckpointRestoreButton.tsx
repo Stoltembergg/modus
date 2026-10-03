@@ -1,6 +1,6 @@
 import { IconCheck, IconRestore } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 
 type CheckpointRestoreButtonProps = {
@@ -70,7 +70,7 @@ export function CheckpointRestoreButton({ checkpointId, onRestore }: CheckpointR
       {phase === "restoring" ? (
         <>
           <IconRestore size={13} stroke={1.8} />
-          <ShinyText className="text-xs">Restoring…</ShinyText>
+          <WorkingText className="text-xs">Restoring…</WorkingText>
         </>
       ) : phase === "done" ? (
         <IconCheck size={13} stroke={1.9} />
