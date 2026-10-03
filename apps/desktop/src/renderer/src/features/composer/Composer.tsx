@@ -34,6 +34,7 @@ import type {
   SkillSelection,
   ThinkingOption,
 } from "../../../../shared/contracts";
+import { modusText } from "../../../../shared/modus-text";
 import { GradientWaves } from "../../components/ui/GradientWaves";
 import { ImageThumb } from "../../components/ui/ImageViewer";
 import { PromptSendGlyph } from "../../components/ui/PromptSendGlyph";
@@ -50,6 +51,7 @@ import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
 import { MentionEditor, type MentionEditorHandle, type MentionEditorPart } from "./MentionEditor";
 import { MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE, MODEL_CHIP_TONE } from "./modelChipStyle";
+import { useModusPickerState } from "./modusPickerState";
 import { SlashMenu } from "./SlashMenu";
 import {
   type ComposerImage,
@@ -858,7 +860,9 @@ export function ModelSelect({
   onModelChange(model: string): void;
   onModelConfigChange?(model: string, thinkingVariant: string): Promise<void> | void;
 }) {
-  const current = models.find((item) => item.id === model) ?? models[0];
+  const modus = useModusPickerState();
+  const current =
+    models.find((item) => item.id === model) ?? models.find((item) => !item.locked) ?? models[0];
   const thinkingOptions = current ? modelThinkingOptions(current) : [];
   const thinkingSelection = current ? selectedThinkingOption(current) : undefined;
   const effortAvailable = Boolean(
@@ -957,6 +961,15 @@ export function ModelSelect({
               className="scroll-thin origin-(--transform-origin) w-[240px] max-w-[calc(100vw-24px)] overflow-y-auto popup-chrome popup-motion p-1"
               style={{ maxHeight: "min(320px, var(--available-height))" }}
             >
+              {modus.status === "unavailable" ? (
+                <div
+                  className="px-2 pt-2 pb-1.5 text-fg-faint text-xs"
+                  data-testid="modus-unavailable"
+                  role="status"
+                >
+                  {modusText("modus.picker.unavailable")}
+                </div>
+              ) : null}
               {providerGroups.map((group) => (
                 <div key={group.provider}>
                   <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-2xs text-fg-faint uppercase tracking-wide">
@@ -968,26 +981,47 @@ export function ModelSelect({
                     />
                     <span className="truncate">{group.name}</span>
                   </div>
-                  {group.models.map((item) => (
-                    <Menu.Item
-                      className="flex h-9 cursor-default items-center gap-2.5 rounded-lg px-2 text-sm outline-none select-none data-highlighted:bg-hover"
-                      key={item.id}
-                      onClick={() => onModelChange(item.id)}
-                    >
-                      <span className="min-w-0 flex-auto truncate font-medium text-fg">
-                        {item.name}
-                      </span>
-                      {!item.available ? (
-                        <span className="shrink-0 text-2xs text-fg-faint">off</span>
-                      ) : null}
-                      <span
-                        className="inline-flex w-4 shrink-0 justify-center text-fg-muted opacity-0 data-[on]:opacity-100"
-                        data-on={item.id === current.id ? "" : undefined}
+                  {group.models.map((item) =>
+                    item.locked ? (
+                      <div
+                        className="flex h-9 items-center gap-2.5 rounded-lg px-2 text-sm"
+                        data-locked=""
+                        key={item.id}
                       >
-                        <IconCheck size={ICON.sm} stroke={ICON_STROKE.sm} />
-                      </span>
-                    </Menu.Item>
-                  ))}
+                        <span className="min-w-0 flex-auto truncate text-fg-faint">
+                          {item.name}
+                        </span>
+                        <Menu.Item
+                          aria-label={modusText("modus.picker.upgradeLabel", null, {
+                            model: item.name,
+                          })}
+                          className="shrink-0 cursor-default rounded-md border border-hairline px-1.5 py-0.5 text-2xs text-fg-muted outline-none select-none data-highlighted:bg-hover data-highlighted:text-fg"
+                          onClick={() => modus.openUpgrade?.()}
+                        >
+                          {modusText("modus.picker.upgrade")}
+                        </Menu.Item>
+                      </div>
+                    ) : (
+                      <Menu.Item
+                        className="flex h-9 cursor-default items-center gap-2.5 rounded-lg px-2 text-sm outline-none select-none data-highlighted:bg-hover"
+                        key={item.id}
+                        onClick={() => onModelChange(item.id)}
+                      >
+                        <span className="min-w-0 flex-auto truncate font-medium text-fg">
+                          {item.name}
+                        </span>
+                        {!item.available ? (
+                          <span className="shrink-0 text-2xs text-fg-faint">off</span>
+                        ) : null}
+                        <span
+                          className="inline-flex w-4 shrink-0 justify-center text-fg-muted opacity-0 data-[on]:opacity-100"
+                          data-on={item.id === current.id ? "" : undefined}
+                        >
+                          <IconCheck size={ICON.sm} stroke={ICON_STROKE.sm} />
+                        </span>
+                      </Menu.Item>
+                    ),
+                  )}
                 </div>
               ))}
             </Menu.Popup>

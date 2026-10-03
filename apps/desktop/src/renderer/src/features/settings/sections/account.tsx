@@ -6,6 +6,7 @@ import {
   type AuthOAuthProviderId,
   type AuthState,
 } from "../../../../../shared/auth";
+import { modusText } from "../../../../../shared/modus-text";
 import { ShinyText } from "../../../components/ui/ShinyText";
 import { Field } from "../form-controls";
 import {
@@ -117,6 +118,11 @@ export function AccountSettingsPanel() {
       />
 
       {shownError ? <p className="-mt-4 text-danger text-xs">{shownError}</p> : null}
+      {state?.notice === "session-expired" ? (
+        <p className="-mt-4 text-danger text-xs" role="status">
+          {modusText("modus.sessionExpired")}
+        </p>
+      ) : null}
       {state?.notice === "confirm-email" ? (
         <p className="-mt-4 text-success text-xs">
           Check your inbox to confirm your email, then sign in.
