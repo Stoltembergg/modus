@@ -46,7 +46,12 @@ export class FakeDb implements RouterDb {
   settles: SettleArgs[] = [];
   balance: number | null;
   plan: UserPlan;
-  settleError = false;
+  /** Number of upcoming settle calls that fail (Infinity = DB down). */
+  settleFailures = 0;
+  settleAttempts = 0;
+  /** router_store_cost rows (sweep input); storeError makes it fail too. */
+  stored = new Map<string, SettleArgs>();
+  storeError = false;
 
   constructor(balance: number | null = 100000, plan?: UserPlan) {
     this.balance = balance;
@@ -81,7 +86,11 @@ export class FakeDb implements RouterDb {
   }
 
   settle(args: SettleArgs): Promise<SettleResult> {
-    if (this.settleError) return Promise.reject(new Error("db down"));
+    this.settleAttempts++;
+    if (this.settleFailures > 0) {
+      this.settleFailures--;
+      return Promise.reject(new Error("db down"));
+    }
     this.settles.push(args);
     const r = this.reservations.get(args.requestId);
     if (!r) return Promise.reject(new Error("reservation not found"));
@@ -97,6 +106,13 @@ export class FakeDb implements RouterDb {
     r.charged = charged;
     this.balance = (this.balance ?? 0) + (r.amount - charged);
     return Promise.resolve({ code: "settled", charged, reserved: r.amount });
+  }
+
+  storeCost(args: SettleArgs): Promise<boolean> {
+    if (this.storeError) return Promise.reject(new Error("db down"));
+    if (!this.claims.has(args.requestId)) return Promise.resolve(false);
+    this.stored.set(args.requestId, args);
+    return Promise.resolve(true);
   }
 
   active(): number {
@@ -125,13 +141,10 @@ export type Seen = { url: string; headers: Headers; body: Record<string, unknown
 export function fakeUpstream(respond: (seen: Seen, req: Request) => Response | Promise<Response>): {
   baseUrl: string;
   seen: Seen[];
-  aborted: () => number;
   close: () => Promise<void>;
 } {
   const seen: Seen[] = [];
-  let aborted = 0;
   const server = Deno.serve({ hostname: "127.0.0.1", port: 0, onListen() {} }, async (req) => {
-    req.signal.addEventListener("abort", () => aborted++);
     const entry: Seen = { url: req.url, headers: req.headers, body: await req.json() };
     seen.push(entry);
     return await respond(entry, req);
@@ -140,7 +153,6 @@ export function fakeUpstream(respond: (seen: Seen, req: Request) => Response | P
   return {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     seen,
-    aborted: () => aborted,
     close: async () => {
       await server.shutdown();
     },

@@ -32,9 +32,12 @@ import { buildOpenAiCompletionsRequest, inspectCompletion, SseUsageTracker } fro
  *      402 insufficient_credits when not even min(forced, 256) fits; reserve the
  *      worst case (no cache hits, tier by prompt size) -> 402 / 429
  *   8. upstream (adapter by catalog api; stream_options.include_usage when streaming)
- *   9. settle with real usage (capped at the reservation). Upstream error / timeout
- *      before the response: full release. Stream cut (client gone, upstream error,
- *      10 min cap) or no usage: conservative estimate (pricing.ts), capped.
+ *   9. settle (billing rule): full release ONLY when the upstream provably did not take
+ *      the request (fetch failed without our abort, or non-2xx). After a 2xx, and on our
+ *      own timeouts (stream headers 60 s, 10 min cap), real usage or the conservative
+ *      estimate (pricing.ts), capped at the reservation. A client disconnect does not
+ *      stop the upstream: it is drained under waitUntil and settled with its usage.
+ *      settle_usage is retried 2 times, then the cost is stored for the expiry sweep.
  * Logs only ids, model, token counts and credits: never prompts, responses or keys.
  */
 export const MAX_BODY_BYTES = 1024 * 1024;
@@ -42,6 +45,8 @@ export const MIN_OUTPUT_TOKENS = 256;
 export const MAX_ACTIVE_RESERVATIONS = 4;
 /** Reservation TTL (B1 sweep refunds after it); longer than the stream cap. */
 export const STREAM_CAP_MS = 10 * 60 * 1000;
+/** settle_usage retries before the cost is stored for the sweep. */
+export const SETTLE_RETRIES = 2;
 /** Streaming only: time to the upstream response headers. */
 export const HEADERS_TIMEOUT_MS = 60 * 1000;
 
@@ -65,6 +70,8 @@ export type RouterDeps = {
     headersTimeoutMs: number;
     streamCapMs: number;
     maxActive: number;
+    settleRetries: number;
+    settleRetryDelayMs: number;
   }>;
 };
 
@@ -176,6 +183,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     headersTimeoutMs: HEADERS_TIMEOUT_MS,
     streamCapMs: STREAM_CAP_MS,
     maxActive: MAX_ACTIVE_RESERVATIONS,
+    settleRetries: SETTLE_RETRIES,
+    settleRetryDelayMs: 200,
     ...deps.limits,
   };
 
@@ -247,7 +256,6 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     }
 
     return await forward({
-      req,
       userId,
       key,
       model,
@@ -261,7 +269,6 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
   }
 
   type Ctx = {
-    req: Request;
     userId: string;
     key: string;
     model: CatalogModel;
@@ -273,9 +280,18 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     promptTokens: number;
   };
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * Settles the reservation: `release` = 0 credits (only when the upstream provably did
+   * not accept the request); otherwise real usage, or the conservative estimate when
+   * usage is missing (always capped at the reservation by settle_usage). settle_usage is
+   * retried 2 times; if it still fails, the computed cost is stored on the
+   * router_requests row so the expiry sweep charges it instead of refunding.
+   */
   async function settle(
     ctx: Ctx,
-    reason: string,
+    outcome: string,
     usage: Usage | null,
     outputChars: number,
     release = false,
@@ -290,60 +306,89 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         });
     const credits = release ? 0 : creditsFor(ctx.model, final, ctx.markup);
     const int = (n: number) => Math.min(2147483647, Math.max(0, Math.floor(n)));
-    try {
-      const result = await deps.db.settle({
-        userId: ctx.userId,
-        requestId: ctx.key,
-        credits,
-        model: ctx.model.id,
-        provider: ctx.model.provider,
-        inputTokens: int(final.promptTokens),
-        outputTokens: int(final.completionTokens),
-      });
-      log({
-        event: "model_router.settled",
-        reason,
-        request_id: ctx.key,
-        user_id: ctx.userId,
-        model: ctx.model.id,
-        input_tokens: final.promptTokens,
-        cached_tokens: final.cachedTokens,
-        output_tokens: final.completionTokens,
-        estimated,
-        credits,
-        reserved: ctx.reserved,
-        charged: result.charged,
-        code: result.code,
-      });
-    } catch (error) {
-      // The reservation stays active and the B1 sweep refunds it at expiry (never an
-      // orphan, never a charge above the reservation).
-      log({
-        event: "model_router.settle_failed",
-        reason,
-        request_id: ctx.key,
-        user_id: ctx.userId,
-        error: error instanceof Error ? error.name : typeof error,
-      });
+    const args = {
+      userId: ctx.userId,
+      requestId: ctx.key,
+      credits,
+      model: ctx.model.id,
+      provider: ctx.model.provider,
+      inputTokens: int(final.promptTokens),
+      outputTokens: int(final.completionTokens),
+    };
+    const base = {
+      outcome,
+      request_id: ctx.key,
+      user_id: ctx.userId,
+      model: ctx.model.id,
+      input_tokens: final.promptTokens,
+      cached_tokens: final.cachedTokens,
+      output_tokens: final.completionTokens,
+      estimated,
+      credits,
+      reserved: ctx.reserved,
+    };
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= limits.settleRetries; attempt++) {
+      if (attempt > 0) await sleep(limits.settleRetryDelayMs * attempt);
+      try {
+        const result = await deps.db.settle(args);
+        log({
+          event: "model_router.settled",
+          ...base,
+          attempts: attempt + 1,
+          charged: result.charged,
+          code: result.code,
+        });
+        return;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    // Settle kept failing. Keep the cost for the expiry sweep (B4a release_expired_reservations
+    // charges a stored cost, capped at the reservation); with nothing stored it refunds.
+    let stored = false;
+    if (!release) {
+      try {
+        stored = await deps.db.storeCost(args);
+      } catch {
+        stored = false;
+      }
+    }
+    log({
+      event: "model_router.settle_failed",
+      ...base,
+      attempts: limits.settleRetries + 1,
+      cost_stored: stored,
+      error: lastError instanceof Error ? lastError.name : typeof lastError,
+    });
   }
 
+  /**
+   * Billing rule: full release ONLY when the upstream provably did not take the request
+   * (fetch failed without our own abort, or a non-2xx status). Anything after a 2xx, and
+   * our own timeouts (headers timeout, 10 min cap), pays real usage or the estimate.
+   * Client disconnects never abort the upstream (it bills the full response anyway): the
+   * work continues under waitUntil and settles with the final usage. request.signal is
+   * not used at all (Deno.serve aborts it after a successful response too), so a
+   * completed response is never classified as a disconnect.
+   */
   async function forward(ctx: Ctx): Promise<Response> {
     const abort = new AbortController();
-    const onClientGone = () => abort.abort("client_disconnect");
-    ctx.req.signal?.addEventListener("abort", onClientGone, { once: true });
-    const cap = setTimeout(() => abort.abort("stream_cap"), limits.streamCapMs);
+    let ourAbort: string | undefined;
+    const stop = (why: string) => {
+      ourAbort ??= why;
+      abort.abort(why);
+    };
+    const cap = setTimeout(() => stop("stream_cap"), limits.streamCapMs);
     // Streams must start within headersTimeoutMs. A non-stream gateway answers only when
     // the completion is done, so those are bounded by the total cap alone.
     const headersTimer = ctx.parsed.stream
-      ? setTimeout(() => abort.abort("upstream_timeout"), limits.headersTimeoutMs)
+      ? setTimeout(() => stop("upstream_timeout"), limits.headersTimeoutMs)
       : undefined;
     const cleanup = () => {
       clearTimeout(cap);
       clearTimeout(headersTimer);
-      ctx.req.signal?.removeEventListener("abort", onClientGone);
     };
-
     const request = buildOpenAiCompletionsRequest(
       ctx.model,
       ctx.parsed.body,
@@ -352,64 +397,94 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       ctx.upstream,
       abort.signal,
     );
-    let response: Response;
-    try {
-      response = await fetchImpl(request.url, request.init);
-    } catch {
-      cleanup();
-      const reason = String(abort.signal.reason ?? "upstream_error");
-      if (reason === "client_disconnect") {
-        // The prompt reached the provider: bill the prompt estimate, nothing else.
-        await settle(ctx, reason, null, 0);
-        throw new HttpError(499, "client_closed_request");
-      }
-      await settle(ctx, reason, null, 0, true);
-      throw new HttpError(
-        reason === "upstream_error" ? 502 : 504,
-        reason === "upstream_error" ? "upstream_error" : "upstream_timeout",
-      );
-    }
-    clearTimeout(headersTimer);
+    const timeoutResponse = () => json(504, { error: "upstream_timeout" });
 
-    if (!response.ok || !response.body) {
-      await response.body?.cancel().catch(() => {});
-      cleanup();
-      await settle(ctx, "upstream_status", null, 0, true);
-      return json(502, { error: "upstream_error", upstream_status: response.status });
+    /** Response headers, or a finished error Response (already settled). */
+    async function open(): Promise<Response | { error: Response }> {
+      let response: Response;
+      try {
+        response = await fetchImpl(request.url, request.init);
+      } catch {
+        cleanup();
+        if (ourAbort) {
+          // Sent, then our timeout: the upstream may have taken it -> estimate.
+          await settle(ctx, ourAbort, null, 0);
+          return { error: timeoutResponse() };
+        }
+        await settle(ctx, "upstream_unreachable", null, 0, true);
+        return { error: json(502, { error: "upstream_error" }) };
+      }
+      clearTimeout(headersTimer);
+      if (!response.ok) {
+        await response.body?.cancel().catch(() => {});
+        cleanup();
+        await settle(ctx, "upstream_status", null, 0, true);
+        return { error: json(502, { error: "upstream_error", upstream_status: response.status }) };
+      }
+      return response;
     }
 
     if (!ctx.parsed.stream) {
-      let text: string;
-      try {
-        text = await response.text();
-      } catch {
+      const work = (async (): Promise<Response> => {
+        const opened = await open();
+        if (!(opened instanceof Response)) return opened.error;
+        let text: string;
+        try {
+          text = await opened.text();
+        } catch {
+          cleanup();
+          const outcome = ourAbort ?? "upstream_error";
+          await settle(ctx, outcome, null, 0);
+          return ourAbort ? timeoutResponse() : json(502, { error: "upstream_error" });
+        }
         cleanup();
-        const reason = String(abort.signal.reason ?? "upstream_error");
-        await settle(ctx, reason, null, 0);
-        throw new HttpError(
-          reason === "client_disconnect" ? 499 : 504,
-          reason === "client_disconnect" ? "client_closed_request" : "upstream_timeout",
-        );
-      }
+        const { usage, outputChars } = inspectCompletion(text);
+        await settle(ctx, "complete", usage, outputChars);
+        return new Response(text, {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "no-store",
+          },
+        });
+      })();
+      // If the client goes away, the runtime keeps this alive until it has settled.
+      deps.waitUntil?.(work);
+      return await work;
+    }
+
+    const opened = await open();
+    if (!(opened instanceof Response)) return opened.error;
+    if (!opened.body) {
       cleanup();
-      const { usage, outputChars } = inspectCompletion(text);
-      await settle(ctx, "complete", usage, outputChars);
-      return new Response(text, {
-        status: 200,
-        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-      });
+      await settle(ctx, "upstream_error", null, 0);
+      return json(502, { error: "upstream_error" });
     }
 
     const tracker = new SseUsageTracker();
-    const reader = response.body.getReader();
+    const reader = opened.body.getReader();
+    let clientGone = false;
     let settled: Promise<void> | undefined;
-    const finish = (reason: string) => {
+    const finish = (outcome: string) => {
       settled ??= (async () => {
         cleanup();
-        await settle(ctx, reason, tracker.usage, tracker.outputChars);
+        await settle(ctx, outcome, tracker.usage, tracker.outputChars);
       })();
       deps.waitUntil?.(settled);
       return settled;
+    };
+    // After a disconnect: keep reading the upstream (bounded by the cap) for the final usage.
+    const drain = async () => {
+      try {
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          tracker.push(chunk.value);
+        }
+        await finish("client_disconnect");
+      } catch {
+        await finish(ourAbort ?? "upstream_error");
+      }
     };
 
     const body = new ReadableStream<Uint8Array>({
@@ -418,23 +493,25 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         try {
           chunk = await reader.read();
         } catch {
-          await finish(String(abort.signal.reason ?? "upstream_error"));
+          if (clientGone) return; // drain() settles
+          await finish(ourAbort ?? "upstream_error");
           controller.error(new Error("upstream stream failed"));
           return;
         }
+        if (!chunk.done) tracker.push(chunk.value);
+        if (clientGone) return; // drain() owns the rest
         if (chunk.done) {
           // Settle before closing so the runtime keeps the request alive for it.
           await finish("complete");
           controller.close();
           return;
         }
-        tracker.push(chunk.value);
         controller.enqueue(chunk.value);
       },
-      async cancel() {
-        abort.abort("client_disconnect");
-        await reader.cancel().catch(() => {});
-        await finish("client_disconnect");
+      cancel() {
+        clientGone = true;
+        const draining = drain();
+        deps.waitUntil?.(draining);
       },
     });
     return new Response(body, {

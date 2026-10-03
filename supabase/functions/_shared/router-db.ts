@@ -38,6 +38,11 @@ export interface RouterDb {
   reserve(userId: string, requestId: string, amount: number, maxActive: number): Promise<void>;
   /** private.settle_usage (capped at the reservation; 0 credits = full release). */
   settle(args: SettleArgs): Promise<SettleResult>;
+  /**
+   * private.router_store_cost: keep a computed cost on the router_requests row when
+   * settle keeps failing, so the expiry sweep charges it instead of refunding.
+   */
+  storeCost(args: SettleArgs): Promise<boolean>;
 }
 
 /** Subscription statuses that unlock the paid plan's models (judgment call: not past_due). */
@@ -112,6 +117,15 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
           charged: Number(r.charged ?? 0),
           reserved: Number(r.reserved ?? 0),
         };
+      }),
+
+    storeCost: (args) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select private.router_store_cost(${args.userId}, ${args.requestId}, ${args.credits},
+                                           ${args.model}, ${args.provider},
+                                           ${args.inputTokens}, ${args.outputTokens}) as stored`;
+        return rows[0].stored === true;
       }),
   };
 }

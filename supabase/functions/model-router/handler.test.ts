@@ -48,8 +48,20 @@ function handler(db: FakeDb, baseUrl: string, extra: Partial<RouterDeps> = {}, l
     catalog: [FLASH, GLM, PAID],
     log: (event) => logs.push(event),
     ...extra,
+    limits: { settleRetryDelayMs: 1, ...extra.limits },
   });
 }
+
+/** Awaits every waitUntil promise, including ones registered while waiting. */
+async function drainAll(list: Promise<unknown>[]) {
+  for (let seen = -1; seen !== list.length; ) {
+    seen = list.length;
+    await Promise.all(list);
+  }
+}
+
+const promptOnly = () =>
+  creditsFor(FLASH, { promptTokens: PROMPT_TOKENS, cachedTokens: 0, completionTokens: 0 }, M125);
 
 const okCompletion = (usage: unknown) =>
   Response.json({
@@ -454,7 +466,7 @@ Deno.test("stream without usage: conservative estimate (prompt chars/4 + ceil(ou
   }
 });
 
-Deno.test("client disconnect mid-stream: upstream aborted, partial settled, never above reserved", async () => {
+Deno.test("client disconnect mid-stream: upstream NOT aborted, drained under waitUntil, real usage", async () => {
   let release!: () => void;
   const hold = new Promise<void>((r) => (release = r));
   const up = fakeUpstream(() => {
@@ -468,6 +480,9 @@ Deno.test("client disconnect mid-stream: upstream aborted, partial settled, neve
             ),
           );
           await hold;
+          controller.enqueue(
+            enc.encode(sse([{ choices: [], usage: { prompt_tokens: 9, completion_tokens: 300 } }])),
+          );
           controller.close();
         },
       }),
@@ -476,8 +491,14 @@ Deno.test("client disconnect mid-stream: upstream aborted, partial settled, neve
   });
   try {
     const db = new FakeDb(1e9);
-    const settled: Promise<unknown>[] = [];
-    const res = await handler(db, up.baseUrl, { waitUntil: (p) => settled.push(p) })(
+    const logs: Logged = [];
+    const later: Promise<unknown>[] = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      { waitUntil: (p) => later.push(p) },
+      logs,
+    )(
       completionRequest(
         { model: FLASH.id, messages: MESSAGES, stream: true, max_tokens: 500 },
         { key: "x1" },
@@ -486,17 +507,132 @@ Deno.test("client disconnect mid-stream: upstream aborted, partial settled, neve
     const reader = bodyOf(res).getReader();
     await reader.read();
     await reader.cancel();
-    await Promise.all(settled);
+    assertEquals(reservationOf(db, "x1").status, "active", "not settled at the disconnect");
+    release();
+    await drainAll(later);
     const r = reservationOf(db, "x1");
     assertEquals(r.status, "settled");
-    assertEquals(db.settles[0].outputTokens, estimateOutputTokens(40));
-    assertGreater(chargedOf(r), 0);
+    assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [9, 300]);
+    assertEquals(
+      chargedOf(r),
+      creditsFor(FLASH, { promptTokens: 9, cachedTokens: 0, completionTokens: 300 }, M125),
+    );
     assertLessOrEqual(chargedOf(r), r.amount);
-    for (let i = 0; i < 50 && up.aborted() === 0; i++) await new Promise((r) => setTimeout(r, 10));
-    assertEquals(up.aborted(), 1, "the upstream request was aborted");
-    release();
+    assertEquals(logs.at(-1)?.outcome, "client_disconnect");
+    assertEquals(logs.at(-1)?.estimated, false);
   } finally {
     release?.();
+    await up.close();
+  }
+});
+
+Deno.test("client disconnect mid-stream without usage: output estimate of everything drained", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  const up = fakeUpstream(() => {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          controller.enqueue(
+            enc.encode(
+              sse([{ choices: [{ delta: { content: "a".repeat(40) } }] }], { done: false }),
+            ),
+          );
+          await hold;
+          controller.enqueue(
+            enc.encode(sse([{ choices: [{ delta: { content: "b".repeat(360) } }] }])),
+          );
+          controller.close();
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  });
+  try {
+    const db = new FakeDb(1e9);
+    const later: Promise<unknown>[] = [];
+    const res = await handler(db, up.baseUrl, { waitUntil: (p) => later.push(p) })(
+      completionRequest(
+        { model: FLASH.id, messages: MESSAGES, stream: true, max_tokens: 500 },
+        { key: "x2" },
+      ),
+    );
+    const reader = bodyOf(res).getReader();
+    await reader.read();
+    await reader.cancel();
+    release();
+    await drainAll(later);
+    assertEquals(db.settles[0].outputTokens, estimateOutputTokens(400));
+    assertEquals(db.settles[0].inputTokens, PROMPT_TOKENS);
+    const r = reservationOf(db, "x2");
+    assertLessOrEqual(chargedOf(r), r.amount);
+  } finally {
+    release?.();
+    await up.close();
+  }
+});
+
+Deno.test("non-stream: the whole upstream call + settle is handed to waitUntil", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 5, completion_tokens: 2 }));
+  try {
+    const db = new FakeDb(1e9);
+    const later: Promise<unknown>[] = [];
+    const pending = handler(db, up.baseUrl, { waitUntil: (p) => later.push(p) })(
+      completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "w1" }),
+    );
+    // A caller that walks away: the registered work still finishes and settles.
+    for (let i = 0; i < 100 && later.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    assertEquals(later.length, 1);
+    await drainAll(later);
+    assertEquals(reservationOf(db, "w1").status, "settled");
+    assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [5, 2]);
+    await (await pending).json();
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("mid-stream upstream error after 2xx: estimate of what was received, never a release", async () => {
+  const up = fakeUpstream(() => {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          controller.enqueue(
+            enc.encode(
+              sse([{ choices: [{ delta: { content: "e".repeat(40) } }] }], { done: false }),
+            ),
+          );
+          await new Promise((r) => setTimeout(r, 20));
+          controller.error(new Error("boom"));
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  });
+  try {
+    const db = new FakeDb(1e9);
+    const logs: Logged = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      {},
+      logs,
+    )(
+      completionRequest(
+        { model: FLASH.id, messages: MESSAGES, stream: true, max_tokens: 500 },
+        { key: "m1" },
+      ),
+    );
+    await res.text().catch(() => {});
+    for (let i = 0; i < 100 && db.settles.length === 0; i++)
+      await new Promise((r) => setTimeout(r, 5));
+    assertEquals(db.settles[0].inputTokens, PROMPT_TOKENS);
+    assertEquals(db.settles[0].outputTokens, estimateOutputTokens(40));
+    assertGreater(chargedOf(reservationOf(db, "m1")), 0);
+    assertEquals(logs.at(-1)?.outcome, "upstream_error");
+  } finally {
     await up.close();
   }
 });
@@ -529,7 +665,7 @@ Deno.test("upstream unreachable: 502 and full release", async () => {
   assertEquals(db.balance, 5000);
 });
 
-Deno.test("stream: upstream headers timeout -> 504 and full release", async () => {
+Deno.test("stream: upstream headers timeout -> 504, prompt estimate charged (not released)", async () => {
   const up = fakeUpstream(async () => {
     await new Promise((r) => setTimeout(r, 400));
     return okCompletion({ prompt_tokens: 1, completion_tokens: 1 });
@@ -543,8 +679,10 @@ Deno.test("stream: upstream headers timeout -> 504 and full release", async () =
       ),
     );
     assertEquals(await errorOf(res), { status: 504, error: "upstream_timeout" });
-    assertEquals(reservationOf(db, "t1").charged, 0);
-    assertEquals(db.balance, 5000);
+    assertGreater(promptOnly(), 0);
+    assertEquals(reservationOf(db, "t1").charged, promptOnly());
+    assertEquals(db.balance, 5000 - promptOnly());
+    assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [PROMPT_TOKENS, 0]);
     await new Promise((r) => setTimeout(r, 450));
   } finally {
     await up.close();
@@ -567,7 +705,11 @@ Deno.test("non-stream: a slow upstream is bounded by the total cap, not the head
       completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "t3" }),
     );
     assertEquals(await errorOf(capped), { status: 504, error: "upstream_timeout" });
-    assertEquals(chargedOf(reservationOf(db, "t3")), 0);
+    assertEquals(
+      chargedOf(reservationOf(db, "t3")),
+      promptOnly(),
+      "cap after send pays the estimate",
+    );
     await new Promise((r) => setTimeout(r, 200));
   } finally {
     await up.close();
@@ -603,7 +745,13 @@ Deno.test("stream cap: a stream past the total limit is cut and settled by estim
   });
   try {
     const db = new FakeDb(1e9);
-    const res = await handler(db, up.baseUrl, { limits: { streamCapMs: 100 } })(
+    const logs: Logged = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      { limits: { streamCapMs: 100 } },
+      logs,
+    )(
       completionRequest(
         { model: FLASH.id, messages: MESSAGES, stream: true, max_tokens: 500 },
         { key: "cap1" },
@@ -619,7 +767,10 @@ Deno.test("stream cap: a stream past the total limit is cut and settled by estim
     const r = reservationOf(db, "cap1");
     assertEquals(r.status, "settled");
     assertEquals(db.settles[0].outputTokens, estimateOutputTokens(80));
+    assertEquals(db.settles[0].inputTokens, PROMPT_TOKENS);
+    assertGreater(chargedOf(r), 0);
     assertLessOrEqual(chargedOf(r), r.amount);
+    assertEquals(logs.at(-1)?.outcome, "stream_cap");
   } finally {
     await up.close();
   }
@@ -679,11 +830,33 @@ Deno.test("429: too many active reservations", async () => {
   assertEquals(db.reservations.has("q1"), false);
 });
 
-Deno.test("a settle failure is logged without content; the reservation is left for the sweep", async () => {
+Deno.test("settle is retried 2 times: a transient failure still settles", async () => {
   const up = fakeUpstream(() => okCompletion({ prompt_tokens: 5, completion_tokens: 2 }));
   try {
     const db = new FakeDb(1e9);
-    db.settleError = true;
+    db.settleFailures = 2;
+    const logs: Logged = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      {},
+      logs,
+    )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "f0" }));
+    await res.json();
+    assertEquals(db.settleAttempts, 3);
+    assertEquals(reservationOf(db, "f0").status, "settled");
+    assertEquals(db.stored.size, 0);
+    assertEquals(logs.at(-1)?.attempts, 3);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("settle keeps failing: the computed cost is stored for the sweep, logged without content", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 5, completion_tokens: 2 }));
+  try {
+    const db = new FakeDb(1e9);
+    db.settleFailures = Infinity;
     const logs: Logged = [];
     const res = await handler(
       db,
@@ -693,8 +866,41 @@ Deno.test("a settle failure is logged without content; the reservation is left f
     )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "f1" }));
     assertEquals(res.status, 200);
     await res.json();
-    assertEquals(logs.at(-1)?.event, "model_router.settle_failed");
+    assertEquals(db.settleAttempts, 3, "1 try + 2 retries");
+    const stored = db.stored.get("f1");
+    assertEquals(
+      stored?.credits,
+      creditsFor(FLASH, { promptTokens: 5, cachedTokens: 0, completionTokens: 2 }, M125),
+    );
+    assertEquals(
+      [stored?.model, stored?.provider, stored?.inputTokens, stored?.outputTokens],
+      [FLASH.id, "deepseek", 5, 2],
+    );
+    const last = logs.at(-1) ?? {};
+    assertEquals([last.event, last.cost_stored], ["model_router.settle_failed", true]);
+    assert(!JSON.stringify(logs).includes("hello there"), "no content in logs");
     assertEquals(reservationOf(db, "f1").status, "active");
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("settle failure on a release (non-2xx): nothing stored, the sweep refunds", async () => {
+  const up = fakeUpstream(() => new Response("no", { status: 503 }));
+  try {
+    const db = new FakeDb(1e9);
+    db.settleFailures = Infinity;
+    const logs: Logged = [];
+    await (
+      await handler(
+        db,
+        up.baseUrl,
+        {},
+        logs,
+      )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "f2" }))
+    ).json();
+    assertEquals(db.stored.size, 0);
+    assertEquals(logs.at(-1)?.cost_stored, false);
   } finally {
     await up.close();
   }

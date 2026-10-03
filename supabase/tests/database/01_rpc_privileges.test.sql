@@ -22,6 +22,8 @@ select throws_ok(format($q$select private.router_claim_request(%L, 'k', repeat('
   '42501', null, 'anon: router_claim_request denied');
 select throws_ok(format($q$select private.router_reserve(%L, 'k', 1)$q$, :'uid'),
   '42501', null, 'anon: router_reserve denied');
+select throws_ok(format($q$select private.router_store_cost(%L, 'k', 1, 'm', 'p')$q$, :'uid'),
+  '42501', null, 'anon: router_store_cost denied');
 select tests.clear_authentication();
 
 select tests.authenticate_as(:'uid');
@@ -39,6 +41,8 @@ select throws_ok(format($q$select private.router_claim_request(%L, 'k', repeat('
   '42501', null, 'authenticated: router_claim_request denied');
 select throws_ok(format($q$select private.router_reserve(%L, 'k', 1)$q$, :'uid'),
   '42501', null, 'authenticated: router_reserve denied');
+select throws_ok(format($q$select private.router_store_cost(%L, 'k', 1, 'm', 'p')$q$, :'uid'),
+  '42501', null, 'authenticated: router_store_cost denied');
 select tests.clear_authentication();
 
 -- Denied at the function level too, not only by the schema: even with USAGE
@@ -68,8 +72,8 @@ select is(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private' and has_function_privilege('service_role', p.oid, 'execute')),
   array['claim_stripe_customer', 'grant_credits', 'process_stripe_event', 'release_expired_reservations',
-        'reserve_credits', 'router_claim_request', 'router_reserve', 'settle_usage'],
-  'service_role can execute exactly the eight RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve; not the trigger functions)');
+        'reserve_credits', 'router_claim_request', 'router_reserve', 'router_store_cost', 'settle_usage'],
+  'service_role can execute exactly the nine RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost; not the trigger functions)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -88,13 +92,13 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  11, 'eleven functions in private (8 RPCs + 3 trigger functions)');
+  12, 'twelve functions in private (9 RPCs + 3 trigger functions)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  11, 'all private functions are SECURITY DEFINER with search_path=""');
+  12, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -103,7 +107,7 @@ select is(
       and p.proconfig @> array['search_path=""']),
   array['claim_stripe_customer', 'grant_credits', 'grant_free_initial_credits', 'handle_new_user',
         'process_stripe_event', 'release_expired_reservations', 'reserve_credits', 'router_claim_request',
-        'router_reserve', 'set_updated_at', 'settle_usage'],
+        'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage'],
   'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');
 
 -- Hijack attempt: a caller-controlled search_path with decoy objects must not

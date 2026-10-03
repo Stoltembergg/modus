@@ -1,7 +1,8 @@
 -- B4a (20261003063000_b4a_model_router, 20261003063100_b4a_free_plan_models):
 -- router_requests (idempotency keys, no client access), router_claim_request
 -- (replay vs conflict), router_reserve (4 active reservations per user, 402,
--- reservation + release through settle_usage), and the Free models.
+-- reservation + release through settle_usage), router_store_cost + the
+-- replaced expiry sweep (stored cost -> settled; none -> refunded), and the Free models.
 begin;
 set local search_path = public, extensions;
 select no_plan();
@@ -85,6 +86,61 @@ select throws_ok($q$select private.router_reserve('00000000-0000-4000-8000-00000
   'P0404', null, 'no wallet -> P0404');
 select throws_ok(format($q$select private.router_reserve(%L, 'x', 1, 0)$q$, :'a'),
   '22023', null, 'max_active < 1 rejected');
+
+-- Settle kept failing in the router -> cost stored -> the sweep charges it.
+-- User b: balance 1000, three reservations: sc (cost stored), sn (nothing stored),
+-- sx (stored cost above the reservation -> capped).
+select private.router_claim_request(:'b', 'sc', repeat('c', 64));
+select private.router_claim_request(:'b', 'sn', repeat('c', 64));
+select private.router_claim_request(:'b', 'sx', repeat('c', 64));
+select private.router_reserve(:'b', 'sc', 300);
+select private.router_reserve(:'b', 'sn', 200);
+select private.router_reserve(:'b', 'sx', 50);
+select is((select balance from public.credit_wallets where user_id = :'b'), 450::bigint,
+  'store: three reservations debited (550)');
+select is(private.router_store_cost(:'b', 'sc', 120, 'deepseek/deepseek-flash', 'deepseek', 50, 40), true,
+  'store: cost kept on the router_requests row');
+select is(private.router_store_cost(:'b', 'sx', 999, 'zai/glm-5.3-flash', 'zai', 1, 2), true,
+  'store: a cost above the reservation is kept as-is (capped by the sweep)');
+select is(private.router_store_cost(:'b', 'no-such-key', 1, 'm', 'p'), false,
+  'store: unknown key -> false');
+select throws_ok(format($q$select private.router_store_cost(%L, 'sc', -1, 'm', 'p')$q$, :'b'),
+  '22023', null, 'store: negative credits rejected');
+select throws_ok(format($q$select private.router_store_cost(%L, 'sc', 1, null, 'p')$q$, :'b'),
+  '22023', null, 'store: model required');
+select is((select settle_credits from public.router_requests where user_id = :'b' and idempotency_key = 'sn'),
+  null, 'sn: nothing stored');
+update public.credit_reservations set expires_at = now() - interval '1 second'
+ where user_id = :'b' and status = 'active';
+select is(private.release_expired_reservations(), 3, 'sweep: three expired reservations handled');
+select is((select status || ':' || settled_amount from public.credit_reservations
+            where user_id = :'b' and request_id = 'sc'), 'settled:120',
+  'sweep: stored cost -> settled by that cost');
+select is((select status from public.credit_reservations where user_id = :'b' and request_id = 'sn'),
+  'expired', 'sweep: no stored cost -> released (expired)');
+select is((select status || ':' || settled_amount from public.credit_reservations
+            where user_id = :'b' and request_id = 'sx'), 'settled:50',
+  'sweep: stored cost capped at the reservation');
+select is((select balance from public.credit_wallets where user_id = :'b'), 830::bigint,
+  'sweep: 180 back from sc, 200 from sn, 0 from sx');
+select is((select reserved from public.credit_wallets where user_id = :'b'), 0::bigint,
+  'sweep: nothing left reserved');
+select results_eq(
+  format($q$select request_id, model, provider, input_tokens, output_tokens, credits, status
+              from public.usage_events where user_id = %L order by request_id$q$, :'b'),
+  $q$values ('sc', 'deepseek/deepseek-flash', 'deepseek', 50, 40, 120::bigint, 'billed'),
+            ('sx', 'zai/glm-5.3-flash', 'zai', 1, 2, 50::bigint, 'billed')$q$,
+  'sweep: billed usage rows for the stored costs only');
+select results_eq(
+  format($q$select idempotency_key, kind, amount from public.credit_transactions
+             where user_id = %L and ref in ('sc', 'sn', 'sx') and kind <> 'reserve'
+             order by idempotency_key$q$, :'b'),
+  $q$values ('expire:sn', 'refund', 200::bigint), ('settle:sc', 'settle', 180::bigint),
+            ('settle:sx', 'settle', 0::bigint)$q$,
+  'sweep: settle ledger rows for stored costs, refund for the other');
+select is(private.settle_usage(:'b', 'sc', 120, 'deepseek/deepseek-flash', 'deepseek') ->> 'code',
+  'already_settled', 'a late settle after the sweep does not charge twice');
+select is(private.release_expired_reservations(:'b'), 0, 'sweep is idempotent');
 select tests.clear_authentication();
 
 -- Free plan models (B4a migration).

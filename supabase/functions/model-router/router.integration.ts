@@ -175,7 +175,8 @@ Deno.test({
       assertEquals([rf.status, Number(rf.settled_amount)], ["settled", 0]);
       assertEquals(await wallet(), { balance, reserved: 0 });
 
-      // 5) Stream cut by the client: partial settle (estimate), capped at the reservation.
+      // 5) Stream cut by the client: the upstream is drained under waitUntil and the
+      //    estimate of everything it sent is settled, capped at the reservation.
       mode = "stream-partial";
       const stream = await h(
         completionRequest(
@@ -187,8 +188,11 @@ Deno.test({
       const reader = stream.body.getReader();
       await reader.read();
       await reader.cancel();
-      await Promise.all(settled);
       release?.();
+      for (let seen = -1; seen !== settled.length; ) {
+        seen = settled.length;
+        await Promise.all(settled);
+      }
       const rc = await reservation("it-cut");
       assertEquals(rc.status, "settled");
       assertGreater(Number(rc.settled_amount), 0);
@@ -230,6 +234,27 @@ Deno.test({
       const after = await wallet();
       assert(after.balance >= 0);
       assertEquals(after.reserved, 0);
+
+      // 8) Settle kept failing -> router_store_cost; the expiry sweep charges the stored cost.
+      await admin`update public.credit_wallets set balance = 1000 where user_id = ${userId}`;
+      assertEquals(await db.claimRequest(userId, "it-store", "a".repeat(64)), "claimed");
+      await db.reserve(userId, "it-store", 300, 4);
+      const stored = await db.storeCost({
+        userId,
+        requestId: "it-store",
+        credits: 120,
+        model: FLASH,
+        provider: "deepseek",
+        inputTokens: 50,
+        outputTokens: 40,
+      });
+      assert(stored, "cost stored on the router_requests row");
+      await admin`update public.credit_reservations set expires_at = now() - interval '1 second'
+                   where user_id = ${userId} and request_id = 'it-store'`;
+      await admin`select private.release_expired_reservations(${userId}::uuid)`;
+      const rs = await reservation("it-store");
+      assertEquals([rs.status, Number(rs.settled_amount)], ["settled", 120]);
+      assertEquals(await wallet(), { balance: 880, reserved: 0 });
 
       // No orphan reservation anywhere for this user.
       const [{ active }] =
