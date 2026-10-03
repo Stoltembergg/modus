@@ -76,7 +76,7 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
     processStripeEvent: (eventId, type, payload) =>
       asServiceRole(async (tx) => {
         const rows = await tx`
-          select private.process_stripe_event(${eventId}, ${type}, ${JSON.stringify(payload)}::jsonb) as result`;
+          select private.process_stripe_event(${eventId}, ${type}, ${tx.json(payload as postgres.JSONValue)}) as result`;
         return rows[0].result as Record<string, unknown>;
       }),
   };

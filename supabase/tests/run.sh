@@ -22,6 +22,7 @@ if [[ -z "${PG_BIN:-}" || ! -x "$PG_BIN/initdb" ]]; then
   exit 2
 fi
 command -v pg_prove >/dev/null || { echo "run.sh: pg_prove not found" >&2; exit 2; }
+command -v deno >/dev/null || { echo "run.sh: deno not found (needed for the db.ts integration test)" >&2; exit 2; }
 
 work="$(mktemp -d)"
 export PGHOST="$work" PGPORT="${PGPORT_TEST:-55432}" PGUSER=postgres PGDATABASE=postgres
@@ -33,7 +34,7 @@ trap cleanup EXIT
 
 "$PG_BIN/initdb" -D "$work/data" -U postgres -A trust --no-sync >/dev/null
 "$PG_BIN/pg_ctl" -D "$work/data" -l "$work/server.log" -w \
-  -o "-p $PGPORT -k $work -c listen_addresses='' -c fsync=off" start >/dev/null
+  -o "-p $PGPORT -k $work -c listen_addresses=127.0.0.1 -c fsync=off" start >/dev/null
 
 psql_run() { "$PG_BIN/psql" -X -q -v ON_ERROR_STOP=1 "$@"; }
 
@@ -52,5 +53,10 @@ pg_prove --ext .sql -v "$here"/database/*.test.sql
 
 echo "== concurrency"
 PSQL="$PG_BIN/psql" bash "$here/concurrency.sh"
+
+echo "== functions db.ts (npm:postgres, real cluster)"
+(cd "$root/supabase/functions" &&
+  MODUS_TEST_DB_URL="postgres://postgres@127.0.0.1:$PGPORT/postgres" \
+    deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import _shared/db.integration.ts)
 
 echo "== all SQL tests passed"
