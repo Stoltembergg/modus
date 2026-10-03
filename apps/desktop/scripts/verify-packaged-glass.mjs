@@ -94,10 +94,10 @@ export function checkMainBundle(outDir) {
   return failures;
 }
 
-const SCENE = `<div class="app-shell app-root flex h-screen min-h-0 flex-col" data-shell-layer="app-shell">
+export const SCENE = `<div class="app-shell app-root flex h-screen min-h-0 flex-col" data-shell-layer="app-shell">
 <div class="flex min-h-0 min-w-0 flex-1 flex-col">
 <div class="app-layout-row surface-app flex min-h-0 min-w-0 flex-1">
-<nav class="app-rail" data-probe="rail"></nav>
+<nav class="app-rail" data-probe="rail"><button class="app-rail-item" type="button">A</button></nav>
 <aside class="app-context-sidebar relative flex shrink-0 flex-col overflow-hidden bg-panel" data-probe="sidebar"><div class="app-context-sidebar-body flex h-full flex-col bg-panel"></div></aside>
 <main class="surface-main relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-b-lg border border-hairline-strong border-t-0" data-probe="main"></main>
 </div></div></div>`;
@@ -117,6 +117,19 @@ const MEASURE = `(() => {
     return 1 - through;
   };
   const q = (s) => document.querySelector(s);
+  const own = (s) => alphaOf(getComputedStyle(q(s)).backgroundColor);
+  const blur = (s) => getComputedStyle(q(s)).getPropertyValue("backdrop-filter").includes("blur(");
+  const edge = (style, side) =>
+    Number.parseFloat(style.getPropertyValue("border-" + side + "-width")) > 0
+      ? alphaOf(style.getPropertyValue("border-" + side + "-color"))
+      : 0;
+  const mainStyle = getComputedStyle(q('[data-probe="main"]'));
+  const button = q(".app-rail-item");
+  button.focus();
+  const ring = getComputedStyle(button);
+  const focusRing =
+    ring.outlineStyle !== "none" && Number.parseFloat(ring.outlineWidth) > 0 && alphaOf(ring.outlineColor) > 0;
+  button.blur();
   return JSON.stringify({
     nativeGlass: document.documentElement.dataset.nativeGlass,
     stylesheets: document.styleSheets.length,
@@ -127,6 +140,14 @@ const MEASURE = `(() => {
     rail: effective(q('[data-probe="rail"]')),
     sidebar: effective(q('[data-probe="sidebar"]')),
     main: effective(q('[data-probe="main"]')),
+    own: { rail: own('[data-probe="rail"]'), sidebar: own('[data-probe="sidebar"]'), main: own('[data-probe="main"]') },
+    blur: { shell: blur(".app-shell"), rail: blur('[data-probe="rail"]'), sidebar: blur('[data-probe="sidebar"]'), main: blur('[data-probe="main"]') },
+    edges: {
+      railDivider: edge(getComputedStyle(q('[data-probe="rail"]'), "::after"), "right"),
+      mainLeft: edge(mainStyle, "left"),
+      mainRight: edge(mainStyle, "right"),
+    },
+    focusRing,
   });
 })()`;
 
@@ -241,6 +262,8 @@ export async function measureScenarios(
       (await send("Runtime.evaluate", { expression, returnByValue: true })).result?.result?.value;
 
     await send("Page.enable");
+    // Headless pages are never focused; focus-visible needs a focused page.
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true });
     const host = JSON.parse(await evaluate(HOST_MEDIA));
     const results = [];
     for (const [index, scenario] of scenarios.entries()) {
@@ -281,24 +304,52 @@ export function renderFailures(results) {
       m.nativeGlass === String(scenario.glass),
       `first frame set data-native-glass="${m.nativeGlass}"`,
     );
+    expect(m.focusRing === true, "focus ring on a rail item is not visible");
+    const todaysEdges = () => {
+      for (const [name, alpha] of Object.entries(m.edges ?? {})) {
+        expect(alpha > 0, `${name} divider missing (today's border expected)`);
+      }
+    };
     if (scenario.os) {
-      // OS accessibility wins in CSS too: solid even with native glass on.
+      // OS accessibility wins in CSS too: today's solid look, dividers included.
       for (const layer of ["rail", "sidebar", "main"]) {
         expect(m[layer] === 1, `${layer} not opaque under ${scenario.os} (${m[layer]})`);
       }
+      expect(m.blur?.shell === false, `window blur still on under ${scenario.os}`);
+      todaysEdges();
     } else if (scenario.glass) {
-      for (const layer of ["html", "body", "root", "shell"]) {
+      for (const layer of ["html", "body", "root"]) {
         expect(m[layer] === 0, `<${layer}> background alpha ${m[layer]} hides the window material`);
       }
+      // Uniform glass: one tint + blur at the window, panels transparent on top.
+      expect(
+        m.shell > 0 && m.shell < 1,
+        `window tint alpha ${m.shell} (expected one translucent layer)`,
+      );
+      expect(m.blur?.shell === true, "window layer has no blur");
+      for (const panel of ["rail", "sidebar"]) {
+        expect(m.own?.[panel] === 0, `${panel} paints its own background (${m.own?.[panel]})`);
+        expect(m.blur?.[panel] === false, `${panel} has its own backdrop-filter`);
+      }
+      expect(m.blur?.main === false, "main has its own backdrop-filter");
       expect(m.rail < 1, `rail is opaque (effective alpha ${m.rail})`);
-      expect(m.sidebar < 1, `sidebar is opaque (effective alpha ${m.sidebar})`);
-      if (scenario.mode === "sidebar")
+      expect(m.rail === m.sidebar, `rail ${m.rail} and sidebar ${m.sidebar} alphas differ`);
+      expect(m.edges?.railDivider === 0, "rail|sidebar divider still visible");
+      expect(m.edges?.mainLeft === 0, "sidebar|main line still visible");
+      if (scenario.mode === "sidebar") {
         expect(m.main === 1, `main not opaque in Sidebar (${m.main})`);
-      if (scenario.mode === "full") expect(m.main < 1, `main opaque in Full (${m.main})`);
+        expect(m.edges?.mainRight > 0, "main lost its other edges in Sidebar");
+      }
+      if (scenario.mode === "full") {
+        expect(m.own?.main === 0, `main paints its own background in Full (${m.own?.main})`);
+        expect(m.main === m.rail, `main ${m.main} and rail ${m.rail} alphas differ in Full`);
+        expect(m.edges?.mainRight === 0, "main edge still visible in Full");
+      }
     } else {
       for (const layer of ["rail", "sidebar", "main"]) {
         expect(m[layer] === 1, `${layer} not opaque with glass off (${m[layer]})`);
       }
+      todaysEdges();
     }
   }
   return failures;

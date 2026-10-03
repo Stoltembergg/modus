@@ -45,7 +45,7 @@ export function SettingsSidebar({
   const version = useAppVersion();
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
+    <aside className="app-settings-sidebar flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
       <button
         className="mb-4 flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-muted transition-colors hover:bg-hover hover:text-fg"
         onClick={onBack}

@@ -222,16 +222,17 @@
   --surface-app: color-mix(in srgb, var(--color-panel) 97%, transparent);
   --surface-sidebar: color-mix(in srgb, var(--color-panel) 94%, transparent);
   --surface-main: var(--color-canvas);
-  --surface-main-glass: color-mix(
-    in srgb,
-    var(--color-canvas) var(--glass-alpha-canvas),
-    transparent
-  );
   --surface-raised: var(--color-elevated);
   /* Solid on unsupported hosts; native translucency is applied by the scoped
      data-native-glass rules below. */
   --surface-glass: var(--surface-raised);
   --surface-glass-sidebar: color-mix(
+    in srgb,
+    var(--color-panel) var(--glass-alpha-chrome),
+    transparent
+  );
+  /* Uniform glass: the one tint layer behind rail, sidebar and (Full) main. */
+  --surface-glass-window: color-mix(
     in srgb,
     var(--color-panel) var(--glass-alpha-chrome),
     transparent
@@ -287,9 +288,8 @@
      percentages; one set for every theme (no per-theme override), so the
      reduced-transparency fallback at the end of this file always wins.
      Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
-  --glass-alpha-chrome: 78%; /* app rail + context sidebar */
+  --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
   --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
-  --glass-alpha-canvas: 94%; /* main surface; light pdf chrome */
   --glass-blur: 18px;
   --glass-saturate: 1.12;
   --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
@@ -900,9 +900,11 @@ body {
    - "sidebar" (default): only the left chrome (rail + context sidebar, one
      column) is translucent; the canvas, overlays and every other surface keep
      their opaque defaults.
-   - "full": the canvas gets a light tint and overlays / scrims are glass too.
-   Same rules in every theme. Rail and sidebar carry a light CSS blur so their
-   frost matches the overlays; behind them the OS material blurs the desktop.
+   - "full": rail, sidebar and canvas share one tint; overlays / scrims are
+     glass too.
+   Same rules in every theme. The rules right below are the solid-compatible
+   base (what reduced transparency / more contrast / forced colors keep); the
+   uniform block after them is what a normal desktop sees.
    Always -webkit-backdrop-filter first: Lightning CSS drops the standard
    property when it comes first, and Chromium ignores the prefixed one. */
 /* <html> too: `:root { background: var(--color-canvas) }` paints the whole
@@ -917,16 +919,9 @@ body {
 :root[data-native-glass="true"] .app-rail,
 :root[data-native-glass="true"] .app-context-sidebar {
   background-color: var(--surface-glass-sidebar);
-  -webkit-backdrop-filter: var(--glass-filter);
-  backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .app-context-sidebar-body {
   background-color: transparent;
-}
-:root[data-native-glass="true"][data-transparency="full"] .surface-main {
-  background-color: var(--surface-main-glass);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 :root[data-native-glass="true"][data-transparency="full"] .surface-raised,
 :root[data-native-glass="true"][data-transparency="full"] .surface-glass {
@@ -942,6 +937,48 @@ body {
 :root[data-native-glass="true"][data-transparency="full"] .dialog-scrim {
   -webkit-backdrop-filter: var(--glass-scrim-filter);
   backdrop-filter: var(--glass-scrim-filter);
+}
+
+/* Uniform glass (D2, Gabriel 2026-10-03 17:23). One tint + blur layer at the
+   window level (.app-shell); rail, sidebar, settings and (Full) main / inspector
+   are transparent on top of it, with no backdrop-filter of their own, so tints
+   and blurs never stack. Dividers between those areas go transparent and the
+   gutters stay as spacing (they now carry the same tint, no dark strip).
+   Sidebar mode keeps main opaque and only drops the sidebar|main line.
+   Gated off for reduced transparency, more contrast, forced colors and hosts
+   without backdrop-filter support; there the base rules above apply unchanged.
+   Focus rings / outlines are untouched (only border-color of panel edges). */
+@media (prefers-reduced-transparency: no-preference) and (prefers-contrast: no-preference) {
+  @media (forced-colors: none) {
+    @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+      :root[data-native-glass="true"] .app-shell {
+        background-color: var(--surface-glass-window);
+        -webkit-backdrop-filter: var(--glass-filter);
+        backdrop-filter: var(--glass-filter);
+      }
+      :root[data-native-glass="true"] .app-rail,
+      :root[data-native-glass="true"] .app-context-sidebar,
+      :root[data-native-glass="true"] .app-settings-sidebar,
+      :root[data-native-glass="true"] .app-layout-row > .surface-app {
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-native-glass="true"] .app-rail::after {
+        border-color: transparent;
+      }
+      :root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-main,
+      :root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-sidebar {
+        border-color: transparent;
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-native-glass="true"][data-transparency="sidebar"] .app-layout-row .surface-main {
+        border-left-color: transparent;
+      }
+    }
+  }
 }
 
 :root[data-native-glass="false"] body,
@@ -2871,7 +2908,6 @@ body
   :root {
     --glass-alpha-chrome: 100%;
     --glass-alpha-overlay: 100%;
-    --glass-alpha-canvas: 100%;
     --glass-filter: none;
     --glass-scrim-filter: none;
   }
@@ -2887,7 +2923,6 @@ body
   :root {
     --glass-alpha-chrome: 100%;
     --glass-alpha-overlay: 100%;
-    --glass-alpha-canvas: 100%;
     --glass-filter: none;
     --glass-scrim-filter: none;
   }

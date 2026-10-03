@@ -9,6 +9,7 @@ import {
   mediaFor,
   renderFailures,
   SCENARIOS,
+  SCENE,
   verifyPackagedGlass,
 } from "./verify-packaged-glass.mjs";
 
@@ -19,66 +20,70 @@ import {
  * Package macOS / Package Windows run the same verifier as a CLI step.
  */
 const OUT = process.env.MODUS_PACKAGED_OUT;
+/** Real checker measurements (before = 8d4c400 build, after = uniform glass build). */
+const FIXTURES = JSON.parse(
+  readFileSync(new URL("./verify-packaged-glass.fixtures.json", import.meta.url), "utf8"),
+);
 const CHROME = findChrome();
 
 describe("packaged glass verifier", () => {
   it("flags what Gabriel's macOS build of 152a4c2 measured (opaque <html> hides vibrancy)", () => {
-    // Measured from the 152a4c2 Package macOS artifact (dark, Automatic, glass on).
+    // 152a4c2 Package macOS artifact (dark, Automatic, glass on): <html> painted the canvas.
+    const { measured } = FIXTURES.afterSidebar;
     const failures = renderFailures([
       {
         scenario: { theme: "dark", glass: true, mode: "sidebar" },
-        measured: {
-          nativeGlass: "true",
-          stylesheets: 2,
-          html: 1,
-          body: 0,
-          root: 0,
-          shell: 0,
-          rail: 1,
-          sidebar: 1,
-          main: 1,
-        },
+        measured: { ...measured, html: 1, rail: 1, sidebar: 1 },
       },
     ]);
-    expect(failures).toEqual([
+    expect(failures).toContain(
       "renderer dark/sidebar/glass=true: <html> background alpha 1 hides the window material",
+    );
+    expect(failures).toContain(
       "renderer dark/sidebar/glass=true: rail is opaque (effective alpha 1)",
-      "renderer dark/sidebar/glass=true: sidebar is opaque (effective alpha 1)",
+    );
+  });
+
+  it("flags the Full build Gabriel saw on 0715072: stacked tints, per-panel blur, dividers", () => {
+    // Measured from the electron-vite build of 8d4c400 (= 0715072 + #154), dark / Full.
+    expect(renderFailures([FIXTURES.beforeFull])).toEqual([
+      "renderer dark/full/glass=true: window tint alpha 0 (expected one translucent layer)",
+      "renderer dark/full/glass=true: window layer has no blur",
+      "renderer dark/full/glass=true: rail paints its own background (0.78)",
+      "renderer dark/full/glass=true: rail has its own backdrop-filter",
+      "renderer dark/full/glass=true: sidebar paints its own background (0.78)",
+      "renderer dark/full/glass=true: sidebar has its own backdrop-filter",
+      "renderer dark/full/glass=true: rail|sidebar divider still visible",
+      "renderer dark/full/glass=true: sidebar|main line still visible",
+      "renderer dark/full/glass=true: main paints its own background in Full (0.94)",
+      "renderer dark/full/glass=true: main 0.94 and rail 0.78 alphas differ in Full",
+      "renderer dark/full/glass=true: main edge still visible in Full",
     ]);
   });
 
-  it("accepts a build where the material shows through the left chrome only", () => {
-    const failures = renderFailures([
-      {
-        scenario: { theme: "dark", glass: true, mode: "sidebar" },
+  it("accepts uniform glass: one window layer, equal alphas, no dividers, focus ring kept", () => {
+    const { afterSidebar, afterFull, afterOff, afterReduced } = FIXTURES;
+    expect(renderFailures([afterSidebar, afterFull, afterOff, afterReduced])).toEqual([]);
+    expect(afterFull.measured.main).toBe(afterFull.measured.rail);
+    expect(afterFull.measured.focusRing).toBe(true);
+  });
+
+  it("requires today's dividers and a focus ring when glass is off or the OS asks for solid", () => {
+    for (const fixture of [FIXTURES.afterOff, FIXTURES.afterReduced]) {
+      const stripped = {
+        ...fixture,
         measured: {
-          nativeGlass: "true",
-          stylesheets: 2,
-          html: 0,
-          body: 0,
-          root: 0,
-          shell: 0,
-          rail: 0.78,
-          sidebar: 0.78,
-          main: 1,
+          ...fixture.measured,
+          edges: { railDivider: 0, mainLeft: 0, mainRight: 0 },
+          focusRing: false,
         },
-      },
-      {
-        scenario: { theme: "dark", glass: false, mode: "off" },
-        measured: {
-          nativeGlass: "false",
-          stylesheets: 2,
-          html: 1,
-          body: 0.97,
-          root: 0.97,
-          shell: 0.97,
-          rail: 1,
-          sidebar: 1,
-          main: 1,
-        },
-      },
-    ]);
-    expect(failures).toEqual([]);
+      };
+      const failures = renderFailures([stripped]);
+      expect(failures.some((f) => f.endsWith("focus ring on a rail item is not visible"))).toBe(
+        true,
+      );
+      expect(failures.filter((f) => f.includes("divider missing"))).toHaveLength(3);
+    }
   });
 
   it("pins the host accessibility media: glass scenarios measure a desktop with every setting off", () => {
@@ -97,31 +102,15 @@ describe("packaged glass verifier", () => {
   });
 
   it("macOS runner (Reduce transparency on): the CSS fallback is expected under `os`, a failure without it", () => {
-    // Package macOS run 37147973291 (3dcb1cf), dark/sidebar, host media not pinned.
-    const runner = {
-      nativeGlass: "true",
-      stylesheets: 2,
-      html: 0,
-      body: 1,
-      root: 1,
-      shell: 1,
-      rail: 1,
-      sidebar: 1,
-      main: 1,
-    };
+    // Package macOS run 37147973291: the runner's Reduce transparency turned the
+    // solid fallback on in every glass scenario.
+    const runner = FIXTURES.afterReduced.measured;
     expect(
       renderFailures([
         { scenario: { theme: "dark", glass: true, mode: "sidebar" }, measured: runner },
-      ]),
-    ).toHaveLength(5);
-    expect(
-      renderFailures([
-        {
-          scenario: { theme: "dark", glass: true, mode: "sidebar", os: "reduced-transparency" },
-          measured: runner,
-        },
-      ]),
-    ).toEqual([]);
+      ]).length,
+    ).toBeGreaterThanOrEqual(5);
+    expect(renderFailures([FIXTURES.afterReduced])).toEqual([]);
   });
 
   it.skipIf(!OUT)(
@@ -144,16 +133,8 @@ describe("packaged glass verifier", () => {
         base: new URL(".", cssPath).pathname,
         onDependency: () => undefined,
       });
-      const used = [
-        "flex",
-        "h-screen",
-        "min-h-0",
-        "min-w-0",
-        "flex-1",
-        "flex-col",
-        "bg-panel",
-        "relative",
-      ];
+      // Every utility class the checker's app scene uses (the real build has them all).
+      const used = [...SCENE.matchAll(/class="([^"]+)"/g)].flatMap((m) => m[1].split(/\s+/));
       writeFileSync(join(dir, "app.css"), optimize(compiler.build(used), { minify: true }).code);
       const html = readFileSync(
         new URL("../src/renderer/index.html", import.meta.url),

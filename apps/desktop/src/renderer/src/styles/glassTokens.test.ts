@@ -87,7 +87,6 @@ const THEMES: Theme[] = ["dark", "dark-plus", "light"];
 const TIERS = {
   "--glass-alpha-chrome": "--color-panel",
   "--glass-alpha-overlay": "--color-elevated",
-  "--glass-alpha-canvas": "--color-canvas",
 } as const;
 
 /** Smallest contrast of a text tier on a glass tier over the given backdrops. */
@@ -103,7 +102,6 @@ describe("glass tokens (D1)", () => {
       [
         "--glass-alpha-chrome",
         "--glass-alpha-overlay",
-        "--glass-alpha-canvas",
         "--glass-blur",
         "--glass-saturate",
         "--glass-filter",
@@ -111,7 +109,7 @@ describe("glass tokens (D1)", () => {
         "--glass-scrim-filter",
         "--surface-glass-sidebar",
         "--surface-glass-elevated",
-        "--surface-main-glass",
+        "--surface-glass-window",
       ].map((name) => [
         name,
         decl(semanticRoot, name)?.replace(/\s+/g, " ").replace(/\( /g, "(").replace(/ \)/g, ")"),
@@ -120,7 +118,6 @@ describe("glass tokens (D1)", () => {
     expect(tokens).toEqual({
       "--glass-alpha-chrome": "78%",
       "--glass-alpha-overlay": "82%",
-      "--glass-alpha-canvas": "94%",
       "--glass-blur": "18px",
       "--glass-saturate": "1.12",
       "--glass-filter": "blur(var(--glass-blur)) saturate(var(--glass-saturate))",
@@ -130,8 +127,8 @@ describe("glass tokens (D1)", () => {
         "color-mix(in srgb, var(--color-panel) var(--glass-alpha-chrome), transparent)",
       "--surface-glass-elevated":
         "color-mix(in srgb, var(--color-elevated) var(--glass-alpha-overlay), transparent)",
-      "--surface-main-glass":
-        "color-mix(in srgb, var(--color-canvas) var(--glass-alpha-canvas), transparent)",
+      "--surface-glass-window":
+        "color-mix(in srgb, var(--color-panel) var(--glass-alpha-chrome), transparent)",
     });
     for (const theme of ["dark-plus", "light"] as const) {
       expect(overrides[theme], `${theme} must not override glass tokens`).not.toMatch(/--glass-/);
@@ -277,14 +274,14 @@ describe("glass in production (D2)", () => {
     }
   });
 
-  it("(f) rail and sidebar share one glass rule with a light CSS blur, in Sidebar and Full", () => {
+  it("(f) rail and sidebar share one base glass rule, with no CSS blur of their own", () => {
     const chrome = block(
       ':root[data-native-glass="true"] .app-rail,\n:root[data-native-glass="true"] .app-context-sidebar {',
     ).body;
+    // Solid-compatible base: the fallback turns this tier to 100%.
     expect(chrome).toContain("var(--surface-glass-sidebar)");
-    expect(chrome).toMatch(
-      /-webkit-backdrop-filter: var\(--glass-filter\);\s*backdrop-filter: var\(--glass-filter\);/,
-    );
+    // Uniform glass: the only blur behind the panels is the window layer (k).
+    expect(chrome).not.toContain("backdrop-filter");
     // Not scoped to a mode: the left chrome is glass in both "sidebar" and "full".
     expect(css).not.toMatch(/data-transparency="(sidebar|full)"\] \.app-(rail|context-sidebar)/);
   });
@@ -302,7 +299,8 @@ describe("glass in production (D2)", () => {
   /** Tiers that are translucent per Transparency mode ("off" has none). */
   const MODE_TIERS: Record<"sidebar" | "full", (keyof typeof TIERS)[]> = {
     sidebar: ["--glass-alpha-chrome"],
-    full: ["--glass-alpha-chrome", "--glass-alpha-overlay", "--glass-alpha-canvas"],
+    // Uniform glass: rail, sidebar and main all sit on the one window tint.
+    full: ["--glass-alpha-chrome", "--glass-alpha-overlay"],
   };
 
   it("(h) fg and muted >= 4.5:1 on every translucent tier, Sidebar and Full, every theme", () => {
@@ -318,7 +316,7 @@ describe("glass in production (D2)", () => {
         }
       }
     }
-    expect(checked).toBe(2 * 3 * (1 + 3));
+    expect(checked).toBe(2 * 3 * (1 + 2));
   });
 
   it("(h) mirrored controls: what the opposite desktop would do without the nativeTheme sync", () => {
@@ -339,6 +337,66 @@ describe("glass in production (D2)", () => {
     expect(
       worst("light", "--glass-alpha-chrome", "--color-fg-muted", [OS_BACKDROP.light], 0.6),
     ).toBeLessThan(D2_GATE);
+  });
+
+  it("(k) uniform glass: one tint + blur at the window, panels transparent, gated off for the fallback", () => {
+    const gate = block(
+      "@media (prefers-reduced-transparency: no-preference) and (prefers-contrast: no-preference) {",
+    );
+    const forced = block("@media (forced-colors: none) {", gate.start);
+    expect(forced.start).toBeLessThan(gate.end);
+    const supports = block(
+      "@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {",
+      forced.start,
+    );
+    expect(supports.start).toBeLessThan(forced.end);
+    const shell = block(':root[data-native-glass="true"] .app-shell {', supports.start);
+    expect(shell.start).toBeLessThan(supports.end);
+    expect(shell.body).toContain("background-color: var(--surface-glass-window);");
+    expect(shell.body).toMatch(
+      /-webkit-backdrop-filter: var\(--glass-filter\);\s*backdrop-filter: var\(--glass-filter\);/,
+    );
+    const panels = block(
+      ':root[data-native-glass="true"] .app-rail,\n      :root',
+      supports.start,
+    ).body;
+    expect(panels).toMatch(
+      /background-color: transparent;\s*-webkit-backdrop-filter: none;\s*backdrop-filter: none;/,
+    );
+    const full = block(
+      ':root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-main,',
+      supports.start,
+    ).body;
+    expect(full).toContain("border-color: transparent;");
+    expect(full).toContain("background-color: transparent;");
+    const sidebar = block(
+      ':root[data-native-glass="true"][data-transparency="sidebar"] .app-layout-row .surface-main {',
+      supports.start,
+    ).body;
+    // Sidebar mode keeps main opaque; only the sidebar|main line goes.
+    expect(sidebar.trim()).toBe("border-left-color: transparent;");
+    expect(
+      block(':root[data-native-glass="true"] .app-rail::after {', supports.start).body.trim(),
+    ).toBe("border-color: transparent;");
+    // Only panel-edge border colours change: no outline / focus ring is touched.
+    expect(gate.body).not.toMatch(/outline|focus|box-shadow/);
+    // The uniform block sits before the solid fallback, which stays last (c).
+    expect(gate.end).toBeLessThan(
+      css.indexOf("@media (prefers-reduced-transparency: reduce), (prefers-contrast: more)"),
+    );
+  });
+
+  it("(k) one alpha for rail, sidebar and main: 78% passes the D2 gate for main-area text", () => {
+    // Debbie's rule: try 78%; only a failure would move to the smallest passing alpha.
+    for (const theme of THEMES) {
+      for (const text of ["--color-fg", "--color-fg-muted"]) {
+        expect(
+          worst(theme, "--glass-alpha-chrome", text, [OS_BACKDROP[theme]]),
+          `${theme} ${text}`,
+        ).toBeGreaterThanOrEqual(D2_GATE);
+      }
+    }
+    expect(alpha("--glass-alpha-chrome")).toBe(0.78);
   });
 
   it("(j) every page-level background is cleared under native glass, <html> included", () => {

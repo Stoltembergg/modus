@@ -10,7 +10,7 @@ describe("Modus semantic design tokens", () => {
       "--surface-app",
       "--surface-sidebar",
       "--surface-main",
-      "--surface-main-glass",
+      "--surface-glass-window",
       "--surface-raised",
       "--surface-glass",
       "--text-primary",
@@ -43,7 +43,6 @@ describe("Modus semantic design tokens", () => {
       "--motion-overlay",
       "--glass-alpha-chrome",
       "--glass-alpha-overlay",
-      "--glass-alpha-canvas",
       "--glass-blur",
       "--glass-saturate",
       "--glass-filter",
@@ -82,11 +81,12 @@ describe("Modus semantic design tokens", () => {
     );
     expect(css).toContain(':root[data-native-glass="true"] .app-context-sidebar');
     expect(css).toContain(
-      ':root[data-native-glass="true"][data-transparency="full"] .surface-main',
+      ':root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-main',
     );
     expect(css).toContain("--surface-glass: var(--surface-raised)");
+    // Uniform glass: the canvas joins the window layer in Full, with no blur of its own.
     expect(css).toMatch(
-      /:root\[data-native-glass="true"\]\[data-transparency="full"\] \.surface-main\s*\{[^}]*backdrop-filter: none/su,
+      /:root\[data-native-glass="true"\]\[data-transparency="full"\] \.app-layout-row \.surface-main,[^{]*\{[^}]*background-color: transparent;[^}]*backdrop-filter: none/su,
     );
     expect(css).not.toContain(".chat-scroll-top-blur");
     const composerDock = css.match(/\.composer-dock-shell\s*\{([^}]+)\}/)?.[1] ?? "";
@@ -104,13 +104,12 @@ describe("Modus semantic design tokens", () => {
       /--surface-sidebar:\s*color-mix\(in srgb, var\(--color-panel\) 94%, transparent\)/,
     );
     expect(css).toMatch(/--surface-main:\s*var\(--color-canvas\)/);
+    // One window-level tint (uniform glass) replaces the per-canvas tier.
     expect(css).toMatch(
-      /--surface-main-glass:\s*color-mix\(\s*in srgb,\s*var\(--color-canvas\) var\(--glass-alpha-canvas\),\s*transparent\s*\)/,
+      /--surface-glass-window:\s*color-mix\(\s*in srgb,\s*var\(--color-panel\) var\(--glass-alpha-chrome\),\s*transparent\s*\)/,
     );
-    expect(css).toMatch(/--glass-alpha-canvas:\s*94%;/);
-    expect(css).toMatch(
-      /:root\[data-native-glass="true"\]\[data-transparency="full"\] \.surface-main\s*\{\s*background-color: var\(--surface-main-glass\)/,
-    );
+    expect(css).not.toContain("--glass-alpha-canvas");
+    expect(css).not.toContain("--surface-main-glass");
     const mainSurface = css.match(/(?:^|\n)\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
     expect(mainSurface).not.toContain("backdrop-filter");
   });

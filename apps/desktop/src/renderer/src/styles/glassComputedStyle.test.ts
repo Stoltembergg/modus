@@ -22,23 +22,31 @@ if (!CHROME && process.env.CI) throw new Error("D2 computed-style test needs Chr
 
 const SCENE = `
 <div id="root"><div class="app-shell"><div class="app-layout-row surface-app">
-  <nav class="app-rail"></nav>
+  <nav class="app-rail"><button class="app-rail-item" type="button">A</button></nav>
   <aside class="app-context-sidebar bg-panel"><div class="app-context-sidebar-body bg-panel"></div></aside>
-  <main class="surface-main">
+  <main class="surface-main rounded-b-lg border border-hairline-strong border-t-0">
     <div class="surface-raised"></div>
     <div class="popup-chrome"></div>
     <div class="pdf-page-chrome"></div>
     <div class="dialog-scrim"></div>
   </main>
 </div></div></div>`;
+const CANDIDATES = ["bg-panel", "rounded-b-lg", "border", "border-hairline-strong", "border-t-0"];
+const PANELS = [".app-rail", ".app-context-sidebar", ".surface-main"];
 const CHROME_PARTS = [".app-rail", ".app-context-sidebar"];
-const CONTENT = [".surface-main", ".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
-const BLURRED = [...CHROME_PARTS, ".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
+const OVERLAYS = [".surface-raised", ".popup-chrome", ".pdf-page-chrome"];
 const THEMES = ["dark", "dark-plus", "light"] as const;
+const OS = ["reduced-transparency", "more-contrast", "forced-colors"] as const;
+type Os = (typeof OS)[number] | undefined;
 
-type Measured = Record<string, { alpha: number; effective: number; backdrop: string }>;
+type Probe = { alpha: number; effective: number; backdrop: string };
+type Edge = { alpha: number; width: number };
+type Measured = Record<string, Probe> & {
+  edges: { railDivider: Edge; mainLeft: Edge; mainRight: Edge; mainBottom: Edge };
+  focus: { style: string; width: number; alpha: number };
+};
 
-/** Runs in the page: set the root attributes, read every probe's computed style. */
+/** Runs in the page: computed backgrounds, panel-edge borders and the focus ring. */
 const MEASURE = `(${(selectors: string[]) => {
   const alphaOf = (color: string): number => {
     const slash = color.match(/\/\s*([\d.]+%?)\s*\)$/);
@@ -59,11 +67,34 @@ const MEASURE = `(${(selectors: string[]) => {
     out[selector] = {
       alpha: alphaOf(style.backgroundColor),
       effective: 1 - through,
-      // Chrome aliases -webkit-backdrop-filter to this; test (e) in glassTokens
-      // checks the build emits both declarations.
+      // Chrome aliases -webkit-backdrop-filter to this; glassTokens (e) checks
+      // the build emits both declarations.
       backdrop: style.getPropertyValue("backdrop-filter"),
     };
   }
+  const edge = (style: CSSStyleDeclaration, side: string) => ({
+    alpha: alphaOf(style.getPropertyValue(`border-${side}-color`)),
+    width: Number.parseFloat(style.getPropertyValue(`border-${side}-width`)),
+  });
+  const main = getComputedStyle(document.querySelector(".surface-main") as Element);
+  out.edges = {
+    railDivider: edge(
+      getComputedStyle(document.querySelector(".app-rail") as Element, "::after"),
+      "right",
+    ),
+    mainLeft: edge(main, "left"),
+    mainRight: edge(main, "right"),
+    mainBottom: edge(main, "bottom"),
+  };
+  const button = document.querySelector(".app-rail-item") as HTMLElement;
+  button.focus({ focusVisible: true } as FocusOptions);
+  const ring = getComputedStyle(button);
+  out.focus = {
+    style: ring.outlineStyle,
+    width: Number.parseFloat(ring.outlineWidth),
+    alpha: alphaOf(ring.outlineColor),
+  };
+  button.blur();
   return JSON.stringify(out);
 }})`;
 
@@ -85,14 +116,17 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     theme: string,
     glass: boolean,
     transparency: "full" | "sidebar" | "off",
-    reducedTransparency = false,
+    os?: Os,
   ): Promise<Measured> {
+    // Pin every accessibility feature (the host's own settings must not leak in).
     await send("Emulation.setEmulatedMedia", {
       features: [
         {
           name: "prefers-reduced-transparency",
-          value: reducedTransparency ? "reduce" : "no-preference",
+          value: os === "reduced-transparency" ? "reduce" : "no-preference",
         },
+        { name: "prefers-contrast", value: os === "more-contrast" ? "more" : "no-preference" },
+        { name: "forced-colors", value: os === "forced-colors" ? "active" : "none" },
       ],
     });
     const root = `Object.assign(document.documentElement.dataset, ${JSON.stringify({
@@ -101,10 +135,23 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       transparency,
     })});`;
     const response = await send("Runtime.evaluate", {
-      expression: `${root} ${MEASURE}(${JSON.stringify([...CHROME_PARTS, ...CONTENT, "html"])})`,
+      expression: `${root} ${MEASURE}(${JSON.stringify([...PANELS, ...OVERLAYS, ".app-shell", "html"])})`,
       returnByValue: true,
     });
     return JSON.parse(response.result?.result?.value ?? "{}") as Measured;
+  }
+
+  /** The panel-edge dividers and the focus ring as they are without glass. */
+  function expectTodaysEdges(m: Measured, at: string): void {
+    for (const [name, edge] of Object.entries(m.edges)) {
+      expect(edge.alpha, `${at} ${name} colour`).toBeGreaterThan(0);
+      expect(edge.width, `${at} ${name} width`).toBeGreaterThan(0);
+    }
+  }
+  function expectFocusRing(m: Measured, at: string): void {
+    expect(m.focus.style, `${at} focus ring`).not.toBe("none");
+    expect(m.focus.width, `${at} focus ring width`).toBeGreaterThan(0);
+    expect(m.focus.alpha, `${at} focus ring colour`).toBeGreaterThan(0);
   }
 
   beforeAll(async () => {
@@ -113,7 +160,7 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       base: dirname(cssPath),
       onDependency: () => undefined,
     });
-    const css = optimize(compiler.build(["bg-panel"]), { minify: true }).code;
+    const css = optimize(compiler.build(CANDIDATES), { minify: true }).code;
     const page = join(dir, "index.html");
     writeFileSync(
       page,
@@ -155,6 +202,8 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
       pending.delete(message.id);
     });
     await send("Page.enable");
+    // Headless pages are never focused; focus-visible needs a focused page.
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true });
     await send("Page.navigate", { url: pathToFileURL(page).href });
     await new Promise((resolve) => setTimeout(resolve, 500));
   }, 30_000);
@@ -176,57 +225,83 @@ describe.skipIf(!CHROME)("D2 transparency modes in real computed styles (headles
     }
   }, 15_000);
 
-  it("Sidebar: rail + sidebar translucent with CSS blur; canvas and every other surface opaque", async () => {
+  it("Sidebar: one window tint behind rail + sidebar; main opaque without the sidebar|main line", async () => {
     for (const theme of THEMES) {
       const m = await measure(theme, true, "sidebar");
       // Regression: <html> used to paint the canvas over the whole window material.
       expect(m.html?.alpha, `${theme} html`).toBe(0);
+      expect(m[".app-shell"]?.alpha, `${theme} window tint`).toBeCloseTo(0.78, 2);
+      expect(m[".app-shell"]?.backdrop, `${theme} window blur`).toMatch(/blur\(/);
       for (const part of CHROME_PARTS) {
-        expect(m[part]?.alpha, `${theme} ${part}`).toBeLessThan(1);
-        expect(m[part]?.effective, `${theme} ${part}`).toBeLessThan(1);
-        expect(m[part]?.backdrop, `${theme} ${part}`).toMatch(/blur\(/);
+        expect(m[part]?.alpha, `${theme} ${part} own background`).toBe(0);
+        expect(m[part]?.effective, `${theme} ${part}`).toBeCloseTo(0.78, 2);
+        expect(m[part]?.backdrop, `${theme} ${part} blur`).toBe("none");
       }
-      for (const part of CONTENT) {
-        expect(m[part]?.alpha, `${theme} ${part}`).toBe(1);
+      expect(m[".surface-main"]?.effective, `${theme} main`).toBe(1);
+      expect(m[".surface-main"]?.backdrop, `${theme} main blur`).toBe("none");
+      for (const part of OVERLAYS) {
         expect(m[part]?.effective, `${theme} ${part}`).toBe(1);
         expect(m[part]?.backdrop, `${theme} ${part}`).toBe("none");
       }
+      expect(m.edges.railDivider.alpha, `${theme} rail|sidebar divider`).toBe(0);
+      expect(m.edges.mainLeft.alpha, `${theme} sidebar|main line`).toBe(0);
+      // Main keeps its other edges in Sidebar mode.
+      expect(m.edges.mainRight.alpha, `${theme} main right edge`).toBeGreaterThan(0);
+      expectFocusRing(m, `${theme} sidebar`);
     }
   });
 
-  it("Full: rail, sidebar, canvas and overlays translucent; chrome and overlays blurred", async () => {
+  it("Full: rail, sidebar and main share one alpha on one blurred layer; no dividers", async () => {
     for (const theme of THEMES) {
       const m = await measure(theme, true, "full");
-      for (const part of [...CHROME_PARTS, ...CONTENT]) {
-        expect(m[part]?.effective, `${theme} ${part}`).toBeLessThan(1);
+      expect(m[".app-shell"]?.backdrop, `${theme} window blur`).toMatch(/blur\(/);
+      const effective = PANELS.map((part) => m[part]?.effective);
+      expect(new Set(effective).size, `${theme} equal alpha ${effective}`).toBe(1);
+      expect(effective[0], `${theme} shared alpha`).toBeCloseTo(0.78, 2);
+      for (const part of PANELS) {
+        expect(m[part]?.alpha, `${theme} ${part} own background`).toBe(0);
+        expect(m[part]?.backdrop, `${theme} ${part} blur`).toBe("none");
       }
-      for (const part of BLURRED) {
+      for (const part of OVERLAYS) {
+        expect(m[part]?.effective, `${theme} ${part}`).toBeLessThan(1);
         expect(m[part]?.backdrop, `${theme} ${part}`).toMatch(/blur\(/);
       }
-      expect(m[".surface-main"]?.backdrop, `${theme} canvas`).toBe("none");
+      for (const [name, edge] of Object.entries(m.edges)) {
+        expect(edge.alpha, `${theme} ${name} divider`).toBe(0);
+      }
+      expectFocusRing(m, `${theme} full`);
     }
   });
 
-  it("Off (also what OS accessibility resolves to): everything opaque, no CSS blur", async () => {
+  it("Off (also what main resolves OS accessibility to): opaque, today's dividers, no CSS blur", async () => {
     for (const theme of THEMES) {
       for (const transparency of ["off", "full", "sidebar"] as const) {
         // data-native-glass="false" is what main sends for Off and for any OS block.
         const m = await measure(theme, false, transparency);
-        for (const part of [...CHROME_PARTS, ...CONTENT]) {
+        for (const part of [...PANELS, ...OVERLAYS]) {
           expect(m[part]?.effective, `${theme} ${transparency} ${part}`).toBe(1);
           expect(m[part]?.backdrop, `${theme} ${transparency} ${part}`).toBe("none");
         }
+        expect(m[".app-shell"]?.backdrop).toBe("none");
+        expectTodaysEdges(m, `${theme} ${transparency}`);
+        expectFocusRing(m, `${theme} ${transparency}`);
       }
     }
   });
 
-  it("CSS second line of defence: reduced transparency makes Full/Sidebar opaque even with glass on", async () => {
+  it("CSS second line of defence: reduce transparency / more contrast / forced colors keep today's solid look", async () => {
     for (const theme of THEMES) {
       for (const transparency of ["full", "sidebar"] as const) {
-        const m = await measure(theme, true, transparency, true);
-        for (const part of [...CHROME_PARTS, ...CONTENT]) {
-          expect(m[part]?.effective, `${theme} ${transparency} ${part}`).toBe(1);
-          expect(m[part]?.backdrop, `${theme} ${transparency} ${part}`).toBe("none");
+        for (const os of OS) {
+          const m = await measure(theme, true, transparency, os);
+          const at = `${theme} ${transparency} ${os}`;
+          for (const part of [...PANELS, ...OVERLAYS]) {
+            expect(m[part]?.effective, `${at} ${part}`).toBe(1);
+            expect(m[part]?.backdrop, `${at} ${part}`).toBe("none");
+          }
+          expect(m[".app-shell"]?.backdrop, `${at} window blur`).toBe("none");
+          expectTodaysEdges(m, at);
+          expectFocusRing(m, at);
         }
       }
     }
