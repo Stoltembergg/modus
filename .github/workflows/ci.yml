@@ -33,3 +33,50 @@ jobs:
       - name: Test
         # Vitest unit suite; does not require Rust PTY sidecar or electron-builder packaging
         run: npm run test
+
+  supabase:
+    # Supabase migrations (pgTAP + concurrency) and the Functions' real db.ts
+    # (Deno + npm:postgres) against a throwaway local Postgres 17. Never talks to
+    # the hosted project and needs no secrets. Runs on every PR / push to main
+    # (no path filter), so it can be a required check without hanging PRs that
+    # don't touch supabase/**.
+    name: supabase · pgTAP · integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # Same major as the hosted project (Postgres 17) and the local box
+      PG_MAJOR: "17"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Postgres ${{ env.PG_MAJOR }} + pgTAP + pg_prove
+        run: |
+          # No auto-created/started "main" cluster: run.sh starts its own.
+          sudo sed -i -E 's/^#?\s*create_main_cluster\s*=.*/create_main_cluster = false/' \
+            /etc/postgresql-common/createcluster.conf
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y --no-install-recommends \
+            "postgresql-${PG_MAJOR}" "postgresql-${PG_MAJOR}-pgtap" libtap-parser-sourcehandler-pgtap-perl
+          echo "PG_BIN=/usr/lib/postgresql/${PG_MAJOR}/bin" >> "$GITHUB_ENV"
+
+      - uses: denoland/setup-deno@v2
+        with:
+          # Pinned to the version used locally
+          deno-version: v2.9.7
+          cache: true
+          # deno.json has lock:false, so key the module cache on the sources
+          cache-hash: ${{ hashFiles('supabase/functions/**/*.ts', 'supabase/functions/deno.json') }}
+
+      - name: Versions
+        run: |
+          "$PG_BIN/postgres" --version
+          pg_prove --version
+          deno --version
+
+      - name: SQL tests (pgTAP + concurrency + db.ts integration)
+        # supabase/tests/run.sh: unix socket in a private dir, scram-sha-256 with a
+        # random per-run password on 127.0.0.1 (never printed), no trust over TCP
+        run: npm run test:supabase
+
+      - name: Functions (deno test + check + lint)
+        run: npm run test:functions
