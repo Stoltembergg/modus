@@ -16,7 +16,8 @@
     "catalog:generate": "node scripts/generate-model-catalog.mjs",
     "check": "biome check . && npm run typecheck --workspaces --if-present",
     "format": "biome check --write .",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:supabase": "bash supabase/tests/run.sh"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
