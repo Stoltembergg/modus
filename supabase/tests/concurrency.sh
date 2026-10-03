@@ -160,8 +160,8 @@ errors6="$(cat "$out"/mp* | grep -c 'ERROR' || true)"
 balance6="$(q "select balance from public.credit_wallets where user_id = '$uid6'")"
 ledger6="$(q "select count(*) from public.credit_transactions where idempotency_key = 'mp:payment:990001'")"
 echo "mp payment x6: credited=$credited6 errors=$errors6 balance=$balance6 ledger_rows=$ledger6"
-[[ "$credited6" == 1 && "$errors6" == 0 && "$balance6" == 11000 && "$ledger6" == 1 ]] \
+[[ "$credited6" == 1 && "$errors6" == 0 && "$balance6" == 21000 && "$ledger6" == 1 ]] \
   || { cat "$out"/mp*; fail "concurrent Mercado Pago deliveries: credited exactly once"; }
-echo "ok - 6 concurrent deliveries of one approved Mercado Pago payment: credited exactly once (1000 + 10000)"
+echo "ok - 6 concurrent deliveries of one approved Mercado Pago payment: credited exactly once (1000 + 20000)"
 
 rm -rf "$out"

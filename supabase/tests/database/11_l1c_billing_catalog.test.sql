@@ -97,8 +97,8 @@ select is(
   (select string_agg(plan || ':' || name || ':' || monthly_credits || ':' || provider || ':' || currency || ':'
                      || amount_minor, ',' order by sort_order, provider)
      from public.get_billing_catalog()),
-  'starter:Starter:10000:mercadopago:BRL:4990',
-  'anon, flag off: only Starter via Mercado Pago, BRL 4990, 10000 credits');
+  'starter:Starter:20000:mercadopago:BRL:4990',
+  'anon, flag off: only Starter via Mercado Pago, BRL 4990, 20000 credits');
 select is((select count(*)::int from public.get_billing_catalog() where plan in ('pro', 'max', 'ultra')), 0,
   'anon: inactive plans (pro / max / ultra) excluded');
 select is((select count(*)::int from public.get_billing_catalog() where plan = 'free'), 0, 'anon: free excluded');
@@ -130,7 +130,7 @@ select is(
   (select string_agg(plan || ':' || monthly_credits || ':' || provider || ':' || currency || ':' || amount_minor,
                      ',' order by sort_order, provider)
      from public.get_billing_catalog()),
-  'starter:10000:mercadopago:BRL:4990,starter:10000:stripe:USD:900',
+  'starter:20000:mercadopago:BRL:4990,starter:20000:stripe:USD:900',
   'anon, flag on: Starter via Mercado Pago and Stripe (USD 900)');
 select is((select count(*)::int from public.get_billing_catalog() where plan in ('pro', 'max', 'ultra')), 0,
   'anon, flag on: inactive plans still excluded');

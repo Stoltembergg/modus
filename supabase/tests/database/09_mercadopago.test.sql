@@ -87,7 +87,7 @@ select is(
   'starter=4990,pro=10990,max=26990,ultra=53990', 'BRL prices seeded (amount_minor)');
 select is(
   (select string_agg(plan || '=' || monthly_credits, ',' order by sort_order) from public.plans),
-  'free=1000,starter=10000,pro=25000,max=70000,ultra=150000', 'monthly credits unchanged');
+  'free=1000,starter=20000,pro=50000,max=140000,ultra=300000', 'monthly credits (L1f: paid plans doubled)');
 select ok(
   (select indisunique and pg_get_expr(indpred, indrelid) like '%active%'
           and pg_get_expr(indpred, indrelid) not like '%incomplete%'
@@ -209,9 +209,9 @@ select is(private.process_mp_payment(pg_temp.pay('2001', 'pending'), pg_temp.pre
 select private.process_mp_payment(pg_temp.pay('2001', 'approved', 10990, 0, false, '777', 'BRL', :'co2id'),
   pg_temp.pre('PREA1', :'co2id'), :'expect') as p1 \gset
 select is((:'p1'::jsonb) ->> 'code', 'credited', 'approved: credited (frozen price 10990 after the price change)');
-select is(pg_temp.balance(:'a'), 26000::bigint, 'pro monthly credits granted once (1000 + 25000)');
+select is(pg_temp.balance(:'a'), 51000::bigint, 'pro monthly credits granted once (1000 + 50000)');
 select is(pg_temp.sub_status('PREA1'), 'active', 'first approved payment makes the subscription active');
-select is((select plan_allowance from public.credit_wallets where user_id = :'a'), 25000::bigint, 'plan_allowance = pro');
+select is((select plan_allowance from public.credit_wallets where user_id = :'a'), 50000::bigint, 'plan_allowance = pro');
 select is((select status from public.billing_checkouts where id = :'co2id'), 'active', 'checkout active');
 select is(private.process_mp_payment(pg_temp.pay('2001', 'approved'), pg_temp.pre('PREA1', :'co2id'), :'expect') ->> 'code',
   'already_credited', 'same payment again (invoice topic): no second credit');
@@ -219,7 +219,7 @@ select is(private.process_mp_payment(pg_temp.pay('2001', 'approved'), null, :'ex
   'already_credited', 'same payment via the payment topic: no second credit');
 select is((select count(*)::int from public.credit_transactions where idempotency_key = 'mp:payment:2001'), 1,
   'one ledger row per payment id');
-select is(pg_temp.balance(:'a'), 26000::bigint, 'balance unchanged by repeats');
+select is(pg_temp.balance(:'a'), 51000::bigint, 'balance unchanged by repeats');
 select is(private.process_mp_payment(pg_temp.pay('2001', 'approved'), pg_temp.pre('PREB9', :'co2id'), :'expect') ->> 'code',
   'rejected_preapproval', 'a known payment cannot be re-linked to another preapproval');
 select is(private.mp_create_checkout(:'a', 'max') ->> 'code', 'already_subscribed', 'live subscription: no new checkout');
@@ -229,45 +229,45 @@ select is(private.mp_create_checkout(:'a', 'max') ->> 'code', 'already_subscribe
 -- ---------------------------------------------------------------------------
 select is(private.process_mp_payment(pg_temp.pay('2002', 'approved'), pg_temp.pre('PREA1', :'co2id'), :'expect') ->> 'code',
   'credited', 'renewal payment credited');
-select is(pg_temp.balance(:'a'), 51000::bigint, '26000 + 25000');
+select is(pg_temp.balance(:'a'), 101000::bigint, '51000 + 50000');
 select private.process_mp_payment(pg_temp.pay('2002', 'approved', 10990, 2000), null, :'expect') as r1 \gset
-select is((:'r1'::jsonb) ->> 'reversed_amount', '4549', 'partial 1: target floor(25000 * 2000 / 10990) = 4549');
-select is(pg_temp.balance(:'a'), 46451::bigint, 'debited 4549');
+select is((:'r1'::jsonb) ->> 'reversed_amount', '9099', 'partial 1: target floor(50000 * 2000 / 10990) = 9099');
+select is(pg_temp.balance(:'a'), 91901::bigint, 'debited 9099');
 select is(pg_temp.sub_status('PREA1'), 'active', 'partial refund only debits');
 select private.process_mp_payment(pg_temp.pay('2002', 'approved', 10990, 5000), null, :'expect') as r2 \gset
-select is((:'r2'::jsonb) ->> 'reversed_amount', '11373', 'partial 2: cumulative target 11373');
-select is(pg_temp.balance(:'a'), 39627::bigint, 'debited only the difference (6824)');
+select is((:'r2'::jsonb) ->> 'reversed_amount', '22747', 'partial 2: cumulative target 22747');
+select is(pg_temp.balance(:'a'), 78253::bigint, 'debited only the difference (13648)');
 select private.process_mp_payment(pg_temp.pay('2002', 'approved', 10990, 5000), null, :'expect') as r2b \gset
-select is(pg_temp.balance(:'a'), 39627::bigint, 'same partial again: nothing more');
+select is(pg_temp.balance(:'a'), 78253::bigint, 'same partial again: nothing more');
 select private.process_mp_payment(pg_temp.pay('2002', 'charged_back', 10990, 5000), null, :'expect') as r3 \gset
-select is((:'r3'::jsonb) ->> 'reversed_amount', '25000', 'chargeback: target = full credited_amount');
-select is(pg_temp.balance(:'a'), 26000::bigint, 'total debited = 25000 = credited, never more');
+select is((:'r3'::jsonb) ->> 'reversed_amount', '50000', 'chargeback: target = full credited_amount');
+select is(pg_temp.balance(:'a'), 51000::bigint, 'total debited = 50000 = credited, never more');
 select is((select -sum(amount) from public.credit_transactions where idempotency_key like 'mp:reversal:2002:%'),
-  25000::numeric, 'ledger: reversals of payment 2002 sum to exactly the credit');
+  50000::numeric, 'ledger: reversals of payment 2002 sum to exactly the credit');
 select is(pg_temp.sub_status('PREA1'), 'blocked', 'chargeback blocks the subscription');
 select private.process_mp_payment(pg_temp.pay('2002', 'refunded', 10990, 10990), null, :'expect') as r4 \gset
-select is(pg_temp.balance(:'a'), 26000::bigint, 'refund after chargeback: no double debit');
+select is(pg_temp.balance(:'a'), 51000::bigint, 'refund after chargeback: no double debit');
 select is(pg_temp.sub_status('PREA1'), 'blocked', 'a refund never unblocks');
 select is(private.process_mp_payment(pg_temp.pay('2003', 'approved'), pg_temp.pre('PREA1', :'co2id'), :'expect') ->> 'code',
   'rejected_blocked', 'blocked subscription: a new approved payment is not credited');
 select is(private.process_mp_preapproval(pg_temp.pre('PREA1', :'co2id'), :'expect') ->> 'code', 'blocked',
   'preapproval updates never change a blocked subscription');
-select is(pg_temp.balance(:'a'), 26000::bigint, 'balance unchanged');
+select is(pg_temp.balance(:'a'), 51000::bigint, 'balance unchanged');
 
 -- Shortfall + full refund cancels: B spends most credits, then a full refund.
 select pg_temp.checkout(:'b', 'starter', 'PREB1') as cob \gset
 select private.process_mp_preapproval(pg_temp.pre('PREB1', :'cob', 'authorized', 4990), :'expect') \gset ignore_
 select is(private.process_mp_payment(pg_temp.pay('3001', 'approved', 4990), pg_temp.pre('PREB1', :'cob', 'authorized', 4990), :'expect') ->> 'code',
   'credited', 'B: starter credited');
-select is(pg_temp.balance(:'b'), 11000::bigint, 'B: 1000 + 10000');
+select is(pg_temp.balance(:'b'), 21000::bigint, 'B: 1000 + 20000');
 select tests.clear_authentication();
 update public.credit_wallets set balance = 300 where user_id = :'b';
 select tests.as_service_role();
 select private.process_mp_payment(pg_temp.pay('3001', 'refunded', 4990, 4990), null, :'expect') as rb \gset
 select is(pg_temp.balance(:'b'), 0::bigint, 'B: balance never negative');
-select is((:'rb'::jsonb) ->> 'shortfall', '9700', 'B: shortfall recorded (10000 - 300)');
+select is((:'rb'::jsonb) ->> 'shortfall', '19700', 'B: shortfall recorded (20000 - 300)');
 select is((select reversed_amount || '/' || reversal_shortfall from public.mp_payments where payment_id = 3001),
-  '10000/9700', 'B: reversal fully accounted, shortfall kept');
+  '20000/19700', 'B: reversal fully accounted, shortfall kept');
 select is(pg_temp.sub_status('PREB1'), 'canceled', 'full refund cancels the subscription');
 
 -- Refund seen before the credit: never credited afterwards.
@@ -344,7 +344,7 @@ select is(private.process_mp_preapproval(pg_temp.pre('PREF1', :'cof', 'authorize
   'subscription_active', 'resumed -> active');
 select is(private.process_mp_preapproval(pg_temp.pre('PREF1', :'cof', 'canceled', 4990), :'expect') ->> 'code',
   'subscription_canceled', 'canceled');
-select is(pg_temp.balance(:'f'), 11000::bigint, 'F: cancel keeps the credits already granted');
+select is(pg_temp.balance(:'f'), 21000::bigint, 'F: cancel keeps the credits already granted');
 
 -- ---------------------------------------------------------------------------
 -- Delivery dedupe: processed only with the RPC; a failure is reprocessed once
@@ -379,12 +379,12 @@ select is(private.process_mp_payment(pg_temp.pay('8001', 'approved', 4990), pg_t
 select is((select status from public.mp_notifications where request_id = 'req-g-1'), 'processed', 'processed with the RPC');
 select is(private.mp_claim_notification('req-g-1', 'subscription_authorized_payment', '8001'), 'duplicate',
   'after processing: duplicate');
-select is(pg_temp.balance(:'g'), 11000::bigint, 'credited exactly once');
+select is(pg_temp.balance(:'g'), 21000::bigint, 'credited exactly once');
 
 -- debit_credits directly: idempotent, never negative.
 select is((private.debit_credits(:'g', 500, 'test-debit') ->> 'debited')::bigint, 500::bigint, 'debit 500');
 select is((private.debit_credits(:'g', 500, 'test-debit') ->> 'duplicate')::boolean, true, 'same key: no second debit');
-select is((private.debit_credits(:'g', 999999, 'test-debit-2') ->> 'shortfall')::bigint, 999999 - 10500::bigint,
+select is((private.debit_credits(:'g', 999999, 'test-debit-2') ->> 'shortfall')::bigint, 999999 - 20500::bigint,
   'debit beyond the balance: shortfall');
 select is(pg_temp.balance(:'g'), 0::bigint, 'balance 0, never negative');
 select tests.clear_authentication();

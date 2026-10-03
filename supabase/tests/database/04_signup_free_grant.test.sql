@@ -86,7 +86,7 @@ select is((select count(*)::int from public.plans where plan <> 'free' and allow
 select is((select array_agg(plan order by sort_order) from public.plans),
   array['free', 'starter', 'pro', 'max', 'ultra'], 'five plans in order');
 select is((select array_agg(monthly_credits order by sort_order) from public.plans),
-  array[1000, 10000, 25000, 70000, 150000]::bigint[], 'monthly credits per plan');
+  array[1000, 20000, 50000, 140000, 300000]::bigint[], 'monthly credits per plan');
 select is((select stripe_price_id from public.plans where plan = 'free'), null, 'Free has no Stripe price');
 select is((select count(*)::int from public.plans where plan <> 'free' and stripe_price_id like 'price\_%'), 4,
   'paid plans carry the test-mode price ids');

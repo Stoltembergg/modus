@@ -20,10 +20,10 @@ select is(
 select is(
   (select string_agg(plan || ':' || price_usd_cents || ':' || monthly_credits || ':' || coalesce(stripe_price_id, '-'),
                      ',' order by sort_order) from public.plans),
-  'free:0:1000:-,starter:900:10000:price_1UMIyDKAHtqpope6RahtIgRw,'
-    || 'pro:2000:25000:price_1UMIyIKAHtqpope6sw0xLZDQ,max:5000:70000:price_1UMIyKKAHtqpope6GL0mTcaB,'
-    || 'ultra:10000:150000:price_1UMIyMKAHtqpope6LhMhWnNh',
-  'prices, credits and Stripe price ids unchanged');
+  'free:0:1000:-,starter:900:20000:price_1UMIyDKAHtqpope6RahtIgRw,'
+    || 'pro:2000:50000:price_1UMIyIKAHtqpope6sw0xLZDQ,max:5000:140000:price_1UMIyKKAHtqpope6GL0mTcaB,'
+    || 'ultra:10000:300000:price_1UMIyMKAHtqpope6LhMhWnNh',
+  'prices and Stripe price ids unchanged; L1f doubled the paid credits');
 select is(
   (select string_agg(plan || '=' || amount_minor || ':' || active, ',' order by amount_minor)
      from public.plan_prices where provider = 'mercadopago'),
@@ -182,8 +182,8 @@ select is(private.process_stripe_event('evt_l1b_inv', 'invoice.paid',
   pg_temp.invoice('in_l1b_1', 'cus_L1B', 'subscription_create', 900, 'sub_L1B',
     jsonb_build_array(pg_temp.line(:'starter', false, 'sub_L1B', 900)))) ->> 'code',
   'credits_granted', 'starter invoice: credits_granted');
-select is((select balance from public.credit_wallets where user_id = :'b'), 11000::bigint,
-  'B: free 1000 + starter 10000');
+select is((select balance from public.credit_wallets where user_id = :'b'), 21000::bigint,
+  'B: free 1000 + starter 20000');
 
 -- Starter -> pro: neither the switch nor its upgrade invoice applies.
 select pg_temp.ledger() as l1 \gset
@@ -201,8 +201,8 @@ select is(pg_temp.event('evt_l1b_up'), 'processed:rejected_inactive_plan:true',
 select is(pg_temp.ledger(), :'l1', 'upgrade to an inactive plan: zero credit ledger change');
 
 -- "Inactive" = off-sale: an existing pro subscriber keeps renewing with credits.
-select is((select monthly_credits from public.plans where plan = 'pro'), 25000::bigint,
-  'pro grants 25000 credits a month (B1 seed)');
+select is((select monthly_credits from public.plans where plan = 'pro'), 50000::bigint,
+  'pro grants 50000 credits a month (L1f: 2 x 25000)');
 select is(private.process_stripe_event('evt_l1c_upd', 'customer.subscription.updated',
   pg_temp.sub('sub_L1C', 'cus_L1C', :'pro', 'past_due')) ->> 'code', 'subscription_upserted',
   'existing pro subscription: status update applied');
@@ -215,10 +215,10 @@ select (private.process_stripe_event('evt_l1c_inv', 'invoice.paid',
     jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))))::text as rc \gset
 select is(:'rc'::jsonb ->> 'code', 'credits_granted', 'existing pro subscription: renewal credits_granted');
 select is(:'rc'::jsonb ->> 'plan', 'pro', 'renewal on pro');
-select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 25000,
-  'existing pro renewal: exactly +25000');
-select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
-  'existing pro renewal: plan_allowance 25000');
+select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 50000,
+  'existing pro renewal: exactly +50000');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 50000::bigint,
+  'existing pro renewal: plan_allowance 50000');
 select is((select count(*) from public.credit_transactions where user_id = :'c'), :'cn0'::bigint + 1,
   'existing pro renewal: one ledger row');
 select is((select kind from public.credit_transactions where idempotency_key = 'invoice:in_l1c_1'), 'renewal',
@@ -232,7 +232,7 @@ select is(private.process_stripe_event('evt_l1c_inv_again', 'invoice.paid',
   pg_temp.invoice('in_l1c_1', 'cus_L1C', 'subscription_cycle', 2000, 'sub_L1C',
     jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))) ->> 'code',
   'already_granted', 'same renewal invoice, new event id: already_granted');
-select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 25000,
+select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 50000,
   'renewal credited once');
 
 -- Pro -> Max (inactive): the switch and its upgrade invoice are rejected; the row stays pro.
@@ -262,8 +262,8 @@ select is(private.process_stripe_event('evt_l1d_cycle', 'invoice.paid',
   pg_temp.invoice('in_l1d_1', 'cus_L1D', 'subscription_cycle', 900, 'sub_L1D',
     jsonb_build_array(pg_temp.line(:'starter', false, 'sub_L1D', 900)))) ->> 'code',
   'credits_granted', 'starter renewal after the downgrade: credits_granted');
-select is((select plan_allowance from public.credit_wallets where user_id = :'d'), 10000::bigint,
-  'after the downgrade the renewal grants starter (10000)');
+select is((select plan_allowance from public.credit_wallets where user_id = :'d'), 20000::bigint,
+  'after the downgrade the renewal grants starter (20000)');
 
 -- A canceled pro row does not renew.
 select pg_temp.ledger() as l3 \gset
