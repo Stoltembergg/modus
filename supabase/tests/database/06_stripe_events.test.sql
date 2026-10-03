@@ -69,8 +69,8 @@ returns jsonb language sql as $$
 $$;
 grant execute on function pg_temp.sub(text, text, text, text, jsonb) to service_role;
 
-\set starter 'price_1UMISRDuKWPSLmWmyVh3aXHh'
-\set pro 'price_1UMISdDuKWPSLmWmJZqqbZiV'
+\set starter 'price_1UMIyDKAHtqpope6RahtIgRw'
+\set pro 'price_1UMIyIKAHtqpope6sw0xLZDQ'
 
 select tests.as_service_role();
 select is(pg_temp.balance(:'a'), 1000::bigint, 'A starts with the free 1000');
@@ -137,19 +137,19 @@ select is((select count(*)::int from public.stripe_events where event_id like 'e
 
 -- Customer without an owner: raises, nothing written.
 select throws_ok($q$select private.process_stripe_event('evt_nocus', 'invoice.paid',
-  pg_temp.invoice('in_nocus', 'cus_nobody', 'price_1UMISRDuKWPSLmWmyVh3aXHh'))$q$, 'P0404',
+  pg_temp.invoice('in_nocus', 'cus_nobody', 'price_1UMIyDKAHtqpope6RahtIgRw'))$q$, 'P0404',
   'unknown stripe customer', 'customer with no owner -> error');
 select throws_ok($q$select private.process_stripe_event('evt_nocus2', 'customer.subscription.updated',
-  pg_temp.sub('sub_x', 'cus_nobody', 'price_1UMISRDuKWPSLmWmyVh3aXHh'))$q$, 'P0404',
+  pg_temp.sub('sub_x', 'cus_nobody', 'price_1UMIyDKAHtqpope6RahtIgRw'))$q$, 'P0404',
   'unknown stripe customer', 'subscription for a customer with no owner -> error');
 select throws_ok($q$select private.process_stripe_event('evt_nocus3', 'invoice.paid',
-  pg_temp.invoice('in_nocus3', null, 'price_1UMISRDuKWPSLmWmyVh3aXHh'))$q$, '22023', null,
+  pg_temp.invoice('in_nocus3', null, 'price_1UMIyDKAHtqpope6RahtIgRw'))$q$, '22023', null,
   'object without customer -> error');
 select is(pg_temp.snapshot(), :'before', 'unknown customer: nothing changed');
 
 -- livemode must be false.
 select throws_ok($q$select private.process_stripe_event('evt_live', 'invoice.paid',
-  pg_temp.invoice('in_live', 'cus_A', 'price_1UMISRDuKWPSLmWmyVh3aXHh', true))$q$, '22023', null,
+  pg_temp.invoice('in_live', 'cus_A', 'price_1UMIyDKAHtqpope6RahtIgRw', true))$q$, '22023', null,
   'livemode true rejected');
 select throws_ok($q$select private.process_stripe_event('evt_live2', 'charge.succeeded', '{"object": "charge"}')$q$,
   '22023', null, 'missing livemode rejected (must be exactly false)');
@@ -178,13 +178,13 @@ select is(pg_temp.balance(:'a'), 21000::bigint, 'subscription events grant no cr
 -- A subscription owned by A cannot be moved to B by an event for cus_B.
 select pg_temp.snapshot() as before2 \gset
 select throws_ok($q$select private.process_stripe_event('evt_steal', 'customer.subscription.updated',
-  pg_temp.sub('sub_A', 'cus_B', 'price_1UMISdDuKWPSLmWmJZqqbZiV'))$q$, 'P0403', null,
+  pg_temp.sub('sub_A', 'cus_B', 'price_1UMIyIKAHtqpope6sw0xLZDQ'))$q$, 'P0403', null,
   'subscription of A with customer of B -> error');
 select is(pg_temp.snapshot(), :'before2', 'steal attempt: nothing changed');
 
 -- Wrong object type for the event.
 select throws_ok($q$select private.process_stripe_event('evt_wrongobj', 'invoice.paid',
-  pg_temp.sub('sub_A', 'cus_A', 'price_1UMISdDuKWPSLmWmJZqqbZiV'))$q$, '22023', null,
+  pg_temp.sub('sub_A', 'cus_A', 'price_1UMIyIKAHtqpope6sw0xLZDQ'))$q$, '22023', null,
   'invoice.paid with a subscription object -> error');
 
 -- Unsupported types are recorded and ignored.
@@ -272,23 +272,23 @@ select is((select count(*)::int from public.credit_transactions where idempotenc
 select pg_temp.snapshot() as before_stale \gset
 select throws_ok($q$select private.process_stripe_event('evt_c_stale', 'invoice.paid',
   pg_temp.invoice_x('in_c_stale', 'cus_C', 'subscription_cycle', 900, 'sub_C',
-    jsonb_build_array(pg_temp.line('price_1UMISRDuKWPSLmWmyVh3aXHh', false, 'sub_C', 900))))$q$,
+    jsonb_build_array(pg_temp.line('price_1UMIyDKAHtqpope6RahtIgRw', false, 'sub_C', 900))))$q$,
   'P0404', null, 'no non-proration line with the subscription price -> error');
 select throws_ok($q$select private.process_stripe_event('evt_c_othersub', 'invoice.paid',
   pg_temp.invoice_x('in_c_other', 'cus_C', 'subscription_cycle', 2000, 'sub_C',
-    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, 'sub_other', 2000))))$q$,
+    jsonb_build_array(pg_temp.line('price_1UMIyIKAHtqpope6sw0xLZDQ', false, 'sub_other', 2000))))$q$,
   'P0404', null, 'a line of another subscription is never used');
 select throws_ok($q$select private.process_stripe_event('evt_c_onlyprorate', 'invoice.paid',
   pg_temp.invoice_x('in_c_op', 'cus_C', 'subscription_cycle', 2000, 'sub_C',
-    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', true, 'sub_C', 2000))))$q$,
+    jsonb_build_array(pg_temp.line('price_1UMIyIKAHtqpope6sw0xLZDQ', true, 'sub_C', 2000))))$q$,
   'P0404', null, 'only proration lines -> error');
 select throws_ok($q$select private.process_stripe_event('evt_c_nosub', 'invoice.paid',
   pg_temp.invoice_x('in_c_nosub', 'cus_C', 'subscription_cycle', 2000, null,
-    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, null, 2000))))$q$,
+    jsonb_build_array(pg_temp.line('price_1UMIyIKAHtqpope6sw0xLZDQ', false, null, 2000))))$q$,
   '22023', null, 'renewal invoice without a subscription id -> error');
 select throws_ok($q$select private.process_stripe_event('evt_c_foreign_sub', 'invoice.paid',
   pg_temp.invoice_x('in_c_fs', 'cus_C', 'subscription_cycle', 2000, 'sub_A',
-    jsonb_build_array(pg_temp.line('price_1UMISdDuKWPSLmWmJZqqbZiV', false, 'sub_A', 2000))))$q$,
+    jsonb_build_array(pg_temp.line('price_1UMIyIKAHtqpope6sw0xLZDQ', false, 'sub_A', 2000))))$q$,
   'P0403', null, 'invoice of C pointing at A''s subscription -> error');
 select is(pg_temp.snapshot(), :'before_stale', 'stale / foreign / proration-only invoices: nothing changed');
 select tests.clear_authentication();

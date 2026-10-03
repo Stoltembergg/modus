@@ -249,7 +249,7 @@ create policy usage_events_select_own on public.usage_events
 -- ---------------------------------------------------------------------------
 -- Seed: plans. Prices / credits: placeholders from the plan doc (Gabriel
 -- sets the final values). Stripe ids are the TEST-MODE objects of account
--- acct_1QC4NbDuKWPSLmWm (livemode false); live mode will need new ids, so the
+-- acct_1UMIt2KAHtqpope6 (livemode false); live mode will need new ids, so the
 -- lookup_key is stored too. Free has no Stripe object and is limited to two
 -- models (Gabriel, 2026-10-02 23:14 BRT); paid plans allow every model.
 -- ---------------------------------------------------------------------------
@@ -258,10 +258,10 @@ insert into public.plans
 values
   ('free',    'Free',    0,     null,                             null,                  1000,
      array['openai/gpt-6-luna', 'deepseek/deepseek-flash'], 0),
-  ('starter', 'Starter', 900,   'price_1UMISRDuKWPSLmWmyVh3aXHh', 'modus_starter_monthly', 10000,  null, 1),
-  ('pro',     'Pro',     2000,  'price_1UMISdDuKWPSLmWmJZqqbZiV', 'modus_pro_monthly',     25000,  null, 2),
-  ('max',     'Max',     5000,  'price_1UMISfDuKWPSLmWmNvJnT969', 'modus_max_monthly',     70000,  null, 3),
-  ('ultra',   'Ultra',   10000, 'price_1UMIShDuKWPSLmWmXrIsnPVM', 'modus_ultra_monthly',   150000, null, 4);
+  ('starter', 'Starter', 900,   'price_1UMIyDKAHtqpope6RahtIgRw', 'modus_starter_monthly', 10000,  null, 1),
+  ('pro',     'Pro',     2000,  'price_1UMIyIKAHtqpope6sw0xLZDQ', 'modus_pro_monthly',     25000,  null, 2),
+  ('max',     'Max',     5000,  'price_1UMIyKKAHtqpope6GL0mTcaB', 'modus_max_monthly',     70000,  null, 3),
+  ('ultra',   'Ultra',   10000, 'price_1UMIyMKAHtqpope6LhMhWnNh', 'modus_ultra_monthly',   150000, null, 4);
 
 -- ---------------------------------------------------------------------------
 -- Credit RPCs (service_role only)
