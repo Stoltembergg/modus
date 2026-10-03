@@ -1,14 +1,10 @@
 import { z } from "zod";
-import type { AppearancePreferences, AppearanceSetInput } from "../../shared/appearance";
+import type { AppearanceSetInput } from "../../shared/appearance";
 
-const themePreferenceSchema = z.enum(["dark", "light", "dark-plus", "system"]);
-const transparencyPreferenceSchema = z.enum(["auto", "off"]);
+export const themePreferenceSchema = z.enum(["dark", "light", "dark-plus", "system"]);
+export const transparencyPreferenceSchema = z.enum(["full", "sidebar", "off"]);
 
-export const appearancePreferencesSchema: z.ZodType<AppearancePreferences> = z.object({
-  theme: themePreferenceSchema,
-  transparency: transparencyPreferenceSchema,
-});
-
+/** IPC input: exactly these two optional fields, nothing else (no `auto` / `on`). */
 export const appearanceSetInputSchema: z.ZodType<AppearanceSetInput> = z
   .object({
     theme: themePreferenceSchema.optional(),

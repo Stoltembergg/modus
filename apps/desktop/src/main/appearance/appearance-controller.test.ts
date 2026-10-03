@@ -87,13 +87,13 @@ function setup({
 describe("appearance controller", () => {
   it("syncs nativeTheme.themeSource from the stored theme before any window exists", () => {
     expect(
-      setup({ stored: { theme: "dark-plus", transparency: "auto" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "dark-plus", transparency: "sidebar" } }).nativeTheme.themeSource,
     ).toBe("dark");
     expect(
-      setup({ stored: { theme: "light", transparency: "auto" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "light", transparency: "sidebar" } }).nativeTheme.themeSource,
     ).toBe("light");
     expect(
-      setup({ stored: { theme: "system", transparency: "auto" } }).nativeTheme.themeSource,
+      setup({ stored: { theme: "system", transparency: "sidebar" } }).nativeTheme.themeSource,
     ).toBe("system");
   });
 
@@ -103,18 +103,25 @@ describe("appearance controller", () => {
     expect(arg.startsWith(APPEARANCE_ARGUMENT_PREFIX)).toBe(true);
     expect(JSON.parse(arg.slice(APPEARANCE_ARGUMENT_PREFIX.length))).toMatchObject({
       theme: "dark",
-      transparency: "auto",
+      transparency: "sidebar",
+      glassMode: "sidebar",
       glass: true,
       material: "vibrancy",
     });
   });
 
-  it("turns macOS vibrancy off for the light theme as soon as the window is attached", () => {
-    const { controller } = setup({ stored: { theme: "light", transparency: "auto" } });
+  it("keeps vibrancy for the light theme and paints the light canvas when Off", () => {
+    const { controller } = setup({ stored: { theme: "light", transparency: "sidebar" } });
     const { window, raw } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
-    expect(raw.setVibrancy).toHaveBeenCalledWith(null);
-    expect(raw.setBackgroundColor).toHaveBeenCalledWith("#ffffff");
+    expect(raw.setVibrancy).toHaveBeenLastCalledWith("sidebar");
+    expect(raw.setBackgroundColor).toHaveBeenLastCalledWith("#00000000");
+
+    const off = setup({ stored: { theme: "light", transparency: "off" } });
+    const solid = fakeWindow();
+    off.controller.attach(solid.window, { nativeGlassAvailable: true });
+    expect(solid.raw.setVibrancy).toHaveBeenLastCalledWith(null);
+    expect(solid.raw.setBackgroundColor).toHaveBeenLastCalledWith("#ffffff");
   });
 
   it("persists Off, paints solid CSS first and only then makes the window opaque", () => {
@@ -133,13 +140,28 @@ describe("appearance controller", () => {
     expect(calls).toEqual(["send:false", "vibrancy:null", "bg:#131314"]);
 
     calls.length = 0;
-    controller.set({ transparency: "auto" });
+    controller.set({ transparency: "sidebar" });
     expect(calls).toEqual(["vibrancy:sidebar", "bg:#00000000", "send:true"]);
+  });
+
+  it("switches Sidebar <-> Full with the material kept on (CSS-only change)", () => {
+    const { controller, scheduled } = setup();
+    const { window, calls } = fakeWindow();
+    controller.attach(window, { nativeGlassAvailable: true });
+    calls.length = 0;
+
+    expect(controller.set({ transparency: "full" })).toMatchObject({
+      glass: true,
+      glassMode: "full",
+      material: "vibrancy",
+    });
+    expect(calls).toEqual(["vibrancy:sidebar", "bg:#00000000", "send:true"]);
+    expect(scheduled).toHaveLength(0);
   });
 
   it("follows the OS through nativeTheme `updated` and window focus", () => {
     const { controller, nativeTheme } = setup({
-      stored: { theme: "system", transparency: "auto" },
+      stored: { theme: "system", transparency: "sidebar" },
     });
     const { window, raw, handlers } = fakeWindow();
     controller.attach(window, { nativeGlassAvailable: true });
@@ -147,7 +169,7 @@ describe("appearance controller", () => {
 
     nativeTheme.shouldUseDarkColors = false;
     nativeTheme.emitUpdated();
-    expect(controller.getState()).toMatchObject({ effectiveTheme: "light", glass: false });
+    expect(controller.getState()).toMatchObject({ effectiveTheme: "light", glass: true });
 
     nativeTheme.shouldUseDarkColors = true;
     nativeTheme.emitUpdated();

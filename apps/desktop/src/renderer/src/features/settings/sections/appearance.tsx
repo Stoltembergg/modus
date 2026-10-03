@@ -1,6 +1,7 @@
 import {
   IconBlur,
   IconDeviceDesktop,
+  IconLayoutSidebar,
   IconMoon,
   IconMoonStars,
   IconSquare,
@@ -43,7 +44,7 @@ export function AppearanceSettingsPanel() {
                 label="transparency"
                 onChange={setTransparency}
                 options={TRANSPARENCY_OPTIONS}
-                value={appearance?.transparency ?? "auto"}
+                value={appearance?.transparency ?? "sidebar"}
               />
             }
             description={transparencyDescription(appearance)}
@@ -60,7 +61,7 @@ export function AppearanceSettingsPanel() {
   );
 }
 
-/** Why the shell is solid when Transparency is Automatic (or the platform has no material). */
+/** Row description: why the app is solid despite Full/Sidebar, or what the modes do. */
 export function transparencyDescription(appearance: AppearanceState | null): string {
   switch (appearance?.blockedBy) {
     case undefined:
@@ -70,10 +71,8 @@ export function transparencyDescription(appearance: AppearanceState | null): str
       return "Solid while Reduce transparency is on in your system settings.";
     case "os-high-contrast":
       return "Solid while a high-contrast system setting is on.";
-    case "light-theme":
-      return "The light theme always uses solid surfaces.";
     default:
-      return "Let the desktop show through the sidebar in dark themes, or keep every surface solid.";
+      return "Let the desktop show through the sidebar only, the whole app, or nothing. Same in every theme.";
   }
 }
 
@@ -87,7 +86,8 @@ const THEME_OPTIONS: ReadonlyArray<SegmentOption<ThemeMode>> = [
 ];
 
 const TRANSPARENCY_OPTIONS: ReadonlyArray<SegmentOption<TransparencyPreference>> = [
-  { value: "auto", label: "Automatic", icon: IconBlur },
+  { value: "full", label: "Full", icon: IconBlur },
+  { value: "sidebar", label: "Sidebar", icon: IconLayoutSidebar },
   { value: "off", label: "Off", icon: IconSquare },
 ];
 

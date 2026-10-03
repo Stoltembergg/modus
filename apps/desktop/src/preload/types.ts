@@ -150,8 +150,8 @@ export type ModusApi = {
     /** Whether this host supports the native glass effect used by the shell. */
     nativeGlass: boolean;
     /**
-     * Whether glass is on right now: host support, the Transparency preference,
-     * the theme (light is solid) and OS accessibility settings all agree.
+     * Whether glass is on right now: host support, the Transparency preference
+     * and OS accessibility settings all agree (same glass in every theme).
      */
     isNativeGlassAvailable(): boolean;
     /** Fires whenever the effective glass state flips (preference, theme, OS or a native failure). */

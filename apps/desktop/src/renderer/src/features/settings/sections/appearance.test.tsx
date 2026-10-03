@@ -6,8 +6,9 @@ import { AppearanceSettingsPanel, transparencyDescription } from "./appearance";
 
 const base: AppearanceState = {
   theme: "dark",
-  transparency: "auto",
+  transparency: "sidebar",
   effectiveTheme: "dark",
+  glassMode: "sidebar",
   glass: true,
   material: "vibrancy",
   blockedBy: null,
@@ -35,16 +36,22 @@ function stubAppearance(state: AppearanceState) {
 }
 
 describe("Appearance settings — Transparency", () => {
-  it("offers Automatic / Off and persists the choice through the main process", async () => {
+  it("offers Full / Sidebar / Off (Sidebar selected by default) and persists the choice", async () => {
     const set = stubAppearance(base);
     await act(async () => {
       render(<AppearanceSettingsPanel />);
     });
-    expect(screen.getByRole("button", { name: "Automatic" }).getAttribute("aria-pressed")).toBe(
+    expect(screen.getByRole("button", { name: "Sidebar" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Off" }));
-    expect(set).toHaveBeenCalledWith({ transparency: "off" });
+    for (const [label, value] of [
+      ["Full", "full"],
+      ["Off", "off"],
+      ["Sidebar", "sidebar"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      expect(set).toHaveBeenLastCalledWith({ transparency: value });
+    }
   });
 
   it("is disabled where the platform has no native material", async () => {
@@ -56,7 +63,6 @@ describe("Appearance settings — Transparency", () => {
   });
 
   it("explains why the shell is solid", () => {
-    expect(transparencyDescription({ ...base, blockedBy: "light-theme" })).toMatch(/light theme/);
     expect(transparencyDescription({ ...base, blockedBy: "os-reduced-transparency" })).toMatch(
       /Reduce transparency/,
     );
@@ -64,6 +70,9 @@ describe("Appearance settings — Transparency", () => {
       /high-contrast/,
     );
     expect(transparencyDescription(null)).toMatch(/not available/);
-    expect(transparencyDescription(base)).toMatch(/sidebar/);
+    expect(transparencyDescription(base)).toMatch(/every theme/);
+    expect(transparencyDescription({ ...base, theme: "light", effectiveTheme: "light" })).toMatch(
+      /every theme/,
+    );
   });
 });

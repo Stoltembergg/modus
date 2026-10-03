@@ -33,14 +33,16 @@ describe("appearance IPC", () => {
     expect(appearance.set).not.toHaveBeenCalled();
   });
 
-  it("accepts only known theme / transparency values", () => {
+  it("accepts exactly full | sidebar | off and known themes", () => {
     const { handlers, appearance } = register();
-    expect(handlers.get("appearance:set")?.(trusted, { transparency: "off" })).toEqual({
-      glass: false,
-    });
-    expect(appearance.set).toHaveBeenCalledWith({ transparency: "off" });
+    for (const transparency of ["full", "sidebar", "off"]) {
+      expect(handlers.get("appearance:set")?.(trusted, { transparency })).toEqual({ glass: false });
+      expect(appearance.set).toHaveBeenLastCalledWith({ transparency });
+    }
     for (const bad of [
+      { transparency: "auto" },
       { transparency: "on" },
+      { transparency: null },
       { theme: "neon" },
       { theme: "dark", extra: 1 },
       null,

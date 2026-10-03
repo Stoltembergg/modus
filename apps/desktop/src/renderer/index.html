@@ -18,8 +18,10 @@
         document.documentElement.dataset.theme = theme;
         const app = window.modus?.app;
         const glass = app?.isNativeGlassAvailable ? app.isNativeGlassAvailable() : app?.nativeGlass;
-        // Light is always solid (D2), even before main confirms the theme.
-        document.documentElement.dataset.nativeGlass = String(glass === true && theme !== "light");
+        document.documentElement.dataset.nativeGlass = String(glass === true);
+        // First frame follows the stored Transparency mode (main passes it via argv).
+        document.documentElement.dataset.transparency =
+          glass === true ? (app?.appearance?.initial?.glassMode ?? "sidebar") : "off";
       } catch {}
     </script>
     <style>

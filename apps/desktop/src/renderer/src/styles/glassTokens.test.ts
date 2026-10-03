@@ -187,12 +187,9 @@ describe("glass tokens (D1)", () => {
       );
     }
 
-    // Order: after every theme override (the last one is light's .pdf-page-chrome)
-    // and after the native-glass rules whose selectors it repeats.
+    // Order: after every theme override and after the native-glass rules whose
+    // selectors it repeats.
     const lastTheme = css.lastIndexOf(":root[data-theme=");
-    expect(lastTheme).toBeGreaterThan(
-      css.indexOf(':root[data-theme="light"] .pdf-page-chrome') - 1,
-    );
     expect(media.start).toBeGreaterThan(lastTheme);
     expect(media.start).toBeGreaterThan(
       css.lastIndexOf(':root[data-native-glass="true"]', media.start),
@@ -207,11 +204,10 @@ describe("glass tokens (D1)", () => {
     expect(declarations[1]).toBeGreaterThan(media.start);
     expect(declarations[2]).toBeGreaterThan(supports.start);
 
-    // Every translucent glass surface reads a tier token (no fixed alpha left),
-    // including the light pdf chrome that used to be a fixed 94%.
-    expect(block(':root[data-theme="light"] .pdf-page-chrome {').body).toContain(
-      "var(--glass-alpha-canvas)",
-    );
+    // Every translucent glass surface reads a tier token (no fixed alpha left).
+    // D2 dropped light's always-translucent .pdf-page-chrome: it now follows the
+    // same Transparency mode as every other theme.
+    expect(css).not.toContain(':root[data-theme="light"] .pdf-page-chrome');
     for (const m of css.matchAll(/(?<![-(])backdrop-filter:\s*([^;]+);/g)) {
       expect(m[1]).toMatch(/^(none|var\(--glass-(scrim-)?filter\))$/);
     }
@@ -219,13 +215,21 @@ describe("glass tokens (D1)", () => {
 });
 
 /**
- * D2 acceptance gate (Debbie, 2026-10-03). With nativeTheme synced, the OS
- * material behind a dark app is the dark material. Provisional worst case for
- * it: #cccccc (dark app, white wallpaper / white window behind). A real P95
- * sample from macOS / Win11 may only make this darker in reality; the gate
- * never loosens past #cccccc.
+ * D2 acceptance gate (Debbie, 2026-10-03; light added 15:49 BRT). With
+ * nativeTheme synced, the OS material behind the app follows the app theme,
+ * and the worst case is the opposite-luminance desktop showing through it:
+ * - dark / dark-plus over #cccccc (dark app, white wallpaper; macOS also a
+ *   white window behind). Real sample later: P95 luminance of sidebar+rail.
+ * - light over #333333, the mirror of #cccccc (light app, black wallpaper;
+ *   macOS also a dark window behind). Real sample later: P5 luminance (P95 of
+ *   darkness) of sidebar+rail.
+ * Samples can only tighten these backdrops; the gate never loosens.
  */
-const OS_BACKDROP_DARK: Rgb = [0xcc, 0xcc, 0xcc];
+const OS_BACKDROP: Record<Theme, Rgb> = {
+  dark: [0xcc, 0xcc, 0xcc],
+  "dark-plus": [0xcc, 0xcc, 0xcc],
+  light: [0x33, 0x33, 0x33],
+};
 const D2_GATE = 4.5;
 
 function themesWithGlass(): Theme[] {
@@ -234,9 +238,11 @@ function themesWithGlass(): Theme[] {
     [
       resolveWindowAppearance("darwin", "15.0.0"),
       resolveWindowAppearance("win32", "10.0.22631"),
-    ].some(
-      (window) =>
-        resolveAppearance({ window, preferences: { theme, transparency: "auto" }, os }).glass,
+    ].every((window) =>
+      (["sidebar", "full"] as const).every(
+        (transparency) =>
+          resolveAppearance({ window, preferences: { theme, transparency }, os }).glass,
+      ),
     ),
   );
 }
@@ -271,35 +277,68 @@ describe("glass in production (D2)", () => {
     }
   });
 
-  it("(f) the rail and sidebar leave the blur to the OS material (no CSS backdrop-filter)", () => {
+  it("(f) rail and sidebar share one glass rule with a light CSS blur, in Sidebar and Full", () => {
     const chrome = block(
       ':root[data-native-glass="true"] .app-rail,\n:root[data-native-glass="true"] .app-context-sidebar {',
     ).body;
     expect(chrome).toContain("var(--surface-glass-sidebar)");
-    expect(chrome).not.toMatch(/backdrop-filter/);
+    expect(chrome).toMatch(
+      /-webkit-backdrop-filter: var\(--glass-filter\);\s*backdrop-filter: var\(--glass-filter\);/,
+    );
+    // Not scoped to a mode: the left chrome is glass in both "sidebar" and "full".
+    expect(css).not.toMatch(/data-transparency="(sidebar|full)"\] \.app-(rail|context-sidebar)/);
   });
 
-  it("(g) only dark and dark-plus can get glass; light is always solid", () => {
-    expect(themesWithGlass()).toEqual(["dark", "dark-plus"]);
+  it("(g) every theme gets the same glass, with no theme-specific solid override", () => {
+    expect(themesWithGlass()).toEqual(["dark", "dark-plus", "light"]);
+    // One treatment across the app: glass rules are never scoped to a theme, and
+    // the tier alphas are only declared on plain :root (see (a) and (c)).
+    for (const m of css.matchAll(/([^{}]*)\{/g)) {
+      const selector = m[1] ?? "";
+      if (selector.includes("data-native-glass")) expect(selector).not.toMatch(/data-theme/);
+    }
   });
 
-  it("(h) fg and muted >= 4.5:1 on every glass tier over the #cccccc OS backdrop", () => {
-    const results: string[] = [];
-    for (const theme of themesWithGlass()) {
-      for (const tier of Object.keys(TIERS) as (keyof typeof TIERS)[]) {
-        for (const text of ["--color-fg", "--color-fg-muted"]) {
-          const ratio = worst(theme, tier, text, [OS_BACKDROP_DARK]);
-          results.push(`${theme} ${tier} ${text} ${ratio.toFixed(2)}`);
-          expect(ratio, `${theme} ${tier} ${text}`).toBeGreaterThanOrEqual(D2_GATE);
+  /** Tiers that are translucent per Transparency mode ("off" has none). */
+  const MODE_TIERS: Record<"sidebar" | "full", (keyof typeof TIERS)[]> = {
+    sidebar: ["--glass-alpha-chrome"],
+    full: ["--glass-alpha-chrome", "--glass-alpha-overlay", "--glass-alpha-canvas"],
+  };
+
+  it("(h) fg and muted >= 4.5:1 on every translucent tier, Sidebar and Full, every theme", () => {
+    let checked = 0;
+    for (const mode of ["sidebar", "full"] as const) {
+      for (const theme of themesWithGlass()) {
+        for (const tier of MODE_TIERS[mode]) {
+          for (const text of ["--color-fg", "--color-fg-muted"]) {
+            const ratio = worst(theme, tier, text, [OS_BACKDROP[theme]]);
+            expect(ratio, `${mode} ${theme} ${tier} ${text}`).toBeGreaterThanOrEqual(D2_GATE);
+            checked += 1;
+          }
         }
       }
     }
-    expect(results).toHaveLength(12);
-    // Negative control: without the sync (light material / white desktop behind a
-    // dark app) the same tokens fail, which is why D2 couples glass to nativeTheme.
+    expect(checked).toBe(2 * 3 * (1 + 3));
+  });
+
+  it("(h) mirrored controls: what the opposite desktop would do without the nativeTheme sync", () => {
+    // Dark over a pure white desktop fails on chrome and overlays: glass needs the sync.
+    expect(worst("dark", "--glass-alpha-chrome", "--color-fg-muted", [WHITE])).toBeLessThan(
+      D2_GATE,
+    );
     expect(worst("dark", "--glass-alpha-overlay", "--color-fg-muted", [WHITE])).toBeLessThan(
       D2_GATE,
     );
+    // Light holds even over pure black with the current shared alphas (no raise needed)...
+    for (const tier of Object.keys(TIERS) as (keyof typeof TIERS)[]) {
+      expect(worst("light", tier, "--color-fg-muted", [BLACK]), tier).toBeGreaterThanOrEqual(
+        D2_GATE,
+      );
+    }
+    // ...and the light gate is not vacuous: a thinner 60% chrome would fail over #333333.
+    expect(
+      worst("light", "--glass-alpha-chrome", "--color-fg-muted", [OS_BACKDROP.light], 0.6),
+    ).toBeLessThan(D2_GATE);
   });
 
   it("(i) native window colours mirror the palette tokens", () => {

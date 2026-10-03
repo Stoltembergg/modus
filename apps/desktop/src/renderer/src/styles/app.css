@@ -895,42 +895,51 @@ body {
   height: 100vh;
 }
 
-/* Desktop glass is scoped to the rail, context sidebar and raised surfaces.
-   The conversation canvas gets a light tint only; transcript content and media
-   keep their own surfaces, and the canvas itself does not add another blur. */
+/* Desktop glass (D2). The window material (vibrancy / Mica) is on whenever
+   data-native-glass="true"; data-transparency picks how much of the app shows it:
+   - "sidebar" (default): only the left chrome (rail + context sidebar, one
+     column) is translucent; the canvas, overlays and every other surface keep
+     their opaque defaults.
+   - "full": the canvas gets a light tint and overlays / scrims are glass too.
+   Same rules in every theme. Rail and sidebar carry a light CSS blur so their
+   frost matches the overlays; behind them the OS material blurs the desktop.
+   Always -webkit-backdrop-filter first: Lightning CSS drops the standard
+   property when it comes first, and Chromium ignores the prefixed one. */
+/* <html> too: `:root { background: var(--color-canvas) }` paints the whole
+   window canvas and would hide the material entirely. */
+:root[data-native-glass="true"],
 :root[data-native-glass="true"] body,
 :root[data-native-glass="true"] #root,
 :root[data-native-glass="true"] .app-shell,
 :root[data-native-glass="true"] .app-layout-row {
   background-color: transparent;
 }
-/* No CSS blur on chrome: backdrop-filter samples only page pixels, and behind
- * the rail/sidebar there is none, just the OS material (vibrancy / Mica), which
- * already blurs the desktop. A CSS blur here would cost GPU for nothing (D2). */
 :root[data-native-glass="true"] .app-rail,
 :root[data-native-glass="true"] .app-context-sidebar {
   background-color: var(--surface-glass-sidebar);
+  -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .app-context-sidebar-body {
   background-color: transparent;
 }
-:root[data-native-glass="true"] .surface-main {
+:root[data-native-glass="true"][data-transparency="full"] .surface-main {
   background-color: var(--surface-main-glass);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-:root[data-native-glass="true"] .surface-raised,
-:root[data-native-glass="true"] .surface-glass {
+:root[data-native-glass="true"][data-transparency="full"] .surface-raised,
+:root[data-native-glass="true"][data-transparency="full"] .surface-glass {
   background-color: var(--surface-glass-elevated);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
 }
-:root[data-native-glass="true"] .popup-chrome {
+:root[data-native-glass="true"][data-transparency="full"] .popup-chrome {
   background: var(--surface-glass-elevated);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
 }
-:root[data-native-glass="true"] .dialog-scrim {
+:root[data-native-glass="true"][data-transparency="full"] .dialog-scrim {
   -webkit-backdrop-filter: var(--glass-scrim-filter);
   backdrop-filter: var(--glass-scrim-filter);
 }
@@ -1468,7 +1477,7 @@ body {
    * the same budget. Applied as a step (no transition) — at 1px the arrival is
    * imperceptible, and it then costs nothing while the sheet sits open.
    */
-  :root[data-native-glass="true"] .subagent-preview-scrim[data-settled] {
+  :root[data-native-glass="true"][data-transparency="full"] .subagent-preview-scrim[data-settled] {
     -webkit-backdrop-filter: var(--glass-scrim-filter);
     backdrop-filter: var(--glass-scrim-filter);
     will-change: auto;
@@ -2670,16 +2679,16 @@ body
   background: color-mix(in srgb, var(--color-fg) 8%, transparent);
 }
 
-:root[data-native-glass="true"]
+:root[data-native-glass="true"][data-transparency="full"]
   body
   > div.fixed.inset-0:has([data-streamdown="mermaid"])
   > button.absolute,
-:root[data-native-glass="true"]
+:root[data-native-glass="true"][data-transparency="full"]
   body
   > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"],
-:root[data-native-glass="true"] .pdf-page-chrome {
+:root[data-native-glass="true"][data-transparency="full"] .pdf-page-chrome {
   background: var(--surface-glass-elevated);
   -webkit-backdrop-filter: var(--glass-filter);
   backdrop-filter: var(--glass-filter);
@@ -2687,9 +2696,6 @@ body
 .pdf-rect-tool.is-active {
   color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-}
-:root[data-theme="light"] .pdf-page-chrome {
-  background: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-canvas), transparent);
 }
 
 .inspector-tab-panel {

@@ -73,13 +73,20 @@ describe("Modus semantic design tokens", () => {
     expect(popup).toContain("border-radius: var(--radius-overlay)");
     expect(popup).not.toMatch(/blur\(\d/);
     expect(scrim).not.toContain("backdrop-filter");
-    expect(css).toContain(':root[data-native-glass="true"] .dialog-scrim');
-    expect(css).toContain(':root[data-native-glass="true"] .surface-glass');
+    // D2: canvas / overlay glass only in Transparency "full"; the left chrome in both modes.
+    expect(css).toContain(
+      ':root[data-native-glass="true"][data-transparency="full"] .dialog-scrim',
+    );
+    expect(css).toContain(
+      ':root[data-native-glass="true"][data-transparency="full"] .surface-glass',
+    );
     expect(css).toContain(':root[data-native-glass="true"] .app-context-sidebar');
-    expect(css).toContain(':root[data-native-glass="true"] .surface-main');
+    expect(css).toContain(
+      ':root[data-native-glass="true"][data-transparency="full"] .surface-main',
+    );
     expect(css).toContain("--surface-glass: var(--surface-raised)");
     expect(css).toMatch(
-      /:root\[data-native-glass="true"\] \.surface-main\s*\{[^}]*backdrop-filter: none/su,
+      /:root\[data-native-glass="true"\]\[data-transparency="full"\] \.surface-main\s*\{[^}]*backdrop-filter: none/su,
     );
     expect(css).not.toContain(".chat-scroll-top-blur");
     const composerDock = css.match(/\.composer-dock-shell\s*\{([^}]+)\}/)?.[1] ?? "";
@@ -102,7 +109,7 @@ describe("Modus semantic design tokens", () => {
     );
     expect(css).toMatch(/--glass-alpha-canvas:\s*94%;/);
     expect(css).toMatch(
-      /:root\[data-native-glass="true"\] \.surface-main\s*\{\s*background-color: var\(--surface-main-glass\)/,
+      /:root\[data-native-glass="true"\]\[data-transparency="full"\] \.surface-main\s*\{\s*background-color: var\(--surface-main-glass\)/,
     );
     const mainSurface = css.match(/(?:^|\n)\.surface-main\s*\{([^}]+)\}/)?.[1] ?? "";
     expect(mainSurface).not.toContain("backdrop-filter");
