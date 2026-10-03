@@ -17,7 +17,7 @@ import {
   IconUserQuestion,
 } from "@tabler/icons-react";
 import type { ReactNode } from "react";
-import { groupRoomIntlLocale } from "../../../../shared/group-room-locale";
+import { formatGroupRoomDate, groupRoomIntlLocale } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { ICON_STROKE } from "../../lib/uiDensity";
@@ -59,7 +59,11 @@ export function GroupMessageHeader({
       <time
         className="text-2xs text-fg-faint tabular-nums"
         dateTime={createdAt}
-        title={Number.isNaN(ms) ? undefined : new Date(ms).toLocaleString(intl)}
+        title={
+          Number.isNaN(ms)
+            ? undefined
+            : formatGroupRoomDate(new Date(ms), { dateStyle: "medium", timeStyle: "short" }, intl)
+        }
       >
         {formatClock(ms, undefined, intl)}
       </time>

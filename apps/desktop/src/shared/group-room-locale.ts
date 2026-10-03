@@ -450,14 +450,56 @@ export function filesSearchPluralText(
 const INTL_FALLBACK: Record<GroupRoomLocale, string> = { en: "en-US", pt: "pt-BR", zh: "zh-CN" };
 
 /**
+ * The system's hour cycle ("h23" on a pt-BR system, "h12" on en-US), read
+ * from the runtime default locale. Undefined when `Intl` can't tell.
+ */
+export function systemHourCycle(): Intl.DateTimeFormatOptions["hourCycle"] {
+  try {
+    return new Intl.DateTimeFormat([], { hour: "numeric" }).resolvedOptions().hourCycle;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Date / time formatting for UI text (C6.2). With an explicit `Intl` tag it is
+ * fully that locale. Without one, names (weekday, month) are en-US so they
+ * match the English text around them, while the hour cycle is the system's:
+ * 24h "21:47" on a pt system, "9:47 PM" on an en-US one. A numeric hour is
+ * never zero-padded ("9:05", as the pre-C6 system format showed it), and the
+ * output matches `Date#toLocale*String` spacing.
+ */
+export function formatGroupRoomDate(
+  date: Date,
+  options: Intl.DateTimeFormatOptions,
+  intlLocale?: string,
+): string {
+  const hasTime = options.hour !== undefined || options.timeStyle !== undefined;
+  const hourCycle = !intlLocale && hasTime ? systemHourCycle() : undefined;
+  const format = new Intl.DateTimeFormat(
+    intlLocale ?? "en-US",
+    hourCycle ? { ...options, hourCycle } : options,
+  );
+  const text =
+    !intlLocale && options.hour === "numeric"
+      ? format
+          .formatToParts(date)
+          .map((part) => (part.type === "hour" ? String(Number(part.value)) : part.value))
+          .join("")
+      : format.format(date);
+  // `Intl.DateTimeFormat` puts U+202F before AM/PM where `Date#toLocale*String`
+  // (used before C6.2) prints a plain space; keep the plain space.
+  return text.replace(/\u202f/g, " ");
+}
+
+/**
  * BCP-47 tag for `Intl` / `toLocale*String` in the room: the same resolution
  * rule as the catalog (pt* → pt, zh* → zh, else en). The raw tag is kept when
  * it resolves to the same catalog locale and `Intl` accepts it (en-GB, pt-PT,
  * zh-TW keep their region); otherwise en-US / pt-BR / zh-CN.
  *
- * No tag → `undefined` (C6.2): `Intl` then uses the system locale, as before
- * C6, so clocks and long dates keep the user's format (24h "21:47" on a pt
- * system) while the text around them is the en catalog.
+ * No tag → `undefined` (C6.2): format with `formatGroupRoomDate`, which then
+ * uses en-US names with the system hour cycle.
  */
 export function groupRoomIntlLocale(tag?: string | null): string | undefined {
   if (tag == null || tag.trim() === "") return undefined;

@@ -5,7 +5,7 @@
  * Pure helpers — keep renderer/main free of duplicated date/token math.
  */
 
-import { groupRoomIntlLocale, groupText } from "./group-room-locale";
+import { formatGroupRoomDate, groupRoomIntlLocale, groupText } from "./group-room-locale";
 
 /** Rough token estimate (same rule as Group Runtime chain budget). */
 export function estimateGroupTokens(text: string): number {
@@ -38,9 +38,9 @@ export function formatGroupDaySeparator(
   if (startOfThat === startOfToday - dayMs) return groupText("day.yesterday", locale);
   const intl = groupRoomIntlLocale(locale);
   if (startOfThat >= startOfToday - 6 * dayMs) {
-    return date.toLocaleDateString(intl, { weekday: "long" });
+    return formatGroupRoomDate(date, { weekday: "long" }, intl);
   }
-  return date.toLocaleDateString(intl, { month: "short", day: "numeric", year: "numeric" });
+  return formatGroupRoomDate(date, { month: "short", day: "numeric", year: "numeric" }, intl);
 }
 
 export type GroupTranscriptItem<T extends { id: string; createdAt: string }> =
