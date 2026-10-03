@@ -1,6 +1,7 @@
 /**
  * Locale-aware Group Room UI strings (Thinking…, Queued…, Ready…).
- * Uses the app/renderer locale when available; falls back to English.
+ * English unless an explicit locale tag is passed (C6.2); the system locale
+ * only drives `Intl` date / time formatting (see `groupRoomIntlLocale`).
  */
 
 import {
@@ -99,21 +100,16 @@ const LABELS: Record<GroupRoomLocale, Record<GroupThinkingStateKey, string>> = {
   },
 };
 
-/** Normalize a BCP-47 / OS locale tag into a Group Room catalog key. */
+/**
+ * Normalize a BCP-47 locale tag into a Group Room catalog key. No tag means
+ * `en` (C6.2): UI text never follows the system locale on its own; pt / zh
+ * only come from an explicit locale (e.g. a future language selector).
+ */
 export function resolveGroupRoomLocale(tag?: string | null): GroupRoomLocale {
-  const raw = (tag ?? detectRendererLocale()).trim().toLowerCase().replace(/_/g, "-");
+  const raw = (tag ?? "").trim().toLowerCase().replace(/_/g, "-");
   if (raw.startsWith("pt")) return "pt";
   if (raw.startsWith("zh")) return "zh";
   return "en";
-}
-
-function detectRendererLocale(): string {
-  try {
-    if (typeof navigator !== "undefined" && navigator.language) return navigator.language;
-  } catch {
-    // non-browser
-  }
-  return "en-US";
 }
 
 /** Localized label for a Thinking State / ephemeral room indicator. */
@@ -457,11 +453,15 @@ const INTL_FALLBACK: Record<GroupRoomLocale, string> = { en: "en-US", pt: "pt-BR
  * BCP-47 tag for `Intl` / `toLocale*String` in the room: the same resolution
  * rule as the catalog (pt* → pt, zh* → zh, else en). The raw tag is kept when
  * it resolves to the same catalog locale and `Intl` accepts it (en-GB, pt-PT,
- * zh-TW keep their region); otherwise en-US / pt-BR / zh-CN. So dates and
- * clocks are never in a different language from the copy around them.
+ * zh-TW keep their region); otherwise en-US / pt-BR / zh-CN.
+ *
+ * No tag → `undefined` (C6.2): `Intl` then uses the system locale, as before
+ * C6, so clocks and long dates keep the user's format (24h "21:47" on a pt
+ * system) while the text around them is the en catalog.
  */
-export function groupRoomIntlLocale(tag?: string | null): string {
-  const raw = (tag ?? detectRendererLocale()).trim().replace(/_/g, "-");
+export function groupRoomIntlLocale(tag?: string | null): string | undefined {
+  if (tag == null || tag.trim() === "") return undefined;
+  const raw = tag.trim().replace(/_/g, "-");
   const locale = resolveGroupRoomLocale(raw);
   try {
     const canonical = Intl.getCanonicalLocales(raw)[0];

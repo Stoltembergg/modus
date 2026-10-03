@@ -40,7 +40,7 @@ export function GroupMessageHeader({
   memberRole?: string | undefined;
   createdAt: string;
   trailing?: ReactNode;
-  /** Room locale for the clock (default: the room provider / renderer locale). */
+  /** Room locale for the clock (default: the room provider; none = system locale, C6.2). */
   locale?: string | null | undefined;
 }) {
   const ms = Date.parse(createdAt);

@@ -82,8 +82,8 @@ export type GroupRoomProps = {
    */
   chromeHost?: HTMLElement | null | undefined;
   /**
-   * Room locale tag (C6). Omitted = the renderer locale (`navigator.language`),
-   * resolved like the catalog: pt* → pt, zh* → zh, anything else → en.
+   * Room locale tag (C6). Omitted = English text (C6.2); dates and clocks then
+   * follow the system locale. A tag resolves pt* → pt, zh* → zh, else en.
    */
   locale?: string | null | undefined;
 };

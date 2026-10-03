@@ -119,10 +119,14 @@ describe("SearchToolCard copy in pt / zh (C6.1)", () => {
     expect(screen.getByText("Buscando…")).toBeTruthy();
   });
 
-  it("falls back to navigator.language, and en stays as before", () => {
+  it("without a locale it is English even on a zh / pt system (C6.2), and en stays as before", () => {
     vi.spyOn(navigator, "language", "get").mockReturnValue("zh-TW");
     render(<SearchToolCard args={{ pattern: "x" }} fallback={fallback} name="grep" output="" />);
-    expect(screen.getByText("正在搜索…")).toBeTruthy();
+    expect(screen.getByText("Searching…")).toBeTruthy();
+    cleanup();
+    vi.spyOn(navigator, "language", "get").mockReturnValue("pt-BR");
+    renderDone();
+    expect(screen.getByRole("button", { name: /Found 2 results/ })).toBeTruthy();
     cleanup();
     renderDone("en-US");
     expect(screen.getByRole("button", { name: /Found 2 results/ })).toBeTruthy();

@@ -3,7 +3,8 @@
  * week, short date + time beyond that ("5:17 PM" / "Monday 5:17 PM" /
  * "Jun 3 5:17 PM"). `now` is injectable for tests. `locale` is a BCP-47 tag
  * for `Intl` (the group room passes `groupRoomIntlLocale(...)`); omitted = the
- * runtime default, as before.
+ * system locale, as before C6 (`groupRoomIntlLocale` returns undefined when the
+ * room has no explicit locale, C6.2).
  */
 export function formatClock(ms?: number, now: Date = new Date(), locale?: string): string {
   if (!ms || !Number.isFinite(ms)) return "";
