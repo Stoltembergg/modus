@@ -116,3 +116,16 @@ Electron、React、TypeScript、Tailwind CSS、Base UI、Motion、Monaco、xterm
 ## License
 
 Apache-2.0。见 [LICENSE](./LICENSE)。
+
+例外：以下文件改编自 [React Bits](https://github.com/DavidHDev/react-bits)，**不**适用 Apache-2.0，仍遵循 MIT + Commons Clause License Condition v1.0（Copyright (c) 2026 David Haz），详见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
+- `apps/desktop/src/renderer/src/components/ui/Aurora.tsx`
+- `apps/desktop/src/renderer/src/components/ui/GradientWaves.tsx`
+- `apps/desktop/src/renderer/src/components/ui/FadeContent.tsx`
+- `apps/desktop/src/renderer/src/components/ui/ScrollReveal.tsx`
+- `apps/desktop/src/renderer/src/components/ui/TextType.tsx`
+- `apps/desktop/src/renderer/src/components/ui/ShinyText.tsx`
+- `apps/desktop/src/renderer/src/components/ui/BranchedMenu.tsx`
+- `apps/desktop/src/renderer/src/components/ui/SpringCheck.tsx`
+- `apps/desktop/src/renderer/src/components/ui/ThoughtLine.tsx`
+- `apps/desktop/src/renderer/src/components/ui/PromptSendGlyph.tsx`
