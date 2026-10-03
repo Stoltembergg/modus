@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 /**
  * C6 guard: no hardcoded user-visible strings in `features/groups/` (outside
  * tests). Every string literal, template and JSX text that reads like copy
- * must come from the room catalog (`shared/group-room-text.ts`). A heuristic
+ * must come from the room catalog (`shared/group-room-text.ts`). C6.1 extends
+ * the scan to the Files panel (`features/files/`) and the Search Tool card
+ * (`features/agent/SearchToolCard.tsx` + its parsers), whose copy lives in
+ * `shared/files-search-text.ts`. A heuristic
  * scan with the TypeScript AST: identifiers, class lists, test ids, ARIA
  * plumbing, imports, comparisons and `cn(...)` arguments are not copy.
  *
@@ -46,14 +49,31 @@ const ALLOWED: Record<string, Record<string, string>> = {
   "NewGroupModal.tsx": {
     "×": "multiplier glyph before a template count",
   },
+  "../agent/SearchToolCard.tsx": {
+    Home: "keyboard event key name (roving focus), not rendered",
+    End: "keyboard event key name (roving focus), not rendered",
+  },
+  "../agent/searchResults.ts": {
+    "No matches found": "PI grep tool output recognised as an empty result (parsed, not rendered)",
+    "No files found matching pattern":
+      "PI find tool output recognised as an empty result (parsed, not rendered)",
+  },
 };
+
+/** C6.1: the Files panel and the Search Tool card, scanned with the room. */
+const EXTRA_SOURCES = [
+  "../files",
+  "../agent/SearchToolCard.tsx",
+  "../agent/searchResults.ts",
+  "../agent/searchResultPath.ts",
+];
 
 const here = fileURLToPath(new URL(".", import.meta.url));
 
 const SKIP_ATTR =
   /^(className|style|key|data-[\w-]+|type|role|id|htmlFor|name|href|src|value|mode|variant|side|align|accept|aria-(controls|hidden|live|haspopup|labelledby|current|pressed|expanded|selected|checked))$/;
 const SKIP_CALLS =
-  /^(cn|startsWith|endsWith|includes|split|replace|test|match|join|get|has|set|add|delete|warn|error|log|setItem|getItem|removeItem|querySelector|querySelectorAll|t|groupText|groupPluralText|plural|RegExp|localeCompare)$/;
+  /^(cn|startsWith|endsWith|includes|split|replace|test|match|join|get|has|set|add|delete|warn|error|log|setItem|getItem|removeItem|querySelector|querySelectorAll|t|groupText|groupPluralText|filesSearchText|filesSearchPluralText|plural|RegExp|localeCompare)$/;
 
 function looksLikeCopy(text: string): boolean {
   const value = text.trim();
@@ -150,9 +170,16 @@ function scan(file: string): string[] {
   return hits;
 }
 
-describe("features/groups has no hardcoded user-visible strings (C6)", () => {
+describe("features/groups, Files panel and Search card have no hardcoded user-visible strings (C6/C6.1)", () => {
   const found = new Map<string, string[]>();
-  for (const file of sourceFiles(here)) {
+  const files = [
+    ...sourceFiles(here),
+    ...EXTRA_SOURCES.flatMap((entry) => {
+      const path = join(here, entry);
+      return statSync(path).isDirectory() ? sourceFiles(path) : [path];
+    }),
+  ];
+  for (const file of files) {
     const hits = scan(file);
     if (hits.length > 0) found.set(relative(here, file), hits);
   }
@@ -185,5 +212,17 @@ describe("features/groups has no hardcoded user-visible strings (C6)", () => {
     expect(looksLikeCopy("flex min-w-0 items-center gap-2")).toBe(false);
     expect(looksLikeCopy("error.{x}")).toBe(false);
     expect(looksLikeCopy("{x}…")).toBe(false);
+  });
+
+  it("covers the Files panel and the Search Tool card (C6.1)", () => {
+    const scanned = files.map((file) => relative(here, file));
+    for (const file of [
+      "../files/FilesPanel.tsx",
+      "../files/UnsavedChangesDialog.tsx",
+      "../agent/SearchToolCard.tsx",
+      "../agent/searchResults.ts",
+    ]) {
+      expect(scanned).toContain(file);
+    }
   });
 });

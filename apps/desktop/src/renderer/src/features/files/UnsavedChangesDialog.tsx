@@ -1,7 +1,7 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { useRef } from "react";
 import { cn } from "../../lib/cn";
-import { FILES_DIRTY_COPY } from "./filesDirtyCopy";
+import { useFilesText } from "./filesI18n";
 
 type UnsavedChangesDialogProps = {
   open: boolean;
@@ -13,6 +13,8 @@ type UnsavedChangesDialogProps = {
   onSave(): void;
   onDiscard(): void;
   onCancel(): void;
+  /** Room / UI locale tag; falls back to the renderer locale (C6.1). */
+  locale?: string | undefined;
 };
 
 const BUTTON =
@@ -31,7 +33,9 @@ export function UnsavedChangesDialog({
   onSave,
   onDiscard,
   onCancel,
+  locale,
 }: UnsavedChangesDialogProps) {
+  const t = useFilesText(locale);
   const saveRef = useRef<HTMLButtonElement>(null);
   return (
     <AlertDialog.Root
@@ -59,17 +63,17 @@ export function UnsavedChangesDialog({
           initialFocus={saveRef}
         >
           <AlertDialog.Title className="font-medium text-fg text-sm">
-            {FILES_DIRTY_COPY.dialogTitle(fileName)}
+            {t("files.dialogTitle", { name: fileName })}
           </AlertDialog.Title>
           <AlertDialog.Description className="mt-1 text-fg-muted text-xs leading-relaxed">
-            {FILES_DIRTY_COPY.dialogDescription}
+            {t("files.dialogDescription")}
           </AlertDialog.Description>
           {error ? (
             <div
               className="mt-2 max-h-24 overflow-y-auto whitespace-pre-wrap rounded-md border border-danger/30 bg-danger/8 px-2.5 py-2 text-danger text-xs"
               role="alert"
             >
-              {FILES_DIRTY_COPY.saveFailed(error)}
+              {t("files.saveFailed", { message: error })}
             </div>
           ) : null}
           <div className="mt-3 flex items-center justify-end gap-2">
@@ -79,7 +83,7 @@ export function UnsavedChangesDialog({
               onClick={onCancel}
               type="button"
             >
-              {FILES_DIRTY_COPY.cancel}
+              {t("files.cancel")}
             </button>
             <button
               className={cn(BUTTON, "text-danger hover:bg-danger/8")}
@@ -87,7 +91,7 @@ export function UnsavedChangesDialog({
               onClick={onDiscard}
               type="button"
             >
-              {FILES_DIRTY_COPY.discard}
+              {t("files.discard")}
             </button>
             <button
               className={cn(BUTTON, "bg-accent text-white hover:opacity-90")}
@@ -96,7 +100,7 @@ export function UnsavedChangesDialog({
               ref={saveRef}
               type="button"
             >
-              {FILES_DIRTY_COPY.save}
+              {t("files.save")}
             </button>
           </div>
         </AlertDialog.Popup>

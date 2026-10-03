@@ -5,6 +5,8 @@
  * tool row and never drop information.
  */
 
+import { filesSearchPluralText, filesSearchText } from "../../../../shared/group-room-locale";
+
 export const FILE_SEARCH_TOOL_NAMES = ["grep", "find"] as const;
 export const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
@@ -47,13 +49,15 @@ export function isSearchToolName(name: string): boolean {
 }
 
 /** Query label shown in mono: the pattern / query plus where it ran. */
-export function searchQuery(name: string, args: unknown): string {
+export function searchQuery(name: string, args: unknown, locale?: string | null): string {
   const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
   const text = (value: unknown) => (value == null ? "" : String(value));
   if (name === "web_search") return text(a.query);
   const pattern = text(a.pattern);
-  if (a.path) return `${pattern} in ${text(a.path)}`;
-  if (name === "grep" && a.glob) return `${pattern} in ${text(a.glob)}`;
+  if (a.path) return filesSearchText("search.queryIn", locale, { pattern, path: text(a.path) });
+  if (name === "grep" && a.glob) {
+    return filesSearchText("search.queryIn", locale, { pattern, path: text(a.glob) });
+  }
   return pattern;
 }
 
@@ -226,8 +230,12 @@ export function middleTruncatePath(path: string, max = 64): string {
 }
 
 /** Right-hand column for a file row: "L42" for one match, "3 matches" for more. */
-export function fileResultMeta(result: FileSearchResult): string {
-  if (result.matches === undefined) return result.path.endsWith("/") ? "dir" : "";
-  if (result.matches === 1 && result.line !== undefined) return `L${result.line}`;
-  return `${result.matches} ${result.matches === 1 ? "match" : "matches"}`;
+export function fileResultMeta(result: FileSearchResult, locale?: string | null): string {
+  if (result.matches === undefined) {
+    return result.path.endsWith("/") ? filesSearchText("search.dir", locale) : "";
+  }
+  if (result.matches === 1 && result.line !== undefined) {
+    return filesSearchText("search.line", locale, { line: result.line });
+  }
+  return filesSearchPluralText("search.matches", result.matches, locale);
 }

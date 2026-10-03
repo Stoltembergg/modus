@@ -33,6 +33,7 @@ import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { ShinyText } from "../../components/ui/ShinyText";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { type FilesTextFn, useFilesText } from "../files/filesI18n";
 import { resolveSearchResultTarget, type SearchResultTarget } from "./searchResultPath";
 import {
   type FileSearchResult,
@@ -57,6 +58,8 @@ export type SearchToolCardProps = {
   cwd?: string | undefined;
   /** Opens a workspace file, optionally at a line. Without it rows are static. */
   onOpenFile?: ((path: string, line?: number) => void) | undefined;
+  /** Room / UI locale tag; falls back to the room context, then the renderer locale (C6.1). */
+  locale?: string | undefined;
 };
 
 /** Focus ring shared by every focusable row / match line (Modus focus token). */
@@ -115,10 +118,6 @@ function searchPathArg(args: unknown): string | undefined {
   return typeof path === "string" && path.trim() ? path : undefined;
 }
 
-function resultLabel(count: number): string {
-  return `Found ${count} ${count === 1 ? "result" : "results"}`;
-}
-
 /**
  * Middle-truncated path: the directory part may shrink further (CSS ellipsis)
  * when the row is narrow, the filename never does.
@@ -155,7 +154,9 @@ function FileRow({
   firstKey,
   roving,
   onOpen,
+  t,
 }: {
+  t: FilesTextFn;
   result: FileSearchResult;
   target: SearchResultTarget;
   navKey: string;
@@ -163,7 +164,7 @@ function FileRow({
   roving: Roving;
   onOpen?: ((path: string, line?: number) => void) | undefined;
 }) {
-  const meta = fileResultMeta(result);
+  const meta = fileResultMeta(result, t.locale);
   const isDir = result.path.endsWith("/");
   const matchLines = result.matchLines ?? [];
   const expandable = matchLines.length > 1;
@@ -184,7 +185,9 @@ function FileRow({
       <FileIcon isDir={isDir} />
       <PathLabel path={result.path} />
       {outside ? (
-        <span className="shrink-0 whitespace-nowrap text-fg-faint text-xs">outside workspace</span>
+        <span className="shrink-0 whitespace-nowrap text-fg-faint text-xs">
+          {t("search.outsideWorkspace")}
+        </span>
       ) : meta ? (
         <span className="shrink-0 whitespace-nowrap text-fg-faint text-xs tabular-nums">
           {meta}
@@ -211,7 +214,9 @@ function FileRow({
         data-search-row="file"
         title={
           outside
-            ? `Outside the workspace: ${target.kind === "outside" ? target.path : result.path}`
+            ? t("search.outsideTitle", {
+                path: target.kind === "outside" ? target.path : result.path,
+              })
             : result.path
         }
       >
@@ -219,10 +224,10 @@ function FileRow({
           <button
             aria-label={
               outside
-                ? `${result.path} (outside the workspace)`
+                ? t("search.outsideLabel", { path: result.path })
                 : result.line !== undefined
-                  ? `Open ${result.path} at line ${result.line}`
-                  : `Open ${result.path}`
+                  ? t("search.openAtLine", { path: result.path, line: result.line })
+                  : t("search.open", { path: result.path })
             }
             className={cn(
               "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1 text-left",
@@ -248,7 +253,11 @@ function FileRow({
           <button
             aria-controls={matchesId}
             aria-expanded={expanded}
-            aria-label={`${expanded ? "Hide" : "Show"} ${matchLines.length} matches in ${result.path}`}
+            aria-label={t.plural(
+              expanded ? "search.hideMatches" : "search.showMatches",
+              matchLines.length,
+              { path: result.path },
+            )}
             className={cn(
               "flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint transition-colors hover:text-fg-muted",
               NAV_FOCUS,
@@ -288,7 +297,11 @@ function FileRow({
             );
             return interactive && !outside ? (
               <button
-                aria-label={`Open ${result.path} at line ${match.line}: ${match.text}`}
+                aria-label={t("search.openMatch", {
+                  path: result.path,
+                  line: match.line,
+                  text: match.text,
+                })}
                 className={cn(
                   "flex min-w-0 items-center gap-2 rounded-md px-2 py-0.5 text-left font-mono text-xs hover:bg-hover",
                   NAV_FOCUS,
@@ -359,10 +372,12 @@ export const SearchToolCard = memo(function SearchToolCard({
   defaultOpen = false,
   cwd,
   onOpenFile,
+  locale,
 }: SearchToolCardProps) {
+  const t = useFilesText(locale);
   const [open, setOpen] = useState(defaultOpen);
   const roving = useRovingList();
-  const query = searchQuery(name, args);
+  const query = searchQuery(name, args, t.locale);
   const searching = !isComplete && !isError;
   const parsed = useMemo(
     () => (isComplete && !isError ? parseSearchOutput(name, output) : undefined),
@@ -373,7 +388,7 @@ export const SearchToolCard = memo(function SearchToolCard({
     return (
       <div className="flex min-w-0 items-center gap-2 py-0.5 text-sm" data-search-state="searching">
         <ShinyText className="shrink-0">
-          {name === "web_search" ? "Searching the web…" : "Searching…"}
+          {name === "web_search" ? t("search.searchingWeb") : t("search.searching")}
         </ShinyText>
         {query ? (
           <span className="min-w-0 flex-1 truncate font-mono text-fg-faint text-xs" title={query}>
@@ -401,7 +416,7 @@ export const SearchToolCard = memo(function SearchToolCard({
     firstNavKey && firstNavKey.kind === "file" ? `file:${firstNavKey.path}` : undefined;
   const expandable = count > 0 || Boolean(parsed.notice);
   const bodyOpen = open && expandable;
-  const label = resultLabel(count);
+  const label = t.plural("search.found", count);
 
   const header = (
     <>
@@ -437,7 +452,7 @@ export const SearchToolCard = memo(function SearchToolCard({
       <CollapsibleMotion open={bodyOpen} preset="timeline">
         <div className="mt-1.5 overflow-hidden rounded-md border border-hairline bg-card">
           <div className="flex h-7 min-w-0 items-center gap-1.5 border-hairline border-b px-2.5 text-xs">
-            <span className="shrink-0 font-medium text-fg-muted">Searched for</span>
+            <span className="shrink-0 font-medium text-fg-muted">{t("search.searchedFor")}</span>
             <span className="min-w-0 truncate font-mono text-fg-subtle" title={query}>
               {query}
             </span>
@@ -460,6 +475,7 @@ export const SearchToolCard = memo(function SearchToolCard({
                       onOpen={onOpenFile}
                       result={result}
                       roving={roving}
+                      t={t}
                       target={resolveSearchResultTarget({
                         cwd,
                         searchPath,
