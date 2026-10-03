@@ -244,7 +244,10 @@ export function NewGroupModal({
     setBusy(true);
     setError(undefined);
     try {
-      await onCreate(newGroupCreateInput({ name, workspaceId, members, leadKey }));
+      // Same locale as the placeholder: `undefined` (no room locale) → `null` = renderer locale.
+      await onCreate(
+        newGroupCreateInput({ name, workspaceId, members, leadKey }, t.locale ?? null),
+      );
       onOpenChange(false);
     } catch (caught) {
       setError(describeGroupError(caught, t.locale));

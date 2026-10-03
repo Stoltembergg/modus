@@ -268,15 +268,22 @@ export function resolveNewGroupLead(
 }
 
 /** The ONE `group:create` payload: members in order, the Lead by its final name. */
-export function newGroupCreateInput(state: {
-  name: string;
-  workspaceId: string;
-  members: readonly NewGroupMember[];
-  leadKey: string | null;
-}): CreateAgentGroupInput {
+export function newGroupCreateInput(
+  state: {
+    name: string;
+    workspaceId: string;
+    members: readonly NewGroupMember[];
+    leadKey: string | null;
+  },
+  /**
+   * Room locale of the blank-name default (the modal's placeholder). Omitted =
+   * English, as before; `null` = the renderer locale (`navigator.language`).
+   */
+  locale: string | null = "en",
+): CreateAgentGroupInput {
   const lead = resolveNewGroupLead(state.members, state.leadKey);
   return {
-    name: state.name.trim() || NEW_GROUP_DEFAULT_NAME,
+    name: state.name.trim() || newGroupDefaultName(locale),
     workspaceId: state.workspaceId,
     members: state.members.map(newGroupMemberInput),
     ...(lead ? { leadName: lead.name.trim() } : {}),
