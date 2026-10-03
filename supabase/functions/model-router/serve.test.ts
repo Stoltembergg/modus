@@ -107,12 +107,7 @@ Deno.test("real Deno.serve: a fully delivered stream settles as complete", async
 });
 
 Deno.test("real Deno.serve: a fully delivered non-stream settles as complete", async () => {
-  const up = fakeUpstream(() =>
-    Response.json({
-      choices: [{ index: 0, message: { role: "assistant", content: "ok" } }],
-      usage: USAGE,
-    }),
-  );
+  const up = streamingUpstream();
   const db = new FakeDb(1e9);
   const router = serveRouter(db, up.baseUrl);
   try {
@@ -168,7 +163,10 @@ Deno.test("real Deno.serve: a client that drops a slow non-stream request still 
   const hold = new Promise<void>((r) => (release = r));
   const up = fakeUpstream(async () => {
     await hold;
-    return Response.json({ choices: [{ index: 0, message: { content: "late" } }], usage: USAGE });
+    return new Response(
+      sse([{ choices: [{ index: 0, delta: { content: "late" } }] }, { choices: [], usage: USAGE }]),
+      { headers: { "content-type": "text/event-stream" } },
+    );
   });
   const db = new FakeDb(1e9);
   const router = serveRouter(db, up.baseUrl);

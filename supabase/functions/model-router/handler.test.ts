@@ -63,13 +63,30 @@ async function drainAll(list: Promise<unknown>[]) {
 const promptOnly = () =>
   creditsFor(FLASH, { promptTokens: PROMPT_TOKENS, cachedTokens: 0, completionTokens: 0 }, M125);
 
+/** What the gateway sends for `stream: true` (the router always asks for it). */
 const okCompletion = (usage: unknown) =>
-  Response.json({
-    id: "cmpl",
-    object: "chat.completion",
-    choices: [{ index: 0, message: { role: "assistant", content: "hi!" } }],
-    ...(usage === undefined ? {} : { usage }),
-  });
+  new Response(
+    sse([
+      {
+        id: "cmpl",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "deepseek-v4.1-flash",
+        choices: [{ index: 0, delta: { role: "assistant", content: "hi!" }, finish_reason: null }],
+      },
+      {
+        id: "cmpl",
+        object: "chat.completion.chunk",
+        created: 1,
+        model: "deepseek-v4.1-flash",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      },
+      ...(usage === undefined
+        ? []
+        : [{ id: "cmpl", object: "chat.completion.chunk", created: 1, choices: [], usage }]),
+    ]),
+    { headers: { "content-type": "text/event-stream" } },
+  );
 
 async function errorOf(res: Response) {
   return { status: res.status, error: (await res.json()).error };
@@ -228,19 +245,7 @@ Deno.test("request validation: n != 1, bad max_tokens, empty messages, oversize 
 });
 
 Deno.test("upstream request: catalog model id, forced max_tokens, include_usage, NO client headers", async () => {
-  const up = fakeUpstream((seen) =>
-    seen.body.stream
-      ? new Response(
-          sse([
-            { choices: [{ delta: { content: "hi" } }] },
-            { choices: [], usage: { prompt_tokens: 9, completion_tokens: 1 } },
-          ]),
-          {
-            headers: { "content-type": "text/event-stream" },
-          },
-        )
-      : okCompletion({ prompt_tokens: 9, completion_tokens: 1 }),
-  );
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
   try {
     const db = new FakeDb(1e9);
     const h = handler(db, up.baseUrl);
@@ -277,13 +282,18 @@ Deno.test("upstream request: catalog model id, forced max_tokens, include_usage,
 
     const [plain, streamed] = up.seen;
     assertEquals(new URL(plain.url).pathname, "/v1/chat/completions");
-    assertEquals(plain.body, {
-      model: "deepseek-v4.1-flash",
-      messages: MESSAGES,
-      temperature: 0.2,
-      max_tokens: FLASH.maxTokens,
-      stream: false,
-    });
+    assertEquals(
+      plain.body,
+      {
+        model: "deepseek-v4.1-flash",
+        messages: MESSAGES,
+        temperature: 0.2,
+        max_tokens: FLASH.maxTokens,
+        stream: true,
+        stream_options: { include_usage: true },
+      },
+      "a non-stream client still gets a streaming upstream call",
+    );
     assertEquals(streamed.body.model, "glm-5.3-flash");
     assertEquals(
       streamed.body.max_tokens,
@@ -292,6 +302,8 @@ Deno.test("upstream request: catalog model id, forced max_tokens, include_usage,
     );
     assertEquals(streamed.body.stream_options, { include_usage: true });
     for (const seen of up.seen) {
+      assertEquals(seen.body.stream, true);
+      assertEquals(seen.headers.get("accept"), "text/event-stream");
       assertEquals(seen.headers.get("authorization"), "Bearer upstream-secret");
       for (const name of Object.keys(sneaky)) assertEquals(seen.headers.get(name), null, name);
       const names = [...seen.headers.keys()].filter(
@@ -694,28 +706,177 @@ Deno.test("stream: upstream headers timeout -> 504, prompt estimate charged (not
   }
 });
 
-Deno.test("non-stream: a slow upstream is bounded by the total cap, not the headers timeout", async () => {
+Deno.test("non-stream: the headers timeout applies too (504, prompt estimate charged)", async () => {
   const up = fakeUpstream(async () => {
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((r) => setTimeout(r, 300));
     return okCompletion({ prompt_tokens: 3, completion_tokens: 2 });
   });
   try {
     const db = new FakeDb(5000);
-    const slow = await handler(db, up.baseUrl, { limits: { headersTimeoutMs: 20 } })(
+    const res = await handler(db, up.baseUrl, { limits: { headersTimeoutMs: 40 } })(
       completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "t2" }),
     );
-    assertEquals(slow.status, 200);
-    await slow.json();
-    const capped = await handler(db, up.baseUrl, {
-      config: routerConfig(up.baseUrl, { maxDurationMs: "30" }),
-    })(completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 100 }, { key: "t3" }));
-    assertEquals(await errorOf(capped), { status: 504, error: "upstream_timeout" });
-    assertEquals(
-      chargedOf(reservationOf(db, "t3")),
-      promptOnly(),
-      "cap after send pays the estimate",
+    assertEquals(await errorOf(res), { status: 504, error: "upstream_timeout" });
+    assertEquals(chargedOf(reservationOf(db, "t2")), promptOnly(), "after send: the estimate");
+    await new Promise((r) => setTimeout(r, 350));
+  } finally {
+    await up.close();
+  }
+});
+
+/** Sends `parts` content deltas (one every `gapMs`), then hangs until `hold` resolves. */
+function trickle(parts: string[], gapMs: number, hold: Promise<void>) {
+  return () => {
+    const enc = new TextEncoder();
+    return new Response(
+      new ReadableStream({
+        async start(controller) {
+          for (const part of parts) {
+            controller.enqueue(
+              enc.encode(
+                sse([{ choices: [{ index: 0, delta: { content: part } }] }], { done: false }),
+              ),
+            );
+            await new Promise((r) => setTimeout(r, gapMs));
+          }
+          await hold;
+          try {
+            controller.close();
+          } catch {
+            // cancelled
+          }
+        },
+      }),
+      { headers: { "content-type": "text/event-stream" } },
     );
-    await new Promise((r) => setTimeout(r, 200));
+  };
+}
+
+Deno.test("non-stream cap: charges prompt + the OUTPUT received so far (not just the prompt)", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  const up = fakeUpstream(trickle(["a".repeat(200), "b".repeat(200)], 5, hold));
+  try {
+    const db = new FakeDb(1e9);
+    const logs: Logged = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      { config: routerConfig(up.baseUrl, { maxDurationMs: "120" }) },
+      logs,
+    )(completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 5000 }, { key: "nc1" }));
+    assertEquals(await errorOf(res), { status: 504, error: "upstream_timeout" });
+    assertEquals(
+      [db.settles[0].inputTokens, db.settles[0].outputTokens],
+      [PROMPT_TOKENS, estimateOutputTokens(400)],
+    );
+    const r = reservationOf(db, "nc1");
+    assertEquals(
+      chargedOf(r),
+      creditsFor(
+        FLASH,
+        {
+          promptTokens: PROMPT_TOKENS,
+          cachedTokens: 0,
+          completionTokens: estimateOutputTokens(400),
+        },
+        M125,
+      ),
+    );
+    assertGreater(chargedOf(r), promptOnly());
+    assertLessOrEqual(chargedOf(r), r.amount);
+    assertEquals(logs.at(-1)?.outcome, "stream_cap");
+  } finally {
+    release?.();
+    await up.close();
+  }
+});
+
+Deno.test("non-stream: progressive cost updates while the upstream is still producing", async () => {
+  let release!: () => void;
+  const hold = new Promise<void>((r) => (release = r));
+  const up = fakeUpstream(
+    trickle(["x".repeat(400), "y".repeat(400), "z".repeat(400), "w".repeat(400)], 30, hold),
+  );
+  try {
+    const db = new FakeDb(1e9);
+    const later: Promise<unknown>[] = [];
+    const pending = handler(db, up.baseUrl, {
+      waitUntil: (p) => later.push(p),
+      limits: { progressIntervalMs: 20 },
+    })(
+      completionRequest({ model: FLASH.id, messages: MESSAGES, max_tokens: 5000 }, { key: "np1" }),
+    );
+    for (let i = 0; i < 100 && db.storeHistory.length < 3; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    const credits = db.storeHistory.map((s) => s.credits);
+    assertEquals(credits[0], promptOnly(), "minimum before the fetch");
+    assertGreater(credits.length, 2, `periodic updates on the non-stream path: ${credits}`);
+    for (let i = 1; i < credits.length; i++) assertGreater(credits[i], credits[i - 1]);
+    // Worker death here -> the sweep charges the last stored value.
+    assertEquals(reservationOf(db, "np1").status, "active");
+    release();
+    const res = await pending;
+    assertEquals(res.status, 200);
+    assertEquals((await res.json()).choices[0].message.content.length, 1600);
+    await drainAll(later);
+  } finally {
+    release?.();
+    await up.close();
+  }
+});
+
+Deno.test("pre-fetch cost store fails -> 503 billing_unavailable, upstream never called, released", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 5, completion_tokens: 2 }));
+  try {
+    for (const stream of [false, true]) {
+      const db = new FakeDb(5000);
+      db.storeError = true;
+      const logs: Logged = [];
+      const res = await handler(
+        db,
+        up.baseUrl,
+        {},
+        logs,
+      )(
+        completionRequest(
+          { model: FLASH.id, messages: MESSAGES, max_tokens: 100, stream },
+          { key: "bu" },
+        ),
+      );
+      assertEquals(await errorOf(res), { status: 503, error: "billing_unavailable" });
+      assertEquals(up.seen.length, 0, "the upstream was never called");
+      const r = reservationOf(db, "bu");
+      assertEquals([r.status, r.charged], ["settled", 0], "reservation released");
+      assertEquals(db.balance, 5000, "no credits debited");
+      assertEquals(db.stored.has("bu"), false);
+      assert(logs.some((l) => l.event === "model_router.cost_store_failed"));
+    }
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("upstream that ignores stream:true and answers JSON: passed through, real usage billed", async () => {
+  const body = {
+    id: "cmpl-json",
+    object: "chat.completion",
+    created: 7,
+    model: "deepseek-v4.1-flash",
+    choices: [
+      { index: 0, message: { role: "assistant", content: "plain" }, finish_reason: "stop" },
+    ],
+    usage: { prompt_tokens: 12, completion_tokens: 34 },
+  };
+  const up = fakeUpstream(() => Response.json(body));
+  try {
+    const db = new FakeDb(1e9);
+    const res = await handler(
+      db,
+      up.baseUrl,
+    )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "js1" }));
+    assertEquals(await res.json(), body);
+    assertEquals([db.settles[0].inputTokens, db.settles[0].outputTokens], [12, 34]);
   } finally {
     await up.close();
   }

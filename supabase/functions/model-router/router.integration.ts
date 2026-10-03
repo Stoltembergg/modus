@@ -46,16 +46,25 @@ Deno.test({
         );
       }
       await Promise.resolve();
-      return Response.json({
-        id: "x",
-        choices: [{ message: { role: "assistant", content: "ok" } }],
-        usage: {
-          prompt_tokens: 120,
-          completion_tokens: 80,
-          prompt_tokens_details: { cached_tokens: 20 },
-        },
-        model: seen.body.model,
-      });
+      // The router always asks for stream: true (also for non-stream clients).
+      assertEquals(seen.body.stream, true);
+      const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
+      return new Response(
+        sse([
+          { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] },
+          { ...head, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+          {
+            ...head,
+            choices: [],
+            usage: {
+              prompt_tokens: 120,
+              completion_tokens: 80,
+              prompt_tokens_details: { cached_tokens: 20 },
+            },
+          },
+        ]),
+        { headers: { "content-type": "text/event-stream" } },
+      );
     });
     const db = createPostgresRouterDb(dbUrl ?? "");
     try {

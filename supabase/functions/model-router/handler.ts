@@ -17,7 +17,7 @@ import {
   type Markup,
   type Usage,
 } from "./pricing.ts";
-import { buildOpenAiCompletionsRequest, inspectCompletion, SseUsageTracker } from "./upstream.ts";
+import { buildOpenAiCompletionsRequest, CompletionAssembler, SseUsageTracker } from "./upstream.ts";
 
 /**
  * model-router (B4a). OpenAI-compatible:
@@ -39,7 +39,11 @@ import { buildOpenAiCompletionsRequest, inspectCompletion, SseUsageTracker } fro
  *   7. max_tokens forced = min(requested, model maxTokens, context left, affordable);
  *      402 insufficient_credits when not even min(forced, 256) fits; reserve the
  *      worst case (no cache hits, tier by prompt size) -> 402 / 429
- *   8. upstream (adapter by catalog api; stream_options.include_usage when streaming)
+ *   8. store the minimum cost (prompt estimate) BEFORE the fetch; if that store fails:
+ *      release + 503 billing_unavailable, the upstream is never called. Upstream is
+ *      ALWAYS called with stream: true + stream_options.include_usage (a non-stream
+ *      client gets the chat.completion assembled by the router), so both paths have
+ *      the same headers timeout, cap and progressive cost updates (<= every 5 s).
  *   9. settle (billing rule): full release ONLY when the upstream provably did not take
  *      the request (fetch failed without our abort, or non-2xx). After a 2xx, and on our
  *      own timeouts (stream headers min(60 s, cap), the MODUS_ROUTER_MAX_DURATION_MS cap,
@@ -402,7 +406,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       try {
         // Release: first zero the cost stored before the fetch, so even if settle never
         // lands the sweep cannot charge a request the upstream rejected.
-        if (release && !(await deps.db.storeCost(args))) throw new Error("cost not cleared");
+        // (best effort: a failure here must not stop the release itself).
+        if (release) await deps.db.storeCost(args).catch(() => false);
         const result = await deps.db.settle(args);
         log({
           event: "model_router.settled",
@@ -438,39 +443,9 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
    * completed response is never classified as a disconnect.
    */
   async function forward(ctx: Ctx): Promise<Response> {
-    const abort = new AbortController();
-    let ourAbort: string | undefined;
-    const stop = (why: string) => {
-      ourAbort ??= why;
-      abort.abort(why);
-    };
-    // The cap counts from the request's arrival (MODUS_ROUTER_MAX_DURATION_MS), so the
-    // whole request + settle fits the 150 s worker wall clock.
-    const remaining = Math.max(0, ctx.deadline - Date.now());
-    const cap = setTimeout(() => stop("stream_cap"), remaining);
-    // Streams must start within min(60 s, cap). A non-stream gateway answers only when
-    // the completion is done, so those are bounded by the total cap alone.
-    const headersMs = Math.min(ctx.duration.headersTimeoutMs, limits.headersTimeoutMs, remaining);
-    const headersTimer = ctx.parsed.stream
-      ? setTimeout(() => stop("upstream_timeout"), headersMs)
-      : undefined;
-    const cleanup = () => {
-      clearTimeout(cap);
-      clearTimeout(headersTimer);
-    };
-    const request = buildOpenAiCompletionsRequest(
-      ctx.model,
-      ctx.parsed.body,
-      ctx.maxTokens,
-      ctx.parsed.stream,
-      ctx.upstream,
-      abort.signal,
-    );
-    const timeoutResponse = () => json(504, { error: "upstream_timeout" });
-
-    // Progressive cost persistence: BEFORE the fetch, the minimum (prompt estimate); while
-    // streaming, the running estimate at most every progressIntervalMs. If the worker is
-    // killed (wall clock) the expiry sweep charges the last stored value, capped.
+    // Progressive cost persistence, step 1, FAIL CLOSED: the minimum (prompt estimate,
+    // capped) is stored BEFORE the upstream is called. If that store fails the sweep
+    // could not charge a killed worker, so nothing goes upstream: release + 503.
     const promptOnly: Usage = {
       promptTokens: ctx.promptTokens,
       cachedTokens: 0,
@@ -484,7 +459,39 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         user_id: ctx.userId,
         phase: "prefetch",
       });
+      await settle(ctx, "billing_unavailable", null, 0, true);
+      return json(503, { error: "billing_unavailable" });
     }
+
+    const abort = new AbortController();
+    let ourAbort: string | undefined;
+    const stop = (why: string) => {
+      ourAbort ??= why;
+      abort.abort(why);
+    };
+    // The cap counts from the request's arrival (MODUS_ROUTER_MAX_DURATION_MS), so the
+    // whole request + settle fits the 150 s worker wall clock. The upstream always
+    // streams, so both paths must see response headers within min(60 s, cap).
+    const remaining = Math.max(0, ctx.deadline - Date.now());
+    const cap = setTimeout(() => stop("stream_cap"), remaining);
+    const headersMs = Math.min(ctx.duration.headersTimeoutMs, limits.headersTimeoutMs, remaining);
+    const headersTimer = setTimeout(() => stop("upstream_timeout"), headersMs);
+    const cleanup = () => {
+      clearTimeout(cap);
+      clearTimeout(headersTimer);
+    };
+    const request = buildOpenAiCompletionsRequest(
+      ctx.model,
+      ctx.parsed.body,
+      ctx.maxTokens,
+      ctx.upstream,
+      abort.signal,
+    );
+    const timeoutResponse = () => json(504, { error: "upstream_timeout" });
+
+    // Step 2: while output arrives, the running estimate at most every
+    // progressIntervalMs (stream AND non-stream). A killed worker leaves the last value
+    // for the expiry sweep (capped at the reservation).
     let progress: Promise<unknown> = Promise.resolve();
     let lastProgressAt = Date.now();
     const onProgress = (usage: Usage | null, outputChars: number) => {
@@ -521,26 +528,43 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         await settle(ctx, "upstream_status", null, 0, true);
         return { error: json(502, { error: "upstream_error", upstream_status: response.status }) };
       }
+      if (!response.body) {
+        cleanup();
+        await settle(ctx, "upstream_error", null, 0);
+        return { error: json(502, { error: "upstream_error" }) };
+      }
       return response;
     }
 
     if (!ctx.parsed.stream) {
       const work = (async (): Promise<Response> => {
         const opened = await open();
-        if (!(opened instanceof Response)) return opened.error;
-        let text: string;
+        if (!(opened instanceof Response) || !opened.body) {
+          return opened instanceof Response ? json(502, { error: "upstream_error" }) : opened.error;
+        }
+        const assembler = new CompletionAssembler();
+        const tracker = new SseUsageTracker(assembler);
+        const reader = opened.body.getReader();
         try {
-          text = await opened.text();
+          for (;;) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            tracker.push(chunk.value);
+            onProgress(tracker.usage, tracker.outputChars);
+          }
         } catch {
+          // Cap, or the upstream failed mid-body: real usage if it came, else the
+          // estimate of the prompt + every output character received so far.
           cleanup();
+          tracker.end();
           const outcome = ourAbort ?? "upstream_error";
-          await settle(ctx, outcome, null, 0);
+          await settle(ctx, outcome, tracker.usage, tracker.outputChars, false, progress);
           return ourAbort ? timeoutResponse() : json(502, { error: "upstream_error" });
         }
         cleanup();
-        const { usage, outputChars } = inspectCompletion(text);
-        await settle(ctx, "complete", usage, outputChars);
-        return new Response(text, {
+        tracker.end();
+        await settle(ctx, "complete", tracker.usage, tracker.outputChars, false, progress);
+        return new Response(tracker.jsonBody ?? JSON.stringify(assembler.result()), {
           status: 200,
           headers: {
             "content-type": "application/json; charset=utf-8",
@@ -554,11 +578,8 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     }
 
     const opened = await open();
-    if (!(opened instanceof Response)) return opened.error;
-    if (!opened.body) {
-      cleanup();
-      await settle(ctx, "upstream_error", null, 0);
-      return json(502, { error: "upstream_error" });
+    if (!(opened instanceof Response) || !opened.body) {
+      return opened instanceof Response ? json(502, { error: "upstream_error" }) : opened.error;
     }
 
     const tracker = new SseUsageTracker();
@@ -568,6 +589,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     const finish = (outcome: string) => {
       settled ??= (async () => {
         cleanup();
+        tracker.end();
         await settle(ctx, outcome, tracker.usage, tracker.outputChars, false, progress);
       })();
       deps.waitUntil?.(settled);

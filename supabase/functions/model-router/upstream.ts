@@ -4,7 +4,10 @@ import type { Usage } from "./pricing.ts";
 
 /**
  * Upstream adapters keyed by the catalog `api`. Only `openai-completions` ships
- * (POST {baseUrl}/chat/completions). The request is REBUILT from an allowlist of body
+ * (POST {baseUrl}/chat/completions). The upstream is ALWAYS called with `stream: true`
+ * and `stream_options.include_usage: true`, whatever the client asked: the router sees
+ * output as it arrives (progressive cost, cap, headers timeout) on both paths, and for a
+ * non-stream client it assembles the chat.completion itself (CompletionAssembler). The request is REBUILT from an allowlist of body
  * fields; no client header is ever forwarded (only content-type, accept and the
  * server's own Authorization).
  */
@@ -33,7 +36,6 @@ export function buildOpenAiCompletionsRequest(
   model: CatalogModel,
   body: Record<string, unknown>,
   maxTokens: number,
-  stream: boolean,
   upstream: UpstreamConfig,
   signal: AbortSignal,
 ): UpstreamRequest {
@@ -42,16 +44,16 @@ export function buildOpenAiCompletionsRequest(
     if (body[field] !== undefined) payload[field] = body[field];
   }
   payload.max_tokens = maxTokens;
-  payload.stream = stream;
+  payload.stream = true;
   // Without it the final chunk has no usage and we would have to estimate.
-  if (stream) payload.stream_options = { include_usage: true };
+  payload.stream_options = { include_usage: true };
   return {
     url: `${upstream.baseUrl}/chat/completions`,
     init: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        accept: stream ? "text/event-stream" : "application/json",
+        accept: "text/event-stream",
         authorization: `Bearer ${upstream.apiKey}`,
       },
       body: JSON.stringify(payload),
@@ -116,18 +118,165 @@ export function inspectCompletion(text: string): { usage: Usage | null; outputCh
   }
 }
 
+/** Max non-SSE text kept for the JSON fallback, and max length of one SSE line. */
+const RAW_LIMIT = 4_000_000;
+
+type ToolCallParts = { id?: unknown; type?: unknown; name: string; args: string };
+type ChoiceParts = {
+  role: unknown;
+  content: string;
+  reasoning: string | null;
+  refusal: string | null;
+  tools: Map<number, ToolCallParts>;
+  finish: unknown;
+  hasLogprobs: boolean;
+  logprobs: unknown[] | null;
+};
+
 /**
- * Watches the SSE bytes we pass through: remembers the last `usage` and counts output
- * characters of every delta. Never stores the content itself.
+ * Rebuilds a non-stream `chat.completion` from the upstream SSE chunks, in the shape of
+ * a genuine non-stream OpenAI response:
+ *   id, object "chat.completion", created, model, system_fingerprint (when sent),
+ *   choices[]: { index, message: { role, content, reasoning_content?, refusal?,
+ *   tool_calls? }, logprobs (when sent), finish_reason }, usage (final usage chunk).
+ * `content` is the concatenation of the deltas, or null when there was no text (as
+ * OpenAI does for tool-call-only answers). tool_calls are merged by `index`: the first
+ * id / type / function.name seen and the concatenated function.arguments.
+ */
+export class CompletionAssembler {
+  #id: unknown;
+  #created: unknown;
+  #model: unknown;
+  #fingerprint: unknown;
+  #hasFingerprint = false;
+  #usage: unknown;
+  #choices = new Map<number, ChoiceParts>();
+
+  push(chunk: Record<string, unknown>): void {
+    this.#id ??= chunk.id;
+    this.#created ??= chunk.created;
+    this.#model ??= chunk.model;
+    if ("system_fingerprint" in chunk && !this.#hasFingerprint) {
+      this.#hasFingerprint = true;
+      this.#fingerprint = chunk.system_fingerprint;
+    }
+    if (chunk.usage && typeof chunk.usage === "object") this.#usage = chunk.usage;
+    if (!Array.isArray(chunk.choices)) return;
+    for (const raw of chunk.choices) {
+      if (!raw || typeof raw !== "object") continue;
+      const c = raw as Record<string, unknown>;
+      const index = typeof c.index === "number" ? c.index : 0;
+      let parts = this.#choices.get(index);
+      if (!parts) {
+        parts = {
+          role: undefined,
+          content: "",
+          reasoning: null,
+          refusal: null,
+          tools: new Map(),
+          finish: null,
+          hasLogprobs: false,
+          logprobs: null,
+        };
+        this.#choices.set(index, parts);
+      }
+      if ("logprobs" in c) {
+        parts.hasLogprobs = true;
+        const content = (c.logprobs as { content?: unknown } | null)?.content;
+        if (Array.isArray(content)) parts.logprobs = [...(parts.logprobs ?? []), ...content];
+      }
+      if (c.finish_reason !== undefined && c.finish_reason !== null) parts.finish = c.finish_reason;
+      const delta = c.delta as Record<string, unknown> | undefined;
+      if (!delta || typeof delta !== "object") continue;
+      parts.role ??= delta.role;
+      if (typeof delta.content === "string") parts.content += delta.content;
+      if (typeof delta.reasoning_content === "string") {
+        parts.reasoning = (parts.reasoning ?? "") + delta.reasoning_content;
+      }
+      if (typeof delta.refusal === "string") parts.refusal = (parts.refusal ?? "") + delta.refusal;
+      if (Array.isArray(delta.tool_calls)) {
+        for (const rawCall of delta.tool_calls) {
+          const call = (rawCall ?? {}) as Record<string, unknown>;
+          const at = typeof call.index === "number" ? call.index : parts.tools.size;
+          let tool = parts.tools.get(at);
+          if (!tool) {
+            tool = { name: "", args: "" };
+            parts.tools.set(at, tool);
+          }
+          tool.id ??= call.id;
+          tool.type ??= call.type;
+          const fn = (call.function ?? {}) as { name?: unknown; arguments?: unknown };
+          if (typeof fn.name === "string") tool.name += fn.name;
+          if (typeof fn.arguments === "string") tool.args += fn.arguments;
+        }
+      }
+    }
+  }
+
+  result(): Record<string, unknown> {
+    const choices = [...this.#choices.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([index, parts]) => {
+        const message: Record<string, unknown> = {
+          role: parts.role ?? "assistant",
+          content: parts.content === "" ? null : parts.content,
+        };
+        if (parts.reasoning !== null) message.reasoning_content = parts.reasoning;
+        if (parts.refusal !== null) message.refusal = parts.refusal;
+        if (parts.tools.size > 0) {
+          message.tool_calls = [...parts.tools.entries()]
+            .sort(([a], [b]) => a - b)
+            .map(([, tool]) => ({
+              id: tool.id,
+              type: tool.type ?? "function",
+              function: { name: tool.name, arguments: tool.args },
+            }));
+        }
+        const choice: Record<string, unknown> = { index, message };
+        if (parts.hasLogprobs) {
+          choice.logprobs = parts.logprobs === null ? null : { content: parts.logprobs };
+        }
+        choice.finish_reason = parts.finish;
+        return choice;
+      });
+    const out: Record<string, unknown> = {
+      id: this.#id,
+      object: "chat.completion",
+      created: this.#created,
+      model: this.#model,
+      choices,
+    };
+    if (this.#usage !== undefined) out.usage = this.#usage;
+    if (this.#hasFingerprint) out.system_fingerprint = this.#fingerprint;
+    return out;
+  }
+}
+
+/**
+ * Watches the upstream SSE bytes: remembers the last `usage`, counts output characters
+ * of every delta and (optionally) feeds a CompletionAssembler. If the upstream ignored
+ * `stream: true` and answered with one JSON completion, end() reads usage and output
+ * from it instead (`jsonBody`), so that case is never free either.
  */
 export class SseUsageTracker {
   usage: Usage | null = null;
   outputChars = 0;
+  /** The upstream's own JSON completion, when it did not stream (see end()). */
+  jsonBody: string | null = null;
   #decoder = new TextDecoder();
   #buffer = "";
+  #sawData = false;
+  #raw = "";
+  #assembler: CompletionAssembler | undefined;
+
+  constructor(assembler?: CompletionAssembler) {
+    this.#assembler = assembler;
+  }
 
   push(chunk: Uint8Array): void {
-    this.#buffer += this.#decoder.decode(chunk, { stream: true });
+    const text = this.#decoder.decode(chunk, { stream: true });
+    if (!this.#sawData && this.#raw.length < RAW_LIMIT) this.#raw += text;
+    this.#buffer += text;
     let newline = this.#buffer.indexOf("\n");
     while (newline >= 0) {
       this.#line(this.#buffer.slice(0, newline));
@@ -135,19 +284,35 @@ export class SseUsageTracker {
       newline = this.#buffer.indexOf("\n");
     }
     // A single absurdly long line is not ours to buffer forever.
-    if (this.#buffer.length > 4_000_000) {
+    if (this.#buffer.length > RAW_LIMIT) {
       this.outputChars += this.#buffer.length;
       this.#buffer = "";
     }
   }
 
+  /** End of the upstream body (or of what we got): flush the last line. */
+  end(): void {
+    this.#buffer += this.#decoder.decode();
+    if (this.#buffer) this.#line(this.#buffer);
+    this.#buffer = "";
+    if (!this.#sawData && this.#raw.trim().startsWith("{")) {
+      const inspected = inspectCompletion(this.#raw);
+      this.usage = inspected.usage;
+      this.outputChars = inspected.outputChars;
+      this.jsonBody = this.#raw;
+    }
+    this.#raw = "";
+  }
+
   #line(rawLine: string): void {
     const line = rawLine.trim();
     if (!line.startsWith("data:")) return;
+    this.#sawData = true;
+    this.#raw = "";
     const data = line.slice(5).trim();
     if (!data || data === "[DONE]") return;
     try {
-      const value = JSON.parse(data) as { usage?: unknown; choices?: unknown };
+      const value = JSON.parse(data) as Record<string, unknown>;
       const usage = parseUsage(value.usage);
       if (usage) this.usage = usage;
       if (Array.isArray(value.choices)) {
@@ -155,6 +320,7 @@ export class SseUsageTracker {
           this.outputChars += outputChars((choice as { delta?: unknown }).delta);
         }
       }
+      this.#assembler?.push(value);
     } catch {
       // Not JSON: count it as output so a garbled stream is never free.
       this.outputChars += data.length;
