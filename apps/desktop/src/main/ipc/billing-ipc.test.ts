@@ -64,7 +64,7 @@ describe("billing IPC", () => {
     expect(backend.createBillingSession).not.toHaveBeenCalled();
   });
 
-  it("accepts only {plan} for checkout: no price, customer, user id or URL", async () => {
+  it("accepts only {plan, provider?} for checkout: no price, customer, user id or URL", async () => {
     const { call, backend } = setup();
     for (const input of [
       { plan: "pro", price: "price_123" },
@@ -72,6 +72,8 @@ describe("billing IPC", () => {
       { plan: "pro", userId: "11111111-1111-4111-8111-111111111111" },
       { plan: "pro", successUrl: "https://evil.example" },
       { plan: "PRO" },
+      { plan: "pro", provider: "paypal" },
+      { plan: "pro", provider: "" },
       { price: "price_123" },
       undefined,
     ]) {
@@ -86,17 +88,21 @@ describe("billing IPC", () => {
     const { call, broadcasts, openExternal } = setup();
     const replies = [
       await call("billing:refresh"),
-      await call("billing:checkout", { plan: "pro" }),
+      await call("billing:checkout", { plan: "starter" }),
+      await call("billing:checkout", { plan: "starter", provider: "mercadopago" }),
       await call("billing:portal"),
       await call("billing:get-state"),
     ];
-    expect(openExternal).toHaveBeenCalledTimes(2);
+    expect(openExternal).toHaveBeenCalledTimes(3);
     const payload = JSON.stringify({ replies, broadcasts });
-    expect(payload).not.toMatch(/stripe\.com|cs_test_|cus_|price_|sub_/);
+    expect(payload).not.toMatch(
+      /stripe\.com|mercadopago\.com|preapproval|cs_test_|cus_|price_|sub_/,
+    );
     expect(payload).not.toContain(SECRET_ACCESS_TOKEN_IN_BILLING);
     for (const reply of [...replies, ...broadcasts]) {
       expect(Object.keys(reply as object).sort()).toEqual(
         [
+          "catalog",
           "currentPlan",
           "error",
           "lastReturn",

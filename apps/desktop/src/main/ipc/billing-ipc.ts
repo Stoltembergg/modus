@@ -1,7 +1,9 @@
 import { z } from "zod";
 import {
   BILLING_PLAN_KEY_PATTERN,
+  BILLING_PROVIDERS,
   type BillingCheckoutInput,
+  type BillingProvider,
   type BillingState,
 } from "../../shared/billing";
 import { IPC_CHANNELS } from "./channels";
@@ -11,7 +13,7 @@ import type { TrustedSenderEvent } from "./trusted-sender";
 export type BillingIpcService = {
   getState(): BillingState;
   refresh(): Promise<BillingState>;
-  startCheckout(plan: string): Promise<BillingState>;
+  startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
   openPortal(): Promise<BillingState>;
 };
 
@@ -21,9 +23,12 @@ type HandlerRegistration = {
 
 const billingNoInputSchema = z.undefined();
 
-/** Only a plan key: the Edge Function maps it to the Stripe price server-side. */
+/** Only a plan key (+ provider): the Edge Function maps it to the price server-side. */
 export const billingCheckoutSchema = z
-  .object({ plan: z.string().regex(BILLING_PLAN_KEY_PATTERN) })
+  .object({
+    plan: z.string().regex(BILLING_PLAN_KEY_PATTERN),
+    provider: z.enum(BILLING_PROVIDERS as [BillingProvider, ...BillingProvider[]]).optional(),
+  })
   .strict() as z.ZodType<BillingCheckoutInput>;
 
 /**
@@ -44,7 +49,7 @@ export function registerBillingIpcHandlers(
   handle(IPC_CHANNELS.billingGetState, billingNoInputSchema, () => service.getState());
   handle(IPC_CHANNELS.billingRefresh, billingNoInputSchema, () => service.refresh());
   handle(IPC_CHANNELS.billingCheckout, billingCheckoutSchema, (input) =>
-    service.startCheckout(input.plan),
+    service.startCheckout(input.plan, input.provider),
   );
   handle(IPC_CHANNELS.billingPortal, billingNoInputSchema, () => service.openPortal());
 }

@@ -188,15 +188,17 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
     },
 
     async fetchBilling(userId) {
-      const [plans, subscription, wallet] = await Promise.all([
+      const [plans, catalog, subscription, wallet] = await Promise.all([
         client
           .from("plans")
           .select("plan, name, price_usd_cents, stripe_price_id, monthly_credits, sort_order")
           .eq("active", true)
           .order("sort_order"),
+        // L1c: sellable offers (public data only; Stripe rows only while the DB flag is on).
+        client.rpc("get_billing_catalog"),
         client
           .from("subscriptions")
-          .select("plan, status, current_period_end, cancel_at_period_end, updated_at")
+          .select("plan, provider, status, current_period_end, cancel_at_period_end, updated_at")
           .eq("user_id", userId)
           .in("status", [...LIVE_SUBSCRIPTION_STATUSES])
           .order("updated_at", { ascending: false })
@@ -213,6 +215,8 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
       }
       return mapBillingRows({
         plans: (plans.data ?? []) as unknown[],
+        // A catalog failure must not hide the plan / credits: the UI shows "plans unavailable".
+        catalog: catalog.error ? null : ((catalog.data ?? []) as unknown[]),
         subscription: subscription.data,
         wallet: wallet.data,
       });

@@ -1,4 +1,12 @@
-import type { BillingPlan, BillingSubscription, BillingWallet } from "../../shared/billing";
+import {
+  BILLING_PLAN_KEY_PATTERN,
+  type BillingCatalogEntry,
+  type BillingPlan,
+  type BillingProvider,
+  type BillingSubscription,
+  type BillingWallet,
+  isBillingProvider,
+} from "../../shared/billing";
 
 /** Subscription statuses that block a new Checkout (same list as the Edge Function). */
 export const LIVE_SUBSCRIPTION_STATUSES = [
@@ -11,18 +19,30 @@ export const LIVE_SUBSCRIPTION_STATUSES = [
 
 export type BillingSnapshot = {
   plans: BillingPlan[];
+  /** get_billing_catalog() rows; null when that RPC failed (plans / wallet still load). */
+  catalog: BillingCatalogEntry[] | null;
   subscription: BillingSubscription | null;
   wallet: BillingWallet | null;
 };
 
-export type BillingFunctionName = "create-checkout-session" | "create-portal-session";
+export type BillingFunctionName =
+  | "create-checkout-session"
+  | "create-portal-session"
+  | "mp-checkout";
+
+/** Edge Function that opens a checkout for each provider (both: POST { plan } -> { url }). */
+export const CHECKOUT_FUNCTIONS: Record<BillingProvider, BillingFunctionName> = {
+  mercadopago: "mp-checkout",
+  stripe: "create-checkout-session",
+};
 
 export type BillingFunctionResult =
   | { ok: true; url: string }
   | { ok: false; status: number; code: string };
 
 /**
- * Billing reads (RLS: the caller's own rows) and the two Stripe session Functions. Implemented by
+ * Billing reads (RLS: the caller's own rows, plus the public catalog RPC) and the checkout /
+ * portal Functions. Implemented by
  * the Supabase backend so the access token never leaves main.
  */
 export interface BillingBackend {
@@ -35,8 +55,15 @@ export interface BillingBackend {
 
 export const CHECKOUT_URL_PREFIX = "https://checkout.stripe.com/";
 export const PORTAL_URL_PREFIX = "https://billing.stripe.com/";
+/** mp-checkout only ever returns Mercado Pago's own (Brazil) init_point (MP_CHECKOUT_HOST). */
+export const MP_CHECKOUT_URL_PREFIX = "https://www.mercadopago.com.br/";
 
-/** Only Stripe-hosted https pages are ever opened in the browser. */
+export const CHECKOUT_URL_PREFIXES: Record<BillingProvider, string> = {
+  mercadopago: MP_CHECKOUT_URL_PREFIX,
+  stripe: CHECKOUT_URL_PREFIX,
+};
+
+/** Only provider-hosted https pages (exact origin) are ever opened in the browser. */
 export function isStripeHostedUrl(raw: unknown, prefix: string): raw is string {
   if (typeof raw !== "string" || !raw.startsWith(prefix) || raw.length > 4096) return false;
   try {
@@ -62,9 +89,42 @@ function str(value: unknown): string | null {
   return typeof value === "string" && value ? value : null;
 }
 
+/** get_billing_catalog() rows → display entries; anything malformed is dropped. */
+export function mapCatalogRows(rows: unknown[]): BillingCatalogEntry[] {
+  return rows.flatMap((raw): BillingCatalogEntry[] => {
+    const row = (raw ?? {}) as Record<string, unknown>;
+    const plan = str(row.plan);
+    const currency = str(row.currency);
+    const amountMinor = num(row.amount_minor);
+    if (
+      !plan ||
+      !BILLING_PLAN_KEY_PATTERN.test(plan) ||
+      !isBillingProvider(row.provider) ||
+      !currency ||
+      !/^[A-Z]{3}$/.test(currency) ||
+      amountMinor <= 0
+    ) {
+      return [];
+    }
+    return [
+      {
+        plan,
+        name: str(row.name) ?? plan,
+        monthlyCredits: num(row.monthly_credits),
+        provider: row.provider,
+        currency,
+        amountMinor,
+        sortOrder: num(row.sort_order),
+      },
+    ];
+  });
+}
+
 /** PostgREST rows → display data. Stripe ids are dropped here (only `purchasable` survives). */
 export function mapBillingRows(rows: {
   plans: unknown[];
+  /** null: the catalog RPC failed. */
+  catalog: unknown[] | null;
   subscription: unknown;
   wallet: unknown;
 }): BillingSnapshot {
@@ -86,10 +146,13 @@ export function mapBillingRows(rows: {
   const wallet = rows.wallet as Record<string, unknown> | null;
   return {
     plans,
+    catalog: rows.catalog ? mapCatalogRows(rows.catalog) : null,
     subscription:
       sub && str(sub.plan)
         ? {
             plan: str(sub.plan) ?? "free",
+            // B6a: subscriptions.provider defaults to 'stripe'.
+            provider: sub.provider === "mercadopago" ? "mercadopago" : "stripe",
             status: str(sub.status) ?? "unknown",
             currentPeriodEnd: str(sub.current_period_end),
             cancelAtPeriodEnd: sub.cancel_at_period_end === true,
