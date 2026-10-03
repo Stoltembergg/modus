@@ -1,8 +1,10 @@
 -- L1a: only Starter is for sale. pro / max / ultra are inactive (no row
 -- deleted); both checkout paths refuse them; a Stripe event whose price maps
 -- to an inactive plan credits nothing, upserts nothing and is recorded as
--- processed with result 'rejected_inactive_plan'. A subscription already
--- stored on that plan still syncs its status (no credits).
+-- processed with result 'rejected_inactive_plan'. "Inactive" = off-sale: a
+-- subscription already stored on that plan still syncs its status and keeps
+-- renewing with credits (subscription_cycle, same subscription id and plan,
+-- not canceled); everything else fails closed.
 begin;
 set local search_path = public, extensions;
 select no_plan();
@@ -61,9 +63,15 @@ select tests.create_user('l1a-c@example.com', true) as c \gset
 update public.profiles set stripe_customer_id = 'cus_L1A' where id = :'a';
 update public.profiles set stripe_customer_id = 'cus_L1B' where id = :'b';
 update public.profiles set stripe_customer_id = 'cus_L1C' where id = :'c';
--- C subscribed to pro before it was deactivated.
+select tests.create_user('l1a-d@example.com', true) as d \gset
+select tests.create_user('l1a-e@example.com', true) as e \gset
+update public.profiles set stripe_customer_id = 'cus_L1D' where id = :'d';
+update public.profiles set stripe_customer_id = 'cus_L1E' where id = :'e';
+-- C and D subscribed to pro before it was deactivated; E's pro subscription
+-- is already canceled.
 insert into public.subscriptions (user_id, stripe_subscription_id, plan, status)
-values (:'c', 'sub_L1C', 'pro', 'active');
+values (:'c', 'sub_L1C', 'pro', 'active'), (:'d', 'sub_L1D', 'pro', 'active'),
+       (:'e', 'sub_L1E', 'pro', 'canceled');
 
 create function pg_temp.ledger() returns text
 language sql as $$
@@ -157,6 +165,15 @@ select is(private.process_stripe_event('evt_l1a_inv_pro', 'invoice.paid',
   'duplicate', 'replayed rejected event: duplicate');
 select is(pg_temp.ledger(), :'l0', 'replay: ledger unchanged');
 
+-- Fail-closed: a renewal-looking invoice for an inactive plan whose
+-- subscription row does not exist yet (invoice before subscription.created).
+select pg_temp.ledger() as l0b \gset
+select is(private.process_stripe_event('evt_l1a_cycle_norow', 'invoice.paid',
+  pg_temp.invoice('in_l1a_cycle', 'cus_L1A', 'subscription_cycle', 2000, 'sub_L1A_new',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1A_new', 2000)))) ->> 'code',
+  'rejected_inactive_plan', 'pro subscription_cycle invoice with no subscription row: rejected (fail-closed)');
+select is(pg_temp.ledger(), :'l0b', 'no-row renewal: zero credit ledger change');
+
 -- Starter is still sold through the same function.
 select is(private.process_stripe_event('evt_l1b_sub', 'customer.subscription.created',
   pg_temp.sub('sub_L1B', 'cus_L1B', :'starter')) ->> 'code', 'subscription_upserted',
@@ -183,23 +200,87 @@ select is(pg_temp.event('evt_l1b_up'), 'processed:rejected_inactive_plan:true',
   'stripe_events: upgrade invoice recorded as rejected_inactive_plan');
 select is(pg_temp.ledger(), :'l1', 'upgrade to an inactive plan: zero credit ledger change');
 
--- Existing pro subscriber: status still syncs (no credits), renewal credits nothing.
-select pg_temp.ledger() as l2 \gset
+-- "Inactive" = off-sale: an existing pro subscriber keeps renewing with credits.
+select is((select monthly_credits from public.plans where plan = 'pro'), 25000::bigint,
+  'pro grants 25000 credits a month (B1 seed)');
 select is(private.process_stripe_event('evt_l1c_upd', 'customer.subscription.updated',
   pg_temp.sub('sub_L1C', 'cus_L1C', :'pro', 'past_due')) ->> 'code', 'subscription_upserted',
   'existing pro subscription: status update applied');
 select is((select plan || ':' || status from public.subscriptions where stripe_subscription_id = 'sub_L1C'),
   'pro:past_due', 'existing pro subscription synced');
+select (select balance from public.credit_wallets where user_id = :'c') as c0 \gset
+select (select count(*) from public.credit_transactions where user_id = :'c') as cn0 \gset
+select (private.process_stripe_event('evt_l1c_inv', 'invoice.paid',
+  pg_temp.invoice('in_l1c_1', 'cus_L1C', 'subscription_cycle', 2000, 'sub_L1C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))))::text as rc \gset
+select is(:'rc'::jsonb ->> 'code', 'credits_granted', 'existing pro subscription: renewal credits_granted');
+select is(:'rc'::jsonb ->> 'plan', 'pro', 'renewal on pro');
+select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 25000,
+  'existing pro renewal: exactly +25000');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
+  'existing pro renewal: plan_allowance 25000');
+select is((select count(*) from public.credit_transactions where user_id = :'c'), :'cn0'::bigint + 1,
+  'existing pro renewal: one ledger row');
+select is((select kind from public.credit_transactions where idempotency_key = 'invoice:in_l1c_1'), 'renewal',
+  'ledger row invoice:in_l1c_1 (renewal)');
+select is(pg_temp.event('evt_l1c_inv'), 'processed:credits_granted:true', 'stripe_events: renewal credits_granted');
 select is(private.process_stripe_event('evt_l1c_inv', 'invoice.paid',
   pg_temp.invoice('in_l1c_1', 'cus_L1C', 'subscription_cycle', 2000, 'sub_L1C',
     jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))) ->> 'code',
-  'rejected_inactive_plan', 'existing pro subscription: renewal invoice rejected');
+  'duplicate', 'renewal replay: duplicate');
+select is(private.process_stripe_event('evt_l1c_inv_again', 'invoice.paid',
+  pg_temp.invoice('in_l1c_1', 'cus_L1C', 'subscription_cycle', 2000, 'sub_L1C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))) ->> 'code',
+  'already_granted', 'same renewal invoice, new event id: already_granted');
+select is((select balance from public.credit_wallets where user_id = :'c'), :'c0'::bigint + 25000,
+  'renewal credited once');
+
+-- Pro -> Max (inactive): the switch and its upgrade invoice are rejected; the row stays pro.
+select pg_temp.ledger() as l2 \gset
+select is(private.process_stripe_event('evt_l1c_to_max', 'customer.subscription.updated',
+  pg_temp.sub('sub_L1C', 'cus_L1C', :'max')) ->> 'code', 'rejected_inactive_plan',
+  'existing pro -> max: rejected');
+select is((select plan from public.subscriptions where stripe_subscription_id = 'sub_L1C'), 'pro',
+  'pro -> max rejected: plan stays pro');
+select is(private.process_stripe_event('evt_l1c_up_max', 'invoice.paid',
+  pg_temp.invoice('in_l1c_up', 'cus_L1C', 'subscription_update', 3000, 'sub_L1C', jsonb_build_array(
+    pg_temp.line(:'pro', true, 'sub_L1C', -2000), pg_temp.line(:'max', true, 'sub_L1C', 5000)))) ->> 'code',
+  'rejected_inactive_plan', 'upgrade invoice pro -> max: rejected');
+select throws_ok($q$select private.process_stripe_event('evt_l1c_cycle_max', 'invoice.paid',
+  pg_temp.invoice('in_l1c_2', 'cus_L1C', 'subscription_cycle', 5000, 'sub_L1C',
+    jsonb_build_array(pg_temp.line('price_1UMIyKKAHtqpope6GL0mTcaB', false, 'sub_L1C', 5000))))$q$,
+  'P0404', null, 'max renewal line on a pro row: refused by B3 (line must carry the row''s price)');
+select is(pg_temp.ledger(), :'l2', 'pro -> max: zero credit ledger change');
+
+-- Pro -> Starter (active): accepted per B3.
+select is(private.process_stripe_event('evt_l1d_to_starter', 'customer.subscription.updated',
+  pg_temp.sub('sub_L1D', 'cus_L1D', :'starter')) ->> 'code', 'subscription_upserted',
+  'existing pro -> starter: accepted');
+select is((select plan || ':' || status from public.subscriptions where stripe_subscription_id = 'sub_L1D'),
+  'starter:active', 'pro -> starter: row on starter');
+select is(private.process_stripe_event('evt_l1d_cycle', 'invoice.paid',
+  pg_temp.invoice('in_l1d_1', 'cus_L1D', 'subscription_cycle', 900, 'sub_L1D',
+    jsonb_build_array(pg_temp.line(:'starter', false, 'sub_L1D', 900)))) ->> 'code',
+  'credits_granted', 'starter renewal after the downgrade: credits_granted');
+select is((select plan_allowance from public.credit_wallets where user_id = :'d'), 10000::bigint,
+  'after the downgrade the renewal grants starter (10000)');
+
+-- A canceled pro row does not renew.
+select pg_temp.ledger() as l3 \gset
+select is(private.process_stripe_event('evt_l1e_cycle', 'invoice.paid',
+  pg_temp.invoice('in_l1e_1', 'cus_L1E', 'subscription_cycle', 2000, 'sub_L1E',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1E', 2000)))) ->> 'code',
+  'rejected_inactive_plan', 'canceled pro row: renewal rejected');
 select is(private.process_stripe_event('evt_l1c_del', 'customer.subscription.deleted',
   pg_temp.sub('sub_L1C', 'cus_L1C', :'pro', 'canceled')) ->> 'code', 'subscription_upserted',
   'existing pro subscription: deletion applied');
-select is((select status from public.subscriptions where stripe_subscription_id = 'sub_L1C'), 'canceled',
-  'existing pro subscription canceled');
-select is(pg_temp.ledger(), :'l2', 'existing pro subscriber: zero credit ledger change');
+select is((select plan || ':' || status from public.subscriptions where stripe_subscription_id = 'sub_L1C'),
+  'pro:canceled', 'existing pro subscription canceled');
+select is(private.process_stripe_event('evt_l1c_cycle_after', 'invoice.paid',
+  pg_temp.invoice('in_l1c_3', 'cus_L1C', 'subscription_cycle', 2000, 'sub_L1C',
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_L1C', 2000)))) ->> 'code',
+  'rejected_inactive_plan', 'renewal after the deletion: rejected');
+select is(pg_temp.ledger(), :'l3', 'canceled pro rows: zero credit ledger change');
 select tests.clear_authentication();
 
 select * from finish();

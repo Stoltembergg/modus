@@ -14,8 +14,16 @@
 --    Covered: invoice.paid first / renewal and upgrade invoices, and
 --    customer.subscription.created / updated / deleted, except a subscription
 --    already stored on that same plan, which keeps syncing its status (and its
---    deletion) so existing subscribers are never left stale. Their renewal
---    invoices are still rejected (no credits) while the plan is inactive.
+--    deletion) so existing subscribers are never left stale.
+--    "Inactive" means off-sale only: an existing subscriber keeps renewing with
+--    credits. The one inactive-plan invoice that credits is a renewal
+--    (billing_reason subscription_cycle) of a subscriptions row found by the
+--    invoice's subscription id (never by user), on the same plan, not
+--    canceled. Fail-closed otherwise: an invoice before subscription.created,
+--    a first invoice, an upgrade into an inactive plan (e.g. Pro -> Max) or a
+--    canceled row is rejected. Plan switches INTO an inactive plan are
+--    rejected (the row keeps its plan); switches to an active plan (e.g. Pro ->
+--    Starter) follow B3 unchanged.
 -- Same privilege rules as B1/B3: SECURITY DEFINER, search_path '', service_role only.
 
 update public.plans set active = false where plan in ('pro', 'max', 'ultra');
@@ -44,6 +52,7 @@ declare
   v_allowance bigint;
   v_diff bigint;
   v_existing_plan text;
+  v_existing_status text;
 begin
   if p_event_id is null or p_type is null or p_payload is null
      or pg_catalog.jsonb_typeof(p_payload) <> 'object' then
@@ -284,8 +293,22 @@ begin
       raise exception 'unknown stripe price' using errcode = 'P0404';
     end if;
 
-    -- L1a: a price whose plan is inactive (pro / max / ultra) is not applied.
+    -- L1a: a price whose plan is inactive (pro / max / ultra) is not applied,
+    -- except the renewal of an existing subscriber ("inactive" = off-sale):
+    -- billing_reason subscription_cycle AND a subscriptions row with this
+    -- invoice's subscription id (v_sub_id, never looked up by user) on the
+    -- same plan and not canceled. Fail-closed: no row yet (invoice before
+    -- subscription.created), a first invoice, another plan or a canceled row
+    -- is rejected.
     if not v_plan.active then
+      select su.plan, su.status into v_existing_plan, v_existing_status
+        from public.subscriptions su
+       where su.stripe_subscription_id = v_sub_id;
+    end if;
+    if not v_plan.active
+       and not coalesce(v_reason = 'subscription_cycle'
+                        and v_existing_plan = v_plan.plan
+                        and v_existing_status <> 'canceled', false) then
       raise warning 'stripe event % rejected: rejected_inactive_plan (plan %)', p_event_id, v_plan.plan;
       update public.stripe_events e
          set status = 'processed', result = 'rejected_inactive_plan', processed_at = pg_catalog.now()
