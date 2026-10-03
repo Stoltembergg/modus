@@ -49,28 +49,28 @@ grant execute on all functions in schema pg_temp to service_role;
 select tests.as_service_role();
 select is(pg_temp.balance(:'d'), 1000::bigint, 'D starts with the free 1000');
 
--- Starter subscription: +10000, allowance 10000.
+-- Starter subscription: +20000, allowance 20000.
 select private.process_stripe_event('evt_d_sub', 'customer.subscription.created', pg_temp.sub(:'starter')) \gset ignore_
 select is(private.process_stripe_event('evt_d_create', 'invoice.paid',
   pg_temp.inv('in_d_create', 'subscription_create', 900,
     jsonb_build_array(pg_temp.line(:'starter', false, 'sub_D', 900)))) ->> 'code',
   'credits_granted', 'subscription_create grants the starter credits');
-select is(pg_temp.balance(:'d'), 11000::bigint, 'D: 1000 + 10000');
-select is(pg_temp.allowance(:'d'), 10000::bigint, 'D: allowance 10000');
+select is(pg_temp.balance(:'d'), 21000::bigint, 'D: 1000 + 20000');
+select is(pg_temp.allowance(:'d'), 20000::bigint, 'D: allowance 20000');
 
--- 1. Upgrade starter -> pro (always_invoice): +15000.
+-- 1. Upgrade starter -> pro (always_invoice): +30000.
 select private.process_stripe_event('evt_d_up1_sub', 'customer.subscription.updated', pg_temp.sub(:'pro')) \gset ignore_
 select (private.process_stripe_event('evt_d_up1', 'invoice.paid',
   pg_temp.inv('in_d_up1', 'subscription_update', 1100, jsonb_build_array(
     pg_temp.line(:'starter', true, 'sub_D', -900), pg_temp.line(:'pro', true, 'sub_D', 2000)))))::text as up1 \gset
 select is(:'up1'::jsonb ->> 'code', 'upgrade_credits_granted', 'upgrade 1: upgrade_credits_granted');
-select is((:'up1'::jsonb ->> 'credits')::bigint, 15000::bigint, 'upgrade 1: difference 25000 - 10000');
-select is((:'up1'::jsonb ->> 'previous_allowance')::bigint, 10000::bigint, 'upgrade 1: old plan from wallet state');
-select is(pg_temp.balance(:'d'), 26000::bigint, 'upgrade 1: balance 26000');
-select is(pg_temp.allowance(:'d'), 25000::bigint, 'upgrade 1: allowance 25000');
+select is((:'up1'::jsonb ->> 'credits')::bigint, 30000::bigint, 'upgrade 1: difference 50000 - 20000');
+select is((:'up1'::jsonb ->> 'previous_allowance')::bigint, 20000::bigint, 'upgrade 1: old plan from wallet state');
+select is(pg_temp.balance(:'d'), 51000::bigint, 'upgrade 1: balance 51000');
+select is(pg_temp.allowance(:'d'), 50000::bigint, 'upgrade 1: allowance 50000');
 select is((select kind || ':' || amount || ':' || ref from public.credit_transactions
             where user_id = :'d' and idempotency_key = 'upgrade:in_d_up1'),
-  'grant:15000:in_d_up1', 'upgrade 1: ledger upgrade:<invoice id>');
+  'grant:30000:in_d_up1', 'upgrade 1: ledger upgrade:<invoice id>');
 
 -- Replays: same event no-op; another event for the same invoice grants nothing.
 select is(private.process_stripe_event('evt_d_up1', 'invoice.paid',
@@ -80,7 +80,7 @@ select is(private.process_stripe_event('evt_d_up1_again', 'invoice.paid',
   pg_temp.inv('in_d_up1', 'subscription_update', 1100, jsonb_build_array(
     pg_temp.line(:'pro', true, 'sub_D', 2000)))) ->> 'code', 'upgrade_no_credits',
   'upgrade 1, new event id: no second grant');
-select is(pg_temp.balance(:'d'), 26000::bigint, 'upgrade 1 replays: balance unchanged');
+select is(pg_temp.balance(:'d'), 51000::bigint, 'upgrade 1 replays: balance unchanged');
 
 -- 2. Downgrade pro -> starter: scheduled at period end; even if the
 -- subscription switches now and a $0 / credit invoice arrives, nothing is removed.
@@ -89,8 +89,8 @@ select is(private.process_stripe_event('evt_d_down_zero', 'invoice.paid',
   pg_temp.inv('in_d_down', 'subscription_update', 0, jsonb_build_array(
     pg_temp.line(:'pro', true, 'sub_D', -2000), pg_temp.line(:'starter', true, 'sub_D', 900)))) ->> 'code',
   'not_grantable', 'downgrade invoice ($0): not_grantable');
-select is(pg_temp.balance(:'d'), 26000::bigint, 'downgrade: credits never removed');
-select is(pg_temp.allowance(:'d'), 25000::bigint, 'downgrade: allowance stays 25000 until the period ends');
+select is(pg_temp.balance(:'d'), 51000::bigint, 'downgrade: credits never removed');
+select is(pg_temp.allowance(:'d'), 50000::bigint, 'downgrade: allowance stays 50000 until the period ends');
 select is((select plan from public.subscriptions where stripe_subscription_id = 'sub_D'), 'starter',
   'downgrade: subscription row follows Stripe');
 
@@ -100,33 +100,33 @@ select (private.process_stripe_event('evt_d_up2', 'invoice.paid',
   pg_temp.inv('in_d_up2', 'subscription_update', 1100, jsonb_build_array(
     pg_temp.line(:'starter', true, 'sub_D', -900), pg_temp.line(:'pro', true, 'sub_D', 2000)))))::text as up2 \gset
 select is(:'up2'::jsonb ->> 'code', 'upgrade_no_credits', 'upgrade 2 (same period): upgrade_no_credits');
-select is((:'up2'::jsonb ->> 'credits')::bigint, 0::bigint, 'upgrade 2: max(0, 25000 - 25000) = 0');
-select is(pg_temp.balance(:'d'), 26000::bigint, 'upgrade -> downgrade -> upgrade: the difference was granted once');
+select is((:'up2'::jsonb ->> 'credits')::bigint, 0::bigint, 'upgrade 2: max(0, 50000 - 50000) = 0');
+select is(pg_temp.balance(:'d'), 51000::bigint, 'upgrade -> downgrade -> upgrade: the difference was granted once');
 select is((select count(*)::int from public.credit_transactions where user_id = :'d' and idempotency_key like 'upgrade:%'),
   1, 'one upgrade ledger row in the period');
 
--- 4. Upgrade pro -> max: +45000.
+-- 4. Upgrade pro -> max: +90000.
 select is(private.process_stripe_event('evt_d_up3', 'invoice.paid',
   pg_temp.inv('in_d_up3', 'subscription_update', 3000, jsonb_build_array(
     pg_temp.line(:'pro', true, 'sub_D', -2000), pg_temp.line(:'max', true, 'sub_D', 5000)))) ->> 'credits',
-  '45000', 'upgrade pro -> max: +45000');
-select is(pg_temp.balance(:'d'), 71000::bigint, 'balance 71000');
-select is(pg_temp.allowance(:'d'), 70000::bigint, 'allowance 70000');
+  '90000', 'upgrade pro -> max: +90000');
+select is(pg_temp.balance(:'d'), 141000::bigint, 'balance 141000');
+select is(pg_temp.allowance(:'d'), 140000::bigint, 'allowance 140000');
 
 -- 5. Renewal resets the allowance to the renewed plan (here the scheduled
--- downgrade to starter took effect): +10000, allowance 10000. A later
+-- downgrade to starter took effect): +20000, allowance 20000. A later
 -- upgrade in the new period is granted again.
 select private.process_stripe_event('evt_d_cycle_sub', 'customer.subscription.updated', pg_temp.sub(:'starter')) \gset ignore_
 select is(private.process_stripe_event('evt_d_cycle', 'invoice.paid',
   pg_temp.inv('in_d_cycle', 'subscription_cycle', 900, jsonb_build_array(
     pg_temp.line(:'starter', false, 'sub_D', 900)))) ->> 'code', 'credits_granted',
   'renewal on starter: credits_granted');
-select is(pg_temp.balance(:'d'), 81000::bigint, 'renewal: +10000, earlier credits kept');
-select is(pg_temp.allowance(:'d'), 10000::bigint, 'renewal: allowance reset to 10000');
+select is(pg_temp.balance(:'d'), 161000::bigint, 'renewal: +20000, earlier credits kept');
+select is(pg_temp.allowance(:'d'), 20000::bigint, 'renewal: allowance reset to 20000');
 select is(private.process_stripe_event('evt_d_up4', 'invoice.paid',
   pg_temp.inv('in_d_up4', 'subscription_update', 1100, jsonb_build_array(
     pg_temp.line(:'starter', true, 'sub_D', -900), pg_temp.line(:'pro', true, 'sub_D', 2000)))) ->> 'credits',
-  '15000', 'new period: upgrade to pro grants the difference again');
+  '30000', 'new period: upgrade to pro grants the difference again');
 
 -- 6. Rejections leave nothing behind.
 select (select count(*) from public.credit_transactions)::text || '|' || pg_temp.balance(:'d') as before \gset

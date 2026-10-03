@@ -164,7 +164,7 @@ Deno.test({
         "already_credited",
       );
       assertEquals((await notify("payment", "880001", "it-4")).body.code, "already_credited");
-      assertEquals(await balance(), 11000, "starter credited exactly once");
+      assertEquals(await balance(), 21000, "starter credited exactly once (1000 + 20000)");
       const [sub] =
         await admin`select status, plan from public.subscriptions where provider_subscription_id = 'PREIT1'`;
       assertEquals([sub.status, sub.plan], ["active", "starter"]);
@@ -172,7 +172,7 @@ Deno.test({
       // 4) Partial refund via the payment topic: proportional debit; then full refund cancels.
       must(payments.get("880001"), "880001").refunded_minor = 2495;
       assertEquals((await notify("payment", "880001", "it-5")).body.code, "reversed");
-      assertEquals(await balance(), 6000, "half refunded -> 5000 debited");
+      assertEquals(await balance(), 11000, "half refunded -> 10000 debited");
       must(payments.get("880001"), "880001").status = "refunded";
       must(payments.get("880001"), "880001").refunded_minor = 4990;
       assertEquals((await notify("payment", "880001", "it-6")).body.code, "reversed");

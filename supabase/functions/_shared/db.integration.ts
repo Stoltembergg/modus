@@ -132,8 +132,8 @@ Deno.test({
       );
       assertEquals(paid.code, "credits_granted");
       const afterPaid = await wallet();
-      assertEquals(Number(afterPaid.balance) - Number(before.balance), 10000);
-      assertEquals(Number(afterPaid.plan_allowance), 10000);
+      assertEquals(Number(afterPaid.balance) - Number(before.balance), 20000);
+      assertEquals(Number(afterPaid.plan_allowance), 20000);
       assertEquals(await eventRow("evt_it_inv"), {
         type: "invoice.paid",
         status: "processed",
@@ -173,7 +173,7 @@ Deno.test({
       });
 
       // B3 upgrade path (Pro reactivated for this check, then deactivated again):
-      // subscription_update, amount_paid > 0 -> +15000 (Pro 25000 - 10000).
+      // subscription_update, amount_paid > 0 -> +30000 (Pro 50000 - 20000).
       await admin`update public.plans set active = true where plan = 'pro'`;
       try {
         const up = await db.processStripeEvent(
@@ -186,7 +186,7 @@ Deno.test({
         await admin`update public.plans set active = false where plan = 'pro'`;
       }
       const afterUp = await wallet();
-      assertEquals(Number(afterUp.balance) - Number(afterPaid.balance), 15000);
+      assertEquals(Number(afterUp.balance) - Number(afterPaid.balance), 30000);
 
       const events =
         await admin`select event_id, status from public.stripe_events where event_id like 'evt_it_%' order by event_id`;
