@@ -6,6 +6,7 @@ import { StrictMode, useLayoutEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import { reportRendererStartup } from "./app/startup-report";
+import { initAppearanceAttributes } from "./lib/appearance";
 import { initTheme } from "./lib/theme";
 import "./styles/app.css";
 
@@ -31,6 +32,7 @@ function StartupCommitReporter() {
 
 // Paint the stored palette before first render (no theme flash).
 initTheme();
+initAppearanceAttributes();
 
 // React's DEV build ("Performance Tracks") emits a `performance.measure` per
 // component render. Those entries live forever in the browser's performance

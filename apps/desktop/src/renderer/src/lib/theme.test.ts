@@ -48,3 +48,30 @@ describe("system theme", () => {
     expect(window.localStorage.getItem("modus.theme")).toBe("system");
   });
 });
+
+describe("theme sync with the main process (D2)", () => {
+  function stubModus(initialTheme: string | null) {
+    const set = vi.fn(() => Promise.resolve({}));
+    vi.stubGlobal("modus", {
+      app: { appearance: { initial: initialTheme ? { theme: initialTheme } : null, set } },
+    });
+    return set;
+  }
+
+  it("pushes every theme change so nativeTheme and the window material follow", async () => {
+    const set = stubModus("dark");
+    const theme = await import("./theme");
+    theme.initTheme();
+    expect(set).not.toHaveBeenCalled();
+    theme.setTheme("light");
+    expect(set).toHaveBeenCalledWith({ theme: "light" });
+  });
+
+  it("migrates a localStorage theme the main process does not know yet", async () => {
+    window.localStorage.setItem("modus.theme", "dark-plus");
+    const set = stubModus(null);
+    const theme = await import("./theme");
+    theme.initTheme();
+    expect(set).toHaveBeenCalledWith({ theme: "dark-plus" });
+  });
+});

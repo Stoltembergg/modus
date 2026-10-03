@@ -11,10 +11,17 @@
     <title>Modus</title>
     <script>
       try {
-        document.documentElement.dataset.theme = localStorage.getItem("modus.theme") ?? "dark";
-        if (window.modus?.app?.nativeGlass) {
-          document.documentElement.dataset.nativeGlass = "true";
+        let theme = localStorage.getItem("modus.theme") ?? "dark";
+        if (theme === "system") {
+          theme = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
         }
+        document.documentElement.dataset.theme = theme;
+        const app = window.modus?.app;
+        const glass = app?.isNativeGlassAvailable ? app.isNativeGlassAvailable() : app?.nativeGlass;
+        document.documentElement.dataset.nativeGlass = String(glass === true);
+        // First frame follows the stored Transparency mode (main passes it via argv).
+        document.documentElement.dataset.transparency =
+          glass === true ? (app?.appearance?.initial?.glassMode ?? "sidebar") : "off";
       } catch {}
     </script>
     <style>

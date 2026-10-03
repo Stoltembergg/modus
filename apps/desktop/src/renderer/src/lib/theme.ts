@@ -56,8 +56,27 @@ function handleSystemColorSchemeChange(): void {
   for (const listener of listeners) listener();
 }
 
+/**
+ * The main process mirrors the theme into nativeTheme.themeSource (OS
+ * materials, window controls, prefers-color-scheme) and its own settings file.
+ * localStorage stays the renderer's first-paint cache; this push keeps the two
+ * in sync, including the one-time migration of users who predate D2.
+ */
+function syncThemeToMain(mode: ThemeMode): void {
+  const appearance = typeof window === "undefined" ? undefined : window.modus?.app.appearance;
+  if (!appearance) return;
+  void appearance.set({ theme: mode }).catch(() => undefined);
+}
+
 /** Call once before first render so the correct palette paints with no flash. */
 export function initTheme(): void {
+  if (
+    typeof window !== "undefined" &&
+    window.modus?.app.appearance &&
+    window.modus.app.appearance.initial?.theme !== current
+  ) {
+    syncThemeToMain(current);
+  }
   const media = getSystemColorScheme();
   if (media && !systemColorSchemeListenerAttached) {
     if (typeof media.addEventListener === "function") {
@@ -90,6 +109,7 @@ export function setTheme(mode: ThemeMode): void {
     // ignore persistence failures (private mode etc.)
   }
   applyTheme(mode);
+  syncThemeToMain(mode);
   for (const listener of listeners) {
     listener();
   }

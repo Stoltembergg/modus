@@ -1,9 +1,15 @@
-import { app, BrowserWindow, type BrowserWindow as BrowserWindowType } from "electron";
+import { app, BrowserWindow, type BrowserWindow as BrowserWindowType, nativeTheme } from "electron";
+import { resolveWindowAppearance } from "../shared/window-appearance";
 import {
   shutdownProviderAuthOperations,
   startRemoteModelCatalog,
   stopRemoteModelCatalog,
 } from "./agent/model-service";
+import {
+  type AppearanceController,
+  createAppearanceController,
+} from "./appearance/appearance-controller";
+import { createAppearanceStore } from "./appearance/appearance-store";
 import {
   deepLinkCallbackHub,
   initializeAuthService,
@@ -45,6 +51,7 @@ try {
 
 let mainWindow: BrowserWindowType | null = null;
 let ipcRegistered = false;
+let appearance: AppearanceController | null = null;
 const startupTimeline = createStartupTimeline();
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -61,19 +68,29 @@ function drainShutdown(tasks: Promise<unknown>[]): Promise<void> {
 
 startupTimeline.mark("main.entry");
 
+/** Created after `ready`: reads userData/appearance.json and syncs nativeTheme once. */
+function getAppearance(): AppearanceController {
+  appearance ??= createAppearanceController({
+    nativeTheme,
+    store: createAppearanceStore(app.getPath("userData")),
+    windowAppearance: resolveWindowAppearance(process.platform, process.getSystemVersion?.() ?? ""),
+  });
+  return appearance;
+}
+
 function ensureAppIpcRegistered(): void {
   if (ipcRegistered) {
     return;
   }
 
-  registerAppIpc({ startupTimeline });
+  registerAppIpc({ startupTimeline, appearance: getAppearance() });
   ipcRegistered = true;
 }
 
 function openMainWindow(): void {
   ensureAppIpcRegistered();
 
-  mainWindow = createMainWindow({ startupTimeline });
+  mainWindow = createMainWindow({ startupTimeline, appearance: getAppearance() });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
