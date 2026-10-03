@@ -1,5 +1,6 @@
 import type { IpcRendererEvent } from "electron";
 import { contextBridge, ipcRenderer } from "electron";
+import type { AuthState } from "../shared/auth";
 import type {
   AgentEvent,
   BrowserEvent,
@@ -381,6 +382,22 @@ const api: ModusApi = {
         callback(payload as UpdateState);
       ipcRenderer.on("update:state-event", listener);
       return () => ipcRenderer.removeListener("update:state-event", listener);
+    },
+  },
+  auth: {
+    getState: () => ipcRenderer.invoke("auth:get-state") as Promise<AuthState>,
+    signUp: (input) => ipcRenderer.invoke("auth:sign-up", input) as Promise<AuthState>,
+    signInWithPassword: (input) =>
+      ipcRenderer.invoke("auth:sign-in-password", input) as Promise<AuthState>,
+    signInWithOAuth: (input) =>
+      ipcRenderer.invoke("auth:sign-in-oauth", input) as Promise<AuthState>,
+    cancelOAuth: () => ipcRenderer.invoke("auth:cancel-oauth") as Promise<AuthState>,
+    signOut: () => ipcRenderer.invoke("auth:sign-out") as Promise<AuthState>,
+    onStateChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, payload: unknown) =>
+        callback(payload as AuthState);
+      ipcRenderer.on("auth:state-event", listener);
+      return () => ipcRenderer.removeListener("auth:state-event", listener);
     },
   },
   clipboard: {

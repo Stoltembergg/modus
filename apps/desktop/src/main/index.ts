@@ -4,6 +4,7 @@ import {
   startRemoteModelCatalog,
   stopRemoteModelCatalog,
 } from "./agent/model-service";
+import { initializeAuthService, shutdownAuthService } from "./auth/auth-service-instance";
 import { resolveBrowserLocale } from "./browser/browser-locale";
 import {
   initializeComposioService,
@@ -99,6 +100,8 @@ if (!app.requestSingleInstanceLock()) {
       openMainWindow();
       // Restore the profile after the first renderer exists; do not block agent startup on Composio.
       void initializeComposioService().catch(() => undefined);
+      // Restore the Supabase session (encrypted refresh token) without blocking the window.
+      void initializeAuthService().catch(() => undefined);
       // No-op in dev, beta builds and unsupported platforms; first check runs after a delay.
       startUpdateServiceInBackground();
 
@@ -141,6 +144,7 @@ if (!app.requestSingleInstanceLock()) {
     disposeGroupRuntime();
     void drainShutdown([
       shutdownProviderAuthOperations(),
+      shutdownAuthService(),
       (async () => {
         try {
           await shutdownComposioService();

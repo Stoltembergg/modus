@@ -85,6 +85,7 @@ import {
   setAgentArchived,
   updateAgent,
 } from "../agents/agents-store";
+import { authIpcService } from "../auth/auth-service-instance";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -213,6 +214,7 @@ import {
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
+import { registerAuthIpcHandlers } from "./auth-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
 import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
@@ -1384,6 +1386,7 @@ export function registerAppIpc({
   });
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
+  registerAuthIpcHandlers(ipcMain, assertTrustedSender, authIpcService);
 
   // A member leaving (remove, update, group or agent delete) takes its hidden
   // room session and its 1:1 chat with it: the store transaction detaches them,

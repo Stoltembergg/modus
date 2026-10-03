@@ -1,5 +1,6 @@
 export type SettingsSectionId =
   | "general"
+  | "account"
   | "model-provider"
   | "appearance"
   | "personalization"

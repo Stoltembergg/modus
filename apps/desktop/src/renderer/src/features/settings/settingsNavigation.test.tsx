@@ -11,6 +11,7 @@ import {
 
 const NAV_LABELS = [
   "General",
+  "Account",
   "Model & Provider",
   "Appearance",
   "Personalization",
@@ -23,7 +24,7 @@ const NAV_LABELS = [
 const GROUPED_NAV = {
   Workspace: ["MCP & Integrations", "Skills", "Subagents", "Rules"],
   Models: ["Model & Provider"],
-  Interface: ["General", "Appearance", "Personalization"],
+  Interface: ["General", "Account", "Appearance", "Personalization"],
 } as const;
 
 const RENDERED_NAV_LABELS = Object.values(GROUPED_NAV).flat();

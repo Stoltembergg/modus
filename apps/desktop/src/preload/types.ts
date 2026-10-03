@@ -1,3 +1,4 @@
+import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
 import type {
   AddDocInput,
   AgentEvent,
@@ -713,6 +714,21 @@ export type ModusApi = {
     /** Once per start: the UI state saved by the previous version, or null. */
     takeRestoredUiState(): Promise<UpdateRestoreUiState | null>;
     onStateChange(listener: (state: UpdateState) => void): () => void;
+  };
+  /**
+   * Modus account (Supabase Auth). Sign-in runs in main; replies carry display data only,
+   * never tokens or the OAuth code.
+   */
+  auth: {
+    getState(): Promise<AuthState>;
+    signUp(input: AuthCredentialsInput): Promise<AuthState>;
+    signInWithPassword(input: AuthCredentialsInput): Promise<AuthState>;
+    /** Opens the default browser; resolves after the callback was handled, failed or timed out. */
+    signInWithOAuth(input: AuthOAuthInput): Promise<AuthState>;
+    cancelOAuth(): Promise<AuthState>;
+    /** Clears the stored session even when offline. */
+    signOut(): Promise<AuthState>;
+    onStateChange(listener: (state: AuthState) => void): () => void;
   };
   clipboard: {
     /** Write PNG bytes to the OS clipboard as an image. */
