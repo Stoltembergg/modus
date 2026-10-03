@@ -168,6 +168,39 @@ Deno.test("webhook: duplicate events are a 200 no-op", async () => {
   assertEquals(await res.json(), { received: true, code: "duplicate" });
 });
 
+Deno.test("webhook: an inactive-plan price is a logged 200 (rejected_inactive_plan)", async () => {
+  const warnings: unknown[][] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
+  try {
+    for (const type of ["invoice.paid", "customer.subscription.created"]) {
+      warnings.length = 0;
+      const { handler, rec } = setup({
+        result: {
+          processed: true,
+          code: "rejected_inactive_plan",
+          granted: false,
+          plan: "pro",
+          event_id: "evt_1",
+        },
+      });
+      const object =
+        type === "invoice.paid"
+          ? { id: "in_1", object: "invoice" }
+          : { id: "sub_1", object: "subscription" };
+      const res = await handler(await signed(event(type, object)));
+      assertEquals(res.status, 200, type);
+      assertEquals(await res.json(), { received: true, code: "rejected_inactive_plan" });
+      assert(rec.names().includes("processStripeEvent"));
+      assertEquals(warnings, [["[stripe-webhook] rejected_inactive_plan:", type, "evt_1"]]);
+    }
+  } finally {
+    console.warn = warn;
+  }
+});
+
 Deno.test("webhook: unhandled types are acknowledged without fetching or writing", async () => {
   const { handler, rec } = setup();
   const res = await handler(
