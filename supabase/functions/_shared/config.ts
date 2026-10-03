@@ -99,3 +99,43 @@ export function lazyBillingUrls(env: EnvSource): () => BillingUrls {
     return cached;
   };
 }
+
+/**
+ * Mercado Pago (B6a). MP_ACCESS_TOKEN: the seller's access token (APP_USR-… or TEST-…; the
+ * TEST seller today, rotated before production). Never logged.
+ */
+export function requireMpAccessToken(env: EnvSource): string {
+  const token = env.get("MP_ACCESS_TOKEN")?.trim() ?? "";
+  if (!/^(APP_USR|TEST)-[A-Za-z0-9-]{10,300}$/.test(token)) {
+    throw new ConfigError(
+      "MP_ACCESS_TOKEN must be a Mercado Pago access token (APP_USR-… or TEST-…).",
+    );
+  }
+  return token;
+}
+
+/** MP_WEBHOOK_SECRET: the "secret signature" of the app's Webhooks configuration. */
+export function requireMpWebhookSecret(env: EnvSource): string {
+  const secret = required(env, "MP_WEBHOOK_SECRET");
+  if (secret.length < 16 || /\s/.test(secret)) {
+    throw new ConfigError(
+      "MP_WEBHOOK_SECRET must be the webhook secret signature (16+ characters).",
+    );
+  }
+  return secret;
+}
+
+/**
+ * What every Mercado Pago object must carry. live_mode is fixed to false (test seller): live
+ * payments need their own reviewed change, like the Stripe live lock. MP_COLLECTOR_ID is the
+ * seller's user id (digits): payments and preapprovals of any other seller are rejected.
+ */
+export type MpExpectations = { liveMode: false; collectorId: string };
+
+export function loadMpExpectations(env: EnvSource): MpExpectations {
+  const collectorId = env.get("MP_COLLECTOR_ID")?.trim() ?? "";
+  if (!/^[0-9]{1,20}$/.test(collectorId)) {
+    throw new ConfigError("MP_COLLECTOR_ID must be the Mercado Pago seller user id (digits).");
+  }
+  return { liveMode: false, collectorId };
+}
