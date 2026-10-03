@@ -2,6 +2,9 @@ import { assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
   ConfigError,
   loadBillingUrls,
+  loadMpExpectations,
+  requireMpAccessToken,
+  requireMpWebhookSecret,
   requireTestModeStripeKey,
   requireWebhookSecret,
 } from "./config.ts";
@@ -72,5 +75,57 @@ Deno.test("BILLING_RETURN_URL fails closed: no default, https only, no query/fra
       undefined,
       bad,
     );
+  }
+});
+
+Deno.test("Mercado Pago config: token, webhook secret and collector are required; live_mode fixed false", () => {
+  assertEquals(
+    requireMpAccessToken(env({ MP_ACCESS_TOKEN: "APP_USR-1234567890-abcdef" })),
+    "APP_USR-1234567890-abcdef",
+  );
+  assertEquals(
+    requireMpAccessToken(env({ MP_ACCESS_TOKEN: "TEST-1234567890-abcdef" })),
+    "TEST-1234567890-abcdef",
+  );
+  for (const token of [
+    "",
+    "sk_test_abc",
+    "APP_USR-short",
+    "Bearer APP_USR-1234567890",
+    "APP_USR-12345678901 x",
+  ]) {
+    assertThrows(
+      () => requireMpAccessToken(env({ MP_ACCESS_TOKEN: token })),
+      ConfigError,
+      "MP_ACCESS_TOKEN",
+    );
+  }
+  assertEquals(
+    requireMpWebhookSecret(env({ MP_WEBHOOK_SECRET: "0123456789abcdef0123" })),
+    "0123456789abcdef0123",
+  );
+  for (const secret of ["", "short", "has space in it 0123"]) {
+    assertThrows(
+      () => requireMpWebhookSecret(env({ MP_WEBHOOK_SECRET: secret })),
+      ConfigError,
+      "MP_WEBHOOK_SECRET",
+    );
+  }
+  assertEquals(loadMpExpectations(env({ MP_COLLECTOR_ID: "123456789" })), {
+    liveMode: false,
+    collectorId: "123456789",
+  });
+  for (const id of ["", "abc", "12 3"]) {
+    assertThrows(
+      () => loadMpExpectations(env({ MP_COLLECTOR_ID: id })),
+      ConfigError,
+      "MP_COLLECTOR_ID",
+    );
+  }
+  // Error messages never echo the value.
+  try {
+    requireMpAccessToken(env({ MP_ACCESS_TOKEN: "APP_USR-secret value" }));
+  } catch (error) {
+    assertEquals((error as Error).message.includes("secret value"), false);
   }
 });

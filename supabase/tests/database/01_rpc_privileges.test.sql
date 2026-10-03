@@ -71,9 +71,11 @@ select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private' and has_function_privilege('service_role', p.oid, 'execute')),
-  array['claim_stripe_customer', 'grant_credits', 'process_stripe_event', 'release_expired_reservations',
+  array['claim_stripe_customer', 'debit_credits', 'grant_credits', 'mp_claim_notification',
+        'mp_create_checkout', 'mp_finish_notification', 'mp_link_checkout', 'process_mp_payment',
+        'process_mp_preapproval', 'process_stripe_event', 'release_expired_reservations',
         'reserve_credits', 'router_claim_request', 'router_reserve', 'router_store_cost', 'settle_usage'],
-  'service_role can execute exactly the nine RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost; not the trigger functions)');
+  'service_role can execute exactly the sixteen RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost + B6a debit_credits / mp_* / process_mp_*; not the trigger functions nor the mp_preapproval_mismatch helper)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -92,20 +94,22 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  12, 'twelve functions in private (9 RPCs + 3 trigger functions)');
+  20, 'twenty functions in private (16 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  12, 'all private functions are SECURITY DEFINER with search_path=""');
+  20, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  array['claim_stripe_customer', 'grant_credits', 'grant_free_initial_credits', 'handle_new_user',
+  array['claim_stripe_customer', 'debit_credits', 'grant_credits', 'grant_free_initial_credits',
+        'handle_new_user', 'mp_claim_notification', 'mp_create_checkout', 'mp_finish_notification',
+        'mp_link_checkout', 'mp_preapproval_mismatch', 'process_mp_payment', 'process_mp_preapproval',
         'process_stripe_event', 'release_expired_reservations', 'reserve_credits', 'router_claim_request',
         'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage'],
   'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');

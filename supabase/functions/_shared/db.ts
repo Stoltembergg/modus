@@ -1,4 +1,6 @@
 import postgres, { type TransactionSql } from "npm:postgres@3.4.9";
+import type { MpExpectations } from "./config.ts";
+import type { MpPayment, MpPreapproval } from "./mp.ts";
 
 /**
  * Server-side data access for the billing Functions. Every call runs in its
@@ -8,6 +10,25 @@ import postgres, { type TransactionSql } from "npm:postgres@3.4.9";
  * by the REST API (by design).
  */
 export type BillingPlan = { plan: string; stripePriceId: string };
+
+/** private.mp_create_checkout result (B6a). */
+export type MpCheckout =
+  | { code: "unknown_plan" }
+  | { code: "already_subscribed" }
+  | {
+      code: "created" | "reused";
+      checkoutId: string;
+      plan: string;
+      planName: string;
+      amountMinor: number;
+      currency: string;
+      checkoutUrl: string | null;
+    };
+export type MpLinkResult = {
+  code: "linked" | "already_linked" | "conflict" | "not_found";
+  checkoutUrl: string | null;
+};
+export type MpClaim = "new" | "retry" | "duplicate";
 
 export interface BillingDb {
   /** A purchasable plan (active, with a Stripe price); null for unknown / free / inactive. */
@@ -22,15 +43,40 @@ export interface BillingDb {
     type: string,
     payload: Record<string, unknown>,
   ): Promise<Record<string, unknown>>;
+  /** B6a: private.mp_create_checkout (creates or reuses the user's open checkout). */
+  mpCreateCheckout(userId: string, plan: string): Promise<MpCheckout>;
+  mpLinkCheckout(checkoutId: string, preapprovalId: string, url: string): Promise<MpLinkResult>;
+  mpClaimNotification(requestId: string, topic: string, dataId: string): Promise<MpClaim>;
+  mpFinishNotification(requestId: string, result: string): Promise<void>;
+  /** Marks the notification processed in the SAME transaction (requestId). */
+  processMpPreapproval(
+    pre: MpPreapproval,
+    expect: MpExpectations,
+    requestId: string | null,
+  ): Promise<Record<string, unknown>>;
+  processMpPayment(
+    payment: MpPayment,
+    pre: MpPreapproval | null,
+    expect: MpExpectations,
+    requestId: string | null,
+  ): Promise<Record<string, unknown>>;
 }
 
-/** Subscription statuses that still own a paid plan (a second Checkout would double-bill). */
+export function mpExpectJson(expect: MpExpectations): Record<string, unknown> {
+  return { live_mode: expect.liveMode, collector_id: expect.collectorId };
+}
+
+/**
+ * Subscription statuses that still own a paid plan (a second Checkout would double-bill).
+ * B6a: across providers (Stripe and Mercado Pago rows); 'paused' is a Mercado Pago pause.
+ */
 export const LIVE_SUBSCRIPTION_STATUSES = [
   "active",
   "trialing",
   "past_due",
   "unpaid",
   "incomplete",
+  "paused",
 ];
 
 export function createPostgresBillingDb(dbUrl: string): BillingDb {
@@ -78,6 +124,68 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
         const rows = await tx`
           select private.process_stripe_event(${eventId}, ${type}, ${tx.json(payload as postgres.JSONValue)}) as result`;
         return rows[0].result as Record<string, unknown>;
+      }),
+
+    mpCreateCheckout: (userId, plan) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`select private.mp_create_checkout(${userId}, ${plan}) as r`;
+        const r = rows[0].r as Record<string, unknown>;
+        if (r.code === "unknown_plan" || r.code === "already_subscribed") return { code: r.code };
+        if (r.code !== "created" && r.code !== "reused")
+          throw new Error("unexpected checkout code");
+        return {
+          code: r.code,
+          checkoutId: String(r.checkout_id),
+          plan: String(r.plan),
+          planName: String(r.plan_name),
+          amountMinor: Number(r.amount_minor),
+          currency: String(r.currency),
+          checkoutUrl: typeof r.checkout_url === "string" ? r.checkout_url : null,
+        };
+      }),
+
+    mpLinkCheckout: (checkoutId, preapprovalId, url) =>
+      asServiceRole(async (tx) => {
+        const rows =
+          await tx`select private.mp_link_checkout(${checkoutId}, ${preapprovalId}, ${url}) as r`;
+        const r = rows[0].r as Record<string, unknown>;
+        return {
+          code: r.code as MpLinkResult["code"],
+          checkoutUrl: typeof r.checkout_url === "string" ? r.checkout_url : null,
+        };
+      }),
+
+    mpClaimNotification: (requestId, topic, dataId) =>
+      asServiceRole(async (tx) => {
+        const rows =
+          await tx`select private.mp_claim_notification(${requestId}, ${topic}, ${dataId}) as r`;
+        return rows[0].r as MpClaim;
+      }),
+
+    mpFinishNotification: (requestId, result) =>
+      asServiceRole(async (tx) => {
+        await tx`select private.mp_finish_notification(${requestId}, ${result})`;
+      }),
+
+    processMpPreapproval: (pre, expect, requestId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select private.process_mp_preapproval(
+            ${tx.json(pre as unknown as postgres.JSONValue)},
+            ${tx.json(mpExpectJson(expect) as postgres.JSONValue)},
+            ${requestId}) as r`;
+        return rows[0].r as Record<string, unknown>;
+      }),
+
+    processMpPayment: (payment, pre, expect, requestId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select private.process_mp_payment(
+            ${tx.json(payment as unknown as postgres.JSONValue)},
+            ${pre ? tx.json(pre as unknown as postgres.JSONValue) : null},
+            ${tx.json(mpExpectJson(expect) as postgres.JSONValue)},
+            ${requestId}) as r`;
+        return rows[0].r as Record<string, unknown>;
       }),
   };
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Case 4: concurrent reservations on one wallet, from separate connections;
-# plus release_expired_reservations racing settle_usage (no deadlock).
+# plus release_expired_reservations racing settle_usage (no deadlock), and
+# (B6a) concurrent deliveries of one Mercado Pago payment.
 # Called by run.sh (PGHOST / PGPORT / PGUSER / PGDATABASE and PSQL set).
 set -euo pipefail
 PSQL="${PSQL:-psql}"
@@ -139,5 +140,28 @@ echo "release/settle burst: deadlocks=$deadlocks errors=$errors expired=$expired
    && "$state5" == 900/0 && "$ledger5" == 900 ]] \
   || { cat "$out"/m-* | sort | uniq -c; fail "release/settle burst: no deadlock, consistent balance"; }
 echo "ok - 20 settles racing 20 direct releases: no deadlock, balance 900 = ledger, nothing reserved"
+
+# 6) B6a: the same approved Mercado Pago payment delivered by 6 sessions at
+#    once (invoice + payment topics, MP retries): credited exactly once.
+uid6="$(q "select tests.create_user('race-mp@example.com', true)")"
+co6="$(q "set role service_role; select private.mp_create_checkout('$uid6', 'starter') ->> 'checkout_id'")"
+q "set role service_role; select private.mp_link_checkout('$co6', 'PRERACE', 'https://www.mercadopago.com.br/x')" >/dev/null
+pre6="{\"id\":\"PRERACE\",\"status\":\"authorized\",\"external_reference\":\"$co6\",\"collector_id\":\"777\",\"amount_minor\":4990,\"currency\":\"BRL\",\"next_payment_date\":null}"
+pay6='{"id":"990001","status":"approved","amount_minor":4990,"refunded_minor":0,"live_mode":false,"collector_id":"777","currency":"BRL","external_reference":null}'
+exp6='{"live_mode":false,"collector_id":"777"}'
+for i in $(seq 1 6); do
+  if (( i % 2 )); then pre_arg="'$pre6'::jsonb"; else pre_arg="null"; fi
+  ( "$PSQL" -X -q -t -A -c "set role service_role; select private.process_mp_payment('$pay6'::jsonb, $pre_arg, '$exp6'::jsonb) ->> 'code'" \
+      >"$out/mp$i" 2>&1 || true ) &
+done
+wait
+credited6="$(cat "$out"/mp* | grep -c '^credited$' || true)"
+errors6="$(cat "$out"/mp* | grep -c 'ERROR' || true)"
+balance6="$(q "select balance from public.credit_wallets where user_id = '$uid6'")"
+ledger6="$(q "select count(*) from public.credit_transactions where idempotency_key = 'mp:payment:990001'")"
+echo "mp payment x6: credited=$credited6 errors=$errors6 balance=$balance6 ledger_rows=$ledger6"
+[[ "$credited6" == 1 && "$errors6" == 0 && "$balance6" == 11000 && "$ledger6" == 1 ]] \
+  || { cat "$out"/mp*; fail "concurrent Mercado Pago deliveries: credited exactly once"; }
+echo "ok - 6 concurrent deliveries of one approved Mercado Pago payment: credited exactly once (1000 + 10000)"
 
 rm -rf "$out"
