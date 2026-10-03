@@ -66,6 +66,7 @@ Deno.test({
         getPreapproval: (id) => Promise.resolve(structuredClone(must(preapprovals.get(id), id))),
         getAuthorizedPayment: (id) => Promise.resolve(structuredClone(must(invoices.get(id), id))),
         getPayment: (id) => Promise.resolve(structuredClone(must(payments.get(id), id))),
+        cancelPreapproval: () => Promise.reject(new Error("not used here")),
       };
 
       // 1) mp-checkout (server only): record + preapproval + link; a second call reuses it.

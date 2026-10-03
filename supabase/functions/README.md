@@ -6,6 +6,7 @@
 | `create-portal-session` | Stripe Customer Portal for the caller's own customer | partly: off -> opens only for an existing Stripe subscriber |
 | `stripe-webhook` | Stripe events -> `private.process_stripe_event` | **no**, always processes |
 | `mp-checkout`, `mp-webhook` | Mercado Pago subscriptions (B6a) | no |
+| `mp-cancel` | Cancel the caller's own Mercado Pago subscription (L1e), `verify_jwt = true` | no |
 | `model-router` | Modus model router (B4a) | no |
 
 Secrets are listed in [`.env.example`](.env.example). For the local stack, copy it to `supabase/functions/.env`. For the hosted project, set them with `supabase secrets set`.
@@ -49,3 +50,19 @@ If the two flags disagree, nothing is sold through Stripe:
 To disable Stripe, turn off both, starting with the env, which is the hard block.
 
 **Tests and CI:** no test needs `STRIPE_ENABLED`. Handler tests inject `stripeEnabled`, and the SQL / integration tests (`supabase/tests/run.sh`) call `db.ts` and the RPCs directly, never the HTTP Functions. The desktop app's billing tests mock the backend.
+
+## `mp-cancel` (L1e)
+
+Deploy with `verify_jwt = true`. The handler also validates the JWT itself (`createGetUser`, like `mp-checkout`); no user means `401 unauthorized`.
+
+**Request:** `POST` with an empty body or `{}`. Any field (for example a preapproval id) is `400 invalid_body`, before any lookup. The preapproval ids come only from the database: `private.mp_cancel_targets(user)` returns the caller's own live Mercado Pago rows (`incomplete`, `active`, `trialing`, `past_due`, `unpaid`, `paused`).
+
+**Per target:**
+1. `PUT /preapproval/{id}` with `{"status":"canceled"}`. Mercado Pago spells it `canceled`; `cancelled` from MP is normalized to the same status.
+2. If that answer is not `canceled` (or the PUT failed), `GET /preapproval/{id}` re-reads it.
+3. If MP reads `canceled`, the preapproval goes through `private.process_mp_preapproval`, the same path as `mp-webhook`. That is the only place the status changes.
+4. A row still live afterwards is only flagged (`private.mp_mark_cancel_requested`: `cancel_at_period_end = true`). It stays live, so a new checkout stays blocked until the webhook confirms.
+
+**Response** (never an id): `200 {"code":"no_subscription"}` (nothing live: a no-op), `200 {"code":"canceled"}`, `200 {"code":"cancel_requested"}` (not confirmed yet), or `502 mercadopago_unavailable` when MP neither accepted the PUT nor reads `canceled` (nothing changed). Repeats are safe. No refund: credits already granted stay.
+
+**Secrets:** `MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`. These are the same ones `mp-checkout` uses.

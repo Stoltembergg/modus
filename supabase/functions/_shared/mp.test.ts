@@ -6,6 +6,7 @@ import {
   normalizeAuthorizedPayment,
   normalizePayment,
   normalizePreapproval,
+  normalizePreapprovalStatus,
   toMinor,
 } from "./mp.ts";
 
@@ -188,4 +189,35 @@ Deno.test("createPreapproval: pending, BRL monthly, external_reference + X-Idemp
     back_url: "https://example.com/billing?modus_billing=success",
     status: "pending",
   });
+});
+
+Deno.test("cancelPreapproval: PUT /preapproval/{id} { status: canceled }; id validated first", async () => {
+  const seen: { url: string; init: RequestInit }[] = [];
+  const api = createMpApi(TOKEN, {
+    fetchImpl: (input, init) => {
+      seen.push({ url: String(input), init: init ?? {} });
+      return Promise.resolve(
+        Response.json({
+          id: "pre1",
+          status: "cancelled",
+          auto_recurring: { transaction_amount: 49.9, currency_id: "BRL" },
+        }),
+      );
+    },
+  });
+  const pre = await api.cancelPreapproval("pre1");
+  assertEquals(pre.status, "canceled", "the 'cancelled' spelling is the same status");
+  assertEquals(seen[0].url, `${MP_API_BASE}/preapproval/pre1`);
+  assertEquals(seen[0].init.method, "PUT");
+  assertEquals(JSON.parse(String(seen[0].init.body)), { status: "canceled" });
+  await assertRejects(() => api.cancelPreapproval("../payments/1"), MpApiError);
+  await assertRejects(() => api.cancelPreapproval(""), MpApiError);
+  assertEquals(seen.length, 1);
+});
+
+Deno.test("normalizePreapprovalStatus: only 'cancelled' is rewritten", () => {
+  assertEquals(normalizePreapprovalStatus("cancelled"), "canceled");
+  assertEquals(normalizePreapprovalStatus("CANCELLED"), "canceled");
+  assertEquals(normalizePreapprovalStatus("canceled"), "canceled");
+  assertEquals(normalizePreapprovalStatus("authorized"), "authorized");
 });

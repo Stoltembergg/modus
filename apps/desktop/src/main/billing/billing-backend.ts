@@ -40,6 +40,14 @@ export type BillingFunctionResult =
   | { ok: true; url: string }
   | { ok: false; status: number; code: string };
 
+/** L1e mp-cancel answers (never an id): nothing live, confirmed, or requested (not yet). */
+export const CANCEL_RESULT_CODES = ["no_subscription", "canceled", "cancel_requested"] as const;
+export type CancelResultCode = (typeof CANCEL_RESULT_CODES)[number];
+
+export type BillingCancelResult =
+  | { ok: true; code: CancelResultCode }
+  | { ok: false; status: number; code: string };
+
 /**
  * Billing reads (RLS: the caller's own rows, plus the public catalog RPC) and the checkout /
  * portal Functions. Implemented by
@@ -51,6 +59,11 @@ export interface BillingBackend {
     fn: BillingFunctionName,
     body: Record<string, string>,
   ): Promise<BillingFunctionResult>;
+  /**
+   * L1e: POST mp-cancel with an empty body. The Function finds the caller's own live Mercado
+   * Pago subscription from the JWT; no id is ever sent.
+   */
+  cancelSubscription(): Promise<BillingCancelResult>;
 }
 
 export const CHECKOUT_URL_PREFIX = "https://checkout.stripe.com/";

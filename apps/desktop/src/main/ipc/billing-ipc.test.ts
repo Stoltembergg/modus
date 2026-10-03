@@ -4,9 +4,10 @@ import {
   createFakeAuth,
   createFakeBillingBackend,
   SECRET_ACCESS_TOKEN_IN_BILLING,
+  snapshot,
 } from "../billing/billing.test-helpers";
 import { createBillingService } from "../billing/billing-service";
-import { registerBillingIpcHandlers } from "./billing-ipc";
+import { billingCancelSchema, registerBillingIpcHandlers } from "./billing-ipc";
 import {
   assertTrustedSender,
   registerTrustedSender,
@@ -18,6 +19,7 @@ const BILLING_CHANNELS = [
   "billing:refresh",
   "billing:checkout",
   "billing:portal",
+  "billing:cancel",
 ];
 
 type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
@@ -102,6 +104,7 @@ describe("billing IPC", () => {
     for (const reply of [...replies, ...broadcasts]) {
       expect(Object.keys(reply as object).sort()).toEqual(
         [
+          "cancelling",
           "catalog",
           "currentPlan",
           "error",
@@ -114,5 +117,47 @@ describe("billing IPC", () => {
         ].sort(),
       );
     }
+  });
+
+  it("billing:cancel takes no id: nothing or {} only (strict), any key is rejected", async () => {
+    expect(billingCancelSchema.safeParse(undefined).success).toBe(true);
+    expect(billingCancelSchema.safeParse({}).success).toBe(true);
+    const { call, backend } = setup();
+    for (const input of [
+      { preapprovalId: "SECRET_preapproval" },
+      { subscriptionId: "sub_123" },
+      { id: "x" },
+      { userId: "11111111-1111-4111-8111-111111111111" },
+      "PRE1",
+      [],
+      null,
+    ]) {
+      expect(billingCancelSchema.safeParse(input).success).toBe(false);
+      await expect(call("billing:cancel", input)).rejects.toThrow(/Invalid IPC payload/);
+    }
+    expect(backend.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it("billing:cancel calls the backend without arguments and replies with display data", async () => {
+    const { call, backend, broadcasts } = setup();
+    const mp = {
+      plan: "starter",
+      provider: "mercadopago" as const,
+      status: "active",
+      currentPeriodEnd: "2026-11-03T00:00:00Z",
+      cancelAtPeriodEnd: false,
+    };
+    backend.fetchBilling.mockImplementation(async () => snapshot({ subscription: mp }));
+    await call("billing:refresh");
+    backend.fetchBilling.mockImplementation(async () => snapshot({ subscription: null }));
+    const reply = (await call("billing:cancel")) as { subscription: unknown; cancelling: boolean };
+    expect(backend.cancelSubscription).toHaveBeenCalledTimes(1);
+    expect(backend.cancelSubscription.mock.calls[0]).toEqual([]);
+    expect(reply.subscription).toBeNull();
+    expect(reply.cancelling).toBe(false);
+    expect(broadcasts.some((s) => (s as { cancelling: boolean }).cancelling)).toBe(true);
+    const payload = JSON.stringify({ reply, broadcasts });
+    expect(payload).not.toMatch(/preapproval|mercadopago\.com|PRE[A-Z0-9]/);
+    expect(payload).not.toContain(SECRET_ACCESS_TOKEN_IN_BILLING);
   });
 });

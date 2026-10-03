@@ -1,7 +1,12 @@
 import { vi } from "vitest";
 import type { AuthState } from "../../shared/auth";
 import type { BillingCatalogEntry } from "../../shared/billing";
-import type { BillingBackend, BillingFunctionResult, BillingSnapshot } from "./billing-backend";
+import type {
+  BillingBackend,
+  BillingCancelResult,
+  BillingFunctionResult,
+  BillingSnapshot,
+} from "./billing-backend";
 
 /** Test doubles for main/billing (imported by *.test.ts only). */
 
@@ -100,6 +105,9 @@ export function createFakeBillingBackend() {
               ? SECRET_CHECKOUT_URL
               : SECRET_PORTAL_URL,
       }),
+    ),
+    cancelSubscription: vi.fn(
+      async (): Promise<BillingCancelResult> => ({ ok: true, code: "canceled" }),
     ),
   } satisfies BillingBackend;
   return backend;

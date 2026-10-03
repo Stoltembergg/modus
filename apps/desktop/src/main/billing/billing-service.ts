@@ -25,6 +25,12 @@ export interface BillingService {
   startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
   /** Opens the Stripe Customer Portal (upgrade / downgrade / cancel / payment method). */
   openPortal(): Promise<BillingState>;
+  /**
+   * L1e: asks mp-cancel to cancel the user's own live Mercado Pago subscription (no id crosses
+   * IPC or leaves main), then refreshes now and again while the webhook catches up. The
+   * subscription (and so the blocked Subscribe button) stays until the status leaves the live set.
+   */
+  cancelSubscription(): Promise<BillingState>;
   /** modus://billing/return: refresh now and again while the webhook catches up. */
   handleReturn(status: BillingReturnStatus | null): Promise<BillingState>;
   onStateChange(listener: (state: BillingState) => void): () => void;
@@ -42,12 +48,15 @@ type Deps = {
   openExternal(url: string): Promise<void>;
   /** Extra refreshes after a return (webhook latency). */
   returnRefreshDelaysMs?: number[];
+  /** Extra refreshes after a cancel request (webhook latency). */
+  cancelRefreshDelaysMs?: number[];
   setTimer?(run: () => void, ms: number): { cancel(): void };
 };
 
 const ERRORS: Record<string, string> = {
   already_subscribed: "You already have a subscription.",
   checkout_conflict: "A checkout is already being created. Try again in a moment.",
+  cancel_not_available: "There is no Mercado Pago subscription to cancel.",
   email_required: "Add an email address to your account before subscribing.",
   mercadopago_unavailable: "Mercado Pago is unavailable right now. Try again in a few minutes.",
   stripe_disabled: "Card payments through Stripe are turned off right now.",
@@ -73,6 +82,7 @@ function emptyState(status: BillingState["status"]): BillingState {
     wallet: null,
     currentPlan: "free",
     pending: null,
+    cancelling: false,
     lastReturn: null,
     error: null,
   };
@@ -87,6 +97,7 @@ export function createBillingService(deps: Deps): BillingService {
   const { auth, backend } = deps;
   const setTimer = deps.setTimer ?? defaultTimer;
   const returnDelays = deps.returnRefreshDelaysMs ?? [4_000, 12_000];
+  const cancelDelays = deps.cancelRefreshDelaysMs ?? [3_000, 10_000, 30_000];
   const listeners = new Set<(state: BillingState) => void>();
   const timers = new Set<{ cancel(): void }>();
   let state = emptyState(backend ? "signed-out" : "unavailable");
@@ -167,6 +178,44 @@ export function createBillingService(deps: Deps): BillingService {
     }
   }
 
+  function scheduleRefreshes(delays: number[]): void {
+    const run = generation;
+    for (const delay of delays) {
+      const timer = setTimer(() => {
+        timers.delete(timer);
+        if (run === generation) void refresh();
+      }, delay);
+      timers.add(timer);
+    }
+  }
+
+  async function cancelSubscription(): Promise<BillingState> {
+    if (!backend || !signedInUser()) {
+      return setState({ error: ERRORS.unauthorized ?? GENERIC_ERROR });
+    }
+    if (state.cancelling) return snapshot();
+    if (state.status !== "ready" || state.subscription?.provider !== "mercadopago") {
+      return setState({ error: ERRORS.cancel_not_available ?? GENERIC_ERROR });
+    }
+    const run = generation;
+    setState({ cancelling: true, error: null });
+    let error: string | null = null;
+    try {
+      const result = await backend.cancelSubscription();
+      if (!result.ok) error = ERRORS[result.code] ?? GENERIC_ERROR;
+    } catch (caught) {
+      error = userFacing(caught);
+    }
+    if (run !== generation) return snapshot();
+    if (error) return setState({ cancelling: false, error });
+    // The final status comes from the server (webhook / confirmed re-read), never from here.
+    cancelTimers();
+    scheduleRefreshes(cancelDelays);
+    await refresh();
+    if (run !== generation) return snapshot();
+    return setState({ cancelling: false });
+  }
+
   function onAuth(next: AuthState): void {
     const id = next.status === "signed-in" && next.user ? next.user.id : null;
     if (id === userId) return;
@@ -212,17 +261,12 @@ export function createBillingService(deps: Deps): BillingService {
       return openSession("portal");
     },
 
+    cancelSubscription,
+
     async handleReturn(status) {
       setState({ pending: null, lastReturn: status });
       cancelTimers();
-      const run = generation;
-      for (const delay of returnDelays) {
-        const timer = setTimer(() => {
-          timers.delete(timer);
-          if (run === generation) void refresh();
-        }, delay);
-        timers.add(timer);
-      }
+      scheduleRefreshes(returnDelays);
       return await refresh();
     },
 

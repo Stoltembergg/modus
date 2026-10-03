@@ -15,6 +15,7 @@ export type BillingIpcService = {
   refresh(): Promise<BillingState>;
   startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
   openPortal(): Promise<BillingState>;
+  cancelSubscription(): Promise<BillingState>;
 };
 
 type HandlerRegistration = {
@@ -30,6 +31,12 @@ export const billingCheckoutSchema = z
     provider: z.enum(BILLING_PROVIDERS as [BillingProvider, ...BillingProvider[]]).optional(),
   })
   .strict() as z.ZodType<BillingCheckoutInput>;
+
+/**
+ * L1e: cancelling takes nothing from the renderer (no subscription / preapproval id): nothing or
+ * an empty object, any key is rejected. mp-cancel finds the subscription from the JWT.
+ */
+export const billingCancelSchema = z.object({}).strict().optional();
 
 /**
  * Billing IPC: every reply is a BillingState (display data only). The access token, Stripe ids
@@ -52,4 +59,5 @@ export function registerBillingIpcHandlers(
     service.startCheckout(input.plan, input.provider),
   );
   handle(IPC_CHANNELS.billingPortal, billingNoInputSchema, () => service.openPortal());
+  handle(IPC_CHANNELS.billingCancel, billingCancelSchema, () => service.cancelSubscription());
 }

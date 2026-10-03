@@ -88,6 +88,11 @@ export type BillingState = {
   currentPlan: string;
   /** A Checkout / Portal page was opened in the browser and not returned from yet. */
   pending: "checkout" | "portal" | null;
+  /**
+   * L1e: a Mercado Pago cancellation request is in flight. Once it returns, a subscription that
+   * is still live with cancelAtPeriodEnd means "cancel requested, waiting for Mercado Pago".
+   */
+  cancelling: boolean;
   lastReturn: BillingReturnStatus | null;
   error: string | null;
 };

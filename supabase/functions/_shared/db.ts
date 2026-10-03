@@ -29,6 +29,8 @@ export type MpLinkResult = {
   checkoutUrl: string | null;
 };
 export type MpClaim = "new" | "retry" | "duplicate";
+/** L1e: one of the user's live Mercado Pago subscriptions (private.mp_cancel_targets). */
+export type MpCancelTarget = { preapprovalId: string; status: string; cancelRequested: boolean };
 
 export interface BillingDb {
   /** A purchasable plan (active, with a Stripe price); null for unknown / free / inactive. */
@@ -66,6 +68,10 @@ export interface BillingDb {
     expect: MpExpectations,
     requestId: string | null,
   ): Promise<Record<string, unknown>>;
+  /** L1e: the user's own live Mercado Pago subscriptions; the only source of preapproval ids. */
+  mpCancelTargets(userId: string): Promise<MpCancelTarget[]>;
+  /** L1e: flags a requested (not yet confirmed) cancellation; never sets the status. */
+  mpMarkCancelRequested(userId: string, preapprovalId: string): Promise<"marked" | "not_found">;
 }
 
 export function mpExpectJson(expect: MpExpectations): Record<string, unknown> {
@@ -209,6 +215,30 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
             ${tx.json(mpExpectJson(expect) as postgres.JSONValue)},
             ${requestId}) as r`;
         return rows[0].r as Record<string, unknown>;
+      }),
+
+    mpCancelTargets: (userId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`select private.mp_cancel_targets(${userId}) as r`;
+        const list = Array.isArray(rows[0].r) ? (rows[0].r as Record<string, unknown>[]) : [];
+        return list.flatMap((t) =>
+          typeof t.preapproval_id === "string" && typeof t.status === "string"
+            ? [
+                {
+                  preapprovalId: t.preapproval_id,
+                  status: t.status,
+                  cancelRequested: t.cancel_requested === true,
+                },
+              ]
+            : [],
+        );
+      }),
+
+    mpMarkCancelRequested: (userId, preapprovalId) =>
+      asServiceRole(async (tx) => {
+        const rows =
+          await tx`select private.mp_mark_cancel_requested(${userId}, ${preapprovalId}) as r`;
+        return (rows[0].r as { code?: unknown }).code === "marked" ? "marked" : "not_found";
       }),
   };
 }

@@ -63,6 +63,16 @@ export interface MpApi {
   getPayment(id: string): Promise<MpPayment>;
   /** POST /preapproval with X-Idempotency-Key (the checkout id). */
   createPreapproval(input: CreatePreapprovalInput, idempotencyKey: string): Promise<MpPreapproval>;
+  /** L1e: PUT /preapproval/{id} { status: "canceled" } (irreversible on Mercado Pago's side). */
+  cancelPreapproval(id: string): Promise<MpPreapproval>;
+}
+
+/**
+ * Mercado Pago documents the preapproval status as "canceled"; "cancelled" is accepted as the
+ * same value so a spelling variant can never leave a cancelled subscription live here.
+ */
+export function normalizePreapprovalStatus(status: string): string {
+  return status.toLowerCase() === "cancelled" ? "canceled" : status;
 }
 
 function invalid(): never {
@@ -108,7 +118,7 @@ export function normalizePreapproval(raw: unknown): MpPreapproval {
   const next = optString(body.next_payment_date);
   return {
     id,
-    status,
+    status: normalizePreapprovalStatus(status),
     external_reference: idString(body.external_reference),
     collector_id: idString(body.collector_id),
     amount_minor: toMinor(recurring.transaction_amount),
@@ -162,7 +172,7 @@ export function createMpApi(
   }: { fetchImpl?: typeof fetch; timeoutMs?: number } = {},
 ): MpApi {
   async function call(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT",
     path: string,
     body?: unknown,
     idempotencyKey?: string,
@@ -235,5 +245,9 @@ export function createMpApi(
           idempotencyKey,
         ),
       ),
+    cancelPreapproval: async (id) => {
+      if (!PREAPPROVAL_ID.test(id)) throw new MpApiError(404, "not_found");
+      return normalizePreapproval(await call("PUT", `/preapproval/${id}`, { status: "canceled" }));
+    },
   };
 }

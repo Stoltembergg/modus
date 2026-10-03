@@ -1,11 +1,16 @@
 // @vitest-environment happy-dom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { BillingCatalogEntry, BillingState } from "../../../../../shared/billing";
+import type {
+  BillingCatalogEntry,
+  BillingState,
+  BillingSubscription,
+} from "../../../../../shared/billing";
 import {
   AccountBillingSection,
   BillingSectionView,
+  cancelConfirmMessage,
   formatCredits,
   formatMoney,
   formatPrice,
@@ -52,6 +57,7 @@ const READY: BillingState = {
   wallet: { balance: 1000, reserved: 0, planAllowance: 1000, periodEnd: null },
   currentPlan: "free",
   pending: null,
+  cancelling: false,
   lastReturn: null,
   error: null,
 };
@@ -64,6 +70,7 @@ const markup = (state: BillingState | undefined) =>
       onCheckout={noop}
       onPortal={noop}
       onRefresh={noop}
+      onCancel={noop}
       state={state}
     />,
   );
@@ -179,6 +186,7 @@ describe("Account billing section", () => {
         onCheckout={noop}
         onPortal={noop}
         onRefresh={noop}
+        onCancel={noop}
         state={{ ...READY, pending: "checkout" }}
       />,
     );
@@ -223,5 +231,152 @@ describe("Account billing section", () => {
     await waitFor(() =>
       expect(checkout).toHaveBeenCalledWith({ plan: "starter", provider: "stripe" }),
     );
+  });
+});
+
+describe("Mercado Pago cancel (L1e)", () => {
+  const MP_ACTIVE: BillingSubscription = {
+    plan: "starter",
+    provider: "mercadopago",
+    status: "active",
+    currentPeriodEnd: "2026-11-03T00:00:00Z",
+    cancelAtPeriodEnd: false,
+  };
+  const subscribed = (
+    sub: Partial<BillingSubscription> = {},
+    patch: Partial<BillingState> = {},
+  ): BillingState => ({
+    ...READY,
+    currentPlan: "starter",
+    subscription: { ...MP_ACTIVE, ...sub },
+    ...patch,
+  });
+
+  /** happy-dom has no window.confirm: install a mock for the test. */
+  function stubConfirm() {
+    const fn = vi.fn((_message?: string) => false);
+    Object.defineProperty(window, "confirm", { value: fn, configurable: true, writable: true });
+    return fn;
+  }
+
+  function mount(initial: BillingState, cancelSubscription: () => Promise<BillingState>) {
+    let push: (state: BillingState) => void = () => undefined;
+    const cancel = vi.fn(cancelSubscription);
+    (window as { modus?: unknown }).modus = {
+      billing: {
+        getState: vi.fn(async () => initial),
+        refresh: vi.fn(async () => initial),
+        checkout: vi.fn(async () => initial),
+        openPortal: vi.fn(async () => initial),
+        cancelSubscription: cancel,
+        onStateChange: vi.fn((listener: (state: BillingState) => void) => {
+          push = listener;
+          return () => undefined;
+        }),
+      },
+    };
+    render(<AccountBillingSection />);
+    return { push: (state: BillingState) => act(() => push(state)), cancel };
+  }
+
+  it("active: Cancel subscription (no Subscribe), the confirm says no refund and credits stay", () => {
+    const html = markup(subscribed());
+    expect(html).toContain("Cancel subscription");
+    expect(html).not.toContain("Subscribe with");
+    expect(html).not.toContain("Payment pending");
+    expect(cancelConfirmMessage("Starter")).toMatch(/Starter.*Nothing is refunded.*credits/);
+  });
+
+  it("incomplete: Payment pending with Cancel and try again, never a Subscribe button", () => {
+    const html = markup(subscribed({ status: "incomplete" }));
+    expect(html).toContain("Payment pending");
+    expect(html).toContain("Cancel and try again");
+    expect(html).not.toContain("Subscribe with");
+    expect(html).not.toContain(">Cancel subscription<");
+  });
+
+  it("cancelling: no cancel / subscribe buttons, only the disabled Cancelling… state", () => {
+    render(
+      <BillingSectionView
+        busy={false}
+        onCheckout={noop}
+        onPortal={noop}
+        onRefresh={noop}
+        onCancel={noop}
+        state={subscribed({}, { cancelling: true })}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Cancelling…" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel subscription" })).toBeNull();
+  });
+
+  it("Stripe subscribers get no Mercado Pago cancel button", () => {
+    const html = markup(subscribed({ provider: "stripe" }));
+    expect(html).not.toContain("Cancel subscription");
+    expect(html).toContain("Manage billing");
+  });
+
+  it("active: declining the confirm does nothing; accepting calls cancelSubscription()", async () => {
+    const confirm = stubConfirm().mockReturnValueOnce(false);
+    const { cancel } = mount(subscribed(), async () => READY);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
+    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter"));
+    expect(cancel).not.toHaveBeenCalled();
+    confirm.mockReturnValueOnce(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel subscription" }));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith());
+    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    confirm.mockRestore();
+  });
+
+  it("cancel not confirmed yet: Subscribe stays blocked until the status leaves the live set", async () => {
+    const confirm = stubConfirm().mockReturnValue(true);
+    const requested = subscribed({ cancelAtPeriodEnd: true });
+    const { push } = mount(subscribed(), async () => requested);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
+    await screen.findByText(/Waiting for Mercado Pago to confirm/);
+    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+    // A refresh that still reads the live row keeps it blocked.
+    push(requested);
+    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    // The webhook confirms: the live subscription is gone, Subscribe is back.
+    push(READY);
+    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    confirm.mockRestore();
+  });
+
+  it("incomplete -> Cancel and try again -> Cancelling… -> Subscribe", async () => {
+    const confirm = stubConfirm();
+    let finish: (state: BillingState) => void = () => undefined;
+    const { push, cancel } = mount(
+      subscribed({ status: "incomplete" }),
+      () =>
+        new Promise<BillingState>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel and try again" }));
+    expect(confirm).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledTimes(1);
+    push(subscribed({ status: "incomplete" }, { cancelling: true }));
+    await screen.findByRole("button", { name: "Cancelling…" });
+    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    await act(async () => finish(READY));
+    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    confirm.mockRestore();
+  });
+
+  it("a cancel error is shown and the button stays available", () => {
+    const html = markup(
+      subscribed(
+        { status: "incomplete" },
+        { error: "Mercado Pago is unavailable right now. Try again in a few minutes." },
+      ),
+    );
+    expect(html).toContain("Mercado Pago is unavailable");
+    expect(html).toContain("Cancel and try again");
   });
 });
