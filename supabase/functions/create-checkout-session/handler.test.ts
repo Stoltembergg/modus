@@ -13,11 +13,13 @@ function setup({
   sessionLivemode = false,
   user = USER as typeof USER | null,
   urls = (() => URLS) as () => BillingUrls,
+  stripeEnabled = true,
 } = {}) {
   const rec = recorder();
   const handler = createCheckoutHandler({
     getUser: rec.record("getUser", async () => user),
     urls,
+    stripeEnabled: () => stripeEnabled,
     db: {
       getPurchasablePlan: rec.record("getPurchasablePlan", async (plan: string) =>
         plan === "starter" ? { plan: "starter", stripePriceId: STARTER_PRICE } : null,
@@ -196,4 +198,37 @@ Deno.test("checkout: request headers and body cannot change success/cancel URLs"
     assertEquals((await again.handler(request(body))).status, 400);
     assert(!again.rec.names().includes("sessions.create"));
   }
+});
+
+Deno.test("checkout: STRIPE_ENABLED off -> 503 stripe_disabled before auth, the database or Stripe", async () => {
+  for (const method of ["POST", "GET"]) {
+    const { handler, rec } = setup({ stripeEnabled: false });
+    const req =
+      method === "POST"
+        ? request({ plan: "starter" })
+        : new Request("http://localhost/create-checkout-session");
+    const res = await handler(req);
+    if (method === "GET") {
+      assertEquals(res.status, 405, "the method check still comes first");
+      continue;
+    }
+    assertEquals(res.status, 503);
+    assertEquals(await res.json(), { error: "stripe_disabled" });
+    assertEquals(rec.calls.length, 0, "no getUser, no database, no Stripe call");
+  }
+  // Even with the return URL unset: the flag is checked first.
+  const unset = setup({
+    stripeEnabled: false,
+    urls: () => loadBillingUrls(env({})),
+  });
+  const res = await unset.handler(request({ plan: "starter" }));
+  assertEquals(await res.json(), { error: "stripe_disabled" });
+});
+
+Deno.test("checkout: STRIPE_ENABLED on -> unchanged behaviour (session created)", async () => {
+  const { handler, rec } = setup({ stripeEnabled: true, storedCustomer: "cus_existing" });
+  const res = await handler(request({ plan: "starter" }));
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { url: "https://checkout.stripe.com/c/pay/cs_test_1" });
+  assert(rec.names().includes("sessions.create"));
 });

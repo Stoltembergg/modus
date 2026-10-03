@@ -88,6 +88,8 @@ Deno.test({
       assertEquals(await db.claimStripeCustomer(userId, "cus_OTHER"), "cus_IT");
       assertEquals(await db.getStripeCustomerId(userId), "cus_IT");
       assertEquals(await db.hasLiveSubscription(userId), false);
+      // L1b: no Stripe subscription row yet -> the Portal stays closed while Stripe is off.
+      assertEquals(await db.hasStripeSubscription(userId), false);
 
       // How the parameter arrives: tx.json(...) is a jsonb object; the old
       // `${JSON.stringify(...)}::jsonb` was a jsonb string (process_stripe_event's
@@ -111,6 +113,7 @@ Deno.test({
       );
       assertEquals(created.code, "subscription_upserted");
       assertEquals(await db.hasLiveSubscription(userId), true);
+      assertEquals(await db.hasStripeSubscription(userId), true);
       assertEquals(await eventRow("evt_it_sub"), {
         type: "customer.subscription.created",
         status: "processed",
@@ -196,6 +199,21 @@ Deno.test({
           "evt_it_up_inactive:processed",
         ],
       );
+
+      // L1b: hasStripeSubscription is per user and ignores canceled rows.
+      const [{ id: otherId }] =
+        await admin`select tests.create_user('db-it-other@example.com', true) as id`;
+      assertEquals(
+        await db.hasStripeSubscription(otherId),
+        false,
+        "another user's row never counts",
+      );
+      for (const status of ["past_due", "trialing", "incomplete"]) {
+        await admin`update public.subscriptions set status = ${status} where stripe_subscription_id = 'sub_IT'`;
+        assertEquals(await db.hasStripeSubscription(userId), true, status);
+      }
+      await admin`update public.subscriptions set status = 'canceled' where stripe_subscription_id = 'sub_IT'`;
+      assertEquals(await db.hasStripeSubscription(userId), false, "canceled row -> false");
     } finally {
       await admin.end();
     }

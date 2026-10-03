@@ -8,6 +8,7 @@ import {
   json,
   readJsonObject,
   requireBillingUrls,
+  requireStripeEnabled,
 } from "../_shared/http.ts";
 import type { StripeApi } from "../_shared/stripe.ts";
 
@@ -20,6 +21,8 @@ export type CheckoutDeps = {
   getUser: GetUser;
   /** From BILLING_RETURN_URL (server env) only; throws when unset or invalid. */
   urls: () => BillingUrls;
+  /** L1b: STRIPE_ENABLED (server env, isStripeEnabled); false -> 503 stripe_disabled. */
+  stripeEnabled: () => boolean;
 };
 
 const PLAN_KEY = /^[a-z][a-z0-9_]{0,31}$/;
@@ -64,6 +67,8 @@ export function createCheckoutHandler(deps: CheckoutDeps): (req: Request) => Pro
   return async (req) => {
     try {
       if (req.method !== "POST") throw new HttpError(405, "method_not_allowed");
+      // L1b: Stripe off (STRIPE_ENABLED missing or not "true"): refuse before anything else.
+      requireStripeEnabled(deps.stripeEnabled);
       // Fail closed before auth, the database or Stripe when the return page is not configured.
       const urls = requireBillingUrls(deps.urls);
       const user = await deps.getUser(req);

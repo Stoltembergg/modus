@@ -1,6 +1,7 @@
 import { assertEquals, assertThrows } from "jsr:@std/assert@1";
 import {
   ConfigError,
+  isStripeEnabled,
   loadBillingUrls,
   loadMpExpectations,
   requireMpAccessToken,
@@ -127,5 +128,26 @@ Deno.test("Mercado Pago config: token, webhook secret and collector are required
     requireMpAccessToken(env({ MP_ACCESS_TOKEN: "APP_USR-secret value" }));
   } catch (error) {
     assertEquals((error as Error).message.includes("secret value"), false);
+  }
+});
+
+Deno.test('STRIPE_ENABLED: only the exact value "true" enables Stripe; missing = disabled', () => {
+  assertEquals(isStripeEnabled(env({ STRIPE_ENABLED: "true" })), true);
+  assertEquals(isStripeEnabled(env({ STRIPE_ENABLED: " true\n" })), true, "whitespace trimmed");
+  assertEquals(isStripeEnabled(env({})), false, "missing -> disabled");
+  for (const value of [
+    "",
+    " ",
+    "false",
+    "0",
+    "1",
+    "TRUE",
+    "True",
+    "yes",
+    "on",
+    "enabled",
+    "true1",
+  ]) {
+    assertEquals(isStripeEnabled(env({ STRIPE_ENABLED: value })), false, JSON.stringify(value));
   }
 });

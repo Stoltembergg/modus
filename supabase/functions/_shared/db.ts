@@ -35,6 +35,12 @@ export interface BillingDb {
   getPurchasablePlan(plan: string): Promise<BillingPlan | null>;
   getStripeCustomerId(userId: string): Promise<string | null>;
   hasLiveSubscription(userId: string): Promise<boolean>;
+  /**
+   * L1b: the user has a subscriptions row with a stripe_subscription_id that is not canceled
+   * (any other status counts). Lets an existing Stripe subscriber open the Portal while
+   * STRIPE_ENABLED is off.
+   */
+  hasStripeSubscription(userId: string): Promise<boolean>;
   /** private.claim_stripe_customer: keeps the stored customer when there is one. */
   claimStripeCustomer(userId: string, customerId: string): Promise<string>;
   /** private.process_stripe_event with the object re-fetched from the Stripe API. */
@@ -102,6 +108,16 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
       asServiceRole(async (tx) => {
         const rows = await tx`select stripe_customer_id from public.profiles where id = ${userId}`;
         return rows[0]?.stripe_customer_id ?? null;
+      }),
+
+    hasStripeSubscription: (userId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select 1 from public.subscriptions
+           where user_id = ${userId} and stripe_subscription_id is not null
+             and status <> 'canceled'
+           limit 1`;
+        return rows.length > 0;
       }),
 
     hasLiveSubscription: (userId) =>

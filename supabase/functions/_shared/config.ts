@@ -35,6 +35,24 @@ export function requireWebhookSecret(env: EnvSource): string {
   return secret;
 }
 
+/**
+ * L1b: STRIPE_ENABLED turns the Stripe checkout and Customer Portal Functions on. Only the exact
+ * value "true" (surrounding whitespace ignored) enables them; missing, empty or anything else
+ * ("1", "TRUE", "yes", "false") is DISABLED. Fail closed: a deploy that forgets the secret
+ * cannot sell through Stripe (release L1 sells Starter through Mercado Pago only).
+ * When disabled, create-checkout-session answers 503 {error: "stripe_disabled"} before auth,
+ * the database or Stripe; create-portal-session still opens for a user with a non-canceled
+ * Stripe subscription row (looked up server-side, never from the request) and answers 503
+ * stripe_disabled to everyone else. stripe-webhook is NOT gated: it keeps processing events of
+ * existing Stripe subscriptions (and their audit rows) either way.
+ * Read per request, so the L1c billing catalog can reuse it to report enabled providers.
+ */
+export const STRIPE_ENABLED_ENV = "STRIPE_ENABLED";
+
+export function isStripeEnabled(env: EnvSource): boolean {
+  return env.get(STRIPE_ENABLED_ENV)?.trim() === "true";
+}
+
 export type SupabaseConfig = { url: string; anonKey: string; dbUrl: string };
 
 /** Provided by the Supabase Edge runtime (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_DB_URL). */

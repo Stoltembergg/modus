@@ -56,6 +56,11 @@ export function requireBillingUrls<T>(resolve: () => T): T {
   }
 }
 
+/** L1b: Stripe checkout / portal are off unless STRIPE_ENABLED=true; a 503 before anything else. */
+export function requireStripeEnabled(enabled: () => boolean): void {
+  if (!enabled()) throw new HttpError(503, "stripe_disabled");
+}
+
 export function errorResponse(error: unknown): Response {
   if (error instanceof HttpError) return json(error.status, { error: error.code });
   console.error("[billing] unexpected error:", error instanceof Error ? error.name : typeof error);
