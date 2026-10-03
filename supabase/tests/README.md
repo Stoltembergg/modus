@@ -9,13 +9,15 @@ npm run test:supabase      # or: bash supabase/tests/run.sh
 
 The script:
 
-1. Starts a temporary cluster (`initdb` + `pg_ctl`, unix socket only, port
-   55432 or `$PGPORT_TEST`). The cluster is removed on exit.
+1. Starts a temporary cluster (`initdb` + `pg_ctl`, unix socket plus
+   `127.0.0.1`, port 55432 or `$PGPORT_TEST`). The cluster is removed on exit.
 2. Loads `shim/supabase_shim.sql`.
 3. Applies every `supabase/migrations/*.sql` in order.
 4. Loads `shim/test_helpers.sql`.
 5. Runs the pgTAP files in `database/` with `pg_prove`.
 6. Runs `concurrency.sh`.
+7. Runs `supabase/functions/_shared/db.integration.ts` with Deno: the real
+   `db.ts` (`npm:postgres`) against this cluster, over `127.0.0.1`.
 
 It exits non-zero on any failure.
 
@@ -23,6 +25,7 @@ It exits non-zero on any failure.
 
 - Postgres 15+ server binaries.
 - pgTAP for that server, and `pg_prove`.
+- Deno 2 (for step 7).
 
 On Debian/Ubuntu:
 
@@ -63,5 +66,7 @@ It is never part of a migration.
 - `database/06_stripe_events.test.sql`: `process_stripe_event` (duplicates, unknown price / customer, livemode, subscription upsert, invoice credits and their grant rules: billing_reason, amount_paid, proration lines, line choice).
 - `database/07_billing_upgrades.test.sql` (B3): mid-period upgrades (`subscription_update` invoices with `amount_paid > 0` grant `max(0, new - plan_allowance)` once per invoice), downgrades never remove credits, the renewal resets the allowance, and `private.claim_stripe_customer`.
 - `concurrency.sh`: concurrent reservations from separate connections (2 sessions, a burst of 20, and 5 calls with the same `request_id`), and `release_expired_reservations` racing `settle_usage` (a forced interleaving that deadlocks if the release does not lock the wallet first, plus a burst of 20 + 20).
+
+- `supabase/functions/_shared/db.integration.ts`: the Functions' real `db.ts` through `npm:postgres`. `process_stripe_event` receives a jsonb object (not a JSON string), `customer.subscription.created` and Starter `invoice.paid` (+10000) are processed and recorded in `stripe_events`, a repeated `invoice.paid` grants nothing, and an upgrade invoice grants the difference.
 
 Each pgTAP file runs inside a transaction and rolls back. `concurrency.sh` commits, but only into the throwaway cluster.
