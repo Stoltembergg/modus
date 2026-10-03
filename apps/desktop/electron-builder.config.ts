@@ -46,7 +46,7 @@ const config: Configuration = {
       from: "resources/licenses",
       to: "licenses",
     },
-    // Repo-root LICENSE and third-party notices (React Bits, Agent Elements) ship in every
+    // Repo-root LICENSE and third-party notices (Agent Elements) ship in every
     // package: Contents/Resources on macOS, resources\ on Windows, resources/ on Linux.
     {
       from: "../../LICENSE",

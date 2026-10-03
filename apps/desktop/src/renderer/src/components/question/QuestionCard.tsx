@@ -36,7 +36,7 @@ import type { QuestionAnswer, QuestionPrompt } from "../../../../shared/contract
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { CollapsibleMotion } from "../ui/CollapsibleMotion";
-import { ShinyText } from "../ui/ShinyText";
+import { WorkingText } from "../ui/WorkingText";
 
 export type QuestionCardStatus = "pending" | "answered" | "expired";
 
@@ -686,7 +686,7 @@ function SummaryMode({ running = false, items, label, className }: QuestionCardS
         data-mode="summary"
         data-status="pending"
       >
-        <ShinyText className="min-w-0 flex-1 truncate">Asking…</ShinyText>
+        <WorkingText className="min-w-0 flex-1 truncate">Asking…</WorkingText>
       </div>
     );
   }

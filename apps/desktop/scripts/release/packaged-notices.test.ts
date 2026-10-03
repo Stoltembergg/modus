@@ -16,8 +16,8 @@ function extraResource(to: string): ResourceEntry | undefined {
 }
 
 describe("packaged license notices", () => {
-  // MIT (Agent Elements) and MIT + Commons Clause (React Bits) require the notice in
-  // every copy, so the packaged app ships the repo-root files next to resources/licenses.
+  // MIT (Agent Elements) requires the notice in every copy, so the packaged app ships
+  // the repo-root files next to resources/licenses.
   it.each([
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",

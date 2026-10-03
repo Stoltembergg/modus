@@ -2,7 +2,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { IconCloudUpload, IconGitBranch, IconGitCommit } from "@tabler/icons-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import type { GitStatusSummary } from "../../../../shared/contracts";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 
 type CommitAction = "commit" | "commit-and-push" | "push";
@@ -223,7 +223,7 @@ function ActionRow({
         {icon}
       </span>
       {busy ? (
-        <ShinyText className="flex-1">{label}</ShinyText>
+        <WorkingText className="flex-1">{label}</WorkingText>
       ) : (
         <span className="flex-1">{label}</span>
       )}

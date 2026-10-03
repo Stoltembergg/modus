@@ -10,7 +10,7 @@
  * streaming with more than `maskThreshold` rows the list becomes a bounded,
  * bottom-pinned window with a top fade, as upstream does.
  *
- * Modus adaptations: Modus tokens, ShinyText + CollapsibleMotion, the group
+ * Modus adaptations: Modus tokens, WorkingText + CollapsibleMotion, the group
  * stays collapsed until the user opens it (no auto-open, no simulated
  * one-by-one reveal: rows appear as real events arrive), nested rows are
  * rendered by the caller (ToolCard etc.) instead of a tool registry.
@@ -19,7 +19,7 @@ import { IconChevronRight } from "@tabler/icons-react";
 import { m } from "motion/react";
 import { Children, type ReactNode, useEffect, useId, useRef } from "react";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 
 export type ToolGroupProps = {
@@ -69,7 +69,7 @@ export function ToolGroup({
           type="button"
         >
           {active ? (
-            <ShinyText className="min-w-0 truncate">{label}</ShinyText>
+            <WorkingText className="min-w-0 truncate">{label}</WorkingText>
           ) : (
             <span className="min-w-0 truncate text-fg-subtle">{label}</span>
           )}

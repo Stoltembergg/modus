@@ -8,7 +8,7 @@ import {
   WAIT_TOOL_NAME,
 } from "../../../../shared/tools";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { PlanTimelineCard } from "../plan/PlanTimelineCard";
 import { DiffToolCard } from "./diff/DiffToolCard";
@@ -236,7 +236,7 @@ function LiveToolCard({
       >
         {view.icon ? <span className="shrink-0 text-fg-faint">{view.icon}</span> : null}
         {running ? (
-          <ShinyText className="shrink-0">{view.verb}</ShinyText>
+          <WorkingText className="shrink-0">{view.verb}</WorkingText>
         ) : (
           <span className={cn("shrink-0", isError ? "text-danger" : "text-fg-subtle")}>
             {view.verb}
@@ -299,7 +299,7 @@ function FlatToolRow({
       {view.icon ? <span className="shrink-0 text-fg-faint">{view.icon}</span> : null}
       {running ? (
         <>
-          <ShinyText className="shrink-0">{view.verb}</ShinyText>
+          <WorkingText className="shrink-0">{view.verb}</WorkingText>
           {status ? (
             <span className="min-w-0 flex-1 truncate text-fg-faint" title={status}>
               {status}

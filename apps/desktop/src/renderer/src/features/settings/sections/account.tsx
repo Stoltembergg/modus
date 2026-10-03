@@ -6,7 +6,7 @@ import {
   type AuthOAuthProviderId,
   type AuthState,
 } from "../../../../../shared/auth";
-import { ShinyText } from "../../../components/ui/ShinyText";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { Field } from "../form-controls";
 import {
   ReadOnlyPill,
@@ -199,7 +199,7 @@ export function AccountSettingsPanel() {
                 >
                   <IconMail size={13} stroke={2} />
                   {busy ? (
-                    <ShinyText className="text-canvas">Working…</ShinyText>
+                    <WorkingText className="text-canvas">Working…</WorkingText>
                   ) : mode === "sign-in" ? (
                     "Sign in"
                   ) : (

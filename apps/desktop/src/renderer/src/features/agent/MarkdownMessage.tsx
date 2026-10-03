@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { TextType } from "../../components/ui/TextType";
+import { StreamingCaret } from "../../components/ui/StreamingCaret";
 import { MarkdownFileNavContext } from "./markdownFileNav";
 
 const MarkdownMessageRenderer = lazy(() => import("./MarkdownMessageRenderer"));
@@ -47,8 +47,8 @@ export function MarkdownMessage({
         <Suspense fallback={<PlainTextFallback content={shown} />}>
           <span className="relative inline-block max-w-full min-w-0">
             <MarkdownMessageRenderer className={className} content={shown} streaming={animating} />
-            {/* React Bits TextType caret — types along as tokens catch up. */}
-            <TextType active={animating} className="align-baseline text-fg-muted" mode="caret" />
+            {/* Caret follows the text while tokens catch up. */}
+            <StreamingCaret active={animating} className="align-baseline" />
           </span>
         </Suspense>
       </MarkdownMessageErrorBoundary>

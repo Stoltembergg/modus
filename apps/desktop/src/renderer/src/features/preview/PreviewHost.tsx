@@ -1,7 +1,7 @@
 import { IconExternalLink } from "@tabler/icons-react";
 import { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import type { ContextItem, PreviewKind, PreviewReadResult } from "../../../../shared/contracts";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { loadPreviewEngine, type PreviewEngineProps } from "./registry";
 
@@ -60,7 +60,7 @@ export function PreviewHost({ cwd, path, className, onAddToChat }: PreviewHostPr
   if (state.status === "loading") {
     return (
       <Centered className={className}>
-        <ShinyText>Loading preview…</ShinyText>
+        <WorkingText>Loading preview…</WorkingText>
       </Centered>
     );
   }

@@ -2,8 +2,8 @@ import { IconChevronRight, IconCopy } from "@tabler/icons-react";
 import { memo, useMemo, useState } from "react";
 import { getToolUiMeta, type ToolUiMeta } from "../../../../../shared/tools";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
 import { materialIconForFile } from "../../files/fileIcons";
 import { type InlineDiff, inlineDiffFromToolArgs, toolTargetPath } from "./computeInlineDiff";
@@ -65,7 +65,7 @@ function diffToClipboardText(diff: InlineDiff): string {
 /**
  * Diff card for file-writing tools.
  *
- * Running: material icon + ShinyText progress phrase — no live ±.
+ * Running: material icon + WorkingText progress phrase — no live ±.
  * Done: verb + file + static ±; primary click opens Files; chevron expands diff.
  */
 export const DiffToolCard = memo(
@@ -123,7 +123,9 @@ export const DiffToolCard = memo(
             </span>
 
             {running ? (
-              <ShinyText className="min-w-0 truncate">{progressPhrase(meta, fileName)}</ShinyText>
+              <WorkingText className="min-w-0 truncate">
+                {progressPhrase(meta, fileName)}
+              </WorkingText>
             ) : (
               <>
                 <span className={cn("shrink-0", isError ? "text-danger" : "text-fg-subtle")}>

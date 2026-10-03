@@ -1,7 +1,7 @@
 import { IconCheck, IconFileText } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type { PersonalizationState } from "../../../../../shared/contracts";
-import { ShinyText } from "../../../components/ui/ShinyText";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import {
   ReadOnlyPill,
   SettingsList,
@@ -86,7 +86,7 @@ export function PersonalizationSettingsPanel() {
               type="button"
             >
               <IconCheck size={13} stroke={2} />
-              {saving ? <ShinyText className="text-canvas">Saving…</ShinyText> : "Save"}
+              {saving ? <WorkingText className="text-canvas">Saving…</WorkingText> : "Save"}
             </button>
           </>
         }

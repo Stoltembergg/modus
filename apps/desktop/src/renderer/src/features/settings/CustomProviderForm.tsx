@@ -11,7 +11,7 @@ import { AnimatePresence, m } from "motion/react";
 import { type FormEvent, type ReactNode, useState } from "react";
 import type { CustomProviderConfig, TestCustomProviderResult } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import {
   Disclosure,
@@ -418,7 +418,7 @@ export function CustomProviderForm({
             type="button"
           >
             <IconPlugConnected size={13} stroke={1.8} />
-            {testing ? <ShinyText>Testing…</ShinyText> : "Test connection"}
+            {testing ? <WorkingText>Testing…</WorkingText> : "Test connection"}
           </button>
           <ConnectionTestStatus result={visibleTestResult} testing={testing} />
           <div className="flex-1" />
@@ -435,7 +435,7 @@ export function CustomProviderForm({
             title={missingReason}
             type="submit"
           >
-            {busy ? <ShinyText className="text-canvas">Saving…</ShinyText> : "Save provider"}
+            {busy ? <WorkingText className="text-canvas">Saving…</WorkingText> : "Save provider"}
           </button>
         </div>
       </div>

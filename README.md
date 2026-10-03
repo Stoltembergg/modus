@@ -133,16 +133,3 @@ Questions and project discussion: use the repository's issue tracker once it is 
 ## License
 
 Apache-2.0. See [LICENSE](./LICENSE).
-
-Exception: the files below are adapted from [React Bits](https://github.com/DavidHDev/react-bits) and are **not** Apache-2.0. They stay under the MIT + Commons Clause License Condition v1.0 (Copyright (c) 2026 David Haz); see [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
-
-- `apps/desktop/src/renderer/src/components/ui/Aurora.tsx`
-- `apps/desktop/src/renderer/src/components/ui/GradientWaves.tsx`
-- `apps/desktop/src/renderer/src/components/ui/FadeContent.tsx`
-- `apps/desktop/src/renderer/src/components/ui/ScrollReveal.tsx`
-- `apps/desktop/src/renderer/src/components/ui/TextType.tsx`
-- `apps/desktop/src/renderer/src/components/ui/ShinyText.tsx`
-- `apps/desktop/src/renderer/src/components/ui/BranchedMenu.tsx`
-- `apps/desktop/src/renderer/src/components/ui/SpringCheck.tsx`
-- `apps/desktop/src/renderer/src/components/ui/ThoughtLine.tsx`
-- `apps/desktop/src/renderer/src/components/ui/PromptSendGlyph.tsx`

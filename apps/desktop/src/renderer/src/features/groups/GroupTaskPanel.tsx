@@ -1,7 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../shared/contracts";
 import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
-import { SpringCheck } from "../../components/ui/SpringCheck";
+import { TaskCheck } from "../../components/ui/TaskCheck";
 import { cn } from "../../lib/cn";
 import { describeGroupError } from "./groupErrors";
 import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
@@ -76,7 +76,7 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
 
 /**
  * Right-hand side panel of the room: `top` (Activity sections / Decisions)
- * above the checklist. Agents mark done; the user can Cancel. Spring Check is
+ * above the checklist. Agents mark done; the user can Cancel. TaskCheck is
  * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
  */
 export function GroupTaskPanel({
@@ -191,11 +191,10 @@ function TaskCheckRow({
       data-testid="group-task"
     >
       <div className="flex items-start gap-2">
-        <SpringCheck
+        <TaskCheck
           aria-label={done ? t("tasks.done") : t("tasks.notDone")}
           checked={done}
           className="mt-0.5"
-          disabled
         />
         <div className="min-w-0 flex-1">
           <div

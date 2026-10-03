@@ -19,7 +19,7 @@ import {
   IconLoader2,
 } from "@tabler/icons-react";
 import { type ReactNode, useState } from "react";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { useClipFade } from "../../lib/useClipFade";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
@@ -165,7 +165,7 @@ export function PlanToolCard({
           />
         )}
         {writing ? (
-          <ShinyText>Writing the plan</ShinyText>
+          <WorkingText>Writing the plan</WorkingText>
         ) : (
           <span className={state === "failed" ? "text-danger" : "text-fg-subtle"}>
             {state === "failed" ? "Plan failed" : "Plan"}

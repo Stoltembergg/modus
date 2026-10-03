@@ -858,7 +858,7 @@ export function ChatPane({
       }
       autoScrollResumeRef.current();
     };
-    // ThoughtLine / WorkFold layout settles across a couple frames; without
+    // WorkStatusLine / WorkFold layout settles across a couple frames; without
     // retries an idle remount stays at scrollTop 0 (session start).
     requestAnimationFrame(() => {
       apply();
@@ -1456,7 +1456,6 @@ export function ChatPane({
               await window.modus.checkpoint.restore({ checkpointId });
               refreshStats();
             }}
-            scrollContainerRef={scrollContainerRef}
             workspaceId={workspace?.id}
           />
         </ChatViewport>

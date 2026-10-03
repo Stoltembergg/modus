@@ -4,9 +4,9 @@ import { memo, type ReactNode, useEffect, useId, useState } from "react";
 import type { ModelInfo, PlanRef } from "../../../../shared/contracts";
 import { getToolUiMeta, type ToolSummaryMeta } from "../../../../shared/tools";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
-import { ThoughtLine } from "../../components/ui/ThoughtLine";
+import { WorkingText } from "../../components/ui/WorkingText";
+import { WorkStatusLine } from "../../components/ui/WorkStatusLine";
 import { cn } from "../../lib/cn";
 import { MessageBlock } from "./MessageBlock";
 import { SubagentRow } from "./SubagentRow";
@@ -31,7 +31,7 @@ export function formatElapsed(end: number, start: number): string {
   return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
-/** Single-line tool-style compaction status (ShinyText while running). */
+/** Single-line tool-style compaction status (WorkingText while running). */
 export function CompactionRow({ status, detail }: Pick<CompactionBlockItem, "status" | "detail">) {
   const running = status === "running";
   const danger = status === "aborted" || status === "error";
@@ -39,7 +39,7 @@ export function CompactionRow({ status, detail }: Pick<CompactionBlockItem, "sta
   return (
     <div className="flex min-w-0 items-center gap-2 text-sm">
       {running ? (
-        <ShinyText className="shrink-0 font-medium">{label}</ShinyText>
+        <WorkingText className="shrink-0 font-medium">{label}</WorkingText>
       ) : (
         <span className={cn("shrink-0 font-medium", danger ? "text-danger" : "text-fg-subtle")}>
           {label}
@@ -200,7 +200,7 @@ export function workFoldPhaseLabel(items: WorkFoldItem[]): string | undefined {
 
 /**
  * Visual-only phase label for the fold header (Transitions.dev thinking-states).
- * Accessible copy stays on ThoughtLine's stable "Working…" status; this line is
+ * Accessible copy stays on WorkStatusLine's stable "Working…" status; this line is
  * aria-hidden so assistive tech doesn't chatter on every tool hop.
  */
 function PhaseSwapLabel({ label }: { label: string }) {
@@ -252,7 +252,7 @@ export function WorkActivityRow({
     const preview = thoughtText(item.text);
     if (item.streaming) {
       return (
-        <ThoughtLine
+        <WorkStatusLine
           className="text-fg-faint"
           collapsible={false}
           color="var(--color-fg-faint)"
@@ -264,9 +264,8 @@ export function WorkActivityRow({
       );
     }
     return (
-      <ThoughtLine
+      <WorkStatusLine
         className="text-fg-faint"
-        collapseOnSettle={false}
         color="var(--color-fg-faint)"
         doneLabel="Thought"
         fontSize={12}
@@ -348,7 +347,7 @@ export const WorkFold = memo(function WorkFold({
   return (
     <div className="min-w-0 text-sm">
       <div className="flex min-w-0 items-start gap-1.5">
-        <ThoughtLine
+        <WorkStatusLine
           className="min-w-0"
           color="var(--color-fg-subtle)"
           doneLabel={terminal ?? "Worked for"}

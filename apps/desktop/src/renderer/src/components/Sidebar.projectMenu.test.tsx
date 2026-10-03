@@ -106,7 +106,7 @@ describe("Project menu", () => {
 });
 
 describe("Project context chats", () => {
-  it("render without the React Bits scroll-reveal blur", async () => {
+  it("render without a scroll-reveal blur", async () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByRole("button", { name: "Project context" }));

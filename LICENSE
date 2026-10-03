@@ -199,27 +199,3 @@
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
-
-
-==============================================================================
-THIRD-PARTY FILES NOT COVERED BY THE APACHE LICENSE ABOVE
-
-The Apache License, Version 2.0 above does NOT apply to the following files.
-They are adapted from React Bits (https://github.com/DavidHDev/react-bits),
-Copyright (c) 2026 David Haz, and remain under the "MIT + Commons Clause
-License Condition v1.0". See THIRD_PARTY_NOTICES.md for the full license text.
-
-  apps/desktop/src/renderer/src/components/ui/Aurora.tsx
-  apps/desktop/src/renderer/src/components/ui/GradientWaves.tsx
-  apps/desktop/src/renderer/src/components/ui/FadeContent.tsx
-  apps/desktop/src/renderer/src/components/ui/ScrollReveal.tsx
-  apps/desktop/src/renderer/src/components/ui/TextType.tsx
-  apps/desktop/src/renderer/src/components/ui/ShinyText.tsx
-  apps/desktop/src/renderer/src/components/ui/BranchedMenu.tsx
-  apps/desktop/src/renderer/src/components/ui/SpringCheck.tsx
-  apps/desktop/src/renderer/src/components/ui/ThoughtLine.tsx
-  apps/desktop/src/renderer/src/components/ui/PromptSendGlyph.tsx
-
-The style rules marked "React Bits" in apps/desktop/src/renderer/src/styles/app.css
-(Text Type caret, Branched Menu) come from the same source and license.
-==============================================================================

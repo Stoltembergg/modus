@@ -7,8 +7,8 @@ import type {
   WorkspaceInfo,
 } from "../../../../../shared/contracts";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../../components/ui/ShinyText";
 import { Tooltip } from "../../../components/ui/Tooltip";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
 import { SelectField, SwitchControl } from "../form-controls";
 import {
@@ -440,7 +440,7 @@ export function SubagentsSettingsPanel({
                 type="button"
               >
                 {saving ? (
-                  <ShinyText className="text-canvas">Saving…</ShinyText>
+                  <WorkingText className="text-canvas">Saving…</WorkingText>
                 ) : form.path ? (
                   "Save subagent"
                 ) : (
@@ -456,7 +456,7 @@ export function SubagentsSettingsPanel({
         <SettingsSection title="Modus defaults">
           {loading && builtinSubagents.length === 0 ? (
             <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-              <ShinyText>Discovering subagents…</ShinyText>
+              <WorkingText>Discovering subagents…</WorkingText>
             </div>
           ) : (
             <SettingsList>
@@ -502,7 +502,7 @@ export function SubagentsSettingsPanel({
           </div>
         ) : loading && visibleSubagents.length === 0 && builtinSubagents.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-6 text-sm text-fg-muted">
-            <ShinyText>Discovering subagents…</ShinyText>
+            <WorkingText>Discovering subagents…</WorkingText>
           </div>
         ) : visibleSubagents.length === 0 ? (
           <div className="rounded-lg border border-hairline-soft bg-panel px-5 py-10 text-center">

@@ -19,7 +19,6 @@ import {
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
-  type RefObject,
   useEffect,
   useMemo,
   useRef,
@@ -47,7 +46,6 @@ import { ICON, ICON_STROKE } from "../lib/uiDensity";
 import { useScrollFade } from "../lib/useScrollFade";
 import { SidebarGroups } from "./SidebarGroups";
 import { CollapsibleMotion } from "./ui/CollapsibleMotion";
-import { ScrollReveal } from "./ui/ScrollReveal";
 
 export const SIDEBAR_MIN_WIDTH = 240;
 const SIDEBAR_MAX_WIDTH = 480;
@@ -213,7 +211,6 @@ export function Sidebar({
     [ungroupedSessions],
   );
   const { ref: scrollFadeRef, fadeTop, fadeBottom } = useScrollFade();
-  const scrollContainerRef = scrollFadeRef as RefObject<HTMLElement | null>;
 
   const dragStartRef = useRef<{ x: number; width: number } | null>(null);
   const latestWidthRef = useRef(width);
@@ -325,34 +322,28 @@ export function Sidebar({
                 <div data-testid="sidebar-pinned">
                   <AnimatePresence initial={false}>
                     {pinnedSessions.map((session) => (
-                      <ScrollReveal
+                      <SessionRow
                         key={session.id}
-                        offsetY={8}
-                        scrollContainerRef={scrollContainerRef}
-                        blurStrength={3}
-                      >
-                        <SessionRow
-                          activity={activityBySession[session.id]}
-                          isActive={activeSessionId === session.id}
-                          pinned={true}
-                          onSelect={() => onSelectSession(session)}
-                          onPin={(event) => {
-                            event.stopPropagation();
-                            onPinSession(session, false);
-                          }}
-                          onRename={(title) => onRenameSession?.(session.id, title)}
-                          onArchive={(event) => {
-                            event.stopPropagation();
-                            onArchiveSession(session);
-                          }}
-                          onDelete={(event) => {
-                            event.stopPropagation();
-                            onDeleteSession(session);
-                          }}
-                          title={session.title}
-                          updatedAt={session.updatedAt}
-                        />
-                      </ScrollReveal>
+                        activity={activityBySession[session.id]}
+                        isActive={activeSessionId === session.id}
+                        pinned={true}
+                        onSelect={() => onSelectSession(session)}
+                        onPin={(event) => {
+                          event.stopPropagation();
+                          onPinSession(session, false);
+                        }}
+                        onRename={(title) => onRenameSession?.(session.id, title)}
+                        onArchive={(event) => {
+                          event.stopPropagation();
+                          onArchiveSession(session);
+                        }}
+                        onDelete={(event) => {
+                          event.stopPropagation();
+                          onDeleteSession(session);
+                        }}
+                        title={session.title}
+                        updatedAt={session.updatedAt}
+                      />
                     ))}
                   </AnimatePresence>
                 </div>
@@ -411,34 +402,28 @@ export function Sidebar({
                   </p>
                 ) : (
                   directMessageSessions.map((session) => (
-                    <ScrollReveal
+                    <SessionRow
                       key={session.id}
-                      offsetY={8}
-                      scrollContainerRef={scrollContainerRef}
-                      blurStrength={3}
-                    >
-                      <SessionRow
-                        activity={activityBySession[session.id]}
-                        isActive={activeSessionId === session.id}
-                        onArchive={(event) => {
-                          event.stopPropagation();
-                          onArchiveSession(session);
-                        }}
-                        onDelete={(event) => {
-                          event.stopPropagation();
-                          onDeleteSession(session);
-                        }}
-                        onPin={(event) => {
-                          event.stopPropagation();
-                          onPinSession(session, !session.pinnedAt);
-                        }}
-                        onRename={(title) => onRenameSession?.(session.id, title)}
-                        onSelect={() => onSelectSession(session)}
-                        pinned={Boolean(session.pinnedAt)}
-                        title={session.title}
-                        updatedAt={session.updatedAt}
-                      />
-                    </ScrollReveal>
+                      activity={activityBySession[session.id]}
+                      isActive={activeSessionId === session.id}
+                      onArchive={(event) => {
+                        event.stopPropagation();
+                        onArchiveSession(session);
+                      }}
+                      onDelete={(event) => {
+                        event.stopPropagation();
+                        onDeleteSession(session);
+                      }}
+                      onPin={(event) => {
+                        event.stopPropagation();
+                        onPinSession(session, !session.pinnedAt);
+                      }}
+                      onRename={(title) => onRenameSession?.(session.id, title)}
+                      onSelect={() => onSelectSession(session)}
+                      pinned={Boolean(session.pinnedAt)}
+                      title={session.title}
+                      updatedAt={session.updatedAt}
+                    />
                   ))
                 )}
               </AnimatePresence>
