@@ -7,12 +7,18 @@ function setup({
   customer = "cus_own" as string | null,
   url = "https://billing.stripe.com/p/session/test_1",
   urls = (() => URLS) as () => BillingUrls,
+  stripeEnabled = true,
+  stripeSubscription = false,
 } = {}) {
   const rec = recorder();
   const handler = createPortalHandler({
-    getUser: async () => USER,
+    getUser: rec.record("getUser", async () => USER),
     urls,
-    db: { getStripeCustomerId: rec.record("getStripeCustomerId", async () => customer) },
+    stripeEnabled: () => stripeEnabled,
+    db: {
+      getStripeCustomerId: rec.record("getStripeCustomerId", async () => customer),
+      hasStripeSubscription: rec.record("hasStripeSubscription", async () => stripeSubscription),
+    },
     stripe: {
       billingPortal: {
         sessions: { create: rec.record("portal.create", async () => ({ url, livemode: false })) },
@@ -49,7 +55,8 @@ Deno.test("portal: no stored customer -> 404, unauthenticated -> 401, unexpected
   const anonymous = createPortalHandler({
     getUser: async () => null,
     urls: () => URLS,
-    db: { getStripeCustomerId: async () => "cus_own" },
+    stripeEnabled: () => false,
+    db: { getStripeCustomerId: async () => "cus_own", hasStripeSubscription: async () => true },
     stripe: {
       billingPortal: {
         sessions: {
@@ -96,4 +103,42 @@ Deno.test("portal: return_url comes from config only (headers and body cannot se
   const body = setup();
   assertEquals((await body.handler(request({ return_url: "https://evil.example" }))).status, 400);
   assert(!body.rec.names().includes("portal.create"));
+});
+
+Deno.test("portal: STRIPE_ENABLED off + existing Stripe subscription -> opens (manage / cancel)", async () => {
+  const { handler, rec } = setup({ stripeEnabled: false, stripeSubscription: true });
+  const res = await handler(request({}));
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { url: "https://billing.stripe.com/p/session/test_1" });
+  // Looked up for the AUTHENTICATED user (server side), never from the body.
+  assertEquals(rec.calls.find((c) => c.name === "hasStripeSubscription")?.args, [USER.id]);
+  assertEquals(rec.calls.find((c) => c.name === "portal.create")?.args, [
+    { customer: "cus_own", return_url: URLS.portalReturnUrl },
+  ]);
+});
+
+Deno.test("portal: STRIPE_ENABLED off + no Stripe subscription in an allowed status -> 503 stripe_disabled", async () => {
+  // hasStripeSubscription is false without a row and for any status outside the allowlist
+  // (canceled, incomplete, incomplete_expired, ...; asserted against Postgres in
+  // db.integration.ts).
+  const { handler, rec } = setup({ stripeEnabled: false, stripeSubscription: false });
+  const res = await handler(request({}));
+  assertEquals(res.status, 503);
+  assertEquals(await res.json(), { error: "stripe_disabled" });
+  assertEquals(rec.calls.find((c) => c.name === "hasStripeSubscription")?.args, [USER.id]);
+  assert(!rec.names().includes("getStripeCustomerId"), "no customer lookup");
+  assert(!rec.names().includes("portal.create"), "no Stripe call");
+  // A client cannot claim a subscription or customer: any body is refused first.
+  const forged = setup({ stripeEnabled: false, stripeSubscription: false });
+  assertEquals((await forged.handler(request({ stripe_subscription_id: "sub_x" }))).status, 400);
+  assert(!forged.rec.names().includes("hasStripeSubscription"));
+});
+
+Deno.test("portal: STRIPE_ENABLED on -> unchanged behaviour (no subscription check)", async () => {
+  const { handler, rec } = setup({ stripeEnabled: true, stripeSubscription: false });
+  const res = await handler(request({}));
+  assertEquals(res.status, 200);
+  assertEquals(await res.json(), { url: "https://billing.stripe.com/p/session/test_1" });
+  assert(!rec.names().includes("hasStripeSubscription"), "flag on: no subscription check");
+  assert(rec.names().includes("portal.create"));
 });

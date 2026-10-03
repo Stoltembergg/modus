@@ -222,3 +222,12 @@ Deno.test("webhook: only POST", async () => {
   const { handler } = setup();
   assertEquals((await handler(new Request("http://localhost/x"))).status, 405);
 });
+
+Deno.test("webhook: never gated by STRIPE_ENABLED (L1b): existing subscriptions keep syncing", async () => {
+  // The flag only gates create-checkout-session and create-portal-session.
+  for (const file of ["./index.ts", "./handler.ts"]) {
+    const source = await Deno.readTextFile(new URL(file, import.meta.url));
+    assert(!source.includes("STRIPE_ENABLED"), file);
+    assert(!source.includes("isStripeEnabled"), file);
+  }
+});
