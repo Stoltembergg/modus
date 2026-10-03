@@ -79,6 +79,10 @@ Deno.test({
         stripePriceId: STARTER,
       });
       assertEquals(await db.getPurchasablePlan("free"), null);
+      // L1a: pro / max / ultra are inactive, so the Stripe checkout path refuses them.
+      for (const plan of ["pro", "max", "ultra"]) {
+        assertEquals(await db.getPurchasablePlan(plan), null, `${plan} is not purchasable`);
+      }
       assertEquals(await db.getStripeCustomerId(userId), null);
       assertEquals(await db.claimStripeCustomer(userId, "cus_IT"), "cus_IT");
       assertEquals(await db.claimStripeCustomer(userId, "cus_OTHER"), "cus_IT");
@@ -150,13 +154,34 @@ Deno.test({
         1,
       );
 
-      // Upgrade invoice (subscription_update, amount_paid > 0) -> +15000 (Pro 25000 - 10000).
-      const up = await db.processStripeEvent(
-        "evt_it_up",
+      // L1a: Pro is inactive. An upgrade invoice to Pro credits nothing and is
+      // recorded as processed / rejected_inactive_plan (the Function answers 200).
+      const rejected = await db.processStripeEvent(
+        "evt_it_up_inactive",
         "invoice.paid",
         invoice("in_IT_2", "cus_IT", "sub_IT", "subscription_update", PRO, 1100),
       );
-      assertEquals(up.code, "upgrade_credits_granted");
+      assertEquals(rejected.code, "rejected_inactive_plan");
+      assertEquals(await wallet(), afterPaid, "an inactive-plan invoice grants nothing");
+      assertEquals(await eventRow("evt_it_up_inactive"), {
+        type: "invoice.paid",
+        status: "processed",
+        result: "rejected_inactive_plan",
+      });
+
+      // B3 upgrade path (Pro reactivated for this check, then deactivated again):
+      // subscription_update, amount_paid > 0 -> +15000 (Pro 25000 - 10000).
+      await admin`update public.plans set active = true where plan = 'pro'`;
+      try {
+        const up = await db.processStripeEvent(
+          "evt_it_up",
+          "invoice.paid",
+          invoice("in_IT_2", "cus_IT", "sub_IT", "subscription_update", PRO, 1100),
+        );
+        assertEquals(up.code, "upgrade_credits_granted");
+      } finally {
+        await admin`update public.plans set active = false where plan = 'pro'`;
+      }
       const afterUp = await wallet();
       assertEquals(Number(afterUp.balance) - Number(afterPaid.balance), 15000);
 
@@ -164,7 +189,12 @@ Deno.test({
         await admin`select event_id, status from public.stripe_events where event_id like 'evt_it_%' order by event_id`;
       assertEquals(
         events.map((e) => `${e.event_id}:${e.status}`),
-        ["evt_it_inv:processed", "evt_it_sub:processed", "evt_it_up:processed"],
+        [
+          "evt_it_inv:processed",
+          "evt_it_sub:processed",
+          "evt_it_up:processed",
+          "evt_it_up_inactive:processed",
+        ],
       );
     } finally {
       await admin.end();

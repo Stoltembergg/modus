@@ -72,6 +72,11 @@ export function createWebhookHandler(deps: WebhookDeps): (req: Request) => Promi
         fetched as unknown as Record<string, unknown>,
       );
       // Duplicate event ids come back as {processed: false, code: duplicate}: a no-op 200.
+      // L1a: a price on an inactive plan is recorded as rejected_inactive_plan (no credits,
+      // nothing upserted); still a 200 so Stripe does not retry, but logged for audit.
+      if (result.code === "rejected_inactive_plan") {
+        console.warn("[stripe-webhook] rejected_inactive_plan:", event.type, event.id);
+      }
       return json(200, { received: true, code: String(result.code ?? "") });
     } catch (error) {
       // 500 -> Stripe retries (e.g. an invoice that arrives before its subscription).

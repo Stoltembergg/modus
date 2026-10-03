@@ -4,6 +4,10 @@
 begin;
 set local search_path = public, extensions;
 select no_plan();
+-- L1a deactivated pro / max / ultra; these B1/B3/B6a rules are exercised between
+-- paid plans, so reactivate them inside this transaction (rolled back at the end).
+-- The inactive-plan behaviour is covered by 10_l1a_inactive_plans.test.sql.
+update public.plans set active = true where plan in ('pro', 'max', 'ultra');
 
 select tests.create_user('d@example.com', true) as d \gset
 select tests.create_user('e@example.com', true) as e \gset
