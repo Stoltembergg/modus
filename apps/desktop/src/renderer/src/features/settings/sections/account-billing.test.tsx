@@ -282,7 +282,7 @@ describe("Mercado Pago cancel (L1e)", () => {
   it("active: Cancel subscription (no Subscribe), the confirm says no refund and credits stay", () => {
     const html = markup(subscribed());
     expect(html).toContain("Cancel subscription");
-    expect(html).not.toContain("Subscribe with");
+    expect(html).not.toContain("Subscribe</button>");
     expect(html).not.toContain("Payment pending");
     expect(cancelConfirmMessage("Starter")).toMatch(/Starter.*Nothing is refunded.*credits/);
   });
@@ -291,7 +291,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     const html = markup(subscribed({ status: "incomplete" }));
     expect(html).toContain("Payment pending");
     expect(html).toContain("Cancel and try again");
-    expect(html).not.toContain("Subscribe with");
+    expect(html).not.toContain("Subscribe</button>");
     expect(html).not.toContain(">Cancel subscription<");
   });
 
@@ -308,7 +308,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     );
     const button = screen.getByRole("button", { name: "Cancelling…" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel subscription" })).toBeNull();
   });
 
@@ -327,7 +327,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     confirm.mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel subscription" }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith());
-    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    await screen.findByRole("button", { name: /^Subscribe$/ });
     confirm.mockRestore();
   });
 
@@ -337,14 +337,14 @@ describe("Mercado Pago cancel (L1e)", () => {
     const { push } = mount(subscribed(), async () => requested);
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
     await screen.findByText(/Waiting for Mercado Pago to confirm/);
-    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
     // A refresh that still reads the live row keeps it blocked.
     push(requested);
-    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     // The webhook confirms: the live subscription is gone, Subscribe is back.
     push(READY);
-    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    await screen.findByRole("button", { name: /^Subscribe$/ });
     confirm.mockRestore();
   });
 
@@ -363,9 +363,9 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
     push(subscribed({ status: "incomplete" }, { cancelling: true }));
     await screen.findByRole("button", { name: "Cancelling…" });
-    expect(screen.queryByRole("button", { name: /Subscribe with/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     await act(async () => finish(READY));
-    await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ });
+    await screen.findByRole("button", { name: /^Subscribe$/ });
     confirm.mockRestore();
   });
 
