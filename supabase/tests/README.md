@@ -20,8 +20,10 @@ The script:
 4. Loads `shim/test_helpers.sql`.
 5. Runs the pgTAP files in `database/` with `pg_prove`.
 6. Runs `concurrency.sh`.
-7. Runs `supabase/functions/_shared/db.integration.ts` with Deno: the real
-   `db.ts` (`npm:postgres`) against this cluster, over `127.0.0.1`.
+7. Runs `supabase/functions/_shared/db.integration.ts` and
+   `supabase/functions/model-router/router.integration.ts` with Deno: the real
+   `db.ts` / `router-db.ts` (`npm:postgres`) against this cluster, over
+   `127.0.0.1` (the router with a fake OpenAI-compatible upstream).
 
 It exits non-zero on any failure.
 
@@ -73,8 +75,10 @@ It is never part of a migration.
 - `database/05_default_privileges.test.sql`: tables, sequences and functions created after the migration are closed to `anon` / `authenticated`.
 - `database/06_stripe_events.test.sql`: `process_stripe_event` (duplicates, unknown price / customer, livemode, subscription upsert, invoice credits and their grant rules: billing_reason, amount_paid, proration lines, line choice).
 - `database/07_billing_upgrades.test.sql` (B3): mid-period upgrades (`subscription_update` invoices with `amount_paid > 0` grant `max(0, new - plan_allowance)` once per invoice), downgrades never remove credits, the renewal resets the allowance, and `private.claim_stripe_customer`.
+- `database/08_model_router.test.sql` (B4a): `router_requests` has no client access; `router_claim_request` (claimed / `idempotency_replay` / `idempotency_conflict`, per user, malformed input rejected); `router_reserve` (402, at most 4 active reservations per user with expired ones released first, 429 leaves nothing behind); release through `settle_usage(0)` and the cap at the reservation; the Free models; cascade on user delete.
 - `concurrency.sh`: concurrent reservations from separate connections (2 sessions, a burst of 20, and 5 calls with the same `request_id`), and `release_expired_reservations` racing `settle_usage` (a forced interleaving that deadlocks if the release does not lock the wallet first, plus a burst of 20 + 20).
 
+- `supabase/functions/model-router/router.integration.ts`: the model-router handler with the real `router-db.ts`: a call reserves and settles the real usage (the rest refunded, `usage_events` billed), a repeated key is 409 replay / conflict, a model outside the plan is refused before any reservation, an upstream failure refunds everything, a stream cut by the client settles the partial estimate (capped), 402 reserves nothing, 6 concurrent calls never go negative, no reservation is left active, and every seeded `allowed_models` id is in the server model table.
 - `supabase/functions/_shared/db.integration.ts`: the Functions' real `db.ts` through `npm:postgres`. `process_stripe_event` receives a jsonb object (not a JSON string), `customer.subscription.created` and Starter `invoice.paid` (+10000) are processed and recorded in `stripe_events`, a repeated `invoice.paid` grants nothing, and an upgrade invoice grants the difference.
 
 Each pgTAP file runs inside a transaction and rolls back. `concurrency.sh` commits, but only into the throwaway cluster.

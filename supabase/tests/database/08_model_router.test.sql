@@ -1,0 +1,100 @@
+-- B4a (20261003063000_b4a_model_router, 20261003063100_b4a_free_plan_models):
+-- router_requests (idempotency keys, no client access), router_claim_request
+-- (replay vs conflict), router_reserve (4 active reservations per user, 402,
+-- reservation + release through settle_usage), and the Free models.
+begin;
+set local search_path = public, extensions;
+select no_plan();
+
+select tests.create_user('router-a@example.com', true) as a \gset
+select tests.create_user('router-b@example.com', true) as b \gset
+
+-- Table: RLS on, no policy, nothing for anon / authenticated.
+select ok((select relrowsecurity from pg_class where oid = 'public.router_requests'::regclass),
+  'router_requests: RLS enabled');
+select is((select count(*)::int from pg_policies where tablename = 'router_requests'), 0,
+  'router_requests: no policy');
+select ok(not has_table_privilege('authenticated', 'public.router_requests', 'select'),
+  'authenticated cannot read router_requests');
+select ok(not has_table_privilege('anon', 'public.router_requests', 'select'),
+  'anon cannot read router_requests');
+select ok(not has_table_privilege('authenticated', 'public.router_requests', 'insert'),
+  'authenticated cannot write router_requests');
+select ok(has_table_privilege('service_role', 'public.router_requests', 'insert'),
+  'service_role writes router_requests');
+
+select tests.as_service_role();
+
+-- Claim: first time claimed; same body -> replay; other body -> conflict.
+select is(private.router_claim_request(:'a', 'key-1', repeat('a', 64)) ->> 'code', 'claimed',
+  'claim: first use of a key');
+select is(private.router_claim_request(:'a', 'key-1', repeat('a', 64)) ->> 'code', 'idempotency_replay',
+  'claim: same key + same body hash -> replay');
+select is(private.router_claim_request(:'a', 'key-1', repeat('b', 64)) ->> 'code', 'idempotency_conflict',
+  'claim: same key + other body hash -> conflict');
+select is(private.router_claim_request(:'b', 'key-1', repeat('b', 64)) ->> 'code', 'claimed',
+  'claim: keys are per user');
+select is((select count(*)::int from public.router_requests), 2, 'two keys stored');
+select throws_ok(format($q$select private.router_claim_request(%L, 'bad key', repeat('a', 64))$q$, :'a'),
+  '22023', null, 'claim: malformed key rejected');
+select throws_ok(format($q$select private.router_claim_request(%L, 'k', 'nothex')$q$, :'a'),
+  '22023', null, 'claim: malformed hash rejected');
+select throws_ok(format($q$select private.router_claim_request(%L, repeat('k', 201), repeat('a', 64))$q$, :'a'),
+  '22023', null, 'claim: key longer than 200 rejected');
+
+-- Reserve: balance 1000 (Free grant).
+select is((private.router_reserve(:'a', 'r1', 100) ->> 'created')::boolean, true, 'reserve 1');
+select is((select balance from public.credit_wallets where user_id = :'a'), 900::bigint,
+  'reserve debits the balance');
+select throws_ok(format($q$select private.router_reserve(%L, 'big', 5000)$q$, :'a'),
+  'P0402', null, 'reserve above the balance -> P0402');
+select is((select count(*)::int from public.credit_reservations where user_id = :'a' and request_id = 'big'), 0,
+  '402 leaves no reservation');
+select private.router_reserve(:'a', 'r2', 10);
+select private.router_reserve(:'a', 'r3', 10);
+select private.router_reserve(:'a', 'r4', 10);
+select throws_ok(format($q$select private.router_reserve(%L, 'r5', 10)$q$, :'a'),
+  'P0429', null, 'a 5th active reservation -> P0429');
+select is((select count(*)::int from public.credit_reservations where user_id = :'a' and request_id = 'r5'), 0,
+  '429 leaves no reservation');
+select is((select balance from public.credit_wallets where user_id = :'a'), 870::bigint,
+  '429: balance unchanged');
+select is((private.router_reserve(:'a', 'r5', 10, 5) ->> 'created')::boolean, true,
+  'the limit is a parameter (5)');
+
+-- Release (settle 0) and settle capped at the reservation.
+select is((private.settle_usage(:'a', 'r1', 0, 'deepseek/deepseek-flash', 'deepseek') ->> 'charged')::bigint, 0::bigint,
+  'release: settle with 0 credits charges nothing');
+select is((private.settle_usage(:'a', 'r2', 999, 'deepseek/deepseek-flash', 'deepseek', 5, 7) ->> 'charged')::bigint, 10::bigint,
+  'settle is capped at the reservation');
+select is((select balance from public.credit_wallets where user_id = :'a'), 960::bigint,
+  'release refunded 100, settle kept 10');
+select is((select count(*)::int from public.credit_reservations where user_id = :'a' and status = 'active'), 3,
+  'three reservations still active');
+select is((private.router_reserve(:'a', 'r6', 10) ->> 'created')::boolean, true,
+  'after settling, a new reservation fits under the limit again');
+
+-- Expired reservations are released before counting.
+update public.credit_reservations set expires_at = now() - interval '1 second'
+ where user_id = :'a' and status = 'active';
+select is((private.router_reserve(:'a', 'r7', 10) ->> 'created')::boolean, true,
+  'expired reservations do not count (released first)');
+select is((select count(*)::int from public.credit_reservations where user_id = :'a' and status = 'active'), 1,
+  'only the new reservation is active');
+select throws_ok($q$select private.router_reserve('00000000-0000-4000-8000-000000000000', 'x', 1)$q$,
+  'P0404', null, 'no wallet -> P0404');
+select throws_ok(format($q$select private.router_reserve(%L, 'x', 1, 0)$q$, :'a'),
+  '22023', null, 'max_active < 1 rejected');
+select tests.clear_authentication();
+
+-- Free plan models (B4a migration).
+select is((select allowed_models from public.plans where plan = 'free'),
+  array['deepseek/deepseek-flash', 'zai/glm-5.3-flash'], 'Free: deepseek/deepseek-flash + zai/glm-5.3-flash');
+
+-- Cascade: deleting the user removes their keys.
+delete from auth.users where id = :'b';
+select is((select count(*)::int from public.router_requests where user_id = :'b'), 0,
+  'router_requests rows cascade with the user');
+
+select * from finish();
+rollback;

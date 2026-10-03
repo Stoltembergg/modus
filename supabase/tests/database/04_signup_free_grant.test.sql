@@ -76,9 +76,11 @@ select is(
   array['on_auth_user_created', 'on_auth_user_created_free_grant', 'on_auth_user_email_confirmed_free_grant'],
   'three triggers on auth.users');
 
--- Plans seed (Gabriel 23:14 BRT): Free = exactly 2 models, paid = all (NULL).
+-- Plans seed: Free = exactly 2 models (B4a migration 20261003063100 replaced the
+-- B1 seed, GPT-6 Luna is not served by the gateway), paid = all (NULL).
 select is((select allowed_models from public.plans where plan = 'free'),
-  array['openai/gpt-6-luna', 'deepseek/deepseek-flash'], 'Free allows exactly openai/gpt-6-luna and deepseek/deepseek-flash');
+  array['deepseek/deepseek-flash', 'zai/glm-5.3-flash'],
+  'Free allows exactly deepseek/deepseek-flash and zai/glm-5.3-flash');
 select is((select count(*)::int from public.plans where plan <> 'free' and allowed_models is not null), 0,
   'paid plans: allowed_models NULL (all models)');
 select is((select array_agg(plan order by sort_order) from public.plans),
