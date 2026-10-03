@@ -1,6 +1,7 @@
 import type { IpcRendererEvent } from "electron";
 import { contextBridge, ipcRenderer } from "electron";
 import type { AuthState } from "../shared/auth";
+import type { BillingState } from "../shared/billing";
 import type {
   AgentEvent,
   BrowserEvent,
@@ -398,6 +399,18 @@ const api: ModusApi = {
         callback(payload as AuthState);
       ipcRenderer.on("auth:state-event", listener);
       return () => ipcRenderer.removeListener("auth:state-event", listener);
+    },
+  },
+  billing: {
+    getState: () => ipcRenderer.invoke("billing:get-state") as Promise<BillingState>,
+    refresh: () => ipcRenderer.invoke("billing:refresh") as Promise<BillingState>,
+    checkout: (input) => ipcRenderer.invoke("billing:checkout", input) as Promise<BillingState>,
+    openPortal: () => ipcRenderer.invoke("billing:portal") as Promise<BillingState>,
+    onStateChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, payload: unknown) =>
+        callback(payload as BillingState);
+      ipcRenderer.on("billing:state-event", listener);
+      return () => ipcRenderer.removeListener("billing:state-event", listener);
     },
   },
   clipboard: {

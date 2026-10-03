@@ -209,27 +209,31 @@ select is(pg_temp.balance(:'c'), 11000::bigint, 'C: subscription_create grants s
 select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
   'C: plan_allowance 10000');
 
--- Upgrade starter -> pro mid-cycle: proration invoice, nothing in B1.
+-- Upgrade starter -> pro mid-cycle: proration invoice. B1 granted nothing;
+-- B3 (20261003041000_b3_billing_upgrades) grants the difference once
+-- (details in 07_billing_upgrades.test.sql).
 select private.process_stripe_event('evt_c_up_sub', 'customer.subscription.updated',
   pg_temp.sub('sub_C', 'cus_C', :'pro')) \gset ignore_
 select pg_temp.snapshot() as before_up \gset
 select (private.process_stripe_event('evt_c_prorate', 'invoice.paid',
   pg_temp.invoice_x('in_c_prorate', 'cus_C', 'subscription_update', 1100, 'sub_C', jsonb_build_array(
     pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', true, 'sub_C', 2000)))))::text as up \gset
-select is(:'up'::jsonb ->> 'code', 'not_grantable', 'proration invoice (subscription_update): not_grantable');
-select is((:'up'::jsonb ->> 'granted')::boolean, false, 'proration invoice: granted false');
-select is(:'up'::jsonb ->> 'reason', 'not_grantable', 'proration invoice: reason not_grantable');
-select is(pg_temp.balance(:'c'), 11000::bigint, 'proration invoice: no credits');
-select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
-  'proration invoice: wallet plan_allowance unchanged');
+select is(:'up'::jsonb ->> 'code', 'upgrade_credits_granted', 'proration invoice (subscription_update): upgrade_credits_granted');
+select is((:'up'::jsonb ->> 'granted')::boolean, true, 'proration invoice: granted true');
+select is(:'up'::jsonb ->> 'plan', 'pro', 'proration invoice: new plan from the positive line (pro)');
+select is(pg_temp.balance(:'c'), 26000::bigint, 'proration invoice: +15000 (pro 25000 - allowance 10000)');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
+  'proration invoice: wallet plan_allowance raised to 25000');
 select is((select status || ':' || result from public.stripe_events where event_id = 'evt_c_prorate'),
-  'processed:not_grantable', 'proration invoice recorded as processed / not_grantable');
+  'processed:upgrade_credits_granted', 'proration invoice recorded as processed / upgrade_credits_granted');
 select is((select count(*)::int from public.credit_transactions where idempotency_key = 'invoice:in_c_prorate'),
-  0, 'proration invoice: no ledger row');
+  0, 'proration invoice: no renewal ledger row');
+select is((select amount from public.credit_transactions where idempotency_key = 'upgrade:in_c_prorate'),
+  15000::bigint, 'proration invoice: one upgrade:<invoice> ledger row of 15000');
 select is(private.process_stripe_event('evt_c_update_plain', 'invoice.paid',
   pg_temp.invoice_x('in_c_upd2', 'cus_C', 'subscription_update', 2000, 'sub_C',
-    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code', 'not_grantable',
-  'subscription_update with a non-proration line still grants nothing in B1');
+    jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code', 'upgrade_no_credits',
+  'another subscription_update to the same plan: no further credits');
 
 -- $0 paid invoice (e.g. downgrade, 100% coupon): nothing.
 select is(private.process_stripe_event('evt_c_zero', 'invoice.paid',
@@ -240,8 +244,8 @@ select is(private.process_stripe_event('evt_c_manual', 'invoice.paid',
   pg_temp.invoice_x('in_c_manual', 'cus_C', 'manual', 5000, 'sub_C',
     jsonb_build_array(pg_temp.line(:'pro', false, 'sub_C', 5000)))) ->> 'code', 'not_grantable',
   'billing_reason manual: not_grantable');
-select is(pg_temp.balance(:'c'), 11000::bigint, '$0 / manual invoices: no credits');
-select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 10000::bigint,
+select is(pg_temp.balance(:'c'), 26000::bigint, '$0 / manual invoices: no credits');
+select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
   '$0 / manual invoices: wallet unchanged');
 
 -- Renewal whose FIRST line is a negative proration of the old price and the
@@ -251,7 +255,7 @@ select (private.process_stripe_event('evt_c_cycle', 'invoice.paid',
     pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', false, 'sub_C', 2000)))))::text as cy \gset
 select is(:'cy'::jsonb ->> 'code', 'credits_granted', 'mixed renewal: credits_granted');
 select is(:'cy'::jsonb ->> 'plan', 'pro', 'mixed renewal: plan from the non-proration line (pro), not the first line');
-select is(pg_temp.balance(:'c'), 36000::bigint, 'mixed renewal: +25000 (pro)');
+select is(pg_temp.balance(:'c'), 51000::bigint, 'mixed renewal: +25000 (pro)');
 select is((select plan_allowance from public.credit_wallets where user_id = :'c'), 25000::bigint,
   'mixed renewal: plan_allowance 25000');
 select is(private.process_stripe_event('evt_c_cycle', 'invoice.paid',
@@ -262,7 +266,7 @@ select is(private.process_stripe_event('evt_c_cycle_again', 'invoice.paid',
   pg_temp.invoice_x('in_c_cycle', 'cus_C', 'subscription_cycle', 1100, 'sub_C', jsonb_build_array(
     pg_temp.line(:'starter', true, 'sub_C', -900), pg_temp.line(:'pro', false, 'sub_C', 2000)))) ->> 'code',
   'already_granted', 'mixed renewal: another event for the same invoice -> already_granted');
-select is(pg_temp.balance(:'c'), 36000::bigint, 'mixed renewal: granted exactly once (invoice:<id>)');
+select is(pg_temp.balance(:'c'), 51000::bigint, 'mixed renewal: granted exactly once (invoice:<id>)');
 select is((select count(*)::int from public.credit_transactions where idempotency_key = 'invoice:in_c_cycle'),
   1, 'one ledger row invoice:in_c_cycle');
 

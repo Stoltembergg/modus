@@ -1,6 +1,9 @@
 import {
   type AuthError,
   createClient,
+  FunctionsFetchError,
+  FunctionsHttpError,
+  FunctionsRelayError,
   isAuthApiError,
   isAuthRetryableFetchError,
   isAuthWeakPasswordError,
@@ -8,6 +11,12 @@ import {
   type SupportedStorage,
 } from "@supabase/supabase-js";
 import type { AuthOAuthProviderId } from "../../shared/auth";
+import {
+  type BillingBackend,
+  type BillingFunctionResult,
+  LIVE_SUBSCRIPTION_STATUSES,
+  mapBillingRows,
+} from "../billing/billing-backend";
 import {
   type AuthBackend,
   AuthBackendError,
@@ -63,7 +72,26 @@ function toSession(session: Session | null | undefined): AuthBackendSession {
   };
 }
 
-export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend {
+async function functionErrorResult(error: unknown): Promise<BillingFunctionResult> {
+  if (error instanceof FunctionsFetchError || error instanceof FunctionsRelayError) {
+    throw new AuthBackendError("network", "network");
+  }
+  if (error instanceof FunctionsHttpError) {
+    const response = error.context as Response | undefined;
+    let code = "unknown";
+    try {
+      const body = (await response?.json()) as { error?: unknown } | undefined;
+      if (typeof body?.error === "string") code = body.error.slice(0, 64);
+    } catch {
+      // non-JSON error body
+    }
+    return { ok: false, status: response?.status ?? 0, code };
+  }
+  throw new AuthBackendError("other", "unexpected");
+}
+
+/** One supabase-js client (memory session) serves auth and the billing reads / Functions. */
+export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & BillingBackend {
   const client = createClient(config.supabaseUrl, config.anonKey, {
     auth: {
       flowType: "pkce",
@@ -97,7 +125,15 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend {
 
   return {
     async signUp(email, password) {
-      const data = await run(() => client.auth.signUp({ email, password }));
+      const data = await run(() =>
+        client.auth.signUp({
+          email,
+          password,
+          ...(config.emailRedirectUrl
+            ? { options: { emailRedirectTo: config.emailRedirectUrl } }
+            : {}),
+        }),
+      );
       return { session: data.session ? await started(data.session) : null };
     },
 
@@ -149,6 +185,46 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend {
         displayName: typeof row.display_name === "string" ? row.display_name : null,
         avatarUrl: typeof row.avatar_url === "string" ? row.avatar_url : null,
       };
+    },
+
+    async fetchBilling(userId) {
+      const [plans, subscription, wallet] = await Promise.all([
+        client
+          .from("plans")
+          .select("plan, name, price_usd_cents, stripe_price_id, monthly_credits, sort_order")
+          .eq("active", true)
+          .order("sort_order"),
+        client
+          .from("subscriptions")
+          .select("plan, status, current_period_end, cancel_at_period_end, updated_at")
+          .eq("user_id", userId)
+          .in("status", [...LIVE_SUBSCRIPTION_STATUSES])
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        client
+          .from("credit_wallets")
+          .select("balance, reserved, plan_allowance, period_end")
+          .eq("user_id", userId)
+          .maybeSingle(),
+      ]);
+      for (const result of [plans, subscription, wallet]) {
+        if (result.error) throw new AuthBackendError("other", "billing read failed");
+      }
+      return mapBillingRows({
+        plans: (plans.data ?? []) as unknown[],
+        subscription: subscription.data,
+        wallet: wallet.data,
+      });
+    },
+
+    async createBillingSession(fn, body) {
+      // functions.invoke sends the session's access token; it never leaves main.
+      const { data, error } = await client.functions.invoke(fn, { method: "POST", body });
+      if (error) return await functionErrorResult(error);
+      const url = (data as { url?: unknown } | null)?.url;
+      if (typeof url !== "string") return { ok: false, status: 502, code: "invalid_response" };
+      return { ok: true, url };
     },
 
     onSessionChange(listener) {

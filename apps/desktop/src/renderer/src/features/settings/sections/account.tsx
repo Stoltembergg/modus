@@ -15,6 +15,7 @@ import {
   SettingsRow,
   SettingsSection,
 } from "../settings-layout";
+import { AccountBillingSection } from "./account-billing";
 
 const SECONDARY_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-xs text-fg transition-colors hover:bg-hover disabled:opacity-40";
@@ -123,35 +124,38 @@ export function AccountSettingsPanel() {
       ) : null}
 
       {state?.status === "signed-in" && state.user ? (
-        <SettingsSection title="Profile">
-          <SettingsList>
-            <SettingsRow
-              control={<ReadOnlyPill>{state.user.provider}</ReadOnlyPill>}
-              description={state.user.email ?? "No email"}
-              title={state.user.displayName ?? "Signed in"}
-            />
-            <SettingsRow
-              control={
-                <ReadOnlyPill>{state.user.emailConfirmed ? "Confirmed" : "Pending"}</ReadOnlyPill>
-              }
-              description="Free credits are granted once the email is confirmed."
-              title="Email confirmation"
-            />
-            <SettingsRow
-              control={
-                <ReadOnlyPill>
-                  {state.persistence === "encrypted" ? "Encrypted" : "This session only"}
-                </ReadOnlyPill>
-              }
-              description={
-                state.persistence === "encrypted"
-                  ? "The session is stored encrypted by your operating system."
-                  : "No secure OS storage was found, so you will sign in again after restarting."
-              }
-              title="Remember me"
-            />
-          </SettingsList>
-        </SettingsSection>
+        <>
+          <SettingsSection title="Profile">
+            <SettingsList>
+              <SettingsRow
+                control={<ReadOnlyPill>{state.user.provider}</ReadOnlyPill>}
+                description={state.user.email ?? "No email"}
+                title={state.user.displayName ?? "Signed in"}
+              />
+              <SettingsRow
+                control={
+                  <ReadOnlyPill>{state.user.emailConfirmed ? "Confirmed" : "Pending"}</ReadOnlyPill>
+                }
+                description="Free credits are granted once the email is confirmed."
+                title="Email confirmation"
+              />
+              <SettingsRow
+                control={
+                  <ReadOnlyPill>
+                    {state.persistence === "encrypted" ? "Encrypted" : "This session only"}
+                  </ReadOnlyPill>
+                }
+                description={
+                  state.persistence === "encrypted"
+                    ? "The session is stored encrypted by your operating system."
+                    : "No secure OS storage was found, so you will sign in again after restarting."
+                }
+                title="Remember me"
+              />
+            </SettingsList>
+          </SettingsSection>
+          <AccountBillingSection />
+        </>
       ) : (
         <>
           <SettingsSection

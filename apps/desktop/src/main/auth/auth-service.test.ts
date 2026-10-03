@@ -14,6 +14,7 @@ import { createAuthService } from "./auth-service";
 import { createAuthSessionStore } from "./auth-session-store";
 import { startLoopbackListener } from "./loopback-server";
 import { createOAuthFlowRegistry } from "./oauth-flow";
+import { createSupabaseAuthBackend } from "./supabase-auth-backend";
 
 const CONFIG: AuthConfig = {
   supabaseUrl: "https://crdgtmyvwdnswuggpjco.supabase.co",
@@ -241,9 +242,47 @@ describe("auth service", () => {
   });
 });
 
-// Real-provider round trips need the GitHub / Google OAuth apps configured in Supabase
-// (secrets from Gabriel). The code path is the same as the loopback tests above.
-describe.skip("OAuth providers against the real project (needs OAuth secrets)", () => {
-  it("signs in with GitHub", () => {});
-  it("signs in with Google", () => {});
+// Against the real Supabase project (public URL; no key or secret involved). A full round trip
+// needs a person to log in at GitHub, so this checks the part the app depends on: the PKCE
+// authorize URL built by supabase-js is accepted and Supabase redirects to GitHub's OAuth app.
+const REAL_PROJECT_URL = "https://crdgtmyvwdnswuggpjco.supabase.co";
+
+const OAUTH_EXPECTATIONS = [
+  { provider: "github", authorize: "https://github.com/login/oauth/authorize" },
+  { provider: "google", authorize: "https://accounts.google.com/o/oauth2/v2/auth" },
+] as const;
+
+describe("OAuth providers against the real project", () => {
+  it.each(
+    OAUTH_EXPECTATIONS,
+  )("$provider is enabled: the authorize URL redirects to the provider", async ({
+    provider,
+    authorize,
+  }) => {
+    const backend = createSupabaseAuthBackend({
+      supabaseUrl: REAL_PROJECT_URL,
+      anonKey: "sb_publishable_test_unused",
+      oauthProviders: [provider],
+    });
+    try {
+      const authorizeUrl = await backend.createOAuthUrl(
+        provider,
+        "http://127.0.0.1:49152/auth/callback?state=test",
+      );
+      expect(new URL(authorizeUrl).searchParams.get("code_challenge_method")).toBe("s256");
+      const response = await fetch(authorizeUrl, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(10_000),
+      });
+      expect(response.status).toBe(302);
+      const location = new URL(response.headers.get("location") ?? "");
+      expect(location.origin + location.pathname).toBe(authorize);
+      expect(location.searchParams.get("client_id")).toBeTruthy();
+      expect(location.searchParams.get("redirect_uri")).toBe(
+        `${REAL_PROJECT_URL}/auth/v1/callback`,
+      );
+    } finally {
+      backend.dispose();
+    }
+  }, 15_000);
 });

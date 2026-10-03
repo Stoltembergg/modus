@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Modus billing</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+    <script type="module" src="/billing/return.js"></script>
+  </head>
+  <body>
+    <!--
+      Stripe Checkout / Customer Portal return page (B3). Stripe redirects here with
+      ?modus_billing=success|cancel|portal (BILLING_RETURN_URL of the Edge Functions).
+      billing/forward.js sends the browser to the fixed modus://billing/return with only the
+      validated status (and a well-formed session_id, if any). It never decides anything:
+      the plan changes only through the Stripe webhook.
+    -->
+    <main class="center">
+      <h1 id="title">Return to Modus</h1>
+      <p>You can close this tab and go back to the app.</p>
+      <a class="button" id="open" href="modus://billing/return">Open Modus</a>
+    </main>
+  </body>
+</html>

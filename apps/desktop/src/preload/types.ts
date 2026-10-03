@@ -1,4 +1,5 @@
 import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
+import type { BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
   AddDocInput,
   AgentEvent,
@@ -729,6 +730,18 @@ export type ModusApi = {
     /** Clears the stored session even when offline. */
     signOut(): Promise<AuthState>;
     onStateChange(listener: (state: AuthState) => void): () => void;
+  };
+  /**
+   * Plan and credits (Stripe via Supabase Edge Functions). Checkout / Portal open in the default
+   * browser; replies carry display data only, never tokens, Stripe ids or session URLs.
+   */
+  billing: {
+    getState(): Promise<BillingState>;
+    refresh(): Promise<BillingState>;
+    /** Only a plan key; the server maps it to the Stripe price. */
+    checkout(input: BillingCheckoutInput): Promise<BillingState>;
+    openPortal(): Promise<BillingState>;
+    onStateChange(listener: (state: BillingState) => void): () => void;
   };
   clipboard: {
     /** Write PNG bytes to the OS clipboard as an image. */
