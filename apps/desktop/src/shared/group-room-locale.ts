@@ -4,13 +4,19 @@
  */
 
 import {
+  FILES_SEARCH_TEXT_EN,
+  FILES_SEARCH_TEXT_PT,
+  FILES_SEARCH_TEXT_ZH,
+  type FilesSearchTextKey,
+} from "./files-search-text";
+import {
   GROUP_ROOM_TEXT_EN,
   GROUP_ROOM_TEXT_PT,
   GROUP_ROOM_TEXT_ZH,
   type GroupTextKey,
 } from "./group-room-text";
 
-export type { GroupTextKey };
+export type { FilesSearchTextKey, GroupTextKey };
 
 export type GroupRoomLocale = "en" | "pt" | "zh";
 
@@ -409,6 +415,42 @@ export function groupPluralText(
   return groupText(key, locale, { count, ...vars });
 }
 
+const FILES_SEARCH_TEXT: Record<GroupRoomLocale, Record<FilesSearchTextKey, string>> = {
+  en: FILES_SEARCH_TEXT_EN,
+  pt: FILES_SEARCH_TEXT_PT,
+  zh: FILES_SEARCH_TEXT_ZH,
+};
+
+/**
+ * Files panel / Search Tool card copy (C6.1) for `key`, resolved with the same
+ * rule as the room catalog (pt* → pt, zh* → zh, else en; no tag → renderer locale).
+ */
+export function filesSearchText(
+  key: FilesSearchTextKey,
+  locale?: string | null,
+  vars?: GroupTextVars,
+): string {
+  return fillGroupText(FILES_SEARCH_TEXT[resolveGroupRoomLocale(locale)][key], vars);
+}
+
+/** Keys of the Files / Search catalog that come as a `_one` / `_other` pair. */
+export type FilesSearchPluralBase = FilesSearchTextKey extends infer K
+  ? K extends `${infer B}_one`
+    ? B
+    : never
+  : never;
+
+/** Plural Files / Search copy: `_one` when count is 1, else `_other`; `{count}` is filled. */
+export function filesSearchPluralText(
+  base: FilesSearchPluralBase,
+  count: number,
+  locale?: string | null,
+  vars?: GroupTextVars,
+): string {
+  const key = `${base}_${count === 1 ? "one" : "other"}` as FilesSearchTextKey;
+  return filesSearchText(key, locale, { count, ...vars });
+}
+
 const INTL_FALLBACK: Record<GroupRoomLocale, string> = { en: "en-US", pt: "pt-BR", zh: "zh-CN" };
 
 /**
@@ -512,4 +554,5 @@ export const GROUP_ROOM_CATALOGS = {
   memberCard: MEMBER_CARD_TEXT,
   modelChip: MODEL_CHIP_TEXT,
   text: GROUP_ROOM_TEXT,
+  filesSearch: FILES_SEARCH_TEXT,
 } as const satisfies Record<string, Record<GroupRoomLocale, Record<string, string>>>;

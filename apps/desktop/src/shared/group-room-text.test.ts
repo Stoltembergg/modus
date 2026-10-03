@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  FILES_SEARCH_TEXT_EN,
+  FILES_SEARCH_TEXT_PT,
+  FILES_SEARCH_TEXT_ZH,
+} from "./files-search-text";
+import {
+  filesSearchPluralText,
+  filesSearchText,
   GROUP_ROOM_CATALOGS,
   type GroupRoomLocale,
   groupPluralText,
@@ -45,11 +52,32 @@ describe("group room catalog parity (en / pt / zh)", () => {
   }
 
   it("plural keys always come as _one / _other pairs", () => {
-    const keys = Object.keys(GROUP_ROOM_TEXT_EN);
-    for (const key of keys) {
-      if (key.endsWith("_one")) expect(keys).toContain(key.replace(/_one$/, "_other"));
-      if (key.endsWith("_other")) expect(keys).toContain(key.replace(/_other$/, "_one"));
+    for (const table of [GROUP_ROOM_TEXT_EN, FILES_SEARCH_TEXT_EN]) {
+      const keys = Object.keys(table);
+      for (const key of keys) {
+        if (key.endsWith("_one")) expect(keys).toContain(key.replace(/_one$/, "_other"));
+        if (key.endsWith("_other")) expect(keys).toContain(key.replace(/_other$/, "_one"));
+      }
     }
+  });
+
+  it("the Files / Search catalog (C6.1) is under the parity check", () => {
+    expect(GROUP_ROOM_CATALOGS.filesSearch).toEqual({
+      en: FILES_SEARCH_TEXT_EN,
+      pt: FILES_SEARCH_TEXT_PT,
+      zh: FILES_SEARCH_TEXT_ZH,
+    });
+  });
+
+  it("Files / Search: pt and zh are translations, not English copies", () => {
+    const same = (
+      Object.keys(FILES_SEARCH_TEXT_EN) as (keyof typeof FILES_SEARCH_TEXT_EN)[]
+    ).filter(
+      (key) =>
+        FILES_SEARCH_TEXT_PT[key] === FILES_SEARCH_TEXT_EN[key] &&
+        FILES_SEARCH_TEXT_ZH[key] === FILES_SEARCH_TEXT_EN[key],
+    );
+    expect(same).toEqual([]);
   });
 
   it("pt and zh are translations, not English copies (except brand / shared words)", () => {
@@ -62,6 +90,24 @@ describe("group room catalog parity (en / pt / zh)", () => {
     );
     // "Lead" is a product term kept in every locale.
     expect(same).toEqual(["common.lead"]);
+  });
+});
+
+describe("filesSearchText / filesSearchPluralText (C6.1)", () => {
+  it("resolves with the room rule and fills placeholders", () => {
+    expect(filesSearchText("files.dialogTitle", "pt-BR", { name: "a.ts" })).toBe(
+      "Salvar as alterações em a.ts?",
+    );
+    expect(filesSearchText("files.dialogTitle", "zh-TW", { name: "a.ts" })).toBe(
+      "保存对 a.ts 的更改？",
+    );
+    expect(filesSearchText("files.dialogTitle", "fr", { name: "a.ts" })).toBe(
+      "Save changes to a.ts?",
+    );
+    expect(filesSearchPluralText("search.found", 1, "en")).toBe("Found 1 result");
+    expect(filesSearchPluralText("search.found", 4, "en")).toBe("Found 4 results");
+    expect(filesSearchPluralText("search.found", 4, "pt")).toBe("4 resultados encontrados");
+    expect(filesSearchPluralText("search.matches", 1, "pt")).toBe("1 ocorrência");
   });
 });
 

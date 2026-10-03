@@ -37,7 +37,7 @@ import { beginResizeGesture, endResizeGesture } from "../../lib/resizeGesture";
 import { MarkdownExcerptPreview } from "../preview/MarkdownExcerptPreview";
 import { PreviewHost } from "../preview/PreviewHost";
 import { materialIconForEntry } from "./fileIcons";
-import { FILES_DIRTY_COPY } from "./filesDirtyCopy";
+import { type FilesTextFn, useFilesText } from "./filesI18n";
 import { hasLiveFilesWatch } from "./hasLiveFilesWatch";
 import { UnsavedChangesDialog } from "./UnsavedChangesDialog";
 
@@ -62,6 +62,8 @@ type FilesPanelProps = {
   onRevealConsumed?: (() => void) | undefined;
   /** Line to open `revealPath` at (C2.1); `key` changes per request. */
   revealLine?: { line: number; key: number } | undefined;
+  /** Room / UI locale tag; falls back to the renderer locale (C6.1). */
+  locale?: string | undefined;
 };
 
 type FlatNode = { entry: FileEntry; depth: number };
@@ -120,7 +122,9 @@ export function FilesPanel({
   revealPath,
   onRevealConsumed,
   revealLine,
+  locale,
 }: FilesPanelProps) {
+  const t = useFilesText(locale);
   // Read at reveal time (the reveal effect is keyed on the path only).
   const revealLineRef = useRef(revealLine);
   revealLineRef.current = revealLine;
@@ -628,22 +632,23 @@ export function FilesPanel({
   }, [rows, query]);
 
   const selectedPath = selectedFile?.path;
-  const viewerNote = selectedFile?.truncated ? "preview truncated" : undefined;
+  const viewerNote = selectedFile?.truncated ? t("files.previewTruncated") : undefined;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="toolbar-row flex shrink-0 items-center gap-2 border-hairline border-b pr-1.5 pl-3">
-        <FileBreadcrumb cwd={cwd} dirty={dirty} file={selectedFile} />
+        <FileBreadcrumb cwd={cwd} dirty={dirty} file={selectedFile} t={t} />
         {viewerNote ? <span className="shrink-0 text-2xs text-fg-faint">{viewerNote}</span> : null}
         <FileActions
           cwd={cwd}
           file={selectedFile}
           onToggleWordWrap={() => setWordWrap((value) => !value)}
+          t={t}
           wordWrap={wordWrap}
         />
-        <Tooltip content={treeOpen ? "Hide file tree" : "Show file tree"} side="bottom">
+        <Tooltip content={treeOpen ? t("files.hideTree") : t("files.showTree")} side="bottom">
           <button
-            aria-label="Toggle file tree"
+            aria-label={t("files.toggleTree")}
             aria-pressed={treeOpen}
             className={cn(
               "toolbar-icon-button flex shrink-0 items-center justify-center rounded-md transition-colors hover:bg-hover",
@@ -674,7 +679,7 @@ export function FilesPanel({
                 <input
                   className="h-8 w-full rounded-lg border border-hairline bg-surface pr-2.5 pl-8 text-fg text-sm outline-none transition-colors placeholder:text-fg-faint focus:border-hairline-strong focus:bg-elevated"
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Filter files..."
+                  placeholder={t("files.filterPlaceholder")}
                   spellCheck={false}
                   type="search"
                   value={query}
@@ -684,10 +689,10 @@ export function FilesPanel({
             <div className="scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1.5 py-1">
               {rows.length === 0 ? (
                 <div className="px-3 py-2 text-fg-faint text-xs">
-                  {cwd ? "Empty" : "No workspace"}
+                  {cwd ? t("files.empty") : t("files.noWorkspace")}
                 </div>
               ) : visibleRows.length === 0 ? (
-                <div className="px-3 py-2 text-fg-faint text-xs">No matches</div>
+                <div className="px-3 py-2 text-fg-faint text-xs">{t("files.noMatches")}</div>
               ) : (
                 visibleRows.map(({ entry, depth }) => (
                   <FileRow
@@ -709,7 +714,7 @@ export function FilesPanel({
 
         {treeOpen ? (
           <button
-            aria-label="Resize file tree"
+            aria-label={t("files.resizeTree")}
             className="-ml-px relative z-10 w-1 shrink-0 cursor-col-resize transition-colors hover:bg-chip-strong data-[resizing]:bg-fg-faint"
             onBlur={stopResize}
             onLostPointerCapture={stopResize}
@@ -729,7 +734,7 @@ export function FilesPanel({
               role="status"
             >
               <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-fg-muted/70" />
-              {FILES_DIRTY_COPY.keptDraftNotice}
+              {t("files.keptDraftNotice")}
             </div>
           ) : null}
           <FileViewer
@@ -739,6 +744,7 @@ export function FilesPanel({
             onChange={setDraftContent}
             onSave={() => void saveFile()}
             revealLine={lineTarget}
+            t={t}
             wordWrap={wordWrap}
             {...(onAddToChat ? { onAddToChat } : {})}
           />
@@ -748,6 +754,7 @@ export function FilesPanel({
         busy={switchBusy}
         error={switchError}
         fileName={fileNameOf(selectedFile)}
+        locale={t.locale}
         onCancel={() => void resolveSwitch("cancel")}
         onDiscard={() => void resolveSwitch("discard")}
         onSave={() => void resolveSwitch("save")}
@@ -761,12 +768,14 @@ function FileBreadcrumb({
   cwd,
   dirty,
   file,
+  t,
 }: {
   cwd: string | undefined;
   dirty: boolean;
   file: FileReadResult | undefined;
+  t: FilesTextFn;
 }) {
-  const root = cwd?.split(/[\\/]/).filter(Boolean).at(-1) ?? "workspace";
+  const root = cwd?.split(/[\\/]/).filter(Boolean).at(-1) ?? t("files.workspaceFallback");
   const parts = file?.relativePath.split("/").filter(Boolean) ?? [];
   return (
     <div
@@ -787,7 +796,7 @@ function FileBreadcrumb({
             </span>
             {last && dirty ? (
               <span
-                aria-label="Unsaved changes"
+                aria-label={t("files.unsavedChanges")}
                 className="size-1.5 shrink-0 rounded-full bg-fg-muted/70"
                 role="img"
               />
@@ -804,11 +813,13 @@ function FileActions({
   file,
   wordWrap,
   onToggleWordWrap,
+  t,
 }: {
   cwd: string | undefined;
   file: FileReadResult | undefined;
   wordWrap: boolean;
   onToggleWordWrap(): void;
+  t: FilesTextFn;
 }) {
   const disabled = !cwd || !file;
   const openFile = (): void => {
@@ -823,7 +834,7 @@ function FileActions({
     <div className="ml-auto flex shrink-0 items-center gap-1">
       <Menu.Root>
         <Menu.Trigger
-          aria-label="File options"
+          aria-label={t("files.options")}
           className="toolbar-icon-button flex items-center justify-center rounded-md outline-none transition-colors hover:bg-hover data-popup-open:bg-hover disabled:opacity-35"
           disabled={disabled}
         >
@@ -836,25 +847,25 @@ function FileActions({
                 icon={<IconCopy size={16} stroke={1.75} />}
                 onClick={() => file && void navigator.clipboard.writeText(file.path)}
               >
-                Copy Path
+                {t("files.copyPath")}
               </MenuAction>
               <MenuAction
                 disabled={!file || file.binary}
                 icon={<IconFileText size={16} stroke={1.75} />}
                 onClick={() => file && void navigator.clipboard.writeText(file.content)}
               >
-                Copy File Contents
+                {t("files.copyContents")}
               </MenuAction>
               <MenuAction
                 closeOnClick={false}
                 icon={wordWrap ? <IconCheck size={16} stroke={1.8} /> : <span className="size-4" />}
                 onClick={onToggleWordWrap}
               >
-                Word Wrap
+                {t("files.wordWrap")}
               </MenuAction>
               <div className="my-1 h-px bg-hairline" />
               <MenuAction icon={<IconFolderOpen size={16} stroke={1.75} />} onClick={openFolder}>
-                Open Containing Folder
+                {t("files.openContainingFolderMenu")}
               </MenuAction>
             </Menu.Popup>
           </Menu.Positioner>
@@ -867,11 +878,11 @@ function FileActions({
         type="button"
       >
         <IconExternalLink size={16} stroke={1.75} />
-        Open
+        {t("files.open")}
       </button>
-      <Tooltip content="Open containing folder" side="bottom">
+      <Tooltip content={t("files.openContainingFolder")} side="bottom">
         <button
-          aria-label="Open containing folder"
+          aria-label={t("files.openContainingFolder")}
           className="toolbar-icon-button flex items-center justify-center rounded-md transition-colors hover:bg-hover disabled:opacity-35"
           disabled={disabled}
           onClick={openFolder}
@@ -984,9 +995,11 @@ function FileViewer({
   onSave,
   onAddToChat,
   revealLine,
+  t,
 }: {
   cwd: string | undefined;
   revealLine?: { line: number; key: number } | undefined;
+  t: FilesTextFn;
   file: FileReadResult | undefined;
   error: string | undefined;
   wordWrap: boolean;
@@ -1000,15 +1013,15 @@ function FileViewer({
   if (!file) {
     return (
       <EmptyState
-        description="Select a file from the workspace tree"
-        hint="No file open"
+        description={t("files.selectFile")}
+        hint={t("files.noFileOpen")}
         icon={<IconFolders size={22} stroke={1.4} />}
       />
     );
   }
   if (file.binary) {
     if (!cwd) {
-      return <Centered>Binary file — no preview.</Centered>;
+      return <Centered>{t("files.binaryNoPreview")}</Centered>;
     }
     return <PreviewHost cwd={cwd} path={file.path} {...(onAddToChat ? { onAddToChat } : {})} />;
   }
