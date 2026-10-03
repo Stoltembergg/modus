@@ -222,13 +222,25 @@
   --surface-app: color-mix(in srgb, var(--color-panel) 97%, transparent);
   --surface-sidebar: color-mix(in srgb, var(--color-panel) 94%, transparent);
   --surface-main: var(--color-canvas);
-  --surface-main-glass: color-mix(in srgb, var(--color-canvas) 94%, transparent);
+  --surface-main-glass: color-mix(
+    in srgb,
+    var(--color-canvas) var(--glass-alpha-canvas),
+    transparent
+  );
   --surface-raised: var(--color-elevated);
   /* Solid on unsupported hosts; native translucency is applied by the scoped
      data-native-glass rules below. */
   --surface-glass: var(--surface-raised);
-  --surface-glass-sidebar: color-mix(in srgb, var(--color-panel) 78%, transparent);
-  --surface-glass-elevated: color-mix(in srgb, var(--color-elevated) 82%, transparent);
+  --surface-glass-sidebar: color-mix(
+    in srgb,
+    var(--color-panel) var(--glass-alpha-chrome),
+    transparent
+  );
+  --surface-glass-elevated: color-mix(
+    in srgb,
+    var(--color-elevated) var(--glass-alpha-overlay),
+    transparent
+  );
 
   --text-primary: var(--color-fg);
   --text-secondary: var(--color-fg-muted);
@@ -271,8 +283,18 @@
   --motion-ui: 160ms;
   --motion-overlay: 180ms;
   --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
-  --glass-filter: blur(18px) saturate(1.12);
-  --glass-scrim-filter: blur(2px);
+  /* Glass tokens (D1). Opacity tiers of the native-glass surfaces, as color-mix
+     percentages; one set for every theme (no per-theme override), so the
+     reduced-transparency fallback at the end of this file always wins.
+     Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
+  --glass-alpha-chrome: 78%; /* app rail + context sidebar */
+  --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
+  --glass-alpha-canvas: 94%; /* main surface; light pdf chrome */
+  --glass-blur: 18px;
+  --glass-saturate: 1.12;
+  --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  --glass-scrim-blur: 2px;
+  --glass-scrim-filter: blur(var(--glass-scrim-blur));
   --group-icon-saturation: 66%;
   --group-icon-lightness: 72%;
   --overlay-shadow: var(--shadow-popup);
@@ -2666,7 +2688,7 @@ body
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 :root[data-theme="light"] .pdf-page-chrome {
-  background: color-mix(in srgb, var(--color-elevated) 94%, transparent);
+  background: color-mix(in srgb, var(--color-elevated) var(--glass-alpha-canvas), transparent);
 }
 
 .inspector-tab-panel {
@@ -2827,5 +2849,46 @@ body
   .agent-avatar .agent-avatar-eyes,
   .agent-avatar .agent-avatar-ring {
     animation: none;
+  }
+}
+
+/*
+ * Glass fallback (D1). Reduced transparency, increased contrast, forced colors
+ * and hosts without backdrop-filter get solid surfaces: every glass tier goes to
+ * 100% and every glass blur to none. It must stay the LAST block of this file:
+ * the tokens are only declared on :root (no theme overrides them), and the
+ * body / #root / .app-shell rules repeat the native-glass selectors, so source
+ * order decides. Pinned by styles/glassTokens.test.ts.
+ */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-alpha-canvas: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+  :root[data-native-glass="true"] body,
+  :root[data-native-glass="true"] #root {
+    background-color: var(--color-canvas);
+  }
+  :root[data-native-glass="true"] .app-shell {
+    background-color: var(--color-panel);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-alpha-canvas: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+  :root[data-native-glass="true"] body,
+  :root[data-native-glass="true"] #root {
+    background-color: var(--color-canvas);
+  }
+  :root[data-native-glass="true"] .app-shell {
+    background-color: var(--color-panel);
   }
 }
