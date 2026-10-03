@@ -500,7 +500,6 @@ export function Sidebar({
                         onDeleteChats={() => onDeleteProjectChats(workspace.id)}
                         onRemove={() => onRemoveProject(workspace.id)}
                         groupNames={projectGroupNames(groups, workspace.id)}
-                        scrollContainerRef={scrollContainerRef}
                       />
                     </m.div>
                   ))}
@@ -559,7 +558,6 @@ function WorkspaceItem({
   onDeleteChats,
   onRemove,
   groupNames,
-  scrollContainerRef,
 }: {
   workspace: WorkspaceInfo;
   activeSessionId?: string | undefined;
@@ -585,7 +583,6 @@ function WorkspaceItem({
   /** Groups this Project owns; "Remove" confirms first when there are any. */
   /** Groups the Project owns (deleted with it): for the remove confirmation. */
   groupNames: readonly string[];
-  scrollContainerRef: RefObject<HTMLElement | null>;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -645,11 +642,12 @@ function WorkspaceItem({
       <CollapsibleMotion open={expanded} preset="default">
         <AnimatePresence initial={false}>
           {visibleSessions.map((session) => (
-            <ScrollReveal
+            <m.div
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              initial={{ opacity: 0, y: 4 }}
               key={session.id}
-              offsetY={8}
-              scrollContainerRef={scrollContainerRef}
-              blurStrength={3}
+              transition={LIST_MOTION}
             >
               <SessionRow
                 activity={activityBySession[session.id]}
@@ -672,7 +670,7 @@ function WorkspaceItem({
                 title={session.title}
                 updatedAt={session.updatedAt}
               />
-            </ScrollReveal>
+            </m.div>
           ))}
         </AnimatePresence>
         {canToggleSessions ? (
