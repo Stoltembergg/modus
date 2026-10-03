@@ -27,10 +27,25 @@ describe("auth config", () => {
       supabaseUrl: URL,
       anonKey: "sb_publishable_runtime",
       oauthProviders: ["github", "google"],
+      oauthTransport: "loopback",
     });
     expect(
       resolveAuthConfig({}, { MAIN_VITE_SUPABASE_URL: URL, MAIN_VITE_SUPABASE_ANON_KEY: "k" }),
     ).toMatchObject({ anonKey: "k", oauthProviders: [] });
+  });
+
+  it("selects the deep-link OAuth transport only when asked", () => {
+    const base = { MODUS_SUPABASE_URL: URL, MODUS_SUPABASE_ANON_KEY: "k" };
+    expect(resolveAuthConfig(base)?.oauthTransport).toBe("loopback");
+    expect(
+      resolveAuthConfig({ ...base, MODUS_AUTH_OAUTH_TRANSPORT: " Deep-Link " })?.oauthTransport,
+    ).toBe("deep-link");
+    expect(
+      resolveAuthConfig(base, { MAIN_VITE_AUTH_OAUTH_TRANSPORT: "deep-link" })?.oauthTransport,
+    ).toBe("deep-link");
+    expect(
+      resolveAuthConfig({ ...base, MODUS_AUTH_OAUTH_TRANSPORT: "custom" })?.oauthTransport,
+    ).toBe("loopback");
   });
 
   it("refuses service-role and secret keys", () => {

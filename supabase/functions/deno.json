@@ -1,0 +1,17 @@
+{
+  "nodeModulesDir": "none",
+  "lock": false,
+  "compilerOptions": {
+    "strict": true
+  },
+  "tasks": {
+    "check": "deno check */index.ts */*.test.ts _shared/*.ts",
+    "test": "deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import",
+    "lint": "deno lint"
+  },
+  "lint": {
+    "rules": {
+      "exclude": ["require-await", "no-import-prefix"]
+    }
+  }
+}

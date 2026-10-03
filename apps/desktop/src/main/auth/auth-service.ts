@@ -10,6 +10,7 @@ import { type AuthBackend, AuthBackendError, type AuthBackendSession } from "./a
 import type { AuthConfig } from "./auth-config";
 import type { AuthSessionStore } from "./auth-session-store";
 import type { LoopbackListener } from "./loopback-server";
+import { loopbackChannel, type OAuthCallbackChannel } from "./oauth-callback";
 import { OAUTH_FLOW_TIMEOUT_MS, type OAuthFlowRegistry } from "./oauth-flow";
 
 export interface AuthService {
@@ -17,7 +18,7 @@ export interface AuthService {
   getState(): AuthState;
   signUp(input: AuthCredentialsInput): Promise<AuthState>;
   signInWithPassword(input: AuthCredentialsInput): Promise<AuthState>;
-  /** Opens the browser and resolves when the loopback callback was handled (or failed). */
+  /** Opens the browser and resolves when the callback (loopback or deep link) was handled. */
   signInWithOAuth(provider: AuthOAuthProviderId): Promise<AuthState>;
   cancelOAuth(): AuthState;
   signOut(): Promise<AuthState>;
@@ -31,6 +32,8 @@ type Deps = {
   store: AuthSessionStore;
   flows: OAuthFlowRegistry;
   startLoopback(options: { timeoutMs: number }): Promise<LoopbackListener>;
+  /** modus://auth/callback transport (config.oauthTransport === "deep-link"). */
+  startDeepLinkCallback?(options: { timeoutMs: number }): Promise<OAuthCallbackChannel>;
   openExternal(url: string): Promise<void>;
   oauthTimeoutMs?: number;
 };
@@ -78,7 +81,7 @@ export function createAuthService(deps: Deps): AuthService {
     notice: null,
     error: null,
   };
-  let listener: LoopbackListener | undefined;
+  let listener: OAuthCallbackChannel | undefined;
   let persistedRefreshToken: string | undefined;
   let unsubscribeBackend: (() => void) | undefined;
   /** Bumped on sign-out so a late profile fetch cannot resurrect a signed-out user. */
@@ -232,10 +235,16 @@ export function createAuthService(deps: Deps): AuthService {
         if (state.status === "signed-in") throw new Error("Already signed in.");
         await closeListener();
         const flow = flows.begin(provider);
-        const loopback = await deps.startLoopback({ timeoutMs: oauthTimeoutMs });
-        listener = loopback;
+        let channel: OAuthCallbackChannel;
+        if (config?.oauthTransport === "deep-link") {
+          if (!deps.startDeepLinkCallback) throw new Error("Deep-link sign-in is unavailable.");
+          channel = await deps.startDeepLinkCallback({ timeoutMs: oauthTimeoutMs });
+        } else {
+          channel = loopbackChannel(await deps.startLoopback({ timeoutMs: oauthTimeoutMs }));
+        }
+        listener = channel;
         try {
-          const redirectTo = `${loopback.callbackUrl}?state=${encodeURIComponent(flow.state)}`;
+          const redirectTo = channel.redirectTo(flow.state);
           const authorizeUrl = await auth.createOAuthUrl(provider, redirectTo);
           setState({
             status: "awaiting-oauth",
@@ -246,10 +255,10 @@ export function createAuthService(deps: Deps): AuthService {
           await deps.openExternal(authorizeUrl);
           let params: URLSearchParams;
           try {
-            ({ params } = await loopback.callback);
+            ({ params } = await channel.callback);
           } catch {
             // cancelOAuth()/signOut() already reset the state; anything else is the timeout.
-            if (listener !== loopback) return snapshot();
+            if (listener !== channel) return snapshot();
             throw new AuthBackendError("rejected", "The sign-in timed out. Try again.");
           }
           const verdict = flows.consume(params.get("state"));
@@ -267,8 +276,8 @@ export function createAuthService(deps: Deps): AuthService {
           return await adoptSession(await auth.exchangeCode(code));
         } finally {
           flows.cancel();
-          if (listener === loopback) listener = undefined;
-          await loopback.close();
+          if (listener === channel) listener = undefined;
+          await channel.close();
         }
       });
     },

@@ -1,0 +1,50 @@
+import { z } from "zod";
+import {
+  BILLING_PLAN_KEY_PATTERN,
+  type BillingCheckoutInput,
+  type BillingState,
+} from "../../shared/billing";
+import { IPC_CHANNELS } from "./channels";
+import { parseIpcInput } from "./schemas";
+import type { TrustedSenderEvent } from "./trusted-sender";
+
+export type BillingIpcService = {
+  getState(): BillingState;
+  refresh(): Promise<BillingState>;
+  startCheckout(plan: string): Promise<BillingState>;
+  openPortal(): Promise<BillingState>;
+};
+
+type HandlerRegistration = {
+  handle(channel: string, listener: (event: TrustedSenderEvent, input?: unknown) => unknown): void;
+};
+
+const billingNoInputSchema = z.undefined();
+
+/** Only a plan key: the Edge Function maps it to the Stripe price server-side. */
+export const billingCheckoutSchema = z
+  .object({ plan: z.string().regex(BILLING_PLAN_KEY_PATTERN) })
+  .strict() as z.ZodType<BillingCheckoutInput>;
+
+/**
+ * Billing IPC: every reply is a BillingState (display data only). The access token, Stripe ids
+ * and Checkout / Portal URLs stay in main; billing-ipc.test.ts asserts that on every payload.
+ */
+export function registerBillingIpcHandlers(
+  ipcMain: HandlerRegistration,
+  assertTrustedSender: (event: TrustedSenderEvent) => void,
+  service: BillingIpcService,
+): void {
+  const handle = <T>(channel: string, schema: z.ZodType<T>, run: (input: T) => unknown) => {
+    ipcMain.handle(channel, (event, input) => {
+      assertTrustedSender(event);
+      return run(parseIpcInput(schema, input, channel));
+    });
+  };
+  handle(IPC_CHANNELS.billingGetState, billingNoInputSchema, () => service.getState());
+  handle(IPC_CHANNELS.billingRefresh, billingNoInputSchema, () => service.refresh());
+  handle(IPC_CHANNELS.billingCheckout, billingCheckoutSchema, (input) =>
+    service.startCheckout(input.plan),
+  );
+  handle(IPC_CHANNELS.billingPortal, billingNoInputSchema, () => service.openPortal());
+}

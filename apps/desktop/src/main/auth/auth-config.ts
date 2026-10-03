@@ -1,12 +1,14 @@
 import { AUTH_OAUTH_PROVIDER_IDS, type AuthOAuthProviderId } from "../../shared/auth";
+import type { OAuthTransport } from "./oauth-callback";
 
 /**
  * Supabase Auth settings for the desktop app. Read in the main process only.
  *
  * Sources, first match wins:
- * - runtime env: MODUS_SUPABASE_URL, MODUS_SUPABASE_ANON_KEY, MODUS_AUTH_OAUTH_PROVIDERS
+ * - runtime env: MODUS_SUPABASE_URL, MODUS_SUPABASE_ANON_KEY, MODUS_AUTH_OAUTH_PROVIDERS,
+ *   MODUS_AUTH_OAUTH_TRANSPORT
  * - build-time env (electron-vite, main only): MAIN_VITE_SUPABASE_URL, MAIN_VITE_SUPABASE_ANON_KEY,
- *   MAIN_VITE_AUTH_OAUTH_PROVIDERS
+ *   MAIN_VITE_AUTH_OAUTH_PROVIDERS, MAIN_VITE_AUTH_OAUTH_TRANSPORT
  *
  * The anon / publishable key is public by design (RLS protects the data), but it is still never
  * committed: builds receive it from env. A service_role / secret key is refused outright.
@@ -16,6 +18,11 @@ export type AuthConfig = {
   anonKey: string;
   /** OAuth providers enabled for this build ("github,google"); empty until their secrets exist. */
   oauthProviders: AuthOAuthProviderId[];
+  /**
+   * "loopback" (default): http://127.0.0.1:<port>/auth/callback, no allow-list entry needed.
+   * "deep-link": modus://auth/callback (allow-list entry `modus://auth/callback`).
+   */
+  oauthTransport?: OAuthTransport;
 };
 
 export type AuthConfigEnv = Record<string, string | undefined>;
@@ -82,6 +89,10 @@ export function parseOAuthProviders(raw: string | undefined): AuthOAuthProviderI
   return AUTH_OAUTH_PROVIDER_IDS.filter((id) => wanted.has(id));
 }
 
+export function parseOAuthTransport(raw: string | undefined): OAuthTransport {
+  return raw?.trim().toLowerCase() === "deep-link" ? "deep-link" : "loopback";
+}
+
 /** undefined when the build has no Supabase settings: the Account UI then reports "unavailable". */
 export function resolveAuthConfig(
   env: AuthConfigEnv,
@@ -97,6 +108,9 @@ export function resolveAuthConfig(
     anonKey,
     oauthProviders: parseOAuthProviders(
       first(merged, "MODUS_AUTH_OAUTH_PROVIDERS", "MAIN_VITE_AUTH_OAUTH_PROVIDERS"),
+    ),
+    oauthTransport: parseOAuthTransport(
+      first(merged, "MODUS_AUTH_OAUTH_TRANSPORT", "MAIN_VITE_AUTH_OAUTH_TRANSPORT"),
     ),
   };
 }

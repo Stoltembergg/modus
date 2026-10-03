@@ -238,6 +238,11 @@ export const IPC_CHANNELS = {
   authCancelOAuth: "auth:cancel-oauth",
   authSignOut: "auth:sign-out",
   authStateEvent: "auth:state-event",
+  billingGetState: "billing:get-state",
+  billingRefresh: "billing:refresh",
+  billingCheckout: "billing:checkout",
+  billingPortal: "billing:portal",
+  billingStateEvent: "billing:state-event",
 } as const;
 
 export type IpcChannel = (typeof IPC_CHANNELS)[keyof typeof IPC_CHANNELS];

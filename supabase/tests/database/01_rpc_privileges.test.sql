@@ -59,9 +59,9 @@ select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private' and has_function_privilege('service_role', p.oid, 'execute')),
-  array['grant_credits', 'process_stripe_event', 'release_expired_reservations', 'reserve_credits',
-        'settle_usage'],
-  'service_role can execute exactly the five RPCs (not the trigger functions)');
+  array['claim_stripe_customer', 'grant_credits', 'process_stripe_event', 'release_expired_reservations',
+        'reserve_credits', 'settle_usage'],
+  'service_role can execute exactly the six RPCs (B1 five + B3 claim_stripe_customer; not the trigger functions)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -80,21 +80,22 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  8, 'eight functions in private (5 RPCs + 3 trigger functions)');
+  9, 'nine functions in private (6 RPCs + 3 trigger functions)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  8, 'all private functions are SECURITY DEFINER with search_path=""');
+  9, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  array['grant_credits', 'grant_free_initial_credits', 'handle_new_user', 'process_stripe_event',
-        'release_expired_reservations', 'reserve_credits', 'set_updated_at', 'settle_usage'],
+  array['claim_stripe_customer', 'grant_credits', 'grant_free_initial_credits', 'handle_new_user',
+        'process_stripe_event', 'release_expired_reservations', 'reserve_credits', 'set_updated_at',
+        'settle_usage'],
   'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');
 
 -- Hijack attempt: a caller-controlled search_path with decoy objects must not

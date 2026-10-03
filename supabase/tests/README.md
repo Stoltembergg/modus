@@ -61,6 +61,7 @@ It is never part of a migration.
 - `database/04_signup_free_grant.test.sql`: profile and wallet created on signup; the Free credits are granted once, at email confirmation; non-https avatars in the metadata are dropped; the plans seed.
 - `database/05_default_privileges.test.sql`: tables, sequences and functions created after the migration are closed to `anon` / `authenticated`.
 - `database/06_stripe_events.test.sql`: `process_stripe_event` (duplicates, unknown price / customer, livemode, subscription upsert, invoice credits and their grant rules: billing_reason, amount_paid, proration lines, line choice).
+- `database/07_billing_upgrades.test.sql` (B3): mid-period upgrades (`subscription_update` invoices with `amount_paid > 0` grant `max(0, new - plan_allowance)` once per invoice), downgrades never remove credits, the renewal resets the allowance, and `private.claim_stripe_customer`.
 - `concurrency.sh`: concurrent reservations from separate connections (2 sessions, a burst of 20, and 5 calls with the same `request_id`), and `release_expired_reservations` racing `settle_usage` (a forced interleaving that deadlocks if the release does not lock the wallet first, plus a burst of 20 + 20).
 
 Each pgTAP file runs inside a transaction and rolls back. `concurrency.sh` commits, but only into the throwaway cluster.

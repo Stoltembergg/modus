@@ -21,6 +21,9 @@ const updateChannel = /-beta\.(0|[1-9]\d*)$/.test(appVersion) ? "beta" : "latest
 const config: Configuration = {
   appId: "dev.modus.desktop",
   productName: "Modus",
+  // modus://auth/callback and modus://billing/return (main/deep-link). Info.plist on macOS,
+  // MimeType x-scheme-handler on Linux; Windows registers at runtime (setAsDefaultProtocolClient).
+  protocols: [{ name: "Modus", schemes: ["modus"] }],
   electronVersion: "42.3.0",
   npmRebuild: false,
   nodeGypRebuild: false,

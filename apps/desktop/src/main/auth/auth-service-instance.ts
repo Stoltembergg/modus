@@ -6,10 +6,15 @@ import { type AuthConfig, resolveAuthConfig } from "./auth-config";
 import { type AuthService, createAuthService } from "./auth-service";
 import { createAuthSessionStore } from "./auth-session-store";
 import { startLoopbackListener } from "./loopback-server";
+import { createDeepLinkCallbackHub } from "./oauth-callback";
 import { createOAuthFlowRegistry } from "./oauth-flow";
 import { createSupabaseAuthBackend } from "./supabase-auth-backend";
 
 let service: AuthService | undefined;
+let backend: ReturnType<typeof createSupabaseAuthBackend> | undefined;
+
+/** modus://auth/callback links are handed here by the deep-link router (main/index.ts). */
+export const deepLinkCallbackHub = createDeepLinkCallbackHub();
 
 function loadConfig(): AuthConfig | undefined {
   try {
@@ -33,16 +38,24 @@ function broadcast(state: AuthState): void {
 export function getAuthService(): AuthService {
   if (service) return service;
   const config = loadConfig();
+  backend = config ? createSupabaseAuthBackend(config) : undefined;
   service = createAuthService({
     config,
-    backend: config ? createSupabaseAuthBackend(config) : undefined,
+    backend,
     store: createAuthSessionStore({ userDataPath: app.getPath("userData"), safeStorage }),
     flows: createOAuthFlowRegistry(),
     startLoopback: startLoopbackListener,
+    startDeepLinkCallback: (options) => deepLinkCallbackHub.start(options),
     openExternal: (url) => shell.openExternal(url),
   });
   service.onStateChange(broadcast);
   return service;
+}
+
+/** The same Supabase client (and session) backs billing reads and the Stripe Functions. */
+export function getSupabaseBillingBackend() {
+  getAuthService();
+  return backend;
 }
 
 /** For IPC registration: the service (and Electron paths) are only touched on first use. */
