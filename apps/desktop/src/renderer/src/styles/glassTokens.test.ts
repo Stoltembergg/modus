@@ -341,6 +341,55 @@ describe("glass in production (D2)", () => {
     ).toBeLessThan(D2_GATE);
   });
 
+  it("(j) every page-level background is cleared under native glass, <html> included", () => {
+    // 152a4c2 shipped `:root { background: var(--color-canvas) }` with no glass
+    // override: <html> painted the whole window and vibrancy never showed on macOS.
+    const prod = optimize(css, { minify: false }).code;
+    const topLevel: { selectors: string[]; body: string }[] = [];
+    let depth = 0;
+    let start = 0;
+    let open = -1;
+    for (let i = 0; i < prod.length; i += 1) {
+      if (prod[i] === "{") {
+        if (depth === 0) open = i;
+        depth += 1;
+      } else if (prod[i] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          const selector = prod.slice(start, open).trim();
+          if (!selector.startsWith("@"))
+            topLevel.push({
+              selectors: selector.split(",").map((s) => s.trim()),
+              body: prod.slice(open + 1, i),
+            });
+          start = i + 1;
+        }
+      }
+    }
+    const paints = (body: string) =>
+      /(^|[;{\s])background(-color)?:\s*(?!transparent|#0000\b|none)[^;]+/.test(body);
+    const clears = (body: string) =>
+      /(^|[;{\s])background(-color)?:\s*(transparent|#0000)\b/.test(body);
+    const GLASS = ':root[data-native-glass="true"]';
+    const glassSelector: Record<string, string> = {
+      ":root": GLASS,
+      html: GLASS,
+      body: `${GLASS} body`,
+      "#root": `${GLASS} #root`,
+    };
+    let checked = 0;
+    for (const [element, cleared] of Object.entries(glassSelector)) {
+      if (!topLevel.some((r) => r.selectors.includes(element) && paints(r.body))) continue;
+      checked += 1;
+      expect(
+        topLevel.some((r) => r.selectors.includes(cleared) && clears(r.body)),
+        `${element} paints a background but nothing clears it under ${GLASS}`,
+      ).toBe(true);
+    }
+    // :root and body both paint the canvas today; keep the guard meaningful.
+    expect(checked).toBeGreaterThanOrEqual(2);
+  });
+
   it("(i) native window colours mirror the palette tokens", () => {
     for (const theme of THEMES) {
       const hex = (rgb: Rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
