@@ -104,3 +104,20 @@ describe("Project menu", () => {
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
   });
 });
+
+describe("Project context chats", () => {
+  it("render without the React Bits scroll-reveal blur", async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+    await user.click(screen.getByRole("button", { name: "Project context" }));
+    const section = screen.getByTestId("sidebar-project-context");
+    const title = await within(section).findByText("Chat s-1");
+    for (
+      let node: HTMLElement | null = title;
+      node && node !== section;
+      node = node.parentElement
+    ) {
+      expect(node.style.filter).not.toMatch(/blur/);
+    }
+  });
+});
