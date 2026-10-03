@@ -11,6 +11,10 @@ The script:
 
 1. Starts a temporary cluster (`initdb` + `pg_ctl`, unix socket plus
    `127.0.0.1`, port 55432 or `$PGPORT_TEST`). The cluster is removed on exit.
+   Auth: the unix socket sits in a private `mktemp -d` directory (0700) and
+   uses `trust`. `127.0.0.1` requires `scram-sha-256` with a random password
+   generated per run and never printed. The script checks that a TCP
+   connection without the password is refused.
 2. Loads `shim/supabase_shim.sql`.
 3. Applies every `supabase/migrations/*.sql` in order.
 4. Loads `shim/test_helpers.sql`.
@@ -34,6 +38,10 @@ sudo apt-get install postgresql postgresql-17-pgtap libtap-parser-sourcehandler-
 ```
 
 Set `PG_BIN` to point at another `bin/` directory.
+
+CI runs the same script in the `supabase · pgTAP · integration` job of
+`.github/workflows/ci.yml` (Postgres 17 from PGDG, pgTAP, `pg_prove`, Deno
+2.9.7), followed by `npm run test:functions`.
 
 ## The Supabase shim (`shim/supabase_shim.sql`)
 
