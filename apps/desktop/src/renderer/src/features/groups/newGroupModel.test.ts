@@ -158,3 +158,22 @@ describe("newGroupModel (A4)", () => {
     expect(again).toHaveLength(3);
   });
 });
+
+describe("newGroupCreateInput blank-name default follows the room locale (C6)", () => {
+  const list = members(2);
+  const blank = { name: "   ", workspaceId: "ws", members: list, leadKey: null };
+  it("pt → Novo grupo", () => {
+    expect(newGroupCreateInput(blank, "pt-BR").name).toBe("Novo grupo");
+  });
+  it("zh → 新群组", () => {
+    expect(newGroupCreateInput(blank, "zh-CN").name).toBe("新群组");
+  });
+  it("en and no locale → New group (unchanged)", () => {
+    expect(newGroupCreateInput(blank, "en").name).toBe("New group");
+    expect(newGroupCreateInput(blank).name).toBe(NEW_GROUP_DEFAULT_NAME);
+    expect(NEW_GROUP_DEFAULT_NAME).toBe("New group");
+  });
+  it("a typed name always wins", () => {
+    expect(newGroupCreateInput({ ...blank, name: " Crew " }, "pt").name).toBe("Crew");
+  });
+});

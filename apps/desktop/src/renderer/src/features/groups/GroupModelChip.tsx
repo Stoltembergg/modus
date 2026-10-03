@@ -4,6 +4,7 @@ import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { MODEL_CHIP_BASE, MODEL_CHIP_TONE } from "../composer/modelChipStyle";
 import type { GroupModelChip as GroupModelChipData } from "./groupModelChipRules";
+import { useGroupRoomLocale } from "./groupRoomI18n";
 
 /**
  * Read-only chip: plain text, no button, no tab stop, no menu. The tooltip
@@ -11,11 +12,12 @@ import type { GroupModelChip as GroupModelChipData } from "./groupModelChipRules
  */
 export function GroupModelChip({
   chip,
-  locale,
+  locale: localeProp,
 }: {
   chip: GroupModelChipData;
   locale?: string | null | undefined;
 }) {
+  const locale = useGroupRoomLocale(localeProp);
   return (
     <span
       className={cn(

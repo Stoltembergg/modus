@@ -15,22 +15,24 @@ import type {
   NewGroupAgentInput,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
-import { GROUP_MAX_MEMBERS } from "../../../../shared/group-blocked";
+import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
+import type { GroupTextKey } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { describeGroupError } from "./groupErrors";
+import { useGroupText } from "./groupRoomI18n";
 import {
   applyCollabPipeline,
   assignNewGroupAvatarShapes,
   copyMember,
   dialogMember,
-  NEW_GROUP_DEFAULT_NAME,
   type NewGroupMember,
   newGroupBlocker,
   newGroupCounter,
   newGroupCreateInput,
+  newGroupDefaultName,
   templateMember,
 } from "./newGroupModel";
 
@@ -39,16 +41,16 @@ const ADD_FOLDER = "__add_folder__";
 
 type Tab = "templates" | "copy" | "custom";
 
-const TABS: readonly { id: Tab; label: string }[] = [
-  { id: "templates", label: "Templates" },
-  { id: "copy", label: "Copy from another group" },
-  { id: "custom", label: "New agent" },
+const TABS: readonly { id: Tab; label: GroupTextKey }[] = [
+  { id: "templates", label: "newGroup.tabTemplates" },
+  { id: "copy", label: "newGroup.tabCopy" },
+  { id: "custom", label: "newGroup.tabCustom" },
 ];
 
-const SOURCE_LABEL: Record<NewGroupMember["source"], string> = {
-  template: "Template",
-  copy: "Copy",
-  custom: "Custom",
+const SOURCE_LABEL: Record<NewGroupMember["source"], GroupTextKey> = {
+  template: "newGroup.sourceTemplate",
+  copy: "newGroup.sourceCopy",
+  custom: "newGroup.sourceCustom",
 };
 
 const FIELD = cn(
@@ -105,6 +107,7 @@ export function NewGroupModal({
   onCreate,
   services,
 }: NewGroupModalProps) {
+  const t = useGroupText();
   const [addedProjects, setAddedProjects] = useState<WorkspaceInfo[]>([]);
   const projects = useMemo(() => {
     const list = workspaces.filter((workspace) => !workspace.inbox);
@@ -148,7 +151,7 @@ export function NewGroupModal({
       (caught: unknown) => {
         if (!cancelled) {
           setAgents([]);
-          setAgentsError(describeGroupError(caught));
+          setAgentsError(describeGroupError(caught, t.locale));
         }
       },
     );
@@ -204,11 +207,11 @@ export function NewGroupModal({
       setAddedProjects((current) => [...current, workspace]);
       setWorkspaceId(workspace.id);
     } catch (caught) {
-      setFolderError(describeGroupError(caught));
+      setFolderError(describeGroupError(caught, t.locale));
     }
   }
 
-  const blocker = newGroupBlocker({ workspaceId, members });
+  const blocker = newGroupBlocker({ workspaceId, members }, t.locale);
   const canCreate = !busy && blocker === null;
   const overLimit = members.length > GROUP_MAX_MEMBERS;
   const countByTemplate = useMemo(() => {
@@ -241,10 +244,13 @@ export function NewGroupModal({
     setBusy(true);
     setError(undefined);
     try {
-      await onCreate(newGroupCreateInput({ name, workspaceId, members, leadKey }));
+      // Same locale as the placeholder: `undefined` (no room locale) → `null` = renderer locale.
+      await onCreate(
+        newGroupCreateInput({ name, workspaceId, members, leadKey }, t.locale ?? null),
+      );
       onOpenChange(false);
     } catch (caught) {
-      setError(describeGroupError(caught));
+      setError(describeGroupError(caught, t.locale));
     } finally {
       setBusy(false);
     }
@@ -252,7 +258,7 @@ export function NewGroupModal({
 
   const dialogTarget: AgentDialogDraftTarget | null = agentDialog
     ? {
-        title: name.trim() || NEW_GROUP_DEFAULT_NAME,
+        title: name.trim() || newGroupDefaultName(t.locale),
         takenNames: members.map((member) => member.name),
         roles: members.map((member) => member.role),
         takenAvatarShapes: members.flatMap((member) =>
@@ -301,38 +307,40 @@ export function NewGroupModal({
             }}
           >
             <div className="px-4 pt-3.5 pb-1">
-              <Dialog.Title className="font-medium text-fg text-sm">New group</Dialog.Title>
+              <Dialog.Title className="font-medium text-fg text-sm">
+                {t("newGroup.title")}
+              </Dialog.Title>
               <Dialog.Description className="mt-0.5 text-2xs text-fg-faint">
-                Agents that work together in one folder.
+                {t("newGroup.description")}
               </Dialog.Description>
             </div>
 
             <div className="grid grid-cols-2 gap-2 px-4 pt-2">
               <label className="flex flex-col gap-1">
-                <span className="text-2xs text-fg-subtle">Folder</span>
+                <span className="text-2xs text-fg-subtle">{t("newGroup.folder")}</span>
                 <select
                   className={cn(FIELD, "px-2")}
                   onChange={(event) => void chooseFolder(event.target.value)}
                   value={workspaceId}
                 >
                   <option disabled value="">
-                    Choose a folder
+                    {t("newGroup.chooseFolder")}
                   </option>
                   {projects.map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.displayName}
                     </option>
                   ))}
-                  <option value={ADD_FOLDER}>Add folder…</option>
+                  <option value={ADD_FOLDER}>{t("newGroup.addFolder")}</option>
                 </select>
               </label>
               <label className="flex flex-col gap-1">
-                <span className="text-2xs text-fg-subtle">Name</span>
+                <span className="text-2xs text-fg-subtle">{t("newGroup.name")}</span>
                 <input
                   className={FIELD}
                   maxLength={120}
                   onChange={(event) => setName(event.target.value)}
-                  placeholder={NEW_GROUP_DEFAULT_NAME}
+                  placeholder={newGroupDefaultName(t.locale)}
                   value={name}
                 />
               </label>
@@ -358,7 +366,7 @@ export function NewGroupModal({
                   role="tab"
                   type="button"
                 >
-                  {item.label}
+                  {t(item.label)}
                 </button>
               ))}
             </div>
@@ -373,7 +381,7 @@ export function NewGroupModal({
                       onClick={() => addCollabPipeline()}
                       type="button"
                     >
-                      Collab pipeline · Planner → Builder → Reviewer
+                      {t("newGroup.collabPipeline")}
                     </button>
                     <ul className="grid grid-cols-2 gap-2">
                       {AGENT_TEMPLATES.map((template) => {
@@ -404,7 +412,7 @@ export function NewGroupModal({
                                   </span>
                                   {template.suggestedLead ? (
                                     <IconCrown
-                                      aria-label="Suggested lead"
+                                      aria-label={t("newGroup.suggestedLead")}
                                       className="text-amber-400"
                                       size={12}
                                     />
@@ -423,7 +431,7 @@ export function NewGroupModal({
                             </div>
                             <div className="flex justify-end gap-1">
                               <button
-                                aria-label={`Customize ${template.name}`}
+                                aria-label={t("newGroup.customizeLabel", { name: template.name })}
                                 className="h-6 rounded-md px-2 text-2xs text-fg-subtle hover:bg-hover hover:text-fg"
                                 onClick={() =>
                                   setAgentDialog({
@@ -440,16 +448,16 @@ export function NewGroupModal({
                                 }
                                 type="button"
                               >
-                                Customize
+                                {t("newGroup.customize")}
                               </button>
                               <button
-                                aria-label={`Add ${template.name}`}
+                                aria-label={t("newGroup.addLabel", { name: template.name })}
                                 className="flex h-6 items-center gap-1 rounded-md bg-chip px-2 text-2xs text-fg hover:bg-chip-strong"
                                 onClick={() => addTemplate(template)}
                                 type="button"
                               >
                                 <IconPlus size={11} />
-                                Add
+                                {t("newGroup.add")}
                               </button>
                             </div>
                           </li>
@@ -459,18 +467,15 @@ export function NewGroupModal({
                   </div>
                 ) : tab === "copy" ? (
                   <div className="flex flex-col gap-1">
-                    <p className="mb-1 text-2xs text-fg-faint">
-                      Adds an independent copy: same name, role, instructions, model and look, no
-                      history. Editing it never changes the original.
-                    </p>
+                    <p className="mb-1 text-2xs text-fg-faint">{t("newGroup.copyHint")}</p>
                     {agents === null ? (
-                      <p className="text-xs text-fg-faint">Loading agents…</p>
+                      <p className="text-xs text-fg-faint">{t("newGroup.loadingAgents")}</p>
                     ) : agentsError ? (
                       <p className="text-xs text-danger" role="alert">
                         {agentsError}
                       </p>
                     ) : copyable.length === 0 ? (
-                      <p className="text-xs text-fg-faint">No agents in other groups yet.</p>
+                      <p className="text-xs text-fg-faint">{t("newGroup.noCopyable")}</p>
                     ) : (
                       <ul className="flex flex-col gap-0.5">
                         {copyable.map((agent) => {
@@ -497,14 +502,17 @@ export function NewGroupModal({
                                 {groupName}
                               </span>
                               <button
-                                aria-label={`Copy ${agent.name} from ${groupName}`}
+                                aria-label={t("newGroup.copyLabel", {
+                                  name: agent.name,
+                                  group: groupName,
+                                })}
                                 className="h-6 rounded-md bg-chip px-2 text-2xs text-fg hover:bg-chip-strong"
                                 onClick={() =>
                                   add(copyMember(agent, members, nextKey(), fallbackModelId), false)
                                 }
                                 type="button"
                               >
-                                Copy
+                                {t("newGroup.copy")}
                               </button>
                             </li>
                           );
@@ -514,35 +522,34 @@ export function NewGroupModal({
                   </div>
                 ) : (
                   <div className="flex flex-col items-start gap-2 text-xs text-fg-subtle">
-                    <p>
-                      A custom agent needs a name and a model. Leave the role and instructions empty
-                      to generate them: the roles already chosen here are sent, so the new one
-                      complements them.
-                    </p>
+                    <p>{t("newGroup.customHint")}</p>
                     <button
                       className="flex h-7 items-center gap-1 rounded-md bg-accent px-3 text-white text-xs hover:opacity-90"
                       onClick={() => setAgentDialog({})}
                       type="button"
                     >
                       <IconPlus size={12} />
-                      New agent…
+                      {t("newGroup.newAgent")}
                     </button>
                   </div>
                 )}
               </div>
 
               <section
-                aria-label="Members"
+                aria-label={t("newGroup.members")}
                 className="scroll-thin flex min-h-0 flex-col gap-1 overflow-y-auto border-hairline-soft border-l p-3"
               >
-                <h3 className="mb-1 text-2xs text-fg-subtle">Members</h3>
+                <h3 className="mb-1 text-2xs text-fg-subtle">{t("newGroup.members")}</h3>
                 {members.length === 0 ? (
-                  <p className="text-2xs text-fg-faint">Add at least 2 agents.</p>
+                  <p className="text-2xs text-fg-faint">
+                    {t("newGroup.addAtLeast", { count: GROUP_MIN_MEMBERS })}
+                  </p>
                 ) : null}
                 <ul className="flex flex-col gap-1">
                   {members.map((member, index) => {
                     const isLead = member.key === leadKey;
-                    const label = member.name.trim() || `member ${index + 1}`;
+                    const label =
+                      member.name.trim() || t("newGroup.memberFallback", { index: index + 1 });
                     return (
                       <li
                         className="flex flex-col gap-1 rounded-md border border-hairline-soft p-1.5"
@@ -561,27 +568,31 @@ export function NewGroupModal({
                             size={20}
                           />
                           <input
-                            aria-label={`Name of member ${index + 1}`}
+                            aria-label={t("newGroup.memberName", { index: index + 1 })}
                             className={cn(FIELD, "h-7 text-xs")}
                             maxLength={80}
                             onChange={(event) => update(member.key, { name: event.target.value })}
                             value={member.name}
                           />
                           <button
-                            aria-label={isLead ? `${label} is the lead` : `Make ${label} lead`}
+                            aria-label={
+                              isLead
+                                ? t("newGroup.isLead", { name: label })
+                                : t("newGroup.makeLeadLabel", { name: label })
+                            }
                             aria-pressed={isLead}
                             className={cn(
                               "rounded p-1 hover:bg-hover",
                               isLead ? "text-amber-400" : "text-fg-faint hover:text-fg",
                             )}
                             onClick={() => setLeadKey(isLead ? null : member.key)}
-                            title={isLead ? "Lead (click to clear)" : "Make lead"}
+                            title={isLead ? t("newGroup.leadClear") : t("newGroup.makeLead")}
                             type="button"
                           >
                             <IconCrown size={12} />
                           </button>
                           <button
-                            aria-label={`Remove ${label}`}
+                            aria-label={t("common.remove", { name: label })}
                             className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg"
                             onClick={() => remove(member.key)}
                             type="button"
@@ -591,15 +602,15 @@ export function NewGroupModal({
                         </div>
                         <div className="flex items-center gap-1.5 pl-6 text-2xs text-fg-faint">
                           <span className="min-w-0 flex-1 truncate">
-                            {member.role || "No role"}
+                            {member.role || t("newGroup.noRole")}
                           </span>
                           <span data-testid="new-group-member-source">
-                            {SOURCE_LABEL[member.source]}
+                            {t(SOURCE_LABEL[member.source])}
                           </span>
                         </div>
                         {!member.templateId && !member.modelId ? (
                           <select
-                            aria-label={`Model of ${label}`}
+                            aria-label={t("newGroup.modelOf", { name: label })}
                             className={cn(FIELD, "h-7 px-2 text-xs")}
                             onChange={(event) =>
                               update(member.key, { modelId: event.target.value })
@@ -607,7 +618,9 @@ export function NewGroupModal({
                             value=""
                           >
                             <option disabled value="">
-                              {models.length === 0 ? "No model configured" : "Choose a model"}
+                              {models.length === 0
+                                ? t("common.noModelConfigured")
+                                : t("newGroup.chooseModel")}
                             </option>
                             {models.map((model) => (
                               <option key={model.id} value={model.id}>
@@ -650,7 +663,7 @@ export function NewGroupModal({
                 onClick={() => onOpenChange(false)}
                 type="button"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className={cn(
@@ -662,7 +675,7 @@ export function NewGroupModal({
                 disabled={!canCreate}
                 type="submit"
               >
-                {busy ? "Creating…" : "Create"}
+                {busy ? t("newGroup.creating") : t("newGroup.create")}
               </button>
             </div>
           </form>

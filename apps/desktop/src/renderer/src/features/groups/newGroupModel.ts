@@ -9,6 +9,7 @@ import type {
 } from "../../../../shared/contracts";
 import { AGENT_AVATAR_SHAPES, allocateUniqueGroupAvatarShapes } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
+import { groupText } from "../../../../shared/group-room-locale";
 
 /*
  * The create-group modal (A4), pure part: the member list the user builds
@@ -34,17 +35,37 @@ export type NewGroupMember = {
   avatarShape?: AgentAvatarShape;
 };
 
-/** Group name used when the name field is left empty. */
-export const NEW_GROUP_DEFAULT_NAME = "New group";
+/** Group name used when the name field is left empty, in the room locale. */
+export function newGroupDefaultName(locale?: string | null): string {
+  return groupText("newGroup.title", locale);
+}
 
+/** en value of `newGroupDefaultName` (tests and English callers). */
+export const NEW_GROUP_DEFAULT_NAME = newGroupDefaultName("en");
+
+export type NewGroupHintKey = "folder" | "min" | "max" | "names" | "emptyName" | "model";
+
+/** "Create" blockers in the room locale (catalog `hint.*`). */
+export function newGroupHint(key: NewGroupHintKey, locale?: string | null): string {
+  switch (key) {
+    case "min":
+      return groupText("hint.min", locale, { count: GROUP_MIN_MEMBERS });
+    case "max":
+      return groupText("hint.max", locale, { count: GROUP_MAX_MEMBERS });
+    default:
+      return groupText(`hint.${key}`, locale);
+  }
+}
+
+/** en values of `newGroupHint` (tests compare English). */
 export const NEW_GROUP_HINTS = {
-  folder: "Choose a folder for the group.",
-  min: `A group needs at least ${GROUP_MIN_MEMBERS} agents.`,
-  max: `A group can have at most ${GROUP_MAX_MEMBERS} agents.`,
-  names: "Each agent needs a different name.",
-  emptyName: "Every agent needs a name.",
-  model: "Choose a model for every agent that isn't from a template.",
-} as const;
+  folder: newGroupHint("folder", "en"),
+  min: newGroupHint("min", "en"),
+  max: newGroupHint("max", "en"),
+  names: newGroupHint("names", "en"),
+  emptyName: newGroupHint("emptyName", "en"),
+  model: newGroupHint("model", "en"),
+} as const satisfies Record<NewGroupHintKey, string>;
 
 const nameKey = (name: string) => name.trim().toLocaleLowerCase();
 
@@ -195,19 +216,23 @@ export function newGroupCounter(count: number): string {
  * 2..10 count come first; names and models mirror the IPC rules so the user
  * sees them before the round trip (the IPC error still wins, shown inline).
  */
-export function newGroupBlocker(state: {
-  workspaceId: string;
-  members: readonly NewGroupMember[];
-}): string | null {
-  if (!state.workspaceId) return NEW_GROUP_HINTS.folder;
+export function newGroupBlocker(
+  state: {
+    workspaceId: string;
+    members: readonly NewGroupMember[];
+  },
+  locale?: string | null,
+): string | null {
+  const hint = (key: NewGroupHintKey) => newGroupHint(key, locale);
+  if (!state.workspaceId) return hint("folder");
   const count = state.members.length;
-  if (count < GROUP_MIN_MEMBERS) return NEW_GROUP_HINTS.min;
-  if (count > GROUP_MAX_MEMBERS) return NEW_GROUP_HINTS.max;
-  if (state.members.some((member) => !member.name.trim())) return NEW_GROUP_HINTS.emptyName;
+  if (count < GROUP_MIN_MEMBERS) return hint("min");
+  if (count > GROUP_MAX_MEMBERS) return hint("max");
+  if (state.members.some((member) => !member.name.trim())) return hint("emptyName");
   const keys = state.members.map((member) => nameKey(member.name));
-  if (new Set(keys).size !== keys.length) return NEW_GROUP_HINTS.names;
+  if (new Set(keys).size !== keys.length) return hint("names");
   if (state.members.some((member) => !member.templateId && !member.modelId.trim())) {
-    return NEW_GROUP_HINTS.model;
+    return hint("model");
   }
   return null;
 }
@@ -243,15 +268,22 @@ export function resolveNewGroupLead(
 }
 
 /** The ONE `group:create` payload: members in order, the Lead by its final name. */
-export function newGroupCreateInput(state: {
-  name: string;
-  workspaceId: string;
-  members: readonly NewGroupMember[];
-  leadKey: string | null;
-}): CreateAgentGroupInput {
+export function newGroupCreateInput(
+  state: {
+    name: string;
+    workspaceId: string;
+    members: readonly NewGroupMember[];
+    leadKey: string | null;
+  },
+  /**
+   * Room locale of the blank-name default (the modal's placeholder). Omitted =
+   * English, as before; `null` = the renderer locale (`navigator.language`).
+   */
+  locale: string | null = "en",
+): CreateAgentGroupInput {
   const lead = resolveNewGroupLead(state.members, state.leadKey);
   return {
-    name: state.name.trim() || NEW_GROUP_DEFAULT_NAME,
+    name: state.name.trim() || newGroupDefaultName(locale),
     workspaceId: state.workspaceId,
     members: state.members.map(newGroupMemberInput),
     ...(lead ? { leadName: lead.name.trim() } : {}),

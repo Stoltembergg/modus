@@ -11,17 +11,19 @@ import {
   filterMessagesByExecution,
   shortExecutionLabel,
 } from "../../../../shared/group-execution-link";
+import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
 import { isNearBottom } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import { deriveGroupDelivery, indexTurnRepliesByTrigger } from "./groupDelivery";
 import type { MentionMember } from "./groupMentions";
+import { useGroupText } from "./groupRoomI18n";
 import { memberLabels } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
 
-export const GROUP_ROOM_EMPTY_TEXT =
-  "Write to the group. Members pick up what fits — or @mention someone.";
+/** en catalog value (tests); the room renders `list.empty` in its locale. */
+export const GROUP_ROOM_EMPTY_TEXT = GROUP_ROOM_TEXT_EN["list.empty"];
 
 /** Virtualize once the transcript is large enough to matter for scroll cost. */
 export const GROUP_MESSAGE_VIRTUALIZE_THRESHOLD = 40;
@@ -33,6 +35,7 @@ const ESTIMATED_DAY_SEPARATOR_PX = 28;
 export {
   GroupMessageRow,
   isActiveWaitingStatus,
+  isGroupMessageWaitingForYou,
   isNoNextOwnerStatus,
   isWaitingStatus,
   memberColor,
@@ -91,6 +94,7 @@ export function GroupMessageList({
   /** Search is owned by GroupRoom and rendered in the room's top bar. */
   searchQuery?: string | undefined;
 }) {
+  const t = useGroupText();
   const scrollRef = useRef<HTMLDivElement>(null);
   const anchorRef = useRef<{ first: string | undefined; height: number; nearBottom: boolean }>({
     first: undefined,
@@ -130,8 +134,8 @@ export function GroupMessageList({
     [executionFilter, roomMessages],
   );
   const transcriptItems = useMemo(
-    () => withGroupDaySeparators(renderedMessages),
-    [renderedMessages],
+    () => withGroupDaySeparators(renderedMessages, new Date(), t.locale),
+    [renderedMessages, t.locale],
   );
   const tokenTotals = useMemo(
     () => estimateTokensByExecution(renderedMessages),
@@ -362,7 +366,7 @@ export function GroupMessageList({
               data-testid="group-execution-filter"
             >
               <span className="min-w-0 flex-1 truncate">
-                This execution ·{" "}
+                {t("list.thisExecution")} ·{" "}
                 <span className="text-fg">
                   {shortExecutionLabel(executionFilter, filterRoot?.body)}
                 </span>
@@ -373,17 +377,17 @@ export function GroupMessageList({
                 onClick={() => onExecutionFilterChange?.(undefined)}
                 type="button"
               >
-                Show all
+                {t("list.showAll")}
               </button>
             </div>
           ) : null}
           {loadingOlder ? (
-            <div className="text-center text-2xs text-fg-faint">Loading older messages…</div>
+            <div className="text-center text-2xs text-fg-faint">{t("list.loadingOlder")}</div>
           ) : null}
           {error ? <div className="text-center text-danger text-xs">{error}</div> : null}
           {loaded && roomMessages.length === 0 && !error && visibleWorkingRows.length === 0 ? (
             <div className="py-16 text-center text-fg-faint text-sm" data-testid="group-room-empty">
-              {GROUP_ROOM_EMPTY_TEXT}
+              {t("list.empty")}
             </div>
           ) : null}
           {searching && renderedMessages.length === 0 && roomMessages.length > 0 ? (
@@ -391,7 +395,7 @@ export function GroupMessageList({
               className="py-10 text-center text-fg-faint text-sm"
               data-testid="group-conversation-search-empty"
             >
-              No messages match “{searchQuery.trim()}”.
+              {t("list.noMatches", { query: searchQuery.trim() })}
             </div>
           ) : null}
           {virtualize ? (
@@ -448,13 +452,13 @@ export function GroupMessageList({
       </div>
       {newMessageCount > 0 ? (
         <button
-          aria-label={`${newMessageCount} new ${newMessageCount === 1 ? "message" : "messages"}`}
+          aria-label={t.plural("list.newMessages", newMessageCount)}
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-hairline bg-elevated px-3 py-1.5 text-xs text-fg shadow-lg hover:bg-hover"
           data-testid="group-new-messages"
           onClick={jumpToLatest}
           type="button"
         >
-          {newMessageCount} new {newMessageCount === 1 ? "message" : "messages"} ↓
+          {t.plural("list.newMessages", newMessageCount)} ↓
         </button>
       ) : null}
     </div>

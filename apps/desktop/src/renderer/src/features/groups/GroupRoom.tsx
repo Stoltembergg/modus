@@ -9,11 +9,7 @@ import type {
   GroupRuntimeEvent,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
-import {
-  GROUP_BLOCKED_TEXT,
-  type GroupBlockedReason,
-  groupBlockedReason,
-} from "../../../../shared/group-blocked";
+import { type GroupBlockedReason, groupBlockedReason } from "../../../../shared/group-blocked";
 import { deriveGroupCollabStage } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import {
@@ -45,6 +41,7 @@ import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { archivedMemberIds, replyAuthorOf } from "./groupModelChipRules";
+import { GroupRoomLocaleProvider, useGroupText } from "./groupRoomI18n";
 import { replyPreview } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
@@ -84,6 +81,11 @@ export type GroupRoomProps = {
    * header portals into that strip (no second internal header bar).
    */
   chromeHost?: HTMLElement | null | undefined;
+  /**
+   * Room locale tag (C6). Omitted = the renderer locale (`navigator.language`),
+   * resolved like the catalog: pt* → pt, zh* → zh, anything else → en.
+   */
+  locale?: string | null | undefined;
 };
 
 /** A member's avatar in the room (chips and message authors; A3). */
@@ -92,7 +94,11 @@ export type RoomAvatar = WorkingMemberAvatar;
 /** The group room (main panel): chrome header, message list, and composer. */
 export function GroupRoom(props: GroupRoomProps) {
   // A room owns its reply, composer, questions and scroll lifetime.
-  return <GroupRoomContent key={props.group.id} {...props} />;
+  return (
+    <GroupRoomLocaleProvider locale={props.locale}>
+      <GroupRoomContent key={props.group.id} {...props} />
+    </GroupRoomLocaleProvider>
+  );
 }
 
 function GroupRoomContent({
@@ -111,6 +117,7 @@ function GroupRoomContent({
   onAgentsChanged,
   chromeHost = null,
 }: GroupRoomProps) {
+  const t = useGroupText();
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
@@ -199,7 +206,7 @@ function GroupRoomContent({
     }
     return map;
   }, [group.members]);
-  const { openCount, label: activityLabel } = activityButtonMeta(tasks);
+  const { openCount, label: activityLabel } = activityButtonMeta(tasks, t.locale);
   const titleToSessionId = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of members) map.set(member.title.toLocaleLowerCase(), member.sessionId);
@@ -275,11 +282,11 @@ function GroupRoomContent({
             activityOpen && "bg-hover text-fg-muted",
           )}
           onClick={() => setActivityOpen((open) => !open)}
-          title={activityOpen ? "Hide activity" : "Show activity"}
+          title={activityOpen ? t("room.hideActivity") : t("room.showActivity")}
           type="button"
         >
           <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
-          Activity
+          {t("activity.title")}
           <span className="tabular-nums" data-testid="group-task-count">
             {openCount}
           </span>
@@ -408,20 +415,23 @@ export function BlockedBanner({
   reason: GroupBlockedReason;
   onAction?: (() => void) | undefined;
 }) {
+  const t = useGroupText();
   return (
     <div
       className="mx-4 mb-3 flex items-center gap-3 rounded-lg border border-hairline bg-chip px-3 py-2 text-xs text-fg-muted"
       data-testid="group-blocked-banner"
       role="status"
     >
-      <span className="min-w-0 flex-1">{GROUP_BLOCKED_TEXT[reason]}</span>
+      <span className="min-w-0 flex-1">
+        {reason === "project-required" ? t("blocked.projectRequired") : t("blocked.minMembers")}
+      </span>
       {onAction ? (
         <button
           className="h-7 shrink-0 rounded-md bg-accent px-3 text-white text-xs hover:opacity-90"
           onClick={onAction}
           type="button"
         >
-          {reason === "project-required" ? "Choose folder" : "Add agent"}
+          {reason === "project-required" ? t("room.chooseFolder") : t("room.addAgent")}
         </button>
       ) : null}
     </div>

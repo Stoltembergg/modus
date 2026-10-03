@@ -13,6 +13,7 @@ import type {
 } from "../../../../shared/contracts";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
 import { GROUP_ERROR_MESSAGES } from "./groupErrors";
+import { GroupRoomLocaleProvider } from "./groupRoomI18n";
 import { NewGroupModal, type NewGroupServices } from "./NewGroupModal";
 import { NEW_GROUP_HINTS } from "./newGroupModel";
 
@@ -352,5 +353,65 @@ describe("NewGroupModal (A4)", () => {
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
     expect(screen.getByTestId("new-group-modal")).toBeTruthy();
     expect(createButton(modal).disabled).toBe(false);
+  });
+});
+
+describe("NewGroupModal blank name in the room locale (C6)", () => {
+  async function createBlank(
+    locale: string,
+    labels: { folder: string; add: string; create: string },
+  ) {
+    const user = userEvent.setup();
+    const create = vi.fn(async (_input: CreateAgentGroupInput) => undefined);
+    render(
+      <GroupRoomLocaleProvider locale={locale}>
+        <NewGroupModal
+          defaultModelId="m-2"
+          defaultWorkspaceId="ws-1"
+          groups={[ALPHA]}
+          models={MODELS}
+          onCreate={create}
+          onOpenChange={vi.fn()}
+          open
+          services={{
+            listAgents: vi.fn(async () => []),
+            addFolder: vi.fn(async () => null),
+            generateProfile: vi.fn(async () => ({ role: "", instructions: "", generated: false })),
+          }}
+          workspaces={WORKSPACES}
+        />
+      </GroupRoomLocaleProvider>,
+    );
+    const modal = screen.getByTestId("new-group-modal");
+    expect(within(modal).getByRole("combobox", { name: labels.folder })).toBeTruthy();
+    await user.click(within(modal).getByRole("button", { name: `${labels.add} Builder` }));
+    await user.click(within(modal).getByRole("button", { name: `${labels.add} Reviewer` }));
+    await user.click(within(modal).getByRole("button", { name: labels.create }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    return { modal, input: create.mock.calls[0]?.[0] as CreateAgentGroupInput };
+  }
+
+  it("pt: the placeholder and the stored name are both Novo grupo", async () => {
+    const { modal, input } = await createBlank("pt-BR", {
+      folder: "Pasta",
+      add: "Adicionar",
+      create: "Criar",
+    });
+    expect((within(modal).getByPlaceholderText("Novo grupo") as HTMLInputElement).value).toBe("");
+    expect(input.name).toBe("Novo grupo");
+  });
+
+  it("zh: stores 新群组", async () => {
+    const { input } = await createBlank("zh-CN", { folder: "文件夹", add: "添加", create: "创建" });
+    expect(input.name).toBe("新群组");
+  });
+
+  it("en: stores New group (unchanged)", async () => {
+    const { input } = await createBlank("en-US", {
+      folder: "Folder",
+      add: "Add",
+      create: "Create",
+    });
+    expect(input.name).toBe("New group");
   });
 });

@@ -3,6 +3,15 @@
  * Uses the app/renderer locale when available; falls back to English.
  */
 
+import {
+  GROUP_ROOM_TEXT_EN,
+  GROUP_ROOM_TEXT_PT,
+  GROUP_ROOM_TEXT_ZH,
+  type GroupTextKey,
+} from "./group-room-text";
+
+export type { GroupTextKey };
+
 export type GroupRoomLocale = "en" | "pt" | "zh";
 
 export type GroupThinkingStateKey =
@@ -357,3 +366,150 @@ export function groupModelCountLabel(count: number, locale?: string | null): str
       return `${count} models`;
   }
 }
+
+// ---------------------------------------------------------------------------
+// C6: the room's full UI copy (group-room-text.ts) and helpers around it.
+// ---------------------------------------------------------------------------
+
+const GROUP_ROOM_TEXT: Record<GroupRoomLocale, Record<GroupTextKey, string>> = {
+  en: GROUP_ROOM_TEXT_EN,
+  pt: GROUP_ROOM_TEXT_PT,
+  zh: GROUP_ROOM_TEXT_ZH,
+};
+
+export type GroupTextVars = Readonly<Record<string, string | number>>;
+
+function fillGroupText(template: string, vars?: GroupTextVars): string {
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    name in vars ? String(vars[name]) : whole,
+  );
+}
+
+/** Room UI copy for `key` in the room locale, with `{name}` placeholders filled. */
+export function groupText(key: GroupTextKey, locale?: string | null, vars?: GroupTextVars): string {
+  return fillGroupText(GROUP_ROOM_TEXT[resolveGroupRoomLocale(locale)][key], vars);
+}
+
+/** Keys that come as a `_one` / `_other` pair. */
+export type GroupPluralTextBase = GroupTextKey extends infer K
+  ? K extends `${infer B}_one`
+    ? B
+    : never
+  : never;
+
+/** Plural copy: `{base}_one` when count is 1, else `{base}_other`; `{count}` is filled. */
+export function groupPluralText(
+  base: GroupPluralTextBase,
+  count: number,
+  locale?: string | null,
+  vars?: GroupTextVars,
+): string {
+  const key = `${base}_${count === 1 ? "one" : "other"}` as GroupTextKey;
+  return groupText(key, locale, { count, ...vars });
+}
+
+const INTL_FALLBACK: Record<GroupRoomLocale, string> = { en: "en-US", pt: "pt-BR", zh: "zh-CN" };
+
+/**
+ * BCP-47 tag for `Intl` / `toLocale*String` in the room: the same resolution
+ * rule as the catalog (pt* → pt, zh* → zh, else en). The raw tag is kept when
+ * it resolves to the same catalog locale and `Intl` accepts it (en-GB, pt-PT,
+ * zh-TW keep their region); otherwise en-US / pt-BR / zh-CN. So dates and
+ * clocks are never in a different language from the copy around them.
+ */
+export function groupRoomIntlLocale(tag?: string | null): string {
+  const raw = (tag ?? detectRendererLocale()).trim().replace(/_/g, "-");
+  const locale = resolveGroupRoomLocale(raw);
+  try {
+    const canonical = Intl.getCanonicalLocales(raw)[0];
+    if (canonical?.toLowerCase().startsWith(locale)) return canonical;
+  } catch {
+    // invalid tag: fall back to the catalog default below
+  }
+  return INTL_FALLBACK[locale];
+}
+
+/**
+ * Status bodies persisted by the Group Runtime (`GROUP_STATUS_TEXT` in main)
+ * stay English in the DB, because agents read them back in the transcript. The
+ * room localises them at render time: each English template becomes a matcher
+ * (`{x}` captures), and a match is rendered with the same key in `locale`.
+ * Unknown bodies come back unchanged.
+ */
+const PERSISTED_STATUS_KEYS = [
+  "status.turnFailed",
+  "status.turnStopped",
+  "status.stoppedByYou",
+  "status.noNextOwner",
+  "status.worktreeReady",
+  "status.archived",
+  "status.limitAgentMessages",
+  "status.limitMemberWakes",
+  "status.limitInputTokens",
+  "status.limitContext",
+] as const satisfies readonly GroupTextKey[];
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const PERSISTED_STATUS_MATCHERS = PERSISTED_STATUS_KEYS.map((key) => {
+  const names: string[] = [];
+  const source = GROUP_ROOM_TEXT_EN[key]
+    .split(/(\{\w+\})/)
+    .map((part) => {
+      const name = /^\{(\w+)\}$/.exec(part)?.[1];
+      if (!name) return escapeRegExp(part);
+      names.push(name);
+      return "(.+?)";
+    })
+    .join("");
+  return { key, names, pattern: new RegExp(`^${source}$`, "s") };
+});
+
+/** The catalog key of a persisted English status body, or null. */
+export function matchGroupStatusBody(
+  body: string,
+): { key: GroupTextKey; vars: Record<string, string> } | null {
+  const text = body.trim();
+  if (isLegacyWaitingForYouBody(text)) return null;
+  for (const matcher of PERSISTED_STATUS_MATCHERS) {
+    const match = matcher.pattern.exec(text);
+    if (!match) continue;
+    const vars: Record<string, string> = {};
+    matcher.names.forEach((name, index) => {
+      vars[name] = match[index + 1] ?? "";
+    });
+    return { key: matcher.key, vars };
+  }
+  return null;
+}
+
+/** Render-time translation of a persisted status body (unknown text unchanged). */
+export function localizeGroupStatusBody(body: string, locale?: string | null): string {
+  if (isLegacyWaitingForYouBody(body)) {
+    return body.trim().replace(/^Waiting for you/, groupStatusLabel("waitingForYou", locale));
+  }
+  const found = matchGroupStatusBody(body);
+  return found ? groupText(found.key, locale, found.vars) : body;
+}
+
+/**
+ * Legacy text detection of the amber "Waiting for you" status: rows written
+ * before 90b751e carry only the English body. New turns mark the card with
+ * `status: "awaiting_user"` instead (see `isGroupMessageWaitingForYou`).
+ */
+export function isLegacyWaitingForYouBody(body: string): boolean {
+  return body.trim().startsWith("Waiting for you");
+}
+
+/**
+ * Every catalog of the room, per locale, for the key-parity test. Adding a
+ * catalog here puts it under the en/pt/zh parity check.
+ */
+export const GROUP_ROOM_CATALOGS = {
+  labels: LABELS,
+  statusOnly: STATUS_ONLY_LABELS,
+  memberCard: MEMBER_CARD_TEXT,
+  modelChip: MODEL_CHIP_TEXT,
+  text: GROUP_ROOM_TEXT,
+} as const satisfies Record<string, Record<GroupRoomLocale, Record<string, string>>>;

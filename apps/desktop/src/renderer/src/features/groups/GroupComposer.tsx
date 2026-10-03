@@ -17,6 +17,7 @@ import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { GroupMemberQuestions } from "./GroupMemberQuestions";
 import { GroupModelChip } from "./GroupModelChip";
+import { describeGroupError } from "./groupErrors";
 import {
   COLLAB_PIPELINE_APPROVAL,
   COLLAB_PIPELINE_NEXT,
@@ -29,6 +30,7 @@ import {
   mentionSuggestions,
 } from "./groupMentions";
 import { type GroupModelChipModel, groupModelChip } from "./groupModelChipRules";
+import { useGroupText } from "./groupRoomI18n";
 import { MemberName } from "./MemberName";
 import { memberLabels } from "./memberLabels";
 import { AttachmentChip } from "./prompt-kit/PromptKit";
@@ -104,7 +106,7 @@ export function GroupComposer({
   leadSessionId,
   archivedSessionIds,
   models = NO_MODELS,
-  locale,
+  locale: localeProp,
   mode,
   replyAuthorSessionId,
 }: {
@@ -134,13 +136,15 @@ export function GroupComposer({
   archivedSessionIds?: ReadonlySet<string> | undefined;
   /** Configured models, for display names (unknown ids show raw). */
   models?: readonly GroupModelChipModel[];
-  /** Room locale override (tests); defaults to the browser locale. */
+  /** Room locale override (tests); defaults to the room provider, then the browser locale. */
   locale?: string | null | undefined;
   /** Room mode, for the chip's coordinator rule. */
   mode?: AgentGroupMode | undefined;
   /** Author of the message in `replyTo` (the runtime's thread-reply rule). */
   replyAuthorSessionId?: string | undefined;
 }) {
+  const t = useGroupText(localeProp);
+  const locale = t.locale;
   const [value, setValue] = useState(() => (groupId ? readGroupComposerDraft(groupId) : ""));
   const [caret, setCaret] = useState(() => {
     const initial = groupId ? readGroupComposerDraft(groupId) : "";
@@ -180,7 +184,7 @@ export function GroupComposer({
     remove,
     toContextItems,
     toPromptAttachments,
-  } = useGroupComposerAttachments();
+  } = useGroupComposerAttachments({ locale });
   const labels = useMemo(() => memberLabels(members), [members]);
   const waitingSessionIds = useMemo(() => {
     const memberIds = new Set(members.map((member) => member.sessionId));
@@ -294,7 +298,7 @@ export function GroupComposer({
       clear();
       onClearReply?.();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(describeGroupError(cause, locale));
     } finally {
       setSending(false);
     }
@@ -309,11 +313,8 @@ export function GroupComposer({
           role="status"
         >
           <IconClockPause size={ICON.sm} stroke={ICON_STROKE.sm} />
-          <span className="font-medium text-fg">Paused while Modus updates</span>
-          <span className="text-fg-faint">
-            Messages are saved. Pending tasks resume after restart. Interrupted runs stay visible
-            for you to resume.
-          </span>
+          <span className="font-medium text-fg">{t("composer.updatePausedTitle")}</span>
+          <span className="text-fg-faint">{t("composer.updatePausedBody")}</span>
         </div>
       ) : null}
       <GroupMemberQuestions labels={labels} waitingSessionIds={waitingSessionIds} />
@@ -323,7 +324,7 @@ export function GroupComposer({
           data-testid="group-composer-ready"
           role="status"
         >
-          {groupRoomLabel("ready")}
+          {groupRoomLabel("ready", locale)}
           <span className="text-fg-faint">
             {" · "}
             {waitingSessionIds
@@ -340,14 +341,14 @@ export function GroupComposer({
           data-testid="group-composer-reply"
         >
           <span className="min-w-0 flex-1 truncate">
-            Replying · <span className="text-fg-faint">{replyTo.preview}</span>
+            {t("composer.replying")} · <span className="text-fg-faint">{replyTo.preview}</span>
           </span>
           <button
             className="shrink-0 text-fg-faint hover:text-fg"
             onClick={() => onClearReply?.()}
             type="button"
           >
-            Cancel
+            {t("common.cancel")}
           </button>
         </div>
       ) : null}
@@ -357,22 +358,20 @@ export function GroupComposer({
           className="mb-2 space-y-2 rounded-xl border border-hairline bg-elevated px-3 py-2.5"
           data-testid="group-kickoff"
         >
-          <p className="font-medium text-fg text-xs">Kick off the group</p>
-          <p className="text-2xs text-fg-faint">
-            Outcome + first owner — the room stays the source of truth.
-          </p>
+          <p className="font-medium text-fg text-xs">{t("composer.kickoffTitle")}</p>
+          <p className="text-2xs text-fg-faint">{t("composer.kickoffHint")}</p>
           <label className="block text-2xs text-fg-muted">
-            Outcome
+            {t("composer.kickoffOutcome")}
             <input
               className="mt-1 h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none placeholder:text-fg-faint"
               data-testid="group-kickoff-outcome"
               onChange={(event) => setKickoffOutcome(event.currentTarget.value)}
-              placeholder="What should the group deliver?"
+              placeholder={t("composer.kickoffOutcomePlaceholder")}
               value={kickoffOutcome}
             />
           </label>
           <label className="block text-2xs text-fg-muted">
-            First owner
+            {t("composer.kickoffFirstOwner")}
             <select
               className="mt-1 h-8 w-full rounded-lg border border-hairline bg-canvas px-2.5 text-fg text-sm outline-none"
               data-testid="group-kickoff-owner"
@@ -406,7 +405,7 @@ export function GroupComposer({
             }}
             type="button"
           >
-            Insert kickoff
+            {t("composer.kickoffInsert")}
           </button>
         </div>
       ) : null}
@@ -485,7 +484,7 @@ export function GroupComposer({
           </div>
         ) : null}
         <textarea
-          aria-label="Message the group"
+          aria-label={t("composer.inputLabel")}
           className="block max-h-48 min-h-[44px] w-full resize-none bg-transparent px-3.5 pt-3 pb-1 text-[14px] text-fg leading-[1.6] outline-none placeholder:text-fg-faint"
           onChange={(event) => {
             setValue(event.currentTarget.value);
@@ -526,7 +525,7 @@ export function GroupComposer({
             }
           }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
-          placeholder="Message the group, @ to mention, attach files"
+          placeholder={t("composer.placeholder")}
           ref={inputRef}
           rows={1}
           value={value}
@@ -549,7 +548,7 @@ export function GroupComposer({
         >
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <button
-              aria-label="Attach files"
+              aria-label={t("composer.attachFiles")}
               className="flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-muted transition-colors hover:bg-hover hover:text-fg disabled:opacity-40"
               data-testid="group-composer-attach"
               disabled={attachments.length >= MAX_GROUP_ATTACHMENTS || sending}
@@ -563,7 +562,7 @@ export function GroupComposer({
                 className="m-0 flex flex-wrap items-center gap-1.5 border-0 p-0 text-2xs"
                 data-testid="group-composer-execution-mode"
               >
-                <legend className="sr-only">Execution mode</legend>
+                <legend className="sr-only">{t("composer.executionMode")}</legend>
                 <button
                   className={cn(
                     "rounded-md border px-2 py-1 font-medium transition-colors",
@@ -575,7 +574,7 @@ export function GroupComposer({
                   onClick={() => setExecutionMode("new")}
                   type="button"
                 >
-                  Nova tarefa
+                  {t("composer.newTask")}
                 </button>
                 <button
                   className={cn(
@@ -588,7 +587,7 @@ export function GroupComposer({
                   onClick={() => setExecutionMode("complement")}
                   type="button"
                 >
-                  Complementar
+                  {t("composer.complement")}
                 </button>
                 {executionMode === "complement" ? (
                   <span className="text-fg-faint" data-testid="group-composer-active-execution">
@@ -601,7 +600,7 @@ export function GroupComposer({
           <div className="flex shrink-0 items-center gap-1.5">
             {modelChip ? <GroupModelChip chip={modelChip} locale={locale} /> : null}
             <button
-              aria-label="Send"
+              aria-label={t("composer.send")}
               className="flex size-7 shrink-0 items-center justify-center rounded-full bg-focus-ring text-white transition-[background-color,transform,opacity] duration-150 hover:bg-focus-ring-soft active:scale-95 disabled:opacity-40 motion-reduce:transition-none"
               disabled={!canSend}
               onClick={() => void send()}

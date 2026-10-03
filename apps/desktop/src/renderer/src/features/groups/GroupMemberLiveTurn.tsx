@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { buildSafeChainOfThought } from "../../../../shared/group-prompt-kit";
+import { groupMemberCardText, groupRoomLabel } from "../../../../shared/group-room-locale";
 import { inlineLiveStatusLabel } from "../../../../shared/group-room-transcript";
 import { shouldShowStillWorking } from "../../../../shared/group-semantic-presence";
 import {
@@ -7,6 +8,7 @@ import {
   isStillWorking,
   STILL_WORKING_AFTER_MS,
 } from "./groupLiveTurn";
+import { useGroupText } from "./groupRoomI18n";
 import { PromptChainOfThought } from "./prompt-kit/PromptKit";
 
 /**
@@ -20,6 +22,7 @@ export function GroupMemberLiveTurn({
   mode: "running" | "queued";
   live: GroupLiveTurnSnapshot;
 }) {
+  const t = useGroupText();
   const [now, setNow] = useState(() => Date.now());
   const startedAtRef = useRef(Date.now());
   useEffect(() => {
@@ -44,7 +47,7 @@ export function GroupMemberLiveTurn({
   const working = mode === "running";
   const progress =
     mode === "queued"
-      ? ["Waiting for its turn"]
+      ? [groupMemberCardText("waitingForTurn", t.locale)]
       : buildSafeChainOfThought({
           phase: String(live.phase),
           activity: live.presence?.activity,
@@ -58,8 +61,13 @@ export function GroupMemberLiveTurn({
       if (writingStep) progress.push(writingStep);
     }
   }
-  if (still && !stream && !progress.some((step) => /still working/i.test(step))) {
-    progress.push("Still working…");
+  const stillWorkingLabel = groupRoomLabel("stillWorking", t.locale);
+  if (
+    still &&
+    !stream &&
+    !progress.some((step) => /still working/i.test(step) || step === stillWorkingLabel)
+  ) {
+    progress.push(stillWorkingLabel);
   }
   const progressItems = progress.slice(-4);
   const statusSummary = inlineLiveStatusLabel({
@@ -70,6 +78,7 @@ export function GroupMemberLiveTurn({
     stillWorking: !stream && still,
     startedAt: live.presence?.startedAt ?? (mode === "queued" ? startedAtRef.current : undefined),
     nowMs: now,
+    locale: t.locale ?? null,
   });
   const summary = progressItems[progressItems.length - 1] ?? statusSummary;
 
@@ -86,7 +95,7 @@ export function GroupMemberLiveTurn({
         data-working={working || undefined}
       />
       <div className="min-w-0 flex-1" data-testid="group-live-status">
-        <PromptChainOfThought items={progressItems} summary={summary} title="Progress" />
+        <PromptChainOfThought items={progressItems} summary={summary} title={t("live.progress")} />
       </div>
     </div>
   );
