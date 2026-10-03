@@ -46,6 +46,16 @@ const config: Configuration = {
       from: "resources/licenses",
       to: "licenses",
     },
+    // Repo-root LICENSE and third-party notices (React Bits, Agent Elements) ship in every
+    // package: Contents/Resources on macOS, resources\ on Windows, resources/ on Linux.
+    {
+      from: "../../LICENSE",
+      to: "LICENSE",
+    },
+    {
+      from: "../../THIRD_PARTY_NOTICES.md",
+      to: "THIRD_PARTY_NOTICES.md",
+    },
     {
       from: `../../target/release/${ptyHostBinary}`,
       to: `bin/${ptyHostBinary}`,
