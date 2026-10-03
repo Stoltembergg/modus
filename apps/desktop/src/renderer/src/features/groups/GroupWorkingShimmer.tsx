@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { groupAgentWorkingLabel } from "../../../../shared/group-room-locale";
+import { useGroupRoomLocale } from "./groupRoomI18n";
 import type { MemberLabel } from "./memberLabels";
 import { TextShimmer } from "./prompt-kit/PromptKit";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
@@ -13,12 +14,13 @@ import { groupWorkingShimmerText, shouldShowGroupWorkingShimmer } from "./workin
 export function GroupWorkingShimmer({
   rows,
   labels,
-  locale,
+  locale: localeProp,
 }: {
   rows: readonly GroupMemberWorkingRow[];
   labels: ReadonlyMap<string, MemberLabel>;
   locale?: string | null;
 }) {
+  const locale = useGroupRoomLocale(localeProp);
   const visible = shouldShowGroupWorkingShimmer(rows);
   const needsTick = visible && rows.some((row) => row.mode === "queued" && !row.live.collapsed);
   const [now, setNow] = useState(() => Date.now());

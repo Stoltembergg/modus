@@ -1,5 +1,5 @@
 import type { GroupMessage } from "../../../../shared/contracts";
-import { groupStatusLabel, resolveGroupRoomLocale } from "../../../../shared/group-room-locale";
+import { groupStatusLabel, groupText } from "../../../../shared/group-room-locale";
 
 /**
  * Delivery state of a room message, derived ONLY from the canonical turn cards
@@ -135,21 +135,6 @@ export function deriveGroupDelivery(
   return { state: highest(members.map((member) => member.state)) ?? "delivered", members };
 }
 
-/** States with no room key of their own; the rest share the card's labels. */
-const OWN_LABELS: Record<
-  "en" | "pt" | "zh",
-  Record<"delivered" | "working" | "noReply" | "answered", string>
-> = {
-  en: { delivered: "Delivered", working: "Working", noReply: "No reply", answered: "Answered" },
-  pt: {
-    delivered: "Entregue",
-    working: "Trabalhando",
-    noReply: "Sem resposta",
-    answered: "Respondida",
-  },
-  zh: { delivered: "已送达", working: "工作中", noReply: "无回复", answered: "已回复" },
-};
-
 /**
  * Footer labels. Waiting / queued / failed / cancelled use `groupStatusLabel`,
  * the same function as the member card badge, so both read the same words.
@@ -163,6 +148,6 @@ export function groupDeliveryLabel(state: GroupDeliveryState, locale?: string | 
     case "cancelled":
       return groupStatusLabel(state, locale);
     default:
-      return OWN_LABELS[resolveGroupRoomLocale(locale)][state];
+      return groupText(`delivery.${state}`, locale);
   }
 }

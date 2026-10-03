@@ -6,7 +6,7 @@
 import type { GroupCollabStatus } from "./group-collab-status";
 import { parseGroupCollabStatusLine } from "./group-collab-status";
 import { formatGroupProgressLabel } from "./group-progress-label";
-import { groupRoomLabel } from "./group-room-locale";
+import { groupRoomLabel, groupText } from "./group-room-locale";
 
 /** Rigid handoff-packet keys moved out of the main timeline into Activity/Details. */
 export const HANDOFF_PACKET_KEYS = [
@@ -108,14 +108,20 @@ export function formatNaturalCollabStatus(
     case "handoff": {
       const objective = status.objective.trim();
       if (objective) return `@${status.targetName}, ${objective}`;
-      return `@${status.targetName}, please take this from here.`;
+      return groupText("collab.handoffDefault", locale, { name: status.targetName });
     }
     case "blocked":
-      return status.reason.trim() ? `Blocked — ${status.reason.trim()}` : "Blocked";
+      return status.reason.trim()
+        ? groupText("collab.blockedWith", locale, { text: status.reason.trim() })
+        : groupText("collab.blocked", locale);
     case "proposed":
-      return status.summary.trim() ? `Proposed — ${status.summary.trim()}` : "Proposed";
+      return status.summary.trim()
+        ? groupText("collab.proposedWith", locale, { text: status.summary.trim() })
+        : groupText("collab.proposed", locale);
     case "agreed":
-      return status.note.trim() ? `Agreed — ${status.note.trim()}` : "Agreed";
+      return status.note.trim()
+        ? groupText("collab.agreedWith", locale, { text: status.note.trim() })
+        : groupText("collab.agreed", locale);
     case "ready":
       return groupRoomLabel("ready", locale);
   }

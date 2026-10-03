@@ -22,6 +22,7 @@ import {
 import { agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
+import { useGroupText } from "./groupRoomI18n";
 import { type GroupMemberStatesById, memberActivityState } from "./useWorkingGroups";
 
 function AgentMorphEdit({
@@ -47,11 +48,12 @@ function AgentMorphEdit({
   triggerTitle?: string;
   triggerClassName?: string;
 }) {
+  const t = useGroupText();
   const [open, setOpen] = useState(false);
   return (
     <MorphingDialog onOpenChange={setOpen} open={open}>
       <MorphingDialogTrigger
-        aria-label={triggerLabel ?? `Edit ${agent.name}`}
+        aria-label={triggerLabel ?? t("popover.edit", { name: agent.name })}
         aria-description={triggerDescription}
         className={triggerClassName}
         data-testid="group-agent-avatar-trigger"
@@ -62,7 +64,9 @@ function AgentMorphEdit({
       <MorphingDialogContainer>
         <MorphingDialogContent className="relative w-[min(480px,calc(100vw-2rem))] popup-chrome">
           <MorphingDialogClose />
-          <MorphingDialogTitle className="sr-only">Edit {agent.name}</MorphingDialogTitle>
+          <MorphingDialogTitle className="sr-only">
+            {t("popover.edit", { name: agent.name })}
+          </MorphingDialogTitle>
           <div className="max-h-[80vh] overflow-y-auto" data-testid="morphing-agent-edit">
             <AgentDialog
               agent={agent}
@@ -103,6 +107,7 @@ export function GroupAgentsPopover({
   defaultModelId?: string | undefined;
   onAgentsChanged?(): void;
 }) {
+  const t = useGroupText();
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
@@ -123,7 +128,7 @@ export function GroupAgentsPopover({
   return (
     <div className="flex w-fit shrink-0 items-center">
       <fieldset
-        aria-label="Agent presence"
+        aria-label={t("popover.agentPresence")}
         className="m-0 flex shrink-0 items-center border-0 p-0 -space-x-2"
         data-testid="group-agent-presence"
       >
@@ -177,7 +182,10 @@ export function GroupAgentsPopover({
             />
           ) : (
             <button
-              aria-label={`${label} profile unavailable. ${AGENT_PRESENCE_LABEL[presence]}`}
+              aria-label={t("popover.profileUnavailable", {
+                name: label,
+                presence: AGENT_PRESENCE_LABEL[presence],
+              })}
               className="relative z-0 flex size-8 shrink-0 aspect-square items-center justify-center rounded-full"
               disabled
               key={member.sessionId}

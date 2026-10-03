@@ -4,6 +4,7 @@ import type { GroupSystemVariant } from "../../../../../shared/group-prompt-kit"
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
 import { cn } from "../../../lib/cn";
 import { ICON, ICON_STROKE } from "../../../lib/uiDensity";
+import { type GroupTextFn, useGroupText } from "../groupRoomI18n";
 
 /** Message card with avatar and identity in the product surface palette. */
 export function PromptMessage({
@@ -105,14 +106,15 @@ export function PromptTool({
   state?: "pending" | "running" | "completed" | "error";
   className?: string;
 }) {
+  const t = useGroupText();
   const badge =
     state === "completed"
-      ? "Completed"
+      ? t("kit.completed")
       : state === "error"
-        ? "Error"
+        ? t("kit.error")
         : state === "pending"
-          ? "Ready"
-          : "Running";
+          ? t("kit.ready")
+          : t("kit.running");
   return (
     <div
       className={cn(
@@ -138,7 +140,7 @@ export function PromptTool({
 
 /** @deprecated Room no longer persists Steps — kept for Activity/tests. */
 export function PromptSteps({
-  title = "Steps",
+  title,
   items,
   defaultOpen = false,
 }: {
@@ -146,6 +148,7 @@ export function PromptSteps({
   items: readonly string[];
   defaultOpen?: boolean;
 }) {
+  const t = useGroupText();
   const [open, setOpen] = useState(defaultOpen);
   if (items.length === 0) return null;
   return (
@@ -156,7 +159,7 @@ export function PromptSteps({
         onClick={() => setOpen((value) => !value)}
         type="button"
       >
-        <span className="font-medium">{title}</span>
+        <span className="font-medium">{title ?? t("kit.steps")}</span>
         <span className="tabular-nums">({items.length})</span>
       </button>
       <CollapsibleMotion open={open} preset="compact">
@@ -175,7 +178,7 @@ export function PromptSteps({
 export function PromptChainOfThought({
   items,
   defaultOpen = false,
-  title = "Progress",
+  title: titleProp,
   summary: summaryOverride,
 }: {
   items: readonly string[];
@@ -183,9 +186,11 @@ export function PromptChainOfThought({
   title?: string;
   summary?: string | undefined;
 }) {
+  const t = useGroupText();
+  const title = titleProp ?? t("live.progress");
   const [open, setOpen] = useState(defaultOpen);
   if (items.length === 0) return null;
-  const summary = summaryOverride?.trim() || items[items.length - 1] || "Progress";
+  const summary = summaryOverride?.trim() || items[items.length - 1] || title;
   return (
     <div className="mt-1" data-prompt-kit="chain-of-thought" data-testid="group-prompt-cot">
       <button
@@ -227,6 +232,7 @@ export function AttachmentChip({
   error?: string | undefined;
   onRemove?: (() => void) | undefined;
 }) {
+  const t = useGroupText();
   const isImage = mimeType.startsWith("image/");
   return (
     <div
@@ -252,12 +258,12 @@ export function AttachmentChip({
       <div className="min-w-0 flex-1">
         <div className="truncate text-2xs text-fg">{name}</div>
         <div className="truncate text-[10px] text-fg-faint">
-          {error ? error : [mimeTypeLabel(mimeType), sizeLabel].filter(Boolean).join(" · ")}
+          {error ? error : [mimeTypeLabel(mimeType, t), sizeLabel].filter(Boolean).join(" · ")}
         </div>
       </div>
       {onRemove ? (
         <button
-          aria-label={`Remove ${name}`}
+          aria-label={t("common.remove", { name })}
           className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full border border-hairline bg-elevated text-fg-faint opacity-0 transition-opacity hover:text-fg group-hover/chip:opacity-100"
           onClick={onRemove}
           type="button"
@@ -276,12 +282,12 @@ function fileExt(name: string, mimeType: string): string {
   return (subtype ?? "file").slice(0, 4);
 }
 
-function mimeTypeLabel(mimeType: string): string {
-  if (mimeType.startsWith("image/")) return "Image";
+function mimeTypeLabel(mimeType: string, t: GroupTextFn): string {
+  if (mimeType.startsWith("image/")) return t("kit.image");
   if (mimeType.includes("pdf")) return "PDF";
   if (mimeType.includes("json")) return "JSON";
-  if (mimeType.startsWith("text/")) return "Text";
-  return "File";
+  if (mimeType.startsWith("text/")) return t("kit.text");
+  return t("kit.file");
 }
 
 /**

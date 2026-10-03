@@ -17,10 +17,12 @@ import {
   IconUserQuestion,
 } from "@tabler/icons-react";
 import type { ReactNode } from "react";
+import { groupRoomIntlLocale } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { ICON_STROKE } from "../../lib/uiDensity";
 import { type GroupDelivery, type GroupDeliveryState, groupDeliveryLabel } from "./groupDelivery";
+import { useGroupRoomLocale } from "./groupRoomI18n";
 import type { MemberLabel } from "./memberLabels";
 
 export function GroupMessageHeader({
@@ -29,6 +31,7 @@ export function GroupMessageHeader({
   memberRole,
   createdAt,
   trailing,
+  locale: localeProp,
 }: {
   /** Small avatar (16px AgentAvatar or the user badge). */
   avatar?: ReactNode;
@@ -37,8 +40,11 @@ export function GroupMessageHeader({
   memberRole?: string | undefined;
   createdAt: string;
   trailing?: ReactNode;
+  /** Room locale for the clock (default: the room provider / renderer locale). */
+  locale?: string | null | undefined;
 }) {
   const ms = Date.parse(createdAt);
+  const intl = groupRoomIntlLocale(useGroupRoomLocale(localeProp));
   return (
     <div
       className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs"
@@ -53,9 +59,9 @@ export function GroupMessageHeader({
       <time
         className="text-2xs text-fg-faint tabular-nums"
         dateTime={createdAt}
-        title={Number.isNaN(ms) ? undefined : new Date(ms).toLocaleString()}
+        title={Number.isNaN(ms) ? undefined : new Date(ms).toLocaleString(intl)}
       >
-        {formatClock(ms)}
+        {formatClock(ms, undefined, intl)}
       </time>
       {trailing}
     </div>
@@ -95,13 +101,14 @@ export function GroupDeliveryFooter({
   delivery,
   labels,
   align,
-  locale,
+  locale: localeProp,
 }: {
   delivery: GroupDelivery;
   labels: ReadonlyMap<string, MemberLabel>;
   align: "start" | "end";
   locale?: string | null | undefined;
 }) {
+  const locale = useGroupRoomLocale(localeProp);
   const { state, members } = delivery;
   const Icon = DELIVERY_ICON[state];
   const label = groupDeliveryLabel(state, locale);

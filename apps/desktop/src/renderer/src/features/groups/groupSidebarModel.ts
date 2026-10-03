@@ -6,6 +6,7 @@ import type {
   AgentSessionInfo,
 } from "../../../../shared/contracts";
 import { type GroupBlockedReason, groupBlockedReason } from "../../../../shared/group-blocked";
+import { groupPluralText } from "../../../../shared/group-room-locale";
 import type { SessionActivity } from "../agent/agentEventHub";
 import { type AgentAvatarState, agentAvatarState, memberAvatar } from "../agents/agentAvatarModel";
 import { type GroupMemberStatesById, memberActivityState } from "./useWorkingGroups";
@@ -112,18 +113,23 @@ export function projectGroupNames(
   return groups.filter((group) => group.workspaceId === workspaceId).map((group) => group.name);
 }
 
-/** Remove-project confirmation when the Project owns groups (at least one name). */
-export function removeProjectGroupsWarning(names: readonly string[]): string {
-  const count = names.length;
-  const groups =
-    count === 1 ? "1 group, its agents and chats" : `${count} groups, their agents and chats`;
-  return `This also deletes ${groups}: ${names.join(", ")}`;
+/**
+ * Remove-project confirmation when the Project owns groups (at least one name).
+ * Defaults to English: its only caller is the sidebar, which is not localised
+ * yet (C6 covers the room); pass a locale once the sidebar is.
+ */
+export function removeProjectGroupsWarning(
+  names: readonly string[],
+  locale: string | null = "en",
+): string {
+  return groupPluralText("sidebar.removeProjectGroups", names.length, locale, {
+    names: names.join(", "),
+  });
 }
 
-/** Delete-group confirmation: an agent belongs to one group, so it goes with it. */
-export function groupDeleteConfirmLabel(agentCount: number): string {
-  const agents = agentCount === 1 ? "1 agent" : `${agentCount} agents`;
-  return `This deletes its ${agents}, their chats and all group messages`;
+/** Delete-group confirmation: an agent belongs to one group, so it goes with it. Same default as above. */
+export function groupDeleteConfirmLabel(agentCount: number, locale: string | null = "en"): string {
+  return groupPluralText("sidebar.deleteGroup", agentCount, locale);
 }
 
 /**

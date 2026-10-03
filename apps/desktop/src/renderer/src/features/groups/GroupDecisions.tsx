@@ -1,18 +1,22 @@
 import { IconChevronRight } from "@tabler/icons-react";
 import { useCallback, useEffect, useState } from "react";
 import type { GroupDecision, GroupRuntimeEvent } from "../../../../shared/contracts";
+import { groupRoomIntlLocale } from "../../../../shared/group-room-locale";
+import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
 import { cn } from "../../lib/cn";
 import { formatClock } from "../../lib/formatClock";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { describeGroupError } from "./groupErrors";
+import { useGroupText } from "./groupRoomI18n";
 import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 
-export const DECISIONS_EMPTY_TEXT = "No decisions yet";
+/** en catalog values (tests and callers comparing English); the UI uses the room locale. */
+export const DECISIONS_EMPTY_TEXT = GROUP_ROOM_TEXT_EN["decisions.empty"];
 /** Second-click label of the two-step "Delete" (like "Cancel task"). */
-export const DELETE_DECISION_CONFIRM_LABEL = "Click again to delete";
-export const FORMER_MEMBER_TEXT = "Former member";
+export const DELETE_DECISION_CONFIRM_LABEL = GROUP_ROOM_TEXT_EN["decisions.confirmDelete"];
+export const FORMER_MEMBER_TEXT = GROUP_ROOM_TEXT_EN["decisions.formerMember"];
 
 /**
  * The group's decisions (`group:list-decisions`, newest first). Reloads on
@@ -53,6 +57,7 @@ export function GroupDecisionsSection({
 }) {
   const { decisions, remove } = useGroupDecisions(groupId);
   const [open, setOpen] = useState(true);
+  const t = useGroupText();
   return (
     <section className="mb-3" data-testid="decision-section">
       <button
@@ -66,13 +71,13 @@ export function GroupDecisionsSection({
           size={ICON.xs}
           stroke={ICON_STROKE.xs}
         />
-        Decisions{" "}
+        {t("decisions.title")}{" "}
         <span className="tabular-nums" data-testid="decision-count">
           {decisions.length}
         </span>
       </button>
       {open && decisions.length === 0 ? (
-        <div className="px-1 py-2 text-fg-faint text-xs">{DECISIONS_EMPTY_TEXT}</div>
+        <div className="px-1 py-2 text-fg-faint text-xs">{t("decisions.empty")}</div>
       ) : null}
       {open
         ? decisions.map((decision) => (
@@ -97,6 +102,8 @@ function DecisionCard({
   labels: ReadonlyMap<string, MemberLabel>;
   onDeleted(decisionId: string): void;
 }) {
+  const t = useGroupText();
+  const intl = groupRoomIntlLocale(t.locale);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -116,7 +123,7 @@ function DecisionCard({
       await window.modus.group.deleteDecision(decision.id);
       onDeleted(decision.id);
     } catch (cause) {
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -134,16 +141,16 @@ function DecisionCard({
           {authorLabel ? (
             <MemberName label={authorLabel} />
           ) : (
-            <span className="text-fg-faint">{FORMER_MEMBER_TEXT}</span>
+            <span className="text-fg-faint">{t("decisions.formerMember")}</span>
           )}
         </span>
         <span aria-hidden>·</span>
         <time
           className="shrink-0"
           dateTime={decision.createdAt}
-          title={Number.isFinite(createdAt) ? new Date(createdAt).toLocaleString() : undefined}
+          title={Number.isFinite(createdAt) ? new Date(createdAt).toLocaleString(intl) : undefined}
         >
-          {formatClock(createdAt)}
+          {formatClock(createdAt, undefined, intl)}
         </time>
       </div>
       {error ? <div className="mt-1 text-danger">{error}</div> : null}
@@ -157,7 +164,7 @@ function DecisionCard({
         onClick={() => void remove()}
         type="button"
       >
-        {confirming ? DELETE_DECISION_CONFIRM_LABEL : "Delete"}
+        {confirming ? t("decisions.confirmDelete") : t("decisions.delete")}
       </button>
     </div>
   );
