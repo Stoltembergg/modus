@@ -180,5 +180,9 @@ select throws_ok(format($q$select private.claim_stripe_customer(%L, 'cus_Z')$q$,
   '42501', null, 'authenticated: claim_stripe_customer denied');
 select tests.clear_authentication();
 
+-- B3 follow-up (*_b3_subscriptions_plan_fk_index): FK subscriptions_plan_fkey is indexed.
+select has_index('public', 'subscriptions', 'subscriptions_plan_idx', array['plan'],
+  'subscriptions.plan (FK to plans) has an index');
+
 select * from finish();
 rollback;

@@ -193,6 +193,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
           MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+          MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: ${{ vars.MAIN_VITE_AUTH_EMAIL_REDIRECT_URL || 'https://modus-site-ruby.vercel.app/auth/confirmed' }}
         run: npm --workspace @modus/desktop exec -- electron-vite build
 
       - name: Package macOS ${{ matrix.electron_arch }} (unsigned)
@@ -301,6 +302,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
           MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+          MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: ${{ vars.MAIN_VITE_AUTH_EMAIL_REDIRECT_URL || 'https://modus-site-ruby.vercel.app/auth/confirmed' }}
         run: npm --workspace @modus/desktop exec -- electron-vite build
 
       - name: Package Windows x64 (unsigned)
@@ -377,6 +379,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
           MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+          MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: ${{ vars.MAIN_VITE_AUTH_EMAIL_REDIRECT_URL || 'https://modus-site-ruby.vercel.app/auth/confirmed' }}
         run: npm --workspace @modus/desktop exec -- electron-vite build
 
       - name: Package Linux x64 (AppImage + deb)

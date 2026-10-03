@@ -53,6 +53,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
           MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+          MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: ${{ vars.MAIN_VITE_AUTH_EMAIL_REDIRECT_URL || 'https://modus-site-ruby.vercel.app/auth/confirmed' }}
         run: |
           set +e
           npm --workspace @modus/desktop exec -- electron-vite build > electron-vite-build.log 2>&1
