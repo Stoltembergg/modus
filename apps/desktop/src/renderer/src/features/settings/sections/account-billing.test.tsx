@@ -98,15 +98,16 @@ describe("Account billing section", () => {
     expect(html).toContain("Mercado Pago");
     expect(html).toContain("Starter · R$ 49,90/mo");
     expect(html).toContain("10,000 credits per month");
-    expect(html).toContain("Subscribe with Mercado Pago");
+    expect(html).toContain("Subscribe</button>");
     expect(html).not.toMatch(/Stripe|card/i);
+    expect(html).not.toContain("Subscribe with");
     expect(html).not.toContain("Choose Free");
     expect(html).not.toContain("Manage billing");
   });
 
   it("shows the Stripe option only when the catalog returns a stripe row", () => {
     const html = markup({ ...READY, catalog: [MP_STARTER, STRIPE_STARTER] });
-    expect(html).toContain("Subscribe with Mercado Pago");
+    expect(html).toContain("Subscribe</button>");
     expect(html).toContain("Pay by card (Stripe)");
     expect(html).toContain("R$ 49,90/mo or $9.00/mo");
   });
@@ -114,16 +115,16 @@ describe("Account billing section", () => {
   it("has loading, error and empty catalog states without a buy button", () => {
     const loading = markup({ ...READY, status: "loading", catalog: null });
     expect(loading).toContain("Loading…");
-    expect(loading).not.toContain("Subscribe with");
+    expect(loading).not.toContain("Subscribe</button>");
     const failed = markup({ ...READY, catalog: null });
     expect(failed).toContain("Plans unavailable");
-    expect(failed).not.toContain("Subscribe with");
+    expect(failed).not.toContain("Subscribe</button>");
     const empty = markup({ ...READY, catalog: [] });
     expect(empty).toContain("No plans available");
-    expect(empty).not.toContain("Subscribe with");
+    expect(empty).not.toContain("Subscribe</button>");
     const errored = markup({ ...READY, status: "error", catalog: null, error: "Billing is down" });
     expect(errored).toContain("Billing is down");
-    expect(errored).not.toContain("Subscribe with");
+    expect(errored).not.toContain("Subscribe</button>");
   });
 
   it("shows a checkout error from the Function and keeps the button usable", () => {
@@ -132,7 +133,7 @@ describe("Account billing section", () => {
       error: "Mercado Pago is unavailable right now. Try again in a few minutes.",
     });
     expect(html).toContain("Mercado Pago is unavailable right now");
-    expect(html).toContain("Subscribe with Mercado Pago");
+    expect(html).toContain("Subscribe</button>");
   });
 
   it("does not offer a purchase to a subscribed user; Stripe subscribers keep the Portal", () => {
@@ -149,7 +150,7 @@ describe("Account billing section", () => {
       wallet: { balance: 11000, reserved: 0, planAllowance: 10000, periodEnd: null },
       lastReturn: "success",
     });
-    expect(mp).not.toContain("Subscribe with");
+    expect(mp).not.toContain("Subscribe</button>");
     expect(mp).not.toContain("Manage billing");
     expect(mp).toContain("billed by Mercado Pago");
     expect(mp).toContain("11,000");
@@ -168,7 +169,7 @@ describe("Account billing section", () => {
       },
     });
     expect(stripe).toContain("Manage billing");
-    expect(stripe).not.toContain("Subscribe with");
+    expect(stripe).not.toContain("Subscribe</button>");
   });
 
   it("disables buying while a checkout is pending in the browser", () => {
@@ -183,8 +184,7 @@ describe("Account billing section", () => {
     );
     expect(screen.getByText("Finish in your browser, then come back to Modus.")).toBeTruthy();
     expect(
-      (screen.getByRole("button", { name: /Subscribe with Mercado Pago/ }) as HTMLButtonElement)
-        .disabled,
+      (screen.getByRole("button", { name: /^Subscribe$/ }) as HTMLButtonElement).disabled,
     ).toBe(true);
   });
 
@@ -200,7 +200,7 @@ describe("Account billing section", () => {
       },
     };
     render(<AccountBillingSection />);
-    fireEvent.click(await screen.findByRole("button", { name: /Subscribe with Mercado Pago/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Subscribe$/ }));
     await waitFor(() =>
       expect(checkout).toHaveBeenCalledWith({ plan: "starter", provider: "mercadopago" }),
     );

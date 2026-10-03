@@ -45,7 +45,7 @@ export function formatMoney(amountMinor: number, currency: string): string {
 }
 
 const PROVIDER_LABEL: Record<BillingProvider, string> = {
-  mercadopago: "Subscribe with Mercado Pago",
+  mercadopago: "Subscribe",
   stripe: "Pay by card (Stripe)",
 };
 
