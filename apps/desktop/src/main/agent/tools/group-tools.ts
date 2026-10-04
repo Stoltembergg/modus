@@ -52,6 +52,7 @@ import {
 import { verifyGroupTaskForTransition } from "../../groups/group-task-evidence";
 import {
   applyGroupAgreementOperation,
+  applyGroupTasklessOperation,
   applyGroupTaskOperation,
   commitVerifiedGroupTask,
   type GroupTaskOperationInput,
@@ -118,10 +119,11 @@ const MAX_NOTE_CHARS = 500;
 
 /* ── wake sink (set by the app wiring; the GroupRuntime routes the wake) ── */
 
-let taskWakeSink: ((wake: GroupTaskWake) => void) | undefined;
+type TaskWakeSink = (wake: GroupTaskWake) => Pick<GroupMessage, "id"> | undefined;
+let taskWakeSink: TaskWakeSink | undefined;
 
-/** Where review / changes wakes go (GroupRuntime.handleTaskWake in the app). */
-export function setGroupTaskWakeSink(sink: ((wake: GroupTaskWake) => void) | undefined): void {
+/** A persisted message ID acknowledges durable delivery; absence leaves the operation retryable. */
+export function setGroupTaskWakeSink(sink: TaskWakeSink | undefined): void {
   taskWakeSink = sink;
 }
 
@@ -391,7 +393,7 @@ function dispatchTaskOperation(
 ): void {
   if (!taskWakeSink) return;
   if (operation && result && hasGroupTaskExplicitDispatch(operation.operationId)) return;
-  taskWakeSink({
+  const ack = taskWakeSink({
     ...wake,
     ...(operation &&
     result &&
@@ -403,6 +405,8 @@ function dispatchTaskOperation(
         }
       : {}),
   });
+  if (!ack?.id)
+    throw new Error("Group task delivery was not acknowledged; retry the same operation.");
   if (operation && result) markGroupTaskExplicitDispatch(operation.operationId);
 }
 
@@ -682,6 +686,32 @@ export function runGroupTool<N extends SyncGroupToolName>(
           targetName,
           objective,
         });
+        if (!input.taskId && !taskTitle) {
+          const saved = applyGroupTasklessOperation(op, () => ({
+            text: `Handed off to ${label(members, target)}: ${objective}.`,
+            wake: {
+              groupId,
+              actorSessionId: actor,
+              targetSessionId: target,
+              body,
+              ...(target === actor ? { wake: false } : {}),
+            },
+          }));
+          if (taskWakeSink && !hasGroupTaskExplicitDispatch(op.operationId)) {
+            const ack = taskWakeSink({
+              ...saved.wake,
+              ...(input.operationId || caller.toolCallId
+                ? { operationId: op.operationId, sourceEventId: saved.sourceEventId }
+                : {}),
+            });
+            if (!ack?.id)
+              throw new Error(
+                "Group task delivery was not acknowledged; retry the same operation.",
+              );
+            markGroupTaskExplicitDispatch(op.operationId);
+          }
+          return saved.text;
+        }
         dispatch({
           groupId,
           actorSessionId: actor,
@@ -728,7 +758,7 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
         }),
       );
       if (taskWakeSink && !hasGroupTaskExplicitDispatch(op.operationId)) {
-        taskWakeSink({
+        const ack = taskWakeSink({
           groupId,
           actorSessionId: actor,
           body: formatGroupCollabStatus({ kind: "agreed", note }),
@@ -737,6 +767,8 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
             ? { operationId: op.operationId, sourceEventId: decision.id }
             : {}),
         });
+        if (!ack?.id)
+          throw new Error("Group task delivery was not acknowledged; retry the same operation.");
         markGroupTaskExplicitDispatch(op.operationId);
       }
       return `Agreed. Recorded decision ${decision.id}: ${decision.text}`;

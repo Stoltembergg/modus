@@ -65,6 +65,7 @@ import {
   memberWorktreeBranchPrefix,
 } from "./group-store";
 import { findGroupTaskForWake } from "./group-task-evidence";
+import { groupTaskOperationFingerprint, markGroupTaskExplicitDispatch } from "./group-task-store";
 import { GroupTurnTranscript } from "./group-turn-transcript";
 
 export {
@@ -380,6 +381,25 @@ export class GroupRuntime {
   }
 
   private saveTaskWake(input: GroupTaskWake): GroupMessage | undefined {
+    const db = getDatabase();
+    const identity = groupTaskOperationFingerprint(input);
+    if (input.operationId) {
+      const previous = db
+        .prepare(
+          "select operation_id, input_json, message_id from group_task_dispatches where operation_id = ? or source_event_id = ?",
+        )
+        .get(input.operationId, input.sourceEventId ?? null) as
+        | { operation_id: string; input_json: string; message_id: string }
+        | undefined;
+      if (previous) {
+        if (previous.operation_id !== input.operationId || previous.input_json !== identity)
+          throw new GroupStoreError(
+            "invalid-value",
+            "Operation ID was reused with a conflicting task dispatch payload.",
+          );
+        return getGroupMessage(previous.message_id);
+      }
+    }
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
     const joined =
       turn && turn.groupId === input.groupId ? this.chains.get(turn.chainId) : undefined;
@@ -400,10 +420,18 @@ export class GroupRuntime {
       return undefined;
     }
     this.emitMessage(message);
-    if (input.wake === false || !input.targetSessionId) return message;
-    const chain = joined ?? this.openChain(input.groupId, message.id);
-    this.route(chain, message, [input.targetSessionId]);
-    this.retireIdleChains();
+    if (input.wake !== false && input.targetSessionId) {
+      const chain = joined ?? this.openChain(input.groupId, message.id);
+      this.route(chain, message, [input.targetSessionId]);
+      this.retireIdleChains();
+    }
+    if (input.operationId) {
+      db.prepare(
+        "insert into group_task_dispatches (operation_id, source_event_id, group_id, input_json, message_id) values (?, ?, ?, ?, ?)",
+      ).run(input.operationId, input.sourceEventId ?? null, input.groupId, identity, message.id);
+      // Delivery and marker commit with the message, jobs and budget counters.
+      markGroupTaskExplicitDispatch(input.operationId);
+    }
     return message;
   }
 

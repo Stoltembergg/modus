@@ -18,6 +18,7 @@ import type {
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getDatabase } from "../db/database";
+import type { GroupTaskWake } from "./group-runtime-lib";
 import { GroupStoreError, getAgentGroup } from "./group-store";
 import { resolveGroupTaskEvidence } from "./group-task-evidence";
 
@@ -280,6 +281,7 @@ export function replayGroupTaskOperation(
 ): GroupTaskOperationResult | undefined {
   requireMember(input.groupId, input.actorSessionId, "actor");
   requireOperationId(input.operationId);
+  rejectTasklessOperationCollision(getDatabase(), input.operationId);
   if (
     getDatabase()
       .prepare("select 1 from group_decisions where operation_id = ?")
@@ -353,9 +355,9 @@ export function applyGroupTaskOperation(
 export function hasGroupTaskExplicitDispatch(operationId: string): boolean {
   const row = getDatabase()
     .prepare(
-      "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ?",
+      "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ? union all select result_json from group_tool_operations where operation_id = ?",
     )
-    .get(operationId, operationId) as { result_json: string } | undefined;
+    .get(operationId, operationId, operationId) as { result_json: string } | undefined;
   return Boolean(row && JSON.parse(row.result_json).explicitDispatch);
 }
 
@@ -365,9 +367,9 @@ export function markGroupTaskExplicitDispatch(operationId: string): boolean {
   return transaction(db, () => {
     const row = db
       .prepare(
-        "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ?",
+        "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ? union all select result_json from group_tool_operations where operation_id = ?",
       )
-      .get(operationId, operationId) as { result_json: string } | undefined;
+      .get(operationId, operationId, operationId) as { result_json: string } | undefined;
     if (!row) return false;
     const result = JSON.parse(row.result_json) as Record<string, unknown>;
     if (result.explicitDispatch) return false;
@@ -377,6 +379,10 @@ export function markGroupTaskExplicitDispatch(operationId: string): boolean {
       operationId,
     );
     db.prepare("update group_decisions set operation_json = ? where operation_id = ?").run(
+      JSON.stringify(result),
+      operationId,
+    );
+    db.prepare("update group_tool_operations set result_json = ? where operation_id = ?").run(
       JSON.stringify(result),
       operationId,
     );
@@ -393,6 +399,7 @@ export function applyGroupAgreementOperation(
   return transaction(db, () => {
     requireMember(input.groupId, input.actorSessionId, "actor");
     requireOperationId(input.operationId);
+    rejectTasklessOperationCollision(db, input.operationId);
     const row = db
       .prepare("select operation_json from group_decisions where operation_id = ?")
       .get(input.operationId) as { operation_json: string } | undefined;
@@ -415,6 +422,64 @@ export function applyGroupAgreementOperation(
     );
     return decision;
   });
+}
+
+type TasklessOperationResult = { sourceEventId: string; text: string; wake: GroupTaskWake };
+
+/** Persist supported taskless delegation without manufacturing a task or transition. */
+export function applyGroupTasklessOperation(
+  input: GroupTaskOperationInput,
+  create: () => Omit<TasklessOperationResult, "sourceEventId">,
+): TasklessOperationResult {
+  const db = getDatabase();
+  return transaction(db, () => {
+    requireMember(input.groupId, input.actorSessionId, "actor");
+    requireOperationId(input.operationId);
+    const row = db
+      .prepare("select result_json from group_tool_operations where operation_id = ?")
+      .get(input.operationId) as { result_json: string } | undefined;
+    if (row) {
+      const saved = JSON.parse(row.result_json) as {
+        input: unknown;
+        result: TasklessOperationResult;
+      };
+      if (groupTaskOperationFingerprint(saved.input) !== groupTaskOperationFingerprint(input))
+        throw new GroupStoreError(
+          "invalid-value",
+          "Operation ID was used for another taskless request.",
+        );
+      return saved.result;
+    }
+    rejectRunOperationCollision(db, input.operationId);
+    rejectEventOperationCollision(db, input.operationId);
+    if (db.prepare("select 1 from group_decisions where operation_id = ?").get(input.operationId))
+      throw new GroupStoreError(
+        "invalid-value",
+        "Operation ID already belongs to an agreement decision.",
+      );
+    const result = { ...create(), sourceEventId: randomUUID() };
+    db.prepare(
+      "insert into group_tool_operations (id, group_id, operation_id, result_json) values (?, ?, ?, ?)",
+    ).run(
+      result.sourceEventId,
+      input.groupId,
+      input.operationId,
+      JSON.stringify({ input: canonical(input), result }),
+    );
+    return result;
+  });
+}
+
+function rejectTasklessOperationCollision(db: DatabaseSync, operationId: string): void {
+  if (db.prepare("select 1 from group_tool_operations where operation_id = ?").get(operationId))
+    throw new GroupStoreError(
+      "invalid-value",
+      "Operation ID already belongs to a taskless request.",
+    );
+}
+
+export function groupTaskOperationFingerprint(input: unknown): string {
+  return JSON.stringify(canonical(input));
 }
 
 /** Re-resolve persisted QA/dependencies immediately before the final synchronous write. */

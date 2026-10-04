@@ -691,6 +691,19 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       operation_id text not null unique,
       primary key (session_id, run_id)
     );
+    create table if not exists group_tool_operations (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      operation_id text not null unique,
+      result_json text not null
+    );
+    create table if not exists group_task_dispatches (
+      operation_id text primary key,
+      source_event_id text unique,
+      group_id text not null references agent_groups(id) on delete cascade,
+      input_json text not null,
+      message_id text not null references group_messages(id) on delete cascade
+    );
   `);
 }
 

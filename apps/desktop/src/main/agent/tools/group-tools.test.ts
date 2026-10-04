@@ -108,7 +108,10 @@ function taskIdFrom(text: string): string {
 describe("group member tools", () => {
   it("run the task flow through the store and route review / changes wakes", async () => {
     const { group, alpha, beta } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const a = { sessionId: alpha, groupId: group.id };
     const b = { sessionId: beta, groupId: group.id };
 
@@ -168,7 +171,10 @@ describe("group member tools", () => {
 
   it("approve with a note records the note in the status", async () => {
     const { group, alpha, beta } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const a = { sessionId: alpha, groupId: group.id };
     const b = { sessionId: beta, groupId: group.id };
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "T" }));
@@ -351,7 +357,10 @@ describe("group member tools", () => {
     );
     const tasksBefore = listGroupTasks(group.id);
     const messagesBefore = listGroupMessages(group.id);
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
 
     // The loner even claims the group's id: membership is re-checked from the store.
     for (const context of [
@@ -415,7 +424,10 @@ describe("group member tools", () => {
 describe("group_record_decision", () => {
   it("records a trimmed decision and posts 'Decision: <text>' as the member without waking anyone", async () => {
     const { group, alpha } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = runGroupTool(
       "group_record_decision",
       { sessionId: alpha, groupId: group.id },
@@ -436,7 +448,10 @@ describe("group_record_decision", () => {
 
   it("returns invalid-text for empty or over-500-character text and records nothing", async () => {
     const { group, alpha } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const caller = { sessionId: alpha, groupId: group.id };
     for (const text of ["", "   \n ", "x".repeat(501)]) {
       expect(runGroupTool("group_record_decision", caller, { text })).toMatch(
@@ -459,7 +474,10 @@ describe("group_record_decision", () => {
         { text: `D${index}` },
       );
     }
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     expect(
       runGroupTool("group_record_decision", { sessionId: alpha, groupId: group.id }, { text: "x" }),
     ).toMatch(/^\[group-error:limit-reached\] /);
@@ -470,7 +488,10 @@ describe("group_record_decision", () => {
   it("refuses a member of another group (not-a-member) and a caller that left", async () => {
     const { group, alpha } = squad();
     const other = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     expect(
       runGroupTool(
         "group_record_decision",
@@ -500,7 +521,10 @@ describe("group_assign_task (coordinator mode)", () => {
 
   it("assigns an open task: in_progress, posts Assigned and wakes the member (with the note)", async () => {
     const { group, alpha, beta, lead, create } = coordinated();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const id = create("Parser");
     const text = runGroupTool("group_assign_task", lead, {
       taskId: id,
@@ -524,7 +548,10 @@ describe("group_assign_task (coordinator mode)", () => {
 
   it("refuses an archived assignee (member-archived) and a group without a folder", async () => {
     const { group, beta, lead, create } = coordinated();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const id = create("Parser");
     const agentId = getDatabase()
       .prepare("select agent_id from agent_group_members where session_id = ?")
@@ -554,7 +581,10 @@ describe("group_assign_task (coordinator mode)", () => {
     const gamma = insertSession(insertWorkspace(), "Gamma");
     const id = create("Parser");
     runGroupTool("group_claim_task", { sessionId: beta, groupId: group.id }, { id });
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     // Gamma is not a member yet.
     expect(runGroupTool("group_assign_task", lead, { taskId: id, memberId: gamma })).toMatch(
       /^\[group-error:not-a-member\] /,
@@ -584,7 +614,10 @@ describe("group_assign_task (coordinator mode)", () => {
   it("returns not-coordinator, coordinator-off and invalid-transition as text, waking nobody", async () => {
     const { group, beta, lead, create } = coordinated();
     const id = create("Parser");
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     expect(
       runGroupTool(
         "group_assign_task",
@@ -622,7 +655,10 @@ describe("agreement tools (P1b)", () => {
       members: [{ sessionId: alpha }, { sessionId: jennie }],
       leadSessionId: alpha,
     });
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = runGroupTool(
       "group_handoff",
       { sessionId: alpha, groupId: group.id },
@@ -649,7 +685,10 @@ describe("agreement tools (P1b)", () => {
 
   it("posts a self handoff without waking the same agent again", async () => {
     const { group, alpha } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     runGroupTool(
       "group_handoff",
       { sessionId: alpha, groupId: group.id },
@@ -671,7 +710,10 @@ describe("agreement tools (P1b)", () => {
 
   it("group_handoff posts typed status, wakes the target, and optionally creates a task", async () => {
     const { group, alpha, beta } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = runGroupTool(
       "group_handoff",
       { sessionId: alpha, groupId: group.id },
@@ -703,7 +745,10 @@ describe("agreement tools (P1b)", () => {
     const a = { sessionId: alpha, groupId: group.id };
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
     runGroupTool("group_claim_task", a, { id });
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = runGroupTool("group_propose_agreement", a, {
       summary: "dark mode ready",
       taskId: id,
@@ -729,7 +774,10 @@ describe("agreement tools (P1b)", () => {
     const a = { sessionId: alpha, groupId: group.id };
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
     runGroupTool("group_claim_task", a, { id });
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = await runGroupVerifiedTool(
       "group_agree",
       { sessionId: beta, groupId: group.id },
@@ -753,7 +801,10 @@ describe("agreement tools (P1b)", () => {
 
   it("group_block posts Blocked and wakes returnTo when set", async () => {
     const { group, alpha, beta } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const text = runGroupTool(
       "group_block",
       { sessionId: beta, groupId: group.id },
@@ -772,7 +823,10 @@ describe("agreement tools (P1b)", () => {
 
   it("group_block returns to itself without scheduling another turn", async () => {
     const { group, alpha } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     runGroupTool(
       "group_block",
       { sessionId: alpha, groupId: group.id },
@@ -805,7 +859,10 @@ describe("agreement tools (P1b)", () => {
         { title: "Private task" },
       ),
     );
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     expect(
       runGroupTool(
         "group_block",
@@ -823,7 +880,10 @@ describe("agreement tools (P1b)", () => {
   it("refuses empty propose/block/handoff inputs and unknown tasks", async () => {
     const { group, alpha } = squad();
     const caller = { sessionId: alpha, groupId: group.id };
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     expect(runGroupTool("group_propose_agreement", caller, { summary: "  " })).toMatch(
       /^\[group-error:invalid-value\] /,
     );
@@ -849,6 +909,7 @@ describe("consistent group task operations", () => {
     const observed: unknown[] = [];
     setGroupTaskWakeSink((wake) => {
       observed.push({ wake, task: listGroupTasks(group.id)[0] });
+      return { id: "test-delivery" };
     });
     const result = runGroupTool(
       "group_handoff",
@@ -895,7 +956,10 @@ describe("consistent group task operations", () => {
 
   it("handoff_retry_returns_same_task_and_wake", async () => {
     const { group, alpha, beta } = squad();
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const caller = { sessionId: alpha, runId: "retry-run", toolCallId: "retry-call" };
     const input = { memberId: beta, objective: "Implement", taskTitle: "Retry task" };
     const first = runGroupTool("group_handoff", caller, input);
@@ -992,7 +1056,10 @@ describe("consistent group task operations", () => {
       ownerSessionId: alpha,
       status: "in_progress",
     });
-    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    setGroupTaskWakeSink((wake) => {
+      wakes.push(wake);
+      return { id: "test-delivery" };
+    });
     const input = {
       id: task.id,
       reviewer: beta,
@@ -1199,6 +1266,7 @@ it("retries wake delivery after a failing sink using the same source event", () 
   setGroupTaskWakeSink((wake) => {
     attempts.push(wake);
     if (attempts.length === 1) throw new Error("wake delivery failed");
+    return { id: "test-delivery" };
   });
   const input = {
     memberId: beta,
@@ -1272,7 +1340,10 @@ it("changes review returns work without requiring unavailable QA", async () => {
 
 it("taskless agreement retries return the same decision and status delivery", async () => {
   const { group, alpha } = squad();
-  setGroupTaskWakeSink((wake) => wakes.push(wake));
+  setGroupTaskWakeSink((wake) => {
+    wakes.push(wake);
+    return { id: "test-delivery" };
+  });
   const caller = { sessionId: alpha, runId: "taskless-run", toolCallId: "taskless-call" };
   const input = { note: "Agreed together", operationId: "taskless-agreement" };
   const first = await runGroupVerifiedTool("group_agree", caller, input);
@@ -1288,4 +1359,33 @@ it("taskless agreement retries return the same decision and status delivery", as
   ).toContain("invalid-value");
   expect(listGroupDecisions(group.id)).toHaveLength(1);
   expect(wakes).toHaveLength(1);
+});
+
+it("taskless handoff retries preserve operation identity and reject conflicting reuse", () => {
+  const { group, alpha, beta } = squad();
+  setGroupTaskWakeSink((wake) => {
+    wakes.push(wake);
+    return { id: "delivered-taskless" };
+  });
+  const input = {
+    memberId: beta,
+    objective: "Delegate without a task",
+    operationId: "taskless-handoff",
+  };
+  const first = runGroupTool("group_handoff", { sessionId: alpha }, input);
+  expect(runGroupTool("group_handoff", { sessionId: alpha }, input)).toBe(first);
+  expect(wakes).toHaveLength(1);
+  expect(wakes[0]).toMatchObject({
+    operationId: input.operationId,
+    sourceEventId: expect.any(String),
+  });
+  expect(
+    runGroupTool(
+      "group_handoff",
+      { sessionId: alpha },
+      { ...input, objective: "Different objective" },
+    ),
+  ).toContain("invalid-value");
+  expect(wakes).toHaveLength(1);
+  expect(listGroupTasks(group.id)).toHaveLength(0);
 });
