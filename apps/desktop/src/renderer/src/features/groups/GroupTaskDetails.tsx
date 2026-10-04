@@ -346,7 +346,7 @@ export function GroupTaskDetails({
             onClick={onClose}
             type="button"
           >
-            {t("taskDetails.closeGlyph")}
+            &#215;
           </button>
         </div>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-fg-muted">

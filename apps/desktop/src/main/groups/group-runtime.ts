@@ -1787,9 +1787,6 @@ export class GroupRuntime {
     // A blocked group (no folder, or fewer than 2 members) is read-only: nobody is woken.
     if (groupBlockedReason(group, members)) return;
     let wanted = this.wakeTargets(group, message, explicitTargets, allowSelf);
-    const { archived, targets: activeWanted } = partitionArchivedWakeTargets(wanted, members);
-    for (const id of archived) this.postArchived(chain, members, id);
-    wanted = activeWanted;
     const userRule =
       message.authorKind === "user"
         ? resolveUserWakeRule({
@@ -1800,15 +1797,25 @@ export class GroupRuntime {
             group,
           })
         : undefined;
-    const autonomousUserMessage =
-      userRule?.rule === "autonomous" && !taskId && explicitTargets === undefined;
-    if (taskId || (message.authorKind === "user" && !autonomousUserMessage)) {
+    const { archived, targets: activeWanted } = partitionArchivedWakeTargets(wanted, members);
+    for (const id of archived) {
+      if (!(userRule?.rule === "mention" && message.mentions.includes(id))) {
+        this.postArchived(chain, members, id);
+      }
+    }
+    wanted = activeWanted;
+    const configuredLead = members.find((member) => member.sessionId === group.leadSessionId);
+    const archivedLeadAutonomyFallback =
+      userRule?.rule === "autonomous" &&
+      !taskId &&
+      explicitTargets === undefined &&
+      configuredLead?.archived === true;
+    if (taskId || (message.authorKind === "user" && !archivedLeadAutonomyFallback)) {
       const task = taskId ? getGroupTask(taskId) : undefined;
       const explicit = explicitTargets ?? (message.mentions.length ? message.mentions : undefined);
-      const activeExplicit = explicit?.filter((id) => !archived.includes(id));
-      const results = activeExplicit
-        ? activeExplicit.map((id) => this.capabilityRoute(group.id, task, id))
-        : taskId || wanted[0]
+      const results = explicit
+        ? explicit.map((id) => this.capabilityRoute(group.id, task, id))
+        : taskId || wanted[0] || userRule?.rule === "autonomous"
           ? [this.capabilityRoute(group.id, task, wanted[0])]
           : [];
       wanted = results.flatMap((result) => {

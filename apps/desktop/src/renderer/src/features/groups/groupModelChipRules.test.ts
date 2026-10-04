@@ -81,26 +81,33 @@ describe("groupModelChip", () => {
     expect(chip?.label).toBe("custom/model-x");
   });
 
-  it("describes the active members when the room has no Lead", () => {
+  it("requests routing input when the room has no configured Lead", () => {
     const chip = groupModelChip({
       ...base,
       leadSessionId: undefined,
       archivedSessionIds: new Set(["old"]),
       draft: "",
     });
-    expect(chip?.kind).toBe("noLead");
-    expect(chip?.label).toBe("2 models");
+    expect(chip).toMatchObject({
+      kind: "nobody",
+      warning: true,
+      label: "No recipient",
+      targets: [],
+    });
     expect(chip?.tooltip.split("\n")).toEqual([
-      "No Lead: the room picks who answers",
-      "Lead: GPT-5",
-      "Dev: Claude Sonnet",
-      "QA: GPT-5",
+      "Nobody will answer",
+      "Set a Lead or mention an active member",
     ]);
   });
 
-  it("treats a Lead id that is not a member as no Lead", () => {
+  it("requests routing input when the configured Lead is absent", () => {
     const chip = groupModelChip({ ...base, leadSessionId: "gone", draft: "" });
-    expect(chip?.kind).toBe("noLead");
+    expect(chip).toMatchObject({
+      kind: "nobody",
+      warning: true,
+      label: "No recipient",
+      targets: [],
+    });
   });
 
   it("thread reply without @ uses the replied-to author, before the room mode", () => {

@@ -20,12 +20,21 @@ describe("untyped intake", () => {
       ]);
     }
   });
-  it("uses the active member pool when there is no eligible Lead", () => {
-    expect(selectAutonomousWakeTargets({ body: "review code", members })).toEqual([
-      "lead",
-      "builder",
-      "reviewer",
-    ]);
+  it("needs user input when the group has no configured Lead", () => {
+    expect(selectAutonomousWakeTargets({ body: "review code", members })).toEqual([]);
+  });
+  it("uses active members when a configured Lead is archived", () => {
+    expect(
+      selectAutonomousWakeTargets({
+        body: "review code",
+        members: [
+          { sessionId: "lead", title: "Alpha", role: "Lead", archived: true },
+          { sessionId: "builder", title: "Beta", role: "Builder" },
+          { sessionId: "reviewer", title: "Gamma", role: "Reviewer" },
+        ],
+        leadSessionId: "lead",
+      }),
+    ).toEqual(["builder", "reviewer"]);
     expect(
       selectAutonomousWakeTargets({
         body: "hi",

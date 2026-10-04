@@ -402,7 +402,7 @@ export function composeGroupSnapshotSection(input: {
   return [...head, ...lines, close].join("\n");
 }
 
-/** Untyped room messages go to the active Lead, or the active member pool if no Lead is available. */
+/** Untyped messages go to the active Lead; an archived configured Lead falls back to active members. */
 export function selectAutonomousWakeTargets(input: {
   body: string;
   members: readonly MemberRef[];
@@ -416,7 +416,12 @@ export function selectAutonomousWakeTargets(input: {
 }): string[] {
   const eligible = autonomousWakeEligible(input.members, input.excludeSessionIds ?? []);
   const lead = eligible.find((member) => member.sessionId === input.leadSessionId);
-  const targets = lead ? [lead.sessionId] : eligible.map((member) => member.sessionId);
+  const configuredLead = input.members.find((member) => member.sessionId === input.leadSessionId);
+  const targets = lead
+    ? [lead.sessionId]
+    : configuredLead?.archived
+      ? eligible.map((member) => member.sessionId)
+      : [];
   return input.maxTargets === undefined ? targets : targets.slice(0, Math.max(0, input.maxTargets));
 }
 
