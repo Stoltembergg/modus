@@ -59,6 +59,7 @@ import {
   type GroupTaskOperationResult,
   getGroupTask,
   handoffGroupTask,
+  hasGroupTaskDispatchReceipt,
   hasGroupTaskExplicitDispatch,
   markGroupTaskExplicitDispatch,
   replayGroupTaskOperation,
@@ -385,6 +386,11 @@ function operationInput(
   };
 }
 
+/** Runtime receipts allow event replay without creating a second message or wake. */
+function shouldDeliverTaskOperation(operationId: string): boolean {
+  return !hasGroupTaskExplicitDispatch(operationId) || hasGroupTaskDispatchReceipt(operationId);
+}
+
 function dispatchTaskOperation(
   wake: GroupTaskWake,
   operation: GroupTaskOperationInput | undefined,
@@ -392,7 +398,7 @@ function dispatchTaskOperation(
   caller: GroupToolCaller,
 ): void {
   if (!taskWakeSink) return;
-  if (operation && result && hasGroupTaskExplicitDispatch(operation.operationId)) return;
+  if (operation && result && !shouldDeliverTaskOperation(operation.operationId)) return;
   const ack = taskWakeSink({
     ...wake,
     ...(operation &&
@@ -697,7 +703,7 @@ export function runGroupTool<N extends SyncGroupToolName>(
               ...(target === actor ? { wake: false } : {}),
             },
           }));
-          if (taskWakeSink && !hasGroupTaskExplicitDispatch(op.operationId)) {
+          if (taskWakeSink && shouldDeliverTaskOperation(op.operationId)) {
             const ack = taskWakeSink({
               ...saved.wake,
               ...(input.operationId || caller.toolCallId
@@ -757,7 +763,7 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
           ...(executionId ? { executionId } : {}),
         }),
       );
-      if (taskWakeSink && !hasGroupTaskExplicitDispatch(op.operationId)) {
+      if (taskWakeSink && shouldDeliverTaskOperation(op.operationId)) {
         const ack = taskWakeSink({
           groupId,
           actorSessionId: actor,

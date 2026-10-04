@@ -397,7 +397,10 @@ export class GroupRuntime {
             "invalid-value",
             "Operation ID was reused with a conflicting task dispatch payload.",
           );
-        return getGroupMessage(previous.message_id);
+        const message = getGroupMessage(previous.message_id);
+        // Publish at least once: a prior durable commit may have lost its live event.
+        if (message) this.emitMessage(message);
+        return message;
       }
     }
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);

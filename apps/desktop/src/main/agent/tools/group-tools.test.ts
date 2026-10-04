@@ -1389,3 +1389,32 @@ it("taskless handoff retries preserve operation identity and reject conflicting 
   expect(wakes).toHaveLength(1);
   expect(listGroupTasks(group.id)).toHaveLength(0);
 });
+
+it("keeps successful sink delivery without a runtime receipt suppressed on retry", () => {
+  const { alpha, beta } = squad();
+  const delivered: unknown[] = [];
+  setGroupTaskWakeSink((wake) => {
+    delivered.push(wake);
+    return { id: "fake-persisted-message" };
+  });
+  const operationId = "fake-delivery-without-receipt";
+  const invoke = () =>
+    runGroupTool(
+      "group_handoff",
+      { sessionId: alpha },
+      {
+        memberId: beta,
+        objective: "Fake delivery ack",
+        taskTitle: "Fake acknowledgement",
+        operationId,
+      },
+    );
+  const first = invoke();
+  expect(
+    getDatabase()
+      .prepare("select 1 from group_task_dispatches where operation_id = ?")
+      .get(operationId),
+  ).toBeUndefined();
+  expect(invoke()).toBe(first);
+  expect(delivered).toHaveLength(1);
+});

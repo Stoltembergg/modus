@@ -565,7 +565,7 @@ it("does not duplicate a tool wake when acknowledgement is lost after durable co
     expect(invoke()).toContain("not acknowledged");
     expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
     expect(invoke()).toContain("[in_progress]");
-    expect(attempts).toBe(1);
+    expect(attempts).toBe(2);
     expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
       1,
     );
@@ -573,6 +573,95 @@ it("does not duplicate a tool wake when acknowledgement is lost after durable co
       getDatabase().prepare("select id from group_jobs where group_id = ?").all(group.id),
     ).toHaveLength(1);
   } finally {
+    setGroupTaskWakeSink(undefined);
+  }
+});
+
+it("republishes the persisted message on runtime replay after post-commit event failure", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const wake = {
+    groupId: group.id,
+    actorSessionId: a,
+    targetSessionId: b,
+    body: "Live delivery retry",
+    operationId: crypto.randomUUID(),
+    sourceEventId: crypto.randomUUID(),
+  };
+  const emit = vi.spyOn(env.host, "emit").mockImplementationOnce(() => {
+    throw new Error("live event failed");
+  });
+  try {
+    expect(() => env.groups.handleTaskWake(wake)).toThrow("live event failed");
+    const persisted = listGroupMessages(group.id).find((message) => message.body === wake.body);
+    const messages = listGroupMessages(group.id);
+    const jobs = getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id);
+    const budgets = getDatabase()
+      .prepare("select * from group_execution_chains where group_id = ?")
+      .all(group.id);
+    emit.mockClear();
+    expect(env.groups.handleTaskWake(wake)).toEqual(persisted);
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "group.message", message: persisted }),
+    );
+    expect(listGroupMessages(group.id)).toEqual(messages);
+    expect(
+      getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id),
+    ).toEqual(jobs);
+    expect(
+      getDatabase()
+        .prepare("select * from group_execution_chains where group_id = ?")
+        .all(group.id),
+    ).toEqual(budgets);
+  } finally {
+    emit.mockRestore();
+  }
+});
+
+it("tool retry republishes a committed dispatch after live event failure", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const operationId = crypto.randomUUID();
+  setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
+  const emit = vi.spyOn(env.host, "emit").mockImplementationOnce(() => {
+    throw new Error("tool live event failed");
+  });
+  const invoke = () =>
+    runGroupTool(
+      "group_handoff",
+      { sessionId: a },
+      {
+        memberId: b,
+        objective: "Republish tool status",
+        taskTitle: "Already committed",
+        operationId,
+      },
+    );
+  try {
+    expect(invoke()).toContain("tool live event failed");
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+    const messages = listGroupMessages(group.id);
+    const persisted = messages.find((message) => message.kind === "status");
+    const jobs = getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id);
+    const budgets = getDatabase()
+      .prepare("select * from group_execution_chains where group_id = ?")
+      .all(group.id);
+    emit.mockClear();
+    expect(invoke()).toContain("[in_progress]");
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "group.message", message: persisted }),
+    );
+    expect(listGroupMessages(group.id)).toEqual(messages);
+    expect(
+      getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id),
+    ).toEqual(jobs);
+    expect(
+      getDatabase()
+        .prepare("select * from group_execution_chains where group_id = ?")
+        .all(group.id),
+    ).toEqual(budgets);
+  } finally {
+    emit.mockRestore();
     setGroupTaskWakeSink(undefined);
   }
 });

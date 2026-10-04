@@ -361,6 +361,14 @@ export function hasGroupTaskExplicitDispatch(operationId: string): boolean {
   return Boolean(row && JSON.parse(row.result_json).explicitDispatch);
 }
 
+export function hasGroupTaskDispatchReceipt(operationId: string): boolean {
+  return Boolean(
+    getDatabase()
+      .prepare("select 1 from group_task_dispatches where operation_id = ?")
+      .get(operationId),
+  );
+}
+
 /** Mark only a successful sink delivery; sourceEventId permits downstream deduplication. */
 export function markGroupTaskExplicitDispatch(operationId: string): boolean {
   const db = getDatabase();
