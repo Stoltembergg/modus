@@ -82,6 +82,8 @@ export function createMpBuyCreditsHandler(
       const purchase = await deps.db.mpCreatePurchase(user.id, body.packId);
       if (purchase.code === "unknown_pack") throw new HttpError(404, "unknown_pack");
       if (purchase.code === "blocked") throw new HttpError(403, "account_blocked");
+      // L5c rate limit (5 open checkouts / 10 min / user), counted under the profile lock.
+      if (purchase.code === "too_many_purchases") throw new HttpError(429, "too_many_purchases");
 
       let pref: MpPreference;
       try {

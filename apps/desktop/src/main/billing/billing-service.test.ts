@@ -149,6 +149,7 @@ describe("billing service", () => {
       ["unknown_pack", /credit pack is not available/],
       ["mercadopago_unavailable", /Mercado Pago is unavailable/],
       ["purchase_conflict", /already being set up/],
+      ["too_many_purchases", /Too many checkouts/],
     ] as const) {
       backend.createBillingSession.mockResolvedValueOnce({ ok: false, status: 403, code });
       const state = await service.buyCredits("credits_5k");
@@ -562,7 +563,7 @@ describe("billing catalog mapping", () => {
         plan: "credits_25k",
         name: "25,000 credits",
         monthly_credits: 25000,
-        amount_minor: 18090,
+        amount_minor: 18190,
         sort_order: 3,
       }),
       pack({}),

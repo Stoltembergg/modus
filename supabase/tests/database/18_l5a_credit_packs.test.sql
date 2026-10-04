@@ -92,8 +92,8 @@ select ok(not has_table_privilege('service_role', 'private.free_renewal_errors',
 -- ---------------------------------------------------------------------------
 select is((select string_agg(pack_id || ':' || credits || ':' || currency || ':' || amount_minor || ':' || access_plan,
                              ',' order by sort_order) from public.credit_packs),
-  'credits_5k:5000:BRL:3690:starter,credits_10k:10000:BRL:7290:starter,credits_25k:25000:BRL:18090:pro',
-  'exactly three packs, BRL, margin-checked prices (36,90 / 72,90 / 180,90); 25k -> pro');
+  'credits_5k:5000:BRL:3690:starter,credits_10k:10000:BRL:7290:starter,credits_25k:25000:BRL:18190:pro',
+  'exactly three packs, BRL, margin-checked prices (36,90 / 72,90 / 181,90); 25k -> pro');
 select ok((select bool_and((amount_minor / 100.0) * (1 - 0.0498) / (credits * 0.001 * 5.50) >= 1.25)
              from public.credit_packs),
   'every pack: margin >= 1.25 after the 4.98% MP card fee at the USD/BRL 5.50 buffer');
@@ -101,7 +101,7 @@ select ok((select bool_and((amount_minor / 100.0) * (1 - 0.0498) / (credits * 0.
 update private.billing_settings set mercadopago_subscriptions_enabled = false;
 select tests.as_anon();
 select is((select string_agg(plan || ':' || kind || ':' || amount_minor, ',') from public.get_billing_catalog()),
-  'credits_5k:pack:3690,credits_10k:pack:7290,credits_25k:pack:18090',
+  'credits_5k:pack:3690,credits_10k:pack:7290,credits_25k:pack:18190',
   'subscriptions off: catalog lists only the packs');
 select tests.clear_authentication();
 select tests.create_user('l5-a@example.com', true) as a \gset
@@ -348,7 +348,7 @@ select pg_temp.buy(:'r', 'credits_5k') as pr1 \gset
 select pg_temp.process(pg_temp.pay(:'pr1', '5020'));
 select is(private.purchase_access_plan(:'r'), 'starter', '5k lot: starter');
 select pg_temp.buy(:'r', 'credits_25k') as pr2 \gset
-select pg_temp.process(pg_temp.pay(:'pr2', '5021', p_amount => 18090));
+select pg_temp.process(pg_temp.pay(:'pr2', '5021', p_amount => 18190));
 select is(private.purchase_access_plan(:'r'), 'pro', '25k lot: pro');
 select tests.clear_authentication();
 update public.credit_lots set remaining = 0 where purchase_id = :'pr2';
