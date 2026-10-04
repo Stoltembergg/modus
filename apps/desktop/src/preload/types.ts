@@ -50,6 +50,9 @@ import type {
   GitCommitResult,
   GitStatusSummary,
   GroupDecision,
+  GroupIntegrationPreview,
+  GroupIntegrationRecord,
+  GroupIntegrationState,
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
@@ -268,6 +271,20 @@ export type ModusApi = {
     ): Promise<GroupSuggestionResolution>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
+    /** Create a read-only, main-process integration preview for one task. */
+    previewTaskIntegration(taskId: string): Promise<GroupIntegrationPreview>;
+    /** Apply exactly the persisted preview after the user explicitly confirms it. */
+    applyTaskIntegration(input: {
+      taskId: string;
+      previewId: string;
+      confirmedByUser: true;
+    }): Promise<GroupIntegrationRecord>;
+    /** Abort a stored applied/conflicted no-commit merge after a fresh git.write decision. */
+    abortTaskIntegration(taskId: string): Promise<GroupIntegrationRecord>;
+    /** Read the latest persisted integration DTOs; no Git state is recomputed. */
+    getIntegrationState(taskId: string): Promise<GroupIntegrationState>;
+    /** Reconcile an interrupted apply record, or return the latest persisted DTOs. */
+    refreshTaskIntegrationState(taskId: string): Promise<GroupIntegrationState>;
     /** The group's decisions (newest first) for the side panel's "Decisions". */
     listDecisions(groupId: string): Promise<GroupDecision[]>;
     /** "Delete" a decision (physical; posts nothing in the room). */

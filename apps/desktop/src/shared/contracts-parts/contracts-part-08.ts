@@ -2,6 +2,7 @@
 
 import type { GroupMemberCapabilities } from "../group-capabilities";
 import type {
+  GroupIntegrationRecord,
   GroupProactivityMode,
   GroupTaskCriterion,
   GroupTaskEvidenceRef,
@@ -420,6 +421,13 @@ export type GroupRuntimeEvent =
       groupId: string;
       taskId: string;
       stateVersion: number;
+    }
+  | {
+      type: "group.integration-changed";
+      groupId: string;
+      taskId: string;
+      record: GroupIntegrationRecord;
+      version: number;
     }
   | {
       type: "group.activity";

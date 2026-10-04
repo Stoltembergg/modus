@@ -60,16 +60,44 @@ function detail(overrides: Record<string, unknown> = {}) {
   };
 }
 
+const integrationPreview = {
+  id: "preview-1",
+  groupId: "group-1",
+  taskId: "task-1",
+  taskVersion: 3,
+  sourceBranch: "group/group-1/parser",
+  sourceSha: "a".repeat(40),
+  sourceFingerprint: "b".repeat(40),
+  targetBranch: "main",
+  targetSha: "c".repeat(40),
+  targetFingerprint: "d".repeat(40),
+  commits: [],
+  omittedCommitCount: 0,
+  changedFiles: [],
+  omittedChangedFileCount: 0,
+  diffSummary: "",
+  createdAt: "2026-10-03T00:00:00.000Z",
+  status: "ready" as const,
+};
+
 let listeners: Array<(event: unknown) => void>;
 let unsubscriptions: ReturnType<typeof vi.fn>[];
 let getDetails: ReturnType<typeof vi.fn>;
 let listTransitions: ReturnType<typeof vi.fn>;
 let updateTask: ReturnType<typeof vi.fn>;
+let getIntegrationState: ReturnType<typeof vi.fn>;
+let previewTaskIntegration: ReturnType<typeof vi.fn>;
+let applyTaskIntegration: ReturnType<typeof vi.fn>;
+let abortTaskIntegration: ReturnType<typeof vi.fn>;
 
 function installGroupApi() {
   getDetails = vi.fn(async () => detail());
   listTransitions = vi.fn(async () => []);
   updateTask = vi.fn(async () => ({ ...detail().task, stateVersion: 4 }));
+  getIntegrationState = vi.fn(async () => ({}));
+  previewTaskIntegration = vi.fn(async () => integrationPreview);
+  applyTaskIntegration = vi.fn(async () => ({}));
+  abortTaskIntegration = vi.fn(async () => ({}));
   unsubscriptions = [];
   Object.assign(window, {
     modus: {
@@ -77,6 +105,10 @@ function installGroupApi() {
         getTaskDetails: getDetails,
         listTaskTransitions: listTransitions,
         updateTask,
+        getIntegrationState,
+        previewTaskIntegration,
+        applyTaskIntegration,
+        abortTaskIntegration,
         onEvent: vi.fn((listener: (event: unknown) => void) => {
           listeners.push(listener);
           const unsubscribe = vi.fn(() => {
@@ -98,6 +130,93 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("GroupTaskDetails", () => {
+  it("opens integration from a completed task without applying on mount or reopen", async () => {
+    getDetails.mockResolvedValue(
+      detail({
+        task: { ...detail().task, status: "done" },
+        blocker: undefined,
+      }),
+    );
+    render(
+      <GroupTaskDetails groupId="group-1" taskId="task-1" labels={new Map()} onClose={vi.fn()} />,
+    );
+
+    const openIntegration = await screen.findByRole("button", { name: /integration/i });
+    expect(applyTaskIntegration).not.toHaveBeenCalled();
+    await userEvent.click(openIntegration);
+    expect(await screen.findByRole("dialog", { name: "Integrate task" })).toBeTruthy();
+    expect(getIntegrationState).toHaveBeenCalledWith("task-1");
+    expect(applyTaskIntegration).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /close integration/i }));
+    await userEvent.click(screen.getByRole("button", { name: /integration/i }));
+    expect(await screen.findByRole("dialog", { name: "Integrate task" })).toBeTruthy();
+    expect(applyTaskIntegration).not.toHaveBeenCalled();
+  });
+
+  it("keeps the integration entry available for a task with a stored conflict", async () => {
+    getIntegrationState.mockResolvedValue({
+      record: { taskId: "task-1", status: "conflict" },
+    });
+    render(
+      <GroupTaskDetails groupId="group-1" taskId="task-1" labels={new Map()} onClose={vi.fn()} />,
+    );
+
+    expect(await screen.findByRole("button", { name: /integration/i })).toBeTruthy();
+    expect(applyTaskIntegration).not.toHaveBeenCalled();
+  });
+
+  it("reloads integration state when a new record restarts its version at 1", async () => {
+    const previousRecord = {
+      id: "integration-old",
+      taskId: "task-1",
+      status: "applied",
+      version: 4,
+    };
+    const retryRecord = {
+      id: "integration-new",
+      taskId: "task-1",
+      status: "ready",
+      version: 1,
+    };
+    getIntegrationState
+      .mockResolvedValueOnce({ record: previousRecord })
+      .mockResolvedValueOnce({ record: retryRecord })
+      .mockResolvedValueOnce({ record: retryRecord });
+    render(
+      <GroupTaskDetails groupId="group-1" taskId="task-1" labels={new Map()} onClose={vi.fn()} />,
+    );
+    await screen.findByRole("button", { name: /integration/i });
+
+    await act(async () => {
+      listeners[0]?.({
+        type: "group.integration-changed",
+        groupId: "group-1",
+        taskId: "task-1",
+        record: retryRecord,
+        version: 1,
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(getIntegrationState).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("button", { name: /integration/i })).toBeNull();
+
+    await act(async () => {
+      listeners[0]?.({
+        type: "group.integration-changed",
+        groupId: "group-1",
+        taskId: "task-1",
+        record: { ...previousRecord, status: "conflict", version: 5 },
+        version: 5,
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getIntegrationState).toHaveBeenCalledTimes(3));
+    expect(screen.queryByRole("button", { name: /integration/i })).toBeNull();
+    expect(previewTaskIntegration).not.toHaveBeenCalled();
+  });
+
   it("shows_blocker_dependencies_and_qa", async () => {
     const onOpenSession = vi.fn();
     render(

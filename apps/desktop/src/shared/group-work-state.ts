@@ -228,6 +228,12 @@ export type GroupIntegrationRecord = {
   conflictFiles?: string[];
 };
 
+/** Latest durable integration outcome and the immutable preview it references. */
+export type GroupIntegrationState = {
+  record?: GroupIntegrationRecord;
+  preview?: GroupIntegrationPreview;
+};
+
 const INTEGRATION_STATUSES: readonly GroupIntegrationStatus[] = [
   "ready",
   "applying",

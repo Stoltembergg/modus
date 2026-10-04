@@ -132,6 +132,7 @@ import {
   unstageFile,
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
+import { createGroupIntegrationService } from "../groups/group-integration-service";
 import { emitGroupRuntimeEvent, getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentToGroup,
@@ -221,6 +222,7 @@ import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
+import { registerGroupIntegrationIpcHandlers } from "./group-integration-ipc";
 import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
 import { registerGroupWorkIpcHandlers } from "./group-work-ipc";
@@ -1455,6 +1457,12 @@ export function registerAppIpc({
     listGroupSuggestions: (groupId) => getGroupRuntime().listSuggestions(groupId),
     resolveGroupSuggestion: (input) => getGroupRuntime().resolveGroupSuggestion(input),
   });
+  registerGroupIntegrationIpcHandlers(
+    ipcMain,
+    assertTrustedSender,
+    createGroupIntegrationService(),
+    emitGroupRuntimeEvent,
+  );
   setGroupTaskChangedSink((change) =>
     emitGroupRuntimeEvent({ type: "group.task-changed", ...change }),
   );

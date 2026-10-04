@@ -6,6 +6,7 @@ import { evaluateGroupTaskGate } from "../../shared/group-task-policy";
 import type {
   GroupIntegrationPreview,
   GroupIntegrationRecord,
+  GroupIntegrationState,
 } from "../../shared/group-work-state";
 import { getAgentSession } from "../agent/agent-store";
 import { getDatabase } from "../db/database";
@@ -268,6 +269,9 @@ export class GroupIntegrationService {
   >;
   private readonly emit: (event: AgentEvent) => void;
   private readonly git: GroupIntegrationGit;
+  private readonly integrationChangedListeners = new Set<
+    (record: GroupIntegrationRecord) => void
+  >();
 
   constructor(dependencies: GroupIntegrationServiceDependencies = {}) {
     this.permission = dependencies.requestPermission ?? requestPermission;
@@ -279,6 +283,53 @@ export class GroupIntegrationService {
       abortSubagentWorktreeApply,
       ...dependencies.git,
     };
+  }
+
+  onIntegrationChanged(listener: (record: GroupIntegrationRecord) => void): () => void {
+    this.integrationChangedListeners.add(listener);
+    return () => this.integrationChangedListeners.delete(listener);
+  }
+
+  getIntegrationState(taskId: string): GroupIntegrationState {
+    return getGroupTaskIntegrationState(taskId);
+  }
+
+  async refreshGroupTaskIntegrationState(taskId: string): Promise<GroupIntegrationState> {
+    const latest = getGroupTaskIntegrationRecord(taskId);
+    if (latest?.status !== "applying") return getGroupTaskIntegrationState(taskId);
+    const preview = getGroupIntegrationPreview(taskId, latest.previewId);
+    if (!preview)
+      throw new GroupStoreError("invalid-value", "Applying integration lost its preview.");
+    const context = resolveContext(taskId, { preview, allowFormerOwner: true });
+
+    return await withRepositoryLock(context.targetRepoKey, async () => {
+      const current = getGroupTaskIntegrationRecord(taskId);
+      if (!current || current.id !== latest.id || current.status !== "applying")
+        return getGroupTaskIntegrationState(taskId);
+      const currentPreview = getGroupIntegrationPreview(taskId, current.previewId);
+      if (!currentPreview)
+        throw new GroupStoreError("invalid-value", "Applying integration lost its preview.");
+      const currentContext = resolveContext(taskId, {
+        preview: currentPreview,
+        allowFormerOwner: true,
+      });
+      if (currentContext.targetRepoKey !== context.targetRepoKey)
+        return getGroupTaskIntegrationState(taskId);
+
+      await this.recoverApplying(currentContext, currentPreview, current);
+      return getGroupTaskIntegrationState(taskId);
+    });
+  }
+
+  private publishIntegrationChange(record: GroupIntegrationRecord): GroupIntegrationRecord {
+    for (const listener of this.integrationChangedListeners) {
+      try {
+        listener(record);
+      } catch {
+        // A renderer event listener cannot change the durable Git operation result.
+      }
+    }
+    return record;
   }
 
   async previewGroupTaskIntegration(taskId: string): Promise<GroupIntegrationPreview> {
@@ -323,7 +374,7 @@ export class GroupIntegrationService {
             ? "no_changes"
             : "ready",
       };
-      persistGroupIntegrationPreview(preview);
+      this.publishIntegrationChange(persistGroupIntegrationPreview(preview));
       return preview;
     });
   }
@@ -381,6 +432,7 @@ export class GroupIntegrationService {
       );
       if (record.status !== "applying")
         throw new GroupStoreError("invalid-transition", "Could not persist Git apply intent.");
+      this.publishIntegrationChange(record);
 
       try {
         const result = await this.git.applySubagentWorktree(
@@ -411,25 +463,29 @@ export class GroupIntegrationService {
               "Git reported a conflict without unmerged files.",
             );
           const currentTask = getGroupTask(input.taskId);
-          return recordGroupTaskIntegrationConflict({
-            taskId: input.taskId,
-            previewId: input.previewId,
-            expectedTaskVersion: currentTask.stateVersion ?? 1,
-            expectedRecordVersion: record.version,
-            mergeHeadSha: actual.mergeHeadSha,
-            conflictFiles: actual.conflictFiles,
-          }).record;
+          return this.publishIntegrationChange(
+            recordGroupTaskIntegrationConflict({
+              taskId: input.taskId,
+              previewId: input.previewId,
+              expectedTaskVersion: currentTask.stateVersion ?? 1,
+              expectedRecordVersion: record.version,
+              mergeHeadSha: actual.mergeHeadSha,
+              conflictFiles: actual.conflictFiles,
+            }).record,
+          );
         }
         if (actual.conflictFiles.length > 0)
           throw new GroupStoreError(
             "invalid-transition",
             "Git apply left conflicts but did not report them.",
           );
-        return reconcileGroupTaskIntegration(input.taskId, input.previewId, record.version, {
-          status: "applied",
-          mergeHeadSha: actual.mergeHeadSha,
-          details: { kind: "no_commit_merge_applied" },
-        });
+        return this.publishIntegrationChange(
+          reconcileGroupTaskIntegration(input.taskId, input.previewId, record.version, {
+            status: "applied",
+            mergeHeadSha: actual.mergeHeadSha,
+            details: { kind: "no_commit_merge_applied" },
+          }),
+        );
       } catch (error) {
         try {
           const recovered = await this.recoverApplying(
@@ -539,13 +595,15 @@ export class GroupIntegrationService {
           restoreTask = false;
         }
       }
-      return completeGroupTaskIntegrationAbort({
-        taskId,
-        previewId: preview.id,
-        expectedTaskVersion: task.stateVersion ?? 1,
-        expectedRecordVersion: record.version,
-        restoreTask,
-      }).record;
+      return this.publishIntegrationChange(
+        completeGroupTaskIntegrationAbort({
+          taskId,
+          previewId: preview.id,
+          expectedTaskVersion: task.stateVersion ?? 1,
+          expectedRecordVersion: record.version,
+          restoreTask,
+        }).record,
+      );
     });
   }
 
@@ -661,30 +719,36 @@ export class GroupIntegrationService {
         );
       if (actual.conflictFiles.length > 0) {
         const task = getGroupTask(context.task.id);
-        return recordGroupTaskIntegrationConflict({
-          taskId: context.task.id,
-          previewId: preview.id,
-          expectedTaskVersion: task.stateVersion ?? 1,
-          expectedRecordVersion: record.version,
-          mergeHeadSha: actual.mergeHeadSha,
-          conflictFiles: actual.conflictFiles,
-        }).record;
+        return this.publishIntegrationChange(
+          recordGroupTaskIntegrationConflict({
+            taskId: context.task.id,
+            previewId: preview.id,
+            expectedTaskVersion: task.stateVersion ?? 1,
+            expectedRecordVersion: record.version,
+            mergeHeadSha: actual.mergeHeadSha,
+            conflictFiles: actual.conflictFiles,
+          }).record,
+        );
       }
-      return reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
-        status: "applied",
-        mergeHeadSha: actual.mergeHeadSha,
-        details: { kind: "recovered_owned_pending_merge" },
-      });
+      return this.publishIntegrationChange(
+        reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
+          status: "applied",
+          mergeHeadSha: actual.mergeHeadSha,
+          details: { kind: "recovered_owned_pending_merge" },
+        }),
+      );
     }
     if (actual.committedMergeSha && actual.targetBranch === preview.targetBranch)
-      return reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
-        status: "applied",
-        mergeHeadSha: preview.sourceSha,
-        details: {
-          kind: "recovered_committed_source_target_merge",
-          mergeCommitSha: actual.committedMergeSha,
-        },
-      });
+      return this.publishIntegrationChange(
+        reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
+          status: "applied",
+          mergeHeadSha: preview.sourceSha,
+          details: {
+            kind: "recovered_committed_source_target_merge",
+            mergeCommitSha: actual.committedMergeSha,
+          },
+        }),
+      );
     const current = await this.git.inspectGroupIntegrationGitState(
       integrationGitInput(context, preview),
     );
@@ -699,10 +763,12 @@ export class GroupIntegrationService {
       !current.sourceMergeHead &&
       !current.targetMergeHead
     )
-      return reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
-        status: "ready",
-        details: { kind: "recovered_no_git_effect" },
-      });
+      return this.publishIntegrationChange(
+        reconcileGroupTaskIntegration(context.task.id, preview.id, record.version, {
+          status: "ready",
+          details: { kind: "recovered_no_git_effect" },
+        }),
+      );
     throw new GroupStoreError(
       "invalid-transition",
       "Cannot prove whether this integration applied; state is preserved for resolution.",
@@ -763,6 +829,14 @@ export function createGroupIntegrationService(
   dependencies: GroupIntegrationServiceDependencies = {},
 ): GroupIntegrationService {
   return new GroupIntegrationService(dependencies);
+}
+
+/** Read only the latest persisted record and its matching immutable preview. */
+export function getGroupTaskIntegrationState(taskId: string): GroupIntegrationState {
+  const record = getGroupTaskIntegrationRecord(taskId);
+  if (!record) return {};
+  const preview = getGroupIntegrationPreview(taskId, record.previewId);
+  return { record, ...(preview ? { preview } : {}) };
 }
 
 export async function previewGroupTaskIntegration(

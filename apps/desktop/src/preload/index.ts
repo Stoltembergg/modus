@@ -71,6 +71,12 @@ const api: ModusApi = {
     memberStates: () => ipcRenderer.invoke("group:member-states"),
     listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
     cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
+    previewTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-preview", { taskId }),
+    applyTaskIntegration: (input) => ipcRenderer.invoke("group:integration-apply", input),
+    abortTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-abort", { taskId }),
+    getIntegrationState: (taskId) => ipcRenderer.invoke("group:integration-state", { taskId }),
+    refreshTaskIntegrationState: (taskId) =>
+      ipcRenderer.invoke("group:integration-refresh", { taskId }),
     getWorkState: (groupId, executionId) =>
       ipcRenderer.invoke("group:get-work-state", {
         groupId,

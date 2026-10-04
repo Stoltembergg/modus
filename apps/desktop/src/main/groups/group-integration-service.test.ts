@@ -14,6 +14,13 @@ const { createAgentSessionRecord, updateAgentSessionWorktree } = await import(
 );
 const { createAgentGroup, addAgentGroupMember, updateGroupTask } = await import("./group-store");
 const { createGroupTask, getGroupTask } = await import("./group-task-store");
+const {
+  beginGroupTaskIntegrationApply,
+  getGroupTaskIntegrationRecord,
+  listGroupTaskIntegrationRecords,
+  reconcileGroupTaskIntegration,
+  recordGroupTaskIntegrationConflict,
+} = await import("./group-task-store");
 const { createGroupIntegrationService } = await import("./group-integration-service");
 const git = promisify(execFile);
 
@@ -156,6 +163,121 @@ function service(
 }
 
 describe("group task branch integration", () => {
+  it("publishes each durable integration record version", async () => {
+    const f = await fixture();
+    try {
+      const s = service();
+      const changes: Array<{ status: string; version: number }> = [];
+      s.integration.onIntegrationChanged((record) =>
+        changes.push({ status: record.status, version: record.version }),
+      );
+
+      const preview = await s.integration.previewGroupTaskIntegration(f.taskId);
+      await s.integration.applyGroupTaskIntegration({
+        taskId: f.taskId,
+        previewId: preview.id,
+        confirmedByUser: true,
+      });
+      await s.integration.abortGroupTaskIntegration(f.taskId);
+
+      expect(changes.map(({ status }) => status)).toEqual([
+        "ready",
+        "applying",
+        "applied",
+        "aborted",
+      ]);
+      expect(changes.map(({ version }) => version)).toEqual([1, 2, 3, 4]);
+    } finally {
+      await cleanup(f);
+    }
+  });
+
+  it("recovers an applying merge without creating a newer preview record", async () => {
+    const f = await fixture();
+    try {
+      const s = service();
+      const changes: Array<{ status: string; version: number }> = [];
+      s.integration.onIntegrationChanged((record) =>
+        changes.push({ status: record.status, version: record.version }),
+      );
+      const preview = await s.integration.previewGroupTaskIntegration(f.taskId);
+      const ready = getGroupTaskIntegrationRecord(f.taskId, preview.id);
+      expect(ready).toBeDefined();
+      const applying = beginGroupTaskIntegrationApply(
+        f.taskId,
+        preview.id,
+        preview.taskVersion,
+        ready?.version ?? 0,
+      );
+      await gitAt(f.root, ["merge", "--no-commit", "--no-ff", f.sourceBranch]);
+
+      const state = await s.integration.refreshGroupTaskIntegrationState(f.taskId);
+
+      expect(state.record).toMatchObject({
+        id: applying.id,
+        previewId: preview.id,
+        status: "applied",
+        version: applying.version + 1,
+      });
+      expect(state.preview).toEqual(preview);
+      expect(listGroupTaskIntegrationRecords(f.taskId)).toHaveLength(1);
+      expect(changes.at(-1)).toEqual({ status: "applied", version: applying.version + 1 });
+      const aborted = await s.integration.abortGroupTaskIntegration(f.taskId);
+      expect(aborted.status).toBe("aborted");
+    } finally {
+      await cleanup(f);
+    }
+  });
+
+  it.each(["applied", "conflict"] as const)(
+    "reads an existing %s integration without another Git inspection",
+    async (status) => {
+      const f = await fixture({ conflict: status === "conflict" });
+      try {
+        const preview = await service().integration.previewGroupTaskIntegration(f.taskId);
+        const ready = getGroupTaskIntegrationRecord(f.taskId, preview.id);
+        expect(ready).toBeDefined();
+        const applying = beginGroupTaskIntegrationApply(
+          f.taskId,
+          preview.id,
+          preview.taskVersion,
+          ready?.version ?? 0,
+        );
+        const expected =
+          status === "applied"
+            ? reconcileGroupTaskIntegration(f.taskId, preview.id, applying.version, {
+                status: "applied",
+                mergeHeadSha: preview.sourceSha,
+                details: { kind: "test_recovered_merge" },
+              })
+            : recordGroupTaskIntegrationConflict({
+                taskId: f.taskId,
+                previewId: preview.id,
+                expectedTaskVersion: preview.taskVersion,
+                expectedRecordVersion: applying.version,
+                mergeHeadSha: preview.sourceSha,
+                conflictFiles: ["shared.txt"],
+              }).record;
+        const inspectApply = vi.fn();
+        const inspectGitState = vi.fn();
+        const reader = createGroupIntegrationService({
+          git: {
+            inspectGroupIntegrationApply: inspectApply,
+            inspectGroupIntegrationGitState: inspectGitState,
+          },
+        });
+
+        const state = await reader.refreshGroupTaskIntegrationState(f.taskId);
+
+        expect(state.record).toEqual(expected);
+        expect(inspectApply).not.toHaveBeenCalled();
+        expect(inspectGitState).not.toHaveBeenCalled();
+      } finally {
+        await cleanup(f);
+      }
+    },
+  );
+
   it("permission_denied_never_applies", async () => {
     const f = await fixture();
     try {
@@ -364,6 +486,10 @@ describe("group task branch integration", () => {
         return result;
       });
       const s = service({ git: { applySubagentWorktree: apply } });
+      const changes: Array<{ status: string; version: number }> = [];
+      s.integration.onIntegrationChanged((record) =>
+        changes.push({ status: record.status, version: record.version }),
+      );
       const preview = await s.integration.previewGroupTaskIntegration(f.taskId);
       const conflict = await s.integration.applyGroupTaskIntegration({
         taskId: f.taskId,
@@ -553,6 +679,10 @@ describe("group task branch integration", () => {
         throw new Error("simulated process interruption after merge");
       });
       const s = service({ git: { applySubagentWorktree: apply } });
+      const changes: Array<{ status: string; version: number }> = [];
+      s.integration.onIntegrationChanged((record) =>
+        changes.push({ status: record.status, version: record.version }),
+      );
       const preview = await s.integration.previewGroupTaskIntegration(f.taskId);
       const input = { taskId: f.taskId, previewId: preview.id, confirmedByUser: true as const };
       const [first, second] = await Promise.all([
@@ -563,6 +693,8 @@ describe("group task branch integration", () => {
       expect(second.status).toBe("applied");
       expect(apply).toHaveBeenCalledTimes(1);
       expect(await gitAt(f.root, ["rev-parse", "MERGE_HEAD"])).toBe(f.sourceSha);
+      expect(changes.map(({ status }) => status)).toEqual(["ready", "applying", "applied"]);
+      expect(changes.map(({ version }) => version)).toEqual([1, 2, 3]);
     } finally {
       await cleanup(f);
     }

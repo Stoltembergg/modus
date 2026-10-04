@@ -34,6 +34,11 @@ export const IPC_CHANNELS = {
   groupDeleteDecision: "group:delete-decision",
   groupSetMode: "group:set-mode",
   groupSetWorkspace: "group:set-workspace",
+  groupIntegrationPreview: "group:integration-preview",
+  groupIntegrationApply: "group:integration-apply",
+  groupIntegrationAbort: "group:integration-abort",
+  groupIntegrationState: "group:integration-state",
+  groupIntegrationRefresh: "group:integration-refresh",
   /** Workspace-scoped Project Setup status (shared Project Model map). */
   groupProjectContext: "group:project-context",
   // Agents entity (agents model). `agent:*` is taken by the session channels.

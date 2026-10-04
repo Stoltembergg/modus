@@ -75,6 +75,33 @@ describe("shouldRefreshGroupSidePanel", () => {
     ).toBe(false);
   });
 
+  it("refreshes task state after a versioned integration change", () => {
+    expect(
+      shouldRefreshGroupSidePanel("g-1", {
+        type: "group.integration-changed",
+        groupId: "g-1",
+        taskId: "t-1",
+        record: {
+          id: "i-1",
+          groupId: "g-1",
+          taskId: "t-1",
+          previewId: "p-1",
+          taskVersion: 2,
+          sourceBranch: "group/g-1/member",
+          sourceSha: "a".repeat(40),
+          targetBranch: "main",
+          targetSha: "b".repeat(40),
+          status: "conflict",
+          version: 3,
+          createdAt: "2026-10-03T00:00:00.000Z",
+          updatedAt: "2026-10-03T00:00:00.000Z",
+          conflictFiles: ["src/parser.ts"],
+        },
+        version: 3,
+      }),
+    ).toBe(true);
+  });
+
   it("refreshes suggestions and mode after versioned proactivity events", () => {
     expect(
       shouldRefreshGroupSidePanel("g-1", {
