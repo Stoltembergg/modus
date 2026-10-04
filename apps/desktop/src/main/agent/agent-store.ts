@@ -427,3 +427,15 @@ export function setAgentSessionArchived(
 export function deleteAgentSession(sessionId: string): void {
   getDatabase().prepare("delete from agent_sessions where id = ?").run(sessionId);
 }
+
+/** L2: the session's chosen branch (session state), or undefined when never set. */
+export function getAgentSessionBranch(sessionId: string): string | undefined {
+  const row = getDatabase()
+    .prepare("select branch from agent_sessions where id = ?")
+    .get(sessionId) as { branch: string | null } | undefined;
+  return row?.branch ?? undefined;
+}
+
+export function setAgentSessionBranch(sessionId: string, branch: string): void {
+  getDatabase().prepare("update agent_sessions set branch = ? where id = ?").run(branch, sessionId);
+}

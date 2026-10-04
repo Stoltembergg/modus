@@ -23,6 +23,7 @@ import {
   getGitMemoryContext,
   getStatusSummary,
   getWorkingChangeStats,
+  hasUncommittedChanges,
   initRepository,
   isGitRepository,
   listBranches,
@@ -770,5 +771,28 @@ describe("git-service", () => {
     expect(result.kind).toBe("worktree");
     expect(result.worktreePath?.replace(/\\/g, "/")).toBe(worktree.path.replace(/\\/g, "/"));
     expect((await git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(current);
+  });
+
+  it("L2: refuses a branch switch with uncommitted changes (no -f, no stash) and allows it when clean", async () => {
+    const current = (await git(["symbolic-ref", "--short", "HEAD"])).trim();
+    await git(["branch", "side"]);
+    expect(await hasUncommittedChanges(repo)).toBe(false);
+
+    await writeFile(join(repo, "tracked.txt"), "edited\n");
+    expect(await hasUncommittedChanges(repo)).toBe(true);
+    await expect(checkoutBranch(repo, "side")).rejects.toThrow("alterações não commitadas");
+    expect((await git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(current);
+    expect((await readFile(join(repo, "tracked.txt"), "utf8")).replace(/\r\n/g, "\n")).toBe(
+      "edited\n",
+    );
+    expect(await git(["stash", "list"])).toBe("");
+
+    await git(["checkout", "--", "tracked.txt"]);
+    await writeFile(join(repo, "untracked.txt"), "new\n");
+    await expect(checkoutBranch(repo, "side")).rejects.toThrow("alterações não commitadas");
+
+    await rm(join(repo, "untracked.txt"));
+    expect((await checkoutBranch(repo, "side")).kind).toBe("ok");
+    expect((await git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe("side");
   });
 });

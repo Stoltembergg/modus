@@ -58,6 +58,12 @@ import {
 import { listAgentReviews, startAgentReview } from "../agent/review-service";
 import { rollbackToUserMessage } from "../agent/rollback-service";
 import { getAgentRuntime } from "../agent/runtime-registry";
+import {
+  readSessionBranchState,
+  SessionBranchError,
+  switchSessionBranch,
+} from "../agent/session-branch";
+import { createSessionBranchDeps } from "../agent/session-branch-deps";
 import { deleteAgentSessionTree, setAgentSessionArchivedTree } from "../agent/session-lifecycle";
 import {
   createSubagent,
@@ -233,6 +239,7 @@ import {
   agentListSchema,
   agentPromptSchema,
   agentRollbackSchema,
+  agentSetBranchSchema,
   agentSetModelSchema,
   approvalModeClearProjectSchema,
   approvalModeGetSchema,
@@ -525,6 +532,46 @@ export function registerAppIpc({
       ...(parsed.thinkingVariant !== undefined ? { thinkingVariant: parsed.thinkingVariant } : {}),
       ...(parsed.planId !== undefined ? { planId: parsed.planId } : {}),
     });
+  });
+
+  // L2: branch is session state. Name only from the renderer; cwd from the session record.
+  const sessionBranchDeps = (event: IpcMainInvokeEvent) =>
+    createSessionBranchDeps({
+      emit: (agentEvent) => {
+        const eventCursor = recordAgentEvent(agentEvent);
+        getSenderWindow(event).webContents.send(IPC_CHANNELS.agentEvent, {
+          ...agentEvent,
+          eventCursor,
+        });
+      },
+      isStreaming: (sessionId) => getAgentRuntime().isSessionStreaming(sessionId),
+    });
+  const branchIpcError = (error: unknown): Error =>
+    error instanceof SessionBranchError ? new Error(error.message) : (error as Error);
+
+  ipcMain.handle(IPC_CHANNELS.agentBranchState, async (event, sessionId: string) => {
+    assertTrustedSender(event);
+    const id = parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentBranchState);
+    try {
+      return await readSessionBranchState(sessionBranchDeps(event), id);
+    } catch (error) {
+      throw branchIpcError(error);
+    }
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentSetBranch, async (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(agentSetBranchSchema, input, IPC_CHANNELS.agentSetBranch);
+    try {
+      requireAgentChatWritable(parsed.sessionId);
+    } catch (error) {
+      throw toGroupIpcError(error);
+    }
+    try {
+      return await switchSessionBranch(sessionBranchDeps(event), parsed.sessionId, parsed.branch);
+    } catch (error) {
+      throw branchIpcError(error);
+    }
   });
 
   registerHyperPlanIpcHandlers(ipcMain);

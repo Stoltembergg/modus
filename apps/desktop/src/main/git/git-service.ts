@@ -1150,6 +1150,20 @@ async function linkedWorktreeForBranch(cwd: string, branch: string): Promise<str
  * to (or create + track) the matching local branch instead of detaching HEAD.
  * Git refuses (and we surface the error) when uncommitted changes would be lost.
  */
+/**
+ * True when the working tree has anything uncommitted: staged, unstaged or untracked
+ * (not ignored) files. A branch switch is refused in that state (L2, Debbie): no
+ * `checkout -f`, no automatic stash, so nothing the user has not committed is ever moved
+ * to another branch or lost.
+ */
+export async function hasUncommittedChanges(cwd: string): Promise<boolean> {
+  const output = await git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+  return output.length > 0;
+}
+
+export const UNCOMMITTED_SWITCH_MESSAGE =
+  "Há alterações não commitadas nesta pasta. Faça commit (ou descarte) antes de trocar de branch.";
+
 export async function checkoutBranch(
   cwd: string,
   name: string,
@@ -1159,6 +1173,10 @@ export async function checkoutBranch(
   if (!target) {
     throw new Error("Branch name is required.");
   }
+  // Same rule for every switcher (Changes panel, new-chat tray, session composer).
+  const refuseDirty = async (): Promise<void> => {
+    if (await hasUncommittedChanges(cwd)) throw new Error(UNCOMMITTED_SWITCH_MESSAGE);
+  };
   if (!remote) {
     const worktreePath = await linkedWorktreeForBranch(cwd, target);
     if (worktreePath) {
@@ -1169,6 +1187,7 @@ export async function checkoutBranch(
         output: `Branch "${target}" is checked out in a linked worktree: ${worktreePath}`,
       };
     }
+    await refuseDirty();
     return { kind: "ok", output: await git(cwd, ["switch", target]) };
   }
   const localName = target.includes("/") ? target.slice(target.indexOf("/") + 1) : target;
@@ -1182,8 +1201,10 @@ export async function checkoutBranch(
         output: `Branch "${localName}" is checked out in a linked worktree: ${worktreePath}`,
       };
     }
+    await refuseDirty();
     return { kind: "ok", output: await git(cwd, ["switch", localName]) };
   }
+  await refuseDirty();
   return { kind: "ok", output: await git(cwd, ["switch", "--track", target]) };
 }
 

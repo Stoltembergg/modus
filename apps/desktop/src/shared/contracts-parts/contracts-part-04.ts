@@ -140,6 +140,18 @@ export type GitBranchSummary = {
   remote: GitBranch[];
 };
 
+/** L2: the composer's branch picker state for one session (resolved in the main process). */
+export type SessionBranchState = {
+  /** The session's branch (saved, or the repo's current branch for a new session). */
+  branch?: string;
+  /** The repo's current branch at the session cwd (undefined when HEAD is detached). */
+  current?: string;
+  /** False when the saved branch no longer exists: sending is blocked until another is chosen. */
+  exists: boolean;
+  /** A run is active: the switcher is disabled. */
+  running: boolean;
+};
+
 /** Result of a network/branch git action (checkout, pull, fetch, create branch). */
 export type GitActionResult = {
   /** Human-readable git output, shown on error or as a toast. */

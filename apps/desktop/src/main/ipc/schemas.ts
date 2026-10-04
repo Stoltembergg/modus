@@ -112,6 +112,21 @@ export const agentPromptSchema = z.object({
 
 export const sessionIdSchema = nonEmptyString;
 
+/**
+ * L2: the renderer sends ONLY a branch name; the main process validates it against the
+ * repo's local branches and uses the session's own cwd. A path is never accepted.
+ */
+export const agentSetBranchSchema = z
+  .object({
+    sessionId: nonEmptyString.max(128),
+    branch: nonEmptyString
+      .max(255)
+      .refine((name) => !/[\\\0\s~^:?*[]|\.\.|@\{|^[-/.]|[/.]$|\.lock$/.test(name), {
+        message: "invalid branch name",
+      }),
+  })
+  .strict();
+
 export const agentReviewPlanWithHyperPlanSchema = z
   .object({
     sessionId: nonEmptyString.max(128),

@@ -8,6 +8,7 @@ import {
   attachTurnActions,
   blockRenderKeys,
   buildBlocks,
+  buildVisibleTimelineBlocks,
   groupTurnWork,
   groupWorkItems,
   segmentTurns,
@@ -30,6 +31,15 @@ function tool(id: string, name: string, complete = true, isError = false) {
 }
 
 describe("buildBlocks", () => {
+  it("L2: an idle branch switch renders 'Branch alterada para X' as a system notice", () => {
+    const blocks = buildVisibleTimelineBlocks([
+      item("switch", { type: "session.branch_changed", sessionId: "s", branch: "feat/l2" }),
+    ]);
+    expect(blocks).toEqual([
+      expect.objectContaining({ type: "notice", body: "Branch alterada para feat/l2" }),
+    ]);
+  });
+
   it("attaches run sources only to the final assistant message segment", () => {
     const blocks = buildBlocks([
       item("run", { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" }),

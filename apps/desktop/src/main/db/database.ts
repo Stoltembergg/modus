@@ -233,6 +233,10 @@ export function migrateDatabase(db: DatabaseSync): void {
   // branch point used to rewind the conversation when the message is edited.
   // "root" marks an empty tree (first message); NULL marks legacy runs.
   addColumn(db, "agent_runs", "pi_leaf_before", "text");
+  // L2: the session's chosen branch (session state; NULL = adopt the repo's current branch
+  // at the next run) and the branch each run snapshotted at its start (immutable).
+  addColumn(db, "agent_sessions", "branch", "text");
+  addColumn(db, "agent_runs", "branch", "text");
   addColumn(db, "model_configs", "thinking_variant", "text");
 
   db.exec(`

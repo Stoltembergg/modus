@@ -798,6 +798,17 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
       continue;
     }
 
+    if (event.type === "session.branch_changed") {
+      // L2: system timeline event for an idle branch switch; the next run uses it.
+      blocks.push({
+        body: `Branch alterada para ${event.branch}`,
+        id,
+        title: "branch",
+        type: "notice",
+      });
+      continue;
+    }
+
     if (event.type === "review.started") {
       blocks.push({
         body: "Reviewing local changes…",

@@ -1,6 +1,6 @@
 /**
- * Shared look of the composer model chips (C5): the 1:1 composer's interactive
- * ModelSelect / effort triggers and the group composer's read-only chip.
+ * Shared chip look (C5): the group composer's read-only model chip and, since L2 removed
+ * the model / effort pickers, the 1:1 composer's session branch picker.
  * `cn` does not merge classes, so tone classes never compete in one element.
  */
 export const MODEL_CHIP_BASE =

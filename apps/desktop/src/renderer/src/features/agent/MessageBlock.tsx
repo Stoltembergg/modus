@@ -292,7 +292,6 @@ function InlineEditComposer({
       onCancel={onCancel}
       onContextChange={setEditContextItems}
       onDraftChange={setDraft}
-      onModelChange={() => undefined}
       onSubmit={(message, nextContext, _delivery, nextAttachments, nextSkills) =>
         onEditResend(messageId, message, nextAttachments, nextContext, nextSkills)
       }

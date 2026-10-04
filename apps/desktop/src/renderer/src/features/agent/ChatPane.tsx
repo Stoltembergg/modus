@@ -34,6 +34,7 @@ import {
 import { ComposerDock } from "../composer/ComposerDock";
 import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
+import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
 import { ReviewPlanCard } from "../plan/ReviewPlanCard";
@@ -690,6 +691,8 @@ export function ChatPane({
     createEmptyChatComposerDraft,
   );
   const [promptError, setPromptError] = useState<string | undefined>();
+  // L2: the session's saved branch no longer exists -> sending is blocked until replaced.
+  const [branchBlocked, setBranchBlocked] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
@@ -1355,16 +1358,6 @@ export function ChatPane({
     submitPrompt(message, contextItems ?? [], "normal", attachments, skills, composerMode);
   }
 
-  async function changeModel(nextModel: string): Promise<void> {
-    if (!nextModel) {
-      return;
-    }
-    onModelChange(nextModel);
-    await window.modus.model.setDefault(nextModel);
-    await window.modus.agent.setModel({ sessionId, model: nextModel });
-    onSessionsChanged();
-  }
-
   const openSubagentPreview = useCallback(
     (childSessionId: string): void => {
       // Inspector already owns the live ChatPane for this session — don't dual-mount.
@@ -1608,11 +1601,19 @@ export function ChatPane({
                     >
                       <Composer
                         integrated
-                        canSubmit={canSubmitPromptForSession(
-                          workspace,
-                          session.workspaceId,
-                          paneModel,
-                        )}
+                        canSubmit={
+                          !branchBlocked &&
+                          canSubmitPromptForSession(workspace, session.workspaceId, paneModel)
+                        }
+                        branchControl={
+                          <SessionBranchPicker
+                            cwd={activeCwd}
+                            isRunning={isRunning}
+                            onBlockedChange={setBranchBlocked}
+                            onError={setPromptError}
+                            sessionId={sessionId}
+                          />
+                        }
                         contextItems={contextItems}
                         cwd={activeCwd}
                         draft={{
@@ -1631,8 +1632,6 @@ export function ChatPane({
                         onContextChange={setContextItems}
                         onDraftChange={setComposerFields}
                         onModeChange={setComposerMode}
-                        onModelChange={(next) => void changeModel(next)}
-                        onModelConfigChange={onModelConfigChange}
                         {...(onOpenConnections ? { onOpenConnections } : {})}
                         onSubmit={(message, context, delivery, attachments, skills, mode) =>
                           submitPrompt(message, context, delivery, attachments, skills, mode)

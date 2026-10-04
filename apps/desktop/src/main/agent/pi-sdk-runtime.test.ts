@@ -6961,3 +6961,85 @@ describe("PiSdkRuntime", () => {
     ).toEqual({ count: 1 });
   });
 });
+
+describe("L2: run branch snapshot + context line", () => {
+  it("each run gets 'Branch atual: X'; an idle switch is logged and reaches the next run", async () => {
+    await initGitRepoWithKnownEmptyScope();
+    await execFileAsync("git", ["branch", "feat/l2"], { cwd, windowsHide: true });
+    const current = (
+      await execFileAsync("git", ["symbolic-ref", "--short", "HEAD"], { cwd })
+    ).stdout.trim();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const seen: Array<{ text: string; runBranch: string | undefined }> = [];
+    const { getAgentRunBranch } = await import("./agent-run-store");
+    const session = createMockPiSession({
+      prompt: vi.fn(async (text: string) => {
+        const run = getActiveAgentRun(sessionId);
+        seen.push({ text, runBranch: run ? getAgentRunBranch(run.id) : undefined });
+      }),
+    });
+    mocks.createAgentSession.mockImplementation(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    await runtime.prompt(window, { context: [], delivery: "normal", message: "one", sessionId });
+    expect(
+      seen[0]?.text.startsWith(`<session_context>Branch atual: ${current}</session_context>`),
+    ).toBe(true);
+    expect(seen[0]?.runBranch).toBe(current);
+
+    const { switchSessionBranch } = await import("./session-branch");
+    const { createSessionBranchDeps } = await import("./session-branch-deps");
+    const emitted: AgentEvent[] = [];
+    await switchSessionBranch(
+      createSessionBranchDeps({
+        emit: (event) => {
+          recordAgentEvent(event);
+          emitted.push(event);
+        },
+      }),
+      sessionId,
+      "feat/l2",
+    );
+    expect(emitted).toEqual([{ type: "session.branch_changed", sessionId, branch: "feat/l2" }]);
+    expect(
+      listAgentEvents(sessionId).some((row) => row.event.type === "session.branch_changed"),
+    ).toBe(true);
+
+    await runtime.prompt(window, { context: [], delivery: "normal", message: "two", sessionId });
+    expect(
+      seen[1]?.text.startsWith("<session_context>Branch atual: feat/l2</session_context>"),
+    ).toBe(true);
+    expect(seen[1]?.runBranch).toBe("feat/l2");
+    // The visible user message never carries the line.
+    const userDeltas = listAgentEvents(sessionId)
+      .map((row) => JSON.stringify(row.event))
+      .filter((json) => json.includes('"type":"message.delta"') && json.includes('"two"'));
+    expect(userDeltas.length).toBeGreaterThan(0);
+    expect(userDeltas.join("\n")).not.toContain("Branch atual");
+    mocks.createAgentSession.mockReset();
+  });
+
+  it("a saved branch that no longer exists refuses the send", async () => {
+    await initGitRepo();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const { setAgentSessionBranch } = await import("./agent-store");
+    setAgentSessionBranch(sessionId, "deleted-branch");
+    const prompt = vi.fn(async () => undefined);
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ prompt }),
+    }));
+    await expect(
+      new PiSdkRuntime().prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "hi",
+        sessionId,
+      }),
+    ).rejects.toThrow('A branch "deleted-branch" não existe mais');
+    expect(prompt).not.toHaveBeenCalled();
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+});
