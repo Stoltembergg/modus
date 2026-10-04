@@ -75,6 +75,17 @@ export class FakeDb implements RouterDb {
     return Promise.resolve(this.plan);
   }
 
+  /** L3a: plans.default_model per plan (unset -> FLASH, like the seed). */
+  defaultModels = new Map<string, string | null>();
+  defaultModelCalls: string[] = [];
+
+  getPlanDefaultModel(plan: string): Promise<string | null> {
+    this.defaultModelCalls.push(plan);
+    return Promise.resolve(
+      this.defaultModels.has(plan) ? (this.defaultModels.get(plan) ?? null) : FLASH.id,
+    );
+  }
+
   getBalance(): Promise<number | null> {
     return Promise.resolve(this.balance);
   }

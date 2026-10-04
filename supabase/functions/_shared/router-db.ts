@@ -32,6 +32,11 @@ export interface RouterDb {
   claimRequest(userId: string, key: string, bodySha256: string): Promise<ClaimResult>;
   /** The caller's plan: the highest active/trialing subscription plan, else free. */
   getPlan(userId: string): Promise<UserPlan>;
+  /**
+   * L3a: public.plans.default_model of a plan (null = no default). Used only when a
+   * completion request names no model.
+   */
+  getPlanDefaultModel(plan: string): Promise<string | null>;
   /** Wallet balance (spendable credits); null when the user has no wallet. */
   getBalance(userId: string): Promise<number | null>;
   /** private.router_reserve; throws ReserveError for 402 / 429. */
@@ -98,6 +103,12 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
              'free')`;
         if (!rows.length) return { plan: "free", allowedModels: [] };
         return { plan: rows[0].plan, allowedModels: rows[0].allowed_models ?? null };
+      }),
+
+    getPlanDefaultModel: (plan) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`select default_model from public.plans where plan = ${plan}`;
+        return rows.length ? ((rows[0].default_model as string | null) ?? null) : null;
       }),
 
     getBalance: (userId) =>
