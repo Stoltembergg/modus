@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessTaskCheckKind } from "../../../shared/contracts";
 
@@ -45,12 +46,14 @@ export type RecognizedCheckInvocation = {
   paths?: string[];
   workspace?: string;
   mutatesSource?: boolean;
+  packageConfigDigest?: string;
 };
 
 export type RunQAEvent =
   | (ToolEventBase & { type: "tool.started" })
   | (ToolEventBase & {
       type: "tool.ended";
+      checkConfigStable?: boolean;
       exitCode?: number;
       error?: boolean;
       aborted?: boolean;
@@ -121,7 +124,15 @@ export function resolvePackageCheckScript(
   cwd: string,
   packageName: string | undefined,
   scriptName: string,
-): { body: string; workspaceRoot?: string } | undefined {
+): { body: string; configDigest: string; workspaceRoot?: string } | undefined {
+  const manifestIdentity = (path: string): string | undefined => {
+    try {
+      const stat = statSync(path, { bigint: true });
+      return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+    } catch {
+      return undefined;
+    }
+  };
   const readManifest = (path: string): Record<string, unknown> | undefined => {
     try {
       const text = readFileSync(path, "utf8");
@@ -132,9 +143,12 @@ export function resolvePackageCheckScript(
       return undefined;
     }
   };
-  const root = readManifest(join(cwd, "package.json"));
-  if (!root) return undefined;
+  const rootManifestPath = join(cwd, "package.json");
+  const root = readManifest(rootManifestPath);
+  const rootIdentity = manifestIdentity(rootManifestPath);
+  if (!root || !rootIdentity) return undefined;
   let manifest = root;
+  let manifestPath = rootManifestPath;
   let workspaceRoot: string | undefined;
   if (packageName) {
     workspaceRoot = RECOGNIZED_WORKSPACE_ROOTS[packageName];
@@ -152,9 +166,12 @@ export function resolvePackageCheckScript(
     ) {
       return undefined;
     }
-    manifest = readManifest(join(cwd, workspaceRoot, "package.json")) ?? {};
+    manifestPath = join(cwd, workspaceRoot, "package.json");
+    manifest = readManifest(manifestPath) ?? {};
     if (manifest.name !== packageName) return undefined;
   }
+  const checkManifestIdentity = manifestIdentity(manifestPath);
+  if (!checkManifestIdentity) return undefined;
   const scripts = manifest.scripts;
   const packageScripts =
     scripts && typeof scripts === "object" && !Array.isArray(scripts)
@@ -162,15 +179,28 @@ export function resolvePackageCheckScript(
       : undefined;
   const body = packageScripts?.[scriptName];
   if (typeof body !== "string" || !body.trim()) return undefined;
+  const preHook = packageScripts?.[`pre${scriptName}`];
+  const postHook = packageScripts?.[`post${scriptName}`];
   if (
-    [`pre${scriptName}`, `post${scriptName}`].some((hook) => {
-      const hookBody = packageScripts?.[hook];
-      return typeof hookBody === "string" && hookBody.trim().length > 0;
-    })
+    [preHook, postHook].some(
+      (hookBody) => typeof hookBody === "string" && hookBody.trim().length > 0,
+    )
   ) {
     return undefined;
   }
-  return { body, ...(workspaceRoot ? { workspaceRoot } : {}) };
+  const configDigest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        scriptName,
+        body,
+        preHook: typeof preHook === "string" ? preHook : null,
+        postHook: typeof postHook === "string" ? postHook : null,
+        rootIdentity,
+        checkManifestIdentity,
+      }),
+    )
+    .digest("hex");
+  return { body, configDigest, ...(workspaceRoot ? { workspaceRoot } : {}) };
 }
 
 function scopedPaths(arguments_: string[]): string[] | undefined {
@@ -273,6 +303,7 @@ export function recognizeCheckInvocation(
       if (!body || body.checkName !== kind || body.mutatesSource) return undefined;
       return {
         ...body,
+        packageConfigDigest: resolved.configDigest,
         fullProject: workspace ? false : body.fullProject,
         ...(workspace
           ? {
@@ -460,6 +491,12 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     if (event.type === "tool.ended" && invalidatingActions.delete(event.toolCallId)) {
       generation += 1;
       latest.clear();
+    }
+
+    if (event.type === "tool.ended" && event.checkConfigStable === false) {
+      generation += 1;
+      latest.clear();
+      continue;
     }
 
     if (event.type === "check.confirmed") {

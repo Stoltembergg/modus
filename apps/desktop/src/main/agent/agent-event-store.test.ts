@@ -870,6 +870,309 @@ describe("agent-event-store", () => {
       checkName: "tests",
     });
   });
+  it("does not reclassify a package check after its manifest changes during execution", async () => {
+    await writeFile(
+      join(userData, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node mutate-package.js", posttest: "node cleanup.js" },
+        workspaces: ["apps/*"],
+      }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      expect(recognizeCheckInvocation("terminal_run", "npm test", userData)).toBeUndefined();
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "mutating-package-check-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+        __qaCheckSnapshot: { version: 1, checkName: "tests", fullProject: true },
+      } as never);
+
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" }, workspaces: ["apps/*"] }),
+      );
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "mutating-package-check-call",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      } as never);
+
+      const events = getRunToolEvidence(sessionId, run.id);
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+
+      expect(events.every((event) => event.checkName === undefined)).toBe(true);
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({
+          scripts: { test: "vitest run", typecheck: "tsc --noEmit" },
+          workspaces: ["apps/*"],
+        }),
+      );
+    }
+  });
+  it("keeps a safe package classification captured at tool start", async () => {
+    await writeFile(
+      join(userData, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" }, workspaces: ["apps/*"] }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "frozen-safe-package-check-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      } as never);
+      const startRow = getDatabase()
+        .prepare(
+          `select payload_json from agent_events
+           where session_id = ? and json_extract(payload_json, '$.runId') = ?
+             and json_extract(payload_json, '$.toolCallId') = ?`,
+        )
+        .get(sessionId, run.id, "frozen-safe-package-check-call") as
+        | { payload_json: string }
+        | undefined;
+      const persistedStart = JSON.parse(startRow?.payload_json ?? "{}") as Record<string, unknown>;
+      expect(persistedStart.__qaCheckSnapshot).toMatchObject({
+        version: 1,
+        checkName: "tests",
+        packageConfigDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+      expect(JSON.stringify(persistedStart.__qaCheckSnapshot)).not.toContain("vitest run");
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "frozen-safe-package-check-call",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      } as never);
+
+      const events = getRunToolEvidence(sessionId, run.id);
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "tool.started", checkName: "tests" }),
+          expect.objectContaining({ type: "tool.ended", checkName: "tests", exitCode: 0 }),
+        ]),
+      );
+      expect(events.find((event) => event.type === "tool.ended")?.checkConfigStable).toBe(true);
+      expect(qa.status).toBe("passed");
+    } finally {
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({
+          scripts: { test: "vitest run", typecheck: "tsc --noEmit" },
+          workspaces: ["apps/*"],
+        }),
+      );
+    }
+  });
+  it("rejects package QA when a recognized script definition changes before tool end", async () => {
+    await writeFile(
+      join(userData, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" }, workspaces: ["apps/*"] }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "changed-package-check-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      } as never);
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({ scripts: { test: "jest" }, workspaces: ["apps/*"] }),
+      );
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "changed-package-check-call",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      } as never);
+
+      const events = getRunToolEvidence(sessionId, run.id);
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+
+      expect(events.find((event) => event.type === "tool.started")?.checkName).toBe("tests");
+      expect(events.find((event) => event.type === "tool.ended")?.checkConfigStable).toBe(false);
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({
+          scripts: { test: "vitest run", typecheck: "tsc --noEmit" },
+          workspaces: ["apps/*"],
+        }),
+      );
+    }
+  });
+  it("rejects a package script that changes and is restored before tool end", async () => {
+    const safeManifest = JSON.stringify({
+      scripts: { test: "vitest run" },
+      workspaces: ["apps/*"],
+    });
+    await writeFile(join(userData, "package.json"), safeManifest);
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "restored-package-check-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      } as never);
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({ scripts: { test: "jest" }, workspaces: ["apps/*"] }),
+      );
+      await writeFile(join(userData, "package.json"), safeManifest);
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "restored-package-check-call",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      } as never);
+
+      const events = getRunToolEvidence(sessionId, run.id);
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+
+      expect(events.find((event) => event.type === "tool.ended")?.checkConfigStable).toBe(false);
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await writeFile(
+        join(userData, "package.json"),
+        JSON.stringify({
+          scripts: { test: "vitest run", typecheck: "tsc --noEmit" },
+          workspaces: ["apps/*"],
+        }),
+      );
+    }
+  });
+  it("fails closed for legacy package starts while retaining direct check recognition", async () => {
+    await writeFile(
+      join(userData, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest run" }, workspaces: ["apps/*"] }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    const legacyStarts = [
+      {
+        type: "tool.started" as const,
+        sessionId,
+        runId: run.id,
+        toolCallId: "legacy-package-check-call",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      },
+      {
+        type: "tool.started" as const,
+        sessionId,
+        runId: run.id,
+        toolCallId: "legacy-direct-check-call",
+        toolName: "terminal_run",
+        args: { command: "vitest run" },
+      },
+    ];
+    for (const [index, event] of legacyStarts.entries()) {
+      getDatabase()
+        .prepare(
+          `insert into agent_events (id, session_id, type, payload_json, created_at)
+           values (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          `legacy-check-start-${index}-${crypto.randomUUID()}`,
+          sessionId,
+          event.type,
+          JSON.stringify(event),
+          new Date().toISOString(),
+        );
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        isError: false,
+        exitCode: 0,
+      } as never);
+    }
+
+    const starts = getRunToolEvidence(sessionId, run.id).filter(
+      (event) => event.type === "tool.started",
+    );
+
+    expect(starts[0]?.checkName).toBeUndefined();
+    expect(starts[1]?.checkName).toBe("tests");
+    expect(starts).toEqual([
+      expect.objectContaining({ type: "tool.started", toolCallId: "legacy-package-check-call" }),
+      expect.objectContaining({
+        type: "tool.started",
+        toolCallId: "legacy-direct-check-call",
+        checkName: "tests",
+      }),
+    ]);
+  });
   it("does not project npm test as QA evidence when posttest mutates source", async () => {
     await writeFile(
       join(userData, "package.json"),
