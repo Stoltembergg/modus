@@ -30,11 +30,11 @@ jobs:
             rust_target: x86_64-apple-darwin
             codegraph_arch: x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
           cache: npm
 
       - name: Install Rust stable (${{ matrix.rust_target }})
@@ -103,7 +103,7 @@ jobs:
 
       - name: Upload electron-vite log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: electron-vite-log-mac-${{ matrix.electron_arch }}-${{ github.sha }}
           path: electron-vite-build.log
@@ -126,7 +126,7 @@ jobs:
         run: ls -lah apps/desktop/dist
 
       - name: Upload macOS ${{ matrix.electron_arch }} artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: modus-macos-${{ matrix.electron_arch }}-${{ github.sha }}
           path: |
