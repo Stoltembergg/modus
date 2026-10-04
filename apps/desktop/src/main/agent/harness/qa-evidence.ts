@@ -14,6 +14,10 @@ import {
 } from "node:fs";
 import { dirname, join, parse, resolve, sep } from "node:path";
 import type { HarnessTaskCheckKind } from "../../../shared/contracts";
+import {
+  controlledNpmScriptShell,
+  parseControlledNpmCheck,
+} from "../../terminal/agent-command-policy";
 
 export type VerificationEvidenceStatus =
   | "passed"
@@ -455,6 +459,13 @@ export function recognizeCheckInvocation(
     if (kind && mutatesSource) {
       return { checkName: kind, fullProject: true, mutatesSource: true };
     }
+    // Only terminal_run applies the npm CLI policy. Pi bash and other package
+    // managers have independent config/env semantics and cannot certify scripts.
+    const controlled =
+      toolName === "terminal_run" && controlledNpmScriptShell()
+        ? parseControlledNpmCheck(text)
+        : undefined;
+    if (!controlled) return undefined;
     if (kind && cwd && tokens.length === argumentStart) {
       const resolved = resolvePackageCheckScript(cwd, workspace, script ?? "");
       if (!resolved) return undefined;

@@ -4836,7 +4836,7 @@ describe("PiSdkRuntime", () => {
           runId,
           toolCallId: "tests-before-restore",
           toolName: "bash",
-          args: { command: "npm test" },
+          args: { command: "vitest run" },
         });
         recordAgentEvent({
           type: "tool.ended",

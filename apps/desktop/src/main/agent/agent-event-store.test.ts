@@ -474,7 +474,7 @@ describe("post-restore QA evidence", () => {
         runId: run.id,
         toolCallId,
         toolName: "bash",
-        args: { command: "npm test" },
+        args: { command: "vitest run" },
       });
       recordAgentEvent({
         type: "tool.ended",
@@ -2045,7 +2045,7 @@ fs.renameSync("original-manifest-link", "package.json");
     insertSession(sessionId);
     const run = createAgentRun({ sessionId, prompt: "check commands" });
     const commands = [
-      ["bash", "npm test", "tests"],
+      ["bash", "npm test", undefined],
       ["terminal_run", "npm run typecheck", "typecheck"],
       ["terminal_run", "npx vitest run", "tests"],
       ["terminal_run", "npm --workspace @modus/desktop run typecheck", "typecheck"],
@@ -2081,7 +2081,7 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(
       starts.map((event) => (event.type === "tool.started" ? event.checkName : undefined)),
     ).toEqual([
-      "tests",
+      undefined,
       "typecheck",
       "tests",
       "typecheck",
@@ -2162,7 +2162,7 @@ fs.renameSync("original-manifest-link", "package.json");
       runId: run.id,
       toolCallId: "bash-check",
       toolName: "bash",
-      args: { command: "npm test" },
+      args: { command: "vitest run" },
     } as never);
     recordAgentEvent({
       type: "tool.ended",

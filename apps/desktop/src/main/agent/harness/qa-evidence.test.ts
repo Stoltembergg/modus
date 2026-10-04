@@ -3,6 +3,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import {
+  controlledAgentCommand,
+  parseControlledNpmCheck,
+} from "../../terminal/agent-command-policy";
 import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
 
 const sessionId = "session-safe-1";
@@ -34,6 +38,48 @@ vi.mock("node:fs", async (importOriginal) => {
       return content;
     },
   };
+});
+
+describe("controlled package execution", () => {
+  it.each([
+    "npm --script-shell=/bin/true test",
+    "npm --workspaces test",
+    "npm --prefix=/other test",
+    "npm --workspace @unknown/package test",
+    "npm --workspace @modus/desktop -w @modus/desktop test",
+    "npm test -- --run",
+    "NPM TEST",
+  ])("never certifies an npm command left unchanged by the runner: %s", async (command) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-package-grammar-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      expect(parseControlledNpmCheck(command)).toBeUndefined();
+      expect(controlledAgentCommand(command, cwd)).toBe(command);
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    ["bash", "npm test"],
+    ["terminal_run", "pnpm test"],
+    ["terminal_run", "yarn test"],
+  ])("does not certify package scripts from uncontrolled %s: %s", async (tool, command) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-uncontrolled-package-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      expect(recognizeCheckInvocation(tool, command, cwd)).toBeUndefined();
+      expect(recognizeCheckInvocation(tool, "vitest run", cwd)?.checkName).toBe("tests");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("manifest read consistency", () => {
