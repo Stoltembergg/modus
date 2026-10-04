@@ -151,6 +151,23 @@ describe("ToolRegistry classify", () => {
   });
 
   it.each([
+    "npx vitest run",
+    "npx tsc --noEmit",
+    "npx eslint .",
+    "npx biome check",
+    "npx vite build",
+    "npx jest",
+    "npx mocha",
+  ])("requires approval without certifying npx QA: %s", (command) => {
+    expect(recognizeCheckInvocation("bash", command)).toBeUndefined();
+    expect(classifyShellCommand(command)).toEqual({ action: "shell.execute", dangerous: true });
+    expect(classifyShellCommand("vitest run")).toEqual({
+      action: "shell.execute",
+      dangerous: true,
+    });
+  });
+
+  it.each([
     "npm test",
     "npm --workspace @modus/desktop run typecheck",
     "npm test; node scripts/mutate.js",
