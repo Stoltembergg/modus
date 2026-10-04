@@ -25,6 +25,7 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
 import { VortexMark } from "../../components/ui/VortexMark";
 import { lookupModel } from "../../lib/modelIdentity";
+import { isModusModelId } from "../../lib/modusModels";
 import {
   Composer,
   type ComposerDraft,
@@ -73,9 +74,22 @@ import { WorkingSubagentBar } from "./WorkingSubagentBar";
  * Full conversation surface bound to one active session.
  */
 
-/** L2: the model a 1:1 turn runs on is always the Settings default (session.model ignored). */
-export function turnModelForPane(defaultModel: string): string {
-  return defaultModel;
+/**
+ * L3b: what the pane shows / sends, mirroring main's resolveTurnModel (main is the
+ * authority): a Modus session (or a session on a Modus Settings default) → the Modus turn
+ * model; an own-provider session keeps its stored model while it is listed; otherwise the
+ * Settings default.
+ */
+export function turnModelForPane(
+  defaultModel: string,
+  sessionModel?: string | undefined,
+  models: readonly { id: string }[] = [],
+  modusDefaultModel?: string | undefined,
+): string {
+  const base = sessionModel || defaultModel;
+  if (isModusModelId(base)) return modusDefaultModel ?? defaultModel;
+  if (sessionModel && models.some((model) => model.id === sessionModel)) return sessionModel;
+  return isModusModelId(defaultModel) ? (modusDefaultModel ?? defaultModel) : defaultModel;
 }
 
 export function canSubmitPromptForSession(
@@ -374,6 +388,8 @@ type ChatPaneProps = {
   defaultModel: string;
   /** L3b0: Modus provider state (ModelSettingsState.modus) for the inline unavailable notice. */
   modusStatus?: ModusModelsStatus | undefined;
+  /** L3b: ModelSettingsState.modusDefaultModel (the Modus turn model). */
+  modusDefaultModel?: string | undefined;
   contextUsage?: ContextUsageInfo | undefined;
   workspace: WorkspaceInfo | null;
   initialEvents?: AgentEventItem[] | undefined;
@@ -671,6 +687,7 @@ export function ChatPane({
   models,
   defaultModel,
   modusStatus,
+  modusDefaultModel,
   contextUsage,
   workspace,
   initialEvents,
@@ -1077,7 +1094,7 @@ export function ChatPane({
 
   // L2: no model picker, so the pane always shows / sends the CURRENT Settings default; a
   // model stored on an old session is ignored (main enforces the same on agent:prompt).
-  const paneModel = turnModelForPane(defaultModel);
+  const paneModel = turnModelForPane(defaultModel, session.model, models, modusDefaultModel);
   const activeCwd = session.cwd;
   const retryStatus = sessionStatus.type === "retry" ? sessionStatus : undefined;
   // The decision card shows only while the plan is unbuilt and not dismissed.

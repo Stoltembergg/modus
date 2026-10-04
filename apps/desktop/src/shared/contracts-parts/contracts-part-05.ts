@@ -214,6 +214,11 @@ export type ModelInfo = {
    * (picker shows it disabled with an upgrade invite); the router's 403 is the real barrier.
    */
   locked?: "upgrade";
+  /**
+   * L3b: locked Modus models only: the smallest credit pack that unlocks it (router
+   * `/v1/models` unlock_pack). Absent = unknown / no pack: the UI shows the generic text.
+   */
+  unlockPack?: { id: string; credits: number };
 };
 
 /**
@@ -313,6 +318,8 @@ export type ModelSettingsState = {
   defaultModel?: string;
   /** B4b: Modus provider state (absent = off). */
   modus?: ModusModelsStatus;
+  /** L3b: the model a Modus session's turn runs on (main getModusTurnModelId). */
+  modusDefaultModel?: string;
 };
 
 export type ProviderUsageMetric = {

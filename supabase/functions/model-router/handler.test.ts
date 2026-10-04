@@ -2,6 +2,7 @@ import { assert, assertEquals, assertGreater, assertLessOrEqual } from "jsr:@std
 import type { AuthenticatedUser } from "../_shared/auth.ts";
 import type { CatalogModel } from "../_shared/model-catalog.ts";
 import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
+import { unlockPackFor } from "../_shared/router-db.ts";
 import { USER } from "../_shared/test-helpers.ts";
 import { createRouterHandler, type RouterDeps } from "./handler.ts";
 import {
@@ -1625,4 +1626,78 @@ Deno.test("L3a: GET /v1/models reports the plan default", async () => {
   assertEquals((await (await h(req())).json()).default_model, FLASH.id);
   db.defaultModels.set("free", null);
   assertEquals((await (await h(req())).json()).default_model, null);
+});
+
+// ---------------------------------------------------------------------------
+// L3b: unlock_pack on locked models in GET /v1/models.
+// ---------------------------------------------------------------------------
+Deno.test("L3b: unlockPackFor picks the smallest active pack whose access plan allows the model", () => {
+  const packs = [
+    { packId: "credits_25k", credits: 25000, sortOrder: 3, accessPlan: "pro", allowedModels: null },
+    {
+      packId: "credits_10k",
+      credits: 10000,
+      sortOrder: 2,
+      accessPlan: "starter",
+      allowedModels: [FLASH.id, "anthropic/claude-opus-5-5"],
+    },
+    {
+      packId: "credits_5k",
+      credits: 5000,
+      sortOrder: 1,
+      accessPlan: "starter",
+      allowedModels: [FLASH.id, "anthropic/claude-opus-5-5"],
+    },
+  ];
+  assertEquals(unlockPackFor("anthropic/claude-opus-5-5", packs), {
+    id: "credits_5k",
+    credits: 5000,
+  });
+  assertEquals(unlockPackFor("anthropic/claude-fable-5-1", packs), {
+    id: "credits_25k",
+    credits: 25000,
+  });
+  // No pack unlocks it (e.g. only explicit-list plans without the model): null.
+  assertEquals(unlockPackFor("x/none", packs.slice(1)), null);
+  assertEquals(unlockPackFor(FLASH.id, []), null);
+});
+
+Deno.test("L3b: GET /v1/models adds unlock_pack only to locked models; Pro skips the pack query", async () => {
+  const db = new FakeDb();
+  db.unlockPacks = [
+    {
+      packId: "credits_5k",
+      credits: 5000,
+      sortOrder: 1,
+      accessPlan: "starter",
+      allowedModels: [PAID.id],
+    },
+    { packId: "credits_25k", credits: 25000, sortOrder: 3, accessPlan: "pro", allowedModels: null },
+  ];
+  const h = handler(db, "http://x");
+  const req = () =>
+    new Request("http://localhost/model-router/v1/models", {
+      headers: { authorization: "Bearer user.jwt.token" },
+    });
+  const body = await (await h(req())).json();
+  const rows = body.data as { id: string; allowed: boolean; unlock_pack?: unknown }[];
+  for (const row of rows.filter((m) => m.allowed)) assert(!("unlock_pack" in row), row.id);
+  assertEquals(rows.find((m) => m.id === PAID.id)?.unlock_pack, {
+    id: "credits_5k",
+    credits: 5000,
+  });
+  // A locked model no pack unlocks: explicit null.
+  db.unlockPacks = [db.unlockPacks[0]];
+  db.unlockPacks[0] = { ...db.unlockPacks[0], allowedModels: [] };
+  const none = await (await h(req())).json();
+  assertEquals(
+    (none.data as { id: string; unlock_pack?: unknown }[]).find((m) => m.id === PAID.id)
+      ?.unlock_pack,
+    null,
+  );
+  assertEquals(db.unlockPackCalls, 2);
+  db.plan = { plan: "pro", allowedModels: null };
+  const pro = await (await h(req())).json();
+  assert((pro.data as object[]).every((m) => !("unlock_pack" in m)));
+  assertEquals(db.unlockPackCalls, 2, "no pack query when nothing is locked");
 });

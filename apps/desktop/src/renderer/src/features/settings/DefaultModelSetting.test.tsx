@@ -35,6 +35,7 @@ const MODELS: ModelInfo[] = [
     provider: "modus",
     providerName: "Modus",
     locked: "upgrade",
+    unlockPack: { id: "credits_25k", credits: 25000 },
   }),
   model({ id: "openai/gpt-x", name: "GPT X", provider: "openai", providerName: "OpenAI" }),
 ];
@@ -58,7 +59,7 @@ describe("L3b0 Settings default model picker", () => {
       "OpenAI",
     ]);
     expect(select.querySelector("option[data-locked]")?.textContent).toBe(
-      "🔒 Fable · Requires a credit pack that includes this model",
+      "🔒 Fable · Available in the 25k credit pack",
     );
     await user.selectOptions(select, "modus/anthropic/claude-fable-5-1");
     expect(onBuyCredits).toHaveBeenCalledTimes(1);

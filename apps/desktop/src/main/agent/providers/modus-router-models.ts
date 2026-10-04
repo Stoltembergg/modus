@@ -10,10 +10,15 @@ export type ModusRouterModel = {
   allowed: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  /**
+   * L3b: locked models only: the smallest credit pack that unlocks it (router
+   * credit_packs.access_plan → plans.allowed_models); null = no pack does / not reported.
+   */
+  unlockPack?: { id: string; credits: number } | null;
 };
 
 export type ModusModelsResult =
-  | { ok: true; plan: string; models: ModusRouterModel[] }
+  | { ok: true; plan: string; models: ModusRouterModel[]; defaultModel?: string | null }
   /** "signed-out": no token, or the session expired (expireSession already ran). */
   | { ok: false; reason: "signed-out" | "unavailable" };
 
@@ -32,8 +37,20 @@ function positive(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-export function parseModusModels(value: unknown): { plan: string; models: ModusRouterModel[] } {
-  const body = (value ?? {}) as { plan?: unknown; data?: unknown };
+function parseUnlockPack(value: unknown): { id: string; credits: number } | null {
+  const pack = (value ?? {}) as { id?: unknown; credits?: unknown };
+  const credits = positive(pack.credits);
+  return typeof pack.id === "string" && /^[a-z0-9_]{1,32}$/.test(pack.id) && credits
+    ? { id: pack.id, credits }
+    : null;
+}
+
+export function parseModusModels(value: unknown): {
+  plan: string;
+  models: ModusRouterModel[];
+  defaultModel: string | null;
+} {
+  const body = (value ?? {}) as { plan?: unknown; data?: unknown; default_model?: unknown };
   const models: ModusRouterModel[] = [];
   const seen = new Set<string>();
   for (const item of Array.isArray(body.data) ? body.data : []) {
@@ -50,9 +67,15 @@ export function parseModusModels(value: unknown): { plan: string; models: ModusR
       allowed: row.allowed === true,
       ...(contextWindow ? { contextWindow } : {}),
       ...(maxTokens ? { maxTokens } : {}),
+      ...(row.allowed === true ? {} : { unlockPack: parseUnlockPack(row.unlock_pack) }),
     });
   }
-  return { plan: typeof body.plan === "string" ? body.plan : "free", models };
+  // L3b: the plan default (L3a); only when it is one of the listed models.
+  const defaultModel =
+    typeof body.default_model === "string" && seen.has(body.default_model)
+      ? body.default_model
+      : null;
+  return { plan: typeof body.plan === "string" ? body.plan : "free", models, defaultModel };
 }
 
 /** GET /v1/models with the same 401 rule as completions: refresh once, retry once. */

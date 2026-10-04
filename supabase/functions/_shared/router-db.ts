@@ -8,6 +8,37 @@ export type ClaimResult = "claimed" | "idempotency_replay" | "idempotency_confli
 
 export type UserPlan = { plan: string; allowedModels: string[] | null };
 
+/**
+ * L3b: an active credit pack with the models its access plan unlocks
+ * (public.credit_packs.access_plan → public.plans.allowed_models; null = every model).
+ */
+export type UnlockPack = {
+  packId: string;
+  credits: number;
+  sortOrder: number;
+  accessPlan: string;
+  allowedModels: string[] | null;
+};
+
+/**
+ * L3b: the smallest active pack (by credits, then sort_order, then id) whose access plan
+ * allows `modelId`; null when no pack unlocks it. Shown on locked models in /v1/models.
+ */
+export function unlockPackFor(
+  modelId: string,
+  packs: readonly UnlockPack[],
+): { id: string; credits: number } | null {
+  const pack = [...packs]
+    .filter((p) => p.allowedModels === null || p.allowedModels.includes(modelId))
+    .sort(
+      (a, b) =>
+        a.credits - b.credits ||
+        a.sortOrder - b.sortOrder ||
+        (a.packId < b.packId ? -1 : a.packId > b.packId ? 1 : 0),
+    )[0];
+  return pack ? { id: pack.packId, credits: pack.credits } : null;
+}
+
 export type SettleArgs = {
   userId: string;
   requestId: string;
@@ -37,6 +68,8 @@ export interface RouterDb {
    * completion request names no model.
    */
   getPlanDefaultModel(plan: string): Promise<string | null>;
+  /** L3b: active credit packs with their access plan's allowed_models (for unlock_pack). */
+  listUnlockPacks(): Promise<UnlockPack[]>;
   /** Wallet balance (spendable credits); null when the user has no wallet. */
   getBalance(userId: string): Promise<number | null>;
   /** private.router_reserve; throws ReserveError for 402 / 429. */
@@ -109,6 +142,22 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
       asServiceRole(async (tx) => {
         const rows = await tx`select default_model from public.plans where plan = ${plan}`;
         return rows.length ? ((rows[0].default_model as string | null) ?? null) : null;
+      }),
+
+    listUnlockPacks: () =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select cp.pack_id, cp.credits, cp.sort_order, cp.access_plan, p.allowed_models
+            from public.credit_packs cp
+            join public.plans p on p.plan = cp.access_plan
+           where cp.active`;
+        return rows.map((row) => ({
+          packId: row.pack_id as string,
+          credits: Number(row.credits),
+          sortOrder: Number(row.sort_order),
+          accessPlan: row.access_plan as string,
+          allowedModels: (row.allowed_models as string[] | null) ?? null,
+        }));
       }),
 
     getBalance: (userId) =>

@@ -1,4 +1,5 @@
 import type { ModusModelsStatus } from "../../../shared/contracts";
+import { resolveGroupRoomLocale } from "../../../shared/group-room-locale";
 import { modusText } from "../../../shared/modus-text";
 
 /**
@@ -18,12 +19,28 @@ export function isModusModelId(id: string | null | undefined): boolean {
   return typeof id === "string" && id.startsWith(MODUS_MODEL_PREFIX);
 }
 
-export type PickableModel = { id: string; name: string; locked?: boolean | undefined };
+export type PickableModel = {
+  id: string;
+  name: string;
+  locked?: boolean | undefined;
+  unlockPack?: { id: string; credits: number } | null | undefined;
+};
+
+/**
+ * L3b: "Disponível no pacote de 25 mil" from the router's unlock_pack (credits / 1000,
+ * locale digits); the generic text when the router names no pack.
+ */
+export function unlockText(model: PickableModel, locale?: string | null): string {
+  const credits = model.unlockPack?.credits;
+  if (!credits || credits <= 0) return modusText("modus.locked.unlock", locale);
+  const thousands = new Intl.NumberFormat(resolveGroupRoomLocale(locale), {
+    maximumFractionDigits: 1,
+  }).format(credits / 1000);
+  return modusText("modus.locked.unlockPack", locale, { thousands });
+}
 
 export function modelOptionLabel(model: PickableModel, locale?: string | null): string {
-  return model.locked
-    ? `🔒 ${model.name} · ${modusText("modus.locked.unlock", locale)}`
-    : model.name;
+  return model.locked ? `🔒 ${model.name} · ${unlockText(model, locale)}` : model.name;
 }
 
 /** `<option>`s for a native model `<select>`; locked ones carry `data-locked`. */
