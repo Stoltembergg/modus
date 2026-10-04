@@ -8,7 +8,11 @@ export type MpWebhookDeps = {
   api: Pick<MpApi, "getPreapproval" | "getAuthorizedPayment" | "getPayment">;
   db: Pick<
     BillingDb,
-    "mpClaimNotification" | "mpFinishNotification" | "processMpPreapproval" | "processMpPayment"
+    | "mpClaimNotification"
+    | "mpFinishNotification"
+    | "processMpPreapproval"
+    | "processMpPayment"
+    | "processMpPurchasePayment"
   >;
   secret: string;
   expect: MpExpectations;
@@ -146,10 +150,14 @@ export function createMpWebhookHandler(deps: MpWebhookDeps): (req: Request) => P
       const result = await deps.db.processMpPayment(payment, pre, deps.expect, requestId);
       return String(result.code ?? "");
     }
-    // 'payment': updates (refund / chargeback / status) of a payment already linked by its
+    // 'payment': L5a first a one-off credit-pack payment (Checkout Pro, external_reference =
+    // credit_purchases.id): credited once, verified against the frozen purchase. Otherwise
+    // updates (refund / chargeback / status) of a subscription payment already linked by its
     // invoice. A payment we have never linked is not credited ('unlinked').
     const payment = await deps.api.getPayment(dataId);
     if (payment.id !== dataId) return finish(requestId, "rejected_id");
+    const purchase = await deps.db.processMpPurchasePayment(payment, deps.expect, requestId);
+    if (purchase.code !== "not_a_purchase") return String(purchase.code ?? "");
     const result = await deps.db.processMpPayment(payment, null, deps.expect, requestId);
     return String(result.code ?? "");
   }

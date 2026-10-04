@@ -52,6 +52,12 @@ export const PLAN_STATUSES = ["active", "trialing"];
  * (status 'canceled' + cancel_at_period_end, set by process_mp_preapproval only for a paid
  * row). After that date the same query no longer matches: Free, with nothing to run.
  */
+/**
+ * L5a: purchased credits also unlock models: private.purchase_access_plan(user) is the
+ * highest credit_packs.access_plan among the user's lots with remaining > 0 (null for a
+ * blocked account: blocked subscription or a charged-back purchase). getPlan returns the
+ * highest plan (by monthly_credits) of the subscription plan and that purchase plan.
+ */
 
 export function createPostgresRouterDb(dbUrl: string): RouterDb {
   const sql = postgres(dbUrl, { max: 2, idle_timeout: 20, prepare: false });
@@ -77,14 +83,17 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
           select p.plan, p.allowed_models
             from public.plans p
            where p.plan = coalesce(
-             (select s.plan
-                from public.subscriptions s
-                join public.plans sp on sp.plan = s.plan
-               where s.user_id = ${userId}
-                 and (s.status = any(${PLAN_STATUSES})
-                      or (s.provider = 'mercadopago' and s.status = 'canceled'
-                          and s.cancel_at_period_end and s.current_period_end > now()))
-               order by sp.monthly_credits desc, s.plan
+             (select c.plan
+                from (select s.plan
+                        from public.subscriptions s
+                       where s.user_id = ${userId}
+                         and (s.status = any(${PLAN_STATUSES})
+                              or (s.provider = 'mercadopago' and s.status = 'canceled'
+                                  and s.cancel_at_period_end and s.current_period_end > now()))
+                      union all
+                      select private.purchase_access_plan(${userId})) c
+                join public.plans sp on sp.plan = c.plan
+               order by sp.monthly_credits desc, c.plan
                limit 1),
              'free')`;
         if (!rows.length) return { plan: "free", allowedModels: [] };

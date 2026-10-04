@@ -49,6 +49,7 @@ function setup(
     apiError: MpApiError;
     dbFailOnce: boolean;
     code: string;
+    purchaseCode: string;
   }> = {},
 ) {
   const calls: Call[] = [];
@@ -94,6 +95,12 @@ function setup(
       }
       if (requestId) processed.add(requestId);
       return Promise.resolve({ code: overrides.code ?? "credited" });
+    },
+    processMpPurchasePayment: (payment, expect, requestId) => {
+      calls.push({ name: "processMpPurchasePayment", args: [payment, expect, requestId] });
+      const code = overrides.purchaseCode ?? "not_a_purchase";
+      if (code !== "not_a_purchase" && requestId) processed.add(requestId);
+      return Promise.resolve({ code });
     },
   };
   const handler = createMpWebhookHandler({
@@ -332,4 +339,43 @@ Deno.test("rejections answer 200 (no retry loop) and logs carry ids only", async
       assertEquals(line.includes(secret), false, `log leaks ${secret}`);
     }
   }
+});
+
+Deno.test("L5a payment topic: a credit-pack purchase is processed first, subscription path skipped", async () => {
+  const { handler, names, calls } = setup({ purchaseCode: "credited" });
+  const res = await handler(await notification());
+  assertEquals([res.status, await res.json()], [200, { received: true, code: "credited" }]);
+  assertEquals(names(), ["claim", "getPayment", "processMpPurchasePayment"]);
+  const args = calls.at(-1)?.args ?? [];
+  assertEquals(args[0], { ...PAY, id: "5001" }, "the API payment, nothing from the body");
+  assertEquals(args[1], EXPECT);
+  assertEquals(args[2], "req-1", "notification finished inside the purchase RPC transaction");
+});
+
+Deno.test("L5a payment topic: not a purchase -> falls back to the subscription payment path", async () => {
+  const { handler, names, calls } = setup({ code: "unlinked" });
+  const res = await handler(await notification());
+  assertEquals((await res.json()).code, "unlinked");
+  assertEquals(names(), ["claim", "getPayment", "processMpPurchasePayment", "processMpPayment"]);
+  assertEquals(calls.at(-1)?.args[1], null);
+});
+
+Deno.test("L5a payment topic: purchase rejections answer 200 and are not reprocessed", async () => {
+  for (const code of ["rejected_amount", "rejected_duplicate", "rejected_blocked", "pending"]) {
+    const { handler, names } = setup({ purchaseCode: code });
+    const res = await handler(await notification({ requestId: `req-${code}` }));
+    assertEquals([res.status, (await res.json()).code], [200, code]);
+    assertEquals(names().includes("processMpPayment"), false);
+    const again = await handler(await notification({ requestId: `req-${code}` }));
+    assertEquals((await again.json()).code, "duplicate");
+  }
+});
+
+Deno.test("L5a subscription topics never go through the purchase processor", async () => {
+  const { handler, names } = setup();
+  await handler(await notification({ topic: "subscription_authorized_payment", dataId: "9001" }));
+  await handler(
+    await notification({ topic: "subscription_preapproval", dataId: "pre1", requestId: "req-2" }),
+  );
+  assertEquals(names().includes("processMpPurchasePayment"), false);
 });

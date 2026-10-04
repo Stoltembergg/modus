@@ -17,6 +17,8 @@ export type MpCheckout =
   | { code: "already_subscribed" }
   /** L1g: a cancelled MP subscription is still paid until current_period_end. */
   | { code: "cancel_grace_active" }
+  /** L5a: Mercado Pago subscriptions are switched off (billing_settings flag); packs only. */
+  | { code: "subscriptions_disabled" }
   | {
       code: "created" | "reused";
       checkoutId: string;
@@ -67,6 +69,16 @@ export interface BillingDb {
   processMpPayment(
     payment: MpPayment,
     pre: MpPreapproval | null,
+    expect: MpExpectations,
+    requestId: string | null,
+  ): Promise<Record<string, unknown>>;
+  /**
+   * L5a: private.process_mp_purchase_payment. code 'not_a_purchase' (external_reference is no
+   * credit purchase; the notification is NOT finished) lets the caller fall back to
+   * processMpPayment; every other code finishes the notification in the same transaction.
+   */
+  processMpPurchasePayment(
+    payment: MpPayment,
     expect: MpExpectations,
     requestId: string | null,
   ): Promise<Record<string, unknown>>;
@@ -164,7 +176,8 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
         if (
           r.code === "unknown_plan" ||
           r.code === "already_subscribed" ||
-          r.code === "cancel_grace_active"
+          r.code === "cancel_grace_active" ||
+          r.code === "subscriptions_disabled"
         )
           return { code: r.code };
         if (r.code !== "created" && r.code !== "reused")
@@ -219,6 +232,16 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
           select private.process_mp_payment(
             ${tx.json(payment as unknown as postgres.JSONValue)},
             ${pre ? tx.json(pre as unknown as postgres.JSONValue) : null},
+            ${tx.json(mpExpectJson(expect) as postgres.JSONValue)},
+            ${requestId}) as r`;
+        return rows[0].r as Record<string, unknown>;
+      }),
+
+    processMpPurchasePayment: (payment, expect, requestId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select private.process_mp_purchase_payment(
+            ${tx.json(payment as unknown as postgres.JSONValue)},
             ${tx.json(mpExpectJson(expect) as postgres.JSONValue)},
             ${requestId}) as r`;
         return rows[0].r as Record<string, unknown>;
