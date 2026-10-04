@@ -18,6 +18,9 @@ const {
   reportGroupTaskProgress,
   getGroupTask,
   updateGroupTask,
+  requestGroupTaskReview,
+  reviewGroupTask,
+  completeGroupTaskForAgreement,
 } = await import("./group-task-store");
 const {
   collectGroupTaskRunEvidence,
@@ -358,6 +361,157 @@ describe("group task evidence", () => {
       )
       .run(f.task.id);
     expect(collectGroupTaskRunEvidence(f.binding, row)).toHaveLength(1);
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves owner QA across legacy request-review, review, and agreement events", async () => {
+    const f = await fixture();
+    const row = qa(f.owner, f.runId, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(f.binding, row);
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.owner,
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: refs,
+    });
+    requestGroupTaskReview(f.group.id, f.task.id, f.owner, f.reviewer);
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'request_review'",
+      )
+      .run(f.task.id);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    const lateRow = qa(f.owner, f.runId, f.sourceFingerprint);
+    const lateRefs = collectGroupTaskRunEvidence(f.binding, lateRow);
+    expect(lateRefs).toHaveLength(1);
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.owner,
+      expectedVersion: getGroupTask(f.task.id).stateVersion ?? 0,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: lateRefs,
+    });
+    reviewGroupTask(f.group.id, f.task.id, f.reviewer, "changes");
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'review'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(f.binding, row)).toHaveLength(1);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    completeGroupTaskForAgreement(f.group.id, f.task.id, f.owner);
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'agreement'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(f.binding, row)).toHaveLength(1);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves reviewer QA across legacy status-only review and agreement", async () => {
+    const f = await fixture();
+    const ready = requestGroupTaskReview(f.group.id, f.task.id, f.owner, f.reviewer);
+    const reviewerRun = crypto.randomUUID();
+    const binding = {
+      ...f.binding,
+      taskVersion: ready.stateVersion ?? 0,
+      sessionId: f.reviewer,
+      runId: reviewerRun,
+      role: "reviewer" as const,
+    };
+    bindGroupTaskRun({
+      ...binding,
+      expectedVersion: binding.taskVersion,
+      operationId: crypto.randomUUID(),
+    });
+    const row = qa(f.reviewer, reviewerRun, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(binding, row);
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.reviewer,
+      expectedVersion: ready.stateVersion ?? 0,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: refs,
+    });
+    reviewGroupTask(f.group.id, f.task.id, f.reviewer, "changes");
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'review'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(binding, row)).toHaveLength(1);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.owner,
+      expectedVersion: getGroupTask(f.task.id).stateVersion ?? 0,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: refs,
+    });
+    completeGroupTaskForAgreement(f.group.id, f.task.id, f.owner);
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'agreement'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(binding, row)).toHaveLength(1);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("invalidates a reviewer binding across legacy request review", async () => {
+    const f = await fixture();
+    const reviewerRun = crypto.randomUUID();
+    const binding = {
+      ...f.binding,
+      sessionId: f.reviewer,
+      runId: reviewerRun,
+      role: "reviewer" as const,
+    };
+    bindGroupTaskRun({ ...binding, expectedVersion: 1, operationId: crypto.randomUUID() });
+    const row = qa(f.reviewer, reviewerRun, f.sourceFingerprint);
+    requestGroupTaskReview(f.group.id, f.task.id, f.owner, f.reviewer);
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'request_review'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(binding, row)).toEqual([]);
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("fails closed on an ambiguous legacy generic update", async () => {
+    const f = await fixture();
+    const row = qa(f.owner, f.runId, f.sourceFingerprint);
+    updateGroupTask(f.task.id, { branch: "feature/legacy" });
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'update'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(f.binding, row)).toEqual([]);
     await rm(f.root, { recursive: true, force: true });
   });
 

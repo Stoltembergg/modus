@@ -575,14 +575,13 @@ export function isGroupTaskRunAssignmentCurrent(binding: GroupTaskRunBinding): b
   const beforeKey = binding.role === "owner" ? "ownerBefore" : "reviewerBefore";
   const afterKey = binding.role === "owner" ? "ownerAfter" : "reviewerAfter";
   for (const row of rows) {
-    // Older member-removal events have no assignment JSON, but the removed
-    // session is durable and only that session's role can have been cleared.
-    if (
-      row.result_json === null &&
-      row.action === "member_removed" &&
-      row.actor_session_id !== binding.sessionId
-    )
-      continue;
+    if (row.result_json === null) {
+      // Legacy events without assignment JSON can preserve only roles their
+      // durable action could not have changed. Unknown updates fail closed.
+      if (row.action === "review" || row.action === "agreement") continue;
+      if (row.action === "request_review" && binding.role === "owner") continue;
+      if (row.action === "member_removed" && row.actor_session_id !== binding.sessionId) continue;
+    }
     let assignment: Record<string, unknown> | undefined;
     try {
       assignment = object(object(JSON.parse(row.result_json ?? "null"))?.assignment);
