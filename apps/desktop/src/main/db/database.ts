@@ -564,6 +564,131 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_group_decisions_execution
       on group_decisions(group_id, execution_id);
   `);
+  migrateGroupTaskState(db);
+}
+
+/** Rebuild only the old CHECK, copying every legacy column before adding state. */
+function migrateGroupTaskState(db: DatabaseSync): void {
+  const ddl = (
+    db
+      .prepare("select sql from sqlite_master where type = 'table' and name = 'group_tasks'")
+      .get() as { sql: string }
+  ).sql;
+  if (!hasColumn(db, "group_tasks", "state_version") || !ddl.includes("'blocked'")) {
+    const oldColumns = (
+      db.prepare("PRAGMA table_info(group_tasks)").all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    const columns = [
+      "id",
+      "group_id",
+      "title",
+      "description",
+      "status",
+      "owner_session_id",
+      "created_by_session_id",
+      "reviewer_session_id",
+      "branch",
+      "execution_id",
+      "created_at",
+      "updated_at",
+      "kind",
+      "priority",
+      "stage",
+      "blocked_reason",
+      "dependency_ids_json",
+      "criteria_json",
+      "criteria_version",
+      "verification_policy_json",
+      "evidence_refs_json",
+      "review_json",
+      "state_version",
+    ];
+    const defaults: Record<string, string> = {
+      kind: "'legacy'",
+      priority: "'normal'",
+      stage: "null",
+      blocked_reason: "null",
+      dependency_ids_json: "'[]'",
+      criteria_json: "'[]'",
+      criteria_version: "1",
+      verification_policy_json: '\'{"mode":"none","requireReview":false}\'',
+      evidence_refs_json: "'[]'",
+      review_json: "null",
+      state_version: "1",
+    };
+    db.exec("begin");
+    try {
+      db.exec(`create table group_tasks_replacement (
+        id text primary key,
+        group_id text not null references agent_groups(id) on delete cascade,
+        title text not null,
+        description text,
+        status text not null default 'open' check (status in ('open','in_progress','blocked','in_review','done','cancelled')),
+        owner_session_id text references agent_sessions(id) on delete set null,
+        created_by_session_id text references agent_sessions(id) on delete set null,
+        reviewer_session_id text references agent_sessions(id) on delete set null,
+        branch text,
+        execution_id text,
+        created_at text not null,
+        updated_at text not null,
+        kind text not null default 'legacy' check (kind in ('legacy','code','docs','design','review','research','question')),
+        priority text not null default 'normal' check (priority in ('low','normal','high')),
+        stage text,
+        blocked_reason text,
+        dependency_ids_json text not null default '[]' check (json_valid(dependency_ids_json) and json_type(dependency_ids_json) = 'array'),
+        criteria_json text not null default '[]' check (json_valid(criteria_json) and json_type(criteria_json) = 'array'),
+        criteria_version integer not null default 1 check (criteria_version >= 1),
+        verification_policy_json text not null default '{"mode":"none","requireReview":false}' check (json_valid(verification_policy_json) and json_type(verification_policy_json) = 'object'),
+        evidence_refs_json text not null default '[]' check (json_valid(evidence_refs_json) and json_type(evidence_refs_json) = 'array'),
+        review_json text,
+        state_version integer not null default 1 check (state_version >= 1)
+      )`);
+      db.exec(`insert into group_tasks_replacement (${columns.join(", ")})
+        select ${columns.map((column) => (oldColumns.includes(column) ? column : (defaults[column] ?? "null"))).join(", ")}
+        from group_tasks`);
+      db.exec("drop table group_tasks");
+      db.exec("alter table group_tasks_replacement rename to group_tasks");
+      db.exec(
+        "create index idx_group_tasks_group_status on group_tasks(group_id, status, updated_at desc)",
+      );
+      db.exec("create index idx_group_tasks_execution on group_tasks(group_id, execution_id)");
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
+  db.exec(`
+    create table if not exists group_task_events (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      action text not null,
+      actor_session_id text,
+      source_event_id text,
+      execution_id text,
+      from_status text not null,
+      to_status text not null,
+      operation_id text unique,
+      result_json text,
+      created_at text not null
+    );
+    create index if not exists idx_group_task_events_task_version on group_task_events(task_id, task_version);
+    create table if not exists group_task_runs (
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      criteria_version integer not null,
+      session_id text not null,
+      run_id text not null,
+      execution_id text not null,
+      role text not null check (role in ('owner','reviewer')),
+      source_fingerprint text not null,
+      operation_id text not null unique,
+      primary key (session_id, run_id)
+    );
+  `);
 }
 
 /**

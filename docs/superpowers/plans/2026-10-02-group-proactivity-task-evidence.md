@@ -130,12 +130,12 @@ Adicionar a `GroupTask`: `kind`, `priority`, `stage?`, `blockedReason?`, `depend
 
 Definir `GroupTaskProgressInput` com groupId, taskId, actorSessionId, expectedVersion, operationId, stage opcional e blockedReason opcional/null para resolver bloqueio; `GroupTaskEvidenceInput` com os mesmos identificadores e refs validadas pelo serviço main; `GroupTaskRunBinding` com groupId, taskId, taskVersion, criteriaVersion, sessionId, runId, executionId, role (`owner | reviewer`) e sourceFingerprint; `BindGroupTaskRunInput` é o binding acrescido de `expectedVersion` e `operationId`. Nenhum desses inputs de evidência é exposto como payload livre ao renderer/agente.
 
-- [ ] Adicionar testes de migração usando banco antigo: preservar IDs, FK, executionId, branches, estados e timestamps; defaults `kind=legacy`, `priority=normal`, `dependencyIds=[]`, `criteria=[]`, política `none`, versões iniciais `1`; aceitar `blocked`. Adicionar testes de concorrência: versão antiga falha sem write/evento; mesmo operationId repete resultado sem duplicação; remoção de owner/reviewer preserva histórico e invalida atribuição ativa.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-task-store.test.ts apps/desktop/src/main/groups/group-store.test.ts`; esperar falha nos novos casos.
-- [ ] Migrar `group_tasks` com preservação do CHECK/FKs e colunas adicionadas por migrações anteriores. Guardar arrays/política versionados em JSON validado; criar `group_task_events` e `group_task_runs` para histórico e associação durável. Garantir identidade única para operationId e `(sessionId, runId)`; nenhuma migração emite eventos ou wakes.
-- [ ] Extrair operações de tarefa para o módulo novo com reexports; usar transações para estado, histórico, evidência e associação de run. Aplicar owner/reviewer/usuário autorizados e `expectedVersion`; `cancelled` só pelo caminho IPC do usuário. Manter API atual até a Tarefa 4 atualizar callers.
-- [ ] Rodar o mesmo comando; esperar migração idempotente, integridade FK e todos os testes aprovados.
-- [ ] Commit: `feat(groups): persist task state and transition history`.
+- [x] Adicionar testes de migração usando banco antigo: preservar IDs, FK, executionId, branches, estados e timestamps; defaults `kind=legacy`, `priority=normal`, `dependencyIds=[]`, `criteria=[]`, política `none`, versões iniciais `1`; aceitar `blocked`. Adicionar testes de concorrência: versão antiga falha sem write/evento; mesmo operationId repete resultado sem duplicação; remoção de owner/reviewer preserva histórico e invalida atribuição ativa.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-task-store.test.ts apps/desktop/src/main/groups/group-store.test.ts`; esperar falha nos novos casos.
+- [x] Migrar `group_tasks` com preservação do CHECK/FKs e colunas adicionadas por migrações anteriores. Guardar arrays/política versionados em JSON validado; criar `group_task_events` e `group_task_runs` para histórico e associação durável. Garantir identidade única para operationId e `(sessionId, runId)`; nenhuma migração emite eventos ou wakes.
+- [x] Extrair operações de tarefa para o módulo novo com reexports; usar transações para estado, histórico, evidência e associação de run. Aplicar owner/reviewer/usuário autorizados e `expectedVersion`; `cancelled` só pelo caminho IPC do usuário. Manter API atual até a Tarefa 4 atualizar callers.
+- [x] Rodar o mesmo comando; esperar migração idempotente, integridade FK e todos os testes aprovados.
+- [x] Commit: `feat(groups): persist task state and transition history`.
 
 ## Tarefa 3: Vincular QA real a critérios da tarefa
 

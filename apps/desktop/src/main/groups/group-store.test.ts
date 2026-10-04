@@ -216,7 +216,7 @@ describe("group schema", () => {
       db
         .prepare(
           `insert into group_tasks (id, group_id, title, status, created_at, updated_at)
-           values (?, ?, 't', 'blocked', ?, ?)`,
+           values (?, ?, 't', 'invalid', ?, ?)`,
         )
         .run(uid("t"), group.id, now, now),
     ).toThrow(/CHECK constraint failed/);
@@ -768,11 +768,11 @@ describe("tasks", () => {
     const task = createGroupTask({ groupId: group.id, title: "Task" });
 
     expectStoreError(
-      () => updateGroupTask(task.id, { status: "blocked" as "open" }),
+      () => updateGroupTask(task.id, { status: "invalid" as "open" }),
       "invalid-value",
     );
     expectStoreError(
-      () => createGroupTask({ groupId: group.id, title: "T", status: "blocked" as "open" }),
+      () => createGroupTask({ groupId: group.id, title: "T", status: "invalid" as "open" }),
       "invalid-value",
     );
     expectStoreError(() => updateGroupTask(task.id, { ownerSessionId: outsider }), "not-a-member");

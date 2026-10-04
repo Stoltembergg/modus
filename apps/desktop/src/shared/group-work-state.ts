@@ -95,6 +95,43 @@ export type GroupTaskTransitionEvent = {
   createdAt: string;
 };
 
+export type GroupTaskProgressInput = {
+  groupId: string;
+  taskId: string;
+  actorSessionId: string;
+  expectedVersion: number;
+  operationId: string;
+  stage?: GroupTaskStage;
+  /** Null clears the current block. */
+  blockedReason?: string | null;
+};
+
+export type GroupTaskEvidenceInput = {
+  groupId: string;
+  taskId: string;
+  actorSessionId: string;
+  expectedVersion: number;
+  operationId: string;
+  evidenceRefs: GroupTaskEvidenceRef[];
+};
+
+export type GroupTaskRunBinding = {
+  groupId: string;
+  taskId: string;
+  taskVersion: number;
+  criteriaVersion: number;
+  sessionId: string;
+  runId: string;
+  executionId: string;
+  role: "owner" | "reviewer";
+  sourceFingerprint: string;
+};
+
+export type BindGroupTaskRunInput = GroupTaskRunBinding & {
+  expectedVersion: number;
+  operationId: string;
+};
+
 export type GroupWorkState = {
   groupId: string;
   tasks: GroupTask[];

@@ -17,15 +17,35 @@ import type {
   GroupMessageCursor,
   GroupMessageKind,
   GroupMessageStatus,
-  GroupTask,
   GroupTaskStatus,
 } from "../../shared/contracts";
 import { allocateUniqueGroupAvatarShapes, CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { groupCreateCountError, groupMemberCountError } from "../../shared/group-blocked";
-import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import type { GroupErrorCode } from "../../shared/group-errors";
 import { groupNeedsProject } from "../../shared/group-project";
 import { getDatabase, uniqueAgentName } from "../db/database";
+import { listGroupTasks, recordGroupTaskLegacyTransition } from "./group-task-store";
+
+export type { GroupTaskReviewVerdict } from "./group-task-store";
+export {
+  assignGroupTask,
+  bindGroupTaskRun,
+  cancelGroupTask,
+  claimGroupTask,
+  completeGroupTaskForAgreement,
+  createGroupTask,
+  createMemberGroupTask,
+  fillMemberTaskBranches,
+  getGroupTaskRunBinding,
+  listGroupTasks,
+  listGroupTaskTransitions,
+  recordGroupTaskEvidence,
+  releaseGroupTask,
+  reportGroupTaskProgress,
+  requestGroupTaskReview,
+  reviewGroupTask,
+  updateGroupTask,
+} from "./group-task-store";
 
 /*
  * Agent Groups persistence. Plain function module in the style of
@@ -50,13 +70,6 @@ export class GroupStoreError extends Error {
 const GROUP_MODES: readonly AgentGroupMode[] = ["free", "coordinator"];
 const AUTHOR_KINDS: readonly GroupMessageAuthorKind[] = ["user", "agent", "system"];
 const MESSAGE_KINDS: readonly GroupMessageKind[] = ["message", "status"];
-const TASK_STATUSES: readonly GroupTaskStatus[] = [
-  "open",
-  "in_progress",
-  "in_review",
-  "done",
-  "cancelled",
-];
 /** Status a task returns to when its owner leaves the group. */
 const INITIAL_TASK_STATUS: GroupTaskStatus = "open";
 /** Work-in-progress status; an in-review task falls back here when its reviewer leaves. */
@@ -115,21 +128,6 @@ type MessageRow = {
   error: string | null;
 };
 
-type TaskRow = {
-  id: string;
-  group_id: string;
-  title: string;
-  description: string | null;
-  status: GroupTaskStatus;
-  owner_session_id: string | null;
-  created_by_session_id: string | null;
-  reviewer_session_id: string | null;
-  branch: string | null;
-  execution_id: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
 type DecisionRow = {
   id: string;
   group_id: string;
@@ -150,8 +148,6 @@ const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.jo
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
   turn_id, run_id, sdk_message_id, sequence, status, updated_at, error`;
-const TASK_COLUMNS = `id, group_id, title, description, status, owner_session_id,
-  created_by_session_id, reviewer_session_id, branch, execution_id, created_at, updated_at`;
 const DECISION_COLUMNS =
   "id, group_id, text, author_session_id, source_message_id, execution_id, created_at";
 
@@ -270,25 +266,6 @@ function toMessage(row: MessageRow): GroupMessage {
     ...(row.status !== null ? { status: row.status } : {}),
     ...(row.updated_at !== null ? { updatedAt: row.updated_at } : {}),
     ...(row.error !== null ? { error: row.error } : {}),
-  };
-}
-
-function toTask(row: TaskRow): GroupTask {
-  return {
-    id: row.id,
-    groupId: row.group_id,
-    title: row.title,
-    ...(row.description !== null ? { description: row.description } : {}),
-    status: row.status,
-    ...(row.owner_session_id !== null ? { ownerSessionId: row.owner_session_id } : {}),
-    ...(row.created_by_session_id !== null
-      ? { createdBySessionId: row.created_by_session_id }
-      : {}),
-    ...(row.reviewer_session_id !== null ? { reviewerSessionId: row.reviewer_session_id } : {}),
-    ...(row.branch !== null ? { branch: row.branch } : {}),
-    ...(row.execution_id !== null ? { executionId: row.execution_id } : {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
   };
 }
 
@@ -1214,6 +1191,11 @@ function detachMemberRows(groupId: string, sessionId: string): boolean {
   const closed = Object.keys(closedParams)
     .map((name) => `:${name}`)
     .join(", ");
+  const affectedTasks = listGroupTasks(groupId).filter(
+    (task) =>
+      !CLOSED_TASK_STATUSES.includes(task.status) &&
+      (task.ownerSessionId === sessionId || task.reviewerSessionId === sessionId),
+  );
   // SQLite evaluates every SET expression against the OLD row, so the
   // owner check in the status CASE sees the owner before it is cleared.
   db.prepare(
@@ -1244,6 +1226,8 @@ function detachMemberRows(groupId: string, sessionId: string): boolean {
     groupId,
     ...closedParams,
   });
+  for (const task of affectedTasks)
+    recordGroupTaskLegacyTransition(task, "member_removed", sessionId);
   touchGroup(groupId);
   return true;
 }
@@ -1586,449 +1570,6 @@ export function listGroupMessages(
     )
     .all(...params, limit) as MessageRow[];
   return rows.reverse().map(toMessage);
-}
-
-/* ── Tasks ─────────────────────────────────────────────────────────────── */
-
-export function createGroupTask(input: {
-  id?: string;
-  groupId: string;
-  title: string;
-  description?: string;
-  status?: GroupTaskStatus;
-  ownerSessionId?: string;
-  createdBySessionId?: string;
-  reviewerSessionId?: string;
-  branch?: string;
-  /** Ask-spanning execution id (message chain root). */
-  executionId?: string;
-}): GroupTask {
-  const db = getDatabase();
-  requireGroupRow(input.groupId);
-  const title = requireText(input.title, "task title");
-  const status = requireOneOf(input.status ?? "open", TASK_STATUSES, "task status");
-  if (input.ownerSessionId) requireMember(input.groupId, input.ownerSessionId, "owner");
-  if (input.createdBySessionId) {
-    requireMember(input.groupId, input.createdBySessionId, "task creator");
-  }
-  if (input.reviewerSessionId) requireMember(input.groupId, input.reviewerSessionId, "reviewer");
-  if (input.executionId) requireExecutionInGroup(input.groupId, input.executionId);
-  const id = input.id ?? randomUUID();
-  const now = new Date().toISOString();
-  db.prepare(
-    `insert into group_tasks (${TASK_COLUMNS})
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    id,
-    input.groupId,
-    title,
-    input.description ?? null,
-    status,
-    input.ownerSessionId ?? null,
-    input.createdBySessionId ?? null,
-    input.reviewerSessionId ?? null,
-    input.branch ?? null,
-    input.executionId ?? null,
-    now,
-    now,
-  );
-  return requireTask(id);
-}
-
-function requireTask(taskId: string): GroupTask {
-  const row = getDatabase()
-    .prepare(`select ${TASK_COLUMNS} from group_tasks where id = ?`)
-    .get(taskId) as TaskRow | undefined;
-  if (!row) {
-    throw new GroupStoreError("task-not-found", `Group task not found: ${taskId}`);
-  }
-  return toTask(row);
-}
-
-/**
- * Patches a task. `null` clears owner / reviewer / branch; omitted fields are
- * left unchanged. New owners and reviewers must be group members.
- */
-export function updateGroupTask(
-  taskId: string,
-  patch: {
-    status?: GroupTaskStatus;
-    ownerSessionId?: string | null;
-    reviewerSessionId?: string | null;
-    branch?: string | null;
-  },
-): GroupTask {
-  const current = requireTask(taskId);
-  const sets: string[] = [];
-  const params: Array<string | null> = [];
-  if (patch.status !== undefined) {
-    sets.push("status = ?");
-    params.push(requireOneOf(patch.status, TASK_STATUSES, "task status"));
-  }
-  if (patch.ownerSessionId !== undefined) {
-    if (patch.ownerSessionId !== null) {
-      requireMember(current.groupId, patch.ownerSessionId, "owner");
-    }
-    sets.push("owner_session_id = ?");
-    params.push(patch.ownerSessionId);
-  }
-  if (patch.reviewerSessionId !== undefined) {
-    if (patch.reviewerSessionId !== null) {
-      requireMember(current.groupId, patch.reviewerSessionId, "reviewer");
-    }
-    sets.push("reviewer_session_id = ?");
-    params.push(patch.reviewerSessionId);
-  }
-  if (patch.branch !== undefined) {
-    sets.push("branch = ?");
-    params.push(patch.branch);
-  }
-  if (sets.length === 0) {
-    return current;
-  }
-  sets.push("updated_at = ?");
-  params.push(new Date().toISOString());
-  getDatabase()
-    .prepare(`update group_tasks set ${sets.join(", ")} where id = ?`)
-    .run(...params, taskId);
-  return requireTask(taskId);
-}
-
-export function listGroupTasks(
-  groupId: string,
-  options: { status?: GroupTaskStatus } = {},
-): GroupTask[] {
-  const db = getDatabase();
-  const rows =
-    options.status === undefined
-      ? (db
-          .prepare(
-            `select ${TASK_COLUMNS} from group_tasks where group_id = ?
-             order by created_at, rowid`,
-          )
-          .all(groupId) as TaskRow[])
-      : (db
-          .prepare(
-            `select ${TASK_COLUMNS} from group_tasks where group_id = ? and status = ?
-             order by created_at, rowid`,
-          )
-          .all(groupId, requireOneOf(options.status, TASK_STATUSES, "task status")) as TaskRow[]);
-  return rows.map(toTask);
-}
-
-/**
- * The user cancels a task from the room's task panel: the only path to
- * `cancelled` (member tools never reach it). Open, in progress and in review
- * tasks cancel; a done task is refused (`invalid-transition`); an already
- * cancelled one is returned unchanged.
- */
-export function cancelGroupTask(taskId: string): GroupTask {
-  const task = requireTask(taskId);
-  if (task.status === "cancelled") return task;
-  if (task.status === "done") {
-    throw new GroupStoreError("invalid-transition", `Cannot cancel task ${task.id}: it is done.`);
-  }
-  return updateGroupTask(taskId, { status: "cancelled" });
-}
-
-/* ── Member task transitions (the rules the member tools rely on) ───────── */
-/*
- * open ──claim──▶ in_progress ──request review──▶ in_review ──approve──▶ done
- *   ▲                │   ▲                            │
- *   └────release─────┘   └──────────changes───────────┘
- *
- * `cancelled` is not reachable here (only through updateGroupTask). A member
- * leaving reuses detachMemberRows: owner leaves → open with no owner; reviewer
- * leaves during in_review → in_progress.
- */
-
-function requireTaskInGroup(taskId: string, groupId: string): GroupTask {
-  const task = requireTask(taskId);
-  if (task.groupId !== groupId) {
-    throw new GroupStoreError("task-not-found", `Group task not found: ${taskId}`);
-  }
-  return task;
-}
-
-/**
- * The status the rules act on, per the reading convention on
- * removeAgentGroupMember: a non-closed task with no owner counts as `open`
- * (e.g. its owner's session was deleted and the FK nulled the owner).
- */
-function effectiveTaskStatus(task: GroupTask): GroupTaskStatus {
-  if (CLOSED_TASK_STATUSES.includes(task.status)) return task.status;
-  return task.ownerSessionId ? task.status : INITIAL_TASK_STATUS;
-}
-
-function invalidTransition(task: GroupTask, action: string): GroupStoreError {
-  return new GroupStoreError(
-    "invalid-transition",
-    `Cannot ${action} task ${task.id}: it is ${effectiveTaskStatus(task)}.`,
-  );
-}
-
-function writeTaskTransition(
-  taskId: string,
-  fields: {
-    status: GroupTaskStatus;
-    owner?: string | null;
-    reviewer?: string | null;
-    branch?: string;
-  },
-): GroupTask {
-  const sets = ["status = ?"];
-  const params: Array<string | null> = [fields.status];
-  if (fields.owner !== undefined) {
-    sets.push("owner_session_id = ?");
-    params.push(fields.owner);
-  }
-  if (fields.reviewer !== undefined) {
-    sets.push("reviewer_session_id = ?");
-    params.push(fields.reviewer);
-  }
-  if (fields.branch !== undefined) {
-    // Fills a missing branch only; an existing value is never overwritten.
-    sets.push("branch = coalesce(branch, ?)");
-    params.push(fields.branch);
-  }
-  sets.push("updated_at = ?");
-  params.push(new Date().toISOString());
-  getDatabase()
-    .prepare(`update group_tasks set ${sets.join(", ")} where id = ?`)
-    .run(...params, taskId);
-  return requireTask(taskId);
-}
-
-/** Any member creates a task; it starts `open` with no owner. */
-export function createMemberGroupTask(input: {
-  groupId: string;
-  actorSessionId: string;
-  title: string;
-  description?: string;
-  reviewerSessionId?: string;
-  executionId?: string;
-}): GroupTask {
-  requireGroupRow(input.groupId);
-  requireMember(input.groupId, input.actorSessionId, "task creator");
-  return createGroupTask({
-    groupId: input.groupId,
-    title: input.title,
-    status: INITIAL_TASK_STATUS,
-    createdBySessionId: input.actorSessionId,
-    ...(input.description?.trim() ? { description: input.description.trim() } : {}),
-    ...(input.reviewerSessionId ? { reviewerSessionId: input.reviewerSessionId } : {}),
-    ...(input.executionId ? { executionId: input.executionId } : {}),
-  });
-}
-
-/**
- * Claim an unowned `open` task: the caller becomes owner, status `in_progress`.
- * A suggested reviewer may claim it; the claim then clears the reviewer in the
- * same update (an owner never reviews their own task). `options.branch` (the
- * claimer's member worktree branch) fills the task's branch when it has none.
- */
-export function claimGroupTask(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-  options: { branch?: string } = {},
-): GroupTask {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    requireMember(groupId, actorSessionId, "claimer");
-    const task = requireTaskInGroup(taskId, groupId);
-    if (task.ownerSessionId) {
-      throw new GroupStoreError("task-taken", `Task ${taskId} is already owned.`);
-    }
-    if (effectiveTaskStatus(task) !== INITIAL_TASK_STATUS) throw invalidTransition(task, "claim");
-    return writeTaskTransition(taskId, {
-      status: IN_PROGRESS_TASK_STATUS,
-      owner: actorSessionId,
-      ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
-      ...(options.branch ? { branch: options.branch } : {}),
-    });
-  });
-}
-
-/**
- * Coordinator mode (PR 7): the Lead hands a task to a member (itself included).
- * `open` → `in_progress` with the assignee; `in_progress` with another owner is
- * a reassignment (returns the previous owner; the branch is kept on purpose, as
- * the record of where the earlier work is); in_review / done / cancelled
- * (and the current owner again) are invalid-transition. Only while the mode is
- * in effect (coordinator-off) and only by the Lead (not-coordinator).
- */
-export function assignGroupTask(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-  assigneeSessionId: string,
-  options: { branch?: string } = {},
-): { task: GroupTask; previousOwnerSessionId?: string } {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    const group = toGroup(requireGroupRow(groupId));
-    if (!isCoordinatorModeActive(group)) {
-      throw new GroupStoreError(
-        "coordinator-off",
-        `Coordinator mode is not in effect in group ${groupId} (it needs the mode on and a Lead).`,
-      );
-    }
-    if (group.leadSessionId !== actorSessionId) {
-      throw new GroupStoreError("not-coordinator", "Only the group's Lead assigns tasks.");
-    }
-    requireMember(groupId, assigneeSessionId, "assignee");
-    const task = requireTaskInGroup(taskId, groupId);
-    const status = effectiveTaskStatus(task);
-    const reviewer = task.reviewerSessionId === assigneeSessionId ? { reviewer: null } : {};
-    if (status === INITIAL_TASK_STATUS) {
-      return {
-        task: writeTaskTransition(taskId, {
-          status: IN_PROGRESS_TASK_STATUS,
-          owner: assigneeSessionId,
-          ...reviewer,
-          ...(options.branch ? { branch: options.branch } : {}),
-        }),
-      };
-    }
-    if (
-      status !== IN_PROGRESS_TASK_STATUS ||
-      !task.ownerSessionId ||
-      task.ownerSessionId === assigneeSessionId
-    ) {
-      throw invalidTransition(task, "assign");
-    }
-    return {
-      task: writeTaskTransition(taskId, {
-        status: IN_PROGRESS_TASK_STATUS,
-        owner: assigneeSessionId,
-        ...reviewer,
-      }),
-      previousOwnerSessionId: task.ownerSessionId,
-    };
-  });
-}
-
-/**
- * Sets `branch` on the member's `in_progress` tasks that have none (never
- * overwrites). Returns the updated tasks.
- */
-export function fillMemberTaskBranches(
-  groupId: string,
-  sessionId: string,
-  branch: string,
-): GroupTask[] {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    const rows = db
-      .prepare(
-        `select id from group_tasks
-         where group_id = ? and owner_session_id = ? and status = ? and branch is null`,
-      )
-      .all(groupId, sessionId, IN_PROGRESS_TASK_STATUS) as Array<{ id: string }>;
-    const now = new Date().toISOString();
-    const update = db.prepare(
-      "update group_tasks set branch = ?, updated_at = ? where id = ? and branch is null",
-    );
-    for (const row of rows) update.run(branch, now, row.id);
-    return rows.map((row) => requireTask(row.id));
-  });
-}
-
-/** The owner gives an `in_progress` task back: `open`, no owner. */
-export function releaseGroupTask(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-): GroupTask {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    const task = requireTaskInGroup(taskId, groupId);
-    if (task.ownerSessionId !== actorSessionId) {
-      throw new GroupStoreError("not-owner", `Only the owner can release task ${taskId}.`);
-    }
-    if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "release");
-    return writeTaskTransition(taskId, { status: INITIAL_TASK_STATUS, owner: null });
-  });
-}
-
-/** The owner asks another member to review an `in_progress` task: `in_review`. */
-export function requestGroupTaskReview(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-  reviewerSessionId: string,
-): GroupTask {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    const task = requireTaskInGroup(taskId, groupId);
-    if (task.ownerSessionId !== actorSessionId) {
-      throw new GroupStoreError("not-owner", `Only the owner can request review of ${taskId}.`);
-    }
-    if (reviewerSessionId === actorSessionId) {
-      throw new GroupStoreError("self-review", `The owner cannot review task ${taskId}.`);
-    }
-    requireMember(groupId, reviewerSessionId, "reviewer");
-    if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "request review of");
-    return writeTaskTransition(taskId, {
-      status: IN_REVIEW_TASK_STATUS,
-      reviewer: reviewerSessionId,
-    });
-  });
-}
-
-export type GroupTaskReviewVerdict = "approve" | "changes";
-
-/**
- * The reviewer decides an `in_review` task: approve → `done` (the schema has no
- * `closed`), changes → `in_progress`. Review rights exist only while the review
- * is pending: anyone else, or the recorded reviewer of a task that is no
- * longer in review (e.g. its owner left, so it went back to `open`), gets
- * `not-reviewer`; a closed task gets `invalid-transition`.
- */
-export function reviewGroupTask(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-  verdict: GroupTaskReviewVerdict,
-): GroupTask {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    const task = requireTaskInGroup(taskId, groupId);
-    const next = requireOneOf(verdict, ["approve", "changes"], "review verdict");
-    const status = effectiveTaskStatus(task);
-    if (CLOSED_TASK_STATUSES.includes(status)) throw invalidTransition(task, "review");
-    if (status !== IN_REVIEW_TASK_STATUS || task.reviewerSessionId !== actorSessionId) {
-      throw new GroupStoreError(
-        "not-reviewer",
-        `Only the reviewer of a pending review can review task ${taskId}.`,
-      );
-    }
-    return writeTaskTransition(taskId, {
-      status: next === "approve" ? "done" : IN_PROGRESS_TASK_STATUS,
-    });
-  });
-}
-
-/**
- * P1b agreement loop: any member may mark an active task done when the room
- * reaches Agree (owner/reviewer formal review is still available via
- * group_review_task). Cancelled/done tasks are rejected.
- */
-export function completeGroupTaskForAgreement(
-  groupId: string,
-  taskId: string,
-  actorSessionId: string,
-): GroupTask {
-  const db = getDatabase();
-  return inTransaction(db, () => {
-    requireMember(groupId, actorSessionId, "agreement actor");
-    const task = requireTaskInGroup(taskId, groupId);
-    const status = effectiveTaskStatus(task);
-    if (CLOSED_TASK_STATUSES.includes(status))
-      throw invalidTransition(task, "complete by agreement");
-    return writeTaskTransition(taskId, { status: "done" });
-  });
 }
 
 /* ── Decisions (PR 6: shared context) ─────────────────────────────────── */
