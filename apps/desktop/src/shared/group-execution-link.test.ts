@@ -47,9 +47,22 @@ describe("group-execution-link", () => {
 
   it("session bind tracks the active execution for tools", () => {
     clearSessionExecutions();
-    bindSessionExecution("s1", "exec-1");
+    bindSessionExecution("s1", "exec-1", "wake-1");
     expect(sessionExecutionId("s1")).toBe("exec-1");
-    unbindSessionExecution("s1");
+    unbindSessionExecution("s1", "wake-1");
+    expect(sessionExecutionId("s1")).toBeUndefined();
+    clearSessionExecutions();
+  });
+
+  it("an old wake cannot clear a newer owner even when both share an execution", () => {
+    clearSessionExecutions();
+    bindSessionExecution("s1", "exec-1", "wake-a");
+    bindSessionExecution("s1", "exec-1", "wake-b");
+
+    unbindSessionExecution("s1", "wake-a");
+
+    expect(sessionExecutionId("s1")).toBe("exec-1");
+    unbindSessionExecution("s1", "wake-b");
     expect(sessionExecutionId("s1")).toBeUndefined();
     clearSessionExecutions();
   });

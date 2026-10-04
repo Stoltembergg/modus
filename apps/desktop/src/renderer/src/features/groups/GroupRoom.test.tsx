@@ -813,7 +813,7 @@ describe("GroupRoom decisions", () => {
     return screen.getByTestId("group-activity-panel");
   }
 
-  it("shows Decisions (newest first) with a counter above the checklist; the header stays Activity N", async () => {
+  it("shows the checklist before Activity details and Decisions newest first; the header stays Activity N", async () => {
     const user = userEvent.setup();
     decisions = [
       decision("3", "Ship on Fridays", { authorSessionId: "s-rev-1" }),
@@ -843,16 +843,18 @@ describe("GroupRoom decisions", () => {
       expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
     );
     expect(group.listDecisions).toHaveBeenCalledWith("g-1");
-    // Proactivity is first in Activity; coordination precedes Decisions and the checklist.
-    expect(panel.firstElementChild).toBe(within(panel).getByTestId("group-proactivity-controls"));
+    // The checklist leads Activity; coordination precedes Decisions in the details below it.
+    const checklistReveal = within(panel).getByTestId("group-task-checklist-reveal");
+    expect(panel.firstElementChild).toBe(checklistReveal);
+    expect(
+      checklistReveal.compareDocumentPosition(
+        within(panel).getByTestId("group-proactivity-controls"),
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     const coordination = within(panel).getByTestId("group-activity-coordination");
     const section = within(panel).getByTestId("decision-section");
     expect(
       coordination.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(
-      section.compareDocumentPosition(within(panel).getByTestId("task-checklist")) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     const cards = within(section).getAllByTestId("group-decision");
     expect(cards.map((card) => card.firstElementChild?.textContent)).toEqual([

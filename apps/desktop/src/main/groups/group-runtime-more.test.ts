@@ -18,12 +18,14 @@ const {
   removeAgentFromGroup,
   listGroupMessages,
   listAgentGroupMembers,
+  listGroupDecisions,
   createMemberGroupTask,
   recordGroupDecision,
   removeAgentGroupMember,
   setAgentGroupLead,
   setAgentGroupMode,
 } = await import("./group-store");
+const { sessionExecutionId } = await import("../../shared/group-execution-link");
 const {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
   ESTIMATED_INPUT_TOKENS_PER_CHAIN,
@@ -508,15 +510,124 @@ describe("queue", () => {
       queuedSessionIds: [gamma],
       waitingSessionIds: [],
     });
-    // An explicit mention of the busy Alpha returns a reason instead of silently queuing work.
+    // An explicit mention queues behind Alpha without steering its active prompt.
     groups.postUserMessage({ groupId: group.id, body: "@Alpha also this" });
-    expect(room(group.id).at(-1)?.body).toContain("member-unavailable");
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: alpha,
+      body: "",
+      status: "queued",
+    });
+    expect(runtime.aborted).toEqual([]);
+    expect(runtime.pendingSessions()).toEqual([alpha, beta]);
+    expect(runtime.calls[0]?.input.message).toContain("@Alpha @Beta @Gamma go");
+    expect(runtime.calls[0]?.input.message).not.toContain("also this");
     runtime.take(beta).resolve({ outcome: "ok" });
     await flush();
     expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
+    expect(runtime.pendingSessions()).toEqual([gamma, alpha]);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
     expect(runtime.pendingSessions()).toEqual([gamma]);
+  });
+
+  it("queues a reply to the running member behind its active turn", async () => {
+    const { group, beta } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "@Beta start" });
+    const activeCardId = room(group.id).at(-1)?.id;
+    expect(activeCardId).toBeDefined();
+
+    groups.postUserMessage({
+      groupId: group.id,
+      body: "Please continue",
+      ...(activeCardId ? { replyToMessageId: activeCardId } : {}),
+    });
+
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.aborted).toEqual([]);
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: beta,
+      body: "",
+      status: "queued",
+    });
+    runtime.take(beta).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([beta]);
+    expect(runtime.calls[0]?.input.message).toContain("Please continue");
+  });
+
+  it("queues default Lead intake behind the Lead's active turn", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    groups.postUserMessage({ groupId: group.id, body: "First request" });
+
+    groups.postUserMessage({ groupId: group.id, body: "A follow-up for the team" });
+
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(runtime.aborted).toEqual([]);
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: alpha,
+      status: "queued",
+    });
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    expect(runtime.calls[0]?.input.message).toContain("A follow-up for the team");
+  });
+
+  it("keeps the running wake's Group tool execution link while follow-ups wait", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const first = groups.postUserMessage({ groupId: group.id, body: "@Alpha first" });
+    const second = groups.postUserMessage({ groupId: group.id, body: "@Alpha second" });
+    const third = groups.postUserMessage({ groupId: group.id, body: "@Alpha third" });
+
+    expect(sessionExecutionId(alpha)).toBe(first.id);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    runGroupTool(
+      "group_record_decision",
+      { sessionId: alpha, groupId: group.id },
+      { text: "Decision during the first turn" },
+    );
+    expect(listGroupDecisions(group.id).at(-1)?.executionId).toBe(first.id);
+
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(sessionExecutionId(alpha)).toBe(second.id);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(sessionExecutionId(alpha)).toBe(third.id);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(sessionExecutionId(alpha)).toBeUndefined();
+  });
+
+  it("keeps a same-chain successor bound when its predecessor settles", async () => {
+    const { group, alpha } = squad();
+    const { runtime, groups } = setup();
+    const first = groups.postUserMessage({ groupId: group.id, body: "@Alpha first" });
+    const second = groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha complement",
+      executionMode: "complement",
+      executionId: first.id,
+    });
+
+    expect(second.chainId).toBe(first.id);
+    expect(sessionExecutionId(alpha)).toBe(first.id);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(sessionExecutionId(alpha)).toBe(first.id);
+    expect(runtime.pendingSessions()).toEqual([alpha]);
+    runtime.take(alpha).resolve({ outcome: "ok" });
+    await flush();
+    expect(sessionExecutionId(alpha)).toBeUndefined();
   });
 
   it("waits while the member is streaming (never steers into it)", async () => {

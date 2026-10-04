@@ -176,6 +176,8 @@ export class GroupRuntime {
   private readonly stopEpochByGroup = new Map<string, number>();
   /** Per-session FIFO of pending wakes. */
   private readonly queues = new Map<string, Wake[]>();
+  /** Unique transient owner for each started wake's tool execution binding. */
+  private readonly executionOwnerTokens = new WeakMap<Wake, string>();
   /** Group turns holding one of the concurrency slots. */
   private readonly running = new Map<string, Wake>();
   /** Group turns waiting at the intent gate: still pending, but no slot and no chain. */
@@ -1410,6 +1412,7 @@ export class GroupRuntime {
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
     for (const wake of [...this.running.values(), ...this.gated.values()]) {
       this.clearWatchdog(wake);
+      this.unbindWakeExecution(wake);
       wake.cancelled = true;
       updateGroupJob(wake, "interrupted");
       this.transcript.setState(
@@ -1638,6 +1641,7 @@ export class GroupRuntime {
     if (wake.cancelled) return;
     wake.cancelled = true;
     this.clearWatchdog(wake);
+    this.unbindWakeExecution(wake);
     if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
     if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
     this.awaitingUser.delete(wake.sessionId);
@@ -1927,10 +1931,24 @@ export class GroupRuntime {
       const explicit = explicitTargets ?? (message.mentions.length ? message.mentions : undefined);
       const results = explicit
         ? explicit.map((id) =>
-            this.capabilityRoute(group.id, task, id, undefined, Boolean(taskId && explicitTargets)),
+            this.capabilityRoute(
+              group.id,
+              task,
+              id,
+              undefined,
+              message.authorKind === "user" || Boolean(taskId && explicitTargets),
+            ),
           )
         : taskId || wanted[0] || userRule?.rule === "autonomous"
-          ? [this.capabilityRoute(group.id, task, wanted[0])]
+          ? [
+              this.capabilityRoute(
+                group.id,
+                task,
+                wanted[0],
+                undefined,
+                message.authorKind === "user",
+              ),
+            ]
           : [];
       wanted = results.flatMap((result) => {
         if (result.kind === "needs_user") {
@@ -2088,10 +2106,22 @@ export class GroupRuntime {
   private enqueue(wake: Wake): void {
     this.transcript.create(wake);
     persistGroupJob(wake);
-    bindSessionExecution(wake.sessionId, wake.chainId);
     const queue = this.queues.get(wake.sessionId) ?? [];
     queue.push(wake);
     this.queues.set(wake.sessionId, queue);
+  }
+
+  private bindWakeExecution(wake: Wake): void {
+    const ownerToken = randomUUID();
+    this.executionOwnerTokens.set(wake, ownerToken);
+    bindSessionExecution(wake.sessionId, wake.chainId, ownerToken);
+  }
+
+  private unbindWakeExecution(wake: Wake): void {
+    const ownerToken = this.executionOwnerTokens.get(wake);
+    if (!ownerToken) return;
+    this.executionOwnerTokens.delete(wake);
+    unbindSessionExecution(wake.sessionId, ownerToken);
   }
 
   private queuedCount(): number {
@@ -2475,6 +2505,7 @@ export class GroupRuntime {
   private start(window: BrowserWindowType, wake: Wake): void {
     wake.promptUserMessageId = `group-wake:${randomUUID()}`;
     this.running.set(wake.sessionId, wake);
+    this.bindWakeExecution(wake);
     this.lastServedGroupId = wake.groupId;
     wake.startedAt = wake.lastProgressAt = Date.now();
     updateGroupJob(wake, "running");
@@ -2569,6 +2600,7 @@ export class GroupRuntime {
     if (result.outcome !== "ok" && wake.error && !result.error)
       result = { ...result, error: wake.error };
     this.clearWatchdog(wake);
+    this.unbindWakeExecution(wake);
     if (this.cancelling.get(wake.sessionId) === wake) this.cancelling.delete(wake.sessionId);
     if (this.disposed || wake.cancelled) {
       if (!this.disposed) {
@@ -2579,13 +2611,6 @@ export class GroupRuntime {
     }
     if (this.running.get(wake.sessionId) === wake) this.running.delete(wake.sessionId);
     if (this.gated.get(wake.sessionId) === wake) this.gated.delete(wake.sessionId);
-    if (
-      !this.running.has(wake.sessionId) &&
-      !this.gated.has(wake.sessionId) &&
-      (this.queues.get(wake.sessionId)?.length ?? 0) === 0
-    ) {
-      unbindSessionExecution(wake.sessionId);
-    }
     const chain = this.chains.get(wake.chainId);
     const stillMember = listAgentGroupMembers(wake.groupId).some(
       (member) => member.sessionId === wake.sessionId,

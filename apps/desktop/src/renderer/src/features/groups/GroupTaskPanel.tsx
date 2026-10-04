@@ -78,9 +78,9 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
 }
 
 /**
- * Right-hand side panel of the room: `top` (Activity sections / Decisions)
- * above the checklist. Agents mark done; the user can Cancel. TaskCheck is
- * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
+ * Right-hand side panel of the room: the checklist leads when work exists,
+ * followed by `top` (Activity sections / Decisions). Agents mark done; the user
+ * can Cancel. TaskCheck is display-only. N2: shell is labeled Activity.
  */
 export function GroupTaskPanel({
   groupId,
@@ -117,57 +117,57 @@ export function GroupTaskPanel({
       data-ui-surface="sidebar"
       data-testid={testId}
     >
-      {top}
-      {tasks.length === 0 ? (
-        <div className="px-1 py-6 text-center text-fg-faint text-xs">{t("tasks.empty")}</div>
-      ) : (
-        <>
-          <div
-            className="mb-2 flex items-baseline justify-between gap-2 px-1"
-            data-testid="task-checklist-progress"
-          >
-            <h3 className="text-2xs text-fg-faint uppercase tracking-wide">
-              {t("tasks.checklist")}
-            </h3>
-            <span className="tabular-nums text-2xs text-fg-muted">
-              {t("tasks.progress", { done: progress.done, total: progress.total })}
-            </span>
-          </div>
-          <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
-            {visible.map((task) => (
-              <TaskCheckRow
-                key={task.id}
-                labels={labels}
-                onCancelled={onCancelled}
-                onShowDetails={() => setSelectedTaskId(task.id)}
-                task={task}
-              />
-            ))}
-          </ul>
-          {selectedTaskId ? (
-            <GroupTaskDetails
-              groupId={groupId}
-              labels={labels}
-              onClose={() => setSelectedTaskId(undefined)}
-              {...(onOpenSession ? { onOpenSession } : {})}
-              {...(onTaskUpdated ? { onTaskUpdated } : {})}
-              taskId={selectedTaskId}
-            />
-          ) : null}
-          {cancelledCount > 0 ? (
-            <button
-              aria-expanded={showCancelled}
-              className="mt-2 px-1 text-left text-2xs text-fg-faint hover:text-fg-muted"
-              onClick={() => setShowCancelled((value) => !value)}
-              type="button"
+      {tasks.length > 0 ? (
+        <div className="group-activity-checklist-enter" data-testid="group-task-checklist-reveal">
+          <div className="min-h-0 overflow-hidden">
+            <div
+              className="mb-2 flex items-baseline justify-between gap-2 px-1"
+              data-testid="task-checklist-progress"
             >
-              {showCancelled
-                ? t("tasks.hideCancelled")
-                : t("tasks.showCancelled", { count: cancelledCount })}
-            </button>
-          ) : null}
-        </>
-      )}
+              <h3 className="text-2xs text-fg-faint uppercase tracking-wide">
+                {t("tasks.checklist")}
+              </h3>
+              <span className="tabular-nums text-2xs text-fg-muted">
+                {t("tasks.progress", { done: progress.done, total: progress.total })}
+              </span>
+            </div>
+            <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
+              {visible.map((task) => (
+                <TaskCheckRow
+                  key={task.id}
+                  labels={labels}
+                  onCancelled={onCancelled}
+                  onShowDetails={() => setSelectedTaskId(task.id)}
+                  task={task}
+                />
+              ))}
+            </ul>
+            {selectedTaskId ? (
+              <GroupTaskDetails
+                groupId={groupId}
+                labels={labels}
+                onClose={() => setSelectedTaskId(undefined)}
+                {...(onOpenSession ? { onOpenSession } : {})}
+                {...(onTaskUpdated ? { onTaskUpdated } : {})}
+                taskId={selectedTaskId}
+              />
+            ) : null}
+            {cancelledCount > 0 ? (
+              <button
+                aria-expanded={showCancelled}
+                className="mt-2 px-1 text-left text-2xs text-fg-faint hover:text-fg-muted"
+                onClick={() => setShowCancelled((value) => !value)}
+                type="button"
+              >
+                {showCancelled
+                  ? t("tasks.hideCancelled")
+                  : t("tasks.showCancelled", { count: cancelledCount })}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {top}
     </aside>
   );
 }

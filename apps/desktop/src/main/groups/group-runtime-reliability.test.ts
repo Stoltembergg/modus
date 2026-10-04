@@ -10,6 +10,7 @@ import type { GroupRuntimeOptions } from "./group-runtime";
 let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 const { getDatabase } = await import("../db/database");
+const { sessionExecutionId } = await import("../../shared/group-execution-link");
 const { createAgentGroupWithMembers, listGroupMessages, appendGroupMessage } = await import(
   "./group-store"
 );
@@ -193,10 +194,15 @@ describe("Groups runtime audit", () => {
     const { group, a, b, c } = squad();
     const env = setup();
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha primeiro" });
-    // The explicit busy target is reported; it is not silently substituted or queued.
+    // The busy target is queued; its active prompt remains untouched.
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha segundo" });
     expect(env.calls.filter((call) => call.input.sessionId === a)).toHaveLength(1);
-    expect(listGroupMessages(group.id).at(-1)?.body).toContain("member-unavailable");
+    expect(listGroupMessages(group.id).at(-1)).toMatchObject({
+      authorKind: "agent",
+      authorSessionId: a,
+      status: "queued",
+    });
+    expect(env.aborted).toEqual([]);
     env.groups.postUserMessage({ groupId: group.id, body: "@Beta descubra" });
     env.groups.postUserMessage({ groupId: group.id, body: "@Gamma aguarde" });
     env.calls
@@ -206,6 +212,107 @@ describe("Groups runtime audit", () => {
     const queued = env.calls.filter((call) => call.input.sessionId === c).at(-1)!;
     expect(queued.input.message).toContain("segundo");
     expect(queued.input.message).toContain("DADO_NOVO_RELEVANTE");
+  });
+
+  it("persists follow-ups in FIFO order and recovers them in that order", async () => {
+    const { group, a } = squad();
+    const env = setup();
+    const first = env.groups.postUserMessage({ groupId: group.id, body: "@Alpha first" });
+    const second = env.groups.postUserMessage({ groupId: group.id, body: "@Alpha second" });
+    const third = env.groups.postUserMessage({ groupId: group.id, body: "@Alpha third" });
+
+    const jobRows = () =>
+      getDatabase()
+        .prepare(
+          "select trigger_message_id, seq, status from group_jobs where group_id = ? and session_id = ? order by seq",
+        )
+        .all(group.id, a) as Array<{
+        trigger_message_id: string;
+        seq: number;
+        status: string;
+      }>;
+    expect(jobRows().map((row) => [row.trigger_message_id, row.status])).toEqual([
+      [first.id, "running"],
+      [second.id, "pending"],
+      [third.id, "pending"],
+    ]);
+    expect(
+      listGroupMessages(group.id)
+        .filter((message) => message.authorSessionId === a)
+        .map((message) => message.status),
+    ).toEqual(["running", "queued", "queued"]);
+
+    env.groups.dispose();
+    await flush();
+    expect(sessionExecutionId(a)).toBeUndefined();
+    expect(jobRows().map((row) => row.status)).toEqual(["interrupted", "pending", "pending"]);
+
+    const recoveredEnv = setup(false, { recoverPending: true, maxConcurrentTurns: 1 });
+    recoveredEnv.groups.kick();
+
+    expect(recoveredEnv.calls.map((call) => call.input.sessionId)).toEqual([a]);
+    expect(recoveredEnv.calls[0]?.input.message).toContain("second");
+    expect(sessionExecutionId(a)).toBe(second.id);
+    expect(jobRows().map((row) => row.status)).toEqual(["interrupted", "running", "pending"]);
+    recoveredEnv.calls[0]!.resolve({ outcome: "ok" });
+    await flush();
+    expect(recoveredEnv.calls.map((call) => call.input.sessionId)).toEqual([a, a]);
+    expect(recoveredEnv.calls[1]?.input.message).toContain("third");
+    expect(sessionExecutionId(a)).toBe(third.id);
+    recoveredEnv.calls[1]!.resolve({ outcome: "ok" });
+    await flush();
+    expect(jobRows().map((row) => row.status)).toEqual(["interrupted", "completed", "completed"]);
+    expect(sessionExecutionId(a)).toBeUndefined();
+  });
+
+  it("Stop cancels queued user follow-ups and clears the running execution link", async () => {
+    const { group, a } = squad();
+    const env = setup();
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha first" });
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha second" });
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha third" });
+
+    expect(sessionExecutionId(a)).toBeTruthy();
+    env.groups.stopGroup(group.id);
+    await flush();
+
+    const statuses = getDatabase()
+      .prepare("select status from group_jobs where group_id = ? and session_id = ? order by seq")
+      .all(group.id, a) as Array<{ status: string }>;
+    expect(statuses.map((row) => row.status)).toEqual(["cancelled", "cancelled", "cancelled"]);
+    expect(env.calls.map((call) => call.input.sessionId)).toEqual([a]);
+    expect(env.aborted).toEqual([a]);
+    expect(sessionExecutionId(a)).toBeUndefined();
+  });
+
+  it("a late disposed wake cannot clear the recovered successor's same-chain binding", async () => {
+    const { group, a } = squad();
+    const env = setup();
+    const first = env.groups.postUserMessage({ groupId: group.id, body: "@Alpha active" });
+    env.groups.postUserMessage({
+      groupId: group.id,
+      body: "@Alpha queued",
+      executionMode: "complement",
+      executionId: first.id,
+    });
+    const lateCall = env.calls[0]!;
+
+    expect(sessionExecutionId(a)).toBe(first.id);
+    env.groups.dispose();
+    expect(sessionExecutionId(a)).toBeUndefined();
+
+    const recoveredEnv = setup(false, { recoverPending: true });
+    recoveredEnv.groups.kick();
+    expect(recoveredEnv.calls.map((call) => call.input.sessionId)).toEqual([a]);
+    expect(sessionExecutionId(a)).toBe(first.id);
+
+    lateCall.resolve({ outcome: "ok", finalText: "Late output" });
+    await flush();
+
+    expect(sessionExecutionId(a)).toBe(first.id);
+    expect(listGroupMessages(group.id).some((message) => message.body === "Late output")).toBe(
+      false,
+    );
   });
 
   it("F01 joins public messages in one turn and finalizes the original card by identity", async () => {

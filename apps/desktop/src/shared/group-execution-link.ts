@@ -47,19 +47,25 @@ export function filterMessagesByExecution<T extends { id: string; chainId?: stri
 
 /* ── Session bind (main process: wake ↔ tools) ─────────────────────────── */
 
-const sessionExecutions = new Map<string, string>();
+const sessionExecutions = new Map<string, { executionId: string; ownerToken: string }>();
 
-/** Bind the running member turn to its ask-spanning execution id. */
-export function bindSessionExecution(sessionId: string, executionId: string): void {
-  sessionExecutions.set(sessionId, executionId);
+/** Bind the running member turn to its ask-spanning execution id and unique owner. */
+export function bindSessionExecution(
+  sessionId: string,
+  executionId: string,
+  ownerToken: string,
+): void {
+  sessionExecutions.set(sessionId, { executionId, ownerToken });
 }
 
-export function unbindSessionExecution(sessionId: string): void {
-  sessionExecutions.delete(sessionId);
+/** Clear a session binding only when the caller still owns it. */
+export function unbindSessionExecution(sessionId: string, ownerToken: string): void {
+  if (sessionExecutions.get(sessionId)?.ownerToken === ownerToken)
+    sessionExecutions.delete(sessionId);
 }
 
 export function sessionExecutionId(sessionId: string): string | undefined {
-  return sessionExecutions.get(sessionId);
+  return sessionExecutions.get(sessionId)?.executionId;
 }
 
 /** Test / dispose helper. */
