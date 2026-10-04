@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          # engines.node is >=22.19.0; pin a 22.19+ line for reproducibility
-          node-version: "22.19"
+          # Use the current Node 24 LTS; package.json permits Node >=22.22.3.
+          node-version: "24.21.0"
           cache: npm
 
       - name: Install dependencies
@@ -47,7 +47,7 @@ jobs:
       # Same major as the hosted project (Postgres 17) and the local box
       PG_MAJOR: "17"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Postgres ${{ env.PG_MAJOR }} + pgTAP + pg_prove
         run: |

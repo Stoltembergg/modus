@@ -50,11 +50,11 @@ jobs:
       windows_metadata: ${{ steps.tag.outputs.windows_metadata || steps.pr.outputs.windows_metadata }}
       linux_metadata: ${{ steps.tag.outputs.linux_metadata || steps.pr.outputs.linux_metadata }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
 
       # Rejects anything but vX.Y.Z / vX.Y.Z-beta.N and fails when the tag does not
       # equal apps/desktop/package.json "version" (that version is what ends up in
@@ -146,11 +146,11 @@ jobs:
       MAC_METADATA: ${{ needs.prepare.outputs.mac_metadata }}
       ARCH: ${{ matrix.electron_arch }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
           cache: npm
 
       - name: Install Rust stable (${{ matrix.rust_target }})
@@ -245,7 +245,7 @@ jobs:
 
       # Per-arch metadata; merge-mac-metadata combines arm64 + x64 into one file.
       - name: Upload update metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: update-metadata-mac-${{ matrix.electron_arch }}
           path: apps/desktop/dist/${{ needs.prepare.outputs.mac_metadata }}
@@ -256,7 +256,7 @@ jobs:
         # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
         # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-mac-${{ matrix.electron_arch }}
           path: |
@@ -278,11 +278,11 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       WINDOWS_METADATA: ${{ needs.prepare.outputs.windows_metadata }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
           cache: npm
 
       - name: Install Rust stable
@@ -324,7 +324,7 @@ jobs:
           cat "$WINDOWS_METADATA"
 
       - name: Upload update metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: update-metadata-win-x64
           path: apps/desktop/dist/${{ needs.prepare.outputs.windows_metadata }}
@@ -335,7 +335,7 @@ jobs:
         # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
         # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-win-x64
           path: |
@@ -355,11 +355,11 @@ jobs:
       VERSION: ${{ needs.prepare.outputs.version }}
       LINUX_METADATA: ${{ needs.prepare.outputs.linux_metadata }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
           cache: npm
 
       - name: Install Rust stable
@@ -400,7 +400,7 @@ jobs:
           cat "$LINUX_METADATA"
 
       - name: Upload update metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: update-metadata-linux-x64
           path: apps/desktop/dist/${{ needs.prepare.outputs.linux_metadata }}
@@ -411,7 +411,7 @@ jobs:
         # Installers are only needed by publish-assets, i.e. on tag runs. PR dry runs
         # keep just the update metadata (above) to avoid ~1.5 GB of artifacts per run.
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-assets-linux-x64
           path: |
@@ -430,11 +430,11 @@ jobs:
     env:
       MAC_METADATA: ${{ needs.prepare.outputs.mac_metadata }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22.19"
+          node-version: "24.21.0"
           cache: npm
 
       # Only js-yaml is needed; skip postinstall scripts (electron download etc.).
@@ -442,7 +442,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Download per-arch mac metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: update-metadata-mac-*
           path: mac-metadata
@@ -458,7 +458,7 @@ jobs:
           cat "merged/$MAC_METADATA"
 
       - name: Upload merged mac metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: update-metadata-mac-merged
           path: merged/${{ needs.prepare.outputs.mac_metadata }}
@@ -483,14 +483,14 @@ jobs:
       LINUX_METADATA: ${{ needs.prepare.outputs.linux_metadata }}
     steps:
       - name: Download release assets
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: release-assets-*
           path: assets
           merge-multiple: true
 
       - name: Download merged mac metadata
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: update-metadata-mac-merged
           path: assets

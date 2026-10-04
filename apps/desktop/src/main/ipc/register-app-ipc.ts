@@ -4,6 +4,7 @@ import {
   app,
   BrowserWindow,
   type BrowserWindow as BrowserWindowType,
+  ClipboardItem,
   clipboard,
   dialog,
   type IpcMainInvokeEvent,
@@ -1753,7 +1754,13 @@ export function registerAppIpc({
     if (image.isEmpty()) {
       throw new Error("Invalid image data.");
     }
-    clipboard.writeImage(image);
+    return clipboard.write([
+      new ClipboardItem({
+        "image/png": new globalThis.Blob([new Uint8Array(image.toPNG())], {
+          type: "image/png",
+        }),
+      }),
+    ]);
   });
 
   ipcMain.handle(IPC_CHANNELS.dialogSaveImage, async (event, input) => {

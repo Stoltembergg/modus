@@ -66,7 +66,7 @@ The desktop app is self-contained under `apps/desktop`. Shared types and tools l
 
 Requirements:
 
-- Node.js `>= 22.19.0`
+- Node.js `>= 22.22.3`
 - npm
 - Rust + Cargo (recent stable; crate uses edition 2024)
 - Git

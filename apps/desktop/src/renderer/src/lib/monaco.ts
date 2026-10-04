@@ -7,7 +7,7 @@
  * editor always matches the active `data-theme` without a second source of
  * color truth.
  */
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import editorWorker from "monaco-editor/editor/editor.worker.js?worker";
 
 export type Monaco = typeof import("monaco-editor");
 

@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
-import yaml from "js-yaml";
+import { dump, load } from "js-yaml";
 import { channelForVersion, updateChannelFor } from "./release-channel.mjs";
 
 /**
@@ -127,7 +127,7 @@ export function mergeMacUpdateInfo(inputs) {
 
 /** Same YAML style electron-builder uses for its own metadata. */
 export function serializeUpdateInfo(info) {
-  return yaml.dump(info, { lineWidth: 8000, noRefs: true });
+  return dump(info, { lineWidth: 8000, noRefs: true });
 }
 
 /**
@@ -157,9 +157,7 @@ export function parseArgs(argv) {
  * @param {{ out: string, inputs: string[] }} options
  */
 export function mergeFiles({ out, inputs }) {
-  const infos = inputs.map((file) =>
-    validateUpdateInfo(yaml.load(readFileSync(file, "utf8")), file),
-  );
+  const infos = inputs.map((file) => validateUpdateInfo(load(readFileSync(file, "utf8")), file));
   const merged = mergeMacUpdateInfo(infos);
   const expectedName = macMetadataFileName(merged.version);
   if (basename(out) !== expectedName) {
