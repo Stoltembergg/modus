@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,6 +44,13 @@ const task = (id: string, title: string, branch?: string): GroupTask => ({
   updatedAt: "2026-01-01T00:00:00.000Z",
   ...(branch ? { branch } : {}),
 });
+
+const appCssFromWorkspace = resolve(process.cwd(), "src/renderer/src/styles/app.css");
+const appCssFromRepo = resolve(process.cwd(), "apps/desktop/src/renderer/src/styles/app.css");
+const activityStyles = readFileSync(
+  existsSync(appCssFromWorkspace) ? appCssFromWorkspace : appCssFromRepo,
+  "utf8",
+);
 
 function liveRow(partial: Partial<GroupMemberWorkingRow> = {}): GroupMemberWorkingRow {
   return {
@@ -112,6 +121,50 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("GroupActivityPanel", () => {
+  it("keeps the empty checklist hidden, then reveals it above Activity content when tasks arrive", () => {
+    const props = {
+      coordinating: false,
+      groupId: "g-1",
+      hasLead: true,
+      labels,
+      onCancelled: vi.fn(),
+      stage: undefined,
+      workingRows: [],
+    };
+    const view = render(<GroupActivityPanel {...props} tasks={[]} />);
+
+    expect(screen.queryByTestId("task-checklist-progress")).toBeNull();
+    expect(screen.queryByTestId("task-checklist")).toBeNull();
+    expect(screen.queryByText("No tasks yet. Members create them as they work.")).toBeNull();
+
+    view.rerender(<GroupActivityPanel {...props} tasks={[task("1", "Parser")]} />);
+
+    const reveal = screen.getByTestId("group-task-checklist-reveal");
+    expect(reveal.classList.contains("group-activity-checklist-enter")).toBe(true);
+    expect(screen.getByTestId("task-checklist")).toBeTruthy();
+    expect(
+      reveal.compareDocumentPosition(screen.getByTestId("group-proactivity-controls")) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("uses an in-flow height reveal and disables motion for reduced-motion preferences", () => {
+    expect(activityStyles.includes("@keyframes group-activity-checklist-reveal")).toBe(true);
+    expect(
+      /\.group-activity-checklist-enter\s*\{[^}]*grid-template-rows:\s*1fr/s.test(activityStyles),
+    ).toBe(true);
+    expect(
+      /@keyframes group-activity-checklist-reveal\s*\{\s*from\s*\{[^}]*grid-template-rows:\s*0fr/s.test(
+        activityStyles,
+      ),
+    ).toBe(true);
+    expect(
+      /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*\.group-activity-checklist-enter\s*\{[^}]*animation:\s*none;/s.test(
+        activityStyles,
+      ),
+    ).toBe(true);
+  });
+
   it("does not apply integration on mount, task reopen, or proactivity opt-in", async () => {
     render(
       <GroupActivityPanel

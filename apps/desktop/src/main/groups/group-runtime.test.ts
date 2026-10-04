@@ -793,6 +793,14 @@ describe("chain limits", () => {
     expect(prompt).toContain("Collaboration protocol");
     expect(prompt).toContain("group_handoff(memberId=<session ID>");
     expect(prompt).toContain("group_request_review(id=<task ID>");
+    expect(prompt).toContain("Match the user's language");
+    expect(prompt).toContain("adding detail when the user asks or the result requires it");
+    expect(prompt).toContain("one concise public response per turn");
+    expect(prompt).toContain("Do not narrate internal reasoning, tool calls");
+    expect(prompt).toContain("briefly thank the teammate and add specific feedback when useful");
+    expect(prompt).toContain("social feedback does not replace a review");
+    expect(prompt).toContain("the Lead should consolidate their results into one public response");
+    expect(prompt).not.toContain("Outcome: … / Validations: … / Changed files: … / Open items: …");
   });
 });
 
@@ -991,7 +999,11 @@ describe("coordinator mode", () => {
       [
         "<group_snapshot>",
         "Group snapshot (coordinator mode: you are the Lead and coordinate the group; hand out tasks with group_assign_task):",
-        "When a task finishes, consolidate into one final result card: Outcome / Validations / Changed files / Open items.",
+        "Match the user's language. Sound natural, warm, and direct; default to 1–3 short sentences, adding detail when the user asks or the result requires it.",
+        "Send one concise public response per turn. Do not narrate internal reasoning, tool calls, or routine work steps.",
+        "After meaningful peer work, briefly thank the teammate and add specific feedback when useful. Avoid generic praise, numerical ratings, or social scoring.",
+        "Requested or required task reviews still follow the typed Group review workflow; social feedback does not replace a review.",
+        "As Lead, consolidate contributing members' results into one public response; specialists should not duplicate it.",
         "Members:",
         "- @Alpha (id a) lead, you: working",
         "- @Beta (id b): idle, branch modus/group/g/b",
@@ -1003,6 +1015,7 @@ describe("coordinator mode", () => {
         "</group_snapshot>",
       ].join("\n"),
     );
+    expect(section).not.toContain("Outcome / Validations / Changed files / Open items");
   });
 
   it("includes typed gates and ready delegation metadata in the Lead snapshot", () => {
@@ -1216,7 +1229,7 @@ describe("intent gate on a group turn", () => {
     const user = groups.postUserMessage({ groupId: group.id, body: "@Alpha @Beta go" });
     // A second chain queues Gamma behind the two running turns.
     const other = groups.postUserMessage({ groupId: group.id, body: "@Gamma also" });
-    groups.postUserMessage({ groupId: group.id, body: "@Beta later" });
+    const later = groups.postUserMessage({ groupId: group.id, body: "@Beta later" });
     expect(runtime.pendingSessions()).toEqual([alpha, beta]);
     const alphaCard = room(group.id).find((message) => message.authorSessionId === alpha);
 
@@ -1245,8 +1258,14 @@ describe("intent gate on a group turn", () => {
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Gamma verify" });
     await flush();
     expect(room(group.id).find((m) => m.body === "Done, @Gamma verify")?.chainId).toBe(user.id);
-    // The explicit mention arrived while Beta was busy; it reported that state and did not silently queue or retarget.
-    expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
+    // The explicit mention arrived while Beta was busy and now runs after its active turn.
+    expect(runtime.pendingSessions()).toEqual([alpha, gamma, beta]);
+    expect(
+      room(group.id).find(
+        (message) => message.chainId === later.id && message.authorSessionId === beta,
+      ),
+    ).toMatchObject({ authorKind: "agent", authorSessionId: beta, status: "running" });
+    expect(runtime.calls.at(-1)?.input.message).toContain("@Beta later");
     expect(groups.isAwaitingUser(alpha)).toBe(false);
   });
 

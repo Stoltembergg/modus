@@ -523,6 +523,54 @@
 .group-composer-toolbar {
   background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
 }
+.group-activity-checklist-enter {
+  display: grid;
+  grid-template-rows: 1fr;
+  margin-bottom: 0.75rem;
+  animation: group-activity-checklist-reveal 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top;
+}
+@keyframes group-activity-checklist-reveal {
+  from {
+    grid-template-rows: 0fr;
+    margin-bottom: 0;
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    grid-template-rows: 1fr;
+    margin-bottom: 0.75rem;
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-activity-checklist-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+.group-message-card-enter {
+  animation: group-message-card-enter 210ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes group-message-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .group-message-card-enter {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
 .group-empty-beams {
   position: absolute;
   inset: 0;

@@ -1,4 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
+import type { ReactNode } from "react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { GroupMessage } from "../../../../shared/contracts";
 import {
@@ -31,6 +32,41 @@ export const GROUP_MESSAGE_VIRTUALIZE_THRESHOLD = 40;
 /** Estimated row height before measure (compact agent cards ~120px). */
 const ESTIMATED_MESSAGE_ROW_PX = 120;
 const ESTIMATED_DAY_SEPARATOR_PX = 28;
+
+function groupMessageEntryKey(groupId: string, messageId: string): string {
+  return JSON.stringify([groupId, messageId]);
+}
+
+function sameStringSet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  return left.size === right.size && [...left].every((value) => right.has(value));
+}
+
+/** Keeps the transform animation off the virtualizer's translated row wrapper. */
+function GroupMessageEntry({
+  entryKey,
+  shouldAnimate,
+  children,
+}: {
+  entryKey: string;
+  shouldAnimate: boolean;
+  children: ReactNode;
+}) {
+  const [hasEntered, setHasEntered] = useState(false);
+  const animate = shouldAnimate || hasEntered;
+
+  useLayoutEffect(() => {
+    if (shouldAnimate) setHasEntered(true);
+  }, [shouldAnimate]);
+
+  return (
+    <div
+      className={animate ? "w-full group-message-card-enter" : "w-full"}
+      data-group-message-entry-key={animate ? entryKey : undefined}
+    >
+      {children}
+    </div>
+  );
+}
 
 export {
   GroupMessageRow,
@@ -153,6 +189,13 @@ export function GroupMessageList({
   // Delivery footers read every loaded turn card, even ones the filters hide.
   const repliesByTrigger = useMemo(() => indexTurnRepliesByTrigger(roomMessages), [roomMessages]);
   const [newMessageCount, setNewMessageCount] = useState(0);
+  const [pendingEntryKeys, setPendingEntryKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const consumedEntryKeysRef = useRef(new Set<string>());
+  const entrySnapshotRef = useRef<{
+    groupId: string;
+    initialized: boolean;
+    ids: readonly string[];
+  }>({ groupId, initialized: false, ids: [] });
   const previousRoomRef = useRef(groupId);
   const previousLastRef = useRef<string | undefined>(undefined);
   const activeWaiting = useMemo(() => {
@@ -184,19 +227,72 @@ export function GroupMessageList({
     [workingRows],
   );
   const activeMessageBySession = useMemo(() => {
-    const active = new Map<string, string>();
-    for (const message of renderedMessages) {
+    const active = new Map<string, { id: string; priority: number }>();
+    for (const message of roomMessages) {
       if (
         message.authorKind === "agent" &&
         message.authorSessionId &&
         message.status &&
         ["queued", "running", "writing", "awaiting_user"].includes(message.status)
       ) {
-        active.set(message.authorSessionId, message.id);
+        const priority = message.status === "queued" ? 0 : 1;
+        const previous = active.get(message.authorSessionId);
+        if (!previous || priority >= previous.priority) {
+          active.set(message.authorSessionId, { id: message.id, priority });
+        }
       }
     }
-    return active;
-  }, [renderedMessages]);
+    return new Map([...active].map(([sessionId, owner]) => [sessionId, owner.id]));
+  }, [roomMessages]);
+
+  // The loaded transcript is the baseline. Later additions after its tail are
+  // entry candidates; prepends, revisions, and room hydration only advance the
+  // snapshot. Hidden appends are recorded without becoming pending animations.
+  useLayoutEffect(() => {
+    let snapshot = entrySnapshotRef.current;
+    if (snapshot.groupId !== groupId) {
+      snapshot = { groupId, initialized: false, ids: [] };
+      entrySnapshotRef.current = snapshot;
+      setPendingEntryKeys((previous) => (previous.size === 0 ? previous : new Set()));
+    }
+
+    const currentIds = roomMessages.map((message) => message.id);
+    if (!loaded) {
+      snapshot.ids = currentIds;
+      snapshot.initialized = false;
+      setPendingEntryKeys((previous) => (previous.size === 0 ? previous : new Set()));
+      return;
+    }
+    if (!snapshot.initialized) {
+      snapshot.ids = currentIds;
+      snapshot.initialized = true;
+      return;
+    }
+
+    const previousIds = snapshot.ids;
+    const previousIdSet = new Set(previousIds);
+    const previousTail = previousIds.at(-1);
+    const tailIndex = previousTail === undefined ? -1 : currentIds.indexOf(previousTail);
+    const hasTailAnchor = previousIds.length === 0 || tailIndex >= 0;
+    const appendedIds = hasTailAnchor
+      ? currentIds.filter(
+          (id, index) => !previousIdSet.has(id) && (previousIds.length === 0 || index > tailIndex),
+        )
+      : [];
+    snapshot.ids = currentIds;
+
+    const visibleEntryKeys = new Set(
+      renderedMessages.map((message) => groupMessageEntryKey(groupId, message.id)),
+    );
+    setPendingEntryKeys((previous) => {
+      const next = new Set([...previous].filter((key) => visibleEntryKeys.has(key)));
+      for (const id of appendedIds) {
+        const key = groupMessageEntryKey(groupId, id);
+        if (visibleEntryKeys.has(key) && !consumedEntryKeysRef.current.has(key)) next.add(key);
+      }
+      return sameStringSet(previous, next) ? previous : next;
+    });
+  }, [groupId, loaded, roomMessages, renderedMessages]);
 
   const [viewportHeight, setViewportHeight] = useState(0);
   // Threshold stays on message count (not day separators) so small rooms stay full-DOM.
@@ -235,6 +331,29 @@ export function GroupMessageList({
     },
   });
   const virtualTotalSize = virtualizer.getTotalSize();
+
+  // A pending virtualized card may not have a DOM row until it enters the
+  // window. Consume it only once its inner wrapper appears; the wrapper keeps
+  // its class for this mount while the shared set prevents remount replay.
+  useLayoutEffect(() => {
+    if (pendingEntryKeys.size === 0) return;
+    const node = scrollRef.current;
+    if (!node) return;
+    const mountedEntryKeys = new Set(
+      Array.from(
+        node.querySelectorAll<HTMLElement>("[data-group-message-entry-key]"),
+        (entry) => entry.dataset.groupMessageEntryKey,
+      ).filter((key): key is string => Boolean(key)),
+    );
+    const consumedNow = [...pendingEntryKeys].filter((key) => mountedEntryKeys.has(key));
+    if (consumedNow.length === 0) return;
+    for (const key of consumedNow) consumedEntryKeysRef.current.add(key);
+    setPendingEntryKeys((previous) => {
+      const next = new Set(previous);
+      for (const key of consumedNow) next.delete(key);
+      return sameStringSet(previous, next) ? previous : next;
+    });
+  });
 
   useLayoutEffect(() => {
     const node = scrollRef.current;
@@ -425,6 +544,7 @@ export function GroupMessageList({
                   );
                 }
                 const message = item.message;
+                const entryKey = groupMessageEntryKey(groupId, message.id);
                 return (
                   <div
                     className="absolute top-0 left-0 w-full pb-3"
@@ -433,7 +553,15 @@ export function GroupMessageList({
                     ref={virtualizer.measureElement}
                     style={{ transform: `translateY(${row.start}px)` }}
                   >
-                    <GroupMessageRow {...messageRowProps(message)} />
+                    <GroupMessageEntry
+                      entryKey={entryKey}
+                      shouldAnimate={
+                        pendingEntryKeys.has(entryKey) &&
+                        !consumedEntryKeysRef.current.has(entryKey)
+                      }
+                    >
+                      <GroupMessageRow {...messageRowProps(message)} />
+                    </GroupMessageEntry>
                   </div>
                 );
               })}
@@ -441,7 +569,18 @@ export function GroupMessageList({
           ) : (
             transcriptItems.map((item) => {
               if (item.type === "day") return renderDaySeparator(item.key, item.label);
-              return <GroupMessageRow key={item.message.id} {...messageRowProps(item.message)} />;
+              const entryKey = groupMessageEntryKey(groupId, item.message.id);
+              return (
+                <GroupMessageEntry
+                  entryKey={entryKey}
+                  key={item.message.id}
+                  shouldAnimate={
+                    pendingEntryKeys.has(entryKey) && !consumedEntryKeysRef.current.has(entryKey)
+                  }
+                >
+                  <GroupMessageRow {...messageRowProps(item.message)} />
+                </GroupMessageEntry>
+              );
             })
           )}
           <GroupWorkingStatus
