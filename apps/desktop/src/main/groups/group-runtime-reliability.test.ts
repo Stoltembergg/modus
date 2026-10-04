@@ -190,20 +190,20 @@ describe("Groups runtime audit", () => {
     expect(env.calls).toHaveLength(1);
   });
   it("F10 a queued prompt includes collaboration completed while it waited", async () => {
-    const { group, a, b } = squad();
+    const { group, a, b, c } = squad();
     const env = setup();
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha primeiro" });
+    // The explicit busy target is reported; it is not silently substituted or queued.
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha segundo" });
+    expect(env.calls.filter((call) => call.input.sessionId === a)).toHaveLength(1);
+    expect(listGroupMessages(group.id).at(-1)?.body).toContain("member-unavailable");
     env.groups.postUserMessage({ groupId: group.id, body: "@Beta descubra" });
+    env.groups.postUserMessage({ groupId: group.id, body: "@Gamma aguarde" });
     env.calls
       .find((call) => call.input.sessionId === b)!
       .resolve({ outcome: "ok", finalText: "DADO_NOVO_RELEVANTE\nAgreed" });
     await flush();
-    env.calls
-      .find((call) => call.input.sessionId === a)!
-      .resolve({ outcome: "ok", finalText: "Primeiro finalizado\nAgreed" });
-    await flush();
-    const queued = env.calls.filter((call) => call.input.sessionId === a).at(-1)!;
+    const queued = env.calls.filter((call) => call.input.sessionId === c).at(-1)!;
     expect(queued.input.message).toContain("segundo");
     expect(queued.input.message).toContain("DADO_NOVO_RELEVANTE");
   });
@@ -443,61 +443,60 @@ const { runGroupTool, runGroupVerifiedTool, setGroupTaskWakeSink } = await impor
 const { hasGroupTaskExplicitDispatch } = await import("./group-task-store");
 const { listGroupDecisions } = await import("./group-store");
 
-it.each([
-  "handoff",
-  "taskless-handoff",
-  "taskless-agree",
-] as const)("retries %s after an actual runtime status persistence failure", async (kind) => {
-  const { group, a, b } = squad();
-  const env = setup(true);
-  const operationId = crypto.randomUUID();
-  setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
-  const invoke = () =>
-    kind !== "taskless-agree"
-      ? runGroupTool(
-          "group_handoff",
-          { sessionId: a },
-          {
-            memberId: b,
-            objective: "Durable objective",
-            ...(kind === "handoff" ? { taskTitle: "Delivery retry" } : {}),
-            operationId,
-          },
-        )
-      : runGroupVerifiedTool(
-          "group_agree",
-          { sessionId: a },
-          { note: "Durable agreement", operationId },
-        );
-  const db = getDatabase();
-  db.exec(
-    "create trigger fail_task_status before insert on group_messages when new.kind = 'status' begin select raise(abort, 'status unavailable'); end",
-  );
-  try {
-    await invoke();
-    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(false);
-    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
-      0,
+it.each(["handoff", "taskless-handoff", "taskless-agree"] as const)(
+  "retries %s after an actual runtime status persistence failure",
+  async (kind) => {
+    const { group, a, b } = squad();
+    const env = setup(true);
+    const operationId = crypto.randomUUID();
+    setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
+    const invoke = () =>
+      kind !== "taskless-agree"
+        ? runGroupTool(
+            "group_handoff",
+            { sessionId: a },
+            {
+              memberId: b,
+              objective: "Durable objective",
+              ...(kind === "handoff" ? { taskTitle: "Delivery retry" } : {}),
+              operationId,
+            },
+          )
+        : runGroupVerifiedTool(
+            "group_agree",
+            { sessionId: a },
+            { note: "Durable agreement", operationId },
+          );
+    const db = getDatabase();
+    db.exec(
+      "create trigger fail_task_status before insert on group_messages when new.kind = 'status' begin select raise(abort, 'status unavailable'); end",
     );
-  } finally {
-    db.exec("drop trigger fail_task_status");
-  }
-  try {
-    await invoke();
-    await invoke();
-    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
-    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
-      1,
-    );
-    if (kind === "taskless-agree") expect(listGroupDecisions(group.id)).toHaveLength(1);
-    else
-      expect(db.prepare("select id from group_jobs where group_id = ?").all(group.id)).toHaveLength(
-        1,
-      );
-  } finally {
-    setGroupTaskWakeSink(undefined);
-  }
-});
+    try {
+      await invoke();
+      expect(hasGroupTaskExplicitDispatch(operationId)).toBe(false);
+      expect(
+        listGroupMessages(group.id).filter((message) => message.kind === "status"),
+      ).toHaveLength(0);
+    } finally {
+      db.exec("drop trigger fail_task_status");
+    }
+    try {
+      await invoke();
+      await invoke();
+      expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+      expect(
+        listGroupMessages(group.id).filter((message) => message.kind === "status"),
+      ).toHaveLength(1);
+      if (kind === "taskless-agree") expect(listGroupDecisions(group.id)).toHaveLength(1);
+      else
+        expect(
+          db.prepare("select id from group_jobs where group_id = ?").all(group.id),
+        ).toHaveLength(1);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  },
+);
 
 it("reuses durable task delivery after post-commit emit failure and runtime reconstruction", () => {
   const { group, a, b } = squad();

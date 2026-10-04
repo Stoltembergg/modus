@@ -10,9 +10,10 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
-const { createAgentGroupWithMembers, listGroupMessages, listGroupTasks } = await import(
-  "./group-store"
-);
+const { updateAgent } = await import("../agents/agents-store");
+const { createAgentGroupWithMembers, listAgentGroupMembers, listGroupMessages, listGroupTasks } =
+  await import("./group-store");
+const { createGroupTask } = await import("./group-task-store");
 const { GROUP_CHAIN_LIMITS, GroupRuntime } = await import("./group-runtime");
 const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 
@@ -131,6 +132,18 @@ function crew() {
     ],
     leadSessionId: planner,
   });
+  for (const member of listAgentGroupMembers(group.id)) {
+    const capabilityIds =
+      member.sessionId === planner
+        ? ["plan"]
+        : member.sessionId === builder
+          ? ["implement", "verify", "docs"]
+          : ["review", "verify"];
+    updateAgent(member.agentId, {
+      capabilityIds,
+      supportedTaskKinds: ["code", "docs", "design", "review"],
+    });
+  }
   return { group, planner, builder, reviewer };
 }
 
@@ -148,39 +161,18 @@ afterAll(async () => {
 });
 
 describe("supervised code flow (runtime)", () => {
-  it("injects the supervised plan into the Lead wake for code work", () => {
-    const { group, planner, builder, reviewer } = crew();
-    const { runtime, groups } = setup();
-    groups.postUserMessage({
-      groupId: group.id,
-      body: "Implement workspace symlink escape fixes with tests",
-    });
-    expect(runtime.pendingSessions()).toEqual([planner]);
-    const prompt = runtime.calls[0]?.input.message ?? "";
-    expect(prompt).toContain("<supervised_flow>");
-    expect(prompt).toContain("Ask kind: code");
-    expect(prompt).toContain("implement: RUN");
-    expect(prompt).toContain("review: RUN");
-    expect(prompt).toContain(`memberId=${builder}`);
-    expect(prompt).toContain(`memberId=${reviewer}`);
-    expect(prompt).toContain("group_handoff");
-    expect(prompt).toContain("group_request_review");
-  });
-
-  it("skips Reviewer in the Lead prompt for docs-only asks", () => {
-    const { group, planner, builder, reviewer } = crew();
-    const { runtime, groups } = setup();
-    groups.postUserMessage({
-      groupId: group.id,
-      body: "Update the README documentation for Groups setup",
-    });
-    expect(runtime.pendingSessions()).toEqual([planner]);
-    const prompt = runtime.calls[0]?.input.message ?? "";
-    expect(prompt).toContain("<supervised_flow>");
-    expect(prompt).toContain("Ask kind: docs");
-    expect(prompt).toContain("review: SKIP");
-    expect(prompt).toContain(`memberId=${builder}`);
-    expect(prompt).not.toContain(`memberId=${reviewer}`);
+  it("does not launch a supervised pipeline from free text keywords or length", () => {
+    for (const body of [
+      "Implement code fixes with tests",
+      "Update README documentation",
+      "implemente a correção".repeat(100),
+    ]) {
+      const { group, planner } = crew();
+      const { runtime, groups } = setup();
+      groups.postUserMessage({ groupId: group.id, body });
+      expect(runtime.pendingSessions()).toEqual([planner]);
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
+    }
   });
 
   it("does not inject supervised flow for social pings", () => {
@@ -202,7 +194,7 @@ describe("supervised code flow (runtime)", () => {
         body: "Implement the login feature with tests",
       });
       expect(runtime.pendingSessions()).toEqual([planner]);
-      expect(runtime.calls[0]?.input.message).toContain("group_handoff");
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
 
       runGroupTool("group_handoff", lead, {
         memberId: builder,
@@ -220,11 +212,12 @@ describe("supervised code flow (runtime)", () => {
 
       const task = listGroupTasks(group.id).find((row) => row.title === "Login feature");
       expect(task).toBeDefined();
+      if (!task) throw new Error("The handoff did not create the Login feature task.");
       expect(task).toMatchObject({ status: "in_progress", ownerSessionId: builder });
       runGroupTool(
         "group_request_review",
         { sessionId: builder, groupId: group.id },
-        { id: task!.id, reviewer },
+        { id: task.id, reviewer },
       );
       expect(runtime.pendingSessions()).toEqual([builder, reviewer]);
       runtime
@@ -235,6 +228,78 @@ describe("supervised code flow (runtime)", () => {
       expect(
         listGroupMessages(group.id, { limit: 50 }).some((m) => m.authorSessionId === builder),
       ).toBe(true);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  });
+
+  it("attaches stages, task ID, gate and delegations only after typed work is recorded", async () => {
+    const { group, planner, builder, reviewer } = crew();
+    const { runtime, groups } = setup();
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const lead = { sessionId: planner, groupId: group.id };
+      const intake = groups.postUserMessage({
+        groupId: group.id,
+        body: "Implement the login feature with tests",
+      });
+      const executionId = intake.chainId;
+      if (!executionId) throw new Error("The intake message did not start an execution.");
+      expect(runtime.pendingSessions()).toEqual([planner]);
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
+
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Login feature",
+        description: "Implement the login feature with tests",
+        createdBySessionId: planner,
+        executionId,
+        kind: "code",
+        priority: "high",
+        dependencyIds: [],
+        criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+        verificationPolicy: { mode: "required", requireReview: true },
+        reviewerSessionId: reviewer,
+      });
+      runGroupTool("group_assign_task", lead, {
+        taskId: task.id,
+        memberId: builder,
+        operationId: "typed-task-assign",
+      });
+      expect(runtime.pendingSessions()).toEqual([planner, builder]);
+      expect(
+        runtime.calls.find((call) => call.input.sessionId === planner)?.input.message,
+      ).not.toContain("<supervised_flow>");
+      const assignedPrompt =
+        runtime.calls.find((call) => call.input.sessionId === builder)?.input.message ?? "";
+      expect(assignedPrompt).toContain("<supervised_flow>");
+      expect(assignedPrompt).toContain(`Typed task: ${task.id}; kind: code`);
+      expect(assignedPrompt).toContain("criterion-unverified");
+      expect(assignedPrompt).toContain(`group_assign_task(taskId=${task.id}, memberId=${builder})`);
+      expect(assignedPrompt).toContain("verify: BLOCKED");
+      expect(assignedPrompt).toContain("review: BLOCKED");
+
+      runtime.take(planner).resolve({ outcome: "ok", finalText: "Plan ready." });
+      await flush();
+      expect(runtime.pendingSessions()).toEqual([builder]);
+
+      runGroupTool(
+        "group_request_review",
+        { sessionId: builder, groupId: group.id },
+        { id: task.id, reviewer, operationId: "typed-task-review" },
+      );
+      expect(runtime.pendingSessions()).toEqual([builder, reviewer]);
+      const reviewPrompt =
+        runtime.calls.find((call) => call.input.sessionId === reviewer)?.input.message ?? "";
+      expect(reviewPrompt).toContain(`Typed task: ${task.id}; kind: code`);
+      expect(reviewPrompt).toContain(
+        `group_request_review(taskId=${task.id}, memberId=${reviewer})`,
+      );
+      expect(reviewPrompt).toContain("review: RUN");
+
+      runtime.take(builder).resolve({ outcome: "ok", finalText: "Implementation ready." });
+      await flush();
+      expect(runtime.pendingSessions()).toEqual([reviewer]);
     } finally {
       setGroupTaskWakeSink(undefined);
     }

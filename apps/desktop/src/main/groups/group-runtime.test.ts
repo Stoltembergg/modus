@@ -381,7 +381,7 @@ describe("wake rules", () => {
     expect(runtime.pendingSessions()).toEqual([alpha]);
   });
 
-  it("a user message without mentions wakes the specialty member (Lead optional)", () => {
+  it("untargeted work without a Lead requests routing input instead of inferring a role", () => {
     const ws = insertWorkspace();
     const planner = insertSession(ws, "Planner");
     const builder = insertSession(ws, "Builder");
@@ -398,7 +398,12 @@ describe("wake rules", () => {
     });
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "please review the login PR" });
-    expect(runtime.pendingSessions()).toEqual([reviewer]);
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).at(-1)).toMatchObject({
+      authorKind: "system",
+      kind: "status",
+      body: expect.stringContaining("no-eligible-lead"),
+    });
   });
 
   it("an agent message without mentions wakes nobody (not even the lead)", async () => {
@@ -998,6 +1003,46 @@ describe("coordinator mode", () => {
     );
   });
 
+  it("includes typed gates and ready delegation metadata in the Lead snapshot", () => {
+    const taskId = "typed-task";
+    const section = composeGroupSnapshotSection({
+      sessionId: "a",
+      leadSessionId: "a",
+      members: [
+        { sessionId: "a", title: "Alpha", state: "working" },
+        { sessionId: "b", title: "Beta", state: "idle" },
+      ],
+      tasks: [
+        {
+          id: taskId,
+          groupId: "g",
+          title: "Typed task",
+          status: "in_progress",
+          kind: "code",
+          priority: "high",
+          stage: "implement",
+          dependencyIds: [],
+          verificationPolicy: { mode: "required", requireReview: true },
+          createdAt: "",
+          updatedAt: "",
+          ownerSessionId: "b",
+        },
+      ],
+      gates: { [taskId]: { satisfied: false, reasonCodes: ["criterion-unverified"] } },
+      delegations: {
+        [taskId]: [{ taskId, stage: "implement", tool: "group_assign_task", memberId: "b" }],
+      },
+    });
+
+    expect(section).toContain(
+      `task ${taskId} [in_progress] kind=code priority=high stage=implement`,
+    );
+    expect(section).toContain('gate={"satisfied":false,"reasonCodes":["criterion-unverified"]}');
+    expect(section).toContain(
+      `delegations=[{"taskId":"${taskId}","stage":"implement","tool":"group_assign_task","memberId":"b"}]`,
+    );
+  });
+
   it(`stays within ~${GROUP_PROMPT_SNAPSHOT_MAX_TOKENS / 1000}k estimated tokens, noting omitted tasks`, () => {
     const tasks = Array.from({ length: 80 }, (_, index) =>
       task(String(index), "open", { title: `${index} ${"x".repeat(150)}` }),
@@ -1066,17 +1111,14 @@ describe("coordinator mode", () => {
     expect(byMember.get(gamma)).not.toContain("<group_snapshot>");
   });
 
-  it("without a Lead the flag is ignored (default routing, no snapshot); a new Lead coordinates", async () => {
+  it("without a Lead untargeted intake needs a user; a new Lead coordinates", async () => {
     const { group, beta } = squad();
     setAgentGroupMode(group.id, "coordinator");
     setAgentGroupLead(group.id, null);
     const { runtime, groups } = setup();
     groups.postUserMessage({ groupId: group.id, body: "anyone?" });
-    // No Lead → free autonomous routing (someone wakes; never a coordinator snapshot).
-    expect(runtime.pendingSessions()).toHaveLength(1);
-    expect(runtime.calls[0]?.input.message).not.toContain("<group_snapshot>");
-    runtime.take(runtime.pendingSessions()[0] as string).resolve({ outcome: "ok" });
-    await flush();
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(room(group.id).at(-1)?.body).toContain("no-eligible-lead");
     groups.postUserMessage({ groupId: group.id, body: "@Beta you then" });
     expect(runtime.pendingSessions()).toEqual([beta]);
     expect(runtime.calls.at(-1)?.input.message).not.toContain("<group_snapshot>");
@@ -1201,8 +1243,8 @@ describe("intent gate on a group turn", () => {
     runtime.take(beta).resolve({ outcome: "ok", finalText: "Done, @Gamma verify" });
     await flush();
     expect(room(group.id).find((m) => m.body === "Done, @Gamma verify")?.chainId).toBe(user.id);
-    // Only the other chain's "@Beta later" wake starts; nothing from the ended chain.
-    expect(runtime.pendingSessions()).toEqual([alpha, gamma, beta]);
+    // The explicit mention arrived while Beta was busy; it reported that state and did not silently queue or retarget.
+    expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
     expect(groups.isAwaitingUser(alpha)).toBe(false);
   });
 

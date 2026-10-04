@@ -506,14 +506,15 @@ describe("queue", () => {
       queuedSessionIds: [gamma],
       waitingSessionIds: [],
     });
-    // A second wake for Alpha waits behind its running turn.
+    // An explicit mention of the busy Alpha returns a reason instead of silently queuing work.
     groups.postUserMessage({ groupId: group.id, body: "@Alpha also this" });
+    expect(room(group.id).at(-1)?.body).toContain("member-unavailable");
     runtime.take(beta).resolve({ outcome: "ok" });
     await flush();
     expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
-    expect(runtime.pendingSessions()).toEqual([gamma, alpha]);
+    expect(runtime.pendingSessions()).toEqual([gamma]);
   });
 
   it("waits while the member is streaming (never steers into it)", async () => {
@@ -941,7 +942,7 @@ describe("agents in the room", () => {
     expect(room(group.id).at(-1)).toMatchObject({
       authorKind: "system",
       kind: "status",
-      body: `${builder.name} is archived`,
+      body: expect.stringContaining(`member-archived — ${builder.name} is archived`),
     });
     // An explicit target (a task tool wake) is refused the same way.
     groups.handleTaskWake({
@@ -961,26 +962,29 @@ describe("agents in the room", () => {
   it.each([
     ["no workspace", null],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])("a group with %s is read-only: posting throws group-project-required and wakes nobody", async (_label, workspaceId) => {
-    const { group, leadSession, builderSession } = agentsRoom();
-    getDatabase()
-      .prepare("update agent_groups set workspace_id = ? where id = ?")
-      .run(workspaceId, group.id);
-    const { runtime, groups } = setup();
-    const before = room(group.id).length;
-    expect(() => groups.postUserMessage({ groupId: group.id, body: "hello" })).toThrow(
-      expect.objectContaining({ code: "group-project-required" }),
-    );
-    groups.handleTaskWake({
-      groupId: group.id,
-      actorSessionId: leadSession,
-      targetSessionId: builderSession,
-      body: "Changes requested",
-    });
-    expect(runtime.pendingSessions()).toEqual([]);
-    // The history stays readable (the task status line itself is still recorded).
-    expect(room(group.id).length).toBe(before + 1);
-  });
+  ])(
+    "a group with %s is read-only: posting throws group-project-required and wakes nobody",
+    async (_label, workspaceId) => {
+      const { group, leadSession, builderSession } = agentsRoom();
+      getDatabase()
+        .prepare("update agent_groups set workspace_id = ? where id = ?")
+        .run(workspaceId, group.id);
+      const { runtime, groups } = setup();
+      const before = room(group.id).length;
+      expect(() => groups.postUserMessage({ groupId: group.id, body: "hello" })).toThrow(
+        expect.objectContaining({ code: "group-project-required" }),
+      );
+      groups.handleTaskWake({
+        groupId: group.id,
+        actorSessionId: leadSession,
+        targetSessionId: builderSession,
+        body: "Changes requested",
+      });
+      expect(runtime.pendingSessions()).toEqual([]);
+      // The history stays readable (the task status line itself is still recorded).
+      expect(room(group.id).length).toBe(before + 1);
+    },
+  );
 
   /* Dynamic discovery: the roster and mentions follow the CURRENT membership. */
 

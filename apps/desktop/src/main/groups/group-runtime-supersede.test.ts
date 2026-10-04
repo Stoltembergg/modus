@@ -202,6 +202,11 @@ describe("group-runtime-supersede: clear sticky Waiting for you", () => {
     expect(groups.memberStates()[0]?.waitingSessionIds).toEqual([beta]);
 
     groups.postUserMessage({ groupId: group.id, body: "@Beta continue" });
+    // The new wake waits for the cancelled gated turn to settle; it never overlaps it.
+    expect(runtime.pendingSessions()).toEqual([]);
+    expect(groups.memberStates()).toEqual([
+      expect.objectContaining({ groupId: group.id, queuedSessionIds: [beta] }),
+    ]);
     await flush();
     expect(
       groups.memberStates().find((entry) => entry.groupId === group.id)?.waitingSessionIds,

@@ -13,11 +13,8 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   GROUP_COLLAB_WAKE_PROTOCOL,
 } from "../../shared/group-collab-status";
-import { isCoordinatorModeActive } from "../../shared/group-coordinator";
-import {
-  composeSupervisedFlowSection,
-  planSupervisedCodeFlow,
-} from "../../shared/group-supervised-flow";
+import type { SupervisedDelegation } from "../../shared/group-supervised-flow";
+import type { GroupTaskGateResult } from "../../shared/group-work-state";
 import type {
   PromptAgentInput,
   PromptTurnOutcome,
@@ -377,6 +374,8 @@ export function composeGroupSnapshotSection(input: {
   leadSessionId: string;
   members: readonly GroupSnapshotMember[];
   tasks: readonly GroupTask[];
+  gates?: Record<string, GroupTaskGateResult>;
+  delegations?: Record<string, readonly SupervisedDelegation[]>;
 }): string {
   const who = (id: string | undefined) => {
     if (!id) return "none";
@@ -411,9 +410,14 @@ export function composeGroupSnapshotSection(input: {
     estimateGroupTokens(`${omittedLine(tasks.length)}\n`);
   const lines: string[] = [];
   for (const task of tasks) {
-    const line = escapeText(
-      `- task ${task.id} [${task.status}] "${task.title}" owner=${who(task.ownerSessionId)} reviewer=${who(task.reviewerSessionId)}`,
-    );
+    const line =
+      task.kind && task.kind !== "legacy"
+        ? escapeText(
+            `- task ${task.id} [${task.status}] kind=${task.kind} priority=${task.priority ?? "normal"} stage=${task.stage ?? "unset"} dependencies=${JSON.stringify(task.dependencyIds ?? [])} verification=${JSON.stringify(task.verificationPolicy ?? { mode: "none", requireReview: false })} gate=${JSON.stringify(input.gates?.[task.id] ?? { satisfied: false, reasonCodes: ["gate-unavailable"] })} delegations=${JSON.stringify(input.delegations?.[task.id] ?? [])} "${task.title}" owner=${who(task.ownerSessionId)} reviewer=${who(task.reviewerSessionId)}`,
+          )
+        : escapeText(
+            `- task ${task.id} [${task.status}] "${task.title}" owner=${who(task.ownerSessionId)} reviewer=${who(task.reviewerSessionId)}`,
+          );
     const cost = estimateGroupTokens(`${line}\n`);
     if (used + cost > GROUP_PROMPT_SNAPSHOT_MAX_TOKENS) break;
     used += cost;
@@ -424,237 +428,25 @@ export function composeGroupSnapshotSection(input: {
   return [...head, ...lines, close].join("\n");
 }
 
-/** Open/in-progress/in-review task hint for autonomous no-@ routing. */
-export type AutonomousWakeTaskHint = {
-  status: string;
-  title?: string;
-  ownerSessionId?: string;
-  reviewerSessionId?: string;
-};
-
-const STOP_WORDS = new Set([
-  "a",
-  "an",
-  "the",
-  "to",
-  "for",
-  "and",
-  "or",
-  "of",
-  "in",
-  "on",
-  "at",
-  "is",
-  "are",
-  "be",
-  "this",
-  "that",
-  "it",
-  "we",
-  "you",
-  "please",
-  "can",
-  "could",
-  "should",
-  "would",
-  "with",
-  "from",
-  "into",
-  "our",
-  "your",
-  "team",
-  "group",
-  "hello",
-  "hi",
-  "hey",
-  "thanks",
-  "thank",
-  "ola",
-  "olá",
-  "oi",
-  "bom",
-  "dia",
-  "tarde",
-  "noite",
-  "tudo",
-  "bem",
-]);
-
-/**
- * True for short social / greeting messages with no actionable objective.
- * These wake at most the single most relevant member (usually Lead) — others stay silent.
- */
-export function isSimpleSocialMessage(body: string): boolean {
-  const text = body
-    .replace(/@[\p{L}\p{N}_.-]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return true;
-  if (text.length > 80) return false;
-  const lower = text.toLocaleLowerCase();
-  // Explicit work / routing cues → not social-only.
-  if (
-    /\b(fix|build|implement|review|plan|test|ship|deploy|debug|investigate|refactor|write|create|add|remove|delete|block|handoff|task|pr|pull\s*request|bug|issue)\b/i.test(
-      lower,
-    )
-  ) {
-    return false;
-  }
-  if (/[?/]|https?:\/\//i.test(text) && text.length > 24) return false;
-  const socialOnly =
-    /^(hi|hello|hey|yo|sup|thanks|thank you|thx|cheers|gm|good\s+(morning|afternoon|evening)|howdy|hola|oi|ol[aá]|bom\s+dia|boa\s+(tarde|noite)|tudo\s+bem|e\s+a[ií]|fala|salve)([!.\s].*)?$/iu;
-  if (socialOnly.test(lower)) return true;
-  const tokens = tokenizeForWake(text);
-  // No content tokens left after stop-words → social / empty ask.
-  return tokens.length === 0;
-}
-
-/** Soft specialty cues in the user message → role/title/description patterns. */
-const SPECIALTY_CUES: ReadonlyArray<{ message: RegExp; member: RegExp; weight: number }> = [
-  { message: /\b(review|reviews|reviewer|lgtm|approve|feedback)\b/i, member: /review/i, weight: 5 },
-  {
-    message: /\b(implement|implementation|code|coding|build|builder|fix|patch|write|edit)\b/i,
-    member: /build|dev|engineer|implement|coder/i,
-    weight: 5,
-  },
-  {
-    message: /\b(plan|planning|planner|design|architect|spec|approach|strategy)\b/i,
-    member: /plan|architect|design/i,
-    weight: 5,
-  },
-  {
-    message: /\b(test|tests|testing|qa|verify|verification)\b/i,
-    member: /test|qa|verif/i,
-    weight: 5,
-  },
-  {
-    message: /\b(research|explore|investigate|find|search|look\s*into)\b/i,
-    member: /research|explor|scout|analyst/i,
-    weight: 4,
-  },
-];
-
-function tokenizeForWake(body: string): string[] {
-  return body
-    .toLocaleLowerCase()
-    .replace(/[^\p{L}\p{N}\s_-]+/gu, " ")
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length >= 3 && !STOP_WORDS.has(token));
-}
-
-function memberHaystack(member: MemberRef): string {
-  return [member.title, member.role, member.description]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase();
-}
-
-/**
- * Pick who should wake for a user message with no @mentions (natural groups N1).
- * Scores role/description/title against the body, open-task ownership, and a soft
- * Lead bias. Lead is optional: if absent or not best-fit, another member may wake.
- * Simple/social greetings wake at most one member (Lead preferred) — Builder/Reviewer
- * stay silent unless there is a real specialty cue or open task.
- * Never returns empty when at least one non-archived, non-excluded member exists.
- */
+/** Untyped room messages remain intake until an agent proposes a typed task. */
 export function selectAutonomousWakeTargets(input: {
   body: string;
   members: readonly MemberRef[];
   leadSessionId?: string;
   excludeSessionIds?: readonly string[];
-  openTasks?: readonly AutonomousWakeTaskHint[];
-  /** Cap simultaneous wakes from one untargeted user message (default 1). */
+  openTasks?: readonly Pick<
+    GroupTask,
+    "status" | "title" | "ownerSessionId" | "reviewerSessionId"
+  >[];
   maxTargets?: number;
 }): string[] {
-  const excluded = new Set(input.excludeSessionIds ?? []);
-  const eligible = input.members.filter(
-    (member) => !member.archived && !excluded.has(member.sessionId),
+  const lead = input.members.find(
+    (member) =>
+      member.sessionId === input.leadSessionId &&
+      !member.archived &&
+      !input.excludeSessionIds?.includes(member.sessionId),
   );
-  if (eligible.length === 0) return [];
-
-  const social = isSimpleSocialMessage(input.body);
-  const maxTargets = social ? 1 : Math.max(1, input.maxTargets ?? 1);
-  const hasOpenWork = (input.openTasks ?? []).some(
-    (task) =>
-      task.status === "open" || task.status === "in_progress" || task.status === "in_review",
-  );
-
-  // Social / greeting with no pending work → Lead only (or first eligible). Others stay quiet.
-  if (social && !hasOpenWork) {
-    if (input.leadSessionId && eligible.some((m) => m.sessionId === input.leadSessionId)) {
-      return [input.leadSessionId];
-    }
-    return eligible[0] ? [eligible[0].sessionId] : [];
-  }
-
-  const tokens = tokenizeForWake(input.body);
-  const scores = new Map<string, number>();
-
-  for (const member of eligible) {
-    let score = 0;
-    const hay = memberHaystack(member);
-    for (const token of tokens) {
-      if (!hay.includes(token)) continue;
-      score += token.length >= 5 ? 3 : 2;
-      if (member.role?.toLocaleLowerCase().includes(token)) score += 2;
-    }
-    for (const cue of SPECIALTY_CUES) {
-      if (cue.message.test(input.body) && cue.member.test(hay)) score += cue.weight;
-    }
-    for (const task of input.openTasks ?? []) {
-      const title = (task.title ?? "").toLocaleLowerCase();
-      const titleHit = tokens.some((token) => title.includes(token));
-      if (
-        task.ownerSessionId === member.sessionId &&
-        (task.status === "open" || task.status === "in_progress")
-      ) {
-        score += titleHit ? 4 : 2;
-      }
-      if (task.reviewerSessionId === member.sessionId && task.status === "in_review") {
-        score += titleHit ? 4 : 2;
-      }
-    }
-    if (member.sessionId === input.leadSessionId) score += 1;
-    // Social + open work: do not let specialty roles wake just to stay busy.
-    if (social && score > 0) {
-      const role = (member.role ?? member.title).toLocaleLowerCase();
-      if (
-        /build|review|dev|engineer|qa|test/.test(role) &&
-        member.sessionId !== input.leadSessionId
-      ) {
-        // Only keep them if they own / review an open task.
-        const owns = (input.openTasks ?? []).some(
-          (task) =>
-            (task.ownerSessionId === member.sessionId &&
-              (task.status === "open" || task.status === "in_progress")) ||
-            (task.reviewerSessionId === member.sessionId && task.status === "in_review"),
-        );
-        if (!owns) score = 0;
-      }
-    }
-    scores.set(member.sessionId, score);
-  }
-
-  const ranked = [...eligible].sort((a, b) => {
-    const diff = (scores.get(b.sessionId) ?? 0) - (scores.get(a.sessionId) ?? 0);
-    if (diff !== 0) return diff;
-    // Stable: lead before others, then membership order.
-    if (a.sessionId === input.leadSessionId) return -1;
-    if (b.sessionId === input.leadSessionId) return 1;
-    return eligible.indexOf(a) - eligible.indexOf(b);
-  });
-
-  const best = scores.get(ranked[0]?.sessionId ?? "") ?? 0;
-  if (best <= 0) {
-    if (input.leadSessionId && eligible.some((m) => m.sessionId === input.leadSessionId)) {
-      return [input.leadSessionId];
-    }
-    return ranked[0] ? [ranked[0].sessionId] : [];
-  }
-
-  const winners = ranked.filter((member) => (scores.get(member.sessionId) ?? 0) === best);
-  return winners.slice(0, maxTargets).map((member) => member.sessionId);
+  return lead ? [lead.sessionId] : [];
 }
 
 /**
@@ -673,8 +465,8 @@ export function composeGroupWakePrompt(input: {
   /** Coordinator mode: the Lead's "Group snapshot" (composeGroupSnapshotSection), Lead only. */
   snapshot?: string;
   /**
-   * Coordinator Lead only: supervised plan → implement → review → deliver section
-   * (composeSupervisedFlowSection). Empty / omitted when the ask is not code work.
+   * Typed task flow for its Lead, owner, or reviewer (composeSupervisedFlowSection).
+   * Empty / omitted when no active typed task is linked to this execution.
    */
   supervisedFlow?: string;
   /** The woken member's agent persona; first in the prompt when set. */
@@ -712,21 +504,7 @@ export function composeGroupWakePrompt(input: {
   const footer = "</group_room>";
   const decisions = composeGroupDecisionsSection(input.decisions ?? [], titles);
   const snapshot = input.snapshot ?? "";
-  // Coordinator Lead: inject supervised plan→implement→review→deliver (skippable).
-  // Callers may override via supervisedFlow; otherwise derive from the user trigger.
-  const supervisedFlow =
-    input.supervisedFlow?.trim() ||
-    (isCoordinatorModeActive(input.group) &&
-    input.group.leadSessionId === input.sessionId &&
-    input.trigger.authorKind === "user"
-      ? composeSupervisedFlowSection(
-          planSupervisedCodeFlow({
-            body: input.trigger.body,
-            members: input.members,
-            leadSessionId: input.sessionId,
-          }),
-        )
-      : "");
+  const supervisedFlow = input.supervisedFlow?.trim() ?? "";
   const member = input.members.find((row) => row.sessionId === input.sessionId);
   const projectContext =
     input.projectContext?.trim() ||
