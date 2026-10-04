@@ -206,9 +206,32 @@ export type GroupWorkState = {
 export type GroupDecisionSnapshot = {
   workState: GroupWorkState;
   mode: GroupProactivityMode;
-  sourceEventId: string;
+  /** Only task-bound sources can initiate policy decisions. Ordered by persisted event sequence. */
+  triggers: GroupTaskTrigger[];
+  /** Successful dispatch receipts from explicit task tools. */
+  explicitWakeSourceEventIds: string[];
+  /** Live runtime availability, including busy or otherwise unavailable members. */
+  memberAvailability: Record<string, "available" | "unavailable">;
+  /** Current task review state, resolved separately from the completion gate. */
+  reviewStates: Record<string, "pending" | "changes_requested" | "approved" | "unavailable">;
   stopRequested: boolean;
   waitingForUser: boolean;
+};
+
+export type GroupTaskTrigger = {
+  kind:
+    | "task_assigned"
+    | "task_unblocked"
+    | "review_requested"
+    | "review_changes_requested"
+    | "task_qa_updated";
+  groupId: string;
+  taskId: string;
+  taskVersion: number;
+  executionId?: string;
+  sourceEventId: string;
+  /** Stable monotonic order assigned by the persisted event source. */
+  sequence: number;
 };
 
 export type GroupProactivityDecision = {

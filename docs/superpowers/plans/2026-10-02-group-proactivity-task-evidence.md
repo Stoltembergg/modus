@@ -191,12 +191,12 @@ A captura usa o fingerprint-base antes do run para `GroupTaskRunBinding` e um fi
 
 **Interfaces:** consome `GroupWorkState`, transições e gates. Produz `decideGroupNextAction(snapshot: GroupDecisionSnapshot): GroupProactivityDecision | null`. Chave é derivada de groupId, executionId, sourceEventId, taskVersion, ação e target; função não lê relógio, DB, Git ou rede.
 
-- [ ] Adicionar testes de tabela para modo suggest/opt-in em atribuição, desbloqueio, review_requested, changes_requested e QA atualizado. Assertar uma ação no máximo; owner/reviewer correto; eventos com wake explícito já agendado retornam null; snapshot idêntico retorna decisão idêntica.
-- [ ] Adicionar `stop_or_waiting_user_prevents_auto_wake`, `missing_qa_suggests_without_claiming_completion`, `unavailable_member_or_exhausted_budget_never_wakes`, `silence_and_public_text_are_not_events`. Impedimentos terminais não criam sugestão acionável; falta de QA/capacidade usa motivo útil.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-proactivity-policy.test.ts`; esperar falha inicial.
-- [ ] Implementar política com prioridade determinística: respeitar gates, dependências, maior prioridade de tarefa, sequência de evento e taskId como desempate. Somente transições tipadas permitem wake; mudança de modo não ressuscita eventos antigos nem cria execução nova.
-- [ ] Rodar o mesmo comando; esperar aprovação.
-- [ ] Commit: `feat(groups): add deterministic proactivity policy`.
+- [x] Adicionar testes de tabela para modo suggest/opt-in em atribuição, desbloqueio, review_requested, changes_requested e QA atualizado. Assertar uma ação no máximo; owner/reviewer correto; eventos com wake explícito já agendado retornam null; snapshot idêntico retorna decisão idêntica.
+- [x] Adicionar `stop_or_waiting_user_prevents_auto_wake`, `missing_qa_suggests_without_claiming_completion`, `unavailable_member_or_exhausted_budget_never_wakes`, `silence_and_public_text_are_not_events`. Impedimentos terminais não criam sugestão acionável; falta de QA/capacidade usa motivo útil.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-proactivity-policy.test.ts`; esperar falha inicial.
+- [x] Implementar política com prioridade determinística: respeitar gates, dependências, maior prioridade de tarefa, sequência de evento e taskId como desempate. Somente transições tipadas permitem wake; mudança de modo não ressuscita eventos antigos nem cria execução nova.
+- [x] Rodar o mesmo comando; esperar aprovação.
+- [x] Commit: `feat(groups): add deterministic proactivity policy`.
 
 ## Tarefa 7: Entrega durável dentro do Group Runtime
 
