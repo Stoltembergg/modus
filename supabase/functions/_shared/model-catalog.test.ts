@@ -24,8 +24,8 @@ function native(id: string): NativeModel | undefined {
   return catalog.providers[id.slice(0, slash)]?.find((m) => m.id === id.slice(slash + 1));
 }
 
-/** The Free (and any other) allowed_models arrays as the migrations leave them. */
-async function seededAllowedModels(): Promise<string[]> {
+/** Every plan's allowed_models array as the migrations leave it (plan -> ids). */
+async function seededAllowedModelsByPlan(): Promise<Map<string, string[]>> {
   const dir = new URL("supabase/migrations/", root);
   const files = [...Deno.readDirSync(dir)]
     .map((e) => e.name)
@@ -51,7 +51,12 @@ async function seededAllowedModels(): Promise<string[]> {
       );
     }
   }
-  return [...latest.values()].flat();
+  return latest;
+}
+
+/** The Free (and any other) allowed_models arrays as the migrations leave them. */
+async function seededAllowedModels(): Promise<string[]> {
+  return [...(await seededAllowedModelsByPlan()).values()].flat();
 }
 
 Deno.test("model table: ids, context and tiers match the native catalog/models.json entries", () => {
@@ -86,12 +91,37 @@ Deno.test("SERVER_ONLY_MODELS: an entry that appears in catalog/models.json fail
 
 Deno.test("every seeded plans.allowed_models id is in the model table with a price", async () => {
   const seeded = await seededAllowedModels();
-  assertEquals(seeded.sort(), ["deepseek/deepseek-flash", "zai/glm-5.3-flash"]);
+  assertEquals([...new Set(seeded)].sort(), ["deepseek/deepseek-flash", "zai/glm-5.3-flash"]);
   for (const id of seeded) {
     const model = MODEL_CATALOG.find((m) => m.id === id);
     assert(model, `${id} missing from the model table`);
     assert(model.cost.input > 0 && model.cost.output > 0, `${id} has no price`);
   }
+});
+
+Deno.test("L5a review 2: Starter's explicit allowed_models = the model table minus claude-fable-*", async () => {
+  const byPlan = await seededAllowedModelsByPlan();
+  const starter = byPlan.get("starter");
+  assert(starter, "a migration must set Starter's allowed_models to an explicit list");
+  const ids = new Set(MODEL_CATALOG.map((m) => m.id));
+  // Typo guard: every listed id is a model the router serves.
+  for (const id of starter)
+    assert(ids.has(id), `Starter lists ${id}, which is not in MODEL_CATALOG`);
+  assertEquals(new Set(starter).size, starter.length, "Starter list has duplicates");
+  assertEquals(
+    starter.filter((id) => /(^|\/)claude-fable-/.test(id)),
+    [],
+    "Starter must never list a claude-fable-* model",
+  );
+  // Completeness: a model added to MODEL_CATALOG needs a migration that adds it to Starter
+  // (or this test updated, if the product decides it is Pro+ only).
+  assertEquals(
+    [...starter].sort(),
+    [...ids].filter((id) => !/(^|\/)claude-fable-/.test(id)).sort(),
+    "Starter must list every MODEL_CATALOG id except claude-fable-* (new model? add a migration)",
+  );
+  // Pro / Max / Ultra keep every model (NULL: no migration sets an array for them).
+  for (const plan of ["pro", "max", "ultra"]) assertEquals(byPlan.get(plan), undefined, plan);
 });
 
 Deno.test("groupRatio: pinned per model, EXACTLY the snapshot ratio of its upstreamGroup", () => {

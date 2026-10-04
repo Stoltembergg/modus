@@ -49,3 +49,6 @@ as $$
 $$;
 
 grant execute on all functions in schema tests to public;
+-- Legacy subscription suites run with Mercado Pago subscriptions ON (the migration default is
+-- OFF since L5a; 18_l5a_credit_packs.test.sql checks the default and the OFF behaviour).
+update private.billing_settings set mercadopago_subscriptions_enabled = true;

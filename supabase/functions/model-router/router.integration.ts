@@ -338,7 +338,8 @@ Deno.test({
         db,
         getUser: () => Promise.resolve({ id: userId as string, email: null }),
         config: routerConfig(up.baseUrl),
-        // A paid-only model next to the two Free ones (Starter allows every model).
+        // A paid-only model next to the two Free ones. Pro allows every model (allowed_models
+        // NULL); since L5a review 2 Starter has an explicit list, so this runs on Pro.
         catalog: [...MODEL_CATALOG, { ...MODEL_CATALOG[0], id: PAID, upstreamId: "pro" }],
         log: () => {},
       });
@@ -349,8 +350,8 @@ Deno.test({
       };
       await admin`insert into public.subscriptions
                     (user_id, provider, provider_subscription_id, plan, status)
-                  values (${userId}, 'mercadopago', 'PRERP1', 'starter', 'active')`;
-      assertEquals(await db.getPlan(userId), { plan: "starter", allowedModels: null });
+                  values (${userId}, 'mercadopago', 'PRERP1', 'pro', 'active')`;
+      assertEquals(await db.getPlan(userId), { plan: "pro", allowedModels: null });
       assertEquals(await call(PAID, "p-active"), [200, PAID]);
 
       // Mercado Pago pause: Free plan's models only, the paid one is 403 before reserving.
@@ -426,13 +427,13 @@ Deno.test({
                where provider_subscription_id = 'PRERG1'`;
       await admin`insert into public.subscriptions
                     (user_id, provider, provider_subscription_id, plan, status, current_period_end)
-                  values (${userId}, 'mercadopago', 'PRERG1', 'starter', 'active',
+                  values (${userId}, 'mercadopago', 'PRERG1', 'pro', 'active',
                           now() + interval '20 days')`;
       assertEquals(await call(PAID, "g-active"), [200, PAID]);
 
       // Cancelled by Mercado Pago, paid until the period end: the plan stays.
       await set({ status: "canceled", ending: true, end: "20 days" });
-      assertEquals(await db.getPlan(userId), { plan: "starter", allowedModels: null });
+      assertEquals(await db.getPlan(userId), { plan: "pro", allowedModels: null });
       assertEquals(await call(PAID, "g-grace"), [200, PAID]);
 
       // The period is over: Free, with nothing having to run.

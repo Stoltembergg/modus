@@ -488,6 +488,34 @@ describe("billing catalog mapping", () => {
     expect(JSON.stringify(mapped)).not.toContain("SECRET");
   });
 
+  it("L5a: ignores credit-pack catalog rows (kind pack / unknown kinds), keeps kind subscription", () => {
+    const pack = {
+      plan: "credits_5k",
+      name: "5,000 credits",
+      monthly_credits: 5000,
+      provider: "mercadopago",
+      currency: "BRL",
+      amount_minor: 3490,
+      sort_order: 1,
+    };
+    const mapped = mapCatalogRows([
+      { ...pack, kind: "pack" },
+      { ...pack, plan: "credits_x", kind: "bundle" },
+      { ...pack, plan: "credits_y", kind: null },
+      {
+        plan: "starter",
+        name: "Starter",
+        monthly_credits: 20000,
+        provider: "mercadopago",
+        currency: "BRL",
+        amount_minor: 4990,
+        sort_order: 1,
+        kind: "subscription",
+      },
+    ]);
+    expect(mapped.map((e) => e.plan)).toEqual(["starter"]);
+  });
+
   it("maps a mercadopago subscription row", () => {
     const mapped = mapBillingRows({
       plans: [],

@@ -205,4 +205,98 @@ echo "free renewal x17: renewed=$renewed7 busy=$busy7 not_due_or_busy_after=$not
   || { cat "$out"/fr* "$out"/fs*; fail "concurrent Free renewals: renewed exactly once"; }
 echo "ok - Free renewal racing itself (per-user + cron batch, wallet held): renewed once (0 -> 1000), others busy / not due"
 
+# 8) L5a: purchased-credit lots under concurrent usage. Allowance 1000 + two
+#    5k lots; 20 sessions reserve + settle 500 each (10000) while 4 sessions
+#    deliver the approval of a third 5k purchase and 2 sessions a second payment
+#    of that same purchase. One lot per payment id, each credited once; consumed
+#    allowance first, then the lots oldest first (the newest lot untouched);
+#    sum(lots remaining) never exceeds balance + reserved; no deadlock.
+uid8="$(q "select tests.create_user('race-lots@example.com', true)")"
+exp8='{"live_mode":false,"collector_id":"777"}'
+for n in 1 2 3; do
+  eval "pur8_$n=\"\$(q \"set role service_role; select private.mp_create_purchase('$uid8', 'credits_5k') ->> 'purchase_id'\")\""
+done
+pay8() { echo "{\"id\":\"$1\",\"status\":\"approved\",\"amount_minor\":3690,\"refunded_minor\":0,\"live_mode\":false,\"collector_id\":\"777\",\"currency\":\"BRL\",\"external_reference\":\"$2\"}"; }
+q "set role service_role; select private.process_mp_purchase_payment('$(pay8 880001 "$pur8_1")'::jsonb, '$exp8'::jsonb)" >/dev/null
+q "update public.credit_lots set created_at = now() - interval '2 hours' where purchase_id = '$pur8_1'" >/dev/null
+q "set role service_role; select private.process_mp_purchase_payment('$(pay8 880002 "$pur8_2")'::jsonb, '$exp8'::jsonb)" >/dev/null
+q "update public.credit_lots set created_at = now() - interval '1 hour' where purchase_id = '$pur8_2'" >/dev/null
+[[ "$(q "select balance from public.credit_wallets where user_id = '$uid8'")" == 11000 ]] || fail "setup: 1000 + 2 x 5000"
+for i in $(seq 1 20); do
+  ( "$PSQL" -X -q -t -A >"$out/lot$i" 2>&1 <<SQL || true
+set role service_role;
+select private.reserve_credits('$uid8', 'lots-$i', 500) ->> 'created';
+select (private.settle_usage('$uid8', 'lots-$i', 500, 'm', 'p') ->> 'charged');
+SQL
+  ) &
+  if (( i % 5 == 0 )); then
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select private.process_mp_purchase_payment('$(pay8 880003 "$pur8_3")'::jsonb, '$exp8'::jsonb) ->> 'code'" \
+        >"$out/lotpay$i" 2>&1 || true ) &
+  fi
+  # The same purchase paid a second time (same preference): its own lot, also credited once.
+  if (( i % 10 == 0 )); then
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select private.process_mp_purchase_payment('$(pay8 880004 "$pur8_3")'::jsonb, '$exp8'::jsonb) ->> 'code'" \
+        >"$out/lotpay2_$i" 2>&1 || true ) &
+  fi
+done
+wait
+charged8="$(cat "$out"/lot[0-9]* | grep -c '^500$' || true)"
+credited8="$(cat "$out"/lotpay* | grep -c '^credited$' || true)"
+errors8="$(cat "$out"/lot* | grep -c 'ERROR' || true)"
+wallet8="$(q "select balance || '+' || reserved from public.credit_wallets where user_id = '$uid8'")"
+lots8="$(q "select string_agg(remaining::text, ',' order by created_at, id) from public.credit_lots where user_id = '$uid8'")"
+inv8="$(q "select (select coalesce(sum(remaining), 0) from public.credit_lots where user_id = '$uid8') <= (select balance + reserved from public.credit_wallets where user_id = '$uid8')")"
+echo "lots under load: charged=$charged8 credited=$credited8 errors=$errors8 wallet=$wallet8 lots=$lots8 invariant=$inv8"
+[[ "$charged8" == 20 && "$credited8" == 2 && "$errors8" == 0 && "$wallet8" == 11000+0 \
+   && "$lots8" == 0,1000,5000,5000 && "$inv8" == t ]] \
+  || { cat "$out"/lot*; fail "concurrent usage across allowance -> lots"; }
+echo "ok - 20 concurrent reserve/settle (10000) + 4 deliveries of a purchase + 2 of a second payment of it: allowance then oldest lots, one lot per payment, invariant kept"
+
+# 9) L5a review 2: refund + chargeback of purchase payments racing settle_usage on the same
+#    user (process_mp_purchase_payment locks purchase -> wallet -> lot, like the lots trigger:
+#    wallet -> lots). Allowance 1000 + two 5k lots; 16 sessions reserve + settle 300 each
+#    while payment A is refunded and payment B charged back (each delivered 3 times). No
+#    deadlock / error (an insufficient reservation is allowed), one reversal row per payment,
+#    balance >= 0, nothing reserved, sum(lots remaining) <= balance + reserved, B blocks.
+uid9="$(q "select tests.create_user('race-refund@example.com', true)")"
+exp9='{"live_mode":false,"collector_id":"777"}'
+pay9() { echo "{\"id\":\"$1\",\"status\":\"$3\",\"amount_minor\":3690,\"refunded_minor\":$4,\"live_mode\":false,\"collector_id\":\"777\",\"currency\":\"BRL\",\"external_reference\":\"$2\"}"; }
+pa9="$(q "set role service_role; select private.mp_create_purchase('$uid9', 'credits_5k') ->> 'purchase_id'")"
+pb9="$(q "set role service_role; select private.mp_create_purchase('$uid9', 'credits_5k') ->> 'purchase_id'")"
+q "set role service_role; select private.process_mp_purchase_payment('$(pay9 890001 "$pa9" approved 0)'::jsonb, '$exp9'::jsonb)" >/dev/null
+q "set role service_role; select private.process_mp_purchase_payment('$(pay9 890002 "$pb9" approved 0)'::jsonb, '$exp9'::jsonb)" >/dev/null
+[[ "$(q "select balance from public.credit_wallets where user_id = '$uid9'")" == 11000 ]] || fail "setup: 1000 + 2 x 5000"
+for i in $(seq 1 16); do
+  ( "$PSQL" -X -q -t -A >"$out/rf$i" 2>&1 <<SQL || true
+set role service_role;
+select private.reserve_credits('$uid9', 'refund-race-$i', 300) ->> 'created';
+select pg_sleep(0.05);
+select (private.settle_usage('$uid9', 'refund-race-$i', 300, 'm', 'p') ->> 'charged');
+SQL
+  ) &
+  if (( i % 5 == 1 )); then
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select pg_sleep(0.03); select private.process_mp_purchase_payment('$(pay9 890001 "$pa9" refunded 3690)'::jsonb, '$exp9'::jsonb) ->> 'code'" \
+        >"$out/rfa$i" 2>&1 || true ) &
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select pg_sleep(0.03); select private.process_mp_purchase_payment('$(pay9 890002 "$pb9" charged_back 3690)'::jsonb, '$exp9'::jsonb) ->> 'code'" \
+        >"$out/rfb$i" 2>&1 || true ) &
+  fi
+done
+wait
+deadlocks9="$(cat "$out"/rf* | grep -c 'deadlock' || true)"
+# An insufficient reservation (and then its settle: reservation not found) is expected once
+# the reversals drained the wallet; anything else is a failure.
+errors9="$(cat "$out"/rf* | grep 'ERROR' | grep -vcE 'insufficient credits|reservation not found' || true)"
+reversed9="$(cat "$out"/rfa* "$out"/rfb* | grep -c '^reversed$' || true)"
+state9="$(q "select balance >= 0 and reserved = 0 from public.credit_wallets where user_id = '$uid9'")"
+inv9="$(q "select (select coalesce(sum(remaining), 0) from public.credit_lots where user_id = '$uid9') <= (select balance + reserved from public.credit_wallets where user_id = '$uid9')")"
+rows9="$(q "select count(*) from public.credit_transactions where user_id = '$uid9' and idempotency_key like 'mp:purchase-reversal:%'")"
+lots9="$(q "select string_agg(payment_id || ':' || status, ',' order by payment_id) from public.credit_lots where user_id = '$uid9'")"
+blocked9="$(q "select private.account_blocked('$uid9')")"
+wallet9="$(q "select balance || '+' || reserved from public.credit_wallets where user_id = '$uid9'")"
+echo "refund/chargeback vs settle: deadlocks=$deadlocks9 errors=$errors9 reversed=$reversed9 reversal_rows=$rows9 wallet=$wallet9 lots=$lots9 invariant=$inv9 blocked=$blocked9"
+[[ "$deadlocks9" == 0 && "$errors9" == 0 && "$reversed9" == 2 && "$rows9" == 2 && "$state9" == t \
+   && "$inv9" == t && "$lots9" == 890001:refunded,890002:charged_back && "$blocked9" == t ]] \
+  || { cat "$out"/rf*; fail "refund / chargeback racing settle_usage"; }
+echo "ok - refund + chargeback racing 16 reserve/settle on the same user: no deadlock, one reversal per payment, invariant kept, chargeback blocks"
+
 rm -rf "$out"

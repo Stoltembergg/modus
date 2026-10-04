@@ -70,6 +70,9 @@ export function createMpCheckoutHandler(deps: MpCheckoutDeps): (req: Request) =>
       if (checkout.code === "already_subscribed") throw new HttpError(409, "already_subscribed");
       // L1g: cancelled but paid until current_period_end; subscribe again after that date.
       if (checkout.code === "cancel_grace_active") throw new HttpError(409, "cancel_grace_active");
+      // L5a: subscriptions off (credit packs only); nothing was created.
+      if (checkout.code === "subscriptions_disabled")
+        throw new HttpError(403, "subscriptions_disabled");
       if (checkout.checkoutUrl) {
         if (!isMpCheckoutUrl(checkout.checkoutUrl))
           throw new HttpError(502, "unexpected_preapproval");

@@ -112,6 +112,10 @@ function str(value: unknown): string | null {
 export function mapCatalogRows(rows: unknown[]): BillingCatalogEntry[] {
   return rows.flatMap((raw): BillingCatalogEntry[] => {
     const row = (raw ?? {}) as Record<string, unknown>;
+    // L5a: the catalog also lists one-off credit packs (kind 'pack'); they are not
+    // subscription plans, so this UI never offers them as one (L5b adds the packs UI).
+    // Rows without a kind come from a server before L5a: subscriptions.
+    if (row.kind !== undefined && row.kind !== "subscription") return [];
     const plan = str(row.plan);
     const currency = str(row.currency);
     const amountMinor = num(row.amount_minor);

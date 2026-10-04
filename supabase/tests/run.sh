@@ -80,6 +80,6 @@ echo "== functions db.ts + model-router + mp-webhook + mp-cancel (npm:postgres, 
   MODUS_TEST_DB_URL="postgres://postgres:$db_password@127.0.0.1:$PGPORT/postgres" \
     deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import \
       _shared/db.integration.ts model-router/router.integration.ts mp-webhook/mp.integration.ts \
-      mp-cancel/cancel.integration.ts)
+      mp-cancel/cancel.integration.ts mp-webhook/packs.integration.ts)
 
 echo "== all SQL tests passed"

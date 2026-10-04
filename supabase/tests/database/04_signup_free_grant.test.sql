@@ -81,8 +81,13 @@ select is(
 select is((select allowed_models from public.plans where plan = 'free'),
   array['deepseek/deepseek-flash', 'zai/glm-5.3-flash'],
   'Free allows exactly deepseek/deepseek-flash and zai/glm-5.3-flash');
-select is((select count(*)::int from public.plans where plan <> 'free' and allowed_models is not null), 0,
-  'paid plans: allowed_models NULL (all models)');
+-- L5a review 2: Starter has an explicit list (the router catalog minus claude-fable-*);
+-- Pro / Max / Ultra stay NULL (all models).
+select is((select allowed_models from public.plans where plan = 'starter'),
+  array['deepseek/deepseek-flash', 'zai/glm-5.3-flash'],
+  'Starter allows exactly the router catalog''s models except claude-fable-* (explicit list)');
+select is((select count(*)::int from public.plans where plan not in ('free', 'starter') and allowed_models is not null), 0,
+  'pro / max / ultra: allowed_models NULL (all models)');
 select is((select array_agg(plan order by sort_order) from public.plans),
   array['free', 'starter', 'pro', 'max', 'ultra'], 'five plans in order');
 select is((select array_agg(monthly_credits order by sort_order) from public.plans),
