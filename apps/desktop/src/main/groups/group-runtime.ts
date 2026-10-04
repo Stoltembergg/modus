@@ -52,6 +52,7 @@ import {
   listGroupActions,
   listPendingGroupActions,
   markGroupActionDispatched,
+  markSuggestedActionsForNewExecution,
   persistGroupProactivityDecision,
   resolveSuggestedGroupAction,
   setGroupProactivityMode,
@@ -101,6 +102,7 @@ import {
   isGroupTaskRunAssignmentCurrent,
   markGroupTaskExplicitDispatch,
   onGroupTaskTransition,
+  reassignGroupTaskForSuggestion,
 } from "./group-task-store";
 import { GroupTurnTranscript } from "./group-turn-transcript";
 import { getGroupWorkState } from "./group-work-state";
@@ -208,13 +210,7 @@ export class GroupRuntime {
   listSuggestions(groupId: string): GroupSuggestion[] {
     const group = getAgentGroup(groupId);
     if (!group) throw new GroupStoreError("group-not-found", `Agent group not found: ${groupId}`);
-    const members = listAgentGroupMembers(groupId).filter((member) => !member.archived);
-    const candidates = members
-      .filter((member) => {
-        const session = getAgentSession(member.sessionId);
-        return session && !session.archivedAt;
-      })
-      .map((member) => member.sessionId);
+    this.refreshSuggestionConfirmations(groupId);
     return listGroupActions(groupId)
       .filter((action) => action.deliveryState === "suggested")
       .slice(-100)
@@ -222,21 +218,9 @@ export class GroupRuntime {
         const trigger = this.transitionForAction(action);
         if (!trigger) return [];
         const task = getGroupTask(action.taskId);
-        const desiredTarget =
-          trigger.kind === "review_requested" ||
-          (trigger.kind === "task_qa_updated" &&
-            task.status === "in_review" &&
-            task.verificationPolicy?.requireReview)
-            ? task.reviewerSessionId
-            : task.ownerSessionId;
-        const proposedTargetSessionId =
-          (desiredTarget && candidates.includes(desiredTarget) ? desiredTarget : undefined) ??
-          (group.leadSessionId && candidates.includes(group.leadSessionId)
-            ? group.leadSessionId
-            : undefined);
-        const sourceChain = action.executionId
-          ? (this.chains.get(action.executionId) ?? readGroupChain(action.executionId))
-          : undefined;
+        const role = this.suggestionRole(trigger, task);
+        const candidates = this.suggestionTargets(groupId, task, role);
+        const proposedTargetSessionId = this.proposedTarget(trigger, task, group);
         const reason = this.suggestionReason(action.decision.reasonCode, trigger.kind);
         return [
           {
@@ -258,7 +242,7 @@ export class GroupRuntime {
             reason,
             ...(proposedTargetSessionId ? { proposedTargetSessionId } : {}),
             candidateSessionIds: candidates,
-            startNewExecution: Boolean(!sourceChain || sourceChain.ended || sourceChain.retired),
+            startNewExecution: action.requiresNewExecution,
           },
         ];
       });
@@ -321,6 +305,8 @@ export class GroupRuntime {
       return resolved;
     }
 
+    this.requireFreshExecutionConfirmation(action, input.expectedVersion);
+
     const stopEpoch = this.stopEpochByGroup.get(action.groupId) ?? 0;
     const initialTrigger = this.transitionForAction(action);
     if (!initialTrigger) return this.invalidateStaleSuggestion(action);
@@ -332,6 +318,7 @@ export class GroupRuntime {
       currentAction.version !== input.expectedVersion
     )
       throw new GroupStoreError("stale-task", "Suggestion changed while it was being accepted.");
+    this.requireFreshExecutionConfirmation(currentAction, input.expectedVersion);
     const trigger = this.transitionForAction(currentAction);
     const task = getGroupTask(currentAction.taskId);
     const group = getAgentGroup(currentAction.groupId);
@@ -345,8 +332,10 @@ export class GroupRuntime {
       return this.invalidateStaleSuggestion(currentAction);
     this.validateSuggestionTask(trigger, task, details);
 
-    const memberRows = listAgentGroupMembers(group.id);
+    const role = this.suggestionRole(trigger, task);
+    const eligibleTargets = this.suggestionTargets(group.id, task, role);
     const targetSessionId = input.targetSessionId ?? this.proposedTarget(trigger, task, group);
+    const memberRows = listAgentGroupMembers(group.id);
     const member = memberRows.find((candidate) => candidate.sessionId === targetSessionId);
     const targetSession = targetSessionId ? getAgentSession(targetSessionId) : undefined;
     if (
@@ -360,6 +349,16 @@ export class GroupRuntime {
         "not-a-member",
         "The selected target is not an active group member.",
       );
+    if (!eligibleTargets.includes(targetSessionId)) {
+      throw new GroupStoreError(
+        role === "reviewer" && task.ownerSessionId === targetSessionId
+          ? "self-review"
+          : "invalid-transition",
+        role === "reviewer"
+          ? "Only a member other than the task owner can receive the review."
+          : "The selected member cannot receive this owner assignment.",
+      );
+    }
     if (
       this.running.has(targetSessionId) ||
       this.gated.has(targetSessionId) ||
@@ -389,16 +388,34 @@ export class GroupRuntime {
       )
         throw new GroupStoreError("stale-task", "Task changed before the suggestion could start.");
       this.validateSuggestionTask(latestTrigger, latestTask, details);
+      const latestRole = this.suggestionRole(latestTrigger, latestTask);
+      const latestEligibleTargets = this.suggestionTargets(action.groupId, latestTask, latestRole);
+      if (!latestEligibleTargets.includes(targetSessionId)) {
+        throw new GroupStoreError(
+          latestRole === "reviewer" && latestTask.ownerSessionId === targetSessionId
+            ? "self-review"
+            : "invalid-transition",
+          latestRole === "reviewer"
+            ? "Only a member other than the task owner can receive the review."
+            : "The selected member cannot receive this owner assignment.",
+        );
+      }
       const latestMember = listAgentGroupMembers(action.groupId).find(
         (candidate) => candidate.sessionId === targetSessionId,
       );
-      if (!latestMember || latestMember.archived || !getAgentSession(targetSessionId))
+      const latestSession = getAgentSession(targetSessionId);
+      if (!latestMember || latestMember.archived || !latestSession || latestSession.archivedAt)
         throw new GroupStoreError("not-a-member", "The selected target left the group.");
 
       const existing = action.executionId ? this.chains.get(action.executionId) : undefined;
       const joinsExisting = Boolean(
         existing && existing.groupId === action.groupId && !existing.ended && !existing.retired,
       );
+      if (!joinsExisting && !latestAction.requiresNewExecution)
+        throw new GroupStoreError(
+          "stale-task",
+          "This suggestion now requires confirmation to start a new execution. Refresh it first.",
+        );
       const message = appendGroupMessage({
         createdAt: this.stamp(),
         groupId: action.groupId,
@@ -410,6 +427,15 @@ export class GroupRuntime {
       this.emitMessage(message);
       const resolvedExecutionId = message.chainId ?? message.id;
       const chain = joinsExisting && existing ? existing : this.openChain(group.id, message.id);
+      reassignGroupTaskForSuggestion({
+        groupId: action.groupId,
+        taskId: action.taskId,
+        expectedVersion: latestTask.stateVersion ?? 1,
+        operationId: `suggestion:${action.id}`,
+        targetSessionId,
+        role: latestRole,
+        executionId: resolvedExecutionId,
+      });
       this.route(chain, message, [targetSessionId], false, true);
       const wake = this.queues
         .get(targetSessionId)
@@ -918,6 +944,7 @@ export class GroupRuntime {
     )
       return;
     const action = persistGroupProactivityDecision(decision);
+    if (action.deliveryState === "suggested") this.emitSuggestionChanged(action);
     if (action.deliveryState === "pending") await this.materializeAction(action, trigger);
   }
 
@@ -1559,6 +1586,7 @@ export class GroupRuntime {
       if (!this.disposed) {
         chain.retired = true;
         persistGroupChain(chain);
+        if (!chain.ended) this.requireNewExecutionForSuggestions(chain.chainId);
       }
       this.retiredChains.set(chainId, chain);
     }
@@ -1743,6 +1771,7 @@ export class GroupRuntime {
     if (chain.ended) return;
     chain.ended = reason;
     persistGroupChain(chain);
+    this.requireNewExecutionForSuggestions(chain.chainId);
     if (reason === "blocked" || reason === "stopped") {
       for (const [sessionId, queue] of this.queues) {
         for (const wake of queue.filter((wake) => wake.chainId === chain.chainId)) {
@@ -1858,17 +1887,77 @@ export class GroupRuntime {
     task: GroupTask,
     group: AgentGroupInfo,
   ): string | undefined {
-    const reviewer =
-      trigger.kind === "review_requested" ||
+    const role = this.suggestionRole(trigger, task);
+    const eligible = this.suggestionTargets(group.id, task, role);
+    const preferred = role === "reviewer" ? task.reviewerSessionId : task.ownerSessionId;
+    if (preferred && eligible.includes(preferred)) return preferred;
+    if (group.leadSessionId && eligible.includes(group.leadSessionId)) return group.leadSessionId;
+    return undefined;
+  }
+
+  private suggestionRole(trigger: GroupTaskTrigger, task: GroupTask): "owner" | "reviewer" {
+    return trigger.kind === "review_requested" ||
       (trigger.kind === "task_qa_updated" &&
         task.status === "in_review" &&
-        task.verificationPolicy?.requireReview);
-    const preferred = reviewer ? task.reviewerSessionId : task.ownerSessionId;
-    const members = listAgentGroupMembers(group.id).filter((member) => !member.archived);
-    if (preferred && members.some((member) => member.sessionId === preferred)) return preferred;
-    if (group.leadSessionId && members.some((member) => member.sessionId === group.leadSessionId))
-      return group.leadSessionId;
-    return undefined;
+        task.verificationPolicy?.requireReview)
+      ? "reviewer"
+      : "owner";
+  }
+
+  private suggestionTargets(
+    groupId: string,
+    task: GroupTask,
+    role: "owner" | "reviewer",
+  ): string[] {
+    const excluded = role === "reviewer" ? task.ownerSessionId : task.reviewerSessionId;
+    return listAgentGroupMembers(groupId)
+      .filter((member) => !member.archived && member.sessionId !== excluded)
+      .filter((member) => {
+        const session = getAgentSession(member.sessionId);
+        return Boolean(session && !session.archivedAt);
+      })
+      .map((member) => member.sessionId);
+  }
+
+  private refreshSuggestionConfirmations(groupId: string): void {
+    const executionIds = new Set(
+      listGroupActions(groupId)
+        .filter(
+          (action) =>
+            action.deliveryState === "suggested" &&
+            !action.requiresNewExecution &&
+            action.executionId,
+        )
+        .map((action) => action.executionId as string),
+    );
+    for (const executionId of executionIds) {
+      const chain = this.chains.get(executionId) ?? readGroupChain(executionId);
+      if (!chain || chain.ended || chain.retired)
+        this.requireNewExecutionForSuggestions(executionId);
+    }
+  }
+
+  private requireNewExecutionForSuggestions(executionId: string): void {
+    for (const action of markSuggestedActionsForNewExecution(executionId))
+      this.emitSuggestionChanged(action);
+  }
+
+  private requireFreshExecutionConfirmation(
+    action: GroupActionRecord,
+    expectedVersion: number,
+  ): void {
+    if (action.version !== expectedVersion)
+      throw new GroupStoreError("stale-task", "Suggestion changed. Refresh it before acting.");
+    if (action.deliveryState !== "suggested" || action.requiresNewExecution) return;
+    const chain = action.executionId
+      ? (this.chains.get(action.executionId) ?? readGroupChain(action.executionId))
+      : undefined;
+    if (chain && !chain.ended && !chain.retired) return;
+    this.requireNewExecutionForSuggestions(action.executionId ?? "");
+    throw new GroupStoreError(
+      "stale-task",
+      "This suggestion now requires confirmation to start a new execution. Refresh it first.",
+    );
   }
 
   private validateSuggestionTask(

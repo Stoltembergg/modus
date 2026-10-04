@@ -43,7 +43,8 @@ export function GroupProactivityControls({
         "groupId" in event &&
         event.groupId === groupId &&
         (event.type === "group.suggestion-changed" ||
-          event.type === "group.proactivity-mode-changed")
+          event.type === "group.proactivity-mode-changed" ||
+          event.type === "group.chain-ended")
       )
         void refresh();
     });

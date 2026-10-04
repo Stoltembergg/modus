@@ -16,6 +16,7 @@ export type GroupActionRecord = {
   jobId?: string;
   resolutionTargetSessionId?: string;
   resolvedExecutionId?: string;
+  requiresNewExecution: boolean;
   version: number;
 };
 
@@ -33,6 +34,7 @@ type ActionRow = {
   job_id: string | null;
   resolution_target_session_id: string | null;
   resolved_execution_id: string | null;
+  requires_new_execution: number;
   version: number;
 };
 
@@ -52,6 +54,7 @@ function toAction(row: ActionRow): GroupActionRecord {
       ? { resolutionTargetSessionId: row.resolution_target_session_id }
       : {}),
     ...(row.resolved_execution_id ? { resolvedExecutionId: row.resolved_execution_id } : {}),
+    requiresNewExecution: row.requires_new_execution === 1,
     version: row.version,
   };
 }
@@ -117,6 +120,30 @@ export function listGroupActions(groupId?: string): GroupActionRecord[] {
           .all()
   ) as ActionRow[];
   return rows.map(toAction);
+}
+
+/** Persist the confirmation step when a source execution ends or is retired. */
+export function markSuggestedActionsForNewExecution(executionId: string): GroupActionRecord[] {
+  if (!executionId) return [];
+  const db = getDatabase();
+  const ids = (
+    db
+      .prepare(`select id from group_proactivity_actions
+      where execution_id = ? and delivery_state = 'suggested' and requires_new_execution = 0`)
+      .all(executionId) as Array<{ id: string }>
+  ).map((row) => row.id);
+  if (ids.length === 0) return [];
+  const now = new Date().toISOString();
+  db.prepare(`update group_proactivity_actions set requires_new_execution = 1,
+    version = version + 1, updated_at = ?
+    where execution_id = ? and delivery_state = 'suggested' and requires_new_execution = 0`).run(
+    now,
+    executionId,
+  );
+  return ids.flatMap((id) => {
+    const action = getGroupAction(id);
+    return action ? [action] : [];
+  });
 }
 
 export function listPendingGroupActions(groupId?: string): GroupActionRecord[] {

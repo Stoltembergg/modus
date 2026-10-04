@@ -780,7 +780,7 @@ function recordEvent(
     next.stateVersion ?? 1,
     action,
     actorSessionId ?? null,
-    task.executionId ?? null,
+    next.executionId ?? task.executionId ?? null,
     task.status,
     next.status,
     operationId ?? null,
@@ -798,11 +798,13 @@ export function recordGroupTaskLegacyTransition(
   task: GroupTask,
   action: string,
   actorSessionId?: string,
+  operationId?: string,
+  input?: unknown,
 ): void {
   const db = getDatabase();
   db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(task.id);
   const next = requireGroupTask(task.groupId, task.id);
-  recordEvent(db, task, action, next, actorSessionId);
+  recordEvent(db, task, action, next, actorSessionId, operationId, input);
   notifyGroupTaskChanged(next);
 }
 
@@ -1455,9 +1457,13 @@ function writeTaskTransition(
     owner?: string | null;
     reviewer?: string | null;
     branch?: string;
+    executionId?: string;
+    clearReview?: boolean;
   },
   action: string,
-  actorSessionId: string,
+  actorSessionId?: string,
+  operationId?: string,
+  input?: unknown,
 ): GroupTask {
   const current = requireTask(taskId);
   const sets = ["status = ?"];
@@ -1475,13 +1481,88 @@ function writeTaskTransition(
     sets.push("branch = coalesce(branch, ?)");
     params.push(fields.branch);
   }
+  if (fields.executionId !== undefined) {
+    sets.push("execution_id = ?");
+    params.push(fields.executionId);
+  }
+  if (fields.clearReview) sets.push("review_json = null");
   sets.push("updated_at = ?");
   params.push(new Date().toISOString());
   getDatabase()
     .prepare(`update group_tasks set ${sets.join(", ")} where id = ?`)
     .run(...params, taskId);
-  recordGroupTaskLegacyTransition(current, action, actorSessionId);
+  recordGroupTaskLegacyTransition(current, action, actorSessionId, operationId, input);
   return requireTask(taskId);
+}
+
+/** Apply a trusted user's suggestion delegation and execution binding atomically. */
+export function reassignGroupTaskForSuggestion(input: {
+  groupId: string;
+  taskId: string;
+  expectedVersion: number;
+  operationId: string;
+  targetSessionId: string;
+  role: "owner" | "reviewer";
+  executionId: string;
+}): GroupTask {
+  const db = getDatabase();
+  return transaction(db, () => {
+    requireOperationId(input.operationId);
+    const replay = getReplay<GroupTask>(db, input.operationId, "suggestion_accept", input);
+    if (replay) return replay;
+    rejectRunOperationCollision(db, input.operationId);
+    rejectEventOperationCollision(db, input.operationId);
+    const task = requireGroupTask(input.groupId, input.taskId);
+    requireVersion(task, input.expectedVersion);
+    requireExecutionInGroup(input.groupId, input.executionId);
+    const target = db
+      .prepare(`select a.archived_at from agent_group_members m
+        join agents a on a.id = m.agent_id where m.group_id = ? and m.session_id = ?`)
+      .get(input.groupId, input.targetSessionId) as { archived_at: string | null } | undefined;
+    if (!target) {
+      throw new GroupStoreError("not-a-member", "The selected target is not a group member.");
+    }
+    if (target.archived_at) {
+      throw new GroupStoreError("member-archived", "An archived member cannot receive this task.");
+    }
+
+    if (input.role === "owner") {
+      if (task.status !== "open" && task.status !== "in_progress")
+        throw new GroupStoreError("invalid-transition", "Only active owner work can be delegated.");
+      if (task.reviewerSessionId === input.targetSessionId)
+        throw new GroupStoreError("invalid-transition", "A reviewer cannot also own this task.");
+      if (task.ownerSessionId === input.targetSessionId && task.executionId === input.executionId)
+        return task;
+      return writeTaskTransition(
+        task.id,
+        { status: task.status, owner: input.targetSessionId, executionId: input.executionId },
+        "suggestion_accept",
+        undefined,
+        input.operationId,
+        input,
+      );
+    }
+
+    if (task.status !== "in_review")
+      throw new GroupStoreError("invalid-transition", "Only a pending review can be delegated.");
+    if (task.ownerSessionId === input.targetSessionId)
+      throw new GroupStoreError("self-review", "The task owner cannot review their own task.");
+    if (task.reviewerSessionId === input.targetSessionId && task.executionId === input.executionId)
+      return task;
+    return writeTaskTransition(
+      task.id,
+      {
+        status: task.status,
+        reviewer: input.targetSessionId,
+        executionId: input.executionId,
+        clearReview: task.reviewerSessionId !== input.targetSessionId,
+      },
+      "suggestion_accept",
+      undefined,
+      input.operationId,
+      input,
+    );
+  });
 }
 
 /** Any member creates a task; it starts `open` with no owner. */

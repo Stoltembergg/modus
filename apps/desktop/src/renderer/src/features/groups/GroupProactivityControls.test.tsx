@@ -114,4 +114,28 @@ describe("GroupProactivityControls", () => {
     render(<GroupProactivityControls groupId="group-1" memberOptions={[]} />);
     expect(await screen.findByRole("button", { name: "Start new execution" })).toBeTruthy();
   });
+
+  it("reloads an open card when its execution ends or is retired", async () => {
+    api.listSuggestions
+      .mockResolvedValueOnce([suggestion])
+      .mockResolvedValue([{ ...suggestion, version: 3, startNewExecution: true }]);
+    render(<GroupProactivityControls groupId="group-1" memberOptions={[]} />);
+    expect(await screen.findByRole("button", { name: "Accept suggestion" })).toBeTruthy();
+
+    for (const listener of subscribers) {
+      listener({ type: "group.activity", groupId: "group-1" });
+    }
+    expect(api.listSuggestions).toHaveBeenCalledTimes(1);
+
+    for (const listener of subscribers) {
+      listener({
+        type: "group.chain-ended",
+        groupId: "group-1",
+        chainId: "execution-old",
+        reason: "stopped",
+      });
+    }
+    expect(await screen.findByRole("button", { name: "Start new execution" })).toBeTruthy();
+    expect(api.listSuggestions).toHaveBeenCalledTimes(2);
+  });
 });

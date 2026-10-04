@@ -718,6 +718,7 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       job_id text references group_jobs(id) on delete set null,
       resolution_target_session_id text,
       resolved_execution_id text,
+      requires_new_execution integer not null default 0 check (requires_new_execution in (0,1)),
       version integer not null default 1,
       created_at text not null,
       updated_at text not null
@@ -733,6 +734,12 @@ function migrateGroupTaskState(db: DatabaseSync): void {
   );
   addColumn(db, "group_proactivity_actions", "resolution_target_session_id", "text");
   addColumn(db, "group_proactivity_actions", "resolved_execution_id", "text");
+  addColumn(
+    db,
+    "group_proactivity_actions",
+    "requires_new_execution",
+    "integer not null default 0 check (requires_new_execution in (0,1))",
+  );
 }
 
 /**

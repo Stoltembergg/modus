@@ -100,6 +100,7 @@ function runtime(
   onEmit?: (event: GroupRuntimeEvent, groups: InstanceType<typeof GroupRuntime>) => void,
 ) {
   let available = windowAvailable;
+  const events: GroupRuntimeEvent[] = [];
   const calls: Array<{ input: PromptAgentInput; resolve: (result: PromptTurnResult) => void }> = [];
   const listeners = new Set<(event: AgentEvent) => void>();
   const engine = {
@@ -122,7 +123,10 @@ function runtime(
     host: {
       getWindow: () => (available ? ({} as never) : undefined),
       isUpdatePending: () => false,
-      emit: (event) => onEmit?.(event, groups),
+      emit: (event) => {
+        events.push(event);
+        onEmit?.(event, groups);
+      },
     },
     recoverPending,
   });
@@ -130,6 +134,7 @@ function runtime(
   return {
     groups,
     calls,
+    events,
     setWindowAvailable: (value: boolean) => {
       available = value;
     },
@@ -998,6 +1003,36 @@ describe("user-resolved proactive suggestions", () => {
     env.groups.dispose();
   });
 
+  it("versions a live suggestion when Stop changes its confirmation to a new execution", async () => {
+    const { group, owner, env, suggestion } = await suggestedAssignment();
+    env.groups.stopGroup(group.id);
+    const refreshed = must(env.groups.listSuggestions(group.id)[0]);
+
+    expect(refreshed.version).toBeGreaterThan(suggestion.version);
+    expect(refreshed.startNewExecution).toBe(true);
+    await expect(
+      env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: owner,
+      }),
+    ).rejects.toThrow(/stale|changed|refresh/i);
+    expect(
+      listGroupMessages(group.id).filter((message) =>
+        message.body.startsWith("Suggestion accepted:"),
+      ),
+    ).toHaveLength(0);
+
+    await env.groups.resolveGroupSuggestion({
+      actionId: refreshed.actionId,
+      decision: "accept",
+      expectedVersion: refreshed.version,
+      targetSessionId: owner,
+    });
+    env.groups.dispose();
+  });
+
   it("double accept creates one persisted message and one target wake", async () => {
     const { group, owner, env, suggestion, db } = await suggestedAssignment();
     const input = {
@@ -1039,12 +1074,13 @@ describe("user-resolved proactive suggestions", () => {
     must(env.calls[0]).resolve({ outcome: "ok" });
     await flush();
     expect(env.groups.chainSnapshot(root.id).retired).toBe(true);
-    expect(must(env.groups.listSuggestions(group.id)[0]).startNewExecution).toBe(true);
+    const refreshed = must(env.groups.listSuggestions(group.id)[0]);
+    expect(refreshed.startNewExecution).toBe(true);
 
     const action = await env.groups.resolveGroupSuggestion({
       actionId: suggestion.actionId,
       decision: "accept",
-      expectedVersion: suggestion.version,
+      expectedVersion: refreshed.version,
       targetSessionId: owner,
     });
     const message = listGroupMessages(group.id).find((item) => item.id === action.wakeMessageId);
@@ -1064,6 +1100,158 @@ describe("user-resolved proactive suggestions", () => {
       db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
     ).toMatchObject({
       n: 2,
+    });
+    env.groups.dispose();
+  });
+
+  it("associates a new accepted execution with its task and persists owner reassignment", async () => {
+    const { group, lead, env, root, task, suggestion } = await suggestedAssignment(true);
+    must(env.calls[0]).resolve({ outcome: "ok" });
+    await flush();
+    const refreshed = must(env.groups.listSuggestions(group.id)[0]);
+    expect(refreshed.startNewExecution).toBe(true);
+    const beforeDelegation = (await import("./group-task-store")).getGroupTask(task.id);
+
+    const action = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: refreshed.version,
+      targetSessionId: lead,
+    });
+    const currentTask = (await import("./group-task-store")).getGroupTask(task.id);
+    const { findGroupTaskForWake } = await import("./group-task-evidence");
+    expect(action.resolvedExecutionId).toBeDefined();
+    expect(action.resolvedExecutionId).not.toBe(root.id);
+    expect(currentTask).toMatchObject({
+      executionId: action.resolvedExecutionId,
+      ownerSessionId: lead,
+      stateVersion: (beforeDelegation.stateVersion ?? 1) + 1,
+    });
+    expect(findGroupTaskForWake(group.id, lead, must(action.resolvedExecutionId))).toEqual({
+      taskId: task.id,
+      groupId: group.id,
+      executionId: action.resolvedExecutionId,
+      role: "owner",
+    });
+    await vi.waitFor(() =>
+      expect(
+        env.calls.some(
+          (call) => call.input.sessionId === lead && call.input.groupTask?.taskId === task.id,
+        ),
+      ).toBe(true),
+    );
+    env.groups.dispose();
+  });
+
+  it("keeps review candidates separate from the task owner", async () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), "modus-proactivity-review-"));
+    execFileSync("git", ["init", "-q"], { cwd: sourceDir });
+    writeFileSync(join(sourceDir, "source.txt"), "ready\n");
+    execFileSync("git", ["add", "source.txt"], { cwd: sourceDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Modus Test",
+        "-c",
+        "user.email=modus@example.test",
+        "commit",
+        "-m",
+        "fixture",
+      ],
+      { cwd: sourceDir },
+    );
+    const { group, lead, owner, db } = squad(sourceDir);
+    const env = runtime(false);
+    try {
+      const reviewerTwo = crypto.randomUUID();
+      const now = new Date().toISOString();
+      db.prepare(`insert into agent_sessions
+        (id, workspace_id, title, cwd, status, created_at, updated_at)
+        values (?, ?, 'Reviewer Two', ?, 'idle', ?, ?)`).run(
+        reviewerTwo,
+        must(group.workspaceId),
+        sourceDir,
+        now,
+        now,
+      );
+      (await import("./group-store")).addAgentGroupMember({
+        groupId: group.id,
+        sessionId: reviewerTwo,
+      });
+      const root = env.groups.postUserMessage({
+        groupId: group.id,
+        body: "private review request",
+      });
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Review parser",
+        executionId: root.id,
+        kind: "code",
+        priority: "normal",
+        dependencyIds: [],
+        criteria: [],
+        verificationPolicy: { mode: "none", requireReview: true },
+      });
+      assignGroupTask(group.id, task.id, lead, owner);
+      requestGroupTaskReview(group.id, task.id, owner, lead);
+      await vi.waitFor(() =>
+        expect(
+          env.groups
+            .listSuggestions(group.id)
+            .some((item) => item.source.kind === "review_requested"),
+        ).toBe(true),
+      );
+      const suggestion = must(
+        env.groups
+          .listSuggestions(group.id)
+          .find((item) => item.source.kind === "review_requested"),
+      );
+
+      expect(suggestion.candidateSessionIds).toContain(lead);
+      expect(suggestion.candidateSessionIds).toContain(reviewerTwo);
+      expect(suggestion.candidateSessionIds).not.toContain(owner);
+      await expect(
+        env.groups.resolveGroupSuggestion({
+          actionId: suggestion.actionId,
+          decision: "accept",
+          expectedVersion: suggestion.version,
+          targetSessionId: owner,
+        }),
+      ).rejects.toThrow(/reviewer|owner|eligible/i);
+
+      const before = (await import("./group-task-store")).getGroupTask(task.id);
+      await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: reviewerTwo,
+      });
+      const after = (await import("./group-task-store")).getGroupTask(task.id);
+      expect(after).toMatchObject({
+        ownerSessionId: owner,
+        reviewerSessionId: reviewerTwo,
+        executionId: root.id,
+        stateVersion: (before.stateVersion ?? 1) + 1,
+      });
+      const { findGroupTaskForWake } = await import("./group-task-evidence");
+      expect(findGroupTaskForWake(group.id, reviewerTwo, root.id)).toMatchObject({
+        taskId: task.id,
+        role: "reviewer",
+      });
+    } finally {
+      env.groups.dispose();
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits the persisted action version after a transition creates a suggestion", async () => {
+    const { group, env, suggestion } = await suggestedAssignment();
+    expect(env.events).toContainEqual({
+      type: "group.suggestion-changed",
+      groupId: group.id,
+      actionId: suggestion.actionId,
+      version: suggestion.version,
     });
     env.groups.dispose();
   });
