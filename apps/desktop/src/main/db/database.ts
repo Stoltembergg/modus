@@ -558,7 +558,10 @@ export function migrateDatabase(db: DatabaseSync): void {
   // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
   addColumn(db, "group_tasks", "execution_id", "text");
   addColumn(db, "group_decisions", "execution_id", "text");
+  addColumn(db, "group_decisions", "operation_id", "text");
+  addColumn(db, "group_decisions", "operation_json", "text");
   db.exec(`
+    create unique index if not exists idx_group_decisions_operation on group_decisions(operation_id);
     create index if not exists idx_group_tasks_execution
       on group_tasks(group_id, execution_id);
     create index if not exists idx_group_decisions_execution

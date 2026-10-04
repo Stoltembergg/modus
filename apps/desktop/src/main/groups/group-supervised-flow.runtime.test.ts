@@ -10,8 +10,9 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
-const { claimGroupTask, createAgentGroupWithMembers, listGroupMessages, listGroupTasks } =
-  await import("./group-store");
+const { createAgentGroupWithMembers, listGroupMessages, listGroupTasks } = await import(
+  "./group-store"
+);
 const { GROUP_CHAIN_LIMITS, GroupRuntime } = await import("./group-runtime");
 const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 
@@ -219,7 +220,7 @@ describe("supervised code flow (runtime)", () => {
 
       const task = listGroupTasks(group.id).find((row) => row.title === "Login feature");
       expect(task).toBeDefined();
-      claimGroupTask(group.id, task!.id, builder);
+      expect(task).toMatchObject({ status: "in_progress", ownerSessionId: builder });
       runGroupTool(
         "group_request_review",
         { sessionId: builder, groupId: group.id },

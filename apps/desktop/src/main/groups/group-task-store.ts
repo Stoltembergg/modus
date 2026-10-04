@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { GroupTask, GroupTaskStatus } from "../../shared/contracts";
+import type { GroupDecision, GroupTask, GroupTaskStatus } from "../../shared/contracts";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
-import { validateGroupTaskDraft } from "../../shared/group-task-policy";
+import { evaluateGroupTaskGate, validateGroupTaskDraft } from "../../shared/group-task-policy";
 import type {
   BindGroupTaskRunInput,
   GroupTaskCriterion,
   GroupTaskDraft,
   GroupTaskEvidenceInput,
   GroupTaskEvidenceRef,
+  GroupTaskGateInput,
   GroupTaskProgressInput,
   GroupTaskReview,
   GroupTaskRunBinding,
@@ -18,6 +19,7 @@ import type {
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getDatabase } from "../db/database";
 import { GroupStoreError, getAgentGroup } from "./group-store";
+import { resolveGroupTaskEvidence } from "./group-task-evidence";
 
 const TASK_STATUSES: readonly GroupTaskStatus[] = [
   "open",
@@ -240,16 +242,269 @@ type EventRow = {
   created_at: string;
 };
 
+// Savepoints compose with the runtime's durable dispatch and atomic tool operations.
 function transaction<T>(db: DatabaseSync, run: () => T): T {
-  db.exec("begin immediate");
+  const name = `task_${randomUUID().replaceAll("-", "")}`;
+  db.exec(`savepoint ${name}`);
   try {
     const result = run();
-    db.exec("commit");
+    db.exec(`release ${name}`);
     return result;
   } catch (error) {
-    db.exec("rollback");
+    db.exec(`rollback to ${name}; release ${name}`);
     throw error;
   }
+}
+
+let toolOperationActive = false;
+
+export type GroupTaskOperationInput = {
+  groupId: string;
+  actorSessionId: string;
+  taskId?: string;
+  expectedVersion?: number;
+  operationId: string;
+  action: string;
+  /** Original tool arguments are part of the durable retry identity. */
+  params: unknown;
+};
+export type GroupTaskOperationResult = {
+  task: GroupTask;
+  eventId: string;
+  replayed: boolean;
+  data?: Record<string, string>;
+};
+
+export function replayGroupTaskOperation(
+  input: GroupTaskOperationInput,
+): GroupTaskOperationResult | undefined {
+  requireMember(input.groupId, input.actorSessionId, "actor");
+  requireOperationId(input.operationId);
+  if (
+    getDatabase()
+      .prepare("select 1 from group_decisions where operation_id = ?")
+      .get(input.operationId)
+  )
+    throw new GroupStoreError(
+      "invalid-value",
+      "Operation ID already belongs to an agreement decision.",
+    );
+  const saved = getReplay<GroupTaskOperationResult>(
+    getDatabase(),
+    input.operationId,
+    input.action,
+    input,
+  );
+  if (!saved) return undefined;
+  const event = getDatabase()
+    .prepare("select id from group_task_events where operation_id = ?")
+    .get(input.operationId) as { id: string };
+  return { ...saved, eventId: event.id, replayed: true };
+}
+
+/** One authority for optimistic concurrency, retry identity and an atomic tool transition. */
+export function applyGroupTaskOperation(
+  input: GroupTaskOperationInput,
+  mutate: () => GroupTask | { task: GroupTask; data?: Record<string, string> },
+): GroupTaskOperationResult {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const replay = replayGroupTaskOperation(input);
+    if (replay) return replay;
+    rejectRunOperationCollision(db, input.operationId);
+    const before = input.taskId ? requireGroupTask(input.groupId, input.taskId) : undefined;
+    if (before) requireVersion(before, input.expectedVersion ?? before.stateVersion ?? 1);
+    const prior = toolOperationActive;
+    toolOperationActive = true;
+    let mutation: GroupTask | { task: GroupTask; data?: Record<string, string> };
+    try {
+      mutation = mutate();
+    } finally {
+      toolOperationActive = prior;
+    }
+    const task = "task" in mutation ? mutation.task : mutation;
+    const data = "task" in mutation ? mutation.data : undefined;
+    if (task.groupId !== input.groupId)
+      throw new GroupStoreError("invalid-value", "Task operation crossed groups.");
+    recordEvent(
+      db,
+      before ?? { ...task, status: "open" },
+      input.action,
+      task,
+      input.actorSessionId,
+      input.operationId,
+      input,
+    );
+    const event = db
+      .prepare("select id from group_task_events where operation_id = ?")
+      .get(input.operationId) as { id: string };
+    const result = { task, eventId: event.id, replayed: false, ...(data ? { data } : {}) };
+    const row = db
+      .prepare("select result_json from group_task_events where id = ?")
+      .get(event.id) as { result_json: string };
+    db.prepare("update group_task_events set result_json = ? where id = ?").run(
+      JSON.stringify({ ...JSON.parse(row.result_json), result }),
+      event.id,
+    );
+    return result;
+  });
+}
+
+export function hasGroupTaskExplicitDispatch(operationId: string): boolean {
+  const row = getDatabase()
+    .prepare(
+      "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ?",
+    )
+    .get(operationId, operationId) as { result_json: string } | undefined;
+  return Boolean(row && JSON.parse(row.result_json).explicitDispatch);
+}
+
+/** Mark only a successful sink delivery; sourceEventId permits downstream deduplication. */
+export function markGroupTaskExplicitDispatch(operationId: string): boolean {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const row = db
+      .prepare(
+        "select result_json from group_task_events where operation_id = ? union all select operation_json as result_json from group_decisions where operation_id = ?",
+      )
+      .get(operationId, operationId) as { result_json: string } | undefined;
+    if (!row) return false;
+    const result = JSON.parse(row.result_json) as Record<string, unknown>;
+    if (result.explicitDispatch) return false;
+    result.explicitDispatch = true;
+    db.prepare("update group_task_events set result_json = ? where operation_id = ?").run(
+      JSON.stringify(result),
+      operationId,
+    );
+    db.prepare("update group_decisions set operation_json = ? where operation_id = ?").run(
+      JSON.stringify(result),
+      operationId,
+    );
+    return true;
+  });
+}
+
+/** A taskless agreement replays its persisted decision and the original request identity. */
+export function applyGroupAgreementOperation(
+  input: GroupTaskOperationInput,
+  create: () => GroupDecision,
+): GroupDecision {
+  const db = getDatabase();
+  return transaction(db, () => {
+    requireMember(input.groupId, input.actorSessionId, "actor");
+    requireOperationId(input.operationId);
+    const row = db
+      .prepare("select operation_json from group_decisions where operation_id = ?")
+      .get(input.operationId) as { operation_json: string } | undefined;
+    if (row) {
+      const saved = JSON.parse(row.operation_json) as { input: unknown; result: GroupDecision };
+      if (JSON.stringify(canonical(saved.input)) !== JSON.stringify(canonical(input)))
+        throw new GroupStoreError(
+          "invalid-value",
+          "Operation ID was used for another agreement request.",
+        );
+      return saved.result;
+    }
+    rejectRunOperationCollision(db, input.operationId);
+    rejectEventOperationCollision(db, input.operationId);
+    const decision = create();
+    db.prepare("update group_decisions set operation_id = ?, operation_json = ? where id = ?").run(
+      input.operationId,
+      JSON.stringify({ input: canonical(input), result: decision }),
+      decision.id,
+    );
+    return decision;
+  });
+}
+
+/** Re-resolve persisted QA/dependencies immediately before the final synchronous write. */
+export function commitVerifiedGroupTask(input: {
+  groupId: string;
+  taskId: string;
+  actorSessionId: string;
+  action: "approve" | "agree" | "changes";
+  snapshot: GroupTaskGateInput;
+  review?: GroupTaskReview;
+}): GroupTask {
+  const task = requireGroupTask(input.groupId, input.taskId);
+  requireVersion(task, input.snapshot.task.stateVersion ?? 1);
+  if (
+    input.snapshot.task.id !== task.id ||
+    input.snapshot.task.criteriaVersion !== task.criteriaVersion
+  )
+    throw new GroupStoreError("stale-task", "Task verification snapshot changed.");
+  const review = input.review;
+  if (
+    review &&
+    (review.reviewerSessionId !== input.actorSessionId ||
+      review.criteriaVersion !== task.criteriaVersion ||
+      review.sourceFingerprint !== input.snapshot.sourceFingerprint)
+  )
+    throw new GroupStoreError("stale-evidence", "Review does not match the verification snapshot.");
+  if (input.action !== "changes") {
+    const gate = evaluateGroupTaskGate(
+      resolveGroupTaskEvidence(
+        { ...task, ...(review ? { review } : {}) },
+        input.snapshot.sourceFingerprint,
+      ),
+    );
+    if (!gate.satisfied)
+      throw new GroupStoreError(
+        "verification-required",
+        `Task ${task.id} cannot complete: ${gate.reasonCodes.join(", ")}.`,
+      );
+  }
+  // Both writes are enclosed by applyGroupTaskOperation; neither can survive the other's failure.
+  if (review)
+    getDatabase()
+      .prepare("update group_tasks set review_json = ? where id = ?")
+      .run(JSON.stringify(review), task.id);
+  return input.action !== "agree"
+    ? reviewGroupTask(input.groupId, task.id, input.actorSessionId, input.action)
+    : completeGroupTaskForAgreement(input.groupId, task.id, input.actorSessionId);
+}
+
+/** Explicit handoff is available to members, including outside coordinator mode. */
+export function handoffGroupTask(input: {
+  groupId: string;
+  actorSessionId: string;
+  targetSessionId: string;
+  taskId?: string;
+  title?: string;
+  description: string;
+  executionId?: string;
+  branch?: string;
+}): GroupTask {
+  requireMember(input.groupId, input.actorSessionId, "handoff actor");
+  requireMember(input.groupId, input.targetSessionId, "handoff target");
+  const task = input.taskId
+    ? requireGroupTask(input.groupId, input.taskId)
+    : createMemberGroupTask({
+        groupId: input.groupId,
+        actorSessionId: input.actorSessionId,
+        title: input.title ?? "",
+        description: input.description,
+        ...(input.executionId ? { executionId: input.executionId } : {}),
+      });
+  if (
+    task.ownerSessionId &&
+    task.ownerSessionId !== input.actorSessionId &&
+    requireGroupRow(input.groupId).leadSessionId !== input.actorSessionId
+  )
+    throw new GroupStoreError("not-owner", "Only the owner or Lead may hand off owned work.");
+  if (task.status !== "open" && task.status !== "in_progress")
+    throw invalidTransition(task, "handoff");
+  return writeTaskTransition(
+    task.id,
+    {
+      status: "in_progress",
+      owner: input.targetSessionId,
+      ...(task.reviewerSessionId === input.targetSessionId ? { reviewer: null } : {}),
+      ...(!task.branch && input.branch ? { branch: input.branch } : {}),
+    },
+    "handoff",
+    input.actorSessionId,
+  );
 }
 
 function requireGroupTask(groupId: string, taskId: string): GroupTask {
@@ -350,6 +605,7 @@ function recordEvent(
   operationId?: string,
   input?: unknown,
 ): void {
+  if (toolOperationActive) return;
   const assignment = {
     ownerBefore: task.ownerSessionId ?? null,
     ownerAfter: next.ownerSessionId ?? null,
@@ -965,17 +1221,23 @@ function writeTaskTransition(
 }
 
 /** Any member creates a task; it starts `open` with no owner. */
-export function createMemberGroupTask(input: {
-  groupId: string;
-  actorSessionId: string;
-  title: string;
-  description?: string;
-  reviewerSessionId?: string;
-  executionId?: string;
-}): GroupTask {
+export function createMemberGroupTask(
+  input: Pick<
+    Parameters<typeof createGroupTask>[0],
+    "kind" | "priority" | "dependencyIds" | "criteria" | "verificationPolicy" | "stage"
+  > & {
+    groupId: string;
+    actorSessionId: string;
+    title: string;
+    description?: string;
+    reviewerSessionId?: string;
+    executionId?: string;
+  },
+): GroupTask {
   requireGroupRow(input.groupId);
   requireMember(input.groupId, input.actorSessionId, "task creator");
   return createGroupTask({
+    ...input,
     groupId: input.groupId,
     title: input.title,
     status: INITIAL_TASK_STATUS,

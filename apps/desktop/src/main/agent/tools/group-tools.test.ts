@@ -7,6 +7,10 @@ import { parseGroupCollabStatusLine } from "../../../shared/group-collab-status"
 let userData: string;
 
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
+vi.mock("../../git/git-service", async (original) => ({
+  ...(await original<typeof import("../../git/git-service")>()),
+  getGroupSourceFingerprint: vi.fn(async () => "current-source"),
+}));
 
 const { getDatabase } = await import("../../db/database");
 const { setAgentArchived } = await import("../../agents/agents-store");
@@ -28,8 +32,11 @@ const {
   GROUP_TOOL_NAMES,
   registerGroupTools,
   runGroupTool,
+  runGroupVerifiedTool,
   setGroupTaskWakeSink,
 } = await import("./group-tools");
+const taskStore = await import("../../groups/group-task-store");
+const taskEvidence = await import("../../groups/group-task-evidence");
 const { estimateGroupTokens } = await import("../../groups/group-runtime");
 const { toolRegistry } = await import("./registry");
 const { setAgentToolContext } = await import("./tool-context");
@@ -99,7 +106,7 @@ function taskIdFrom(text: string): string {
 }
 
 describe("group member tools", () => {
-  it("run the task flow through the store and route review / changes wakes", () => {
+  it("run the task flow through the store and route review / changes wakes", async () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const a = { sessionId: alpha, groupId: group.id };
@@ -125,7 +132,11 @@ describe("group member tools", () => {
     ]);
 
     expect(
-      runGroupTool("group_review_task", b, { id, verdict: "changes", note: "add tests" }),
+      await runGroupVerifiedTool("group_review_task", b, {
+        id,
+        verdict: "changes",
+        note: "add tests",
+      }),
     ).toContain("Changes requested: task");
     expect(wakes.at(-1)).toEqual({
       groupId: group.id,
@@ -135,9 +146,9 @@ describe("group member tools", () => {
     });
 
     runGroupTool("group_request_review", a, { id, reviewer: beta });
-    expect(runGroupTool("group_review_task", b, { id, verdict: "approve" })).toContain(
-      "Approved: task",
-    );
+    expect(
+      await runGroupVerifiedTool("group_review_task", b, { id, verdict: "approve" }),
+    ).toContain("Approved: task");
     // Approve only records a status for the owner (wake: false), without a note just "Approved".
     expect(wakes).toHaveLength(4);
     expect(wakes.at(-1)).toEqual({
@@ -155,7 +166,7 @@ describe("group member tools", () => {
     expect(runGroupTool("group_release_task", b, { id: other })).toContain("[open]");
   });
 
-  it("approve with a note records the note in the status", () => {
+  it("approve with a note records the note in the status", async () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const a = { sessionId: alpha, groupId: group.id };
@@ -163,11 +174,15 @@ describe("group member tools", () => {
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "T" }));
     runGroupTool("group_claim_task", a, { id });
     runGroupTool("group_request_review", a, { id, reviewer: "Beta" });
-    runGroupTool("group_review_task", b, { id, verdict: "approve", note: "  looks good " });
+    await runGroupVerifiedTool("group_review_task", b, {
+      id,
+      verdict: "approve",
+      note: "  looks good ",
+    });
     expect(wakes.at(-1)).toMatchObject({ body: "Approved: looks good", wake: false });
   });
 
-  it("the suggested reviewer may claim; the claim clears the reviewer; self-review still applies", () => {
+  it("the suggested reviewer may claim; the claim clears the reviewer; self-review still applies", async () => {
     const { group, alpha, beta } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     const b = { sessionId: beta, groupId: group.id };
@@ -183,7 +198,7 @@ describe("group member tools", () => {
     );
   });
 
-  it("members resolve by their unique agent name: same-titled chats become Twin and twin 2", () => {
+  it("members resolve by their unique agent name: same-titled chats become Twin and twin 2", async () => {
     const ws = insertWorkspace();
     const lead = insertSession(ws, "Lead");
     const twinA = insertSession(ws, "Twin");
@@ -209,7 +224,7 @@ describe("group member tools", () => {
     expect(listGroupTasks(group.id).map((task) => task.reviewerSessionId)).toEqual([twinA, twinB]);
   });
 
-  it("returns store errors as [group-error:<code>] text and never throws", () => {
+  it("returns store errors as [group-error:<code>] text and never throws", async () => {
     const { group, alpha, beta, loner } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     const b = { sessionId: beta, groupId: group.id };
@@ -224,7 +239,7 @@ describe("group member tools", () => {
     expect(runGroupTool("group_request_review", a, { id, reviewer: "Loner" })).toMatch(
       /^\[group-error:not-a-member\] /,
     );
-    expect(runGroupTool("group_review_task", b, { id, verdict: "approve" })).toMatch(
+    expect(await runGroupVerifiedTool("group_review_task", b, { id, verdict: "approve" })).toMatch(
       /^\[group-error:not-reviewer\] /,
     );
     runGroupTool("group_request_review", a, { id, reviewer: "Beta" });
@@ -234,9 +249,9 @@ describe("group member tools", () => {
     expect(runGroupTool("group_claim_task", a, { id: "missing" })).toMatch(
       /^\[group-error:task-not-found\] /,
     );
-    expect(runGroupTool("group_review_task", b, { id, verdict: "close" as "approve" })).toMatch(
-      /^\[group-error:invalid-value\] /,
-    );
+    expect(
+      await runGroupVerifiedTool("group_review_task", b, { id, verdict: "close" as "approve" }),
+    ).toMatch(/^\[group-error:invalid-value\] /);
     // A caller outside any group, or one that left mid-turn.
     expect(runGroupTool("group_list_tasks", { sessionId: loner }, {})).toMatch(
       /^\[group-error:not-a-member\] /,
@@ -245,7 +260,7 @@ describe("group member tools", () => {
     expect(runGroupTool("group_list_tasks", b, {})).toMatch(/^\[group-error:not-a-member\] /);
   });
 
-  it("group_read_messages pages by persisted sequence, max 50, within the estimated 8k cap", () => {
+  it("group_read_messages pages by persisted sequence, max 50, within the estimated 8k cap", async () => {
     const { group, alpha } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     expect(runGroupTool("group_read_messages", a, {})).toBe("No messages.");
@@ -298,7 +313,7 @@ describe("group member tools", () => {
     );
   });
 
-  it("group_read_messages stops at the estimated token cap and points to older messages", () => {
+  it("group_read_messages stops at the estimated token cap and points to older messages", async () => {
     const { group, alpha } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     for (let i = 0; i < 10; i += 1) {
@@ -398,7 +413,7 @@ describe("group member tools", () => {
 });
 
 describe("group_record_decision", () => {
-  it("records a trimmed decision and posts 'Decision: <text>' as the member without waking anyone", () => {
+  it("records a trimmed decision and posts 'Decision: <text>' as the member without waking anyone", async () => {
     const { group, alpha } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const text = runGroupTool(
@@ -419,7 +434,7 @@ describe("group_record_decision", () => {
     ]);
   });
 
-  it("returns invalid-text for empty or over-500-character text and records nothing", () => {
+  it("returns invalid-text for empty or over-500-character text and records nothing", async () => {
     const { group, alpha } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const caller = { sessionId: alpha, groupId: group.id };
@@ -435,7 +450,7 @@ describe("group_record_decision", () => {
     expect(wakes).toHaveLength(1);
   });
 
-  it(`returns limit-reached past ${GROUP_DECISION_LIMIT} decisions per group`, () => {
+  it(`returns limit-reached past ${GROUP_DECISION_LIMIT} decisions per group`, async () => {
     const { group, alpha, beta } = squad();
     for (let index = 0; index < GROUP_DECISION_LIMIT; index += 1) {
       runGroupTool(
@@ -452,7 +467,7 @@ describe("group_record_decision", () => {
     expect(wakes).toEqual([]);
   });
 
-  it("refuses a member of another group (not-a-member) and a caller that left", () => {
+  it("refuses a member of another group (not-a-member) and a caller that left", async () => {
     const { group, alpha } = squad();
     const other = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
@@ -483,7 +498,7 @@ describe("group_assign_task (coordinator mode)", () => {
     return { ...fixture, lead, create };
   }
 
-  it("assigns an open task: in_progress, posts Assigned and wakes the member (with the note)", () => {
+  it("assigns an open task: in_progress, posts Assigned and wakes the member (with the note)", async () => {
     const { group, alpha, beta, lead, create } = coordinated();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const id = create("Parser");
@@ -507,7 +522,7 @@ describe("group_assign_task (coordinator mode)", () => {
     ]);
   });
 
-  it("refuses an archived assignee (member-archived) and a group without a folder", () => {
+  it("refuses an archived assignee (member-archived) and a group without a folder", async () => {
     const { group, beta, lead, create } = coordinated();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const id = create("Parser");
@@ -534,7 +549,7 @@ describe("group_assign_task (coordinator mode)", () => {
     expect(listGroupTasks(group.id)[0]?.status).toBe("open");
   });
 
-  it("reassigns an in_progress task: Reassigned old → new, wakes only the new owner", () => {
+  it("reassigns an in_progress task: Reassigned old → new, wakes only the new owner", async () => {
     const { group, alpha, beta, lead, create } = coordinated();
     const gamma = insertSession(insertWorkspace(), "Gamma");
     const id = create("Parser");
@@ -566,7 +581,7 @@ describe("group_assign_task (coordinator mode)", () => {
     });
   });
 
-  it("returns not-coordinator, coordinator-off and invalid-transition as text, waking nobody", () => {
+  it("returns not-coordinator, coordinator-off and invalid-transition as text, waking nobody", async () => {
     const { group, beta, lead, create } = coordinated();
     const id = create("Parser");
     setGroupTaskWakeSink((wake) => wakes.push(wake));
@@ -597,7 +612,7 @@ describe("group_assign_task (coordinator mode)", () => {
 });
 
 describe("agreement tools (P1b)", () => {
-  it("hands off by session ID when the target's display name contains spaces", () => {
+  it("hands off by session ID when the target's display name contains spaces", async () => {
     const ws = insertWorkspace();
     const alpha = insertSession(ws, "Alpha");
     const jennie = insertSession(ws, "Jennie 2");
@@ -632,7 +647,7 @@ describe("agreement tools (P1b)", () => {
     });
   });
 
-  it("posts a self handoff without waking the same agent again", () => {
+  it("posts a self handoff without waking the same agent again", async () => {
     const { group, alpha } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     runGroupTool(
@@ -654,7 +669,7 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_handoff posts typed status, wakes the target, and optionally creates a task", () => {
+  it("group_handoff posts typed status, wakes the target, and optionally creates a task", async () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const text = runGroupTool(
@@ -662,13 +677,16 @@ describe("agreement tools (P1b)", () => {
       { sessionId: alpha, groupId: group.id },
       { memberId: "@Beta", objective: "toggle + tests", taskTitle: "Dark mode" },
     );
-    expect(text).toMatch(/^Handed off to @Beta: toggle \+ tests\. Created task \S+ \[open\]/);
+    expect(text).toMatch(
+      /^Handed off to @Beta: toggle \+ tests\. Created task \S+ \[in_progress\]/,
+    );
     const id = taskIdFrom(text);
     expect(listGroupTasks(group.id)[0]).toMatchObject({
       id,
       title: "Dark mode",
       description: "toggle + tests",
-      status: "open",
+      status: "in_progress",
+      ownerSessionId: beta,
     });
     expect(wakes).toEqual([
       {
@@ -680,7 +698,7 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_propose_agreement posts Proposed and can request review from confirmer", () => {
+  it("group_propose_agreement posts Proposed and can request review from confirmer", async () => {
     const { group, alpha, beta } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
@@ -706,13 +724,13 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_agree closes the task, records a decision, and posts Agreed without waking", () => {
+  it("group_agree closes the task, records a decision, and posts Agreed without waking", async () => {
     const { group, alpha, beta } = squad();
     const a = { sessionId: alpha, groupId: group.id };
     const id = taskIdFrom(runGroupTool("group_create_task", a, { title: "Ship" }));
     runGroupTool("group_claim_task", a, { id });
     setGroupTaskWakeSink((wake) => wakes.push(wake));
-    const text = runGroupTool(
+    const text = await runGroupVerifiedTool(
       "group_agree",
       { sessionId: beta, groupId: group.id },
       { note: "looks good", taskId: id, decision: "Ship dark mode" },
@@ -733,7 +751,7 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_block posts Blocked and wakes returnTo when set", () => {
+  it("group_block posts Blocked and wakes returnTo when set", async () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     const text = runGroupTool(
@@ -752,7 +770,7 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_block returns to itself without scheduling another turn", () => {
+  it("group_block returns to itself without scheduling another turn", async () => {
     const { group, alpha } = squad();
     setGroupTaskWakeSink((wake) => wakes.push(wake));
     runGroupTool(
@@ -774,7 +792,7 @@ describe("agreement tools (P1b)", () => {
     ]);
   });
 
-  it("group_block rejects a task from another group before publishing or waking", () => {
+  it("group_block rejects a task from another group before publishing or waking", async () => {
     const { group, alpha, beta } = squad();
     const other = squad();
     const taskId = taskIdFrom(
@@ -802,7 +820,7 @@ describe("agreement tools (P1b)", () => {
     expect(wakes).toEqual([]);
   });
 
-  it("refuses empty propose/block/handoff inputs and unknown tasks", () => {
+  it("refuses empty propose/block/handoff inputs and unknown tasks", async () => {
     const { group, alpha } = squad();
     const caller = { sessionId: alpha, groupId: group.id };
     setGroupTaskWakeSink((wake) => wakes.push(wake));
@@ -823,4 +841,451 @@ describe("agreement tools (P1b)", () => {
     ).toMatch(/^\[group-error:invalid-value\] /);
     expect(wakes).toEqual([]);
   });
+});
+
+describe("consistent group task operations", () => {
+  it("handoff_title_assigns_before_wake", async () => {
+    const { group, alpha, beta } = squad();
+    const observed: unknown[] = [];
+    setGroupTaskWakeSink((wake) => {
+      observed.push({ wake, task: listGroupTasks(group.id)[0] });
+    });
+    const result = runGroupTool(
+      "group_handoff",
+      { sessionId: alpha },
+      {
+        memberId: beta,
+        objective: "Implement",
+        taskTitle: "Atomic handoff",
+        operationId: "handoff-before-wake",
+      },
+    );
+    expect(result).toContain("[in_progress]");
+    expect(observed).toEqual([
+      expect.objectContaining({
+        task: expect.objectContaining({ ownerSessionId: beta, status: "in_progress" }),
+        wake: expect.objectContaining({
+          operationId: "handoff-before-wake",
+          sourceEventId: expect.any(String),
+        }),
+      }),
+    ]);
+    const before = listGroupTasks(group.id).length;
+    getDatabase().exec(`create trigger reject_handoff_assignment before update of owner_session_id on group_tasks
+      when new.title = 'Reject assignment' begin select raise(abort, 'assignment rejected'); end`);
+    try {
+      expect(
+        runGroupTool(
+          "group_handoff",
+          { sessionId: alpha },
+          {
+            memberId: beta,
+            objective: "Fail",
+            taskTitle: "Reject assignment",
+            operationId: "handoff-rollback",
+          },
+        ),
+      ).toContain("assignment rejected");
+      expect(listGroupTasks(group.id)).toHaveLength(before);
+      expect(observed).toHaveLength(1);
+    } finally {
+      getDatabase().exec("drop trigger reject_handoff_assignment");
+    }
+  });
+
+  it("handoff_retry_returns_same_task_and_wake", async () => {
+    const { group, alpha, beta } = squad();
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const caller = { sessionId: alpha, runId: "retry-run", toolCallId: "retry-call" };
+    const input = { memberId: beta, objective: "Implement", taskTitle: "Retry task" };
+    const first = runGroupTool("group_handoff", caller, input);
+    const retry = runGroupTool("group_handoff", caller, input);
+    expect(retry).toBe(first);
+    expect(listGroupTasks(group.id)).toHaveLength(1);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      operationId: expect.stringContaining("retry-run"),
+      taskId: taskIdFrom(first),
+    });
+    const events = taskStore.listGroupTaskTransitions(taskIdFrom(first));
+    expect(events).toHaveLength(1);
+  });
+
+  it("agree_cannot_bypass_required_qa", async () => {
+    const { group, alpha, beta } = squad();
+    const task = taskStore.createGroupTask({
+      groupId: group.id,
+      title: "QA required",
+      ownerSessionId: alpha,
+      reviewerSessionId: beta,
+      status: "in_review",
+      kind: "code",
+      priority: "normal",
+      dependencyIds: [],
+      criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+      verificationPolicy: { mode: "required", requireReview: true },
+    });
+    const result = await runGroupVerifiedTool(
+      "group_agree",
+      { sessionId: beta },
+      {
+        taskId: task.id,
+        expectedVersion: 1,
+        operationId: "agree-without-qa",
+        decision: "Ready when QA passes",
+      },
+    );
+    expect(result).toContain("verification-required");
+    expect(taskStore.getGroupTask(task.id)).toMatchObject({ status: "in_review", stateVersion: 1 });
+    expect(listGroupDecisions(group.id)).toEqual([
+      expect.objectContaining({ text: "Ready when QA passes" }),
+    ]);
+  });
+
+  it("block_persists_task_status", async () => {
+    const { group, alpha } = squad();
+    const caller = { sessionId: alpha };
+    const task = taskStore.createGroupTask({
+      groupId: group.id,
+      title: "Block me",
+      ownerSessionId: alpha,
+      status: "in_progress",
+    });
+    const other = taskStore.createGroupTask({ groupId: group.id, title: "Untouched" });
+    const input = {
+      taskId: task.id,
+      reason: "Need credentials",
+      expectedVersion: 1,
+      operationId: "block-selected",
+    };
+    const first = runGroupTool("group_block", caller, input);
+    expect(taskStore.getGroupTask(task.id)).toMatchObject({
+      status: "blocked",
+      blockedReason: "Need credentials",
+      stateVersion: 2,
+    });
+    expect(runGroupTool("group_block", caller, input)).toBe(first);
+    expect(
+      runGroupTool("group_report_progress", caller, {
+        taskId: task.id,
+        expectedVersion: 1,
+        operationId: "stale-progress",
+        stage: "verify",
+      }),
+    ).toContain("stale-task");
+    expect(taskStore.getGroupTask(other.id).status).toBe("open");
+    expect(
+      runGroupTool("group_report_progress", caller, {
+        taskId: task.id,
+        expectedVersion: 2,
+        operationId: "clear-block",
+        blockedReason: null,
+      }),
+    ).toContain("[in_progress]");
+  });
+
+  it("explicit_review_dispatches_in_suggest_mode", async () => {
+    const { group, alpha, beta } = squad();
+    const task = taskStore.createGroupTask({
+      groupId: group.id,
+      title: "Review",
+      ownerSessionId: alpha,
+      status: "in_progress",
+    });
+    setGroupTaskWakeSink((wake) => wakes.push(wake));
+    const input = {
+      id: task.id,
+      reviewer: beta,
+      expectedVersion: 1,
+      operationId: "explicit-review",
+    };
+    const first = runGroupTool("group_request_review", { sessionId: alpha }, input);
+    expect(runGroupTool("group_request_review", { sessionId: alpha }, input)).toBe(first);
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]).toMatchObject({
+      targetSessionId: beta,
+      taskId: task.id,
+      operationId: "explicit-review",
+      sourceEventId: expect.any(String),
+    });
+    const reviewInput = {
+      id: task.id,
+      verdict: "approve" as const,
+      expectedVersion: 2,
+      operationId: "approve-review",
+      approvedCriterionIds: [],
+    };
+    const verify = vi.spyOn(taskEvidence, "verifyGroupTaskForTransition");
+    expect(
+      await runGroupVerifiedTool("group_review_task", { sessionId: beta }, reviewInput),
+    ).toContain("[done]");
+    expect(verify).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: task.id, expectedVersion: 2, action: "approve" }),
+    );
+    expect(taskStore.getGroupTask(task.id)).toMatchObject({
+      status: "done",
+      stateVersion: 3,
+      review: { reviewerSessionId: beta, verdict: "approve", sourceFingerprint: "current-source" },
+    });
+    expect(
+      await runGroupVerifiedTool("group_review_task", { sessionId: beta }, reviewInput),
+    ).toContain("[done]");
+    expect(wakes).toHaveLength(2);
+    verify.mockRestore();
+  });
+});
+
+it("persists changes review and task status atomically", async () => {
+  const { group, alpha, beta } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Changes",
+    ownerSessionId: alpha,
+    reviewerSessionId: beta,
+    status: "in_review",
+  });
+  expect(
+    await runGroupVerifiedTool(
+      "group_review_task",
+      { sessionId: beta },
+      { id: task.id, verdict: "changes", expectedVersion: 1, operationId: "typed-changes-review" },
+    ),
+  ).toContain("[in_progress]");
+  expect(taskStore.getGroupTask(task.id)).toMatchObject({
+    status: "in_progress",
+    review: { verdict: "changes", reviewerSessionId: beta, criteriaVersion: 1 },
+  });
+});
+
+it("requires explicit approval of criteria without declared QA checks", async () => {
+  const { group, alpha, beta } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Documentation",
+    ownerSessionId: alpha,
+    reviewerSessionId: beta,
+    status: "in_review",
+    kind: "docs",
+    priority: "normal",
+    dependencyIds: [],
+    criteria: [{ id: "readable", description: "Clear prose", requiredCheckKinds: [] }],
+    verificationPolicy: { mode: "required", requireReview: true },
+  });
+  expect(
+    await runGroupVerifiedTool(
+      "group_review_task",
+      { sessionId: beta },
+      {
+        id: task.id,
+        verdict: "approve",
+        expectedVersion: 1,
+        operationId: "missing-criterion-approval",
+      },
+    ),
+  ).toContain("verification-required");
+  expect(taskStore.getGroupTask(task.id)).toMatchObject({ status: "in_review", stateVersion: 1 });
+  expect(taskStore.getGroupTask(task.id).review).toBeUndefined();
+  expect(
+    await runGroupVerifiedTool(
+      "group_review_task",
+      { sessionId: beta },
+      {
+        id: task.id,
+        verdict: "approve",
+        expectedVersion: 1,
+        operationId: "explicit-criterion-approval",
+        approvedCriterionIds: ["readable"],
+      },
+    ),
+  ).toContain("[done]");
+});
+
+it("rejects a concurrent task write during async verification", async () => {
+  const { group, alpha, beta } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Concurrent",
+    ownerSessionId: alpha,
+    reviewerSessionId: beta,
+    status: "in_review",
+  });
+  const original = taskEvidence.verifyGroupTaskForTransition;
+  const spy = vi
+    .spyOn(taskEvidence, "verifyGroupTaskForTransition")
+    .mockImplementationOnce(async (input) => {
+      const snapshot = await original(input);
+      expect(snapshot).toMatchObject({
+        task: { id: task.id, stateVersion: 1 },
+        sourceFingerprint: "current-source",
+        criterionOutcomes: [],
+        dependencies: [],
+      });
+      taskStore.reportGroupTaskProgress({
+        groupId: group.id,
+        taskId: task.id,
+        actorSessionId: beta,
+        stage: "review",
+        expectedVersion: 1,
+        operationId: "concurrent-progress",
+      });
+      return snapshot;
+    });
+  try {
+    expect(
+      await runGroupVerifiedTool(
+        "group_review_task",
+        { sessionId: beta },
+        { id: task.id, verdict: "approve", expectedVersion: 1, operationId: "stale-async-review" },
+      ),
+    ).toContain("stale-task");
+    expect(taskStore.getGroupTask(task.id)).toMatchObject({ status: "in_review", stateVersion: 2 });
+    expect(taskStore.getGroupTask(task.id).review).toBeUndefined();
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("rolls back proposed review when the status write fails", async () => {
+  const { group, alpha, beta } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Reject completion",
+    ownerSessionId: alpha,
+    reviewerSessionId: beta,
+    status: "in_review",
+  });
+  getDatabase().exec(
+    `create trigger reject_review_status before update of status on group_tasks when new.title = 'Reject completion' and new.status = 'done' begin select raise(abort, 'completion rejected'); end`,
+  );
+  try {
+    expect(
+      await runGroupVerifiedTool(
+        "group_review_task",
+        { sessionId: beta },
+        { id: task.id, verdict: "approve", expectedVersion: 1, operationId: "rollback-review" },
+      ),
+    ).toContain("completion rejected");
+    expect(taskStore.getGroupTask(task.id)).toMatchObject({ status: "in_review", stateVersion: 1 });
+    expect(taskStore.getGroupTask(task.id).review).toBeUndefined();
+    expect(taskStore.listGroupTaskTransitions(task.id)).toEqual([]);
+  } finally {
+    getDatabase().exec("drop trigger reject_review_status");
+  }
+});
+
+it("creates a typed task directly from its draft", () => {
+  const { group, alpha } = squad();
+  const draft = {
+    title: "Draft title",
+    kind: "research" as const,
+    priority: "high" as const,
+    dependencyIds: [],
+    criteria: [],
+    verificationPolicy: { mode: "none" as const, requireReview: false },
+  };
+  expect(
+    runGroupTool(
+      "group_create_task",
+      { sessionId: alpha },
+      { draft, operationId: "draft-only-task" },
+    ),
+  ).toContain("Draft title");
+  expect(listGroupTasks(group.id)[0]).toMatchObject({ kind: "research", priority: "high" });
+});
+
+it("retries wake delivery after a failing sink using the same source event", () => {
+  const { group, alpha, beta } = squad();
+  const attempts: unknown[] = [];
+  setGroupTaskWakeSink((wake) => {
+    attempts.push(wake);
+    if (attempts.length === 1) throw new Error("wake delivery failed");
+  });
+  const input = {
+    memberId: beta,
+    objective: "Deliver",
+    taskTitle: "Retry failed wake",
+    operationId: "retry-failed-dispatch",
+  };
+  expect(runGroupTool("group_handoff", { sessionId: alpha }, input)).toContain(
+    "wake delivery failed",
+  );
+  expect(runGroupTool("group_handoff", { sessionId: alpha }, input)).toContain("[in_progress]");
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(runGroupTool("group_handoff", { sessionId: alpha }, input)).toContain("[in_progress]");
+  expect(attempts).toHaveLength(2);
+  expect(listGroupTasks(group.id)).toHaveLength(1);
+});
+
+it("validates block return target before writing task state", () => {
+  const { group, alpha } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Unchanged block",
+    ownerSessionId: alpha,
+    status: "in_progress",
+  });
+  expect(
+    runGroupTool(
+      "group_block",
+      { sessionId: alpha },
+      {
+        taskId: task.id,
+        reason: "Need help",
+        returnTo: "unknown-member",
+        expectedVersion: 1,
+        operationId: "invalid-block-target",
+      },
+    ),
+  ).toContain("not-a-member");
+  expect(taskStore.getGroupTask(task.id)).toMatchObject({ status: "in_progress", stateVersion: 1 });
+  expect(taskStore.listGroupTaskTransitions(task.id)).toEqual([]);
+});
+
+it("changes review returns work without requiring unavailable QA", async () => {
+  const { group, alpha, beta } = squad();
+  const task = taskStore.createGroupTask({
+    groupId: group.id,
+    title: "Missing QA changes",
+    ownerSessionId: alpha,
+    reviewerSessionId: beta,
+    status: "in_review",
+    kind: "code",
+    priority: "normal",
+    dependencyIds: [],
+    criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+    verificationPolicy: { mode: "required", requireReview: true },
+  });
+  expect(
+    await runGroupVerifiedTool(
+      "group_review_task",
+      { sessionId: beta },
+      { id: task.id, verdict: "changes", expectedVersion: 1, operationId: "changes-without-qa" },
+    ),
+  ).toContain("[in_progress]");
+  expect(taskStore.getGroupTask(task.id)).toMatchObject({
+    status: "in_progress",
+    stateVersion: 2,
+    review: { verdict: "changes", reviewerSessionId: beta },
+  });
+});
+
+it("taskless agreement retries return the same decision and status delivery", async () => {
+  const { group, alpha } = squad();
+  setGroupTaskWakeSink((wake) => wakes.push(wake));
+  const caller = { sessionId: alpha, runId: "taskless-run", toolCallId: "taskless-call" };
+  const input = { note: "Agreed together", operationId: "taskless-agreement" };
+  const first = await runGroupVerifiedTool("group_agree", caller, input);
+  expect(await runGroupVerifiedTool("group_agree", caller, input)).toBe(first);
+  expect(listGroupDecisions(group.id)).toHaveLength(1);
+  expect(wakes).toHaveLength(1);
+  expect(wakes[0]).toMatchObject({
+    operationId: "taskless-agreement",
+    sourceEventId: listGroupDecisions(group.id)[0]?.id,
+  });
+  expect(
+    await runGroupVerifiedTool("group_agree", caller, { ...input, note: "Different request" }),
+  ).toContain("invalid-value");
+  expect(listGroupDecisions(group.id)).toHaveLength(1);
+  expect(wakes).toHaveLength(1);
 });

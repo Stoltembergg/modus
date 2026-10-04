@@ -1304,6 +1304,8 @@ describe("decisions", () => {
         "source_message_id",
         "created_at",
         "execution_id",
+        "operation_id",
+        "operation_json",
       ]);
       const rows = db
         .prepare("select id, text, author_session_id from group_decisions order by id")
@@ -1317,6 +1319,10 @@ describe("decisions", () => {
       ).map((index) => index.name);
       expect(indexes).toContain("idx_group_decisions_group_created");
       expect(indexes).toContain("idx_group_decisions_execution");
+      expect(indexes).toContain("idx_group_decisions_operation");
+      expect(
+        db.prepare("select operation_id, operation_json from group_decisions limit 1").get(),
+      ).toEqual({ operation_id: null, operation_json: null });
     } finally {
       db.close();
       await rm(dir, { recursive: true, force: true });

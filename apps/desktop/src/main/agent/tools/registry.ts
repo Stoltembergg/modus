@@ -2,6 +2,7 @@ import type { ToolCallEvent, ToolDefinition } from "@earendil-works/pi-coding-ag
 import type { PermissionAction } from "../../../shared/contracts";
 import {
   BUILTIN_TOOL_CATALOG,
+  GROUP_MEMBER_TOOL_NAMES,
   type ToolCapability,
   type ToolCatalogEntry,
   type ToolProfileName,
@@ -43,6 +44,11 @@ const DEFAULT_ACTION: PermissionAction = "mcp.call";
 
 /** Primary target string for a tool call (command, path, else the raw input). */
 export function getToolTarget(event: ToolCallEvent): string {
+  if ((GROUP_MEMBER_TOOL_NAMES as readonly string[]).includes(event.toolName)) {
+    const input = event.input as Record<string, unknown>;
+    const taskId = input.taskId ?? input.id;
+    if (typeof taskId === "string") return taskId;
+  }
   if ("command" in event.input && typeof event.input.command === "string") {
     return event.input.command;
   }

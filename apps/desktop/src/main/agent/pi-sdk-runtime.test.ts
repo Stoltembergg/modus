@@ -1577,7 +1577,7 @@ describe("PiSdkRuntime", () => {
     // Plan mode keeps only the read-only ones.
     expect(
       activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
-    ).toEqual(["group_read_messages", "group_list_tasks"]);
+    ).toEqual(["group_read_messages", "group_list_tasks", "group_get_work_state"]);
     for (const profile of ["chat", "plan"] as const) {
       expect(
         activeToolNamesForSession(info(loner), profile).filter((name) =>

@@ -139,6 +139,17 @@ export type GroupWorkState = {
   gates: Record<string, GroupTaskGateResult>;
   members: AgentGroupMember[];
   execution?: { id: string; stopped: boolean; waitingForUser: boolean };
+  /** Compact summaries; current Git freshness is unavailable in this synchronous read. */
+  qa?: Record<
+    string,
+    {
+      criterionCount: number;
+      evidenceCount: number;
+      pendingCriterionIds: string[];
+      freshness: "unavailable";
+    }
+  >;
+  omitted: { tasks: number; members: number; criteria: number };
   budgets: {
     remainingAgentMessages: number;
     remainingMemberWakes: number;

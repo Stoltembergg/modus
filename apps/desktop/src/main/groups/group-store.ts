@@ -324,6 +324,20 @@ function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
   }
 }
 
+/** Decisions have no membership broadcasts and may join an atomic task operation. */
+function inDecisionTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  const name = `decision_${randomUUID().replaceAll("-", "")}`;
+  db.exec(`savepoint ${name}`);
+  try {
+    const result = fn();
+    db.exec(`release ${name}`);
+    return result;
+  } catch (error) {
+    db.exec(`rollback to ${name}; release ${name}`);
+    throw error;
+  }
+}
+
 function requireText(value: string, field: string): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (!trimmed) {
@@ -1609,7 +1623,7 @@ export function recordGroupDecision(input: {
       `Decision text must be 1-${GROUP_DECISION_MAX_CHARS} characters after trimming (got ${text.length}).`,
     );
   }
-  const id = inTransaction(db, () => {
+  const id = inDecisionTransaction(db, () => {
     requireGroupRow(input.groupId);
     if (input.authorSessionId) {
       requireMember(input.groupId, input.authorSessionId, "decision author");
