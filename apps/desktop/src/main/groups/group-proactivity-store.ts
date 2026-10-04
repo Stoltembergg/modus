@@ -89,6 +89,13 @@ export function getGroupActionBySource(
   return row ? toAction(row) : undefined;
 }
 
+export function getGroupActionByJobId(jobId: string): GroupActionRecord | undefined {
+  const row = getDatabase()
+    .prepare("select * from group_proactivity_actions where job_id = ?")
+    .get(jobId) as ActionRow | undefined;
+  return row ? toAction(row) : undefined;
+}
+
 export function listGroupActions(groupId?: string): GroupActionRecord[] {
   const rows = (
     groupId
@@ -225,4 +232,14 @@ export function invalidateGroupAction(id: string): GroupActionRecord {
   const action = getGroupAction(id);
   if (!action) throw new GroupStoreError("invalid-value", "Unknown action.");
   return action;
+}
+
+/** A committed automatic job may lose authority while waiting for a start gate. */
+export function invalidateDispatchedGroupAction(id: string): GroupActionRecord {
+  getDatabase()
+    .prepare(
+      "update group_proactivity_actions set delivery_state = 'invalidated', version = version + 1, updated_at = ? where id = ? and delivery_state = 'dispatched'",
+    )
+    .run(new Date().toISOString(), id);
+  return requireAction(id);
 }

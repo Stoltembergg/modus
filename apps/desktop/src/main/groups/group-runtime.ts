@@ -38,8 +38,10 @@ import { decideGroupNextAction } from "./group-proactivity-policy";
 import {
   type GroupActionRecord,
   getGroupAction,
+  getGroupActionByJobId,
   getGroupActionBySource,
   getGroupProactivityMode,
+  invalidateDispatchedGroupAction,
   invalidateGroupAction,
   listPendingGroupActions,
   markGroupActionDispatched,
@@ -138,6 +140,7 @@ export class GroupRuntime {
   private readonly chains = new Map<string, ChainState>();
   private readonly retiredChains = new Map<string, ChainState>();
   private readonly processingChains = new Map<string, number>();
+  private readonly validatingWakes = new Set<string>();
   /** Per-session FIFO of pending wakes. */
   private readonly queues = new Map<string, Wake[]>();
   /** Group turns holding one of the concurrency slots. */
@@ -173,6 +176,7 @@ export class GroupRuntime {
     this.unsubscribers.push(onGroupTaskTransition((event) => this.handleTaskTransition(event)));
     if (options.recoverPending) {
       this.recoverJobs();
+      this.recoverUnprocessedTransitions();
       void this.recoverPendingActions();
     }
   }
@@ -545,6 +549,7 @@ export class GroupRuntime {
 
   private async decisionSnapshot(
     trigger: GroupTaskTrigger,
+    reservedWake?: Wake,
   ): Promise<GroupDecisionSnapshot | undefined> {
     const executionId = trigger.executionId;
     if (!executionId || this.disposed) return undefined;
@@ -568,7 +573,12 @@ export class GroupRuntime {
     if (this.disposed || this.chains.get(executionId) !== chain || chain.ended || chain.retired)
       return undefined;
     const current = getGroupTask(trigger.taskId);
-    if (current.stateVersion !== trigger.taskVersion) return undefined;
+    if (
+      current.groupId !== trigger.groupId ||
+      current.executionId !== executionId ||
+      current.stateVersion !== trigger.taskVersion
+    )
+      return undefined;
     const workState = getGroupWorkState(trigger.groupId, executionId);
     workState.tasks = listGroupTasks(trigger.groupId);
     workState.members = listAgentGroupMembers(trigger.groupId);
@@ -578,28 +588,38 @@ export class GroupRuntime {
       remainingMemberWakes: Math.max(
         0,
         workState.members.length * this.limits.maxWakesPerMember -
-          [...chain.wakesByMember.values()].reduce((sum, wakes) => sum + wakes, 0),
+          [...chain.wakesByMember.values()].reduce((sum, wakes) => sum + wakes, 0) +
+          (reservedWake ? 1 : 0),
       ),
-      remainingInputTokens: Math.max(0, this.limits.maxEstimatedInputTokens - chain.inputTokens),
+      remainingInputTokens: Math.max(
+        0,
+        this.limits.maxEstimatedInputTokens -
+          chain.inputTokens +
+          (reservedWake ? estimateGroupTokens(reservedWake.prompt) : 0),
+      ),
     };
     const availability: GroupDecisionSnapshot["memberAvailability"] = {};
     const remainingWakesByMember: GroupDecisionSnapshot["remainingWakesByMember"] = {};
     for (const member of workState.members) {
       const session = getAgentSession(member.sessionId);
+      const reservedTarget = reservedWake?.sessionId === member.sessionId;
       availability[member.sessionId] =
         member.archived ||
         !session ||
         session.archivedAt ||
-        this.running.has(member.sessionId) ||
-        this.gated.has(member.sessionId) ||
-        (this.queues.get(member.sessionId)?.length ?? 0) > 0 ||
-        this.cancelling.has(member.sessionId) ||
-        this.runtime.isSessionStreaming(member.sessionId)
+        (!reservedTarget && this.running.has(member.sessionId)) ||
+        (!reservedTarget && this.gated.has(member.sessionId)) ||
+        (this.queues.get(member.sessionId)?.some((wake) => wake.id !== reservedWake?.id) ??
+          false) ||
+        (!reservedTarget && this.cancelling.has(member.sessionId)) ||
+        (!reservedTarget && this.runtime.isSessionStreaming(member.sessionId))
           ? "unavailable"
           : "available";
       remainingWakesByMember[member.sessionId] = Math.max(
         0,
-        this.limits.maxWakesPerMember - (chain.wakesByMember.get(member.sessionId) ?? 0),
+        this.limits.maxWakesPerMember -
+          (chain.wakesByMember.get(member.sessionId) ?? 0) +
+          (reservedWake?.sessionId === member.sessionId ? 1 : 0),
       );
     }
     const reviewReadiness =
@@ -650,11 +670,17 @@ export class GroupRuntime {
     if (
       !decision ||
       this.disposed ||
+      !this.isTriggerChainLive(trigger) ||
       getGroupActionBySource(trigger.groupId, trigger.sourceEventId)
     )
       return;
     const action = persistGroupProactivityDecision(decision);
     if (action.deliveryState === "pending") await this.materializeAction(action, trigger);
+  }
+
+  private isTriggerChainLive(trigger: GroupTaskTrigger): boolean {
+    const chain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
+    return Boolean(chain && chain.groupId === trigger.groupId && !chain.ended && !chain.retired);
   }
 
   private invalidatePendingAction(id: string): void {
@@ -713,7 +739,7 @@ export class GroupRuntime {
         const wake = this.queues.get(target)?.find((item) => item.triggerMessageId === message.id);
         if (!wake?.id) throw new Error("Proactive wake exceeded chain limits.");
         markGroupActionDispatched(action.id, message.id, wake.id);
-      });
+      }, true);
       this.pump();
     } catch {
       this.invalidatePendingAction(action.id);
@@ -729,7 +755,7 @@ export class GroupRuntime {
           this.invalidatePendingAction(action.id);
           continue;
         }
-        this.chains.set(chain.chainId, chain);
+        if (!this.chains.has(chain.chainId)) this.chains.set(chain.chainId, chain);
         const row = getDatabase()
           .prepare(`select id, group_id, task_id, task_version, action,
         execution_id, from_status, to_status, created_at from group_task_events where id = ?`)
@@ -770,6 +796,48 @@ export class GroupRuntime {
         this.invalidatePendingAction(action.id);
         console.warn("[modus] pending group action could not be recovered:", error);
       }
+    }
+  }
+
+  private recoverUnprocessedTransitions(): void {
+    if (this.disposed) return;
+    // The transition row is the durable inbox. A crash may occur during the
+    // asynchronous source lookup, before an action can be inserted.
+    const rows = getDatabase()
+      .prepare(`select e.id, e.group_id, e.task_id, e.task_version, e.action,
+        e.execution_id, e.from_status, e.to_status, e.created_at
+        from group_task_events e left join group_proactivity_actions a
+          on a.group_id = e.group_id and a.source_event_id = e.id
+        where e.execution_id is not null and a.id is null order by e.rowid`)
+      .all() as Array<{
+      id: string;
+      group_id: string;
+      task_id: string;
+      task_version: number;
+      action: string;
+      execution_id: string;
+      from_status: GroupTaskTransitionEvent["fromStatus"];
+      to_status: GroupTaskTransitionEvent["toStatus"];
+      created_at: string;
+    }>;
+    for (const row of rows) {
+      if (this.disposed) return;
+      const chain = this.chains.get(row.execution_id) ?? readGroupChain(row.execution_id);
+      if (!chain || chain.ended || chain.retired || chain.groupId !== row.group_id) continue;
+      const event: GroupTaskTransitionEvent = {
+        id: row.id,
+        groupId: row.group_id,
+        taskId: row.task_id,
+        taskVersion: row.task_version,
+        action: row.action,
+        executionId: row.execution_id,
+        fromStatus: row.from_status,
+        toStatus: row.to_status,
+        createdAt: row.created_at,
+      };
+      if (!this.persistedTrigger(event)) continue;
+      this.chains.set(chain.chainId, chain);
+      this.handleTaskTransition(event);
     }
   }
 
@@ -862,12 +930,16 @@ export class GroupRuntime {
       (id) => getAgentGroupForSession(id)?.id === groupId,
     );
     const pendingActions = listPendingGroupActions(groupId);
+    const processing = [...this.processingChains.keys()].some(
+      (chainId) => this.chains.get(chainId)?.groupId === groupId,
+    );
     if (
       queued.length === 0 &&
       running.length === 0 &&
       waiting.length === 0 &&
       awaiting.length === 0 &&
-      pendingActions.length === 0
+      pendingActions.length === 0 &&
+      !processing
     )
       return;
     for (const action of pendingActions) {
@@ -995,7 +1067,7 @@ export class GroupRuntime {
   /* ── internals ────────────────────────────────────────────────────── */
 
   /** A request, its cards and every queued wake survive or roll back together. */
-  private durableDispatch<T>(action: () => T): T {
+  private durableDispatch<T>(action: () => T, isolatePostCommitEmission = false): T {
     if (this.dispatching) return action();
     const db = getDatabase();
     const queues = new Map([...this.queues].map(([id, wakes]) => [id, [...wakes]]));
@@ -1034,7 +1106,14 @@ export class GroupRuntime {
     }
     const events = this.bufferedEvents;
     this.bufferedEvents = [];
-    for (const event of events) this.host.emit(event);
+    for (const event of events) {
+      try {
+        this.host.emit(event);
+      } catch (error) {
+        if (!isolatePostCommitEmission) throw error;
+        console.warn("[modus] committed group event could not be emitted:", error);
+      }
+    }
     return result;
   }
 
@@ -1055,6 +1134,8 @@ export class GroupRuntime {
         !membersOf(wake.groupId).some((m) => m.sessionId === wake.sessionId && !m.archived)
       ) {
         updateGroupJob(wake, "cancelled");
+        const action = wake.id ? getGroupActionByJobId(wake.id) : undefined;
+        if (action?.deliveryState === "dispatched") invalidateDispatchedGroupAction(action.id);
         this.transcript.setState(wake, "cancelled");
         continue;
       }
@@ -1476,6 +1557,108 @@ export class GroupRuntime {
     return count;
   }
 
+  private transitionForAction(action: GroupActionRecord): GroupTaskTrigger | undefined {
+    const row = getDatabase()
+      .prepare(`select id, group_id, task_id, task_version, action,
+        execution_id, from_status, to_status, created_at from group_task_events where id = ?`)
+      .get(action.sourceEventId) as
+      | {
+          id: string;
+          group_id: string;
+          task_id: string;
+          task_version: number;
+          action: string;
+          execution_id: string | null;
+          from_status: GroupTaskTransitionEvent["fromStatus"];
+          to_status: GroupTaskTransitionEvent["toStatus"];
+          created_at: string;
+        }
+      | undefined;
+    return row
+      ? this.persistedTrigger({
+          id: row.id,
+          groupId: row.group_id,
+          taskId: row.task_id,
+          taskVersion: row.task_version,
+          action: row.action,
+          ...(row.execution_id ? { executionId: row.execution_id } : {}),
+          fromStatus: row.from_status,
+          toStatus: row.to_status,
+          createdAt: row.created_at,
+        })
+      : undefined;
+  }
+
+  private cancelStaleAutomaticWake(wake: Wake, actionId: string): void {
+    if (this.disposed || this.queues.get(wake.sessionId)?.[0]?.id !== wake.id) return;
+    this.durableDispatch(() => {
+      const queue = this.queues.get(wake.sessionId);
+      if (!queue || queue[0]?.id !== wake.id) return;
+      queue.shift();
+      if (queue.length === 0) this.queues.delete(wake.sessionId);
+      updateGroupJob(wake, "cancelled");
+      invalidateDispatchedGroupAction(actionId);
+      this.transcript.setState(wake, "cancelled");
+    });
+    this.retireIdleChains();
+    this.settleIdle();
+  }
+
+  private async validateAutomaticWake(wake: Wake, action: GroupActionRecord): Promise<void> {
+    const jobId = wake.id;
+    try {
+      if (!jobId) {
+        this.cancelStaleAutomaticWake(wake, action.id);
+        return;
+      }
+      const trigger = this.transitionForAction(action);
+      const snapshot = trigger ? await this.decisionSnapshot(trigger, wake) : undefined;
+      if (this.disposed || this.queues.get(wake.sessionId)?.[0]?.id !== wake.id) return;
+      const current = snapshot ? decideGroupNextAction(snapshot) : null;
+      const saved = getGroupActionByJobId(jobId);
+      if (
+        !trigger ||
+        trigger.groupId !== action.groupId ||
+        trigger.taskId !== action.taskId ||
+        trigger.taskVersion !== action.taskVersion ||
+        trigger.executionId !== action.executionId ||
+        !current ||
+        current.kind !== action.decision.kind ||
+        current.idempotencyKey !== action.decision.idempotencyKey ||
+        current.targetSessionId !== wake.sessionId ||
+        saved?.id !== action.id ||
+        saved.deliveryState !== "dispatched" ||
+        saved.wakeMessageId !== wake.triggerMessageId ||
+        getGroupJob(jobId)?.status !== "pending"
+      ) {
+        this.cancelStaleAutomaticWake(wake, action.id);
+        return;
+      }
+      const window = this.host.getWindow();
+      if (
+        !window ||
+        this.host.isUpdatePending() ||
+        this.running.has(wake.sessionId) ||
+        this.gated.has(wake.sessionId) ||
+        this.cancelling.has(wake.sessionId) ||
+        this.runtime.isSessionStreaming(wake.sessionId)
+      ) {
+        this.scheduleRetry();
+        return;
+      }
+      // No await separates the final authority check from starting the exact job.
+      this.queues.get(wake.sessionId)?.shift();
+      if (this.queues.get(wake.sessionId)?.length === 0) this.queues.delete(wake.sessionId);
+      this.start(window, wake);
+    } catch (error) {
+      console.warn("[modus] automatic group job validation failed:", error);
+      this.cancelStaleAutomaticWake(wake, action.id);
+    } finally {
+      if (jobId) this.validatingWakes.delete(jobId);
+      this.pump();
+    }
+  }
+
   private pump(): void {
     if (this.disposed || this.dispatching) return;
     if (this.queuedCount() === 0) {
@@ -1488,7 +1671,7 @@ export class GroupRuntime {
       return;
     }
     let gated = false;
-    while (this.running.size < this.maxConcurrent) {
+    while (this.running.size + this.validatingWakes.size < this.maxConcurrent) {
       const heads = [...this.queues.entries()]
         // One group turn per member: a gated turn is still pending in that session.
         .filter(
@@ -1498,7 +1681,10 @@ export class GroupRuntime {
             !this.cancelling.has(sessionId),
         )
         .map(([, queue]) => queue[0])
-        .filter((wake): wake is Wake => Boolean(wake))
+        .filter(
+          (wake): wake is Wake =>
+            wake !== undefined && (!wake.id || !this.validatingWakes.has(wake.id)),
+        )
         .sort((a, b) => {
           const active = (id: string) =>
             [...this.running.values()].filter((w) => w.groupId === id).length;
@@ -1518,6 +1704,12 @@ export class GroupRuntime {
         return true;
       });
       if (!next) break;
+      const action = next.id ? getGroupActionByJobId(next.id) : undefined;
+      if (action && next.id) {
+        this.validatingWakes.add(next.id);
+        void this.validateAutomaticWake(next, action);
+        continue;
+      }
       this.queues.get(next.sessionId)?.shift();
       if (this.queues.get(next.sessionId)?.length === 0) this.queues.delete(next.sessionId);
       this.start(window, next);
