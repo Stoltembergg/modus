@@ -80,7 +80,7 @@ select is(
   (select array_agg(x order by ord)
      from pg_proc p, unnest(p.proargnames, p.proargmodes) with ordinality as t (x, m, ord)
     where p.oid = 'public.get_billing_catalog()'::regprocedure and m = 't'),
-  array['plan', 'name', 'monthly_credits', 'provider', 'currency', 'amount_minor', 'sort_order'],
+  array['plan', 'name', 'monthly_credits', 'provider', 'currency', 'amount_minor', 'sort_order', 'kind'],
   'output columns are exactly the public ones');
 select is(
   (select count(*)::int
@@ -96,7 +96,7 @@ select tests.as_anon();
 select is(
   (select string_agg(plan || ':' || name || ':' || monthly_credits || ':' || provider || ':' || currency || ':'
                      || amount_minor, ',' order by sort_order, provider)
-     from public.get_billing_catalog()),
+     from public.get_billing_catalog() where kind = 'subscription'),
   'starter:Starter:20000:mercadopago:BRL:4990',
   'anon, flag off: only Starter via Mercado Pago, BRL 4990, 20000 credits');
 select is((select count(*)::int from public.get_billing_catalog() where plan in ('pro', 'max', 'ultra')), 0,
@@ -113,7 +113,7 @@ select tests.clear_authentication();
 select tests.authenticate_as(:'uid');
 select is(
   (select string_agg(plan || ':' || provider || ':' || currency || ':' || amount_minor, ',')
-     from public.get_billing_catalog()),
+     from public.get_billing_catalog() where kind = 'subscription'),
   'starter:mercadopago:BRL:4990', 'authenticated, flag off: same catalog');
 select tests.clear_authentication();
 
@@ -129,7 +129,7 @@ select tests.as_anon();
 select is(
   (select string_agg(plan || ':' || monthly_credits || ':' || provider || ':' || currency || ':' || amount_minor,
                      ',' order by sort_order, provider)
-     from public.get_billing_catalog()),
+     from public.get_billing_catalog() where kind = 'subscription'),
   'starter:20000:mercadopago:BRL:4990,starter:20000:stripe:USD:900',
   'anon, flag on: Starter via Mercado Pago and Stripe (USD 900)');
 select is((select count(*)::int from public.get_billing_catalog() where plan in ('pro', 'max', 'ultra')), 0,

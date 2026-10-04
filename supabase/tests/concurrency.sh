@@ -205,4 +205,45 @@ echo "free renewal x17: renewed=$renewed7 busy=$busy7 not_due_or_busy_after=$not
   || { cat "$out"/fr* "$out"/fs*; fail "concurrent Free renewals: renewed exactly once"; }
 echo "ok - Free renewal racing itself (per-user + cron batch, wallet held): renewed once (0 -> 1000), others busy / not due"
 
+# 8) L5a: purchased-credit lots under concurrent usage. Allowance 1000 + two
+#    5k lots; 20 sessions reserve + settle 500 each (10000) while 4 sessions
+#    deliver the approval of a third 5k purchase. Credited once; consumed
+#    allowance first, then the lots oldest first (the newest lot untouched);
+#    sum(lots remaining) never exceeds balance + reserved; no deadlock.
+uid8="$(q "select tests.create_user('race-lots@example.com', true)")"
+exp8='{"live_mode":false,"collector_id":"777"}'
+for n in 1 2 3; do
+  eval "pur8_$n=\"\$(q \"set role service_role; select private.mp_create_purchase('$uid8', 'credits_5k') ->> 'purchase_id'\")\""
+done
+pay8() { echo "{\"id\":\"$1\",\"status\":\"approved\",\"amount_minor\":3490,\"refunded_minor\":0,\"live_mode\":false,\"collector_id\":\"777\",\"currency\":\"BRL\",\"external_reference\":\"$2\"}"; }
+q "set role service_role; select private.process_mp_purchase_payment('$(pay8 880001 "$pur8_1")'::jsonb, '$exp8'::jsonb)" >/dev/null
+q "update public.credit_lots set created_at = now() - interval '2 hours' where purchase_id = '$pur8_1'" >/dev/null
+q "set role service_role; select private.process_mp_purchase_payment('$(pay8 880002 "$pur8_2")'::jsonb, '$exp8'::jsonb)" >/dev/null
+q "update public.credit_lots set created_at = now() - interval '1 hour' where purchase_id = '$pur8_2'" >/dev/null
+[[ "$(q "select balance from public.credit_wallets where user_id = '$uid8'")" == 11000 ]] || fail "setup: 1000 + 2 x 5000"
+for i in $(seq 1 20); do
+  ( "$PSQL" -X -q -t -A >"$out/lot$i" 2>&1 <<SQL || true
+set role service_role;
+select private.reserve_credits('$uid8', 'lots-$i', 500) ->> 'created';
+select (private.settle_usage('$uid8', 'lots-$i', 500, 'm', 'p') ->> 'charged');
+SQL
+  ) &
+  if (( i % 5 == 0 )); then
+    ( "$PSQL" -X -q -t -A -c "set role service_role; select private.process_mp_purchase_payment('$(pay8 880003 "$pur8_3")'::jsonb, '$exp8'::jsonb) ->> 'code'" \
+        >"$out/lotpay$i" 2>&1 || true ) &
+  fi
+done
+wait
+charged8="$(cat "$out"/lot[0-9]* | grep -c '^500$' || true)"
+credited8="$(cat "$out"/lotpay* | grep -c '^credited$' || true)"
+errors8="$(cat "$out"/lot* | grep -c 'ERROR' || true)"
+wallet8="$(q "select balance || '+' || reserved from public.credit_wallets where user_id = '$uid8'")"
+lots8="$(q "select string_agg(remaining::text, ',' order by created_at, id) from public.credit_lots where user_id = '$uid8'")"
+inv8="$(q "select (select coalesce(sum(remaining), 0) from public.credit_lots where user_id = '$uid8') <= (select balance + reserved from public.credit_wallets where user_id = '$uid8')")"
+echo "lots under load: charged=$charged8 credited=$credited8 errors=$errors8 wallet=$wallet8 lots=$lots8 invariant=$inv8"
+[[ "$charged8" == 20 && "$credited8" == 1 && "$errors8" == 0 && "$wallet8" == 6000+0 \
+   && "$lots8" == 0,1000,5000 && "$inv8" == t ]] \
+  || { cat "$out"/lot*; fail "concurrent usage across allowance -> lots"; }
+echo "ok - 20 concurrent reserve/settle (10000) + 4 deliveries of a purchase: allowance then oldest lots, credited once, invariant kept"
+
 rm -rf "$out"

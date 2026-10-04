@@ -72,12 +72,13 @@ select is(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private' and has_function_privilege('service_role', p.oid, 'execute')),
   array['claim_stripe_customer', 'debit_credits', 'grant_credits', 'mp_cancel_targets',
-        'mp_claim_notification', 'mp_create_checkout', 'mp_finish_notification', 'mp_link_checkout',
-        'mp_mark_cancel_requested', 'process_mp_payment',
-        'process_mp_preapproval', 'process_stripe_event', 'release_expired_reservations',
+        'mp_claim_notification', 'mp_create_checkout', 'mp_create_purchase', 'mp_finish_notification',
+        'mp_link_checkout', 'mp_link_purchase', 'mp_mark_cancel_requested', 'process_mp_payment',
+        'process_mp_preapproval', 'process_mp_purchase_payment', 'process_stripe_event',
+        'purchase_access_plan', 'release_expired_reservations',
         'renew_free_credits', 'renew_free_credits_for_user',
         'reserve_credits', 'router_claim_request', 'router_reserve', 'router_store_cost', 'settle_usage'],
-  'service_role can execute exactly the twenty RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost + B6a debit_credits / mp_* / process_mp_* + L1e mp_cancel_targets / mp_mark_cancel_requested + Free renewal renew_free_credits / renew_free_credits_for_user; not the trigger functions nor the mp_preapproval_mismatch helper)');
+  'service_role can execute exactly the twenty-four RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost + B6a debit_credits / mp_* / process_mp_* + L1e mp_cancel_targets / mp_mark_cancel_requested + Free renewal renew_free_credits / renew_free_credits_for_user + L5a mp_create_purchase / mp_link_purchase / process_mp_purchase_payment / purchase_access_plan; not the trigger functions nor the mp_preapproval_mismatch / account_blocked / non_purchased_credits helpers)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -96,26 +97,26 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  26, 'twenty-six functions in private (20 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper + the Free renewal free_renewal_check / backfill_free_plan_allowance helpers)');
+  33, 'thirty-three functions in private (24 RPCs + 4 trigger functions + the B6a mp_preapproval_mismatch helper + the Free renewal free_renewal_check / backfill_free_plan_allowance helpers + the L5a account_blocked / non_purchased_credits helpers)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  26, 'all private functions are SECURITY DEFINER with search_path=""');
+  33, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  array['backfill_free_plan_allowance', 'claim_stripe_customer', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
-        'handle_new_user', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout',
-        'mp_finish_notification', 'mp_link_checkout', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'process_mp_payment', 'process_mp_preapproval',
-        'process_stripe_event', 'release_expired_reservations', 'renew_free_credits',
+  array['account_blocked', 'backfill_free_plan_allowance', 'claim_stripe_customer', 'consume_credit_lots', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
+        'handle_new_user', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout', 'mp_create_purchase',
+        'mp_finish_notification', 'mp_link_checkout', 'mp_link_purchase', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'non_purchased_credits', 'process_mp_payment', 'process_mp_preapproval',
+        'process_mp_purchase_payment', 'process_stripe_event', 'purchase_access_plan', 'release_expired_reservations', 'renew_free_credits',
         'renew_free_credits_for_user', 'reserve_credits', 'router_claim_request',
         'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage'],
-  'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');
+  'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at, consume_credit_lots');
 
 -- Hijack attempt: a caller-controlled search_path with decoy objects must not
 -- change what the function touches.

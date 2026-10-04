@@ -24,7 +24,7 @@ select is(
   'BRL prices unchanged (Starter R$ 49,90)');
 select is(
   (select string_agg(plan || ':' || monthly_credits || ':' || provider || ':' || amount_minor, ',')
-     from public.get_billing_catalog()),
+     from public.get_billing_catalog() where kind = 'subscription'),
   'starter:20000:mercadopago:4990', 'catalog: Starter 20000 credits for R$ 49,90');
 
 -- ---------------------------------------------------------------------------
