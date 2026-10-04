@@ -7,6 +7,7 @@ import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/c
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 
 let userData: string;
+let fixtureRoot: string;
 
 vi.mock("electron", () => ({
   app: {
@@ -87,7 +88,8 @@ function insertSessionInWorkspace(sessionId: string, workspaceId: string): void 
 }
 
 beforeAll(async () => {
-  userData = await mkdtemp(join(tmpdir(), "modus-event-store-test-"));
+  fixtureRoot = await mkdtemp(join(tmpdir(), "modus-event-store-test-"));
+  userData = join(fixtureRoot, "data");
   await mkdir(join(userData, "apps", "desktop"), { recursive: true });
   await writeFile(
     join(userData, "package.json"),
@@ -103,7 +105,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(userData, { recursive: true, force: true }).catch(() => undefined);
+  await rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe("getLatestHarnessTaskState", () => {
@@ -1384,6 +1386,79 @@ console.log("unsafe-ancestor-script-ran");
       expect(qa.status).toBe("missing");
       expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
     } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsafe npm execution after a direct temporary cwd is restored", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-direct-cwd-"));
+    const sandbox = await mkdtemp(join(tmpdir(), "modus-direct-cwd-control-"));
+    const saved = join(sandbox, "saved");
+    const alternate = join(sandbox, "alternate");
+    const executed = join(sandbox, "executed");
+    await mkdir(alternate);
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    await writeFile(
+      join(alternate, "package.json"),
+      JSON.stringify({ scripts: { test: "node bypass.cjs" } }),
+    );
+    await writeFile(
+      join(alternate, "bypass.cjs"),
+      `const fs = require("node:fs");
+fs.writeFileSync("unsafe-marker", "yes");
+fs.renameSync(${JSON.stringify(cwd)}, ${JSON.stringify(executed)});
+fs.renameSync(${JSON.stringify(saved)}, ${JSON.stringify(cwd)});
+console.log("unsafe-direct-cwd-script-ran");
+`,
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "direct-temp-cwd",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      });
+      await rename(cwd, saved);
+      await rename(alternate, cwd);
+      const output = execFileSync("npm", ["test", "--ignore-scripts=false"], {
+        cwd,
+        timeout: 10_000,
+        stdio: "pipe",
+        encoding: "utf8",
+        env: { ...process.env, npm_config_update_notifier: "false", npm_config_audit: "false" },
+      });
+      expect(output).toContain("unsafe-direct-cwd-script-ran");
+      expect(await readFile(join(executed, "unsafe-marker"), "utf8")).toBe("yes");
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "direct-temp-cwd",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      });
+      const events = getRunToolEvidence(sessionId, run.id);
+      expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
+        checkConfigStable: false,
+      });
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
       await rm(sandbox, { recursive: true, force: true });
     }
   });

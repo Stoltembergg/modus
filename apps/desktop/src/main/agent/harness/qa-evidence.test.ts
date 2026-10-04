@@ -38,6 +38,77 @@ vi.mock("node:fs", async (importOriginal) => {
 
 describe("manifest read consistency", () => {
   it.skipIf(!process.getuid)(
+    "observes ancestors conservatively when uid and ACL ownership are unknown",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-unknown-uid-"));
+      const container = join(sandbox, "container");
+      const cwd = join(container, "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(undefined as unknown as number);
+      manifestReadHook.beforeAccess = () => {
+        const error = new Error(
+          "ACL write access denied, ownership unknown",
+        ) as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        mkdirSync(join(container, "changed-topology"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        uidSpy.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "observes sibling churn for a leaf directly inside the sticky temporary directory",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "modus-direct-leaf-churn-"));
+      let sibling: string | undefined;
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const uid = 2 ** 31 - 1;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(uid);
+      manifestReadHook.statOwner = { path: realpathSync(cwd), uid };
+      const protectedParent = dirname(realpathSync(tmpdir()));
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === protectedParent) {
+          const error = new Error(
+            "Global ancestor cannot be renamed by this uid",
+          ) as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-direct-leaf-sibling-"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        manifestReadHook.statOwner = undefined;
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
     "fails closed on global temporary churn when running as root",
     async () => {
       const sandbox = await mkdtemp(join(tmpdir(), "modus-root-ancestor-"));
@@ -104,7 +175,9 @@ describe("manifest read consistency", () => {
   it.skipIf(!process.getuid)(
     "ignores sibling temporary artifacts when the ancestor is protected",
     async () => {
-      const cwd = await mkdtemp(join(tmpdir(), "modus-protected-ancestor-"));
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-protected-ancestor-"));
+      const cwd = join(sandbox, "container", "project");
+      mkdirSync(cwd, { recursive: true });
       let sibling: string | undefined;
       await writeFile(
         join(cwd, "package.json"),
@@ -131,7 +204,7 @@ describe("manifest read consistency", () => {
         manifestReadHook.beforeAccess = undefined;
         uidSpy.mockRestore();
         if (sibling) await rm(sibling, { recursive: true, force: true });
-        await rm(cwd, { recursive: true, force: true });
+        await rm(sandbox, { recursive: true, force: true });
       }
     },
   );

@@ -138,21 +138,16 @@ export function resolvePackageCheckScript(
   scriptName: string,
 ): { body: string; configDigest: string; workspaceRoot?: string } | undefined {
   const artifactDirectories = new Set<string>();
-  try {
-    artifactDirectories.add(realpathSync(cwd));
-  } catch {
-    return undefined;
-  }
-  const directoryNeedsMetadata = (path: string, entry: BigIntStats): boolean => {
-    if (artifactDirectories.has(path)) return false;
-    const uid = process.getuid?.();
-    // Owners can chmod a protected ancestor, temporarily enabling descendant replacement.
-    if (uid === 0 || (uid !== undefined && entry.uid === BigInt(uid))) return true;
+  const artifactContainers = new Set<string>();
+  const entryMayBeRenamed = (path: string, entry: BigIntStats): boolean => {
     if (dirname(path) === path) return false;
+    const uid = process.getuid?.();
+    // Without uid/ACL ownership, permission changes cannot be ruled out safely.
+    if (uid === undefined) return true;
     const parent = dirname(path);
     try {
       const parentEntry = statSync(parent, { bigint: true });
-      if (uid !== undefined && parentEntry.uid === BigInt(uid)) return true;
+      if (uid === 0 || (uid !== undefined && parentEntry.uid === BigInt(uid))) return true;
       accessSync(parent, constants.W_OK | constants.X_OK);
       // Sticky parents allow removal only to root, the parent owner or the entry owner.
       return (
@@ -168,6 +163,36 @@ export function resolvePackageCheckScript(
       }
       throw error;
     }
+  };
+  const addArtifactDirectory = (path: string): void => {
+    const resolved = realpathSync(path);
+    artifactDirectories.add(resolved);
+    if (entryMayBeRenamed(resolved, statSync(resolved, { bigint: true }))) {
+      // The parent must detect leaf replacement even when the parent itself is protected.
+      artifactContainers.add(dirname(resolved));
+    }
+  };
+  try {
+    addArtifactDirectory(cwd);
+    if (packageName) {
+      const trustedWorkspace = RECOGNIZED_WORKSPACE_ROOTS[packageName];
+      if (!trustedWorkspace) return undefined;
+      addArtifactDirectory(join(cwd, trustedWorkspace));
+    }
+  } catch {
+    return undefined;
+  }
+  const directoryNeedsMetadata = (path: string, entry: BigIntStats): boolean => {
+    if (artifactContainers.has(path)) return true;
+    if (artifactDirectories.has(path)) return false;
+    const uid = process.getuid?.();
+    // Owners can chmod a protected ancestor, temporarily enabling descendant replacement.
+    return (
+      uid === undefined ||
+      uid === 0 ||
+      (uid !== undefined && entry.uid === BigInt(uid)) ||
+      entryMayBeRenamed(path, entry)
+    );
   };
   const entryIdentity = (entry: BigIntStats, path: string): string[] => {
     if (entry.isDirectory() && !directoryNeedsMetadata(realpathSync(path), entry)) {
@@ -274,11 +299,6 @@ export function resolvePackageCheckScript(
   if (packageName) {
     workspaceRoot = RECOGNIZED_WORKSPACE_ROOTS[packageName];
     if (!workspaceRoot) return undefined;
-    try {
-      artifactDirectories.add(realpathSync(join(cwd, workspaceRoot)));
-    } catch {
-      return undefined;
-    }
     const patterns = Array.isArray(root.workspaces)
       ? root.workspaces
       : root.workspaces &&
