@@ -162,6 +162,8 @@ describe("billing service", () => {
       [502, "unexpected_preapproval", /unavailable right now/],
       [409, "checkout_conflict", /already being created/],
       [409, "already_subscribed", /already have a subscription/],
+      // L1g: the server refuses a checkout while a cancelled plan is still paid.
+      [409, "cancel_grace_active", /stays active until the end of the period.*subscribe again/],
       [400, "email_required", /email address/],
       [503, "stripe_disabled", /turned off/],
     ];
@@ -330,6 +332,29 @@ describe("billing service", () => {
       const out = setup(false);
       expect((await out.service.cancelSubscription()).error).toMatch(/Sign in/);
       expect(out.backend.cancelSubscription).not.toHaveBeenCalled();
+    });
+
+    it("L1g: a cancelled row paid until the period end keeps the plan, blocks checkout and cancel", async () => {
+      const { service, backend } = await ready({
+        ...MP_SUB,
+        status: "canceled",
+        cancelAtPeriodEnd: true,
+      });
+      expect(service.getState()).toMatchObject({
+        currentPlan: "starter",
+        subscription: { status: "canceled", cancelAtPeriodEnd: true },
+      });
+      expect((await service.startCheckout("starter")).error).toMatch(
+        /cancelled plan stays active.*subscribe again after that/,
+      );
+      expect(backend.createBillingSession).not.toHaveBeenCalled();
+      expect((await service.cancelSubscription()).error).toMatch(/no Mercado Pago/);
+      expect(backend.cancelSubscription).not.toHaveBeenCalled();
+      // Past current_period_end fetchBilling no longer returns the row: Free, checkout open.
+      backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
+      await service.refresh();
+      expect(service.getState().currentPlan).toBe("free");
+      expect((await service.startCheckout("starter")).pending).toBe("checkout");
     });
 
     it("a second click while cancelling does not call mp-cancel twice", async () => {

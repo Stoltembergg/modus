@@ -47,6 +47,11 @@ export interface RouterDb {
 
 /** Subscription statuses that unlock the paid plan's models (judgment call: not past_due). */
 export const PLAN_STATUSES = ["active", "trialing"];
+/**
+ * L1g: a cancelled Mercado Pago subscription keeps its plan until current_period_end
+ * (status 'canceled' + cancel_at_period_end, set by process_mp_preapproval only for a paid
+ * row). After that date the same query no longer matches: Free, with nothing to run.
+ */
 
 export function createPostgresRouterDb(dbUrl: string): RouterDb {
   const sql = postgres(dbUrl, { max: 2, idle_timeout: 20, prepare: false });
@@ -75,7 +80,10 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
              (select s.plan
                 from public.subscriptions s
                 join public.plans sp on sp.plan = s.plan
-               where s.user_id = ${userId} and s.status = any(${PLAN_STATUSES})
+               where s.user_id = ${userId}
+                 and (s.status = any(${PLAN_STATUSES})
+                      or (s.provider = 'mercadopago' and s.status = 'canceled'
+                          and s.cancel_at_period_end and s.current_period_end > now()))
                order by sp.monthly_credits desc, s.plan
                limit 1),
              'free')`;

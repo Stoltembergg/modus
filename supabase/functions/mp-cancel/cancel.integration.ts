@@ -107,7 +107,7 @@ Deno.test({
                                         cancel_requested_at is not null as requested
                                    from public.subscriptions
                                  where provider_subscription_id = ${PRE}`;
-        // [status, cancel_at_period_end (never written by L1e), cancel requested]
+        // [status, cancel_at_period_end (L1g grace: only for a paid row), cancel requested]
         return [r.status, r.cancel_at_period_end, r.requested];
       };
 
@@ -150,10 +150,33 @@ Deno.test({
       await notify("l1e-2");
       assertEquals((await row())[0], "canceled");
 
-      // A new checkout is possible again.
+      // A new checkout is possible again (this row was never paid: canceled without the grace flag).
       const again = await checkout(post({ plan: "starter" }));
       assertEquals(again.status, 200);
       assertEquals(created, 2, "a fresh preapproval for the new checkout");
+
+      // L1g: while a cancelled MP plan is still paid (grace), mp-checkout refuses on the server
+      // (409 cancel_grace_active, no preapproval created); allowed once current_period_end passed.
+      await admin`insert into public.subscriptions
+                    (user_id, provider, provider_subscription_id, plan, status,
+                     cancel_at_period_end, current_period_end)
+                  values (${otherId}, 'mercadopago', 'PREL1GGRACE', 'starter', 'canceled', true,
+                          now() + interval '20 days')`;
+      const otherCheckout = createMpCheckoutHandler({
+        api,
+        db,
+        getUser: () =>
+          Promise.resolve({ id: otherId as string, email: "mp-cancel-other@example.com" }),
+        urls: () => URLS,
+        expect: EXPECT,
+      });
+      const refused = await otherCheckout(post({ plan: "starter" }));
+      assertEquals([refused.status, await refused.json()], [409, { error: "cancel_grace_active" }]);
+      assertEquals(created, 2, "no preapproval during the grace");
+      await admin`update public.subscriptions set current_period_end = now() - interval '1 second'
+                   where provider_subscription_id = 'PREL1GGRACE'`;
+      assertEquals((await otherCheckout(post({ plan: "starter" }))).status, 200);
+      assertEquals(created, 3, "a preapproval once the period ended");
     } finally {
       await admin.end();
     }

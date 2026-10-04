@@ -381,3 +381,87 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name: "model-router against a real Postgres: L1g cancelled Mercado Pago plan until current_period_end, then Free",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false });
+    const up = fakeUpstream(async (seen) => {
+      await Promise.resolve();
+      const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
+      return new Response(
+        sse([
+          { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] },
+          { ...head, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+          { ...head, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+        ]),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const db = createPostgresRouterDb(dbUrl ?? "");
+    const PAID = "deepseek/deepseek-v4-pro";
+    const FREE = { plan: "free", allowedModels: [FLASH, "zai/glm-5.3-flash"] };
+    try {
+      const [{ id: userId }] =
+        await admin`select tests.create_user('router-l1g@example.com', true) as id`;
+      const h = createRouterHandler({
+        db,
+        getUser: () => Promise.resolve({ id: userId as string, email: null }),
+        config: routerConfig(up.baseUrl),
+        catalog: [...MODEL_CATALOG, { ...MODEL_CATALOG[0], id: PAID, upstreamId: "pro" }],
+        log: () => {},
+      });
+      const call = async (model: string, key: string) => {
+        const res = await h(completionRequest({ model, messages: MESSAGES }, { key }));
+        const body = await res.json();
+        return [res.status, res.status === 200 ? body.model : body.error];
+      };
+      const set = (patch: { status: string; ending: boolean; end: string }) =>
+        admin`update public.subscriptions
+                 set status = ${patch.status}, cancel_at_period_end = ${patch.ending},
+                     current_period_end = now() + ${patch.end}::interval
+               where provider_subscription_id = 'PRERG1'`;
+      await admin`insert into public.subscriptions
+                    (user_id, provider, provider_subscription_id, plan, status, current_period_end)
+                  values (${userId}, 'mercadopago', 'PRERG1', 'starter', 'active',
+                          now() + interval '20 days')`;
+      assertEquals(await call(PAID, "g-active"), [200, PAID]);
+
+      // Cancelled by Mercado Pago, paid until the period end: the plan stays.
+      await set({ status: "canceled", ending: true, end: "20 days" });
+      assertEquals(await db.getPlan(userId), { plan: "starter", allowedModels: null });
+      assertEquals(await call(PAID, "g-grace"), [200, PAID]);
+
+      // The period is over: Free, with nothing having to run.
+      await set({ status: "canceled", ending: true, end: "-1 second" });
+      assertEquals(await db.getPlan(userId), FREE);
+      assertEquals(await call(PAID, "g-ended"), [403, "model_not_in_plan"]);
+      assertEquals(await call(FLASH, "g-ended-free"), [200, FLASH]);
+
+      // Canceled without the grace flag (refund / chargeback / never paid): Free at once.
+      await set({ status: "canceled", ending: false, end: "20 days" });
+      assertEquals(await db.getPlan(userId), FREE);
+      // Blocked (chargeback) never keeps the plan, flag or not.
+      await set({ status: "blocked", ending: true, end: "20 days" });
+      assertEquals(await db.getPlan(userId), FREE);
+      // Paused stays Free even with a future period (paused-as-live).
+      await set({ status: "paused", ending: false, end: "20 days" });
+      assertEquals(await db.getPlan(userId), FREE);
+
+      // A Stripe row's cancel_at_period_end keeps Stripe's meaning: a canceled Stripe row is Free.
+      await admin`update public.subscriptions set status = 'canceled' where provider_subscription_id = 'PRERG1'`;
+      await admin`insert into public.subscriptions
+                    (user_id, stripe_subscription_id, plan, status, cancel_at_period_end,
+                     current_period_end)
+                  values (${userId}, 'sub_l1g_router', 'starter', 'canceled', true,
+                          now() + interval '20 days')`;
+      assertEquals(await db.getPlan(userId), FREE);
+    } finally {
+      await up.close();
+      await admin.end();
+    }
+  },
+});
