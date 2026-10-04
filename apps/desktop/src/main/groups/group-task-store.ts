@@ -538,11 +538,10 @@ export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
     rejectEventOperationCollision(db, input.operationId);
     const { operationId, expectedVersion, ...binding } = input;
     const previousOperation = db
-      .prepare("select operation_id from group_task_runs where operation_id = ?")
-      .get(operationId);
+      .prepare(`select ${RUN_COLUMNS} from group_task_runs where operation_id = ?`)
+      .get(operationId) as RunRow | undefined;
     if (previousOperation) {
-      const existing = getGroupTaskRunBinding(input.sessionId, input.runId);
-      if (existing && sameBinding(existing, binding)) return;
+      if (sameBinding(toRun(previousOperation), binding)) return;
       throw new GroupStoreError(
         "invalid-value",
         `operationId ${operationId} was used for another run.`,
@@ -550,10 +549,9 @@ export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
     }
     const existing = getGroupTaskRunBinding(input.sessionId, input.runId);
     if (existing) {
-      if (sameBinding(existing, binding)) return;
       throw new GroupStoreError(
         "invalid-value",
-        `Run ${input.runId} is bound to a different task or version.`,
+        `Run ${input.runId} is already bound by another operation.`,
       );
     }
     const task = requireGroupTask(input.groupId, input.taskId);
@@ -864,6 +862,8 @@ function writeTaskTransition(
     reviewer?: string | null;
     branch?: string;
   },
+  action: string,
+  actorSessionId: string,
 ): GroupTask {
   const current = requireTask(taskId);
   const sets = ["status = ?"];
@@ -886,7 +886,7 @@ function writeTaskTransition(
   getDatabase()
     .prepare(`update group_tasks set ${sets.join(", ")} where id = ?`)
     .run(...params, taskId);
-  recordGroupTaskLegacyTransition(current, "transition");
+  recordGroupTaskLegacyTransition(current, action, actorSessionId);
   return requireTask(taskId);
 }
 
@@ -932,12 +932,17 @@ export function claimGroupTask(
       throw new GroupStoreError("task-taken", `Task ${taskId} is already owned.`);
     }
     if (effectiveTaskStatus(task) !== INITIAL_TASK_STATUS) throw invalidTransition(task, "claim");
-    return writeTaskTransition(taskId, {
-      status: IN_PROGRESS_TASK_STATUS,
-      owner: actorSessionId,
-      ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
-      ...(options.branch ? { branch: options.branch } : {}),
-    });
+    return writeTaskTransition(
+      taskId,
+      {
+        status: IN_PROGRESS_TASK_STATUS,
+        owner: actorSessionId,
+        ...(task.reviewerSessionId === actorSessionId ? { reviewer: null } : {}),
+        ...(options.branch ? { branch: options.branch } : {}),
+      },
+      "claim",
+      actorSessionId,
+    );
   });
 }
 
@@ -974,12 +979,17 @@ export function assignGroupTask(
     const reviewer = task.reviewerSessionId === assigneeSessionId ? { reviewer: null } : {};
     if (status === INITIAL_TASK_STATUS) {
       return {
-        task: writeTaskTransition(taskId, {
-          status: IN_PROGRESS_TASK_STATUS,
-          owner: assigneeSessionId,
-          ...reviewer,
-          ...(options.branch ? { branch: options.branch } : {}),
-        }),
+        task: writeTaskTransition(
+          taskId,
+          {
+            status: IN_PROGRESS_TASK_STATUS,
+            owner: assigneeSessionId,
+            ...reviewer,
+            ...(options.branch ? { branch: options.branch } : {}),
+          },
+          "assign",
+          actorSessionId,
+        ),
       };
     }
     if (
@@ -990,11 +1000,16 @@ export function assignGroupTask(
       throw invalidTransition(task, "assign");
     }
     return {
-      task: writeTaskTransition(taskId, {
-        status: IN_PROGRESS_TASK_STATUS,
-        owner: assigneeSessionId,
-        ...reviewer,
-      }),
+      task: writeTaskTransition(
+        taskId,
+        {
+          status: IN_PROGRESS_TASK_STATUS,
+          owner: assigneeSessionId,
+          ...reviewer,
+        },
+        "assign",
+        actorSessionId,
+      ),
       previousOwnerSessionId: task.ownerSessionId,
     };
   });
@@ -1045,7 +1060,12 @@ export function releaseGroupTask(
       throw new GroupStoreError("not-owner", `Only the owner can release task ${taskId}.`);
     }
     if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "release");
-    return writeTaskTransition(taskId, { status: INITIAL_TASK_STATUS, owner: null });
+    return writeTaskTransition(
+      taskId,
+      { status: INITIAL_TASK_STATUS, owner: null },
+      "release",
+      actorSessionId,
+    );
   });
 }
 
@@ -1067,10 +1087,15 @@ export function requestGroupTaskReview(
     }
     requireMember(groupId, reviewerSessionId, "reviewer");
     if (task.status !== IN_PROGRESS_TASK_STATUS) throw invalidTransition(task, "request review of");
-    return writeTaskTransition(taskId, {
-      status: IN_REVIEW_TASK_STATUS,
-      reviewer: reviewerSessionId,
-    });
+    return writeTaskTransition(
+      taskId,
+      {
+        status: IN_REVIEW_TASK_STATUS,
+        reviewer: reviewerSessionId,
+      },
+      "request_review",
+      actorSessionId,
+    );
   });
 }
 
@@ -1101,9 +1126,14 @@ export function reviewGroupTask(
         `Only the reviewer of a pending review can review task ${taskId}.`,
       );
     }
-    return writeTaskTransition(taskId, {
-      status: next === "approve" ? "done" : IN_PROGRESS_TASK_STATUS,
-    });
+    return writeTaskTransition(
+      taskId,
+      {
+        status: next === "approve" ? "done" : IN_PROGRESS_TASK_STATUS,
+      },
+      "review",
+      actorSessionId,
+    );
   });
 }
 
@@ -1124,6 +1154,6 @@ export function completeGroupTaskForAgreement(
     const status = effectiveTaskStatus(task);
     if (CLOSED_TASK_STATUSES.includes(status))
       throw invalidTransition(task, "complete by agreement");
-    return writeTaskTransition(taskId, { status: "done" });
+    return writeTaskTransition(taskId, { status: "done" }, "agreement", actorSessionId);
   });
 }

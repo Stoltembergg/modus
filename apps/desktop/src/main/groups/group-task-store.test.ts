@@ -11,6 +11,13 @@ const {
   createAgentGroup,
   addAgentGroupMember,
   createGroupTask,
+  claimGroupTask,
+  assignGroupTask,
+  releaseGroupTask,
+  requestGroupTaskReview,
+  reviewGroupTask,
+  completeGroupTaskForAgreement,
+  setAgentGroupLead,
   removeAgentGroupMember,
   listGroupTasks,
 } = await import("./group-store");
@@ -348,6 +355,75 @@ describe("versioned task state", () => {
     expect(listGroupTasks(group.id)[0]).toMatchObject({ status: "open", stateVersion: 3 });
     expect(listGroupTaskTransitions(task.id)).toHaveLength(2);
     expect(getGroupTaskRunBinding(owner, input.runId)?.taskId).toBe(task.id);
+  });
+
+  it("rejects a saved operation key for another bound run and a fresh key for an existing run", () => {
+    const { group, task, owner } = fixture();
+    const first = {
+      groupId: group.id,
+      taskId: task.id,
+      taskVersion: 1,
+      criteriaVersion: 1,
+      sessionId: owner,
+      runId: crypto.randomUUID(),
+      executionId: "execution",
+      role: "owner" as const,
+      sourceFingerprint: "sha",
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+    };
+    const second = { ...first, runId: crypto.randomUUID(), operationId: crypto.randomUUID() };
+    bindGroupTaskRun(first);
+    bindGroupTaskRun(second);
+    expect(() => bindGroupTaskRun({ ...second, operationId: first.operationId })).toThrow();
+    expect(() => bindGroupTaskRun({ ...first, operationId: crypto.randomUUID() })).toThrow();
+    expect(getGroupTaskRunBinding(owner, first.runId)?.taskId).toBe(task.id);
+    expect(getGroupTaskRunBinding(owner, second.runId)?.taskId).toBe(task.id);
+  });
+
+  it("records concrete legacy actions and actors, including same-status reassignment", () => {
+    const { group, task, owner, reviewer } = fixture();
+    const open = createGroupTask({ groupId: group.id, title: "Review path" });
+    claimGroupTask(group.id, open.id, owner);
+    releaseGroupTask(group.id, open.id, owner);
+    claimGroupTask(group.id, open.id, owner);
+    requestGroupTaskReview(group.id, open.id, owner, reviewer);
+    reviewGroupTask(group.id, open.id, reviewer, "changes");
+    requestGroupTaskReview(group.id, open.id, owner, reviewer);
+    reviewGroupTask(group.id, open.id, reviewer, "approve");
+    expect(
+      listGroupTaskTransitions(open.id).map(({ action, actorSessionId }) => [
+        action,
+        actorSessionId,
+      ]),
+    ).toEqual([
+      ["claim", owner],
+      ["release", owner],
+      ["claim", owner],
+      ["request_review", owner],
+      ["review", reviewer],
+      ["request_review", owner],
+      ["review", reviewer],
+    ]);
+    completeGroupTaskForAgreement(group.id, task.id, reviewer);
+    expect(listGroupTaskTransitions(task.id)[0]).toMatchObject({
+      action: "agreement",
+      actorSessionId: reviewer,
+    });
+    setAgentGroupLead(group.id, owner);
+    const reassigned = createGroupTask({
+      groupId: group.id,
+      title: "Reassign",
+      status: "in_progress",
+      ownerSessionId: owner,
+    });
+    assignGroupTask(group.id, reassigned.id, owner, reviewer);
+    expect(listGroupTaskTransitions(reassigned.id)[0]).toMatchObject({
+      action: "assign",
+      actorSessionId: owner,
+      fromStatus: "in_progress",
+      toStatus: "in_progress",
+    });
   });
 
   it("does not reuse an event operation key for a run or lose reviewer history", () => {
