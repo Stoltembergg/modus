@@ -81,7 +81,17 @@ export function registerGroupWorkIpcHandlers(
   const handle: HandlerRegistration["handle"] = (channel, listener) => {
     ipcMain.handle(channel, (event, input) => {
       try {
-        return listener(event, input);
+        const result = listener(event, input);
+        if (
+          result !== null &&
+          (typeof result === "object" || typeof result === "function") &&
+          typeof (result as PromiseLike<unknown>).then === "function"
+        ) {
+          return Promise.resolve(result).catch((error: unknown) => {
+            throw toGroupIpcError(error);
+          });
+        }
+        return result;
       } catch (error) {
         throw toGroupIpcError(error);
       }

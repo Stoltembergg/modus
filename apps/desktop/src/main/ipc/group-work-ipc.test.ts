@@ -152,6 +152,56 @@ describe("group work IPC", () => {
     expect(service.updateGroupTaskDraft).not.toHaveBeenCalled();
   });
 
+  it("converts rejected detail resolver errors and leaves unknown errors intact", async () => {
+    const staleTaskError = Object.assign(new Error("Task changed while details were loading."), {
+      name: "GroupStoreError",
+      code: "stale-task",
+    });
+    const stale = await register(
+      setup({
+        getGroupTaskDetails: vi.fn(async () => {
+          throw staleTaskError;
+        }),
+      }),
+    );
+    const detailsHandler = stale.handlers.get(IPC_CHANNELS.groupGetTaskDetails);
+    await expect(detailsHandler?.(trusted, { groupId: "g-1", taskId: "t-1" })).rejects.toThrow(
+      "[group-error:stale-task] Task changed while details were loading.",
+    );
+
+    const unknownError = new Error("Unrecognized resolver failure.");
+    const unknown = await register(
+      setup({
+        getGroupTaskDetails: vi.fn(async () => {
+          throw unknownError;
+        }),
+      }),
+    );
+    await expect(
+      unknown.handlers.get(IPC_CHANNELS.groupGetTaskDetails)?.(trusted, {
+        groupId: "g-1",
+        taskId: "t-1",
+      }),
+    ).rejects.toBe(unknownError);
+  });
+
+  it("still converts synchronous GroupStoreError throws", async () => {
+    const staleTaskError = Object.assign(new Error("Synchronous store error."), {
+      name: "GroupStoreError",
+      code: "stale-task",
+    });
+    const { handlers } = await register(
+      setup({
+        getGroupWorkState: vi.fn(() => {
+          throw staleTaskError;
+        }),
+      }),
+    );
+    expect(() =>
+      handlers.get(IPC_CHANNELS.groupGetWorkState)?.(trusted, { groupId: "g-1" }),
+    ).toThrow("[group-error:stale-task] Synchronous store error.");
+  });
+
   it("passes the expected version to the authoritative draft updater", async () => {
     const { handlers, service } = await register();
     expect(
