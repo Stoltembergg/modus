@@ -112,14 +112,22 @@ export function applyCollabPipeline(
 
 /**
  * "Copy from another group": an independent copy (name, role, instructions,
- * model, face, color) that becomes a normal member: no templateId, no
- * history, a new agent. A copied template agent on the app default (null)
+ * model, avatar and explicit capability metadata) that becomes a normal member:
+ * no templateId, no history, a new agent. A copied template agent on the app default (null)
  * takes `fallbackModelId`, because a member without a template needs a model.
  */
 export function copyMember(
   agent: Pick<
     AgentInfo,
-    "name" | "role" | "instructions" | "modelId" | "avatarFace" | "avatarColor" | "avatarShape"
+    | "name"
+    | "role"
+    | "instructions"
+    | "modelId"
+    | "avatarFace"
+    | "avatarColor"
+    | "avatarShape"
+    | "capabilityIds"
+    | "supportedTaskKinds"
   >,
   members: readonly NewGroupMember[],
   key: string,
@@ -132,6 +140,7 @@ export function copyMember(
       agent.name,
       members.map((member) => member.name),
     ),
+    ...normalizeGroupMemberCapabilities(agent),
     role: agent.role,
     instructions: agent.instructions,
     modelId: agent.modelId ?? fallbackModelId,

@@ -52,6 +52,8 @@ describe("newGroupModel (A4)", () => {
     expect(copy).toEqual({
       key: "c1",
       source: "copy",
+      capabilityIds: [],
+      supportedTaskKinds: [],
       name: "Builder 2",
       role: "Fixer",
       instructions: "Fix it.",
@@ -182,4 +184,62 @@ it("preserves explicit dialog capabilities in the group creation payload", () =>
     capabilityIds: ["docs"],
     supportedTaskKinds: ["docs"],
   });
+});
+
+it("preserves configured capabilities when copying an agent into group:create", () => {
+  const agent = {
+    name: "Reviewer",
+    role: "Reviewer",
+    instructions: "Review diffs.",
+    modelId: "m-1",
+    avatarFace: "curious" as const,
+    avatarColor: "amber" as const,
+    avatarShape: "circle" as const,
+    templateId: "reviewer",
+    capabilityIds: ["review", "review"],
+    supportedTaskKinds: ["code", "code"] as const,
+  };
+  const copy = copyMember(
+    { ...agent, supportedTaskKinds: [...agent.supportedTaskKinds] },
+    members(1),
+    "copy",
+  );
+  const payload = newGroupCreateInput({
+    name: "Crew",
+    workspaceId: "ws",
+    members: [...members(1), copy],
+    leadKey: "copy",
+  });
+  expect(payload.members[1]).toMatchObject({
+    name: "Reviewer",
+    capabilityIds: ["review"],
+    supportedTaskKinds: ["code"],
+  });
+  expect(payload.members[1]?.templateId).toBeUndefined();
+  expect(agent.capabilityIds).toEqual(["review", "review"]);
+});
+
+it("keeps legacy copied capability metadata empty without inferring from the profile", () => {
+  const copy = copyMember(
+    {
+      name: "Builder",
+      role: "Reviewer",
+      instructions: "Implement and verify with shell.",
+      modelId: "m-1",
+      avatarFace: "happy",
+      avatarColor: "blue",
+      avatarShape: "circle",
+    },
+    members(1),
+    "legacy-copy",
+  );
+  const payload = newGroupCreateInput({
+    name: "Crew",
+    workspaceId: "ws",
+    members: [...members(1), copy],
+    leadKey: "legacy-copy",
+  });
+  expect(copy).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+  expect(payload.members[1]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+  expect(payload.members[1]?.templateId).toBeUndefined();
 });
