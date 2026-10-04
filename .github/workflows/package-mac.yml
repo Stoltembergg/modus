@@ -2,8 +2,6 @@ name: Package macOS
 
 on:
   workflow_dispatch:
-  push:
-    branches: [cursor/macos-package-test-5588]
   pull_request:
     branches: [main]
     paths:
@@ -137,4 +135,3 @@ jobs:
             apps/desktop/dist/mac*/**
           if-no-files-found: warn
           retention-days: 7
-# ci-retrigger: package macOS for resume PR tip
