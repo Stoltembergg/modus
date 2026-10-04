@@ -57,6 +57,7 @@ Deno.test({
           const pre = preapprovals.get(id);
           return pre ? Promise.resolve(structuredClone(pre)) : Promise.reject(new Error(id));
         },
+        createPreference: () => Promise.reject(new Error("not used here")),
         cancelPreapproval: (id) => {
           puts.push(id);
           const pre = preapprovals.get(id);

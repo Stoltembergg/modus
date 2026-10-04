@@ -7,6 +7,7 @@ import {
   normalizePayment,
   normalizePreapproval,
   normalizePreapprovalStatus,
+  normalizePreference,
   toMinor,
 } from "./mp.ts";
 
@@ -189,6 +190,103 @@ Deno.test("createPreapproval: pending, BRL monthly, external_reference + X-Idemp
     back_url: "https://example.com/billing?modus_billing=success",
     status: "pending",
   });
+});
+
+Deno.test("createPreference: Checkout Pro, one item, Pix + card, 1 installment, notification_url, X-Idempotency-Key", async () => {
+  let body: Record<string, unknown> = {};
+  let headers: Record<string, string> = {};
+  let url = "";
+  const api = createMpApi(TOKEN, {
+    fetchImpl: (input, init) => {
+      url = String(input);
+      body = JSON.parse(String(init?.body));
+      headers = init?.headers as Record<string, string>;
+      return Promise.resolve(
+        Response.json({
+          id: "777-abc",
+          external_reference: "pu-1",
+          collector_id: 777,
+          items: [{ id: "credits_5k", quantity: 1, unit_price: 36.9, currency_id: "BRL" }],
+          init_point: "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=777-abc",
+          sandbox_init_point: "https://sandbox.mercadopago.com.br/x",
+        }),
+      );
+    },
+  });
+  const pref = await api.createPreference(
+    {
+      packId: "credits_5k",
+      title: "Modus 5,000 credits",
+      externalReference: "pu-1",
+      payerEmail: "ana@example.com",
+      amountMinor: 3690,
+      currency: "BRL",
+      notificationUrl: "https://p.supabase.co/functions/v1/mp-webhook?source_news=webhooks",
+      backUrls: {
+        success: "https://e.com/s",
+        pending: "https://e.com/s",
+        failure: "https://e.com/f",
+      },
+      expiresAt: new Date("2026-10-04T02:01:00Z"),
+    },
+    "pu-1",
+  );
+  assertEquals(url, "https://api.mercadopago.com/checkout/preferences");
+  assertEquals(headers["x-idempotency-key"], "pu-1");
+  assertEquals(pref, {
+    id: "777-abc",
+    external_reference: "pu-1",
+    collector_id: "777",
+    amount_minor: 3690,
+    currency: "BRL",
+    init_point: "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=777-abc",
+  });
+  assertEquals(body, {
+    items: [
+      {
+        id: "credits_5k",
+        title: "Modus 5,000 credits",
+        quantity: 1,
+        currency_id: "BRL",
+        unit_price: 36.9,
+      },
+    ],
+    payer: { email: "ana@example.com" },
+    external_reference: "pu-1",
+    notification_url: "https://p.supabase.co/functions/v1/mp-webhook?source_news=webhooks",
+    back_urls: {
+      success: "https://e.com/s",
+      pending: "https://e.com/s",
+      failure: "https://e.com/f",
+    },
+    auto_return: "approved",
+    expires: true,
+    expiration_date_to: "2026-10-04T02:01:00.000Z",
+    payment_methods: {
+      excluded_payment_types: [{ id: "ticket" }, { id: "atm" }],
+      installments: 1,
+      default_installments: 1,
+    },
+    statement_descriptor: "MODUS",
+  });
+});
+
+Deno.test("normalizePreference: exactly one item of quantity 1, valid id", () => {
+  const ok = {
+    id: "777-abc",
+    items: [{ quantity: 1, unit_price: "68.90", currency_id: "BRL" }],
+    init_point: "https://www.mercadopago.com.br/x",
+  };
+  assertEquals(normalizePreference(ok).amount_minor, 6890);
+  for (const bad of [
+    { ...ok, id: "bad id" },
+    { ...ok, items: [] },
+    { ...ok, items: [ok.items[0], ok.items[0]] },
+    { ...ok, items: [{ ...ok.items[0], quantity: 2 }] },
+    { ...ok, items: [{ ...ok.items[0], unit_price: -1 }] },
+  ]) {
+    assertThrows(() => normalizePreference(bad), MpApiError);
+  }
 });
 
 Deno.test("cancelPreapproval: PUT /preapproval/{id} { status: canceled }; id validated first", async () => {

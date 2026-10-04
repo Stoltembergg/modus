@@ -32,6 +32,19 @@ export type MpLinkResult = {
   code: "linked" | "already_linked" | "conflict" | "not_found";
   checkoutUrl: string | null;
 };
+/** L5b: private.mp_create_purchase result (pack frozen from public.credit_packs). */
+export type MpPurchase =
+  | { code: "unknown_pack" }
+  | { code: "blocked" }
+  | {
+      code: "created";
+      purchaseId: string;
+      packId: string;
+      name: string;
+      credits: number;
+      amountMinor: number;
+      currency: string;
+    };
 export type MpClaim = "new" | "retry" | "duplicate";
 /** L1e: one of the user's live Mercado Pago subscriptions (private.mp_cancel_targets). */
 export type MpCancelTarget = { preapprovalId: string; status: string; cancelRequested: boolean };
@@ -58,6 +71,10 @@ export interface BillingDb {
   /** B6a: private.mp_create_checkout (creates or reuses the user's open checkout). */
   mpCreateCheckout(userId: string, plan: string): Promise<MpCheckout>;
   mpLinkCheckout(checkoutId: string, preapprovalId: string, url: string): Promise<MpLinkResult>;
+  /** L5b: private.mp_create_purchase (a new purchase per call; price from the DB). */
+  mpCreatePurchase(userId: string, packId: string): Promise<MpPurchase>;
+  /** L5b: private.mp_link_purchase (stores the Checkout Pro preference). */
+  mpLinkPurchase(purchaseId: string, preferenceId: string, url: string): Promise<MpLinkResult>;
   mpClaimNotification(requestId: string, topic: string, dataId: string): Promise<MpClaim>;
   mpFinishNotification(requestId: string, result: string): Promise<void>;
   /** Marks the notification processed in the SAME transaction (requestId). */
@@ -197,6 +214,34 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
       asServiceRole(async (tx) => {
         const rows =
           await tx`select private.mp_link_checkout(${checkoutId}, ${preapprovalId}, ${url}) as r`;
+        const r = rows[0].r as Record<string, unknown>;
+        return {
+          code: r.code as MpLinkResult["code"],
+          checkoutUrl: typeof r.checkout_url === "string" ? r.checkout_url : null,
+        };
+      }),
+
+    mpCreatePurchase: (userId, packId) =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`select private.mp_create_purchase(${userId}, ${packId}) as r`;
+        const r = rows[0].r as Record<string, unknown>;
+        if (r.code === "unknown_pack" || r.code === "blocked") return { code: r.code };
+        if (r.code !== "created") throw new Error("unexpected purchase code");
+        return {
+          code: "created",
+          purchaseId: String(r.purchase_id),
+          packId: String(r.pack_id),
+          name: String(r.name),
+          credits: Number(r.credits),
+          amountMinor: Number(r.amount_minor),
+          currency: String(r.currency),
+        };
+      }),
+
+    mpLinkPurchase: (purchaseId, preferenceId, url) =>
+      asServiceRole(async (tx) => {
+        const rows =
+          await tx`select private.mp_link_purchase(${purchaseId}, ${preferenceId}, ${url}) as r`;
         const r = rows[0].r as Record<string, unknown>;
         return {
           code: r.code as MpLinkResult["code"],
