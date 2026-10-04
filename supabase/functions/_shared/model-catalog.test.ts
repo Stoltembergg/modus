@@ -91,7 +91,11 @@ Deno.test("SERVER_ONLY_MODELS: an entry that appears in catalog/models.json fail
 
 Deno.test("every seeded plans.allowed_models id is in the model table with a price", async () => {
   const seeded = await seededAllowedModels();
-  assertEquals([...new Set(seeded)].sort(), ["deepseek/deepseek-flash", "zai/glm-5.3-flash"]);
+  assertEquals([...new Set(seeded)].sort(), [
+    "anthropic/claude-opus-5-5",
+    "deepseek/deepseek-flash",
+    "zai/glm-5.3-flash",
+  ]);
   for (const id of seeded) {
     const model = MODEL_CATALOG.find((m) => m.id === id);
     assert(model, `${id} missing from the model table`);
@@ -128,6 +132,8 @@ Deno.test("groupRatio: pinned per model, EXACTLY the snapshot ratio of its upstr
   const pinned: Record<string, (string | number)[]> = {
     "deepseek/deepseek-flash": ["model - china", 0.8],
     "zai/glm-5.3-flash": ["model - china", 0.8],
+    "anthropic/claude-opus-5-5": ["claude", 1],
+    "anthropic/claude-fable-5-1": ["claude", 1],
   };
   assertEquals(
     Object.fromEntries(MODEL_CATALOG.map((m) => [m.id, [m.upstreamGroup as string, m.groupRatio]])),
@@ -173,7 +179,34 @@ Deno.test("prices: the vibi 2026-10-03 snapshot derived with the New API premise
     newApiPrice({ modelRatio: 1, completionRatio: 2, cacheRatio: 0.1, groupRatio: 1.5 }),
     { input: 3, output: 6, cacheRead: 0.3 },
   );
+  // L5c (provisional, pending the upstream probe).
+  assertEquals(byId["anthropic/claude-opus-5-5"].upstreamId, "claude-opus-5-5");
+  assertEquals(byId["anthropic/claude-opus-5-5"].cost, {
+    input: 6,
+    output: 30,
+    cacheRead: 0.85,
+    cacheWrite: 7.5,
+  });
+  assertEquals(byId["anthropic/claude-fable-5-1"].upstreamId, "claude-fable-5-1");
+  assertEquals(byId["anthropic/claude-fable-5-1"].cost, {
+    input: 10,
+    output: 50,
+    cacheRead: 0.25,
+    cacheWrite: 12.5,
+  });
+  assertEquals(
+    newApiPrice({
+      modelRatio: 1,
+      completionRatio: 1,
+      cacheRatio: 0.1,
+      createCacheRatio: 1.25,
+      groupRatio: 1,
+    }),
+    { input: 2, output: 2, cacheRead: 0.2, cacheWrite: 2.5 },
+  );
   assertEquals(MODEL_CATALOG.map((m) => m.id).sort(), [
+    "anthropic/claude-fable-5-1",
+    "anthropic/claude-opus-5-5",
     "deepseek/deepseek-flash",
     "zai/glm-5.3-flash",
   ]);

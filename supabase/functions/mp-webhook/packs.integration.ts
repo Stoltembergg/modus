@@ -24,7 +24,9 @@ const SECRET = "integration-webhook-secret";
 const EXPECT = { liveMode: false as const, collectorId: "777" };
 const PAID = "deepseek/deepseek-v4-pro";
 const FLASH = "deepseek/deepseek-flash";
-const STARTER_MODELS = [FLASH, "zai/glm-5.3-flash"];
+const FREE_MODELS = [FLASH, "zai/glm-5.3-flash"];
+// L5c: Starter = the Free models + Claude Opus 5.5 (provisional); claude-fable-* is Pro+.
+const STARTER_MODELS = [...FREE_MODELS, "anthropic/claude-opus-5-5"];
 
 Deno.test({
   name: "L5a credit packs against a real Postgres: webhook -> lot -> router access -> allowance then lot -> refund / chargeback",
@@ -186,7 +188,8 @@ Deno.test({
     const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
     const billing = createPostgresBillingDb(dbUrl ?? "");
     const routerDb = createPostgresRouterDb(dbUrl ?? "");
-    const FABLE = "anthropic/claude-fable-5";
+    const FABLE = "anthropic/claude-fable-5-1";
+    const OPUS = "anthropic/claude-opus-5-5";
     const up = fakeUpstream(async (seen) => {
       await Promise.resolve();
       const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
@@ -199,9 +202,9 @@ Deno.test({
         { headers: { "content-type": "text/event-stream" } },
       );
     });
-    // Fable is not in the production MODEL_CATALOG yet: injected here only into the handler's
-    // catalog. The plans are the REAL seed (no override): Starter's explicit list has no
-    // claude-fable-*, Pro keeps every model (NULL).
+    // The REAL MODEL_CATALOG (L5c: Fable 5.1 and Opus 5.5 provisional) and the REAL plan seed
+    // (no override): Starter's explicit list has Opus but no claude-fable-*, Pro keeps every
+    // model (NULL).
     try {
       const [{ allowed }] =
         await admin`select allowed_models as allowed from public.plans where plan = 'starter'`;
@@ -211,13 +214,15 @@ Deno.test({
       const h = createRouterHandler({
         db: routerDb,
         getUser: () => Promise.resolve({ id: userId as string, email: null }),
-        config: routerConfig(up.baseUrl),
-        catalog: [...MODEL_CATALOG, { ...MODEL_CATALOG[0], id: FABLE, upstreamId: "fable" }],
+        config: routerConfig(up.baseUrl, {
+          keys: { "model - china": "upstream-secret", claude: "claude-secret" },
+        }),
+        catalog: MODEL_CATALOG,
         log: () => {},
       });
-      const call = async (key: string) => {
+      const call = async (key: string, model: string = FABLE) => {
         const res = await h(
-          completionRequest({ model: FABLE, messages: [{ role: "user", content: "hi" }] }, { key }),
+          completionRequest({ model, messages: [{ role: "user", content: "hi" }] }, { key }),
         );
         const body = await res.json();
         return [res.status, res.status === 200 ? body.model : body.error];
@@ -241,6 +246,7 @@ Deno.test({
       assertEquals((await billing.processMpPurchasePayment(first, EXPECT, null)).code, "credited");
       assertEquals((await routerDb.getPlan(userId)).plan, "starter");
       assertEquals(await call("fable-starter"), [403, "model_not_in_plan"]);
+      assertEquals(await call("opus-starter", OPUS), [200, OPUS], "Starter has Opus 5.5");
 
       // The same purchase paid again (same preference): a second lot, credited once.
       const second = pay("690002", p5.purchase_id, 3690);
@@ -261,13 +267,13 @@ Deno.test({
       // Pro (25k) lot: Fable unlocked.
       const [{ r: p25 }] =
         await admin`select private.mp_create_purchase(${userId}, 'credits_25k') as r`;
-      const big = pay("690003", p25.purchase_id, 18090);
+      const big = pay("690003", p25.purchase_id, 18190);
       assertEquals((await billing.processMpPurchasePayment(big, EXPECT, null)).code, "credited");
       assertEquals(await routerDb.getPlan(userId), { plan: "pro", allowedModels: null });
       assertEquals(await call("fable-pro"), [200, FABLE]);
 
       // The pro lot refunded in full: back to the starter lots, Fable refused again.
-      const refunded = { ...big, status: "refunded", refunded_minor: 18090 };
+      const refunded = { ...big, status: "refunded", refunded_minor: 18190 };
       assertEquals(
         (await billing.processMpPurchasePayment(refunded, EXPECT, null)).code,
         "reversed",
@@ -303,7 +309,7 @@ Deno.test({
         "Starter = MODEL_CATALOG minus claude-fable-*",
       );
       for (const plan of ["pro", "max", "ultra"]) assertEquals(byPlan.get(plan), null, plan);
-      assertEquals(byPlan.get("free"), STARTER_MODELS, "Free unchanged");
+      assertEquals(byPlan.get("free"), FREE_MODELS, "Free unchanged");
     } finally {
       await admin.end();
     }
@@ -364,14 +370,14 @@ Deno.test({
       assertEquals(url, "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=777-1");
       assertEquals(
         [prefs[0].amountMinor, prefs[0].currency, prefs[0].notificationUrl],
-        [18090, "BRL", "http://127.0.0.1:54321/functions/v1/mp-webhook?source_news=webhooks"],
+        [18190, "BRL", "http://127.0.0.1:54321/functions/v1/mp-webhook?source_news=webhooks"],
       );
       const [row] =
         await admin`select id, pack_id, credits, amount_minor, status, preference_id, checkout_url
                       from public.credit_purchases where user_id = ${userId}`;
       assertEquals(
         [row.pack_id, Number(row.credits), Number(row.amount_minor), row.status, row.preference_id],
-        ["credits_25k", 25000, 18090, "created", "777-1"],
+        ["credits_25k", 25000, 18190, "created", "777-1"],
       );
       assertEquals(row.checkout_url, url);
 
@@ -380,7 +386,7 @@ Deno.test({
         id: "670001",
         status: "approved",
         status_detail: "accredited",
-        amount_minor: 18090,
+        amount_minor: 18190,
         refunded_minor: 0,
         live_mode: false,
         collector_id: "777",
