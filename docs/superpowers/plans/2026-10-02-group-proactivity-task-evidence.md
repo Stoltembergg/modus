@@ -116,11 +116,11 @@ Adicionar a `GroupTask`: `kind`, `priority`, `stage?`, `blockedReason?`, `depend
 
 **Interfaces:** consome `HarnessTaskCheckKind` e `VerificationEvidenceStatus` existentes. Produz os tipos acima, `validateGroupTaskDraft(draft: GroupTaskDraft, tasks: readonly GroupTask[]): GroupTaskValidationResult` e `evaluateGroupTaskGate(input: GroupTaskGateInput): GroupTaskGateResult`. `criterionOutcomes` representa os resultados resolvidos pelo serviço main; `review_approved` só aparece quando o reviewer aprovou aquele critério para a versão/fingerprint atual. `sourceFingerprint` é a revisão corrente e dependências são snapshots do mesmo grupo.
 
-- [ ] Adicionar testes `required_qa_is_not_satisfied_by_user_confirmation`, `review_is_bound_to_criteria_and_source`, `rejects_dependency_cycles_and_cross_group_ids`, `required_policy_rejects_empty_criteria`, `legacy_none_policy_can_complete`: assertar que `passed` atual satisfaz QA, demais statuses não; revisão/fingerprint antigos não satisfazem; ciclos e outro Grupo são rejeitados; required sem critérios é inválido; tarefa legada sem gate mantém conclusão.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/shared/group-task-policy.test.ts`; esperar falha nas interfaces novas.
-- [ ] Implementar tipos e funções puras. Usar limites existentes do Task State para critérios/referências, e os limites atuais de título/descrição do store. Critério sem check declarado exige aprovação explícita vinculada à revisão atual e política `requireReview=true`; sucesso global de QA não o comprova sozinho. Definir erros `verification-required`, `stale-task`, `dependency-cycle`, `invalid-dependency` e `stale-evidence` na lista compartilhada de erros.
-- [ ] Rodar o mesmo comando; esperar todos os testes aprovados.
-- [ ] Commit: `feat(groups): define verifiable task contracts`.
+- [x] Adicionar testes `required_qa_is_not_satisfied_by_user_confirmation`, `review_is_bound_to_criteria_and_source`, `rejects_dependency_cycles_and_cross_group_ids`, `required_policy_rejects_empty_criteria`, `legacy_none_policy_can_complete`: assertar que `passed` atual satisfaz QA, demais statuses não; revisão/fingerprint antigos não satisfazem; ciclos e outro Grupo são rejeitados; required sem critérios é inválido; tarefa legada sem gate mantém conclusão.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/shared/group-task-policy.test.ts`; esperar falha nas interfaces novas.
+- [x] Implementar tipos e funções puras. Usar limites existentes do Task State para critérios/referências, e os limites atuais de título/descrição do store. Critério sem check declarado exige aprovação explícita vinculada à revisão atual e política `requireReview=true`; sucesso global de QA não o comprova sozinho. Definir erros `verification-required`, `stale-task`, `dependency-cycle`, `invalid-dependency` e `stale-evidence` na lista compartilhada de erros.
+- [x] Rodar o mesmo comando; esperar todos os testes aprovados.
+- [x] Commit: `feat(groups): define verifiable task contracts`.
 
 ## Tarefa 2: Migração e store transacional
 

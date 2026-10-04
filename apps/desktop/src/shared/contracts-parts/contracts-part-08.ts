@@ -1,4 +1,13 @@
 /** Gap 4 contracts split part 8 — Agent Groups DTOs from #62 */
+import type {
+  GroupTaskCriterion,
+  GroupTaskEvidenceRef,
+  GroupTaskKind,
+  GroupTaskPriority,
+  GroupTaskReview,
+  GroupTaskStage,
+  GroupTaskVerificationPolicy,
+} from "../group-work-state";
 /* ── Agent Groups (rooms of normal agent sessions) ─────────────────────── */
 
 export type AgentGroupMode = "free" | "coordinator";
@@ -269,7 +278,13 @@ export type GroupMessage = {
 /** Message pagination cursor: the (createdAt, id) total order of group messages. */
 export type GroupMessageCursor = { createdAt: string; id: string };
 
-export type GroupTaskStatus = "open" | "in_progress" | "in_review" | "done" | "cancelled";
+export type GroupTaskStatus =
+  | "open"
+  | "in_progress"
+  | "blocked"
+  | "in_review"
+  | "done"
+  | "cancelled";
 
 export type GroupTask = {
   id: string;
@@ -280,6 +295,18 @@ export type GroupTask = {
   ownerSessionId?: string;
   createdBySessionId?: string;
   reviewerSessionId?: string;
+  /** Optional until the Group task store migration projects defaults for legacy rows. */
+  kind?: GroupTaskKind;
+  priority?: GroupTaskPriority;
+  stage?: GroupTaskStage;
+  blockedReason?: string;
+  dependencyIds?: string[];
+  criteria?: GroupTaskCriterion[];
+  criteriaVersion?: number;
+  verificationPolicy?: GroupTaskVerificationPolicy;
+  evidenceRefs?: GroupTaskEvidenceRef[];
+  review?: GroupTaskReview;
+  stateVersion?: number;
   branch?: string;
   /**
    * Ask-spanning execution id (`GroupMessage.chainId`). Links the checklist

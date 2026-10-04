@@ -25,6 +25,11 @@ export const GROUP_ERROR_CODES = [
   "not-reviewer",
   "task-taken",
   "invalid-transition",
+  "verification-required",
+  "stale-task",
+  "dependency-cycle",
+  "invalid-dependency",
+  "stale-evidence",
   "self-review",
   "ambiguous-member",
   // Member worktrees: the group has no Project, or its Project is not a Git repository.

@@ -1,16 +1,14 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../shared/contracts";
-import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
-import { TaskCheck } from "../../components/ui/TaskCheck";
+import { SpringCheck } from "../../components/ui/SpringCheck";
 import { cn } from "../../lib/cn";
 import { describeGroupError } from "./groupErrors";
-import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
 import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 
 /** Second-click label of the two-step "Cancel task". */
-export const CANCEL_TASK_CONFIRM_LABEL = GROUP_ROOM_TEXT_EN["tasks.confirmCancel"];
+export const CANCEL_TASK_CONFIRM_LABEL = "Click again to cancel";
 
 /** Tasks still in play (the panel button's counter). */
 export function activeTaskCount(tasks: readonly GroupTask[]): number {
@@ -26,10 +24,11 @@ export function checklistProgress(tasks: readonly GroupTask[]): { done: number; 
   };
 }
 
-function statusBadge(status: GroupTaskStatus, t: GroupTextFn): string | undefined {
-  if (status === "in_progress") return t("tasks.inProgress");
-  if (status === "in_review") return t("tasks.inReview");
-  if (status === "open") return t("tasks.open");
+function statusBadge(status: GroupTaskStatus): string | undefined {
+  if (status === "in_progress") return "In progress";
+  if (status === "in_review") return "In review";
+  if (status === "blocked") return "Blocked";
+  if (status === "open") return "Open";
   return undefined;
 }
 
@@ -63,9 +62,10 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
   const rank: Record<GroupTaskStatus, number> = {
     in_progress: 0,
     in_review: 1,
-    open: 2,
-    done: 3,
-    cancelled: 4,
+    blocked: 2,
+    open: 3,
+    done: 4,
+    cancelled: 5,
   };
   return [...tasks].sort((a, b) => {
     const byStatus = rank[a.status] - rank[b.status];
@@ -76,7 +76,7 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
 
 /**
  * Right-hand side panel of the room: `top` (Activity sections / Decisions)
- * above the checklist. Agents mark done; the user can Cancel. TaskCheck is
+ * above the checklist. Agents mark done; the user can Cancel. Spring Check is
  * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
  */
 export function GroupTaskPanel({
@@ -84,7 +84,7 @@ export function GroupTaskPanel({
   labels,
   onCancelled,
   top,
-  ariaLabel,
+  ariaLabel = "Activity",
   testId = "group-activity-panel",
 }: {
   tasks: readonly GroupTask[];
@@ -94,7 +94,6 @@ export function GroupTaskPanel({
   ariaLabel?: string;
   testId?: string;
 }) {
-  const t = useGroupText();
   const [showCancelled, setShowCancelled] = useState(false);
   const progress = checklistProgress(tasks);
   const visible = sortTasks(tasks.filter((task) => task.status !== "cancelled" || showCancelled));
@@ -102,25 +101,25 @@ export function GroupTaskPanel({
 
   return (
     <aside
-      aria-label={ariaLabel ?? t("activity.title")}
+      aria-label={ariaLabel}
       className="surface-sidebar flex w-[min(300px,40%)] shrink-0 flex-col overflow-y-auto border-hairline border-l px-3 py-3"
       data-ui-surface="sidebar"
       data-testid={testId}
     >
       {top}
       {tasks.length === 0 ? (
-        <div className="px-1 py-6 text-center text-fg-faint text-xs">{t("tasks.empty")}</div>
+        <div className="px-1 py-6 text-center text-fg-faint text-xs">
+          No tasks yet. Members create them as they work.
+        </div>
       ) : (
         <>
           <div
             className="mb-2 flex items-baseline justify-between gap-2 px-1"
             data-testid="task-checklist-progress"
           >
-            <h3 className="text-2xs text-fg-faint uppercase tracking-wide">
-              {t("tasks.checklist")}
-            </h3>
+            <h3 className="text-2xs text-fg-faint uppercase tracking-wide">Checklist</h3>
             <span className="tabular-nums text-2xs text-fg-muted">
-              {t("tasks.progress", { done: progress.done, total: progress.total })}
+              {progress.done}/{progress.total} done
             </span>
           </div>
           <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
@@ -135,9 +134,7 @@ export function GroupTaskPanel({
               onClick={() => setShowCancelled((value) => !value)}
               type="button"
             >
-              {showCancelled
-                ? t("tasks.hideCancelled")
-                : t("tasks.showCancelled", { count: cancelledCount })}
+              {showCancelled ? "Hide cancelled" : `Show cancelled (${cancelledCount})`}
             </button>
           ) : null}
         </>
@@ -155,13 +152,12 @@ function TaskCheckRow({
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
 }) {
-  const t = useGroupText();
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const done = task.status === "done";
   const cancelled = task.status === "cancelled";
-  const badge = statusBadge(task.status, t);
+  const badge = statusBadge(task.status);
   const owner = task.ownerSessionId
     ? (labels.get(task.ownerSessionId) ?? { title: task.ownerSessionId })
     : undefined;
@@ -177,7 +173,7 @@ function TaskCheckRow({
     try {
       onCancelled(await window.modus.group.cancelTask(task.id));
     } catch (cause) {
-      setError(describeGroupError(cause, t.locale));
+      setError(describeGroupError(cause));
     } finally {
       setBusy(false);
       setConfirming(false);
@@ -191,10 +187,11 @@ function TaskCheckRow({
       data-testid="group-task"
     >
       <div className="flex items-start gap-2">
-        <TaskCheck
-          aria-label={done ? t("tasks.done") : t("tasks.notDone")}
+        <SpringCheck
+          aria-label={done ? "Done" : "Not done"}
           checked={done}
           className="mt-0.5"
+          disabled
         />
         <div className="min-w-0 flex-1">
           <div
@@ -217,7 +214,7 @@ function TaskCheckRow({
                 <MemberName label={owner} />
               </span>
             ) : (
-              <span>{t("tasks.unassigned")}</span>
+              <span>Unassigned</span>
             )}
             {task.branch ? (
               <span
@@ -243,7 +240,7 @@ function TaskCheckRow({
               onClick={() => void cancel()}
               type="button"
             >
-              {confirming ? t("tasks.confirmCancel") : t("tasks.cancel")}
+              {confirming ? CANCEL_TASK_CONFIRM_LABEL : "Cancel task"}
             </button>
           ) : null}
         </div>
