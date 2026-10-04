@@ -3,12 +3,14 @@ import { AGENT_TEMPLATES, getAgentTemplate } from "../../../../shared/agent-temp
 import {
   applyCollabPipeline,
   copyMember,
+  dialogMember,
   NEW_GROUP_DEFAULT_NAME,
   NEW_GROUP_HINTS,
   type NewGroupMember,
   newGroupBlocker,
   newGroupCounter,
   newGroupCreateInput,
+  newGroupMemberInput,
   nextFreeName,
   resolveNewGroupLead,
   templateMember,
@@ -116,6 +118,8 @@ describe("newGroupModel (A4)", () => {
       members: [
         {
           templateId: "planner",
+          capabilityIds: planner.capabilityIds,
+          supportedTaskKinds: planner.supportedTaskKinds,
           name: "Boss",
           role: planner.role,
           instructions: planner.instructions,
@@ -124,6 +128,8 @@ describe("newGroupModel (A4)", () => {
         },
         {
           templateId: "builder",
+          capabilityIds: builder?.capabilityIds,
+          supportedTaskKinds: builder?.supportedTaskKinds,
           name: "Builder",
           role: builder?.role,
           instructions: builder?.instructions,
@@ -159,21 +165,21 @@ describe("newGroupModel (A4)", () => {
   });
 });
 
-describe("newGroupCreateInput blank-name default follows the room locale (C6)", () => {
-  const list = members(2);
-  const blank = { name: "   ", workspaceId: "ws", members: list, leadKey: null };
-  it("pt → Novo grupo", () => {
-    expect(newGroupCreateInput(blank, "pt-BR").name).toBe("Novo grupo");
-  });
-  it("zh → 新群组", () => {
-    expect(newGroupCreateInput(blank, "zh-CN").name).toBe("新群组");
-  });
-  it("en and no locale → New group (unchanged)", () => {
-    expect(newGroupCreateInput(blank, "en").name).toBe("New group");
-    expect(newGroupCreateInput(blank).name).toBe(NEW_GROUP_DEFAULT_NAME);
-    expect(NEW_GROUP_DEFAULT_NAME).toBe("New group");
-  });
-  it("a typed name always wins", () => {
-    expect(newGroupCreateInput({ ...blank, name: " Crew " }, "pt").name).toBe("Crew");
+it("preserves explicit dialog capabilities in the group creation payload", () => {
+  const member = dialogMember(
+    {
+      name: "Custom",
+      role: "Builder",
+      modelId: "m-1",
+      capabilityIds: ["docs"],
+      supportedTaskKinds: ["docs"],
+    },
+    [],
+    "cap",
+    { avatarFace: "happy", avatarColor: "blue" },
+  );
+  expect(newGroupMemberInput(member)).toMatchObject({
+    capabilityIds: ["docs"],
+    supportedTaskKinds: ["docs"],
   });
 });

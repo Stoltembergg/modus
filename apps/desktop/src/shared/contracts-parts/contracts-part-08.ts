@@ -1,4 +1,6 @@
 /** Gap 4 contracts split part 8 — Agent Groups DTOs from #62 */
+
+import type { GroupMemberCapabilities } from "../group-capabilities";
 import type {
   GroupProactivityMode,
   GroupTaskCriterion,
@@ -24,7 +26,8 @@ export type AgentGroupInfo = {
   updatedAt: string;
 };
 
-export type AgentGroupMember = {
+/** Capability metadata is optional on legacy DTOs; current stores always project arrays. */
+export type AgentGroupMember = Partial<GroupMemberCapabilities> & {
   groupId: string;
   /** The pair's hidden room session (kind 'group_member'): the runtime's member key. */
   sessionId: string;
@@ -106,7 +109,7 @@ export const AGENT_AVATAR_SHAPES = [
 export type AgentAvatarShape = (typeof AGENT_AVATAR_SHAPES)[number];
 
 /** An agent: belongs to ONE group, name unique in it (case-insensitive), persona and defaults. */
-export type AgentInfo = {
+export type AgentInfo = Partial<GroupMemberCapabilities> & {
   id: string;
   /** Its group (A2). Absent only for legacy agents that had no membership. */
   groupId?: string;
@@ -129,7 +132,7 @@ export type AgentInfo = {
 };
 
 /** `agents:create` payload. */
-export type CreateAgentInput = {
+export type CreateAgentInput = Partial<GroupMemberCapabilities> & {
   name: string;
   role?: string;
   instructions?: string;

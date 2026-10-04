@@ -18,7 +18,9 @@ import {
  * in v1; per-agent tool restrictions come later.
  */
 
-export type AgentTemplate = {
+import type { GroupMemberCapabilities } from "./group-capabilities";
+
+export type AgentTemplate = GroupMemberCapabilities & {
   id: string;
   name: string;
   role: string;
@@ -34,6 +36,8 @@ export type AgentTemplate = {
 export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   {
     id: "planner",
+    capabilityIds: ["plan"],
+    supportedTaskKinds: ["code", "docs", "design", "review", "research", "question"],
     name: "Planner",
     role: "Lead",
     description: "Breaks the request into tasks, assigns them and follows up.",
@@ -49,6 +53,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "builder",
+    capabilityIds: ["implement", "verify"],
+    supportedTaskKinds: ["code"],
     name: "Builder",
     role: "Builder",
     description: "Implements in a worktree, with tests, in small safe steps.",
@@ -62,6 +68,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "reviewer",
+    capabilityIds: ["review"],
+    supportedTaskKinds: ["code", "review"],
     name: "Reviewer",
     role: "Reviewer",
     description: "Reviews diffs and commits for correctness, edge cases, tests and security.",
@@ -75,6 +83,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "explorer",
+    capabilityIds: ["research"],
+    supportedTaskKinds: ["code", "research", "question"],
     name: "Explorer",
     role: "Explorer",
     description: "Maps the codebase and finds where things live, without editing.",
@@ -88,6 +98,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "librarian",
+    capabilityIds: ["research", "docs"],
+    supportedTaskKinds: ["docs", "research", "question"],
     name: "Librarian",
     role: "Librarian",
     description: "Researches docs and external sources, with citations.",
@@ -101,6 +113,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "oracle",
+    capabilityIds: ["plan", "review", "research"],
+    supportedTaskKinds: ["code", "design", "review", "research", "question"],
     name: "Oracle",
     role: "Advisor",
     description: "Advises on architecture and hard debugging, without editing.",
@@ -114,6 +128,8 @@ export const AGENT_TEMPLATES: readonly AgentTemplate[] = [
   },
   {
     id: "designer",
+    capabilityIds: ["implement", "review"],
+    supportedTaskKinds: ["design"],
     name: "Designer",
     role: "Designer",
     description: "Owns UI/UX: states, accessibility and interface copy.",

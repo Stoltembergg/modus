@@ -1,7 +1,7 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { IconRefresh } from "@tabler/icons-react";
 import { useId, useMemo, useRef, useState } from "react";
-import { agentAvatarForId } from "../../../../shared/agent-templates";
+import { agentAvatarForId, getAgentTemplate } from "../../../../shared/agent-templates";
 import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
@@ -17,6 +17,11 @@ import {
   type NewGroupAgentInput,
   type UpdateAgentInput,
 } from "../../../../shared/contracts";
+import {
+  GROUP_CAPABILITY_IDS,
+  GROUP_SUPPORTED_TASK_KINDS,
+  normalizeGroupMemberCapabilities,
+} from "../../../../shared/group-capabilities";
 import { cn } from "../../lib/cn";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
@@ -148,6 +153,14 @@ export function AgentDialog(props: AgentDialogProps) {
   const [instructions, setInstructions] = useState(
     agent?.instructions ?? initial?.instructions ?? "",
   );
+  const [capabilities, setCapabilities] = useState(() =>
+    normalizeGroupMemberCapabilities(
+      agent ?? {
+        ...getAgentTemplate(initial?.templateId ?? ""),
+        ...initial,
+      },
+    ),
+  );
   const [description, setDescription] = useState("");
   const [modelId, setModelId] = useState(() => {
     if (agent) return agent.modelId ?? "";
@@ -231,6 +244,7 @@ export function AgentDialog(props: AgentDialogProps) {
       // A4: added to the modal's member list; the group:create call creates it.
       target.onAdd({
         ...(initial?.templateId ? { templateId: initial.templateId } : {}),
+        ...capabilities,
         name: name.trim(),
         role: role.trim(),
         instructions,
@@ -248,6 +262,7 @@ export function AgentDialog(props: AgentDialogProps) {
       if (agent && props.onUpdate) {
         await props.onUpdate({
           id: agent.id,
+          ...capabilities,
           name: name.trim(),
           role: role.trim(),
           instructions,
@@ -259,6 +274,7 @@ export function AgentDialog(props: AgentDialogProps) {
       } else if (group && props.onCreate) {
         await props.onCreate({
           groupId: group.id,
+          ...capabilities,
           name: name.trim(),
           role: role.trim(),
           instructions,
@@ -422,6 +438,42 @@ export function AgentDialog(props: AgentDialogProps) {
             value={instructions}
           />
         </label>
+
+        <p className="text-2xs text-fg-subtle">
+          Choose the work this agent supports. These choices do not grant tool access.
+        </p>
+        {(
+          [
+            ["capabilityIds", "Capabilities", "Capability", GROUP_CAPABILITY_IDS],
+            ["supportedTaskKinds", "Supported task kinds", "Task kind", GROUP_SUPPORTED_TASK_KINDS],
+          ] as const
+        ).map(([field, title, label, options]) => (
+          <fieldset className="flex flex-col gap-1" key={field} disabled={busy !== null}>
+            <legend className="mb-1 text-2xs text-fg-subtle">{title}</legend>
+            <div className="flex flex-wrap gap-2">
+              {options.map((option) => (
+                <label className="flex items-center gap-1 text-2xs" key={option}>
+                  <input
+                    type="checkbox"
+                    aria-label={`${label} ${option}`}
+                    checked={(capabilities[field] as string[]).includes(option)}
+                    onChange={(event) =>
+                      setCapabilities((current) =>
+                        normalizeGroupMemberCapabilities({
+                          ...current,
+                          [field]: event.target.checked
+                            ? [...current[field], option]
+                            : current[field].filter((value) => value !== option),
+                        }),
+                      )
+                    }
+                  />
+                  {option}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ))}
 
         <fieldset className="flex flex-col gap-1">
           <legend className="mb-1 text-2xs text-fg-subtle">Face</legend>

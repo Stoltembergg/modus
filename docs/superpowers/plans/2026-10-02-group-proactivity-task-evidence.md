@@ -232,12 +232,12 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 
 **Interfaces:** produz `GroupMemberCapabilities = { capabilityIds: string[]; supportedTaskKinds: GroupTaskKind[] }`, campos equivalentes em Create/UpdateAgentInput e AgentInfo; `normalizeGroupMemberCapabilities(input: GroupMemberCapabilities): GroupMemberCapabilities`. IDs canônicos: `plan`, `implement`, `verify`, `review`, `research`, `docs`; ferramentas ativas não são armazenadas como permissões presumidas.
 
-- [ ] Adicionar testes `custom_agent_can_edit_capabilities`, `legacy_missing_capabilities_stay_empty`, `renaming_role_does_not_change_capabilities`, `template_capabilities_are_explicit`. Assertar edição persistida, nenhuma inferência por nome/persona e duplicatas normalizadas.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/shared/group-capabilities.test.ts apps/desktop/src/main/agents/agents-store.test.ts apps/desktop/src/renderer/src/features/agents/AgentDialog.test.tsx`; esperar falhas novas.
-- [ ] Persistir capability metadata validada no perfil existente, preservar campos anteriores e publicar no roster DTO. Declarar capacidades nos templates oficiais por IDs de template conhecidos; não aplicar regex ao nome do template. Gerador de persona mantém apenas role/instructions; não inventa permissões ou capacidades sem escolha explícita.
-- [ ] Expor seleção de capacidades/tipos no editor e respeitar schemas de criação de Grupo, edição e templates. Ler ferramentas ativas pelo registry/profile/overrides atuais durante snapshot, sem ativá-las para atender um match.
-- [ ] Rodar comandos citados e testes de templates/IPC; esperar aprovação.
-- [ ] Commit: `feat(agents): configure explicit group capabilities`.
+- [x] Adicionar testes `custom_agent_can_edit_capabilities`, `legacy_missing_capabilities_stay_empty`, `renaming_role_does_not_change_capabilities`, `template_capabilities_are_explicit`. Assertar edição persistida, nenhuma inferência por nome/persona e duplicatas normalizadas.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/shared/group-capabilities.test.ts apps/desktop/src/main/agents/agents-store.test.ts apps/desktop/src/renderer/src/features/agents/AgentDialog.test.tsx`; esperar falhas novas.
+- [x] Persistir capability metadata validada no perfil existente, preservar campos anteriores e publicar no roster DTO. Declarar capacidades nos templates oficiais por IDs de template conhecidos; não aplicar regex ao nome do template. Gerador de persona mantém apenas role/instructions; não inventa permissões ou capacidades sem escolha explícita.
+- [x] Expor seleção de capacidades/tipos no editor e respeitar schemas de criação de Grupo, edição e templates. Ler ferramentas ativas pelo registry/profile/overrides atuais durante snapshot, sem ativá-las para atender um match.
+- [x] Rodar comandos citados e testes de templates/IPC; esperar aprovação.
+- [x] Commit: `feat(agents): configure explicit group capabilities`.
 
 ## Tarefa 10: Roteamento e fluxo supervisionado tipados
 

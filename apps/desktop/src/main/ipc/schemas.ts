@@ -5,6 +5,11 @@ import {
   AGENT_AVATAR_SHAPES,
   type ContextItem,
 } from "../../shared/contracts";
+import {
+  GROUP_CAPABILITY_IDS,
+  GROUP_SUPPORTED_TASK_KINDS,
+  normalizeGroupMemberCapabilities,
+} from "../../shared/group-capabilities";
 import { STARTUP_RENDERER_MILESTONES } from "../../shared/startup";
 import {
   MAX_RESTORE_DRAFT_CHARS,
@@ -911,6 +916,19 @@ const agentFields = {
   avatarFace: z.enum(AGENT_AVATAR_FACES),
   avatarColor: z.enum(AGENT_AVATAR_COLORS),
   avatarShape: z.enum(AGENT_AVATAR_SHAPES),
+  capabilityIds: z
+    .array(z.enum(GROUP_CAPABILITY_IDS))
+    .max(64)
+    .transform(
+      (capabilityIds) => normalizeGroupMemberCapabilities({ capabilityIds }).capabilityIds,
+    ),
+  supportedTaskKinds: z
+    .array(z.enum(GROUP_SUPPORTED_TASK_KINDS))
+    .max(64)
+    .transform(
+      (supportedTaskKinds) =>
+        normalizeGroupMemberCapabilities({ supportedTaskKinds }).supportedTaskKinds,
+    ),
 };
 
 export const agentsCreateSchema = z
@@ -927,6 +945,8 @@ export const agentsCreateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    capabilityIds: agentFields.capabilityIds.optional(),
+    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
   })
   .strict();
 
@@ -941,6 +961,8 @@ export const agentsUpdateSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    capabilityIds: agentFields.capabilityIds.optional(),
+    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
   })
   .strict();
 
@@ -981,6 +1003,8 @@ const newGroupAgentSchema = z
     avatarFace: agentFields.avatarFace.optional(),
     avatarColor: agentFields.avatarColor.optional(),
     avatarShape: agentFields.avatarShape.optional(),
+    capabilityIds: agentFields.capabilityIds.optional(),
+    supportedTaskKinds: agentFields.supportedTaskKinds.optional(),
     templateId: z.string().min(1).max(128).optional(),
   })
   .strict();

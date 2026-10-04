@@ -401,3 +401,44 @@ describe("IPC schemas", () => {
     ).toThrow("Invalid IPC payload");
   });
 });
+
+it("validates capabilities on every agent and group creation path", async () => {
+  const schemas = await import("./schemas");
+  const split = await import("./schemas-part-04");
+  for (const source of [schemas, split]) {
+    const metadata = { capabilityIds: ["review", "review"], supportedTaskKinds: ["code", "code"] };
+    const member = { name: "Custom", modelId: "m-1", ...metadata };
+    expect(source.agentsCreateSchema.parse({ ...member, groupId: "g-1" })).toMatchObject({
+      capabilityIds: ["review"],
+      supportedTaskKinds: ["code"],
+    });
+    expect(source.agentsUpdateSchema.parse({ id: "a-1", ...metadata })).toMatchObject({
+      capabilityIds: ["review"],
+      supportedTaskKinds: ["code"],
+    });
+    expect(
+      source.groupCreateSchema.parse({ name: "Group", workspaceId: "w-1", members: [member] })
+        .members[0],
+    ).toMatchObject({ capabilityIds: ["review"], supportedTaskKinds: ["code"] });
+    for (const invalid of [
+      { capabilityIds: ["shell"] },
+      { supportedTaskKinds: ["implement"] },
+      { capabilityIds: "review" },
+      { capabilityIds: null },
+      { supportedTaskKinds: null },
+      { tools: ["shell"] },
+    ]) {
+      expect(
+        source.agentsCreateSchema.safeParse({ groupId: "g-1", name: "Custom", ...invalid }).success,
+      ).toBe(false);
+      expect(source.agentsUpdateSchema.safeParse({ id: "a-1", ...invalid }).success).toBe(false);
+      expect(
+        source.groupCreateSchema.safeParse({
+          name: "Group",
+          workspaceId: "w-1",
+          members: [{ name: "Custom", ...invalid }],
+        }).success,
+      ).toBe(false);
+    }
+  }
+});

@@ -21,6 +21,7 @@ import type {
 } from "../../shared/contracts";
 import { allocateUniqueGroupAvatarShapes, CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { groupCreateCountError, groupMemberCountError } from "../../shared/group-blocked";
+import { normalizeGroupMemberCapabilities } from "../../shared/group-capabilities";
 import type { GroupErrorCode } from "../../shared/group-errors";
 import { groupNeedsProject } from "../../shared/group-project";
 import { getDatabase, uniqueAgentName } from "../db/database";
@@ -106,6 +107,8 @@ type MemberRow = {
   agent_avatar_face: AgentAvatarFace;
   agent_avatar_color: AgentAvatarColor;
   agent_avatar_shape: AgentAvatarShape;
+  capability_ids_json: string;
+  supported_task_kinds_json: string;
 };
 
 type MessageRow = {
@@ -146,7 +149,7 @@ const GROUP_COLUMNS = "id, name, workspace_id, mode, lead_session_id, created_at
 const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.joined_at,
     a.name as agent_name, a.role as agent_role, a.archived_at as agent_archived_at,
     a.avatar_face as agent_avatar_face, a.avatar_color as agent_avatar_color,
-    a.avatar_shape as agent_avatar_shape
+    a.avatar_shape as agent_avatar_shape, a.capability_ids_json, a.supported_task_kinds_json
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
@@ -174,6 +177,10 @@ function toMember(row: MemberRow): AgentGroupMember {
     agentId: row.agent_id,
     name: row.agent_name,
     agentRole: row.agent_role,
+    ...normalizeGroupMemberCapabilities({
+      capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
+      supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+    }),
     ...(row.agent_archived_at !== null ? { archived: true as const } : {}),
     avatarFace: row.agent_avatar_face,
     avatarColor: row.agent_avatar_color,

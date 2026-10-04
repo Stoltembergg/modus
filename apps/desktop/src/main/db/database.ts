@@ -492,6 +492,8 @@ export function migrateDatabase(db: DatabaseSync): void {
   // members point at it through agent_group_members.agent_id (unique: 1:1);
   // the room runtime stays keyed by the member's session_id.
   db.exec(`create table if not exists agents (${AGENTS_TABLE_BODY});`);
+  addColumn(db, "agents", "capability_ids_json", "text not null default '[]'");
+  addColumn(db, "agents", "supported_task_kinds_json", "text not null default '[]'");
   // Membership migrations may temporarily reassign an agent before the N6
   // normalization runs. Remove the final-write guards while migrating, then
   // migrateAgentAvatarShapesN6 restores them after all group links are stable.
@@ -759,6 +761,8 @@ const AGENTS_TABLE_BODY = `
       avatar_color text not null check (avatar_color in (${sqlList(AGENT_AVATAR_COLORS)})),
       avatar_shape text not null check (avatar_shape in (${sqlList(AGENT_AVATAR_SHAPES)})),
       template_id text,
+      capability_ids_json text not null default '[]',
+      supported_task_kinds_json text not null default '[]',
       created_at text not null,
       updated_at text not null,
       archived_at text,
@@ -766,7 +770,8 @@ const AGENTS_TABLE_BODY = `
     `;
 /** Columns copied during agents rebuilds (group_id is filled by assignAgentGroups). */
 const AGENT_COPY_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
-  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
+  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at,
+  capability_ids_json, supported_task_kinds_json`;
 
 /**
  * Two migration cases are still undecided; both are conservative (nothing is
@@ -991,14 +996,14 @@ function assignAgentGroups(db: DatabaseSync): void {
   const copy = db.prepare(
     hasShape
       ? `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at)
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json)
          select ?, ?, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json
          from agents where id = ?`
       : `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at)
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json)
          select ?, ?, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json
          from agents where id = ?`,
   );
   const repoint = db.prepare(
