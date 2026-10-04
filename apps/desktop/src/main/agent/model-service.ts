@@ -1004,6 +1004,7 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
   const maxTokens = config?.max_tokens ?? model.maxTokens;
   const modus = model.provider === MODUS_PROVIDER_ID;
   const locked = modus && modusProvider?.lockedIds().has(id);
+  const unlockPack = locked ? (modusProvider?.unlockPack(id) ?? undefined) : undefined;
   return {
     id,
     provider: model.provider,
@@ -1023,6 +1024,7 @@ function modelToInfo(model: Model<Api>, available: boolean, config?: ModelConfig
     thinkingOptions: thinking.options,
     ...(thinking.budget ? { thinkingBudget: thinking.budget } : {}),
     ...(locked ? { locked: "upgrade" as const } : {}),
+    ...(locked && unlockPack ? { unlockPack } : {}),
   };
 }
 
@@ -1192,10 +1194,12 @@ export function getModelSettings(): ModelSettingsState {
   const modelRegistry = refreshRegistry();
   const models = listModelsFromRegistry(modelRegistry);
   const defaultModel = getDefaultModelId(models);
+  const modusDefaultModel = getModusTurnModelId(models);
   return {
     providers: listProvidersFromRegistry(modelRegistry),
     models,
     ...(defaultModel ? { defaultModel } : {}),
+    ...(modusDefaultModel ? { modusDefaultModel } : {}),
     ...(modusProvider && modusProvider.status() !== "off" ? { modus: modusProvider.status() } : {}),
   };
 }
@@ -2189,12 +2193,38 @@ export function getDefaultModelId(models = listModels()): string | undefined {
   // L3b0 fallback (Settings default unset or no longer usable): a Modus model when signed in
   // and the router answered /v1/models ("ready"); otherwise the user's own provider. Never a
   // locked (not in plan) Modus model.
+  // L3b: the Modus pick is the plan default (/v1/models default_model) when usable.
   const usable = models.filter((model) => model.enabled && !model.locked);
-  const modus =
-    modusProvider?.status() === "ready"
-      ? usable.find((model) => model.provider === MODUS_PROVIDER_ID)
-      : undefined;
-  return (modus ?? usable.find((model) => model.provider !== MODUS_PROVIDER_ID) ?? usable[0])?.id;
+  const modus = modusProvider?.status() === "ready" ? modusPlanOrFirst(usable) : undefined;
+  return modus ?? usable.find((model) => model.provider !== MODUS_PROVIDER_ID)?.id ?? usable[0]?.id;
+}
+
+/** The plan default if it is a usable Modus model, else the first usable Modus model. */
+function modusPlanOrFirst(usable: readonly ModelInfo[]): string | undefined {
+  const modus = usable.filter((model) => model.provider === MODUS_PROVIDER_ID);
+  const plan = modusProvider?.defaultModelId();
+  return (modus.find((model) => model.id === plan) ?? modus[0])?.id;
+}
+
+/**
+ * L3b (replaces L2b decision #2 for Modus): the model a turn of a Modus session / agent runs
+ * on. The user's Settings default when it is an allowed (listed, enabled, unlocked) Modus
+ * model (Starter+ may pick Opus / Fable); otherwise the plan default from /v1/models; else
+ * the first usable Modus model. undefined = no usable Modus model (signed out / unavailable).
+ * The router still answers 403 for a model outside the plan.
+ */
+export function getModusTurnModelId(models = listModels()): string | undefined {
+  const usable = models.filter(
+    (model) => model.provider === MODUS_PROVIDER_ID && model.enabled && !model.locked,
+  );
+  const configured = readSetting("model.default");
+  if (configured && usable.some((model) => model.id === configured)) return configured;
+  return modusPlanOrFirst(usable);
+}
+
+/** L3b: a usable model of the list (enabled, available, not a locked Modus model). */
+export function isUsableModelId(modelId: string, models = listModels()): boolean {
+  return models.some((model) => model.id === modelId && model.enabled && !model.locked);
 }
 
 export function getModelThinkingLevel(modelId: string | undefined): ThinkingLevel {

@@ -991,6 +991,7 @@ export function App() {
           id: item.id,
           name: item.name,
           ...(item.locked ? { locked: true } : {}),
+          ...(item.unlockPack ? { unlockPack: item.unlockPack } : {}),
         })),
     [models],
   );
@@ -1564,6 +1565,7 @@ export function App() {
                                   contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
                                   modusStatus={modelSettings?.modus}
+                                  modusDefaultModel={modelSettings?.modusDefaultModel}
                                   hub={hubRef.current}
                                   initialEvents={initialEventsBySession[visibleSession.id]}
                                   key={visibleSession.id}

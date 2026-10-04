@@ -332,6 +332,52 @@ describe("Modus provider in the model service", () => {
     ms.setDefaultModel(undefined);
   });
 
+  it("L3b: Modus turn model = an allowed Settings pick, else the plan default; unlock_pack reaches ModelInfo", async () => {
+    ms.setDefaultModel(undefined);
+    const STARTER: ModusModelsResult = {
+      ok: true,
+      plan: "starter",
+      defaultModel: "zai/glm-4.6",
+      models: [
+        { id: "deepseek/deepseek-flash", name: "Flash", ownedBy: "deepseek", allowed: true },
+        { id: "zai/glm-4.6", name: "GLM 4.6", ownedBy: "zai", allowed: true },
+        { id: "anthropic/claude-opus-5-5", name: "Opus", ownedBy: "anthropic", allowed: true },
+        {
+          id: "anthropic/claude-fable-5-1",
+          name: "Fable",
+          ownedBy: "anthropic",
+          allowed: false,
+          unlockPack: { id: "credits_25k", credits: 25000 },
+        },
+      ],
+    };
+    const auth = authSource("signed-in");
+    const modus = installModus(auth, () => STARTER);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    // Unset Settings default: the plan default (not the first Modus model).
+    expect(ms.getModusTurnModelId()).toBe("modus/zai/glm-4.6");
+    expect(ms.getDefaultModelId()).toBe("modus/zai/glm-4.6");
+    expect(ms.getModelSettings().modusDefaultModel).toBe("modus/zai/glm-4.6");
+    // Starter picks Opus in Settings: Modus turns run on it.
+    ms.setDefaultModel("modus/anthropic/claude-opus-5-5");
+    expect(ms.getModusTurnModelId()).toBe("modus/anthropic/claude-opus-5-5");
+    // An own-provider Settings default does not change the Modus turn model.
+    ms.setDefaultModel("byok-relay/relay-model");
+    expect(ms.getModusTurnModelId()).toBe("modus/zai/glm-4.6");
+    // Locked Fable can't be picked; it carries its unlock pack for the UI.
+    expect(() => ms.setDefaultModel("modus/anthropic/claude-fable-5-1")).toThrow(
+      /not in your plan/,
+    );
+    const fable = ms.listModels().find((model) => model.id === "modus/anthropic/claude-fable-5-1");
+    expect(fable?.locked).toBe("upgrade");
+    expect(fable?.unlockPack).toEqual({ id: "credits_25k", credits: 25000 });
+    expect(ms.isUsableModelId("modus/anthropic/claude-fable-5-1")).toBe(false);
+    expect(ms.isUsableModelId("modus/anthropic/claude-opus-5-5")).toBe(true);
+    auth.set("signed-out");
+    expect(ms.getModusTurnModelId()).toBeUndefined();
+    ms.setDefaultModel(undefined);
+  });
+
   it('"modus" is reserved: no BYOK key, custom provider, sign-in or disconnect', async () => {
     await expect(ms.configureProvider({ provider: "modus", apiKey: "x" })).rejects.toThrow(
       /Modus account/,

@@ -56,7 +56,11 @@ export function DefaultModelSetting({
                     key={model.id}
                     value={model.id}
                   >
-                    {modelOptionLabel({ ...model, locked: Boolean(model.locked) })}
+                    {modelOptionLabel({
+                      ...model,
+                      locked: Boolean(model.locked),
+                      unlockPack: model.unlockPack,
+                    })}
                   </option>
                 ))}
               </optgroup>

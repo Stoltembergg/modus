@@ -56,6 +56,10 @@ export type ModusProvider = {
   models(): readonly ModusRouterModel[];
   /** App model ids (`modus/<provider>/<id>`) not in the user's plan. */
   lockedIds(): ReadonlySet<string>;
+  /** L3b: the plan default (`/v1/models` default_model) as an app id; undefined = none. */
+  defaultModelId(): string | undefined;
+  /** L3b: the smallest credit pack that unlocks a locked app model id (null/undefined = none). */
+  unlockPack(appModelId: string): { id: string; credits: number } | null | undefined;
   /** Sync with the cached state; cheap and idempotent (applyModelCatalog runs it often). */
   register(modelRegistry: ModelRegistry): void;
   /** Catalog load hook: one new /v1/models attempt when the last one failed. */
@@ -70,14 +74,20 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
   let status: ModusModelsStatus = "off";
   let models: ModusRouterModel[] = [];
   let locked = new Set<string>();
+  let planDefault: string | undefined;
   let userId: string | null = null;
   let loading: Promise<void> | undefined;
   let generation = 0;
   const registered = new WeakMap<ModelRegistry, string>();
 
-  function set(nextStatus: ModusModelsStatus, nextModels: ModusRouterModel[]): void {
+  function set(
+    nextStatus: ModusModelsStatus,
+    nextModels: ModusRouterModel[],
+    nextDefault?: string | null,
+  ): void {
     status = nextStatus;
     models = nextModels;
+    planDefault = nextDefault ? `${MODUS_PROVIDER_ID}/${nextDefault}` : undefined;
     locked = new Set(
       nextModels
         .filter((model) => !model.allowed)
@@ -95,7 +105,7 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
         .fetchModels()
         .catch((): ModusModelsResult => ({ ok: false, reason: "unavailable" }));
       if (run !== generation) return;
-      if (result.ok) set("ready", result.models);
+      if (result.ok) set("ready", result.models, result.defaultModel);
       else if (result.reason === "signed-out") set("off", []);
       else set("unavailable", []);
     })();
@@ -127,6 +137,9 @@ export function createModusProvider(deps: ModusProviderDeps): ModusProvider {
     status: () => status,
     models: () => models,
     lockedIds: () => locked,
+    defaultModelId: () => planDefault,
+    unlockPack: (appModelId) =>
+      models.find((model) => `${MODUS_PROVIDER_ID}/${model.id}` === appModelId)?.unlockPack,
 
     register(modelRegistry) {
       const signature =

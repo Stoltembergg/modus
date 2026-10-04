@@ -47,6 +47,8 @@ const {
 const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
 const { createGroupTask } = await import("./group-task-store");
+const { setGroupTurnModelResolver } = await import("./group-runtime-lib");
+const { resolveTurnModel } = await import("../agent/user-turn-model");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
@@ -1523,6 +1525,50 @@ describe("structured task follow-ups", () => {
 });
 
 /* ── Edit agent model applies on the next wake ───────────────────────── */
+
+describe("L3b: group turns force the plan default only for Modus agents", () => {
+  afterEach(() => setGroupTurnModelResolver(undefined));
+
+  it("a Modus agent runs on the Modus turn model; an own-provider agent keeps its model", async () => {
+    const MODUS_TURN = "modus/deepseek/deepseek-flash";
+    setGroupTurnModelResolver((agentModelId, _sessionId) =>
+      resolveTurnModel(
+        agentModelId,
+        {
+          defaultModelId: () => "openai/gpt-5",
+          modusTurnModelId: () => MODUS_TURN,
+          isUsable: () => true,
+        },
+        { keepUnusable: agentModelId !== undefined },
+      ),
+    );
+    const group = createGroupWithNewAgents({
+      name: uid("ModusGroup"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Planner", role: "Lead", modelId: "modus/anthropic/claude-fable-5-1" },
+        { name: "Builder", role: "Builder", modelId: "anthropic/claude-opus-5-5" },
+      ],
+    });
+    const planner = group.members.find((member) => member.name === "Planner");
+    const builder = group.members.find((member) => member.name === "Builder");
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: planner?.sessionId,
+      model: MODUS_TURN,
+    });
+    runtime.take(planner?.sessionId ?? "").resolve({ outcome: "ok", finalText: "Plan ready." });
+    await flush();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Builder build it" });
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: builder?.sessionId,
+      model: "anthropic/claude-opus-5-5",
+    });
+  });
+});
 
 describe("Edit agent model applies on next wake", () => {
   it("passes the agent modelId on wake, and uses the new model after Save", async () => {

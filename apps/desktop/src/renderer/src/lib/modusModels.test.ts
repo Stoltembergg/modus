@@ -6,6 +6,7 @@ import {
   pickModel,
   setBuyCreditsHandler,
   showsModusUnavailable,
+  unlockText,
 } from "./modusModels";
 
 const MODELS = [
@@ -53,5 +54,27 @@ describe("L3b0 Modus model helpers", () => {
     expect(showsModusUnavailable("unavailable", ["openai/gpt-x", undefined])).toBe(false);
     expect(showsModusUnavailable("ready", ["modus/zai/glm"])).toBe(false);
     expect(showsModusUnavailable(undefined, ["modus/zai/glm"])).toBe(false);
+  });
+});
+
+describe("L3b unlock text from the router's unlock_pack", () => {
+  const fable = { id: "modus/anthropic/claude-fable-5-1", name: "Fable", locked: true };
+
+  it("names the pack when unlock_pack is present (en / pt / zh)", () => {
+    const withPack = { ...fable, unlockPack: { id: "credits_25k", credits: 25000 } };
+    expect(unlockText(withPack, "pt-BR")).toBe("Disponível no pacote de 25 mil");
+    expect(unlockText(withPack)).toBe("Available in the 25k credit pack");
+    expect(unlockText(withPack, "zh")).toBe("25千积分包可用");
+    expect(modelOptionLabel(withPack, "pt")).toBe("🔒 Fable · Disponível no pacote de 25 mil");
+    expect(unlockText({ ...fable, unlockPack: { id: "p", credits: 2500 } }, "pt")).toBe(
+      "Disponível no pacote de 2,5 mil",
+    );
+  });
+
+  it("falls back to the generic text when unlock_pack is null or absent", () => {
+    expect(unlockText({ ...fable, unlockPack: null }, "pt")).toBe(
+      "Requer um pacote de créditos que inclua este modelo",
+    );
+    expect(unlockText(fable)).toBe("Requires a credit pack that includes this model");
   });
 });

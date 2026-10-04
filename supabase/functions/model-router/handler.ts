@@ -1,7 +1,7 @@
 import type { GetUser } from "../_shared/auth.ts";
 import { errorResponse, HttpError, json } from "../_shared/http.ts";
 import { type CatalogModel, findModel } from "../_shared/model-catalog.ts";
-import { ReserveError, type RouterDb } from "../_shared/router-db.ts";
+import { ReserveError, type RouterDb, unlockPackFor } from "../_shared/router-db.ts";
 import {
   type DurationLimits,
   type RouterConfig,
@@ -28,6 +28,10 @@ import {
 /**
  * model-router (B4a). OpenAI-compatible:
  *   POST /v1/chat/completions   GET /v1/models
+ * GET /v1/models: { plan, default_model (L3a), data: [{ id, name, owned_by, allowed,
+ *   context_window, max_tokens, unlock_pack? }] }; unlock_pack (L3b) only on locked models:
+ *   { id, credits } of the smallest active credit pack whose access plan allows it, or null
+ *   (always null while private.billing_settings.mercadopago_enabled is false).
  * Order for a completion:
  *   1. JWT (401)                       2. server config: CREDIT_MARKUP (503
  *      pricing_not_configured), MODUS_ROUTER_MAX_DURATION_MS (503 router_not_configured),
@@ -240,6 +244,13 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     const plan = await deps.db.getPlan(userId);
     // L3a: the plan default (what a request without `model` runs on); null = none.
     const defaultModel = await deps.db.getPlanDefaultModel(plan.plan);
+    const allowed = (id: string) => plan.allowedModels === null || plan.allowedModels.includes(id);
+    // L3b: packs are read only when some model is locked (Pro and up skip the query) and
+    // packs are on sale (private.billing_settings.mercadopago_enabled); off → every
+    // unlock_pack is null and the pack query is skipped.
+    const anyLocked = !deps.catalog.every((model) => allowed(model.id));
+    const packs =
+      anyLocked && (await deps.db.getMercadoPagoEnabled()) ? await deps.db.listUnlockPacks() : [];
     return json(200, {
       object: "list",
       plan: plan.plan,
@@ -249,9 +260,11 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
         object: "model",
         owned_by: model.provider,
         name: model.name,
-        allowed: plan.allowedModels === null || plan.allowedModels.includes(model.id),
+        allowed: allowed(model.id),
         context_window: model.contextWindow,
         max_tokens: model.maxTokens,
+        // L3b: only on locked models: the smallest pack that unlocks it, or null.
+        ...(allowed(model.id) ? {} : { unlock_pack: unlockPackFor(model.id, packs) }),
       })),
     });
   }

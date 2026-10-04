@@ -521,3 +521,96 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name: "L3b against a real Postgres: unlock_pack from credit_packs.access_plan + plans.allowed_models",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const db = createPostgresRouterDb(dbUrl ?? "");
+    try {
+      const packs = await db.listUnlockPacks();
+      assertEquals(packs.map((p) => [p.packId, p.credits, p.accessPlan]).sort(), [
+        ["credits_10k", 10000, "starter"],
+        ["credits_25k", 25000, "pro"],
+        ["credits_5k", 5000, "starter"],
+      ]);
+      const [{ id: userId }] =
+        await admin`select tests.create_user('router-l3b@example.com', true) as id`;
+      const h = createRouterHandler({
+        db,
+        getUser: () => Promise.resolve({ id: userId as string, email: null }),
+        config: routerConfig("http://127.0.0.1:9"),
+        catalog: MODEL_CATALOG,
+        waitUntil: () => {},
+        log: () => {},
+      });
+      const res = await h(
+        new Request("http://localhost/model-router/v1/models", {
+          headers: { authorization: "Bearer user.jwt.token" },
+        }),
+      );
+      assertEquals(res.status, 200);
+      const body = await res.json();
+      assertEquals(body.plan, "free");
+      const byId = new Map(
+        (body.data as { id: string; allowed: boolean; unlock_pack?: unknown }[]).map((m) => [
+          m.id,
+          m,
+        ]),
+      );
+      assertEquals(byId.get("anthropic/claude-opus-5-5")?.unlock_pack, {
+        id: "credits_5k",
+        credits: 5000,
+      });
+      assertEquals(byId.get("anthropic/claude-fable-5-1")?.unlock_pack, {
+        id: "credits_25k",
+        credits: 25000,
+      });
+      assert(!("unlock_pack" in (byId.get(FLASH) ?? {})));
+      // An inactive pack is never offered: without the 5k and 10k, Opus needs the 25k.
+      await admin`update public.credit_packs set active = false where access_plan = 'starter'`;
+      try {
+        const again = await (
+          await h(
+            new Request("http://localhost/model-router/v1/models", {
+              headers: { authorization: "Bearer user.jwt.token" },
+            }),
+          )
+        ).json();
+        assertEquals(
+          (again.data as { id: string; unlock_pack?: unknown }[]).find(
+            (m) => m.id === "anthropic/claude-opus-5-5",
+          )?.unlock_pack,
+          { id: "credits_25k", credits: 25000 },
+        );
+      } finally {
+        await admin`update public.credit_packs set active = true where access_plan = 'starter'`;
+      }
+      // Packs off (private.billing_settings.mercadopago_enabled = false): every unlock_pack null.
+      await admin`update private.billing_settings set mercadopago_enabled = false where id`;
+      try {
+        const off = await (
+          await h(
+            new Request("http://localhost/model-router/v1/models", {
+              headers: { authorization: "Bearer user.jwt.token" },
+            }),
+          )
+        ).json();
+        const locked = (off.data as { allowed: boolean; unlock_pack?: unknown }[]).filter(
+          (m) => !m.allowed,
+        );
+        assert(locked.length >= 2);
+        for (const m of locked) assertEquals(m.unlock_pack, null);
+        assertEquals(await db.getMercadoPagoEnabled(), false);
+      } finally {
+        await admin`update private.billing_settings set mercadopago_enabled = true where id`;
+      }
+      assertEquals(await db.getMercadoPagoEnabled(), true);
+    } finally {
+      await admin.end();
+    }
+  },
+});

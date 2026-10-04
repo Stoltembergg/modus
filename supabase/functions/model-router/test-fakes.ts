@@ -7,6 +7,7 @@ import {
   type RouterDb,
   type SettleArgs,
   type SettleResult,
+  type UnlockPack,
   type UserPlan,
 } from "../_shared/router-db.ts";
 import { parseMaxDuration, type RouterConfig } from "./config.ts";
@@ -84,6 +85,33 @@ export class FakeDb implements RouterDb {
     return Promise.resolve(
       this.defaultModels.has(plan) ? (this.defaultModels.get(plan) ?? null) : FLASH.id,
     );
+  }
+
+  /** L3b: the seeded packs (5k/10k → starter, 25k → pro = every model). */
+  unlockPacks: UnlockPack[] = [
+    { packId: "credits_5k", credits: 5000, sortOrder: 1, accessPlan: "starter", allowedModels: [] },
+    {
+      packId: "credits_10k",
+      credits: 10000,
+      sortOrder: 2,
+      accessPlan: "starter",
+      allowedModels: [],
+    },
+    { packId: "credits_25k", credits: 25000, sortOrder: 3, accessPlan: "pro", allowedModels: null },
+  ];
+  unlockPackCalls = 0;
+  /** L3b: private.billing_settings.mercadopago_enabled. */
+  mercadoPagoEnabled = true;
+  mercadoPagoCalls = 0;
+
+  getMercadoPagoEnabled(): Promise<boolean> {
+    this.mercadoPagoCalls += 1;
+    return Promise.resolve(this.mercadoPagoEnabled);
+  }
+
+  listUnlockPacks(): Promise<UnlockPack[]> {
+    this.unlockPackCalls += 1;
+    return Promise.resolve(this.unlockPacks);
   }
 
   getBalance(): Promise<number | null> {

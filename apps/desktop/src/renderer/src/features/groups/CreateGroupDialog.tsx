@@ -26,7 +26,13 @@ const newLeadValue = (key: number) => `new:${key}`;
 
 /** A model offered for the new agents (a configured provider's). */
 /** L3b0: `locked` = a Modus model not in the plan (listed, never selected; opens Buy credits). */
-export type GroupDialogModel = { id: string; name: string; locked?: boolean | undefined };
+export type GroupDialogModel = {
+  id: string;
+  name: string;
+  locked?: boolean | undefined;
+  /** L3b: the smallest credit pack that unlocks a locked model (router unlock_pack). */
+  unlockPack?: { id: string; credits: number } | undefined;
+};
 
 type CreateGroupDialogProps = {
   open: boolean;

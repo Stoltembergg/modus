@@ -270,7 +270,24 @@ export function modelIdOf(groupId: string, sessionId: string): string | undefine
     (member) => member.sessionId === sessionId,
   )?.agentId;
   const modelId = agentId ? getAgent(agentId)?.modelId?.trim() : undefined;
-  return modelId || undefined;
+  return groupTurnModelResolver(modelId || undefined, sessionId);
+}
+
+/**
+ * L3b: the model a group-room turn runs on, from the agent's model (undefined = app
+ * default) and its session. main/ipc installs the real rule (user-turn-model
+ * resolveTurnModel: Modus agents forced to the Modus turn model, own-provider agents keep
+ * theirs); without it (unit tests) the agent's model passes through unchanged.
+ */
+export type GroupTurnModelResolver = (
+  agentModelId: string | undefined,
+  sessionId: string,
+) => string | undefined;
+
+let groupTurnModelResolver: GroupTurnModelResolver = (agentModelId) => agentModelId;
+
+export function setGroupTurnModelResolver(resolver: GroupTurnModelResolver | undefined): void {
+  groupTurnModelResolver = resolver ?? ((agentModelId) => agentModelId);
 }
 
 /**

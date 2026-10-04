@@ -53,10 +53,38 @@ describe("parseModusModels", () => {
           contextWindow: 128000,
           maxTokens: 8192,
         },
-        { id: "zai/glm-4.6", name: "GLM 4.6", ownedBy: "zai", allowed: false },
+        { id: "zai/glm-4.6", name: "GLM 4.6", ownedBy: "zai", allowed: false, unlockPack: null },
+      ],
+      defaultModel: null,
+    });
+    expect(parseModusModels(null)).toEqual({ plan: "free", models: [], defaultModel: null });
+  });
+
+  it("L3b: reads default_model (only a listed id) and unlock_pack on locked models", () => {
+    const parsed = parseModusModels({
+      plan: "free",
+      default_model: "deepseek/deepseek-flash",
+      data: [
+        { id: "deepseek/deepseek-flash", allowed: true, unlock_pack: { id: "x", credits: 1 } },
+        {
+          id: "anthropic/claude-fable-5-1",
+          allowed: false,
+          unlock_pack: { id: "credits_25k", credits: 25000 },
+        },
+        {
+          id: "anthropic/claude-opus-5-5",
+          allowed: false,
+          unlock_pack: { id: "BAD id", credits: 5 },
+        },
       ],
     });
-    expect(parseModusModels(null)).toEqual({ plan: "free", models: [] });
+    expect(parsed.defaultModel).toBe("deepseek/deepseek-flash");
+    expect(parsed.models.map((model) => [model.id, model.unlockPack])).toEqual([
+      ["deepseek/deepseek-flash", undefined],
+      ["anthropic/claude-fable-5-1", { id: "credits_25k", credits: 25000 }],
+      ["anthropic/claude-opus-5-5", null],
+    ]);
+    expect(parseModusModels({ default_model: "zai/not-listed", data: [] }).defaultModel).toBeNull();
   });
 });
 

@@ -38,8 +38,10 @@ import {
   getCustomProviderConfig,
   getDefaultModelId,
   getModelSettings,
+  getModusTurnModelId,
   getProviderAuthState,
   getProviderDetail,
+  isUsableModelId,
   listModels,
   listProviderConnectionMethods,
   refreshRemoteModelCatalog,
@@ -75,7 +77,11 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
-import { userTurnPromptInput } from "../agent/user-turn-model";
+import {
+  resolveTurnModel,
+  type TurnModelDeps,
+  userTurnPromptInput,
+} from "../agent/user-turn-model";
 import { AGENT_PROFILE_TIMEOUT_MS, generateAgentProfile } from "../agents/agent-profile-generator";
 import {
   deleteAgentWithSessions,
@@ -144,6 +150,7 @@ import {
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
 import { createGroupIntegrationService } from "../groups/group-integration-service";
+import { setGroupTurnModelResolver } from "../groups/group-runtime-lib";
 import { emitGroupRuntimeEvent, getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentToGroup,
@@ -378,6 +385,18 @@ export function registerAppIpc({
 } = {}): void {
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
+  // L3b: one turn-model rule for 1:1 (agent:prompt) and group-room turns.
+  const turnModelDeps: TurnModelDeps = {
+    defaultModelId: () => getDefaultModelId(),
+    modusTurnModelId: () => getModusTurnModelId(),
+    isUsable: (modelId) => isUsableModelId(modelId),
+  };
+  setGroupTurnModelResolver((agentModelId, sessionId) =>
+    resolveTurnModel(agentModelId ?? getAgentSession(sessionId)?.model, turnModelDeps, {
+      keepUnusable: agentModelId !== undefined,
+    }),
+  );
+
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
     return app.getVersion();
@@ -529,11 +548,15 @@ export function registerAppIpc({
     } catch (error) {
       throw toGroupIpcError(error);
     }
-    // L2: the current Settings default model, never the renderer's or the session's
-    // stored one; no renderer thinking either (the default model's own config applies).
+    // L3b: a Modus session runs on the Modus turn model (Settings pick if allowed, else the
+    // plan default); an own-provider session keeps its stored model. Never the renderer's
+    // model or thinking (the model's own config applies).
     await getAgentRuntime().prompt(
       getSenderWindow(event),
-      userTurnPromptInput(parsed, getDefaultModelId()),
+      userTurnPromptInput(
+        parsed,
+        resolveTurnModel(getAgentSession(parsed.sessionId)?.model, turnModelDeps),
+      ),
     );
   });
 
