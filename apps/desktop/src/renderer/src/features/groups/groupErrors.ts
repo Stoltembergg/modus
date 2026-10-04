@@ -6,21 +6,11 @@ import {
 import { type GroupTextKey, groupText } from "../../../../shared/group-room-locale";
 import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
 
-/** English text for new task errors that do not have room catalog entries yet. */
-const GROUP_ERROR_FALLBACKS: Partial<Record<GroupErrorCode, string>> = {
-  "verification-required": "Complete the task's required verification before closing it.",
-  "permission-denied": "Allow Git access before applying or aborting this task integration.",
-  "stale-task": "The task changed. Refresh it and try again.",
-  "dependency-cycle": "The task dependencies contain a cycle.",
-  "invalid-dependency": "Choose tasks in this group as dependencies.",
-  "stale-evidence": "The task evidence is out of date. Run verification again.",
-};
-
 /** Readable English message per group error code (the store's text is for logs). */
 export const GROUP_ERROR_MESSAGES = Object.fromEntries(
   GROUP_ERROR_CODES.map((code) => {
     const key = `error.${code}` as GroupTextKey;
-    return [code, GROUP_ROOM_TEXT_EN[key] ?? GROUP_ERROR_FALLBACKS[code] ?? code];
+    return [code, GROUP_ROOM_TEXT_EN[key] ?? code];
   }),
 ) as Record<GroupErrorCode, string>;
 

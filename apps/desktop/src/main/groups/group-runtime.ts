@@ -89,6 +89,7 @@ import {
   modelIdOf,
   parseGroupMentions,
   RETIRED_CHAIN_HISTORY,
+  selectAutonomousWakeTargets,
   type Wake,
 } from "./group-runtime-lib";
 import {
@@ -1753,8 +1754,11 @@ export class GroupRuntime {
       if (rule.rule !== "autonomous") {
         targets = rule.wanted;
       } else {
-        const routed = this.capabilityRoute(group.id);
-        targets = routed.targetSessionId ? [routed.targetSessionId] : [];
+        targets = selectAutonomousWakeTargets({
+          body: message.body,
+          members,
+          ...(group.leadSessionId ? { leadSessionId: group.leadSessionId } : {}),
+        });
       }
     } else if (message.authorKind === "agent") {
       targets = []; // Only explicit task-tool targets dispatch agent work.
@@ -1783,12 +1787,30 @@ export class GroupRuntime {
     // A blocked group (no folder, or fewer than 2 members) is read-only: nobody is woken.
     if (groupBlockedReason(group, members)) return;
     let wanted = this.wakeTargets(group, message, explicitTargets, allowSelf);
-    if (taskId || message.authorKind === "user") {
+    const { archived, targets: activeWanted } = partitionArchivedWakeTargets(wanted, members);
+    for (const id of archived) this.postArchived(chain, members, id);
+    wanted = activeWanted;
+    const userRule =
+      message.authorKind === "user"
+        ? resolveUserWakeRule({
+            mentions: message.mentions,
+            repliedAuthorSessionId: message.replyToMessageId
+              ? getGroupMessage(message.replyToMessageId)?.authorSessionId
+              : undefined,
+            group,
+          })
+        : undefined;
+    const autonomousUserMessage =
+      userRule?.rule === "autonomous" && !taskId && explicitTargets === undefined;
+    if (taskId || (message.authorKind === "user" && !autonomousUserMessage)) {
       const task = taskId ? getGroupTask(taskId) : undefined;
       const explicit = explicitTargets ?? (message.mentions.length ? message.mentions : undefined);
-      const results = explicit
-        ? explicit.map((id) => this.capabilityRoute(group.id, task, id))
-        : [this.capabilityRoute(group.id, task, wanted[0])];
+      const activeExplicit = explicit?.filter((id) => !archived.includes(id));
+      const results = activeExplicit
+        ? activeExplicit.map((id) => this.capabilityRoute(group.id, task, id))
+        : taskId || wanted[0]
+          ? [this.capabilityRoute(group.id, task, wanted[0])]
+          : [];
       wanted = results.flatMap((result) => {
         if (result.kind === "needs_user") {
           this.routingUnavailable(chain, result);
@@ -1797,10 +1819,7 @@ export class GroupRuntime {
         return result.targetSessionId ? [result.targetSessionId] : [];
       });
     }
-    // An archived agent stays a member but is never woken: say so instead.
-    const { archived, targets } = partitionArchivedWakeTargets(wanted, members);
-    for (const id of archived) this.postArchived(chain, members, id);
-    if (targets.length === 0) return;
+    if (wanted.length === 0) return;
     const history = listGroupMessages(group.id, {
       before: { createdAt: message.createdAt, id: message.id },
       limit: 100,
@@ -1809,7 +1828,7 @@ export class GroupRuntime {
     const decisions = listGroupDecisions(group.id);
     const leadSessionId = group.leadSessionId;
     const coordinating = isCoordinatorModeActive(group) && leadSessionId !== undefined;
-    for (const sessionId of targets) {
+    for (const sessionId of wanted) {
       if (chain.agentMessages >= this.limits.maxAgentMessages) {
         this.endChain(chain, "max-agent-messages");
         break;

@@ -20,8 +20,12 @@ describe("untyped intake", () => {
       ]);
     }
   });
-  it("needs user when there is no eligible Lead", () => {
-    expect(selectAutonomousWakeTargets({ body: "review code", members })).toEqual([]);
+  it("uses the active member pool when there is no eligible Lead", () => {
+    expect(selectAutonomousWakeTargets({ body: "review code", members })).toEqual([
+      "lead",
+      "builder",
+      "reviewer",
+    ]);
     expect(
       selectAutonomousWakeTargets({
         body: "hi",

@@ -262,7 +262,7 @@ function TaskCheckRow({
             onClick={onShowDetails}
             type="button"
           >
-            Details
+            {t("taskDetails.details")}
           </button>
           {error ? <div className="mt-1 text-danger">{error}</div> : null}
           {cancellable ? (

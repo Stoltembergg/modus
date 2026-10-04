@@ -261,9 +261,7 @@ describe.skipIf(process.platform === "win32")("safe npm execution policy", () =>
       else env.npm_config_workspace = "@other/package";
       const result = inspect("npm test", cwd, env);
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain(
-        "Cannot use --no-workspaces and --workspace at the same time",
-      );
+      expect(result.stderr).toMatch(/--no-workspaces.*--workspace.*same time/i);
       expect(result.stdout).not.toMatch(/ROOT_SAFE|DESKTOP_SAFE|OTHER_SAFE/);
     });
   });

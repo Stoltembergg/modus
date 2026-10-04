@@ -8,6 +8,7 @@ import type {
   GroupIntegrationState,
 } from "../../../../shared/group-work-state";
 import { describeGroupError } from "./groupErrors";
+import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
 
 type Props = {
   groupId: string;
@@ -16,6 +17,7 @@ type Props = {
 };
 
 export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
+  const t = useGroupText();
   const [state, setState] = useState<GroupIntegrationState>({});
   const [preview, setPreview] = useState<GroupIntegrationPreview>();
   const [loading, setLoading] = useState(true);
@@ -74,12 +76,12 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
           setPreview(persisted.preview);
         }
       } catch (cause) {
-        setError(describeGroupError(cause));
+        setError(describeGroupError(cause, t.locale));
       } finally {
         setLoading(false);
       }
     },
-    [reloadState, taskId],
+    [reloadState, t.locale, taskId],
   );
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
           await requestPreview();
         }
       } catch (cause) {
-        if (!disposed) setError(describeGroupError(cause));
+        if (!disposed) setError(describeGroupError(cause, t.locale));
       } finally {
         if (!disposed) setLoading(false);
       }
@@ -116,14 +118,14 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
         return;
       }
       void reloadState(event.version, event.record.id).catch((cause: unknown) =>
-        setError(describeGroupError(cause)),
+        setError(describeGroupError(cause, t.locale)),
       );
     });
     return () => {
       disposed = true;
       unsubscribe();
     };
-  }, [acceptState, groupId, reloadState, requestPreview, taskId]);
+  }, [acceptState, groupId, reloadState, requestPreview, t.locale, taskId]);
 
   async function apply(): Promise<void> {
     if (!preview || !confirmed || busy || state.record?.status === "no_changes") return;
@@ -139,7 +141,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
       await reloadState(record.version, record.id);
     } catch (cause) {
       const { code } = decodeGroupErrorMessage(cause);
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
       if (code === "stale-task" || code === "stale-evidence") {
         setPreview(undefined);
         setConfirmed(false);
@@ -158,7 +160,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
       const record = await window.modus.group.abortTaskIntegration(taskId);
       await reloadState(record.version, record.id);
     } catch (cause) {
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setBusy(false);
     }
@@ -174,7 +176,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
       const latest = await window.modus.group.refreshTaskIntegrationState(taskId);
       if (requestId === reloadSequence.current) acceptState(latest);
     } catch (cause) {
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setBusy(false);
       setLoading(false);
@@ -199,32 +201,35 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
           initialFocus
         >
           <header className="flex items-center justify-between gap-3 border-b border-hairline px-4 py-3">
-            <Dialog.Title className="font-medium text-fg">Integrate task</Dialog.Title>
+            <Dialog.Title className="font-medium text-fg">{t("integration.title")}</Dialog.Title>
             <button onClick={onClose} type="button">
-              Close integration
+              {t("integration.close")}
             </button>
           </header>
           <div className="min-h-0 overflow-y-auto p-4 text-sm">
             {loading ? (
               <p role="status">
                 {record?.status === "applying"
-                  ? "Checking integration status…"
-                  : "Loading integration preview…"}
+                  ? t("integration.loadingStatus")
+                  : t("integration.loadingPreview")}
               </p>
             ) : null}
             {record ? (
               <p className="mb-3 text-fg-muted" data-testid="integration-status" role="status">
-                {integrationStatusText(record.status)}
+                {integrationStatusText(record.status, t)}
               </p>
             ) : null}
             {record?.status === "applied" ? (
               <p className="mb-3 rounded bg-warning/10 p-2 text-warning">
-                Changes are in the working tree as a no-commit merge. Complete the merge in Git.
+                {t("integration.noCommitExplanation")}
               </p>
             ) : null}
             {record?.status === "conflict" ? (
-              <section aria-label="Merge conflicts" className="mb-3 rounded bg-warning/10 p-2">
-                <h3 className="font-medium text-warning">Resolve or abort this merge conflict</h3>
+              <section
+                aria-label={t("integration.conflicts")}
+                className="mb-3 rounded bg-warning/10 p-2"
+              >
+                <h3 className="font-medium text-warning">{t("integration.resolveConflicts")}</h3>
                 {record.conflictFiles?.length ? (
                   <ul className="mt-1 list-disc pl-5 text-fg-muted">
                     {record.conflictFiles.map((path) => (
@@ -233,7 +238,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                   </ul>
                 ) : null}
                 <button className="mt-2" disabled={busy} onClick={() => void abort()} type="button">
-                  {busy ? "Aborting…" : "Abort merge"}
+                  {busy ? t("integration.aborting") : t("integration.abort")}
                 </button>
               </section>
             ) : null}
@@ -241,16 +246,20 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
               <>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <h3 className="text-xs text-fg-faint uppercase">Source branch</h3>
+                    <h3 className="text-xs text-fg-faint uppercase">
+                      {t("integration.sourceBranch")}
+                    </h3>
                     <p className="break-all font-mono text-fg">{preview.sourceBranch}</p>
                   </div>
                   <div>
-                    <h3 className="text-xs text-fg-faint uppercase">Target branch</h3>
+                    <h3 className="text-xs text-fg-faint uppercase">
+                      {t("integration.targetBranch")}
+                    </h3>
                     <p className="break-all font-mono text-fg">{preview.targetBranch}</p>
                   </div>
                 </div>
                 <section className="mt-4">
-                  <h3 className="font-medium text-fg">Commits</h3>
+                  <h3 className="font-medium text-fg">{t("integration.commits")}</h3>
                   {preview.commits.length > 0 ? (
                     <ul className="mt-1 list-disc pl-5 text-fg-muted">
                       {preview.commits.map((commit) => (
@@ -261,16 +270,16 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                       ))}
                     </ul>
                   ) : (
-                    <p className="mt-1 text-fg-muted">No commits to apply.</p>
+                    <p className="mt-1 text-fg-muted">{t("integration.noCommits")}</p>
                   )}
                   {preview.omittedCommitCount > 0 ? (
                     <p className="mt-1 text-2xs text-fg-faint">
-                      {preview.omittedCommitCount} more commits omitted.
+                      {t("integration.commitsOmitted", { count: preview.omittedCommitCount })}
                     </p>
                   ) : null}
                 </section>
                 <section className="mt-4">
-                  <h3 className="font-medium text-fg">Changed files</h3>
+                  <h3 className="font-medium text-fg">{t("integration.changedFiles")}</h3>
                   {preview.changedFiles.length > 0 ? (
                     <ul className="mt-1 list-disc pl-5 text-fg-muted">
                       {preview.changedFiles.map((file) => (
@@ -281,25 +290,23 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                       ))}
                     </ul>
                   ) : (
-                    <p className="mt-1 text-fg-muted">No changed files.</p>
+                    <p className="mt-1 text-fg-muted">{t("integration.noChangedFiles")}</p>
                   )}
                   {preview.omittedChangedFileCount > 0 ? (
                     <p className="mt-1 text-2xs text-fg-faint">
-                      {preview.omittedChangedFileCount} more files omitted.
+                      {t("integration.filesOmitted", { count: preview.omittedChangedFileCount })}
                     </p>
                   ) : null}
                 </section>
                 <section className="mt-4">
-                  <h3 className="font-medium text-fg">Diff summary</h3>
+                  <h3 className="font-medium text-fg">{t("integration.diffSummary")}</h3>
                   <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-elevated p-2 font-mono text-2xs text-fg-muted">
-                    {preview.diffSummary || "No diff summary available."}
+                    {preview.diffSummary || t("integration.noDiffSummary")}
                   </pre>
                 </section>
               </>
             ) : null}
-            {noChanges ? (
-              <p className="mt-3 text-fg-muted">This preview contains no changes.</p>
-            ) : null}
+            {noChanges ? <p className="mt-3 text-fg-muted">{t("integration.noChanges")}</p> : null}
             {error ? (
               <p className="mt-3 text-danger" role="alert">
                 {error}
@@ -307,12 +314,12 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
             ) : null}
             {!loading && !preview && (!record || record.status === "ready") && !noChanges ? (
               <button disabled={busy} onClick={() => void requestPreview()} type="button">
-                Refresh preview
+                {t("integration.refreshPreview")}
               </button>
             ) : null}
             {record?.status === "aborted" ? (
               <button disabled={busy} onClick={() => void requestPreview()} type="button">
-                Request a new preview
+                {t("integration.requestPreview")}
               </button>
             ) : null}
           </div>
@@ -325,14 +332,14 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                   onChange={(event) => setConfirmed(event.currentTarget.checked)}
                   type="checkbox"
                 />
-                <span>I confirm applying this no-commit merge to the target branch.</span>
+                <span>{t("integration.confirmMerge")}</span>
               </label>
               <div className="flex justify-end gap-2">
                 <button disabled={busy} onClick={() => void requestPreview()} type="button">
-                  Refresh preview
+                  {t("integration.refreshPreview")}
                 </button>
                 <button disabled={!confirmed || busy} onClick={() => void apply()} type="button">
-                  {busy ? "Applying…" : "Apply no-commit merge"}
+                  {busy ? t("integration.applying") : t("integration.applyMerge")}
                 </button>
               </div>
             </footer>
@@ -344,7 +351,7 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                 onClick={() => void requestPreview()}
                 type="button"
               >
-                Refresh preview
+                {t("integration.refreshPreview")}
               </button>
             </footer>
           ) : null}
@@ -355,14 +362,14 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
                 onClick={() => void checkIntegrationStatus()}
                 type="button"
               >
-                {loading ? "Checking status…" : "Check integration status"}
+                {loading ? t("integration.checkingStatus") : t("integration.checkStatus")}
               </button>
             </footer>
           ) : null}
           {record?.status === "applied" ? (
             <footer className="flex justify-end border-t border-hairline px-4 py-3">
               <button disabled={busy} onClick={() => void abort()} type="button">
-                {busy ? "Aborting…" : "Abort merge"}
+                {busy ? t("integration.aborting") : t("integration.abort")}
               </button>
             </footer>
           ) : null}
@@ -372,19 +379,19 @@ export function GroupIntegrationDialog({ groupId, taskId, onClose }: Props) {
   );
 }
 
-function integrationStatusText(status: GroupIntegrationRecord["status"]): string {
+function integrationStatusText(status: GroupIntegrationRecord["status"], t: GroupTextFn): string {
   switch (status) {
     case "ready":
-      return "Preview ready. Confirm before applying.";
+      return t("integration.status.ready");
     case "applying":
-      return "Applying the confirmed integration…";
+      return t("integration.status.applying");
     case "applied":
-      return "Applied as a no-commit change in the working tree.";
+      return t("integration.status.applied");
     case "conflict":
-      return "Integration has conflicts that need resolution.";
+      return t("integration.status.conflict");
     case "aborted":
-      return "The pending merge was aborted.";
+      return t("integration.status.aborted");
     case "no_changes":
-      return "There are no changes to integrate.";
+      return t("integration.status.noChanges");
   }
 }

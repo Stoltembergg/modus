@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent } from "../../../../shared/contracts";
 import type { GroupProactivityMode, GroupSuggestion } from "../../../../shared/group-work-state";
 import { describeGroupError } from "./groupErrors";
+import { useGroupText } from "./groupRoomI18n";
 
 type MemberOption = { sessionId: string; label: string };
 
@@ -12,6 +13,7 @@ export function GroupProactivityControls({
   groupId: string;
   memberOptions: readonly MemberOption[];
 }) {
+  const t = useGroupText();
   const [mode, setMode] = useState<GroupProactivityMode>("suggest");
   const [suggestions, setSuggestions] = useState<GroupSuggestion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,11 +30,11 @@ export function GroupProactivityControls({
       setSuggestions(rows);
       setError(undefined);
     } catch (cause) {
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setLoading(false);
     }
-  }, [groupId]);
+  }, [groupId, t.locale]);
 
   useEffect(() => {
     setLoading(true);
@@ -60,7 +62,7 @@ export function GroupProactivityControls({
       setMode(await window.modus.group.setProactivityMode(groupId, next));
     } catch (cause) {
       setMode(previous);
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setSavingMode(false);
     }
@@ -73,14 +75,12 @@ export function GroupProactivityControls({
     >
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="text-xs font-medium text-fg">Proactivity</h3>
-          <p className="mt-0.5 text-2xs text-fg-faint">
-            Suggestions are the default. Limited automatic wakes require opt-in for this group.
-          </p>
+          <h3 className="text-xs font-medium text-fg">{t("proactivity.title")}</h3>
+          <p className="mt-0.5 text-2xs text-fg-faint">{t("proactivity.defaultDescription")}</p>
         </div>
         <label className="flex shrink-0 items-center gap-1.5 text-2xs text-fg-muted">
           <input
-            aria-label="Automatic suggestions"
+            aria-label={t("proactivity.automaticSuggestions")}
             checked={mode === "opt_in_auto"}
             disabled={loading || savingMode}
             onChange={(event) =>
@@ -88,7 +88,7 @@ export function GroupProactivityControls({
             }
             type="checkbox"
           />
-          Automate
+          {t("proactivity.automate")}
         </label>
       </div>
       {error ? (
@@ -98,11 +98,14 @@ export function GroupProactivityControls({
       ) : null}
       <div className="mt-2" data-testid="group-suggestions">
         <h4 className="mb-1 text-2xs text-fg-faint uppercase tracking-wide">
-          Suggestions <span data-testid="group-suggestion-count">{suggestions.length}</span>
+          {t("proactivity.suggestions")}{" "}
+          <span data-testid="group-suggestion-count">{suggestions.length}</span>
         </h4>
-        {loading ? <p className="px-1 py-2 text-xs text-fg-faint">Loading suggestions…</p> : null}
+        {loading ? (
+          <p className="px-1 py-2 text-xs text-fg-faint">{t("proactivity.loading")}</p>
+        ) : null}
         {!loading && suggestions.length === 0 ? (
-          <p className="px-1 py-2 text-xs text-fg-faint">No pending suggestions.</p>
+          <p className="px-1 py-2 text-xs text-fg-faint">{t("proactivity.noPending")}</p>
         ) : null}
         <ul className="flex flex-col gap-2">
           {suggestions.map((suggestion) => (
@@ -130,6 +133,7 @@ function SuggestionCard({
   memberOptions: readonly MemberOption[];
   onResolved(actionId: string): void;
 }) {
+  const t = useGroupText();
   const options = memberOptions.filter((member) =>
     suggestion.candidateSessionIds.includes(member.sessionId),
   );
@@ -159,7 +163,7 @@ function SuggestionCard({
       );
       onResolved(suggestion.actionId);
     } catch (cause) {
-      setError(describeGroupError(cause));
+      setError(describeGroupError(cause, t.locale));
     } finally {
       setBusy(false);
     }
@@ -177,12 +181,12 @@ function SuggestionCard({
         {suggestion.reason}
       </p>
       <p className="mt-1 text-2xs text-fg-faint" data-testid="group-suggestion-origin">
-        Source: {sourceLabel}
+        {t("proactivity.source")} {sourceLabel}
       </p>
       <label className="mt-2 flex items-center gap-2 text-2xs text-fg-muted">
-        <span>Delegate to</span>
+        <span>{t("proactivity.delegateTo")}</span>
         <select
-          aria-label="Delegate to"
+          aria-label={t("proactivity.delegateTo")}
           className="min-w-0 flex-1 rounded border border-hairline bg-base px-1.5 py-1"
           disabled={busy || options.length === 0}
           onChange={(event) => setTargetSessionId(event.currentTarget.value)}
@@ -196,7 +200,7 @@ function SuggestionCard({
         </select>
       </label>
       <p className="mt-1 text-2xs text-fg-faint" data-testid="group-suggestion-destination">
-        Destination: {targetLabel ?? "Choose an active group member"}
+        {t("proactivity.destination")} {targetLabel ?? t("proactivity.chooseActiveMember")}
       </p>
       {error ? (
         <p className="mt-1 text-2xs text-danger" role="alert">
@@ -210,7 +214,7 @@ function SuggestionCard({
           onClick={() => void resolve("accept")}
           type="button"
         >
-          {suggestion.startNewExecution ? "Start new execution" : "Accept suggestion"}
+          {suggestion.startNewExecution ? t("proactivity.startExecution") : t("proactivity.accept")}
         </button>
         <button
           className="rounded border border-hairline px-2 py-1 text-2xs text-fg-muted disabled:opacity-50"
@@ -218,7 +222,7 @@ function SuggestionCard({
           onClick={() => void resolve("discard")}
           type="button"
         >
-          Discard suggestion
+          {t("proactivity.discard")}
         </button>
       </div>
     </li>

@@ -13,6 +13,7 @@ import type {
 } from "../../../../shared/group-work-state";
 import { GroupIntegrationDialog } from "./GroupIntegrationDialog";
 import { describeGroupError } from "./groupErrors";
+import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
 import type { MemberLabel } from "./memberLabels";
 import { memberLabelText } from "./memberLabels";
 
@@ -25,54 +26,118 @@ type Props = {
   onTaskUpdated?(task: GroupTask): void;
 };
 
-const STATUS_LABELS: Record<GroupTaskStatus, string> = {
-  open: "Open",
-  in_progress: "In progress",
-  blocked: "Blocked",
-  in_review: "In review",
-  done: "Done",
-  cancelled: "Cancelled",
-};
 const CHECK_KINDS: readonly HarnessTaskCheckKind[] = ["tests", "typecheck", "lint", "build"];
+
+function statusLabel(status: GroupTaskStatus, t: GroupTextFn): string {
+  switch (status) {
+    case "open":
+      return t("taskDetails.status.open");
+    case "in_progress":
+      return t("taskDetails.status.inProgress");
+    case "blocked":
+      return t("taskDetails.status.blocked");
+    case "in_review":
+      return t("taskDetails.status.inReview");
+    case "done":
+      return t("taskDetails.status.done");
+    case "cancelled":
+      return t("taskDetails.status.cancelled");
+  }
+}
 
 function displayName(
   sessionId: string | undefined,
   labels: ReadonlyMap<string, MemberLabel>,
+  t: GroupTextFn,
 ): string {
-  if (!sessionId) return "Not assigned";
+  if (!sessionId) return t("taskDetails.notAssigned");
   const label = labels.get(sessionId);
-  return label ? memberLabelText(label) : "Former member";
+  return label ? memberLabelText(label) : t("taskDetails.formerMember");
 }
 
-function displayStage(stage: GroupTask["stage"]): string {
-  if (!stage) return "Not set";
-  return stage === "verify" ? "Verification" : stage[0]?.toUpperCase() + stage.slice(1);
-}
-
-function outcomeLabel(status: string): string {
-  switch (status) {
-    case "passed":
-      return "Passed";
-    case "review_approved":
-      return "Approved by reviewer";
-    case "failed":
-      return "Failed";
-    case "skipped":
-      return "Skipped";
-    case "stale":
-      return "Out of date";
-    case "unavailable":
-      return "Unavailable";
-    case "user_confirmed":
-      return "User confirmed (not QA)";
+function displayStage(stage: GroupTask["stage"], t: GroupTextFn): string {
+  switch (stage) {
+    case "plan":
+      return t("taskDetails.stage.plan");
+    case "implement":
+      return t("taskDetails.stage.implement");
+    case "verify":
+      return t("taskDetails.verification");
+    case "review":
+      return t("taskDetails.stage.review");
+    case "deliver":
+      return t("taskDetails.stage.deliver");
     default:
-      return "Missing";
+      return t("taskDetails.notSet");
   }
 }
 
-function transitionLabel(event: GroupTaskTransitionEvent): string {
+function outcomeLabel(status: string, t: GroupTextFn): string {
+  switch (status) {
+    case "passed":
+      return t("taskDetails.outcome.passed");
+    case "review_approved":
+      return t("taskDetails.outcome.reviewApproved");
+    case "failed":
+      return t("taskDetails.outcome.failed");
+    case "skipped":
+      return t("taskDetails.outcome.skipped");
+    case "stale":
+      return t("taskDetails.outcome.stale");
+    case "unavailable":
+      return t("taskDetails.outcome.unavailable");
+    case "user_confirmed":
+      return t("taskDetails.outcome.userConfirmed");
+    default:
+      return t("taskDetails.outcome.missing");
+  }
+}
+
+function transitionLabel(event: GroupTaskTransitionEvent, t: GroupTextFn): string {
   const action = event.action.replaceAll("_", " ");
-  return `${action}: ${STATUS_LABELS[event.fromStatus]} → ${STATUS_LABELS[event.toStatus]}`;
+  return t("taskDetails.transition", {
+    action,
+    from: statusLabel(event.fromStatus, t),
+    to: statusLabel(event.toStatus, t),
+  });
+}
+
+function priorityLabel(priority: GroupTaskUserDraft["priority"], t: GroupTextFn): string {
+  if (priority === "low") return t("taskDetails.priority.low");
+  if (priority === "high") return t("taskDetails.priority.high");
+  return t("taskDetails.priority.normal");
+}
+
+function kindLabel(kind: GroupTaskUserDraft["kind"], t: GroupTextFn): string {
+  switch (kind) {
+    case "legacy":
+      return t("taskDetails.kind.legacy");
+    case "code":
+      return t("taskDetails.kind.code");
+    case "docs":
+      return t("taskDetails.kind.docs");
+    case "design":
+      return t("taskDetails.kind.design");
+    case "review":
+      return t("taskDetails.kind.review");
+    case "research":
+      return t("taskDetails.kind.research");
+    case "question":
+      return t("taskDetails.kind.question");
+  }
+}
+
+function checkKindLabel(check: HarnessTaskCheckKind, t: GroupTextFn): string {
+  switch (check) {
+    case "tests":
+      return t("taskDetails.check.tests");
+    case "typecheck":
+      return t("taskDetails.check.typecheck");
+    case "lint":
+      return t("taskDetails.check.lint");
+    case "build":
+      return t("taskDetails.check.build");
+  }
 }
 
 function editableDraft(task: GroupTask): GroupTaskUserDraft {
@@ -97,6 +162,7 @@ export function GroupTaskDetails({
   onOpenSession,
   onTaskUpdated,
 }: Props) {
+  const t = useGroupText();
   const [details, setDetails] = useState<GroupTaskDetailsDto | undefined>();
   const [integrationState, setIntegrationState] = useState<GroupIntegrationState>({});
   const [integrationOpen, setIntegrationOpen] = useState(false);
@@ -167,7 +233,7 @@ export function GroupTaskDetails({
         setTransitions(history);
         setError(undefined);
       } catch (cause) {
-        if (!disposed) setError(describeGroupError(cause));
+        if (!disposed) setError(describeGroupError(cause, t.locale));
       }
     }
 
@@ -215,7 +281,7 @@ export function GroupTaskDetails({
       unsubscribe();
       if (reload.current === request) reload.current = () => undefined;
     };
-  }, [groupId, taskId]);
+  }, [groupId, t.locale, taskId]);
 
   useEffect(() => {
     if (details && !editing) setDraft(editableDraft(details.task));
@@ -237,7 +303,7 @@ export function GroupTaskDetails({
       setEditVersion(undefined);
       reload.current(updated.stateVersion ?? 1);
     } catch (cause) {
-      setSaveError(describeGroupError(cause));
+      setSaveError(describeGroupError(cause, t.locale));
     } finally {
       setSaving(false);
     }
@@ -245,14 +311,17 @@ export function GroupTaskDetails({
 
   if (!details) {
     return (
-      <section aria-label="Task details" className="mt-3 rounded-md border border-hairline p-3">
+      <section
+        aria-label={t("taskDetails.aria")}
+        className="mt-3 rounded-md border border-hairline p-3"
+      >
         <button className="float-right text-xs text-fg-faint" onClick={onClose} type="button">
-          Close
+          {t("taskDetails.close")}
         </button>
         {error ? (
           <p className="text-xs text-danger">{error}</p>
         ) : (
-          <p className="text-xs text-fg-muted">Loading task details…</p>
+          <p className="text-xs text-fg-muted">{t("taskDetails.loading")}</p>
         )}
       </section>
     );
@@ -265,37 +334,38 @@ export function GroupTaskDetails({
   return (
     <>
       <section
-        aria-label="Task details"
+        aria-label={t("taskDetails.aria")}
         className="mt-3 rounded-md border border-hairline p-3 text-xs"
         data-testid="group-task-details"
       >
         <div className="flex items-start justify-between gap-2">
           <h4 className="font-medium text-fg">{task.title}</h4>
           <button
-            aria-label="Close task details"
+            aria-label={t("taskDetails.closeAria")}
             className="text-fg-faint hover:text-fg"
             onClick={onClose}
             type="button"
           >
-            ×
+            {t("taskDetails.closeGlyph")}
           </button>
         </div>
         <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-2xs text-fg-muted">
-          <span>{STATUS_LABELS[task.status]}</span>
+          <span>{statusLabel(task.status, t)}</span>
           <span>
-            {(task.priority ?? "normal")[0]?.toUpperCase()}
-            {(task.priority ?? "normal").slice(1)} priority
+            {t("taskDetails.prioritySuffix", {
+              priority: priorityLabel(task.priority ?? "normal", t),
+            })}
           </span>
-          <span>{displayStage(task.stage)}</span>
+          <span>{displayStage(task.stage, t)}</span>
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2 text-2xs">
           <div>
-            <span className="text-fg-faint">Owner</span>
-            <div>{displayName(task.ownerSessionId, labels)}</div>
+            <span className="text-fg-faint">{t("taskDetails.owner")}</span>
+            <div>{displayName(task.ownerSessionId, labels, t)}</div>
           </div>
           <div>
-            <span className="text-fg-faint">Reviewer</span>
-            <div>{displayName(task.reviewerSessionId, labels)}</div>
+            <span className="text-fg-faint">{t("taskDetails.reviewer")}</span>
+            <div>{displayName(task.reviewerSessionId, labels, t)}</div>
           </div>
         </div>
         {details.blocker ? (
@@ -315,22 +385,22 @@ export function GroupTaskDetails({
         ) : null}
         {details.dependencies.length > 0 ? (
           <div className="mt-3">
-            <h5 className="font-medium text-fg-muted">Dependencies</h5>
+            <h5 className="font-medium text-fg-muted">{t("taskDetails.dependencies")}</h5>
             <ul className="mt-1 flex flex-col gap-1">
               {details.dependencies.map((dependency) => (
                 <li className="flex justify-between gap-2" key={dependency.id}>
                   <span>{dependency.title}</span>
-                  <span className="text-fg-faint">{STATUS_LABELS[dependency.status]}</span>
+                  <span className="text-fg-faint">{statusLabel(dependency.status, t)}</span>
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
         <div className="mt-3">
-          <h5 className="font-medium text-fg-muted">Criteria and QA</h5>
+          <h5 className="font-medium text-fg-muted">{t("taskDetails.criteriaAndQa")}</h5>
           {details.source.availability !== "available" ? (
             <p className="mt-1 text-warning" data-testid="task-source-availability">
-              {details.source.reason ?? "Current source is unavailable."}
+              {details.source.reason ?? t("taskDetails.sourceUnavailable")}
             </p>
           ) : null}
           <ul className="mt-1 flex flex-col gap-2">
@@ -338,7 +408,7 @@ export function GroupTaskDetails({
               <li key={criterion.criterionId}>
                 <div className="flex justify-between gap-2">
                   <span>{criterion.description}</span>
-                  <span>{outcomeLabel(criterion.status)}</span>
+                  <span>{outcomeLabel(criterion.status, t)}</span>
                 </div>
                 {criterion.evidence.map((evidence, index) => (
                   <div
@@ -346,7 +416,8 @@ export function GroupTaskDetails({
                     key={`${criterion.criterionId}:${evidence.runId}:${evidence.checkName ?? index}`}
                   >
                     <span>
-                      {evidence.checkName ?? "Review evidence"}: {outcomeLabel(evidence.status)}
+                      {evidence.checkName ?? t("taskDetails.reviewEvidence")}:{" "}
+                      {outcomeLabel(evidence.status, t)}
                     </span>
                     {evidence.reason ? <span>{evidence.reason}</span> : null}
                     {evidence.sessionId ? (
@@ -355,7 +426,7 @@ export function GroupTaskDetails({
                         onClick={() => onOpenSession?.(evidence.sessionId, evidence.runId)}
                         type="button"
                       >
-                        Open QA session
+                        {t("taskDetails.openQaSession")}
                       </button>
                     ) : null}
                   </div>
@@ -364,21 +435,21 @@ export function GroupTaskDetails({
             ))}
           </ul>
           <p className="mt-2 text-2xs text-fg-muted">
-            Review: {details.review.status.replaceAll("_", " ")}
+            {t("taskDetails.review")} {details.review.status.replaceAll("_", " ")}
             {details.review.reviewerSessionId
-              ? ` · ${displayName(details.review.reviewerSessionId, labels)}`
+              ? ` · ${displayName(details.review.reviewerSessionId, labels, t)}`
               : ""}
           </p>
         </div>
         {transitions.length > 0 ? (
           <div className="mt-3">
-            <h5 className="font-medium text-fg-muted">History</h5>
+            <h5 className="font-medium text-fg-muted">{t("taskDetails.history")}</h5>
             <ul className="mt-1 flex flex-col gap-1 text-2xs text-fg-faint">
               {transitions
                 .slice(-8)
                 .reverse()
                 .map((transition) => (
-                  <li key={transition.id}>{transitionLabel(transition)}</li>
+                  <li key={transition.id}>{transitionLabel(transition, t)}</li>
                 ))}
             </ul>
           </div>
@@ -389,7 +460,7 @@ export function GroupTaskDetails({
             onSubmit={(event) => void saveDraft(event)}
           >
             <label className="flex flex-col gap-1">
-              Title
+              {t("taskDetails.title")}
               <input
                 maxLength={200}
                 onChange={(event) => setDraft({ ...draft, title: event.target.value })}
@@ -398,7 +469,7 @@ export function GroupTaskDetails({
               />
             </label>
             <label className="flex flex-col gap-1">
-              Description
+              {t("taskDetails.description")}
               <textarea
                 maxLength={4_000}
                 onChange={(event) => setDraft({ ...draft, description: event.target.value })}
@@ -406,7 +477,7 @@ export function GroupTaskDetails({
               />
             </label>
             <label className="flex flex-col gap-1">
-              Kind
+              {t("taskDetails.kind")}
               <select
                 onChange={(event) =>
                   setDraft({ ...draft, kind: event.target.value as GroupTaskUserDraft["kind"] })
@@ -417,13 +488,13 @@ export function GroupTaskDetails({
                   ["legacy", "code", "docs", "design", "review", "research", "question"] as const
                 ).map((kind) => (
                   <option key={kind} value={kind}>
-                    {kind}
+                    {kindLabel(kind, t)}
                   </option>
                 ))}
               </select>
             </label>
             <label className="flex flex-col gap-1">
-              Priority
+              {t("taskDetails.priority")}
               <select
                 onChange={(event) =>
                   setDraft({
@@ -435,13 +506,13 @@ export function GroupTaskDetails({
               >
                 {(["low", "normal", "high"] as const).map((priority) => (
                   <option key={priority} value={priority}>
-                    {priority}
+                    {priorityLabel(priority, t)}
                   </option>
                 ))}
               </select>
             </label>
             <fieldset className="flex flex-col gap-1">
-              <legend>Dependencies</legend>
+              <legend>{t("taskDetails.dependencies")}</legend>
               {details.dependencyOptions.map((dependency) => (
                 <label className="flex items-center gap-2" key={dependency.id}>
                   <input
@@ -457,21 +528,23 @@ export function GroupTaskDetails({
                     type="checkbox"
                   />
                   <span>{dependency.title}</span>
-                  <span className="text-fg-faint">{STATUS_LABELS[dependency.status]}</span>
+                  <span className="text-fg-faint">{statusLabel(dependency.status, t)}</span>
                 </label>
               ))}
               {details.omittedDependencyOptionCount > 0 ? (
                 <span className="text-2xs text-fg-faint">
-                  {details.omittedDependencyOptionCount} more tasks are omitted from this list.
+                  {t("taskDetails.omittedDependencies", {
+                    count: details.omittedDependencyOptionCount,
+                  })}
                 </span>
               ) : null}
             </fieldset>
             <fieldset className="flex flex-col gap-2">
-              <legend>Criteria</legend>
+              <legend>{t("taskDetails.criteria")}</legend>
               {draft.criteria.map((criterion, index) => (
                 <div className="rounded border border-hairline p-2" key={criterion.id}>
                   <label className="flex flex-col gap-1">
-                    Criterion
+                    {t("taskDetails.criterion")}
                     <input
                       maxLength={1_000}
                       onChange={(event) =>
@@ -507,7 +580,7 @@ export function GroupTaskDetails({
                           }
                           type="checkbox"
                         />
-                        {check}
+                        {checkKindLabel(check, t)}
                       </label>
                     ))}
                   </div>
@@ -521,7 +594,7 @@ export function GroupTaskDetails({
                     }
                     type="button"
                   >
-                    Remove criterion
+                    {t("taskDetails.removeCriterion")}
                   </button>
                 </div>
               ))}
@@ -534,7 +607,7 @@ export function GroupTaskDetails({
                       ...draft.criteria,
                       {
                         id: `criterion-${crypto.randomUUID()}`,
-                        description: "New criterion",
+                        description: t("taskDetails.newCriterion"),
                         requiredCheckKinds: [],
                       },
                     ],
@@ -542,13 +615,13 @@ export function GroupTaskDetails({
                 }
                 type="button"
               >
-                Add criterion
+                {t("taskDetails.addCriterion")}
               </button>
             </fieldset>
             <fieldset className="flex flex-col gap-2">
-              <legend>Verification policy</legend>
+              <legend>{t("taskDetails.verificationPolicy")}</legend>
               <label className="flex flex-col gap-1">
-                Mode
+                {t("taskDetails.mode")}
                 <select
                   onChange={(event) =>
                     setDraft({
@@ -562,8 +635,8 @@ export function GroupTaskDetails({
                   }
                   value={draft.verificationPolicy.mode}
                 >
-                  <option value="none">No required QA</option>
-                  <option value="required">Require QA</option>
+                  <option value="none">{t("taskDetails.noRequiredQa")}</option>
+                  <option value="required">{t("taskDetails.requireQa")}</option>
                 </select>
               </label>
               <label className="flex items-center gap-2">
@@ -580,11 +653,11 @@ export function GroupTaskDetails({
                   }
                   type="checkbox"
                 />
-                Require reviewer approval
+                {t("taskDetails.requireReviewerApproval")}
               </label>
             </fieldset>
             <label className="flex flex-col gap-1">
-              Reviewer
+              {t("taskDetails.reviewer")}
               <select
                 onChange={(event) => {
                   const { reviewerSessionId: _reviewerSessionId, ...withoutReviewer } = draft;
@@ -596,7 +669,7 @@ export function GroupTaskDetails({
                 }}
                 value={draft.reviewerSessionId ?? ""}
               >
-                <option value="">No reviewer</option>
+                <option value="">{t("taskDetails.noReviewer")}</option>
                 {[...labels.entries()].map(([sessionId, label]) => (
                   <option key={sessionId} value={sessionId}>
                     {memberLabelText(label)}
@@ -614,10 +687,10 @@ export function GroupTaskDetails({
                 }}
                 type="button"
               >
-                Discard
+                {t("taskDetails.discard")}
               </button>
               <button disabled={saving} type="submit">
-                {saving ? "Saving…" : "Save task"}
+                {saving ? t("taskDetails.saving") : t("taskDetails.saveTask")}
               </button>
             </div>
           </form>
@@ -633,7 +706,7 @@ export function GroupTaskDetails({
               }}
               type="button"
             >
-              Edit task
+              {t("taskDetails.editTask")}
             </button>
             {canReviewIntegration ? (
               <button
@@ -641,7 +714,7 @@ export function GroupTaskDetails({
                 onClick={() => setIntegrationOpen(true)}
                 type="button"
               >
-                Review integration
+                {t("taskDetails.reviewIntegration")}
               </button>
             ) : null}
           </div>

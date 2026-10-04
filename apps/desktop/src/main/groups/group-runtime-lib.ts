@@ -14,7 +14,10 @@ import {
   GROUP_COLLAB_WAKE_PROTOCOL,
 } from "../../shared/group-collab-status";
 import type { SupervisedDelegation } from "../../shared/group-supervised-flow";
-import { parseGroupMentions as parseSharedGroupMentions } from "../../shared/group-wake-rules";
+import {
+  autonomousWakeEligible,
+  parseGroupMentions as parseSharedGroupMentions,
+} from "../../shared/group-wake-rules";
 import type { GroupTaskGateResult } from "../../shared/group-work-state";
 import type { ToolProfileName } from "../../shared/tools";
 import type {
@@ -399,7 +402,7 @@ export function composeGroupSnapshotSection(input: {
   return [...head, ...lines, close].join("\n");
 }
 
-/** Untyped room messages remain intake until an agent proposes a typed task. */
+/** Untyped room messages go to the active Lead, or the active member pool if no Lead is available. */
 export function selectAutonomousWakeTargets(input: {
   body: string;
   members: readonly MemberRef[];
@@ -411,13 +414,10 @@ export function selectAutonomousWakeTargets(input: {
   >[];
   maxTargets?: number;
 }): string[] {
-  const lead = input.members.find(
-    (member) =>
-      member.sessionId === input.leadSessionId &&
-      !member.archived &&
-      !input.excludeSessionIds?.includes(member.sessionId),
-  );
-  return lead ? [lead.sessionId] : [];
+  const eligible = autonomousWakeEligible(input.members, input.excludeSessionIds ?? []);
+  const lead = eligible.find((member) => member.sessionId === input.leadSessionId);
+  const targets = lead ? [lead.sessionId] : eligible.map((member) => member.sessionId);
+  return input.maxTargets === undefined ? targets : targets.slice(0, Math.max(0, input.maxTargets));
 }
 
 /**
