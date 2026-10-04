@@ -273,13 +273,13 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 
 **Files:** criar `desktop/main/ipc/group-integration-ipc.ts`, `group-integration-ipc.test.ts`, `desktop/renderer/src/features/groups/GroupIntegrationDialog.tsx`, `GroupIntegrationDialog.test.tsx`; modificar channels/register-app-ipc/preload, `GroupTaskDetails.tsx`, `GroupActivityPanel.tsx` e testes.
 
-**Interfaces:** consome Tarefa 11. Produz métodos preload correspondentes a preview/apply/abort e evento `group.integration-changed` com taskId, record e versão. Handler resolve cwd/branches no main; renderer manda só IDs e confirmação.
+**Interfaces:** consome Tarefa 11. Produz métodos preload para preview/apply/abort, leitura read-only do estado persistido, reconciliação explícita de um apply interrompido e evento `group.integration-changed` com taskId, record e versão. Handler resolve cwd/branches no main; renderer manda só IDs e confirmação.
 
-- [ ] Adicionar testes `preview_names_both_branches_and_diff`, `apply_requires_current_preview_confirmation`, `stale_preview_requires_new_confirmation`, `conflict_shows_abort`, `denied_permission_keeps_preview`, `ipc_rejects_forged_paths_or_missing_confirmation`. Assertar comportamento acessível e ausência de aplicação no mount/reopen/toggle opt-in.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/ipc/group-integration-ipc.test.ts apps/desktop/src/renderer/src/features/groups/GroupIntegrationDialog.test.tsx`; esperar falhas novas.
-- [ ] Implementar handlers trusted/strict, bridge e diálogo com commits/diff resumido, destino, confirmação, estado pendente, motivo de gate e abortar. Exibir `applied` como alterações aplicadas aguardando conclusão Git; não chamar de integrada/entregue antes do usuário concluir o merge. Prévia inválida é recarregada, sem reaplicar a confirmação antiga.
-- [ ] Rodar comandos citados e testes de GroupTaskDetails/GroupActivityPanel; esperar aprovação. Fase D fica utilizável.
-- [ ] Commit: `feat(groups): add confirmed integration workflow`.
+- [x] Adicionar testes `preview_names_both_branches_and_diff`, `apply_requires_current_preview_confirmation`, `stale_preview_requires_new_confirmation`, `conflict_shows_abort`, `denied_permission_keeps_preview`, `ipc_rejects_forged_paths_or_missing_confirmation`. Assertar comportamento acessível e ausência de aplicação no mount/reopen/toggle opt-in. Cobertura adicional verifica eventos duráveis de recuperação, nova identidade de registro na versão 1, refresh de `no_changes` e recuperação explícita de `applying` sem criar outro registro.
+- [x] Rodar primeiro as suítes de IPC/diálogo e registrar as falhas esperadas antes da implementação; a suíte de cinco arquivos terminou com 66/66 testes.
+- [x] Implementar handlers trusted/strict, bridge e diálogo com commits/diff resumido, destino, confirmação, estado pendente, motivo de gate e abortar. Exibir `applied` como alterações aplicadas aguardando conclusão Git; não chamar de integrada/entregue antes do usuário concluir o merge. Prévia inválida é recarregada, sem reaplicar a confirmação antiga. A recuperação após reinício tem ação explícita e mantém o registro/preview original.
+- [x] Rodar suíte adicional de serviço/refresh (2 arquivos, 28 testes), typecheck desktop, Biome direcionado (18 arquivos) e `git diff --check`; todos passaram. Revisão independente round 1 aprovou sem findings: `reviews/task-12-review-round-1.md`. Fase D fica utilizável.
+- [x] Commit: `feat(groups): add confirmed integration workflow` (`b3ead50`). Checkpoint de aprovação registrado em `docs(groups): record Task 12 review approval`.
 
 ## Tarefa 13: Cobertura completa, documentação e entrega por fase
 
