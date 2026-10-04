@@ -335,6 +335,29 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(html).not.toContain("Payment pending");
   });
 
+  it("Current plan pill: '<Plan> (paused)' while paused, the plain plan name otherwise", () => {
+    const view = (state: BillingState) =>
+      render(
+        <BillingSectionView
+          busy={false}
+          onCheckout={noop}
+          onPortal={noop}
+          onRefresh={noop}
+          onCancel={noop}
+          state={state}
+        />,
+      );
+    view(subscribed({ status: "paused" }));
+    expect(screen.getByText("Starter (paused)")).toBeTruthy();
+    cleanup();
+    view(subscribed({ provider: "stripe", status: "paused" }));
+    expect(screen.getByText("Starter (paused)")).toBeTruthy();
+    cleanup();
+    view(subscribed());
+    expect(screen.getByText("Starter")).toBeTruthy();
+    expect(screen.queryByText(/\(paused\)/)).toBeNull();
+  });
+
   it("paused: Cancel subscription asks to confirm, then calls cancelSubscription()", async () => {
     const confirm = stubConfirm().mockReturnValue(true);
     const { cancel } = mount(subscribed({ status: "paused" }), async () => READY);

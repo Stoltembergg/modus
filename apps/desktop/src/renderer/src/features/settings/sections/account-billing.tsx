@@ -154,7 +154,7 @@ export function BillingSectionView({
           control={
             <div className="flex items-center gap-2">
               <ReadOnlyPill>
-                {loading ? "Loading…" : (current?.name ?? state.currentPlan)}
+                {loading ? "Loading…" : paused ? `${planName} (paused)` : planName}
               </ReadOnlyPill>
               <button
                 aria-label="Refresh plan"
