@@ -265,8 +265,9 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 - [x] Implementar preview somente de leitura. Se houver mudanças não commitadas na origem, mostrar que precisa finalizar a branch e manter aplicação indisponível; não chamar `finishSubagentWorktree` silenciosamente para montar prévia, pois ele pode executar add/commit. Finalizar origem usa ação Git explícita já autorizada; depois recalcular fingerprint e os gates antes de integrar.
 - [x] Aplicação exige confirmação e `requestPermission`/decisão existente para `git.write`; só depois chama `applySubagentWorktree`. Não presumir proteção porque outra IPC de subagent chama o mesmo serviço. Revalidar source/target/task depois de aguardar permissão, serializar por repositório e impedir duas aplicações concorrentes. Persistir intenção antes do efeito e reconciliar `applying` com Git na recuperação, sem executar merge novamente às cegas.
 - [x] Registrar conflito e arquivos; transição especial `done → blocked` só por conflito de integração confirmada, preservando QA/revisão da origem. Abort volta a ready e restaura o estado pré-integração; revisão/código alterado exige gates novamente. `applied` significa merge aplicado sem commit, não task entregue/commit confirmado. Reusar abort que valida pertença do merge ao worktree; nunca abortar merge alheio.
-- [ ] Rodar testes citados; esperar aprovação sem merge commit/push. Não remover worktree enquanto houver aplicação pendente.
-- [x] Commit: `feat(groups): preview and authorize branch integration`.
+- [x] Rodar novamente as suítes de integração e Git após a correção; 2 arquivos, 66 testes, typecheck, Biome direcionado e `git diff --check` passaram. Sem merge commit/push; limpeza continua bloqueada durante merge pendente.
+- [ ] Receber aprovação independente da rodada 2.
+- [x] Commits: `feat(groups): preview and authorize branch integration`; correção `fix(groups): protect worktrees during pending integration` (`2ca88dd`).
 
 ## Tarefa 12: IPC e UI para integrar e abortar
 
