@@ -11,6 +11,7 @@ import type { GroupRuntimeEvent } from "../../../../shared/contracts";
  */
 export function shouldRefreshGroupSidePanel(groupId: string, event: GroupRuntimeEvent): boolean {
   if (!("groupId" in event) || event.groupId !== groupId) return false;
+  if (event.type === "group.task-changed") return true;
   if (event.type === "group.activity" || event.type === "group.chain-ended") return true;
   if (event.type === "group.message") return event.message.kind === "status";
   return false;

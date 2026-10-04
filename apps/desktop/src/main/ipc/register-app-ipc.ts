@@ -85,9 +85,6 @@ import {
   setAgentArchived,
   updateAgent,
 } from "../agents/agents-store";
-import type { AppearanceController } from "../appearance/appearance-controller";
-import { authIpcService } from "../auth/auth-service-instance";
-import { billingIpcService } from "../billing/billing-service-instance";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -140,17 +137,23 @@ import {
   addAgentToGroup,
   cancelGroupTask,
   deleteGroupDecision,
+  getGroupTask,
   listAgentGroupMembers,
   listAgentGroupsWithMembers,
   listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
+  listGroupTaskTransitions,
   renameAgentGroup,
   setAgentGroupLead,
   setAgentGroupMode,
   setAgentGroupWorkspace,
   setGroupMembershipMessageSink,
+  setGroupTaskChangedSink,
+  updateGroupTaskDraft,
 } from "../groups/group-store";
+import { getGroupTaskDetails } from "../groups/group-task-details";
+import { getGroupWorkState } from "../groups/group-work-state";
 import {
   ensurePersonalizationFile,
   getPersonalization,
@@ -216,13 +219,11 @@ import {
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
-import { registerAppearanceIpcHandlers } from "./appearance-ipc";
-import { registerAuthIpcHandlers } from "./auth-ipc";
-import { registerBillingIpcHandlers } from "./billing-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
 import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
+import { registerGroupWorkIpcHandlers } from "./group-work-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerHyperPlanIpcHandlers } from "./hyperplan-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
@@ -353,13 +354,9 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindowType {
 
 export function registerAppIpc({
   startupTimeline,
-  appearance,
 }: {
   startupTimeline?: StartupTimeline;
-  appearance?: Pick<AppearanceController, "getState" | "set">;
 } = {}): void {
-  if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
-
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
     return app.getVersion();
@@ -1394,8 +1391,6 @@ export function registerAppIpc({
   });
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
-  registerAuthIpcHandlers(ipcMain, assertTrustedSender, authIpcService);
-  registerBillingIpcHandlers(ipcMain, assertTrustedSender, billingIpcService);
 
   // A member leaving (remove, update, group or agent delete) takes its hidden
   // room session and its 1:1 chat with it: the store transaction detaches them,
@@ -1447,6 +1442,18 @@ export function registerAppIpc({
     listGroupDecisions: (groupId) => listGroupDecisions(groupId),
     deleteGroupDecision,
   });
+  registerGroupWorkIpcHandlers(ipcMain, assertTrustedSender, {
+    getGroupWorkState: (groupId, executionId) => getGroupWorkState(groupId, executionId),
+    getGroupTaskDetails: (groupId, taskId) => getGroupTaskDetails(groupId, taskId),
+    listGroupTaskTransitions: (taskId) => {
+      getGroupTask(taskId);
+      return listGroupTaskTransitions(taskId);
+    },
+    updateGroupTaskDraft,
+  });
+  setGroupTaskChangedSink((change) =>
+    emitGroupRuntimeEvent({ type: "group.task-changed", ...change }),
+  );
   // "X joined as <role>" / "X left the group" reach the room live (A3), through
   // the same broadcast as room messages, once their transaction commits.
   setGroupMembershipMessageSink((message) =>

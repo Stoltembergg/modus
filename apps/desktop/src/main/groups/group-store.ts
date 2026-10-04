@@ -36,6 +36,7 @@ export {
   createGroupTask,
   createMemberGroupTask,
   fillMemberTaskBranches,
+  getGroupTask,
   getGroupTaskRunBinding,
   listGroupTasks,
   listGroupTaskTransitions,
@@ -44,7 +45,9 @@ export {
   reportGroupTaskProgress,
   requestGroupTaskReview,
   reviewGroupTask,
+  setGroupTaskChangedSink,
   updateGroupTask,
+  updateGroupTaskDraft,
 } from "./group-task-store";
 
 /*

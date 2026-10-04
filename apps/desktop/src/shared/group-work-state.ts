@@ -61,6 +61,9 @@ export type GroupTaskDraft = {
   reviewerSessionId?: string;
 };
 
+/** Editable fields accepted from the trusted desktop renderer. */
+export type GroupTaskUserDraft = Omit<GroupTaskDraft, "groupId">;
+
 /** A transient outcome produced by the main-process evidence resolver. */
 export type GroupTaskCriterionOutcome = {
   criterionId: string;
@@ -94,6 +97,49 @@ export type GroupTaskTransitionEvent = {
   fromStatus: GroupTaskStatus;
   toStatus: GroupTaskStatus;
   createdAt: string;
+};
+
+export type GroupTaskEvidenceDetailStatus =
+  | "passed"
+  | "failed"
+  | "skipped"
+  | "missing"
+  | "stale"
+  | "unavailable"
+  | "user_confirmed";
+
+export type GroupTaskEvidenceDetail = {
+  criterionId: string;
+  checkName?: HarnessTaskCheckKind;
+  sessionId: string;
+  runId: string;
+  executionId?: string;
+  status: GroupTaskEvidenceDetailStatus;
+  reason?: string;
+};
+
+export type GroupTaskCriterionDetail = {
+  criterionId: string;
+  description: string;
+  requiredCheckKinds: HarnessTaskCheckKind[];
+  status: "passed" | "review_approved" | "failed" | "missing" | "stale" | "unavailable";
+  evidence: GroupTaskEvidenceDetail[];
+  omittedEvidenceCount: number;
+};
+
+export type GroupTaskDetails = {
+  task: GroupTask;
+  dependencies: Array<Pick<GroupTask, "id" | "title" | "status">>;
+  dependencyOptions: Array<Pick<GroupTask, "id" | "title" | "status">>;
+  omittedDependencyOptionCount: number;
+  blocker?: { kind: "task" | "dependency"; reason: string };
+  source: { availability: "available" | "missing" | "unavailable"; reason?: string };
+  criteria: GroupTaskCriterionDetail[];
+  review: {
+    status: "approved" | "changes_requested" | "pending" | "unavailable" | "not_required";
+    reviewerSessionId?: string;
+  };
+  gate: GroupTaskGateResult;
 };
 
 export type GroupTaskProgressInput = {

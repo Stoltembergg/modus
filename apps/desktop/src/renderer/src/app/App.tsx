@@ -60,6 +60,8 @@ import {
   restorePrimaryNavigation,
 } from "../components/shell/navigation-state";
 import { TopBar } from "../components/shell/TopBar";
+import { Aurora } from "../components/ui/Aurora";
+import { FadeContent } from "../components/ui/FadeContent";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
 import { ModusLoadingFallback } from "../components/ui/ModusLoadingMark";
 import { NativeSurfaceProvider } from "../components/ui/nativeSurface";
@@ -225,10 +227,6 @@ export function App() {
   const [inspectorWidth, setInspectorWidth] = useState(384);
   const [inspectorTab, setInspectorTab] = useState("changes");
   const [filesRevealPath, setFilesRevealPath] = useState<string | undefined>();
-  const [filesRevealLine, setFilesRevealLine] = useState<
-    { line: number; key: number } | undefined
-  >();
-  const filesRevealKeyRef = useRef(0);
   const [terminalRevealId, setTerminalRevealId] = useState<string | undefined>();
   const [reviewCwd, setReviewCwd] = useState<string | undefined>();
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | undefined>();
@@ -731,6 +729,25 @@ export function App() {
     setActiveSessionId(session.id);
   }
 
+  async function openGroupTaskSession(sessionId: string): Promise<void> {
+    const existing = agentSessions.find((session) => session.id === sessionId);
+    if (existing) {
+      selectSession(existing);
+      return;
+    }
+    try {
+      const persistedSessions: AgentSessionInfo[] = await window.modus.agent.list({
+        includeSessionId: sessionId,
+      });
+      const persisted = persistedSessions.find(
+        (session: AgentSessionInfo) => session.id === sessionId,
+      );
+      if (persisted) selectSession(persisted);
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+    }
+  }
+
   function openSubagent(childSessionId: string): void {
     setSelectedSubagentId(childSessionId);
     setInspectorTab("subagents");
@@ -1193,12 +1210,9 @@ export function App() {
     [activeSession, updateSessionComposerDraft],
   );
 
-  // `line` is optional (C2.1): every `onOpenFile(path)` caller is unchanged.
-  const openWorkspaceFile = useCallback((path: string, line?: number) => {
+  const openWorkspaceFile = useCallback((path: string) => {
     setInspectorOpen(true);
     setInspectorTab("files");
-    filesRevealKeyRef.current += 1;
-    setFilesRevealLine(line ? { line, key: filesRevealKeyRef.current } : undefined);
     setFilesRevealPath(path);
   }, []);
 
@@ -1219,7 +1233,7 @@ export function App() {
                   band above the chat header. */}
               {settingsOpen ? <MenuBar /> : null}
 
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <FadeContent blur className="flex min-h-0 min-w-0 flex-1 flex-col" duration={0.7}>
                 <div
                   className="app-layout-row surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
@@ -1485,6 +1499,7 @@ export function App() {
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
                                 onOpenFile={openWorkspaceFile}
+                                onOpenSession={(sessionId) => void openGroupTaskSession(sessionId)}
                                 onAgentsChanged={() => void refreshGroups()}
                                 onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
                                 onRename={(name) =>
@@ -1595,6 +1610,12 @@ export function App() {
                                 ease: "easeOut",
                               }}
                             >
+                              <Aurora
+                                amplitude={1.15}
+                                blend={0.65}
+                                className="opacity-95"
+                                speed={0.85}
+                              />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
                                 <Composer
                                   onOpenConnections={openConnections}
@@ -1681,7 +1702,6 @@ export function App() {
                             onAddToChat={addContextToChat}
                             onRevealConsumed={() => setFilesRevealPath(undefined)}
                             onRevealTerminalConsumed={() => setTerminalRevealId(undefined)}
-                            revealLine={filesRevealLine}
                             revealPath={filesRevealPath}
                             revealTerminalId={terminalRevealId}
                             open={inspectorOpen}
@@ -1699,7 +1719,7 @@ export function App() {
                     </>
                   )}
                 </div>
-              </div>
+              </FadeContent>
             </AppShell>
           </ImageViewerProvider>
         </NativeSurfaceProvider>

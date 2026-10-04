@@ -14,6 +14,7 @@ import type {
   GroupTaskReview,
   GroupTaskRunBinding,
   GroupTaskTransitionEvent,
+  GroupTaskUserDraft,
   GroupTaskVerificationPolicy,
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
@@ -258,6 +259,56 @@ function transaction<T>(db: DatabaseSync, run: () => T): T {
 }
 
 let toolOperationActive = false;
+let groupTaskChangedSink:
+  | ((change: { groupId: string; taskId: string; stateVersion: number }) => void)
+  | undefined;
+const pendingTaskChanges = new Map<
+  string,
+  {
+    groupId: string;
+    expectedVersion: number;
+    sink: (change: { groupId: string; taskId: string; stateVersion: number }) => void;
+  }
+>();
+
+export function setGroupTaskChangedSink(
+  sink: ((change: { groupId: string; taskId: string; stateVersion: number }) => void) | undefined,
+): void {
+  groupTaskChangedSink = sink;
+}
+
+/** Publish only after the synchronous transaction has had a chance to commit. */
+function notifyGroupTaskChanged(task: Pick<GroupTask, "groupId" | "id" | "stateVersion">): void {
+  const sink = groupTaskChangedSink;
+  if (!sink) return;
+  const expectedVersion = task.stateVersion ?? 1;
+  const pending = pendingTaskChanges.get(task.id);
+  if (pending && pending.groupId === task.groupId) {
+    pending.expectedVersion = Math.max(pending.expectedVersion, expectedVersion);
+    return;
+  }
+  const notification = { groupId: task.groupId, expectedVersion, sink };
+  pendingTaskChanges.set(task.id, notification);
+  queueMicrotask(() => {
+    if (pendingTaskChanges.get(task.id) !== notification) return;
+    pendingTaskChanges.delete(task.id);
+    try {
+      const current = getGroupTask(task.id);
+      if (
+        current.groupId !== notification.groupId ||
+        (current.stateVersion ?? 1) < notification.expectedVersion
+      )
+        return;
+      notification.sink({
+        groupId: current.groupId,
+        taskId: current.id,
+        stateVersion: current.stateVersion ?? 1,
+      });
+    } catch {
+      // The task may have been rolled back or deleted before the notification runs.
+    }
+  });
+}
 
 export type GroupTaskOperationInput = {
   groupId: string;
@@ -717,6 +768,7 @@ export function recordGroupTaskLegacyTransition(
   db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(task.id);
   const next = requireGroupTask(task.groupId, task.id);
   recordEvent(db, task, action, next, actorSessionId);
+  notifyGroupTaskChanged(next);
 }
 
 export function reportGroupTaskProgress(input: GroupTaskProgressInput): GroupTask {
@@ -767,6 +819,7 @@ export function reportGroupTaskProgress(input: GroupTaskProgressInput): GroupTas
     );
     const next = requireGroupTask(input.groupId, task.id);
     recordEvent(db, task, "progress", next, input.actorSessionId, input.operationId, input);
+    notifyGroupTaskChanged(next);
     return next;
   });
 }
@@ -844,6 +897,7 @@ export function recordGroupTaskEvidence(input: GroupTaskEvidenceInput): GroupTas
     ).run(JSON.stringify(input.evidenceRefs), new Date().toISOString(), task.id);
     const next = requireGroupTask(input.groupId, task.id);
     recordEvent(db, task, "evidence", next, input.actorSessionId, input.operationId, input);
+    notifyGroupTaskChanged(next);
     return next;
   });
 }
@@ -1115,7 +1169,9 @@ export function createGroupTask(input: {
     JSON.stringify(input.verificationPolicy ?? { mode: "none", requireReview: false }),
     input.stage ?? null,
   );
-  return requireTask(id);
+  const task = requireTask(id);
+  notifyGroupTaskChanged(task);
+  return task;
 }
 
 function requireTask(taskId: string): GroupTask {
@@ -1130,6 +1186,102 @@ function requireTask(taskId: string): GroupTask {
 
 export function getGroupTask(taskId: string): GroupTask {
   return requireTask(taskId);
+}
+
+/** User edits task intent using optimistic concurrency; ownership and evidence stay main-owned. */
+export function updateGroupTaskDraft(
+  taskId: string,
+  draft: GroupTaskUserDraft,
+  expectedVersion: number,
+): GroupTask {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const current = requireTask(taskId);
+    requireVersion(current, expectedVersion);
+    const reviewerSessionId = draft.reviewerSessionId ?? null;
+    if (reviewerSessionId) requireMember(current.groupId, reviewerSessionId, "reviewer");
+    const normalized: GroupTaskUserDraft = {
+      title: requireText(draft.title, "task title"),
+      ...(draft.description !== undefined ? { description: draft.description } : {}),
+      kind: requireOneOf(
+        draft.kind,
+        ["legacy", "code", "docs", "design", "review", "research", "question"],
+        "task kind",
+      ),
+      priority: requireOneOf(draft.priority, ["low", "normal", "high"], "task priority"),
+      dependencyIds: draft.dependencyIds,
+      criteria: draft.criteria,
+      verificationPolicy: draft.verificationPolicy,
+      ...(reviewerSessionId ? { reviewerSessionId } : {}),
+    };
+    const validationTask: GroupTask = { ...current, dependencyIds: normalized.dependencyIds };
+    const validation = validateGroupTaskDraft(
+      { ...normalized, groupId: current.groupId },
+      listGroupTasks(current.groupId).map((task) =>
+        task.id === current.id ? validationTask : task,
+      ),
+    );
+    if (validation.issues.length) {
+      const issue = validation.issues[0];
+      throw new GroupStoreError(
+        issue?.code === "dependency-cycle"
+          ? "dependency-cycle"
+          : issue?.code === "invalid-dependency"
+            ? "invalid-dependency"
+            : "invalid-value",
+        issue?.message ?? "Invalid task draft.",
+      );
+    }
+    const description = normalized.description ?? null;
+    const reviewerChanged = (current.reviewerSessionId ?? null) !== reviewerSessionId;
+    const criteriaChanged =
+      JSON.stringify(current.criteria ?? []) !== JSON.stringify(normalized.criteria) ||
+      JSON.stringify(current.verificationPolicy ?? { mode: "none", requireReview: false }) !==
+        JSON.stringify(normalized.verificationPolicy);
+    const changed =
+      current.title !== normalized.title ||
+      (current.description ?? null) !== description ||
+      current.kind !== normalized.kind ||
+      current.priority !== normalized.priority ||
+      JSON.stringify(current.dependencyIds ?? []) !== JSON.stringify(normalized.dependencyIds) ||
+      reviewerChanged ||
+      criteriaChanged;
+    if (!changed) return current;
+
+    const write = db
+      .prepare(`update group_tasks set title = ?, description = ?, reviewer_session_id = ?,
+      kind = ?, priority = ?, dependency_ids_json = ?, criteria_json = ?,
+      verification_policy_json = ?, criteria_version = criteria_version + ?,
+      evidence_refs_json = ?, review_json = ?, updated_at = ? where id = ? and state_version = ?`)
+      .run(
+        normalized.title,
+        description,
+        reviewerSessionId,
+        normalized.kind,
+        normalized.priority,
+        JSON.stringify(normalized.dependencyIds),
+        JSON.stringify(normalized.criteria),
+        JSON.stringify(normalized.verificationPolicy),
+        criteriaChanged ? 1 : 0,
+        criteriaChanged ? "[]" : current.evidenceRefs ? JSON.stringify(current.evidenceRefs) : "[]",
+        criteriaChanged || reviewerChanged
+          ? null
+          : current.review
+            ? JSON.stringify(current.review)
+            : null,
+        new Date().toISOString(),
+        taskId,
+        expectedVersion,
+      );
+    if (write.changes !== 1) {
+      throw new GroupStoreError(
+        "stale-task",
+        `Task ${taskId} changed since version ${expectedVersion}.`,
+      );
+    }
+    recordGroupTaskLegacyTransition(current, "user_update");
+    return requireTask(taskId);
+  });
 }
 
 /**

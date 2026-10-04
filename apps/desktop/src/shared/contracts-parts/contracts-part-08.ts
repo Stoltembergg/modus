@@ -405,6 +405,12 @@ export type GroupProjectContextSnapshot = {
 export type GroupRuntimeEvent =
   | { type: "group.message"; groupId: string; message: GroupMessage }
   | {
+      type: "group.task-changed";
+      groupId: string;
+      taskId: string;
+      stateVersion: number;
+    }
+  | {
       type: "group.activity";
       groupId: string;
       /** Members with a group turn running now. */

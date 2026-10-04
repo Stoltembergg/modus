@@ -4,12 +4,15 @@ import { createPortal } from "react-dom";
 import type {
   AgentGroupMode,
   AgentGroupWithMembers,
-  AgentInfo,
   GroupProjectContextSnapshot,
   GroupRuntimeEvent,
   WorkspaceInfo,
 } from "../../../../shared/contracts";
-import { type GroupBlockedReason, groupBlockedReason } from "../../../../shared/group-blocked";
+import {
+  GROUP_BLOCKED_TEXT,
+  type GroupBlockedReason,
+  groupBlockedReason,
+} from "../../../../shared/group-blocked";
 import { deriveGroupCollabStage } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import {
@@ -40,8 +43,6 @@ import { GroupRoomHeader, GroupStateDot } from "./GroupRoomHeader";
 import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
-import { archivedMemberIds, replyAuthorOf } from "./groupModelChipRules";
-import { GroupRoomLocaleProvider, useGroupText } from "./groupRoomI18n";
 import { replyPreview } from "./groupThreads";
 import { memberLabels } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
@@ -72,6 +73,8 @@ export type GroupRoomProps = {
   onUpdateMembers(change: GroupMembersChange): Promise<void>;
   onDelete(): void;
   onOpenFile?: ((path: string) => void) | undefined;
+  /** Open an existing agent session referenced by task QA evidence. */
+  onOpenSession?: ((sessionId: string, runId?: string) => void) | undefined;
   /** "Add agent" in the room menu (the agent dialog; A3). */
   onAddAgent?: (() => void) | undefined;
   /** Refresh groups after an agent is edited from the Agents panel. */
@@ -81,11 +84,6 @@ export type GroupRoomProps = {
    * header portals into that strip (no second internal header bar).
    */
   chromeHost?: HTMLElement | null | undefined;
-  /**
-   * Room locale tag (C6). Omitted = English text (C6.2); dates and clocks then
-   * follow the system locale. A tag resolves pt* → pt, zh* → zh, else en.
-   */
-  locale?: string | null | undefined;
 };
 
 /** A member's avatar in the room (chips and message authors; A3). */
@@ -94,11 +92,7 @@ export type RoomAvatar = WorkingMemberAvatar;
 /** The group room (main panel): chrome header, message list, and composer. */
 export function GroupRoom(props: GroupRoomProps) {
   // A room owns its reply, composer, questions and scroll lifetime.
-  return (
-    <GroupRoomLocaleProvider locale={props.locale}>
-      <GroupRoomContent key={props.group.id} {...props} />
-    </GroupRoomLocaleProvider>
-  );
+  return <GroupRoomContent key={props.group.id} {...props} />;
 }
 
 function GroupRoomContent({
@@ -113,11 +107,11 @@ function GroupRoomContent({
   onUpdateMembers,
   onDelete,
   onOpenFile,
+  onOpenSession,
   onAddAgent,
   onAgentsChanged,
   chromeHost = null,
 }: GroupRoomProps) {
-  const t = useGroupText();
   // Titles come from the members' agents (current name): their room sessions are hidden.
   const members: MentionMember[] = useMemo(
     () => group.members.map((member) => ({ sessionId: member.sessionId, title: member.name })),
@@ -133,37 +127,6 @@ function GroupRoomContent({
       ),
     [group.members],
   );
-  // Read-only model chip: each member agent's own modelId (no group-level model).
-  const [agentModels, setAgentModels] = useState<ReadonlyMap<string, string | undefined>>(
-    () => new Map(),
-  );
-  const [agentsRefresh, setAgentsRefresh] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refetch when the group or its agents change.
-  useEffect(() => {
-    let cancelled = false;
-    const list = window.modus.agents?.list?.();
-    if (!list) return;
-    void Promise.resolve(list)
-      .then((agents: AgentInfo[]) => {
-        if (!cancelled) setAgentModels(new Map(agents.map((agent) => [agent.id, agent.modelId])));
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [group, agentsRefresh]);
-  const memberModels = useMemo(
-    () =>
-      new Map<string, string | undefined>(
-        group.members.map((member) => [member.sessionId, agentModels.get(member.agentId)]),
-      ),
-    [group.members, agentModels],
-  );
-  const archivedSessionIds = useMemo(() => archivedMemberIds(group.members), [group.members]);
-  const handleAgentsChanged = () => {
-    setAgentsRefresh((value) => value + 1);
-    onAgentsChanged?.();
-  };
   const blocked = groupBlockedReason(group, group.members);
   const workspace = group.workspaceId
     ? workspaces.find((item) => item.id === group.workspaceId)
@@ -183,8 +146,6 @@ function GroupRoomContent({
   }
   const { tasks, replace } = useGroupTasks(group.id);
   const { messages, loaded, hasOlder, loadingOlder, error, loadOlder } = useGroupMessages(group.id);
-  // Thread reply rule: the runtime wakes the replied-to message's author.
-  const replyAuthorSessionId = replyAuthorOf(messages, replyTo?.messageId);
   const workingRows = useGroupMemberWorking(group.id, memberStates);
   const labels = useMemo(() => memberLabels(members), [members]);
   const activeExecutionId = useMemo(() => latestExecutionId(messages), [messages]);
@@ -206,7 +167,7 @@ function GroupRoomContent({
     }
     return map;
   }, [group.members]);
-  const { openCount, label: activityLabel } = activityButtonMeta(tasks, t.locale);
+  const { openCount, label: activityLabel } = activityButtonMeta(tasks);
   const titleToSessionId = useMemo(() => {
     const map = new Map<string, string>();
     for (const member of members) map.set(member.title.toLocaleLowerCase(), member.sessionId);
@@ -262,7 +223,7 @@ function GroupRoomContent({
       models={models}
       onDelete={onDelete}
       onAddAgent={onAddAgent}
-      onAgentsChanged={handleAgentsChanged}
+      {...(onAgentsChanged ? { onAgentsChanged } : {})}
       onManageMembers={() => setManaging(true)}
       onRename={onRename}
       onSetMode={onSetMode}
@@ -282,11 +243,11 @@ function GroupRoomContent({
             activityOpen && "bg-hover text-fg-muted",
           )}
           onClick={() => setActivityOpen((open) => !open)}
-          title={activityOpen ? t("room.hideActivity") : t("room.showActivity")}
+          title={activityOpen ? "Hide activity" : "Show activity"}
           type="button"
         >
           <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
-          {t("activity.title")}
+          Activity
           <span className="tabular-nums" data-testid="group-task-count">
             {openCount}
           </span>
@@ -343,13 +304,8 @@ function GroupRoomContent({
           <GroupComposer
             activeExecutionId={activeExecutionId}
             activeExecutionTitle={activeExecutionTitle}
-            archivedSessionIds={archivedSessionIds}
             groupId={group.id}
-            leadSessionId={group.leadSessionId}
-            memberModels={memberModels}
             members={members}
-            mode={group.mode}
-            models={models}
             onClearReply={() => setReplyTo(undefined)}
             onSeedConsumed={() => setComposerSeed(undefined)}
             onSend={async (payload) => {
@@ -363,7 +319,6 @@ function GroupRoomContent({
                 ...(payload.executionId ? { executionId: payload.executionId } : {}),
               });
             }}
-            replyAuthorSessionId={replyAuthorSessionId}
             replyTo={replyTo}
             seed={composerSeed}
             showKickoff={loaded && messages.length === 0 && !replyTo}
@@ -379,6 +334,8 @@ function GroupRoomContent({
           labels={labels}
           messages={messages}
           onCancelled={replace}
+          onTaskUpdated={replace}
+          {...(onOpenSession ? { onOpenSession } : {})}
           onSetMode={onSetMode}
           projectContext={projectContext}
           stage={stage}
@@ -415,23 +372,20 @@ export function BlockedBanner({
   reason: GroupBlockedReason;
   onAction?: (() => void) | undefined;
 }) {
-  const t = useGroupText();
   return (
     <div
       className="mx-4 mb-3 flex items-center gap-3 rounded-lg border border-hairline bg-chip px-3 py-2 text-xs text-fg-muted"
       data-testid="group-blocked-banner"
       role="status"
     >
-      <span className="min-w-0 flex-1">
-        {reason === "project-required" ? t("blocked.projectRequired") : t("blocked.minMembers")}
-      </span>
+      <span className="min-w-0 flex-1">{GROUP_BLOCKED_TEXT[reason]}</span>
       {onAction ? (
         <button
           className="h-7 shrink-0 rounded-md bg-accent px-3 text-white text-xs hover:opacity-90"
           onClick={onAction}
           type="button"
         >
-          {reason === "project-required" ? t("room.chooseFolder") : t("room.addAgent")}
+          {reason === "project-required" ? "Choose folder" : "Add agent"}
         </button>
       ) : null}
     </div>

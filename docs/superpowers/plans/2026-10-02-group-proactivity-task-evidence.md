@@ -179,11 +179,11 @@ A captura usa o fingerprint-base antes do run para `GroupTaskRunBinding` e um fi
 
 **Interfaces:** consome Tarefas 1–4. Produz `window.modus.group.getWorkState(groupId, executionId?)`, `listTaskTransitions(taskId)` e evento `group.task-changed` com groupId/taskId/stateVersion. Mudanças de draft pelo usuário usam `updateTask(taskId, draft, expectedVersion)`, sem aceitar owner/QA status afirmados pelo renderer.
 
-- [ ] Adicionar testes de handlers trusted/strict e painel: `shows_blocker_dependencies_and_qa`, `stale_response_does_not_replace_newer_task`, `removed_evidence_source_is_visible`, `cancel_is_user_only`. Assertar owner/reviewer/stage/priority, critérios e link QA; atualização fora de ordem respeita stateVersion e troca de Grupo desmonta subscriptions.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/ipc/group-work-ipc.test.ts apps/desktop/src/renderer/src/features/groups/GroupTaskDetails.test.tsx apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx`; esperar falhas novas.
-- [ ] Implementar bridge/preload e painel com estados `blocked`, evidência aprovada/pendente/obsoleta/indisponível, histórico e navegação para a sessão/run real. Reutilizar UI existente para detalhes de execução; IDs técnicos não viram títulos de cards. Atualizar contadores e ordenação para incluir blocked.
-- [ ] Rodar os testes citados e `groupSidePanelRefresh.test.ts`; esperar aprovação. Fase A fica utilizável com delegação explícita.
-- [ ] Commit: `feat(groups): surface task criteria and verification state`.
+- [x] Adicionar testes de handlers trusted/strict e painel: `shows_blocker_dependencies_and_qa`, `stale_response_does_not_replace_newer_task`, `removed_evidence_source_is_visible`, `cancel_is_user_only`. Assertar owner/reviewer/stage/priority, critérios e link QA; atualização fora de ordem respeita stateVersion e troca de Grupo desmonta subscriptions.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/ipc/group-work-ipc.test.ts apps/desktop/src/renderer/src/features/groups/GroupTaskDetails.test.tsx apps/desktop/src/renderer/src/features/groups/GroupRoom.test.tsx`; esperar falhas novas.
+- [x] Implementar bridge/preload e painel com estados `blocked`, evidência aprovada/pendente/obsoleta/indisponível, histórico e navegação para a sessão/run real. Reutilizar UI existente para detalhes de execução; IDs técnicos não viram títulos de cards. Atualizar contadores e ordenação para incluir blocked.
+- [x] Rodar os testes citados e `groupSidePanelRefresh.test.ts`; esperar aprovação. Fase A fica utilizável com delegação explícita.
+- [x] Commit: `feat(groups): surface task criteria and verification state`.
 
 ## Tarefa 6: Política pura de proatividade
 

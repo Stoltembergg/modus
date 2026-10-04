@@ -1,6 +1,3 @@
-import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
-import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
-import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
   AddDocInput,
   AgentEvent,
@@ -59,6 +56,10 @@ import type {
   GroupProjectContextSnapshot,
   GroupRuntimeEvent,
   GroupTask,
+  GroupTaskDetails,
+  GroupTaskTransitionEvent,
+  GroupTaskUserDraft,
+  GroupWorkState,
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
@@ -149,21 +150,10 @@ export type ModusApi = {
     windowChrome: WindowChromeMode;
     /** Whether this host supports the native glass effect used by the shell. */
     nativeGlass: boolean;
-    /**
-     * Whether glass is on right now: host support, the Transparency preference
-     * and OS accessibility settings all agree (same glass in every theme).
-     */
+    /** Current native glass state, including an OS failure discovered after startup. */
     isNativeGlassAvailable(): boolean;
-    /** Fires whenever the effective glass state flips (preference, theme, OS or a native failure). */
+    /** Main-process fallback when the OS declines a native glass request. */
     onNativeGlassChange(handler: (available: boolean) => void): () => void;
-    /** Theme / Transparency preferences mirrored in the main process (nativeTheme + window material). */
-    appearance: {
-      /** State at window creation, read synchronously for a flash-free first paint. */
-      initial: AppearanceState | null;
-      get(): Promise<AppearanceState>;
-      set(input: AppearanceSetInput): Promise<AppearanceState>;
-      onChange(handler: (state: AppearanceState) => void): () => void;
-    };
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;
     startupMetric(input: StartupMetricInput): Promise<void>;
@@ -249,6 +239,18 @@ export type ModusApi = {
     stop(groupId: string): Promise<void>;
     /** The group's tasks (created order) for the room's task panel. */
     listTasks(groupId: string): Promise<GroupTask[]>;
+    /** Bounded task state for agent context; renderer details use getTaskDetails. */
+    getWorkState(groupId: string, executionId?: string): Promise<GroupWorkState>;
+    /** Bounded user-facing criteria, current evidence outcomes and dependency details. */
+    getTaskDetails(groupId: string, taskId: string): Promise<GroupTaskDetails>;
+    /** Chronological task history (the main process caps the result). */
+    listTaskTransitions(taskId: string): Promise<GroupTaskTransitionEvent[]>;
+    /** User edits only the task draft; state and evidence remain main-owned. */
+    updateTask(
+      taskId: string,
+      draft: GroupTaskUserDraft,
+      expectedVersion: number,
+    ): Promise<GroupTask>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
     /** The group's decisions (newest first) for the side panel's "Decisions". */
@@ -727,38 +729,6 @@ export type ModusApi = {
     /** Once per start: the UI state saved by the previous version, or null. */
     takeRestoredUiState(): Promise<UpdateRestoreUiState | null>;
     onStateChange(listener: (state: UpdateState) => void): () => void;
-  };
-  /**
-   * Modus account (Supabase Auth). Sign-in runs in main; replies carry display data only,
-   * never tokens or the OAuth code.
-   */
-  auth: {
-    getState(): Promise<AuthState>;
-    signUp(input: AuthCredentialsInput): Promise<AuthState>;
-    signInWithPassword(input: AuthCredentialsInput): Promise<AuthState>;
-    /** Opens the default browser; resolves after the callback was handled, failed or timed out. */
-    signInWithOAuth(input: AuthOAuthInput): Promise<AuthState>;
-    cancelOAuth(): Promise<AuthState>;
-    /** Clears the stored session even when offline. */
-    signOut(): Promise<AuthState>;
-    onStateChange(listener: (state: AuthState) => void): () => void;
-  };
-  /**
-   * Plan and credits (Mercado Pago, optionally Stripe, via Supabase Edge Functions). Checkout /
-   * Portal open in the default browser; replies carry display data only, never tokens, provider
-   * ids or session URLs.
-   */
-  billing: {
-    getState(): Promise<BillingState>;
-    refresh(): Promise<BillingState>;
-    /** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
-    checkout(input: BillingCheckoutInput): Promise<BillingState>;
-    openPortal(): Promise<BillingState>;
-    /** L1e: cancel the own Mercado Pago subscription; main finds it, no id is passed. */
-    cancelSubscription(): Promise<BillingState>;
-    /** L5b: Mercado Pago Checkout Pro for a credit pack (only the pack id crosses IPC). */
-    buyCredits(input: BillingBuyCreditsInput): Promise<BillingState>;
-    onStateChange(listener: (state: BillingState) => void): () => void;
   };
   clipboard: {
     /** Write PNG bytes to the OS clipboard as an image. */

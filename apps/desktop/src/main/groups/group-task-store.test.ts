@@ -21,6 +21,8 @@ const {
   appendGroupMessage,
   removeAgentGroupMember,
   listGroupTasks,
+  updateGroupTaskDraft,
+  setGroupTaskChangedSink,
 } = await import("./group-store");
 const {
   reportGroupTaskProgress,
@@ -142,6 +144,72 @@ describe("group task migration", () => {
 });
 
 describe("versioned task state", () => {
+  it("updates only the user draft with CAS, invalidates changed criteria, and notifies after commit", async () => {
+    const { group, task } = fixture();
+    const typedTask = createGroupTask({
+      groupId: group.id,
+      title: "Draft task",
+      ...(task.ownerSessionId ? { ownerSessionId: task.ownerSessionId } : {}),
+      ...(task.reviewerSessionId ? { reviewerSessionId: task.reviewerSessionId } : {}),
+      kind: "code",
+      priority: "normal",
+      dependencyIds: [],
+      criteria: [{ id: "unit", description: "Unit tests pass", requiredCheckKinds: ["tests"] }],
+      verificationPolicy: { mode: "required", requireReview: true },
+    });
+    const changes: Array<{ groupId: string; taskId: string; stateVersion: number }> = [];
+    setGroupTaskChangedSink((change) => changes.push(change));
+    try {
+      const updated = updateGroupTaskDraft(
+        typedTask.id,
+        {
+          title: "Updated draft",
+          description: "Updated by user.",
+          kind: "docs",
+          priority: "high",
+          dependencyIds: [task.id],
+          criteria: [{ id: "docs", description: "Docs render", requiredCheckKinds: ["build"] }],
+          verificationPolicy: { mode: "required", requireReview: true },
+          ...(typedTask.reviewerSessionId
+            ? { reviewerSessionId: typedTask.reviewerSessionId }
+            : {}),
+        },
+        1,
+      );
+      expect(updated).toMatchObject({
+        title: "Updated draft",
+        kind: "docs",
+        priority: "high",
+        ownerSessionId: typedTask.ownerSessionId,
+        reviewerSessionId: typedTask.reviewerSessionId,
+        stateVersion: 2,
+        criteriaVersion: 2,
+        dependencyIds: [task.id],
+      });
+      expect(listGroupTaskTransitions(typedTask.id).at(-1)).toMatchObject({
+        action: "user_update",
+      });
+      expect(() =>
+        updateGroupTaskDraft(
+          typedTask.id,
+          {
+            title: "Stale edit",
+            kind: "docs",
+            priority: "high",
+            dependencyIds: [task.id],
+            criteria: [{ id: "docs", description: "Docs render", requiredCheckKinds: ["build"] }],
+            verificationPolicy: { mode: "required", requireReview: true },
+          },
+          1,
+        ),
+      ).toThrow(/changed since version 1/);
+      await new Promise<void>((resolve) => queueMicrotask(resolve));
+      expect(changes).toEqual([{ groupId: group.id, taskId: typedTask.id, stateVersion: 2 }]);
+    } finally {
+      setGroupTaskChangedSink(undefined);
+    }
+  });
+
   it("persists structured criteria, dependencies and verification policy", () => {
     const { group, task } = fixture();
     const created = createGroupTask({

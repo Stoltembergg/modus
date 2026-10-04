@@ -2,6 +2,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../shared/contracts";
 import { SpringCheck } from "../../components/ui/SpringCheck";
 import { cn } from "../../lib/cn";
+import { GroupTaskDetails } from "./GroupTaskDetails";
 import { describeGroupError } from "./groupErrors";
 import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
 import { MemberName } from "./MemberName";
@@ -80,21 +81,28 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
  * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
  */
 export function GroupTaskPanel({
+  groupId,
   tasks,
   labels,
   onCancelled,
+  onTaskUpdated,
+  onOpenSession,
   top,
   ariaLabel = "Activity",
   testId = "group-activity-panel",
 }: {
+  groupId: string;
   tasks: readonly GroupTask[];
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
+  onTaskUpdated?(task: GroupTask): void;
+  onOpenSession?(sessionId: string, runId?: string): void;
   top?: ReactNode;
   ariaLabel?: string;
   testId?: string;
 }) {
   const [showCancelled, setShowCancelled] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
   const progress = checklistProgress(tasks);
   const visible = sortTasks(tasks.filter((task) => task.status !== "cancelled" || showCancelled));
   const cancelledCount = tasks.filter((task) => task.status === "cancelled").length;
@@ -124,9 +132,25 @@ export function GroupTaskPanel({
           </div>
           <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
             {visible.map((task) => (
-              <TaskCheckRow key={task.id} labels={labels} onCancelled={onCancelled} task={task} />
+              <TaskCheckRow
+                key={task.id}
+                labels={labels}
+                onCancelled={onCancelled}
+                onShowDetails={() => setSelectedTaskId(task.id)}
+                task={task}
+              />
             ))}
           </ul>
+          {selectedTaskId ? (
+            <GroupTaskDetails
+              groupId={groupId}
+              labels={labels}
+              onClose={() => setSelectedTaskId(undefined)}
+              {...(onOpenSession ? { onOpenSession } : {})}
+              {...(onTaskUpdated ? { onTaskUpdated } : {})}
+              taskId={selectedTaskId}
+            />
+          ) : null}
           {cancelledCount > 0 ? (
             <button
               aria-expanded={showCancelled}
@@ -147,10 +171,12 @@ function TaskCheckRow({
   task,
   labels,
   onCancelled,
+  onShowDetails,
 }: {
   task: GroupTask;
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
+  onShowDetails(): void;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -226,6 +252,13 @@ function TaskCheckRow({
               </span>
             ) : null}
           </div>
+          <button
+            className="mt-1 text-2xs text-accent hover:underline"
+            onClick={onShowDetails}
+            type="button"
+          >
+            Details
+          </button>
           {error ? <div className="mt-1 text-danger">{error}</div> : null}
           {cancellable ? (
             <button

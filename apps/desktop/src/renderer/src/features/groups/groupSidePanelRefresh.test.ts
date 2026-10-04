@@ -56,6 +56,25 @@ describe("shouldRefreshGroupSidePanel", () => {
     ).toBe(true);
   });
 
+  it("refreshes on a versioned task change for this group", () => {
+    expect(
+      shouldRefreshGroupSidePanel("g-1", {
+        type: "group.task-changed",
+        groupId: "g-1",
+        taskId: "t-1",
+        stateVersion: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRefreshGroupSidePanel("g-1", {
+        type: "group.task-changed",
+        groupId: "g-2",
+        taskId: "t-1",
+        stateVersion: 2,
+      }),
+    ).toBe(false);
+  });
+
   it("refreshes only status messages, not ordinary chat messages", () => {
     expect(
       shouldRefreshGroupSidePanel("g-1", {
