@@ -144,16 +144,69 @@ export function requireMpWebhookSecret(env: EnvSource): string {
 }
 
 /**
- * What every Mercado Pago object must carry. live_mode is fixed to false (test seller): live
- * payments need their own reviewed change, like the Stripe live lock. MP_COLLECTOR_ID is the
- * seller's user id (digits): payments and preapprovals of any other seller are rejected.
+ * MP_LIVE_MODE: which Mercado Pago environment this deploy serves. REQUIRED, exactly "true"
+ * (production seller, live payments) or "false" (test seller); surrounding whitespace is
+ * ignored, anything else (missing, empty, "1", "TRUE", "yes") fails closed: the Function
+ * throws at load and does not serve. The value never comes from a request.
  */
-export type MpExpectations = { liveMode: false; collectorId: string };
+export const MP_LIVE_MODE_ENV = "MP_LIVE_MODE";
 
-export function loadMpExpectations(env: EnvSource): MpExpectations {
+export function requireMpLiveMode(env: EnvSource): boolean {
+  const raw = env.get(MP_LIVE_MODE_ENV)?.trim();
+  if (raw === undefined || raw === "") throw new ConfigError(`${MP_LIVE_MODE_ENV} is not set.`);
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new ConfigError(`${MP_LIVE_MODE_ENV} must be exactly "true" or "false".`);
+}
+
+/**
+ * What every Mercado Pago object must carry, passed to the SQL processors as
+ * `{live_mode, collector_id}`: `liveMode` is MP_LIVE_MODE (payments / preapprovals with any
+ * other live_mode are rejected_live_mode); MP_COLLECTOR_ID is the seller's user id (digits):
+ * payments and preapprovals of any other seller are rejected.
+ */
+export type MpExpectations = { liveMode: boolean; collectorId: string };
+
+/** Everything a Mercado Pago Function needs from env, validated together. */
+export type MpConfig = { accessToken: string; expect: MpExpectations };
+
+/**
+ * The single source of Mercado Pago config (mp-webhook, mp-buy-credits, mp-checkout,
+ * mp-cancel). MP_LIVE_MODE must agree with the access token's environment: "true" needs a
+ * production token (APP_USR-…), "false" a test token (TEST-…). A mismatch refuses to start;
+ * the error never contains the token or any part of it.
+ */
+export function loadMpConfig(env: EnvSource): MpConfig {
+  const liveMode = requireMpLiveMode(env);
+  const accessToken = requireMpAccessToken(env);
+  const tokenIsLive = accessToken.startsWith("APP_USR-");
+  if (tokenIsLive !== liveMode) {
+    throw new ConfigError(`${MP_LIVE_MODE_ENV} does not match access token environment.`);
+  }
   const collectorId = env.get("MP_COLLECTOR_ID")?.trim() ?? "";
   if (!/^[0-9]{1,20}$/.test(collectorId)) {
     throw new ConfigError("MP_COLLECTOR_ID must be the Mercado Pago seller user id (digits).");
   }
-  return { liveMode: false, collectorId };
+  return { accessToken, expect: { liveMode, collectorId } };
+}
+
+/** Same validation as loadMpConfig; only the expectations. */
+export function loadMpExpectations(env: EnvSource): MpExpectations {
+  return loadMpConfig(env).expect;
+}
+
+/**
+ * Boot helper for the Mercado Pago Functions: runs `load` at module load; a ConfigError is
+ * logged as `[name] configuration error: <message>` (messages never carry secret values) and
+ * rethrown, so the Function does not start.
+ */
+export function bootConfig<T>(name: string, load: () => T): T {
+  try {
+    return load();
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      console.error(`[${name}] configuration error: ${error.message}`);
+    }
+    throw error;
+  }
 }

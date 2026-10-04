@@ -8,13 +8,13 @@ import postgres from "npm:postgres@3.4.9";
 import { createPostgresBillingDb } from "../_shared/db.ts";
 import type { CreatePreapprovalInput, MpApi, MpPayment, MpPreapproval } from "../_shared/mp.ts";
 import { hmacSha256Hex, mpManifest } from "../_shared/mp-signature.ts";
-import { URLS } from "../_shared/test-helpers.ts";
+import { mpExpect, URLS } from "../_shared/test-helpers.ts";
 import { createMpCheckoutHandler } from "../mp-checkout/handler.ts";
 import { createMpWebhookHandler } from "./handler.ts";
 
 const dbUrl = Deno.env.get("MODUS_TEST_DB_URL");
 const SECRET = "integration-webhook-secret";
-const EXPECT = { liveMode: false as const, collectorId: "777" };
+const EXPECT = mpExpect(false);
 
 Deno.test({
   name: "Mercado Pago against a real Postgres: checkout -> preapproval -> credit once, retry after a DB failure, refunds",

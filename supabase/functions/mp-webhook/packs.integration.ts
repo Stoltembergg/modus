@@ -13,7 +13,7 @@ import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
 import type { CreatePreferenceInput, MpApi, MpPayment } from "../_shared/mp.ts";
 import { hmacSha256Hex, mpManifest } from "../_shared/mp-signature.ts";
 import { createPostgresRouterDb } from "../_shared/router-db.ts";
-import { URLS } from "../_shared/test-helpers.ts";
+import { mpExpect, URLS } from "../_shared/test-helpers.ts";
 import { createRouterHandler } from "../model-router/handler.ts";
 import { completionRequest, fakeUpstream, routerConfig, sse } from "../model-router/test-fakes.ts";
 import { createMpBuyCreditsHandler, mpNotificationUrl } from "../mp-buy-credits/handler.ts";
@@ -21,7 +21,7 @@ import { createMpWebhookHandler } from "./handler.ts";
 
 const dbUrl = Deno.env.get("MODUS_TEST_DB_URL");
 const SECRET = "integration-webhook-secret";
-const EXPECT = { liveMode: false as const, collectorId: "777" };
+const EXPECT = mpExpect(false);
 const PAID = "deepseek/deepseek-v4-pro";
 const FLASH = "deepseek/deepseek-flash";
 const FREE_MODELS = [FLASH, "zai/glm-5.3-flash"];
@@ -407,6 +407,72 @@ Deno.test({
       const blocked = await buy(req("credits_5k"));
       assertEquals([blocked.status, (await blocked.json()).error], [403, "account_blocked"]);
       assertEquals(prefs.length, 1);
+    } finally {
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
+  name: "MP_LIVE_MODE against a real Postgres: db.ts credits live payments only with live expectations",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const billing = createPostgresBillingDb(dbUrl ?? "");
+    // Both fixtures come from config.ts (MP_LIVE_MODE=true + APP_USR-, =false + TEST-).
+    const LIVE = mpExpect(true);
+    const TEST = mpExpect(false);
+    assertEquals([LIVE.liveMode, TEST.liveMode], [true, false]);
+    try {
+      const [{ id: userId }] =
+        await admin`select tests.create_user('live-mode-it@example.com', true) as id`;
+      const pay = (id: string, ref: string, liveMode: boolean): MpPayment => ({
+        id,
+        status: "approved",
+        status_detail: "accredited",
+        amount_minor: 3690,
+        refunded_minor: 0,
+        live_mode: liveMode,
+        collector_id: "777",
+        currency: "BRL",
+        external_reference: ref,
+      });
+      const lots = async () =>
+        (
+          await admin`select payment_id from public.credit_lots where user_id = ${userId}
+                     order by payment_id`
+        ).map((l) => Number(l.payment_id));
+      const [{ r: purchase }] =
+        await admin`select private.mp_create_purchase(${userId}, 'credits_5k') as r`;
+
+      // Production deploy (MP_LIVE_MODE=true): a live payment is credited.
+      const live = pay("695001", purchase.purchase_id, true);
+      assertEquals((await billing.processMpPurchasePayment(live, LIVE, null)).code, "credited");
+      assertEquals(await lots(), [695001]);
+
+      // A test-environment payment reaching the production deploy: rejected, no lot.
+      const test = pay("695002", purchase.purchase_id, false);
+      assertEquals(
+        (await billing.processMpPurchasePayment(test, LIVE, null)).code,
+        "rejected_live_mode",
+      );
+      // A live payment reaching a test deploy (MP_LIVE_MODE=false): rejected, no lot.
+      const liveOnTest = pay("695003", purchase.purchase_id, true);
+      assertEquals(
+        (await billing.processMpPurchasePayment(liveOnTest, TEST, null)).code,
+        "rejected_live_mode",
+      );
+      // The test deploy still credits test payments.
+      const testOnTest = pay("695004", purchase.purchase_id, false);
+      const credited = await billing.processMpPurchasePayment(testOnTest, TEST, null);
+      assertEquals(credited.code, "credited");
+      assertEquals(await lots(), [695001, 695004]);
+      // Rejected purchase payments record nothing (no mp_payments row, no lot).
+      const rows = await admin`select payment_id from public.mp_payments
+                               where payment_id in (695002, 695003)`;
+      assertEquals(rows.length, 0);
     } finally {
       await admin.end();
     }

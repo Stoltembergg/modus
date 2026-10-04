@@ -1,10 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { MpCancelTarget } from "../_shared/db.ts";
 import { MpApiError, type MpPreapproval } from "../_shared/mp.ts";
-import { recorder, request, USER } from "../_shared/test-helpers.ts";
+import { mpExpect, recorder, request, USER } from "../_shared/test-helpers.ts";
 import { createMpCancelHandler, type MpCancelDeps } from "./handler.ts";
 
-const EXPECT = { liveMode: false as const, collectorId: "777" };
+const EXPECT = mpExpect(false);
 const LIVE = new Set(["incomplete", "active", "trialing", "past_due", "unpaid", "paused"]);
 
 function pre(id: string, status: string): MpPreapproval {

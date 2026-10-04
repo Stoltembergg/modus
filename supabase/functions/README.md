@@ -30,6 +30,22 @@ Secrets are listed in [`.env.example`](.env.example). For the local stack, copy 
 
 **Deploy:** set `STRIPE_ENABLED` explicitly in the function secrets: `supabase secrets set STRIPE_ENABLED=false`, or `true` to sell through Stripe again. The flag is read per request.
 
+## `MP_LIVE_MODE` (Mercado Pago environment)
+
+`_shared/config.ts` `loadMpConfig(env)` is the single source of Mercado Pago config for `mp-webhook`, `mp-buy-credits`, `mp-checkout` and `mp-cancel`. It returns the access token plus the expectations (`{live_mode, collector_id}`) passed to every SQL processor.
+
+**Values**
+- **Required.** Only `true` (production seller, live payments) or `false` (test seller), whitespace trimmed.
+- Missing, empty, `1`, `TRUE`, `yes` or anything else fails closed: the Function throws at load and does not serve.
+
+**Must match the token**
+- `true` requires an `APP_USR-…` `MP_ACCESS_TOKEN`; `false` requires a `TEST-…` token.
+- On a mismatch the Function refuses to start and logs `[<function>] configuration error: MP_LIVE_MODE does not match access token environment.` Neither the error nor the log ever contains the token or its prefix.
+
+**Effect:** payments whose `live_mode` differs from `MP_LIVE_MODE` are `rejected_live_mode` (no credit, no plan).
+
+**Deploy:** `supabase secrets set MP_LIVE_MODE=true` together with the production `MP_ACCESS_TOKEN`, then redeploy all four Mercado Pago Functions. The value is read once at boot.
+
 ## Billing catalog and the DB Stripe flag (L1c)
 
 `public.get_billing_catalog()` is an RPC that anon and authenticated can call. It returns the active paid plans with their enabled providers. Each row has: plan, name, monthly_credits, provider, currency, amount_minor and sort_order. It never returns Stripe price ids or lookup keys, Mercado Pago ids, collector ids or credentials. Inactive plans (pro, max and ultra after L1a) and `free` are excluded.
@@ -69,7 +85,7 @@ Deploy with `verify_jwt = true`. The handler also validates the JWT itself (`cre
 
 **Response** (never an id): `200 {"code":"no_subscription"}` (nothing live: a no-op), `200 {"code":"canceled"}`, `200 {"code":"cancel_requested"}` (not confirmed yet), or `502 mercadopago_unavailable` when MP neither accepted the PUT nor reads `canceled` (nothing changed). Repeats are safe. No refund: credits already granted stay.
 
-**Secrets:** `MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`. These are the same ones `mp-checkout` uses.
+**Secrets:** `MP_LIVE_MODE`, `MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`. These are the same ones `mp-checkout` uses.
 
 ## `mp-buy-credits` (L5b)
 
@@ -89,4 +105,4 @@ Deploy with `verify_jwt = true`. The handler also validates the JWT itself; no u
 
 Credits are granted only by `mp-webhook` (`private.process_mp_purchase_payment`), never here. Each click creates a new purchase; an unpaid purchase grants nothing.
 
-**Secrets:** the same as `mp-checkout` (`MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `BILLING_RETURN_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`).
+**Secrets:** the same as `mp-checkout` (`MP_LIVE_MODE`, `MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `BILLING_RETURN_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`).

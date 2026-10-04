@@ -1,7 +1,7 @@
 // Test doubles for the billing Functions (imported by *.test.ts only).
 import Stripe from "npm:stripe@23.0.0";
 import type { AuthenticatedUser } from "./auth.ts";
-import type { BillingUrls } from "./config.ts";
+import { type BillingUrls, loadMpExpectations, type MpExpectations } from "./config.ts";
 
 export const USER: AuthenticatedUser = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -15,6 +15,26 @@ export const URLS: BillingUrls = {
 
 export function env(values: Record<string, string>) {
   return { get: (key: string) => values[key] };
+}
+
+/**
+ * Mercado Pago env fixtures (never real values): the test seller (MP_LIVE_MODE=false, TEST-
+ * token) and the production seller (MP_LIVE_MODE=true, APP_USR- token), same collector.
+ */
+export const MP_TEST_ENV: Readonly<Record<string, string>> = {
+  MP_LIVE_MODE: "false",
+  MP_ACCESS_TOKEN: "TEST-0000000000-fixture",
+  MP_COLLECTOR_ID: "777",
+};
+export const MP_LIVE_ENV: Readonly<Record<string, string>> = {
+  MP_LIVE_MODE: "true",
+  MP_ACCESS_TOKEN: "APP_USR-0000000000-fixture",
+  MP_COLLECTOR_ID: "777",
+};
+
+/** The expectations a Function would load from the fixture env (through config.ts). */
+export function mpExpect(liveMode: boolean): MpExpectations {
+  return loadMpExpectations(env({ ...(liveMode ? MP_LIVE_ENV : MP_TEST_ENV) }));
 }
 
 export type Call = { name: string; args: unknown[] };

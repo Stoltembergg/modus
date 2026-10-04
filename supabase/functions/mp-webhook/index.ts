@@ -1,7 +1,7 @@
 import {
-  loadMpExpectations,
+  bootConfig,
+  loadMpConfig,
   loadSupabaseConfig,
-  requireMpAccessToken,
   requireMpWebhookSecret,
 } from "../_shared/config.ts";
 import { createPostgresBillingDb } from "../_shared/db.ts";
@@ -10,10 +10,10 @@ import { createMpWebhookHandler } from "./handler.ts";
 
 // Deploy with verify_jwt = false (Mercado Pago does not send a Supabase JWT); the request is
 // authenticated by its x-signature instead. Throws at boot (the Function does not start) when
-// MP_ACCESS_TOKEN, MP_WEBHOOK_SECRET or MP_COLLECTOR_ID is missing or malformed.
-const accessToken = requireMpAccessToken(Deno.env);
-const secret = requireMpWebhookSecret(Deno.env);
-const expect = loadMpExpectations(Deno.env);
+// MP_LIVE_MODE, MP_ACCESS_TOKEN, MP_WEBHOOK_SECRET or MP_COLLECTOR_ID is missing or malformed,
+// or when MP_LIVE_MODE does not match the access token (config.ts loadMpConfig).
+const { accessToken, expect } = bootConfig("mp-webhook", () => loadMpConfig(Deno.env));
+const secret = bootConfig("mp-webhook", () => requireMpWebhookSecret(Deno.env));
 const supabase = loadSupabaseConfig(Deno.env);
 
 Deno.serve(
