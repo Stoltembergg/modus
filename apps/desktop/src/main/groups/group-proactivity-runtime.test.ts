@@ -246,65 +246,66 @@ describe("task transition delivery", () => {
     expect(recovered.calls.some((call) => call.input.sessionId === owner)).toBe(false);
   });
 
-  it.each(["same runtime", "after restart"] as const)(
-    "invalidates a queued automatic job whose task became stale %s before start",
-    async (scenario) => {
-      const { group, lead, owner, db } = squad();
-      setGroupProactivityMode(group.id, "opt_in_auto");
-      const first = runtime(false);
-      const root = first.groups.postUserMessage({ groupId: group.id, body: "work" });
-      const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
-      assignGroupTask(group.id, task.id, lead, owner);
-      await flush();
-      const before = must(listGroupActions(group.id)[0]);
-      expect(before.deliveryState).toBe("dispatched");
-      if (scenario === "after restart") first.groups.dispose();
-      db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(
+  it.each([
+    "same runtime",
+    "after restart",
+  ] as const)("invalidates a queued automatic job whose task became stale %s before start", async (scenario) => {
+    const { group, lead, owner, db } = squad();
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const first = runtime(false);
+    const root = first.groups.postUserMessage({ groupId: group.id, body: "work" });
+    const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
+    assignGroupTask(group.id, task.id, lead, owner);
+    await flush();
+    const before = must(listGroupActions(group.id)[0]);
+    expect(before.deliveryState).toBe("dispatched");
+    if (scenario === "after restart") first.groups.dispose();
+    db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(
+      task.id,
+    );
+    const active = scenario === "after restart" ? runtime(true, true) : first;
+    active.setWindowAvailable(true);
+    active.groups.kick();
+    await vi.waitFor(() =>
+      expect(listGroupActions(group.id)[0]?.deliveryState).toBe("invalidated"),
+    );
+    expect(
+      db.prepare("select status from group_jobs where id = ?").get(must(before.jobId)),
+    ).toMatchObject({ status: "cancelled" });
+    expect(active.calls.some((call) => call.input.sessionId === owner)).toBe(false);
+    expect(active.groups.chainSnapshot(root.id).wakesByMember[owner]).toBe(1);
+  });
+
+  it.each([
+    "mode",
+    "dependency",
+    "member",
+  ] as const)("invalidates a queued automatic job when %s authorization changes", async (change) => {
+    const { group, lead, owner, db } = squad();
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
+    const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
+    assignGroupTask(group.id, task.id, lead, owner);
+    await flush();
+    const action = must(listGroupActions(group.id)[0]);
+    if (change === "mode") setGroupProactivityMode(group.id, "suggest");
+    else if (change === "dependency")
+      db.prepare("update group_tasks set dependency_ids_json = ? where id = ?").run(
+        JSON.stringify([task.id]),
         task.id,
       );
-      const active = scenario === "after restart" ? runtime(true, true) : first;
-      active.setWindowAvailable(true);
-      active.groups.kick();
-      await vi.waitFor(() =>
-        expect(listGroupActions(group.id)[0]?.deliveryState).toBe("invalidated"),
-      );
-      expect(
-        db.prepare("select status from group_jobs where id = ?").get(must(before.jobId)),
-      ).toMatchObject({ status: "cancelled" });
-      expect(active.calls.some((call) => call.input.sessionId === owner)).toBe(false);
-      expect(active.groups.chainSnapshot(root.id).wakesByMember[owner]).toBe(1);
-    },
-  );
-
-  it.each(["mode", "dependency", "member"] as const)(
-    "invalidates a queued automatic job when %s authorization changes",
-    async (change) => {
-      const { group, lead, owner, db } = squad();
-      setGroupProactivityMode(group.id, "opt_in_auto");
-      const env = runtime(false);
-      const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
-      const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
-      assignGroupTask(group.id, task.id, lead, owner);
-      await flush();
-      const action = must(listGroupActions(group.id)[0]);
-      if (change === "mode") setGroupProactivityMode(group.id, "suggest");
-      else if (change === "dependency")
-        db.prepare("update group_tasks set dependency_ids_json = ? where id = ?").run(
-          JSON.stringify([task.id]),
-          task.id,
-        );
-      else removeAgentGroupMember(group.id, owner);
-      env.setWindowAvailable(true);
-      env.groups.kick();
-      await vi.waitFor(() =>
-        expect(listGroupActions(group.id)[0]?.deliveryState).toBe("invalidated"),
-      );
-      expect(
-        db.prepare("select status from group_jobs where id = ?").get(must(action.jobId)),
-      ).toMatchObject({ status: "cancelled" });
-      expect(env.calls.some((call) => call.input.sessionId === owner)).toBe(false);
-    },
-  );
+    else removeAgentGroupMember(group.id, owner);
+    env.setWindowAvailable(true);
+    env.groups.kick();
+    await vi.waitFor(() =>
+      expect(listGroupActions(group.id)[0]?.deliveryState).toBe("invalidated"),
+    );
+    expect(
+      db.prepare("select status from group_jobs where id = ?").get(must(action.jobId)),
+    ).toMatchObject({ status: "cancelled" });
+    expect(env.calls.some((call) => call.input.sessionId === owner)).toBe(false);
+  });
 
   it("keeps committed proactive delivery pumping when the host emitter throws", async () => {
     const { group, lead, owner, db } = squad();
@@ -449,75 +450,75 @@ describe("task transition delivery", () => {
     expect(listGroupActions(group.id)).toEqual([]);
   });
 
-  it.each(["suggest", "opt_in_auto"] as const)(
-    "an explicit task receipt wakes in %s and suppresses the controller",
-    async (mode) => {
-      const { group, lead, owner, db } = squad();
-      setGroupProactivityMode(group.id, mode);
-      const env = runtime(false);
-      const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
-      const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
-      assignGroupTask(group.id, task.id, lead, owner);
-      const transition = must(listGroupTaskTransitions(task.id).at(-1));
-      env.groups.handleTaskWake({
-        taskId: task.id,
-        groupId: group.id,
-        actorSessionId: lead,
-        targetSessionId: owner,
-        body: "Assigned",
-        operationId: crypto.randomUUID(),
-        sourceEventId: transition.id,
-      });
-      await flush();
-      expect(listGroupActions(group.id)).toEqual([]);
-      expect(
-        listGroupMessages(group.id).filter((message) => message.kind === "status"),
-      ).toHaveLength(1);
-      expect(
-        db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
-      ).toMatchObject({ n: 2 });
-    },
-  );
+  it.each([
+    "suggest",
+    "opt_in_auto",
+  ] as const)("an explicit task receipt wakes in %s and suppresses the controller", async (mode) => {
+    const { group, lead, owner, db } = squad();
+    setGroupProactivityMode(group.id, mode);
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
+    const task = createGroupTask({ groupId: group.id, title: "Task", executionId: root.id });
+    assignGroupTask(group.id, task.id, lead, owner);
+    const transition = must(listGroupTaskTransitions(task.id).at(-1));
+    env.groups.handleTaskWake({
+      taskId: task.id,
+      groupId: group.id,
+      actorSessionId: lead,
+      targetSessionId: owner,
+      body: "Assigned",
+      operationId: crypto.randomUUID(),
+      sourceEventId: transition.id,
+    });
+    await flush();
+    expect(listGroupActions(group.id)).toEqual([]);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      1,
+    );
+    expect(
+      db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
+    ).toMatchObject({ n: 2 });
+  });
 
-  it.each(["task_unblocked", "review_requested", "review_changes_requested"] as const)(
-    "maps persisted %s transition to a suggestion",
-    async (kind) => {
-      const { group, lead, owner } = squad();
-      const env = runtime(false);
-      const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
-      const task = createGroupTask({
+  it.each([
+    "task_unblocked",
+    "review_requested",
+    "review_changes_requested",
+  ] as const)("maps persisted %s transition to a suggestion", async (kind) => {
+    const { group, lead, owner } = squad();
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Task",
+      ownerSessionId: owner,
+      reviewerSessionId: lead,
+      status: kind === "task_unblocked" ? "blocked" : "in_progress",
+      executionId: root.id,
+    });
+    if (kind === "task_unblocked")
+      reportGroupTaskProgress({
         groupId: group.id,
-        title: "Task",
-        ownerSessionId: owner,
-        reviewerSessionId: lead,
-        status: kind === "task_unblocked" ? "blocked" : "in_progress",
-        executionId: root.id,
+        taskId: task.id,
+        actorSessionId: owner,
+        expectedVersion: must(task.stateVersion),
+        operationId: crypto.randomUUID(),
+        blockedReason: null,
       });
-      if (kind === "task_unblocked")
-        reportGroupTaskProgress({
-          groupId: group.id,
-          taskId: task.id,
-          actorSessionId: owner,
-          expectedVersion: must(task.stateVersion),
-          operationId: crypto.randomUUID(),
-          blockedReason: null,
-        });
-      else if (kind === "review_requested") requestGroupTaskReview(group.id, task.id, owner, lead);
-      else {
-        requestGroupTaskReview(group.id, task.id, owner, lead);
-        await flush();
-        reviewGroupTask(group.id, task.id, lead, "changes");
-      }
+    else if (kind === "review_requested") requestGroupTaskReview(group.id, task.id, owner, lead);
+    else {
+      requestGroupTaskReview(group.id, task.id, owner, lead);
       await flush();
-      const transition = must(listGroupTaskTransitions(task.id).at(-1));
-      expect(
-        listGroupActions(group.id).some(
-          (action) =>
-            action.sourceEventId === transition.id && action.deliveryState === "suggested",
-        ),
-      ).toBe(true);
-    },
-  );
+      reviewGroupTask(group.id, task.id, lead, "changes");
+    }
+    await flush();
+    const transition = must(listGroupTaskTransitions(task.id).at(-1));
+    expect(
+      listGroupActions(group.id).some(
+        (action) => action.sourceEventId === transition.id && action.deliveryState === "suggested",
+      ),
+    ).toBe(true);
+  });
 
   it("accepts only exact bound persisted QA evidence as a task trigger", async () => {
     const { group, lead, owner } = squad();
@@ -746,49 +747,53 @@ describe("task transition delivery", () => {
     expect(recovered.calls.filter((call) => call.input.sessionId === owner)).toHaveLength(0);
   });
 
-  it.each(["stopped", "removed", "archived", "task-version", "budget", "dependency"] as const)(
-    "invalidates pending delivery when %s changes",
-    async (change) => {
-      const { group, lead, owner, db } = squad();
-      const { root, task, action } = persistUndeliveredAssignment(group.id, lead, owner);
-      if (change === "stopped") {
-        const chain = must(readGroupChain(root.id));
-        chain.ended = "stopped";
-        persistGroupChain(chain);
-      } else if (change === "removed") {
-        removeAgentGroupMember(group.id, owner);
-      } else if (change === "archived") {
-        db.prepare(
-          "update agents set archived_at = ? where id = (select agent_id from agent_group_members where group_id = ? and session_id = ?)",
-        ).run(new Date().toISOString(), group.id, owner);
-      } else if (change === "task-version") {
-        db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(
-          task.id,
-        );
-      } else if (change === "budget") {
-        const chain = must(readGroupChain(root.id));
-        chain.wakesByMember.set(owner, 3);
-        persistGroupChain(chain);
-      } else {
-        db.prepare("update group_tasks set dependency_ids_json = ? where id = ?").run(
-          JSON.stringify([task.id]),
-          task.id,
-        );
-      }
-      const recovered = runtime(false, true);
-      await flush();
-      expect(listGroupActions(group.id)).toMatchObject([
-        { id: action.id, deliveryState: "invalidated" },
-      ]);
-      expect(
-        listGroupMessages(group.id).filter((message) => message.kind === "status"),
-      ).toHaveLength(0);
-      expect(
-        db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
-      ).toMatchObject({ n: 1 });
-      recovered.groups.dispose();
-    },
-  );
+  it.each([
+    "stopped",
+    "removed",
+    "archived",
+    "task-version",
+    "budget",
+    "dependency",
+  ] as const)("invalidates pending delivery when %s changes", async (change) => {
+    const { group, lead, owner, db } = squad();
+    const { root, task, action } = persistUndeliveredAssignment(group.id, lead, owner);
+    if (change === "stopped") {
+      const chain = must(readGroupChain(root.id));
+      chain.ended = "stopped";
+      persistGroupChain(chain);
+    } else if (change === "removed") {
+      removeAgentGroupMember(group.id, owner);
+    } else if (change === "archived") {
+      db.prepare(
+        "update agents set archived_at = ? where id = (select agent_id from agent_group_members where group_id = ? and session_id = ?)",
+      ).run(new Date().toISOString(), group.id, owner);
+    } else if (change === "task-version") {
+      db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(
+        task.id,
+      );
+    } else if (change === "budget") {
+      const chain = must(readGroupChain(root.id));
+      chain.wakesByMember.set(owner, 3);
+      persistGroupChain(chain);
+    } else {
+      db.prepare("update group_tasks set dependency_ids_json = ? where id = ?").run(
+        JSON.stringify([task.id]),
+        task.id,
+      );
+    }
+    const recovered = runtime(false, true);
+    await flush();
+    expect(listGroupActions(group.id)).toMatchObject([
+      { id: action.id, deliveryState: "invalidated" },
+    ]);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      0,
+    );
+    expect(
+      db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
+    ).toMatchObject({ n: 1 });
+    recovered.groups.dispose();
+  });
 
   it("Stop invalidates an undelivered action even when no runtime job is loaded", () => {
     const { group, lead, owner } = squad();

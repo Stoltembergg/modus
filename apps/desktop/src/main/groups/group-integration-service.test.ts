@@ -229,54 +229,54 @@ describe("group task branch integration", () => {
     }
   });
 
-  it.each(["applied", "conflict"] as const)(
-    "reads an existing %s integration without another Git inspection",
-    async (status) => {
-      const f = await fixture({ conflict: status === "conflict" });
-      try {
-        const preview = await service().integration.previewGroupTaskIntegration(f.taskId);
-        const ready = getGroupTaskIntegrationRecord(f.taskId, preview.id);
-        expect(ready).toBeDefined();
-        const applying = beginGroupTaskIntegrationApply(
-          f.taskId,
-          preview.id,
-          preview.taskVersion,
-          ready?.version ?? 0,
-        );
-        const expected =
-          status === "applied"
-            ? reconcileGroupTaskIntegration(f.taskId, preview.id, applying.version, {
-                status: "applied",
-                mergeHeadSha: preview.sourceSha,
-                details: { kind: "test_recovered_merge" },
-              })
-            : recordGroupTaskIntegrationConflict({
-                taskId: f.taskId,
-                previewId: preview.id,
-                expectedTaskVersion: preview.taskVersion,
-                expectedRecordVersion: applying.version,
-                mergeHeadSha: preview.sourceSha,
-                conflictFiles: ["shared.txt"],
-              }).record;
-        const inspectApply = vi.fn();
-        const inspectGitState = vi.fn();
-        const reader = createGroupIntegrationService({
-          git: {
-            inspectGroupIntegrationApply: inspectApply,
-            inspectGroupIntegrationGitState: inspectGitState,
-          },
-        });
+  it.each([
+    "applied",
+    "conflict",
+  ] as const)("reads an existing %s integration without another Git inspection", async (status) => {
+    const f = await fixture({ conflict: status === "conflict" });
+    try {
+      const preview = await service().integration.previewGroupTaskIntegration(f.taskId);
+      const ready = getGroupTaskIntegrationRecord(f.taskId, preview.id);
+      expect(ready).toBeDefined();
+      const applying = beginGroupTaskIntegrationApply(
+        f.taskId,
+        preview.id,
+        preview.taskVersion,
+        ready?.version ?? 0,
+      );
+      const expected =
+        status === "applied"
+          ? reconcileGroupTaskIntegration(f.taskId, preview.id, applying.version, {
+              status: "applied",
+              mergeHeadSha: preview.sourceSha,
+              details: { kind: "test_recovered_merge" },
+            })
+          : recordGroupTaskIntegrationConflict({
+              taskId: f.taskId,
+              previewId: preview.id,
+              expectedTaskVersion: preview.taskVersion,
+              expectedRecordVersion: applying.version,
+              mergeHeadSha: preview.sourceSha,
+              conflictFiles: ["shared.txt"],
+            }).record;
+      const inspectApply = vi.fn();
+      const inspectGitState = vi.fn();
+      const reader = createGroupIntegrationService({
+        git: {
+          inspectGroupIntegrationApply: inspectApply,
+          inspectGroupIntegrationGitState: inspectGitState,
+        },
+      });
 
-        const state = await reader.refreshGroupTaskIntegrationState(f.taskId);
+      const state = await reader.refreshGroupTaskIntegrationState(f.taskId);
 
-        expect(state.record).toEqual(expected);
-        expect(inspectApply).not.toHaveBeenCalled();
-        expect(inspectGitState).not.toHaveBeenCalled();
-      } finally {
-        await cleanup(f);
-      }
-    },
-  );
+      expect(state.record).toEqual(expected);
+      expect(inspectApply).not.toHaveBeenCalled();
+      expect(inspectGitState).not.toHaveBeenCalled();
+    } finally {
+      await cleanup(f);
+    }
+  });
 
   it("permission_denied_never_applies", async () => {
     const f = await fixture();

@@ -1012,22 +1012,19 @@ describe("GroupRoom blocked groups", () => {
   it.each([
     ["no workspace", undefined],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])(
-    "a group with %s shows 'Choose a folder to continue this group' instead of the composer",
-    async (_label, workspaceId) => {
-      const user = userEvent.setup();
-      const { workspaceId: _drop, ...rest } = GROUP;
-      const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
-      const onChooseFolder = vi.fn();
-      renderRoom(states(), roomGroup, undefined, onChooseFolder);
-      const banner = await screen.findByTestId("group-blocked-banner");
-      expect(banner.textContent).toContain("Choose a folder to continue this group");
-      expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
-      await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
-      expect(onChooseFolder).toHaveBeenCalledTimes(1);
-      expect(group.postMessage).not.toHaveBeenCalled();
-    },
-  );
+  ])("a group with %s shows 'Choose a folder to continue this group' instead of the composer", async (_label, workspaceId) => {
+    const user = userEvent.setup();
+    const { workspaceId: _drop, ...rest } = GROUP;
+    const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
+    const onChooseFolder = vi.fn();
+    renderRoom(states(), roomGroup, undefined, onChooseFolder);
+    const banner = await screen.findByTestId("group-blocked-banner");
+    expect(banner.textContent).toContain("Choose a folder to continue this group");
+    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+    await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
+    expect(onChooseFolder).toHaveBeenCalledTimes(1);
+    expect(group.postMessage).not.toHaveBeenCalled();
+  });
 
   it("a group left with one agent shows 'Add a member to continue' and opens Manage members", async () => {
     const user = userEvent.setup();

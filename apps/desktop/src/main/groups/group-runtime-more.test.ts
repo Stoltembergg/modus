@@ -962,29 +962,26 @@ describe("agents in the room", () => {
   it.each([
     ["no workspace", null],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])(
-    "a group with %s is read-only: posting throws group-project-required and wakes nobody",
-    async (_label, workspaceId) => {
-      const { group, leadSession, builderSession } = agentsRoom();
-      getDatabase()
-        .prepare("update agent_groups set workspace_id = ? where id = ?")
-        .run(workspaceId, group.id);
-      const { runtime, groups } = setup();
-      const before = room(group.id).length;
-      expect(() => groups.postUserMessage({ groupId: group.id, body: "hello" })).toThrow(
-        expect.objectContaining({ code: "group-project-required" }),
-      );
-      groups.handleTaskWake({
-        groupId: group.id,
-        actorSessionId: leadSession,
-        targetSessionId: builderSession,
-        body: "Changes requested",
-      });
-      expect(runtime.pendingSessions()).toEqual([]);
-      // The history stays readable (the task status line itself is still recorded).
-      expect(room(group.id).length).toBe(before + 1);
-    },
-  );
+  ])("a group with %s is read-only: posting throws group-project-required and wakes nobody", async (_label, workspaceId) => {
+    const { group, leadSession, builderSession } = agentsRoom();
+    getDatabase()
+      .prepare("update agent_groups set workspace_id = ? where id = ?")
+      .run(workspaceId, group.id);
+    const { runtime, groups } = setup();
+    const before = room(group.id).length;
+    expect(() => groups.postUserMessage({ groupId: group.id, body: "hello" })).toThrow(
+      expect.objectContaining({ code: "group-project-required" }),
+    );
+    groups.handleTaskWake({
+      groupId: group.id,
+      actorSessionId: leadSession,
+      targetSessionId: builderSession,
+      body: "Changes requested",
+    });
+    expect(runtime.pendingSessions()).toEqual([]);
+    // The history stays readable (the task status line itself is still recorded).
+    expect(room(group.id).length).toBe(before + 1);
+  });
 
   /* Dynamic discovery: the roster and mentions follow the CURRENT membership. */
 

@@ -443,60 +443,61 @@ const { runGroupTool, runGroupVerifiedTool, setGroupTaskWakeSink } = await impor
 const { hasGroupTaskExplicitDispatch } = await import("./group-task-store");
 const { listGroupDecisions } = await import("./group-store");
 
-it.each(["handoff", "taskless-handoff", "taskless-agree"] as const)(
-  "retries %s after an actual runtime status persistence failure",
-  async (kind) => {
-    const { group, a, b } = squad();
-    const env = setup(true);
-    const operationId = crypto.randomUUID();
-    setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
-    const invoke = () =>
-      kind !== "taskless-agree"
-        ? runGroupTool(
-            "group_handoff",
-            { sessionId: a },
-            {
-              memberId: b,
-              objective: "Durable objective",
-              ...(kind === "handoff" ? { taskTitle: "Delivery retry" } : {}),
-              operationId,
-            },
-          )
-        : runGroupVerifiedTool(
-            "group_agree",
-            { sessionId: a },
-            { note: "Durable agreement", operationId },
-          );
-    const db = getDatabase();
-    db.exec(
-      "create trigger fail_task_status before insert on group_messages when new.kind = 'status' begin select raise(abort, 'status unavailable'); end",
+it.each([
+  "handoff",
+  "taskless-handoff",
+  "taskless-agree",
+] as const)("retries %s after an actual runtime status persistence failure", async (kind) => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const operationId = crypto.randomUUID();
+  setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
+  const invoke = () =>
+    kind !== "taskless-agree"
+      ? runGroupTool(
+          "group_handoff",
+          { sessionId: a },
+          {
+            memberId: b,
+            objective: "Durable objective",
+            ...(kind === "handoff" ? { taskTitle: "Delivery retry" } : {}),
+            operationId,
+          },
+        )
+      : runGroupVerifiedTool(
+          "group_agree",
+          { sessionId: a },
+          { note: "Durable agreement", operationId },
+        );
+  const db = getDatabase();
+  db.exec(
+    "create trigger fail_task_status before insert on group_messages when new.kind = 'status' begin select raise(abort, 'status unavailable'); end",
+  );
+  try {
+    await invoke();
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(false);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      0,
     );
-    try {
-      await invoke();
-      expect(hasGroupTaskExplicitDispatch(operationId)).toBe(false);
-      expect(
-        listGroupMessages(group.id).filter((message) => message.kind === "status"),
-      ).toHaveLength(0);
-    } finally {
-      db.exec("drop trigger fail_task_status");
-    }
-    try {
-      await invoke();
-      await invoke();
-      expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
-      expect(
-        listGroupMessages(group.id).filter((message) => message.kind === "status"),
-      ).toHaveLength(1);
-      if (kind === "taskless-agree") expect(listGroupDecisions(group.id)).toHaveLength(1);
-      else
-        expect(
-          db.prepare("select id from group_jobs where group_id = ?").all(group.id),
-        ).toHaveLength(1);
-    } finally {
-      setGroupTaskWakeSink(undefined);
-    }
-  },
-);
+  } finally {
+    db.exec("drop trigger fail_task_status");
+  }
+  try {
+    await invoke();
+    await invoke();
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      1,
+    );
+    if (kind === "taskless-agree") expect(listGroupDecisions(group.id)).toHaveLength(1);
+    else
+      expect(db.prepare("select id from group_jobs where group_id = ?").all(group.id)).toHaveLength(
+        1,
+      );
+  } finally {
+    setGroupTaskWakeSink(undefined);
+  }
+});
 
 it("reuses durable task delivery after post-commit emit failure and runtime reconstruction", () => {
   const { group, a, b } = squad();
