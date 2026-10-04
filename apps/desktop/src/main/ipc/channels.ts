@@ -244,6 +244,7 @@ export const IPC_CHANNELS = {
   billingRefresh: "billing:refresh",
   billingCheckout: "billing:checkout",
   billingPortal: "billing:portal",
+  billingCancel: "billing:cancel",
   billingStateEvent: "billing:state-event",
 } as const;
 

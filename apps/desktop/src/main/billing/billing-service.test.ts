@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BillingState } from "../../shared/billing";
+import type { BillingState, BillingSubscription } from "../../shared/billing";
 import { AuthBackendError } from "../auth/auth-backend";
 import {
   authState,
@@ -60,6 +60,7 @@ describe("billing service", () => {
           status: "active",
           currentPeriodEnd: "2026-11-03T03:00:00Z",
           cancelAtPeriodEnd: false,
+          cancelRequestedAt: null,
         },
       }),
     );
@@ -136,6 +137,7 @@ describe("billing service", () => {
           status: "active",
           currentPeriodEnd: null,
           cancelAtPeriodEnd: false,
+          cancelRequestedAt: null,
         },
       }),
     );
@@ -224,6 +226,113 @@ describe("billing service", () => {
     service.dispose();
   });
 
+  describe("cancelSubscription (L1e)", () => {
+    const MP_SUB = {
+      plan: "starter",
+      provider: "mercadopago" as const,
+      status: "active",
+      currentPeriodEnd: "2026-11-03T00:00:00Z",
+      cancelAtPeriodEnd: false,
+      cancelRequestedAt: null,
+    };
+
+    async function ready(subscription: BillingSubscription | null = MP_SUB) {
+      const ctx = setup();
+      ctx.backend.fetchBilling.mockResolvedValue(snapshot({ subscription }));
+      await ctx.service.refresh();
+      return ctx;
+    }
+
+    it("confirmed: cancelling while in flight, then the live subscription is gone", async () => {
+      const { service, backend, events, timers } = await ready();
+      backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
+      const state = await service.cancelSubscription();
+      expect(backend.cancelSubscription).toHaveBeenCalledWith();
+      expect(events.some((e) => e.cancelling && e.subscription?.status === "active")).toBe(true);
+      expect(state).toMatchObject({ cancelling: false, subscription: null, currentPlan: "free" });
+      expect(timers.map((t) => t.ms)).toEqual([3_000, 10_000, 30_000]);
+    });
+
+    it("not confirmed yet: the subscription stays (flagged), so checkout stays blocked", async () => {
+      const { service, backend, timers } = await ready();
+      backend.cancelSubscription.mockResolvedValue({ ok: true, code: "cancel_requested" });
+      backend.fetchBilling.mockResolvedValue(
+        snapshot({ subscription: { ...MP_SUB, cancelRequestedAt: "2026-10-03T23:50:00Z" } }),
+      );
+      const state = await service.cancelSubscription();
+      expect(state.subscription).toMatchObject({
+        status: "active",
+        cancelAtPeriodEnd: false,
+        cancelRequestedAt: "2026-10-03T23:50:00Z",
+      });
+      expect(state.error).toBeNull();
+      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      expect(backend.createBillingSession).not.toHaveBeenCalled();
+      // A late `authorized` webhook keeps the row live and the request set: still blocked.
+      timers[0]?.run();
+      await vi.waitFor(() => expect(backend.fetchBilling).toHaveBeenCalledTimes(4));
+      expect(service.getState().subscription?.cancelRequestedAt).toBe("2026-10-03T23:50:00Z");
+      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      expect(backend.createBillingSession).not.toHaveBeenCalled();
+      // The webhook lands later: a scheduled refresh picks it up.
+      backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
+      timers[1]?.run();
+      await vi.waitFor(() => expect(service.getState().subscription).toBeNull());
+    });
+
+    it("incomplete: cancel and try again, then checkout is possible", async () => {
+      const { service, backend, openExternal } = await ready({ ...MP_SUB, status: "incomplete" });
+      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
+      await service.cancelSubscription();
+      expect((await service.startCheckout("starter")).pending).toBe("checkout");
+      expect(openExternal).toHaveBeenCalledWith(SECRET_MP_URL);
+    });
+
+    it("errors: message, cancelling cleared, subscription kept, no refresh scheduled", async () => {
+      const { service, backend, timers } = await ready();
+      backend.cancelSubscription.mockResolvedValue({
+        ok: false,
+        status: 502,
+        code: "mercadopago_unavailable",
+      });
+      const state = await service.cancelSubscription();
+      expect(state).toMatchObject({ cancelling: false, subscription: { status: "active" } });
+      expect(state.error).toMatch(/Mercado Pago is unavailable/);
+      expect(timers).toHaveLength(0);
+      backend.cancelSubscription.mockRejectedValue(new AuthBackendError("network", "network"));
+      expect((await service.cancelSubscription()).error).toMatch(/connection/);
+    });
+
+    it("refuses without a Mercado Pago subscription (none, Stripe, signed out)", async () => {
+      for (const subscription of [null, { ...MP_SUB, provider: "stripe" as const }]) {
+        const { service, backend } = await ready(subscription);
+        expect((await service.cancelSubscription()).error).toMatch(/no Mercado Pago/);
+        expect(backend.cancelSubscription).not.toHaveBeenCalled();
+      }
+      const out = setup(false);
+      expect((await out.service.cancelSubscription()).error).toMatch(/Sign in/);
+      expect(out.backend.cancelSubscription).not.toHaveBeenCalled();
+    });
+
+    it("a second click while cancelling does not call mp-cancel twice", async () => {
+      const { service, backend } = await ready();
+      let release: () => void = () => undefined;
+      backend.cancelSubscription.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ ok: true, code: "canceled" });
+          }),
+      );
+      const first = service.cancelSubscription();
+      expect(service.getState().cancelling).toBe(true);
+      await service.cancelSubscription();
+      release();
+      await first;
+      expect(backend.cancelSubscription).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("ignores a late fetch for a user who signed out", async () => {
     const { service, backend, auth } = setup();
     let release: (value: ReturnType<typeof snapshot>) => void = () => undefined;
@@ -287,6 +396,7 @@ describe("billing backend helpers", () => {
         status: "active",
         current_period_end: null,
         cancel_at_period_end: true,
+        cancel_requested_at: null,
       },
       wallet: { balance: 26000, reserved: 0, plan_allowance: 25000, period_end: null },
     });
@@ -298,6 +408,7 @@ describe("billing backend helpers", () => {
       plan: "pro",
       provider: "stripe",
       cancelAtPeriodEnd: true,
+      cancelRequestedAt: null,
     });
     expect(mapped.catalog).toEqual([MP_STARTER]);
     expect(mapped.wallet).toMatchObject({ balance: 26000, planAllowance: 25000 });
@@ -344,5 +455,33 @@ describe("billing catalog mapping", () => {
     });
     expect(mapped.catalog).toBeNull();
     expect(mapped.subscription).toMatchObject({ plan: "starter", provider: "mercadopago" });
+  });
+
+  it("maps cancel_requested_at to cancelRequestedAt (a time only, no ids)", () => {
+    const row = {
+      plan: "starter",
+      provider: "mercadopago",
+      status: "active",
+      cancel_at_period_end: false,
+      cancel_requested_at: "2026-10-03T23:50:00+00:00",
+      provider_subscription_id: "SECRET_preapproval",
+    };
+    const mapped = mapBillingRows({ plans: [], catalog: null, subscription: row, wallet: null });
+    expect(mapped.subscription).toEqual({
+      plan: "starter",
+      provider: "mercadopago",
+      status: "active",
+      currentPeriodEnd: null,
+      cancelAtPeriodEnd: false,
+      cancelRequestedAt: "2026-10-03T23:50:00+00:00",
+    });
+    expect(JSON.stringify(mapped)).not.toContain("SECRET_preapproval");
+    const none = mapBillingRows({
+      plans: [],
+      catalog: null,
+      subscription: { ...row, cancel_requested_at: null },
+      wallet: null,
+    });
+    expect(none.subscription?.cancelRequestedAt).toBeNull();
   });
 });

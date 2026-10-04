@@ -13,6 +13,14 @@ const SECONDARY_BUTTON =
 const PRIMARY_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-md bg-fg px-2.5 text-canvas text-xs transition-colors hover:bg-fg-muted disabled:opacity-40";
 
+const DANGER_BUTTON =
+  "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-danger text-xs transition-colors hover:bg-hover disabled:opacity-40";
+
+/** L1e: confirm copy for cancelling an active Mercado Pago subscription. */
+export function cancelConfirmMessage(planName: string): string {
+  return `Cancel your ${planName} subscription? Mercado Pago stops future charges. Nothing is refunded, and the credits you already have stay in your account.`;
+}
+
 const RETURN_NOTICES: Record<string, string> = {
   success: "Payment received. Your plan updates as soon as the payment is confirmed.",
   cancel: "Checkout was cancelled. Nothing was charged.",
@@ -92,10 +100,19 @@ type ViewProps = {
   onCheckout(plan: string, provider: BillingProvider): void;
   onPortal(): void;
   onRefresh(): void;
+  /** L1e: cancel the own Mercado Pago subscription (main finds it; no id here). */
+  onCancel(): void;
 };
 
 /** Presentational: everything comes from BillingState (display data only). */
-export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefresh }: ViewProps) {
+export function BillingSectionView({
+  state,
+  busy,
+  onCheckout,
+  onPortal,
+  onRefresh,
+  onCancel,
+}: ViewProps) {
   if (!state || state.status === "unavailable" || state.status === "signed-out") return null;
   const current: BillingPlan | undefined = state.plans.find(
     (plan) => plan.plan === state.currentPlan,
@@ -105,6 +122,13 @@ export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefres
   const loading = state.status === "loading";
   const catalog = state.catalog ? groupCatalog(state.catalog) : null;
   const stripeSubscription = state.subscription?.provider === "stripe";
+  const mpSubscription = state.subscription?.provider === "mercadopago";
+  /** Requested (in flight, or flagged and waiting for Mercado Pago's confirmation). */
+  const mpCancelling =
+    mpSubscription && (state.cancelling || Boolean(state.subscription?.cancelRequestedAt));
+  const paymentPending = mpSubscription && state.subscription?.status === "incomplete";
+  const planName = current?.name ?? state.currentPlan;
+  const statusLabel = paymentPending ? "payment pending" : (state.subscription?.status ?? "");
 
   return (
     <SettingsSection
@@ -140,14 +164,16 @@ export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefres
           }
           description={
             subscribed
-              ? `${state.subscription?.status ?? ""}${
-                  state.subscription?.cancelAtPeriodEnd
-                    ? renews
-                      ? ` · ends ${renews}`
-                      : " · ends at period end"
-                    : renews
-                      ? ` · renews ${renews}`
-                      : ""
+              ? `${statusLabel}${
+                  mpCancelling
+                    ? " · cancelling"
+                    : state.subscription?.cancelAtPeriodEnd
+                      ? renews
+                        ? ` · ends ${renews}`
+                        : " · ends at period end"
+                      : renews
+                        ? ` · renews ${renews}`
+                        : ""
                 }`
               : "No paid subscription."
           }
@@ -183,12 +209,64 @@ export function BillingSectionView({ state, busy, onCheckout, onPortal, onRefres
               description="Upgrade, downgrade, cancel or update the payment method in Stripe."
               title="Change plan"
             />
-          ) : (
+          ) : mpCancelling ? (
             <SettingsRow
-              control={null}
-              description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
-              title="Billing"
+              control={
+                <button
+                  className={SECONDARY_BUTTON}
+                  disabled={busy || loading || state.cancelling}
+                  onClick={onCancel}
+                  type="button"
+                >
+                  {state.cancelling ? "Cancelling…" : "Check again"}
+                </button>
+              }
+              description={
+                state.cancelling
+                  ? "Cancelling with Mercado Pago…"
+                  : "Cancellation requested. Waiting for Mercado Pago to confirm; you can subscribe again once it does."
+              }
+              title="Cancelling…"
             />
+          ) : paymentPending ? (
+            <SettingsRow
+              control={
+                <button
+                  className={PRIMARY_BUTTON}
+                  disabled={busy || loading}
+                  onClick={onCancel}
+                  type="button"
+                >
+                  Cancel and try again
+                </button>
+              }
+              description="Mercado Pago hasn't confirmed a payment for this subscription. If you didn't finish paying, cancel it and subscribe again."
+              title="Payment pending"
+            />
+          ) : (
+            <>
+              <SettingsRow
+                control={null}
+                description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
+                title="Billing"
+              />
+              <SettingsRow
+                control={
+                  <button
+                    className={DANGER_BUTTON}
+                    disabled={busy || loading}
+                    onClick={() => {
+                      if (window.confirm(cancelConfirmMessage(planName))) onCancel();
+                    }}
+                    type="button"
+                  >
+                    Cancel subscription
+                  </button>
+                }
+                description="Stops future Mercado Pago charges. No refund; your credits stay."
+                title="Cancel subscription"
+              />
+            </>
           )
         ) : loading ? null : catalog === null ? (
           <SettingsRow
@@ -276,6 +354,7 @@ export function AccountBillingSection() {
       }
       onPortal={() => void run(() => window.modus.billing.openPortal())}
       onRefresh={() => void run(() => window.modus.billing.refresh())}
+      onCancel={() => void run(() => window.modus.billing.cancelSubscription())}
       state={state}
     />
   );

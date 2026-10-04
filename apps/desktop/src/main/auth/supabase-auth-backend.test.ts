@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSupabaseAuthBackend } from "./supabase-auth-backend";
 
 describe("Supabase auth backend", () => {
@@ -20,5 +20,74 @@ describe("Supabase auth backend", () => {
     } finally {
       backend.dispose();
     }
+  });
+
+  describe("cancelSubscription (L1e)", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    function withFetch(response: () => Response) {
+      const calls: { url: string; method: string | undefined; body: unknown }[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+          calls.push({
+            url: String(input instanceof Request ? input.url : input),
+            method: init?.method ?? (input instanceof Request ? input.method : undefined),
+            body: init?.body,
+          });
+          return response();
+        }),
+      );
+      const backend = createSupabaseAuthBackend({
+        supabaseUrl: "https://crdgtmyvwdnswuggpjco.supabase.co",
+        anonKey: "sb_publishable_test",
+        oauthProviders: [],
+      });
+      return { backend, calls };
+    }
+
+    it("POSTs an empty object to mp-cancel and maps the known codes", async () => {
+      for (const code of ["no_subscription", "canceled", "cancel_requested"]) {
+        const { backend, calls } = withFetch(() => Response.json({ code }));
+        try {
+          expect(await backend.cancelSubscription()).toEqual({ ok: true, code });
+          expect(calls).toHaveLength(1);
+          expect(calls[0]?.url).toBe(
+            "https://crdgtmyvwdnswuggpjco.supabase.co/functions/v1/mp-cancel",
+          );
+          expect(calls[0]?.method).toBe("POST");
+          expect(calls[0]?.body).toBe("{}");
+        } finally {
+          backend.dispose();
+        }
+      }
+    });
+
+    it("an unknown answer is invalid_response; a Function error keeps its code", async () => {
+      const odd = withFetch(() => Response.json({ code: "PRE123", id: "PRE123" }));
+      try {
+        expect(await odd.backend.cancelSubscription()).toEqual({
+          ok: false,
+          status: 502,
+          code: "invalid_response",
+        });
+      } finally {
+        odd.backend.dispose();
+      }
+      const failing = withFetch(() =>
+        Response.json({ error: "mercadopago_unavailable" }, { status: 502 }),
+      );
+      try {
+        expect(await failing.backend.cancelSubscription()).toEqual({
+          ok: false,
+          status: 502,
+          code: "mercadopago_unavailable",
+        });
+      } finally {
+        failing.backend.dispose();
+      }
+    });
   });
 });

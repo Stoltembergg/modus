@@ -754,6 +754,8 @@ export type ModusApi = {
     /** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
     checkout(input: BillingCheckoutInput): Promise<BillingState>;
     openPortal(): Promise<BillingState>;
+    /** L1e: cancel the own Mercado Pago subscription; main finds it, no id is passed. */
+    cancelSubscription(): Promise<BillingState>;
     onStateChange(listener: (state: BillingState) => void): () => void;
   };
   clipboard: {

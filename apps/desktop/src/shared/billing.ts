@@ -51,6 +51,11 @@ export type BillingSubscription = {
   status: string;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
+  /**
+   * L1e: when a Mercado Pago cancellation was requested from the app and not yet confirmed
+   * (subscriptions.cancel_requested_at, ISO timestamp). Only a time, never an id.
+   */
+  cancelRequestedAt: string | null;
 };
 
 export type BillingWallet = {
@@ -88,6 +93,11 @@ export type BillingState = {
   currentPlan: string;
   /** A Checkout / Portal page was opened in the browser and not returned from yet. */
   pending: "checkout" | "portal" | null;
+  /**
+   * L1e: a Mercado Pago cancellation request is in flight. Once it returns, a subscription that
+   * is still live with cancelRequestedAt means "cancel requested, waiting for Mercado Pago".
+   */
+  cancelling: boolean;
   lastReturn: BillingReturnStatus | null;
   error: string | null;
 };

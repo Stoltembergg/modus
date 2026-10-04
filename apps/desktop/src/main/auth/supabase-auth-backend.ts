@@ -14,6 +14,8 @@ import type { AuthOAuthProviderId } from "../../shared/auth";
 import {
   type BillingBackend,
   type BillingFunctionResult,
+  CANCEL_RESULT_CODES,
+  type CancelResultCode,
   LIVE_SUBSCRIPTION_STATUSES,
   mapBillingRows,
 } from "../billing/billing-backend";
@@ -198,7 +200,9 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
         client.rpc("get_billing_catalog"),
         client
           .from("subscriptions")
-          .select("plan, provider, status, current_period_end, cancel_at_period_end, updated_at")
+          .select(
+            "plan, provider, status, current_period_end, cancel_at_period_end, cancel_requested_at, updated_at",
+          )
           .eq("user_id", userId)
           .in("status", [...LIVE_SUBSCRIPTION_STATUSES])
           .order("updated_at", { ascending: false })
@@ -229,6 +233,22 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
       const url = (data as { url?: unknown } | null)?.url;
       if (typeof url !== "string") return { ok: false, status: 502, code: "invalid_response" };
       return { ok: true, url };
+    },
+
+    async cancelSubscription() {
+      const { data, error } = await client.functions.invoke("mp-cancel", {
+        method: "POST",
+        body: {},
+      });
+      if (error) {
+        const failed = await functionErrorResult(error);
+        return failed.ok ? { ok: false, status: 502, code: "invalid_response" } : failed;
+      }
+      const code = (data as { code?: unknown } | null)?.code;
+      if (!(CANCEL_RESULT_CODES as readonly unknown[]).includes(code)) {
+        return { ok: false, status: 502, code: "invalid_response" };
+      }
+      return { ok: true, code: code as CancelResultCode };
     },
 
     onSessionChange(listener) {

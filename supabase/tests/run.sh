@@ -75,10 +75,11 @@ pg_prove --ext .sql -v "$here"/database/*.test.sql
 echo "== concurrency"
 PSQL="$PG_BIN/psql" bash "$here/concurrency.sh"
 
-echo "== functions db.ts + model-router + mp-webhook (npm:postgres, real cluster, fake upstream / fake MP API)"
+echo "== functions db.ts + model-router + mp-webhook + mp-cancel (npm:postgres, real cluster, fake upstream / fake MP API)"
 (cd "$root/supabase/functions" &&
   MODUS_TEST_DB_URL="postgres://postgres:$db_password@127.0.0.1:$PGPORT/postgres" \
     deno test --allow-env --allow-net=127.0.0.1 --allow-read --allow-import \
-      _shared/db.integration.ts model-router/router.integration.ts mp-webhook/mp.integration.ts)
+      _shared/db.integration.ts model-router/router.integration.ts mp-webhook/mp.integration.ts \
+      mp-cancel/cancel.integration.ts)
 
 echo "== all SQL tests passed"
