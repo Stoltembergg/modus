@@ -8,7 +8,9 @@ import {
   createFakeAuth,
   createFakeBillingBackend,
   MP_STARTER,
+  PACKS,
   SECRET_CHECKOUT_URL,
+  SECRET_MP_PACK_URL,
   SECRET_MP_URL,
   SECRET_PORTAL_URL,
   STRIPE_STARTER,
@@ -20,6 +22,7 @@ import {
   LIVE_SUBSCRIPTION_STATUSES,
   mapBillingRows,
   mapCatalogRows,
+  mapPackRows,
 } from "./billing-backend";
 import { createBillingService } from "./billing-service";
 
@@ -109,6 +112,60 @@ describe("billing service", () => {
     expect(openExternal).toHaveBeenCalledWith(SECRET_CHECKOUT_URL);
     expect(state.pending).toBe("checkout");
     expect(JSON.stringify(events)).not.toContain("cs_test_SECRET");
+  });
+
+  it("L5b buyCredits: opens Checkout Pro for a pack the catalog offers; only the pack id is sent", async () => {
+    const { service, backend, openExternal, events } = setup();
+    backend.fetchBilling.mockResolvedValue(snapshot({ catalog: [], packs: PACKS }));
+    await service.refresh();
+    const state = await service.buyCredits("credits_25k");
+    expect(backend.createBillingSession).toHaveBeenCalledWith("mp-buy-credits", {
+      packId: "credits_25k",
+    });
+    expect(openExternal).toHaveBeenCalledWith(SECRET_MP_PACK_URL);
+    expect([state.pending, state.error]).toEqual(["checkout", null]);
+    expect(JSON.stringify(events)).not.toContain("SECRET_preference");
+  });
+
+  it("L5b buyCredits refuses unknown ids and packs the catalog doesn't offer, before the Function", async () => {
+    const { service, backend } = setup();
+    backend.fetchBilling.mockResolvedValue(snapshot({ packs: PACKS.slice(0, 1) }));
+    await service.refresh();
+    for (const id of ["credits_10k", "credits_1m", "starter", "", "CREDITS_5K"]) {
+      expect((await service.buyCredits(id)).error).toMatch(/credit pack is not available/);
+    }
+    backend.fetchBilling.mockResolvedValue(snapshot({ catalog: null, packs: null }));
+    await service.refresh();
+    expect((await service.buyCredits("credits_5k")).error).toMatch(/not available/);
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
+  });
+
+  it("L5b buyCredits maps the Function's refusals; a non-Mercado Pago URL is never opened", async () => {
+    const { service, backend, openExternal } = setup();
+    backend.fetchBilling.mockResolvedValue(snapshot({ packs: PACKS }));
+    await service.refresh();
+    for (const [code, message] of [
+      ["account_blocked", /blocked on this account/],
+      ["unknown_pack", /credit pack is not available/],
+      ["mercadopago_unavailable", /Mercado Pago is unavailable/],
+      ["purchase_conflict", /already being set up/],
+    ] as const) {
+      backend.createBillingSession.mockResolvedValueOnce({ ok: false, status: 403, code });
+      const state = await service.buyCredits("credits_5k");
+      expect([state.pending, state.error]).toEqual([null, expect.stringMatching(message)]);
+    }
+    backend.createBillingSession.mockResolvedValueOnce({
+      ok: true,
+      url: "https://evil.example/checkout",
+    });
+    expect((await service.buyCredits("credits_5k")).error).toMatch(/unavailable/);
+    expect(openExternal).not.toHaveBeenCalled();
+  });
+
+  it("L5b buyCredits needs a signed-in user", async () => {
+    const { service, backend } = setup(false);
+    expect((await service.buyCredits("credits_5k")).error).toMatch(/Sign in/);
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
   });
 
   it("refuses unknown, free or malformed plans before calling the Function", async () => {
@@ -486,6 +543,58 @@ describe("billing catalog mapping", () => {
     const mapped = mapCatalogRows(rows);
     expect(mapped).toEqual([MP_STARTER, STRIPE_STARTER]);
     expect(JSON.stringify(mapped)).not.toContain("SECRET");
+  });
+
+  it("L5b: maps kind 'pack' rows to credit packs (known ids, Mercado Pago, BRL only), sorted", () => {
+    const pack = (patch: Record<string, unknown>) => ({
+      plan: "credits_5k",
+      name: "5,000 credits",
+      monthly_credits: 5000,
+      provider: "mercadopago",
+      currency: "BRL",
+      amount_minor: 3690,
+      sort_order: 1,
+      kind: "pack",
+      ...patch,
+    });
+    const rows = [
+      pack({
+        plan: "credits_25k",
+        name: "25,000 credits",
+        monthly_credits: 25000,
+        amount_minor: 18090,
+        sort_order: 3,
+      }),
+      pack({}),
+      pack({
+        plan: "credits_10k",
+        name: "10,000 credits",
+        monthly_credits: 10000,
+        amount_minor: "7290",
+        sort_order: 2,
+      }),
+      pack({ plan: "credits_1m" }),
+      pack({ provider: "stripe" }),
+      pack({ currency: "USD" }),
+      pack({ amount_minor: 0 }),
+      pack({ kind: "subscription" }),
+      pack({ kind: undefined }),
+      {
+        plan: "starter",
+        provider: "mercadopago",
+        currency: "BRL",
+        amount_minor: 4990,
+        kind: "subscription",
+      },
+      null,
+    ];
+    expect(mapPackRows(rows)).toEqual(PACKS);
+    expect(
+      mapBillingRows({ plans: [], catalog: rows, subscription: null, wallet: null }).packs,
+    ).toEqual(PACKS);
+    expect(
+      mapBillingRows({ plans: [], catalog: null, subscription: null, wallet: null }).packs,
+    ).toBeNull();
   });
 
   it("L5a: ignores credit-pack catalog rows (kind pack / unknown kinds), keeps kind subscription", () => {

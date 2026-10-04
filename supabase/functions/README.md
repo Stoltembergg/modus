@@ -7,6 +7,7 @@
 | `stripe-webhook` | Stripe events -> `private.process_stripe_event` | **no**, always processes |
 | `mp-checkout`, `mp-webhook` | Mercado Pago subscriptions (B6a) | no |
 | `mp-cancel` | Cancel the caller's own Mercado Pago subscription (L1e), `verify_jwt = true` | no |
+| `mp-buy-credits` | One-off Mercado Pago credit pack: Checkout Pro (Pix + card, 1 installment, link expires in 30 min) (L5b), `verify_jwt = true` | no |
 | `model-router` | Modus model router (B4a) | no |
 
 Secrets are listed in [`.env.example`](.env.example). For the local stack, copy it to `supabase/functions/.env`. For the hosted project, set them with `supabase secrets set`.
@@ -69,3 +70,23 @@ Deploy with `verify_jwt = true`. The handler also validates the JWT itself (`cre
 **Response** (never an id): `200 {"code":"no_subscription"}` (nothing live: a no-op), `200 {"code":"canceled"}`, `200 {"code":"cancel_requested"}` (not confirmed yet), or `502 mercadopago_unavailable` when MP neither accepted the PUT nor reads `canceled` (nothing changed). Repeats are safe. No refund: credits already granted stay.
 
 **Secrets:** `MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`. These are the same ones `mp-checkout` uses.
+
+## `mp-buy-credits` (L5b)
+
+Deploy with `verify_jwt = true`. The handler also validates the JWT itself; no user means `401 unauthorized`.
+
+**Request:** `POST {"packId": "credits_5k" | "credits_10k" | "credits_25k"}`. Any other field or pack id is `400 invalid_body`, before any lookup.
+
+1. `private.mp_create_purchase(user, pack)` records a new purchase with credits, price and currency read from `public.credit_packs` and frozen there. A blocked account (a blocked subscription or a charged-back purchase) gets `403 account_blocked`; an inactive pack, or Mercado Pago switched off, gets `404 unknown_pack`.
+2. `POST /checkout/preferences` (X-Idempotency-Key = purchase id):
+   - one item at the frozen price, `external_reference` = purchase id;
+   - `notification_url` = `${SUPABASE_URL}/functions/v1/mp-webhook?source_news=webhooks`;
+   - `back_urls` from `BILLING_RETURN_URL` (success / pending -> success, failure -> cancel), `auto_return: approved`;
+   - `payment_methods`: `ticket` and `atm` excluded (Pix and cards stay; Mercado Pago balance can't be excluded), `installments: 1`;
+   - `expires: true`, `expiration_date_to` = now + 30 min.
+3. The answer must echo the purchase id, amount, currency and `MP_COLLECTOR_ID`, and `init_point` must be on `www.mercadopago.com.br`; anything else is `502 unexpected_preference`, nothing linked.
+4. `private.mp_link_purchase` stores the preference id and URL. Response: `200 {"url": init_point}`.
+
+Credits are granted only by `mp-webhook` (`private.process_mp_purchase_payment`), never here. Each click creates a new purchase; an unpaid purchase grants nothing.
+
+**Secrets:** the same as `mp-checkout` (`MP_ACCESS_TOKEN`, `MP_COLLECTOR_ID`, `BILLING_RETURN_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_DB_URL`).

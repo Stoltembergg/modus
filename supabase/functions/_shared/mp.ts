@@ -57,6 +57,39 @@ export type CreatePreapprovalInput = {
   backUrl: string;
 };
 
+/** L5b: a Checkout Pro preference (one-off payment of a credit pack), normalized. */
+export type MpPreference = {
+  id: string;
+  external_reference: string | null;
+  collector_id: string | null;
+  /** The single item's unit_price x quantity, in minor units. */
+  amount_minor: number;
+  currency: string | null;
+  init_point: string | null;
+};
+
+export type CreatePreferenceInput = {
+  /** Item id: the pack id. */
+  packId: string;
+  title: string;
+  externalReference: string;
+  payerEmail: string;
+  amountMinor: number;
+  currency: string;
+  notificationUrl: string;
+  backUrls: { success: string; failure: string; pending: string };
+  /** The preference (checkout link) stops accepting payments after this instant. */
+  expiresAt: Date;
+};
+
+/**
+ * L5b: payment types excluded from the credit-pack Checkout Pro: boleto (`ticket`) and
+ * lottery / cash (`atm`): slow offline payments outside the margin model. Pix
+ * (`bank_transfer`) and cards stay; Mercado Pago balance (`account_money`) can never be
+ * excluded (MP docs) and costs 4.99%, still within the margin.
+ */
+export const MP_PACK_EXCLUDED_PAYMENT_TYPES = ["ticket", "atm"] as const;
+
 export interface MpApi {
   getPreapproval(id: string): Promise<MpPreapproval>;
   getAuthorizedPayment(id: string): Promise<MpAuthorizedPayment>;
@@ -65,6 +98,8 @@ export interface MpApi {
   createPreapproval(input: CreatePreapprovalInput, idempotencyKey: string): Promise<MpPreapproval>;
   /** L1e: PUT /preapproval/{id} { status: "canceled" } (irreversible on Mercado Pago's side). */
   cancelPreapproval(id: string): Promise<MpPreapproval>;
+  /** L5b: POST /checkout/preferences with X-Idempotency-Key (the purchase id). */
+  createPreference(input: CreatePreferenceInput, idempotencyKey: string): Promise<MpPreference>;
 }
 
 /**
@@ -124,6 +159,27 @@ export function normalizePreapproval(raw: unknown): MpPreapproval {
     amount_minor: toMinor(recurring.transaction_amount),
     currency: optString(recurring.currency_id),
     next_payment_date: next && !Number.isNaN(Date.parse(next)) ? next : null,
+    init_point: optString(body.init_point),
+  };
+}
+
+const PREFERENCE_ID = /^[A-Za-z0-9-]{1,128}$/;
+
+export function normalizePreference(raw: unknown): MpPreference {
+  const body = obj(raw);
+  const id = optString(body.id);
+  if (!id || !PREFERENCE_ID.test(id)) invalid();
+  const items = Array.isArray(body.items) ? body.items : [];
+  if (items.length !== 1) invalid();
+  const item = obj(items[0]);
+  const quantity = typeof item.quantity === "number" ? item.quantity : Number(item.quantity);
+  if (quantity !== 1) invalid();
+  return {
+    id,
+    external_reference: idString(body.external_reference),
+    collector_id: idString(body.collector_id),
+    amount_minor: toMinor(item.unit_price),
+    currency: optString(item.currency_id),
     init_point: optString(body.init_point),
   };
 }
@@ -241,6 +297,38 @@ export function createMpApi(
             },
             back_url: input.backUrl,
             status: "pending",
+          },
+          idempotencyKey,
+        ),
+      ),
+    createPreference: async (input, idempotencyKey) =>
+      normalizePreference(
+        await call(
+          "POST",
+          "/checkout/preferences",
+          {
+            items: [
+              {
+                id: input.packId,
+                title: input.title,
+                quantity: 1,
+                currency_id: input.currency,
+                unit_price: input.amountMinor / 100,
+              },
+            ],
+            payer: { email: input.payerEmail },
+            external_reference: input.externalReference,
+            notification_url: input.notificationUrl,
+            back_urls: input.backUrls,
+            auto_return: "approved",
+            expires: true,
+            expiration_date_to: input.expiresAt.toISOString(),
+            payment_methods: {
+              excluded_payment_types: MP_PACK_EXCLUDED_PAYMENT_TYPES.map((id) => ({ id })),
+              installments: 1,
+              default_installments: 1,
+            },
+            statement_descriptor: "MODUS",
           },
           idempotencyKey,
         ),

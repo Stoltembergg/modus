@@ -1,6 +1,6 @@
 import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
 import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
-import type { BillingCheckoutInput, BillingState } from "../shared/billing";
+import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
   AddDocInput,
   AgentEvent,
@@ -756,6 +756,8 @@ export type ModusApi = {
     openPortal(): Promise<BillingState>;
     /** L1e: cancel the own Mercado Pago subscription; main finds it, no id is passed. */
     cancelSubscription(): Promise<BillingState>;
+    /** L5b: Mercado Pago Checkout Pro for a credit pack (only the pack id crosses IPC). */
+    buyCredits(input: BillingBuyCreditsInput): Promise<BillingState>;
     onStateChange(listener: (state: BillingState) => void): () => void;
   };
   clipboard: {

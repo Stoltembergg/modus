@@ -434,6 +434,7 @@ const api: ModusApi = {
     checkout: (input) => ipcRenderer.invoke("billing:checkout", input) as Promise<BillingState>,
     openPortal: () => ipcRenderer.invoke("billing:portal") as Promise<BillingState>,
     cancelSubscription: () => ipcRenderer.invoke("billing:cancel") as Promise<BillingState>,
+    buyCredits: (input) => ipcRenderer.invoke("billing:buyCredits", input) as Promise<BillingState>,
     onStateChange: (callback) => {
       const listener = (_event: IpcRendererEvent, payload: unknown) =>
         callback(payload as BillingState);

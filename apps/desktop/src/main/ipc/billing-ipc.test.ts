@@ -3,11 +3,17 @@ import {
   authState,
   createFakeAuth,
   createFakeBillingBackend,
+  PACKS,
   SECRET_ACCESS_TOKEN_IN_BILLING,
+  SECRET_MP_PACK_URL,
   snapshot,
 } from "../billing/billing.test-helpers";
 import { createBillingService } from "../billing/billing-service";
-import { billingCancelSchema, registerBillingIpcHandlers } from "./billing-ipc";
+import {
+  billingBuyCreditsSchema,
+  billingCancelSchema,
+  registerBillingIpcHandlers,
+} from "./billing-ipc";
 import {
   assertTrustedSender,
   registerTrustedSender,
@@ -20,6 +26,7 @@ const BILLING_CHANNELS = [
   "billing:checkout",
   "billing:portal",
   "billing:cancel",
+  "billing:buyCredits",
 ];
 
 type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
@@ -66,6 +73,45 @@ describe("billing IPC", () => {
     expect(backend.createBillingSession).not.toHaveBeenCalled();
   });
 
+  it("L5b billing:buyCredits accepts only {packId} with one of the three pack ids", async () => {
+    const { call, backend } = setup();
+    for (const input of [
+      undefined,
+      {},
+      { packId: "credits_1m" },
+      { packId: "starter" },
+      { packId: "credits_5k", amountMinor: 1 },
+      { packId: "credits_5k", credits: 1_000_000 },
+      { packId: "credits_5k", userId: "11111111-1111-4111-8111-111111111111" },
+      { packId: 5000 },
+      { plan: "credits_5k" },
+    ]) {
+      expect(billingBuyCreditsSchema.safeParse(input).success).toBe(false);
+      await expect(call("billing:buyCredits", input)).rejects.toThrow(/Invalid IPC payload/);
+    }
+    for (const packId of ["credits_5k", "credits_10k", "credits_25k"]) {
+      expect(billingBuyCreditsSchema.safeParse({ packId }).success).toBe(true);
+    }
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
+  });
+
+  it("L5b billing:buyCredits opens Checkout Pro in main and replies with display data only", async () => {
+    const { call, backend, openExternal, broadcasts } = setup();
+    backend.fetchBilling.mockResolvedValue(snapshot({ catalog: [], packs: PACKS }));
+    await call("billing:refresh");
+    const reply = (await call("billing:buyCredits", { packId: "credits_10k" })) as {
+      pending: string | null;
+      error: string | null;
+    };
+    expect(backend.createBillingSession).toHaveBeenCalledWith("mp-buy-credits", {
+      packId: "credits_10k",
+    });
+    expect(openExternal).toHaveBeenCalledWith(SECRET_MP_PACK_URL);
+    expect([reply.pending, reply.error]).toEqual(["checkout", null]);
+    const payload = JSON.stringify({ reply, broadcasts });
+    expect(payload).not.toMatch(/mercadopago\.com|SECRET_preference|pref_id/);
+  });
+
   it("accepts only {plan, provider?} for checkout: no price, customer, user id or URL", async () => {
     const { call, backend } = setup();
     for (const input of [
@@ -109,6 +155,7 @@ describe("billing IPC", () => {
           "currentPlan",
           "error",
           "lastReturn",
+          "packs",
           "pending",
           "plans",
           "status",

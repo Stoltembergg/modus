@@ -10,11 +10,13 @@ import { assert, assertEquals, assertGreater } from "jsr:@std/assert@1";
 import postgres from "npm:postgres@3.4.9";
 import { createPostgresBillingDb } from "../_shared/db.ts";
 import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
-import type { MpApi, MpPayment } from "../_shared/mp.ts";
+import type { CreatePreferenceInput, MpApi, MpPayment } from "../_shared/mp.ts";
 import { hmacSha256Hex, mpManifest } from "../_shared/mp-signature.ts";
 import { createPostgresRouterDb } from "../_shared/router-db.ts";
+import { URLS } from "../_shared/test-helpers.ts";
 import { createRouterHandler } from "../model-router/handler.ts";
 import { completionRequest, fakeUpstream, routerConfig, sse } from "../model-router/test-fakes.ts";
+import { createMpBuyCreditsHandler, mpNotificationUrl } from "../mp-buy-credits/handler.ts";
 import { createMpWebhookHandler } from "./handler.ts";
 
 const dbUrl = Deno.env.get("MODUS_TEST_DB_URL");
@@ -302,6 +304,103 @@ Deno.test({
       );
       for (const plan of ["pro", "max", "ultra"]) assertEquals(byPlan.get(plan), null, plan);
       assertEquals(byPlan.get("free"), STARTER_MODELS, "Free unchanged");
+    } finally {
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
+  name: "L5b mp-buy-credits against a real Postgres: purchase frozen + preference linked, webhook credits it, blocked refused",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const billing = createPostgresBillingDb(dbUrl ?? "");
+    try {
+      const [{ id: userId }] =
+        await admin`select tests.create_user('buy-it@example.com', true) as id`;
+      const prefs: CreatePreferenceInput[] = [];
+      const payments = new Map<string, MpPayment>();
+      const api: MpApi = {
+        createPreference: (input, key) => {
+          prefs.push(input);
+          assertEquals(key, input.externalReference);
+          return Promise.resolve({
+            id: `777-${prefs.length}`,
+            external_reference: input.externalReference,
+            collector_id: "777",
+            amount_minor: input.amountMinor,
+            currency: input.currency,
+            init_point: `https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=777-${prefs.length}`,
+          });
+        },
+        getPayment: (id) => Promise.resolve(structuredClone(payments.get(id) as MpPayment)),
+        getPreapproval: () => Promise.reject(new Error("not used here")),
+        getAuthorizedPayment: () => Promise.reject(new Error("not used here")),
+        createPreapproval: () => Promise.reject(new Error("not used here")),
+        cancelPreapproval: () => Promise.reject(new Error("not used here")),
+      };
+      const buy = createMpBuyCreditsHandler({
+        api,
+        db: billing,
+        getUser: () => Promise.resolve({ id: userId, email: "buy-it@example.com" }),
+        urls: () => URLS,
+        notificationUrl: mpNotificationUrl("http://127.0.0.1:54321"),
+        expect: EXPECT,
+      });
+      const req = (packId: string) =>
+        new Request("http://localhost/mp-buy-credits", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer t" },
+          body: JSON.stringify({ packId }),
+        });
+
+      // The DB price is what Mercado Pago is asked for.
+      const res = await buy(req("credits_25k"));
+      assertEquals(res.status, 200);
+      const { url } = await res.json();
+      assertEquals(url, "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=777-1");
+      assertEquals(
+        [prefs[0].amountMinor, prefs[0].currency, prefs[0].notificationUrl],
+        [18090, "BRL", "http://127.0.0.1:54321/functions/v1/mp-webhook?source_news=webhooks"],
+      );
+      const [row] =
+        await admin`select id, pack_id, credits, amount_minor, status, preference_id, checkout_url
+                      from public.credit_purchases where user_id = ${userId}`;
+      assertEquals(
+        [row.pack_id, Number(row.credits), Number(row.amount_minor), row.status, row.preference_id],
+        ["credits_25k", 25000, 18090, "created", "777-1"],
+      );
+      assertEquals(row.checkout_url, url);
+
+      // MP pays it: credited by the webhook path (same RPC mp-webhook calls).
+      payments.set("670001", {
+        id: "670001",
+        status: "approved",
+        status_detail: "accredited",
+        amount_minor: 18090,
+        refunded_minor: 0,
+        live_mode: false,
+        collector_id: "777",
+        currency: "BRL",
+        external_reference: row.id,
+      });
+      const credited = await billing.processMpPurchasePayment(
+        await api.getPayment("670001"),
+        EXPECT,
+        null,
+      );
+      assertEquals(credited.code, "credited");
+      const [w] = await admin`select balance from public.credit_wallets where user_id = ${userId}`;
+      assertEquals(Number(w.balance), 26000);
+
+      // Blocked account (chargeback): refused before Mercado Pago is called.
+      await admin`update public.credit_purchases set status = 'charged_back' where id = ${row.id}`;
+      const blocked = await buy(req("credits_5k"));
+      assertEquals([blocked.status, (await blocked.json()).error], [403, "account_blocked"]);
+      assertEquals(prefs.length, 1);
     } finally {
       await admin.end();
     }

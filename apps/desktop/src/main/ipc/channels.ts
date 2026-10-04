@@ -245,6 +245,8 @@ export const IPC_CHANNELS = {
   billingCheckout: "billing:checkout",
   billingPortal: "billing:portal",
   billingCancel: "billing:cancel",
+  /** L5b: { packId } -> BillingState (opens Mercado Pago Checkout Pro in the browser). */
+  billingBuyCredits: "billing:buyCredits",
   billingStateEvent: "billing:state-event",
 } as const;
 
