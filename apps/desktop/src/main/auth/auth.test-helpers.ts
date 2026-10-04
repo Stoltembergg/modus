@@ -67,6 +67,8 @@ export function createFakeBackend() {
       fakeSession({ refreshToken: "refresh-token-SECRET-r2" }),
     ),
     signOut: vi.fn(async () => undefined),
+    getAccessToken: vi.fn(async (): Promise<string | null> => SECRET_ACCESS_TOKEN),
+    refreshAccessToken: vi.fn(async () => "access-token-SECRET-a2"),
     fetchProfile: vi.fn(async (_userId: string) => ({
       displayName: "Ana Profile",
       avatarUrl: "https://example.com/a.png",

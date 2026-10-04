@@ -209,7 +209,18 @@ export type ModelInfo = {
   thinkingVariant?: string;
   thinkingOptions?: ThinkingOption[];
   thinkingBudget?: ThinkingBudget;
+  /**
+   * Modus (B4b): the model is listed by the router but not in the user's plan. A UI hint
+   * (picker shows it disabled with an upgrade invite); the router's 403 is the real barrier.
+   */
+  locked?: "upgrade";
 };
+
+/**
+ * Modus provider state for the picker (B4b): "off" signed out, "loading" first /v1/models,
+ * "ready" models listed, "unavailable" the router answered an error (no models).
+ */
+export type ModusModelsStatus = "off" | "loading" | "ready" | "unavailable";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ThinkingOption = {
@@ -300,6 +311,8 @@ export type ModelSettingsState = {
   providers: ModelProviderInfo[];
   models: ModelInfo[];
   defaultModel?: string;
+  /** B4b: Modus provider state (absent = off). */
+  modus?: ModusModelsStatus;
 };
 
 export type ProviderUsageMetric = {

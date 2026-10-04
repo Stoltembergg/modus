@@ -22,6 +22,23 @@ export interface AuthService {
   signInWithOAuth(provider: AuthOAuthProviderId): Promise<AuthState>;
   cancelOAuth(): AuthState;
   signOut(): Promise<AuthState>;
+  /**
+   * B4b, main process only (never on IPC): the current access token, null unless signed in.
+   * The Modus router adapter reads it per request.
+   */
+  getAccessToken(): Promise<string | null>;
+  /**
+   * Single-flight: concurrent callers share one in-flight refresh. With `rejected` (the token
+   * that just got a 401), a token that already moved on is returned without refreshing again.
+   * Throws AuthBackendError ("network" keeps the session, anything else means it is dead).
+   */
+  refreshAccessToken(rejected?: string): Promise<string>;
+  /**
+   * The router session cannot be recovered (refresh rejected, or a 401 after the retry): sign
+   * the account out locally with the "session-expired" notice. Provider keys (BYOK) are not
+   * touched: they live in pi's auth.json, never here.
+   */
+  expireSession(): Promise<AuthState>;
   onStateChange(listener: (state: AuthState) => void): () => void;
   shutdown(): Promise<void>;
 }
@@ -86,6 +103,9 @@ export function createAuthService(deps: Deps): AuthService {
   let unsubscribeBackend: (() => void) | undefined;
   /** Bumped on sign-out so a late profile fetch cannot resurrect a signed-out user. */
   let generation = 0;
+  let refreshing: Promise<string> | undefined;
+  /** The backend dropped the session (supabase-js SIGNED_OUT) and nothing replaced it yet. */
+  let lostByBackend = false;
 
   function snapshot(): AuthState {
     return {
@@ -132,6 +152,7 @@ export function createAuthService(deps: Deps): AuthService {
     await persist(session);
     if (run !== generation) return snapshot();
     const user = profileFrom(session);
+    lostByBackend = false;
     setState({ status: "signed-in", user, pendingProvider: null, notice: null, error: null });
     try {
       const profile = await backend?.fetchProfile(user.id);
@@ -190,6 +211,7 @@ export function createAuthService(deps: Deps): AuthService {
           return;
         }
         if (state.status === "signed-in") {
+          lostByBackend = true;
           void clearLocalSession().then(() => setState({ status: "signed-out", user: null }));
         }
       });
@@ -290,6 +312,7 @@ export function createAuthService(deps: Deps): AuthService {
     },
 
     async signOut() {
+      lostByBackend = false;
       flows.cancel();
       await closeListener();
       // Local state is cleared even if the server call fails (offline, revoked token).
@@ -303,6 +326,47 @@ export function createAuthService(deps: Deps): AuthService {
         status: backend ? "signed-out" : "unconfigured",
         user: null,
         notice: null,
+        error: null,
+        pendingProvider: null,
+      });
+    },
+
+    async getAccessToken() {
+      if (!backend || !config || state.status !== "signed-in") return null;
+      return await backend.getAccessToken();
+    },
+
+    async refreshAccessToken(rejected) {
+      if (refreshing) return await refreshing;
+      const auth = requireBackend();
+      if (state.status !== "signed-in") throw new AuthBackendError("rejected", "signed out");
+      if (rejected) {
+        const current = await auth.getAccessToken().catch(() => null);
+        if (refreshing) return await refreshing;
+        if (current && current !== rejected) return current;
+      }
+      const run = auth.refreshAccessToken();
+      refreshing = run;
+      try {
+        return await run;
+      } finally {
+        if (refreshing === run) refreshing = undefined;
+      }
+    },
+
+    async expireSession() {
+      if (state.status !== "signed-in" && !lostByBackend) return snapshot();
+      lostByBackend = false;
+      await clearLocalSession();
+      try {
+        await backend?.signOut();
+      } catch {
+        // ignore: the refresh token is already dead or cleared locally
+      }
+      return setState({
+        status: "signed-out",
+        user: null,
+        notice: "session-expired",
         error: null,
         pendingProvider: null,
       });

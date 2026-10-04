@@ -5,6 +5,7 @@ import {
   startRemoteModelCatalog,
   stopRemoteModelCatalog,
 } from "./agent/model-service";
+import { startModusProvider, stopModusProvider } from "./agent/modus-provider-instance";
 import {
   type AppearanceController,
   createAppearanceController,
@@ -156,11 +157,14 @@ if (!app.requestSingleInstanceLock()) {
       installApplicationMenu();
       // Before the window asks for it and before the update service cleans its dir.
       takeRestoreSnapshotAtStartup();
-      startRemoteModelCatalog(() => {
+      const notifyModelCatalogChanged = () => {
         for (const window of BrowserWindow.getAllWindows()) {
           window.webContents.send(IPC_CHANNELS.modelCatalogChanged);
         }
-      });
+      };
+      startRemoteModelCatalog(notifyModelCatalogChanged);
+      // B4b: the Modus provider follows the account session (registered only when signed in).
+      startModusProvider(notifyModelCatalogChanged);
       openMainWindow();
       // Restore the profile after the first renderer exists; do not block agent startup on Composio.
       void initializeComposioService().catch(() => undefined);
@@ -204,6 +208,7 @@ if (!app.requestSingleInstanceLock()) {
     // Also runs for update installs: quitAndInstall and the mac installer both go through app.quit().
     stopUpdateService();
     stopRemoteModelCatalog();
+    stopModusProvider();
     shutdownTerminals();
     // Stop the group queue's retry timer and its agent-runtime subscriptions.
     disposeGroupRuntime();

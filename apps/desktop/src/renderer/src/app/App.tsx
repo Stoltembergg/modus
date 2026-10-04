@@ -363,7 +363,10 @@ export function App() {
     setModelSettings(settings);
     setModels(settings.models);
     setModel((current) => {
-      if (current && settings.models.some((item: ModelInfo) => item.id === current)) {
+      if (
+        current &&
+        settings.models.some((item: ModelInfo) => item.id === current && !item.locked)
+      ) {
         return current;
       }
       return settings.defaultModel ?? settings.models[0]?.id ?? "";
