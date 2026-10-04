@@ -211,6 +211,8 @@ A captura usa o fingerprint-base antes do run para `GroupTaskRunBinding` e um fi
 - [x] Rodar testes citados, `group-runtime-reliability.test.ts`, `group-runtime.test.ts` e `group-runtime-supersede.test.ts`; esperar aprovação, incluindo silêncio sem retomada.
 - [x] Commit: `feat(groups): dispatch proactive wakes durably`.
 
+Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o diff `fbd11b7..d3a0cfd`, confirmando as quatro como resolvidas e sem regressões críticas/importantes. Registro completo em `reviews/task-7-review-round-1.md` e `reviews/task-7-review-round-2.md` no ledger SDD.
+
 ## Tarefa 8: Preferência, sugestões e aprovação de próxima ação
 
 **Files:** criar `desktop/renderer/src/features/groups/GroupProactivityControls.tsx`, `GroupProactivityControls.test.tsx`; modificar `group-work-ipc.ts`, seus testes, preload/channels, `GroupActivityPanel.tsx`, `GroupRoom.tsx`, `groupSidePanelRefresh.ts`.
