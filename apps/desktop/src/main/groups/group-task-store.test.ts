@@ -18,6 +18,7 @@ const {
   reviewGroupTask,
   completeGroupTaskForAgreement,
   setAgentGroupLead,
+  appendGroupMessage,
   removeAgentGroupMember,
   listGroupTasks,
 } = await import("./group-store");
@@ -61,7 +62,8 @@ function fixture() {
     reviewerSessionId: reviewer,
     status: "in_progress",
   });
-  return { db, group, task, owner, reviewer };
+  const executionId = appendGroupMessage({ groupId: group.id, authorKind: "user", body: "Ask" }).id;
+  return { db, group, task, owner, reviewer, executionId };
 }
 
 describe("group task migration", () => {
@@ -261,7 +263,7 @@ describe("versioned task state", () => {
   });
 
   it("records scoped evidence for a matching durable run", () => {
-    const { group, owner } = fixture();
+    const { group, owner, executionId } = fixture();
     const task = createGroupTask({
       groupId: group.id,
       title: "QA",
@@ -281,7 +283,7 @@ describe("versioned task state", () => {
       criteriaVersion: 1,
       sessionId: owner,
       runId,
-      executionId: "execution",
+      executionId,
       role: "owner",
       sourceFingerprint: "sha",
       expectedVersion: 1,
@@ -313,7 +315,7 @@ describe("versioned task state", () => {
   });
 
   it("binds a run once and rejects reassignment; keeps binding and events after member removal", () => {
-    const { group, task, owner } = fixture();
+    const { group, task, owner, executionId } = fixture();
     const input = {
       groupId: group.id,
       taskId: task.id,
@@ -321,7 +323,7 @@ describe("versioned task state", () => {
       criteriaVersion: 1,
       sessionId: owner,
       runId: crypto.randomUUID(),
-      executionId: "execution",
+      executionId,
       role: "owner" as const,
       sourceFingerprint: "sha",
       expectedVersion: 1,
@@ -336,7 +338,7 @@ describe("versioned task state", () => {
       criteriaVersion: 1,
       sessionId: owner,
       runId: input.runId,
-      executionId: "execution",
+      executionId,
       role: "owner",
       sourceFingerprint: "sha",
     });
@@ -358,7 +360,7 @@ describe("versioned task state", () => {
   });
 
   it("rejects a saved operation key for another bound run and a fresh key for an existing run", () => {
-    const { group, task, owner } = fixture();
+    const { group, task, owner, executionId } = fixture();
     const first = {
       groupId: group.id,
       taskId: task.id,
@@ -366,7 +368,7 @@ describe("versioned task state", () => {
       criteriaVersion: 1,
       sessionId: owner,
       runId: crypto.randomUUID(),
-      executionId: "execution",
+      executionId,
       role: "owner" as const,
       sourceFingerprint: "sha",
       expectedVersion: 1,
@@ -379,6 +381,45 @@ describe("versioned task state", () => {
     expect(() => bindGroupTaskRun({ ...first, operationId: crypto.randomUUID() })).toThrow();
     expect(getGroupTaskRunBinding(owner, first.runId)?.taskId).toBe(task.id);
     expect(getGroupTaskRunBinding(owner, second.runId)?.taskId).toBe(task.id);
+  });
+
+  it("rejects run bindings to a foreign or missing group execution without writing", () => {
+    const { db, group, task, owner } = fixture();
+    const foreignGroup = createAgentGroup({ name: crypto.randomUUID() });
+    const foreignExecution = appendGroupMessage({
+      groupId: foreignGroup.id,
+      authorKind: "user",
+      body: "Foreign ask",
+    });
+    const binding = {
+      groupId: group.id,
+      taskId: task.id,
+      taskVersion: 1,
+      criteriaVersion: 1,
+      sessionId: owner,
+      executionId: foreignExecution.id,
+      role: "owner" as const,
+      sourceFingerprint: "sha",
+      expectedVersion: 1,
+    };
+    const foreignRunId = crypto.randomUUID();
+    expect(() =>
+      bindGroupTaskRun({ ...binding, runId: foreignRunId, operationId: crypto.randomUUID() }),
+    ).toThrow();
+    expect(getGroupTaskRunBinding(owner, foreignRunId)).toBeUndefined();
+    const missingRunId = crypto.randomUUID();
+    expect(() =>
+      bindGroupTaskRun({
+        ...binding,
+        executionId: "missing",
+        runId: missingRunId,
+        operationId: crypto.randomUUID(),
+      }),
+    ).toThrow();
+    expect(getGroupTaskRunBinding(owner, missingRunId)).toBeUndefined();
+    expect(
+      db.prepare("select count(*) as n from group_task_runs where task_id = ?").get(task.id),
+    ).toEqual({ n: 0 });
   });
 
   it("records concrete legacy actions and actors, including same-status reassignment", () => {
@@ -427,7 +468,7 @@ describe("versioned task state", () => {
   });
 
   it("does not reuse an event operation key for a run or lose reviewer history", () => {
-    const { db, group, task, owner, reviewer } = fixture();
+    const { db, group, task, owner, reviewer, executionId } = fixture();
     const operationId = crypto.randomUUID();
     reportGroupTaskProgress({
       groupId: group.id,
@@ -445,7 +486,7 @@ describe("versioned task state", () => {
         criteriaVersion: 1,
         sessionId: owner,
         runId: crypto.randomUUID(),
-        executionId: "execution",
+        executionId,
         role: "owner",
         sourceFingerprint: "sha",
         expectedVersion: 2,

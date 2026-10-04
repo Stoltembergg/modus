@@ -566,6 +566,7 @@ export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
     if (!input.runId || !input.executionId || !input.sourceFingerprint) {
       throw new GroupStoreError("invalid-value", "Run identity and fingerprint are required.");
     }
+    requireExecutionInGroup(input.groupId, input.executionId);
     db.prepare(`insert into group_task_runs (${RUN_COLUMNS}, operation_id)
       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       input.groupId,
