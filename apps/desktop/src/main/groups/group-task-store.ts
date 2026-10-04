@@ -350,6 +350,12 @@ function recordEvent(
   operationId?: string,
   input?: unknown,
 ): void {
+  const assignment = {
+    ownerBefore: task.ownerSessionId ?? null,
+    ownerAfter: next.ownerSessionId ?? null,
+    reviewerBefore: task.reviewerSessionId ?? null,
+    reviewerAfter: next.reviewerSessionId ?? null,
+  };
   db.prepare(`insert into group_task_events
     (id, group_id, task_id, task_version, action, actor_session_id, execution_id,
      from_status, to_status, operation_id, result_json, created_at)
@@ -364,7 +370,10 @@ function recordEvent(
     task.status,
     next.status,
     operationId ?? null,
-    operationId ? JSON.stringify({ input: canonical(input), result: next }) : null,
+    JSON.stringify({
+      assignment,
+      ...(operationId ? { input: canonical(input), result: next } : {}),
+    }),
     new Date().toISOString(),
   );
 }
@@ -550,17 +559,46 @@ export function getGroupTaskRunBinding(
 
 /** Assignment changes invalidate a binding even when a session later regains the same role. */
 export function isGroupTaskRunAssignmentCurrent(binding: GroupTaskRunBinding): boolean {
-  const actions =
-    binding.role === "owner"
-      ? ["assign", "claim", "release", "member_removed", "update"]
-      : ["assign", "claim", "release", "request_review", "review", "member_removed", "update"];
-  const row = getDatabase()
+  const rows = getDatabase()
     .prepare(
-      `select 1 from group_task_events where task_id = ? and task_version > ?
-      and action in (${actions.map(() => "?").join(", ")}) limit 1`,
+      `select action, actor_session_id, result_json from group_task_events
+       where task_id = ? and task_version > ?
+       and action not in ('progress', 'evidence', 'branch_filled')
+       order by task_version limit 2049`,
     )
-    .get(binding.taskId, binding.taskVersion, ...actions);
-  return row === undefined;
+    .all(binding.taskId, binding.taskVersion) as Array<{
+    action: string;
+    actor_session_id: string | null;
+    result_json: string | null;
+  }>;
+  if (rows.length > 2048) return false;
+  const beforeKey = binding.role === "owner" ? "ownerBefore" : "reviewerBefore";
+  const afterKey = binding.role === "owner" ? "ownerAfter" : "reviewerAfter";
+  for (const row of rows) {
+    // Older member-removal events have no assignment JSON, but the removed
+    // session is durable and only that session's role can have been cleared.
+    if (
+      row.result_json === null &&
+      row.action === "member_removed" &&
+      row.actor_session_id !== binding.sessionId
+    )
+      continue;
+    let assignment: Record<string, unknown> | undefined;
+    try {
+      assignment = object(object(JSON.parse(row.result_json ?? "null"))?.assignment);
+    } catch {
+      return false;
+    }
+    const before = assignment?.[beforeKey];
+    const after = assignment?.[afterKey];
+    if (
+      (before !== null && typeof before !== "string") ||
+      (after !== null && typeof after !== "string") ||
+      before !== after
+    )
+      return false;
+  }
+  return true;
 }
 
 export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {

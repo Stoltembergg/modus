@@ -68,28 +68,13 @@ export async function getGroupSourceFingerprint(cwd: string): Promise<string> {
   if (root !== top) throw new Error("Task source must be a complete Git worktree.");
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
   const index = await git(root, ["ls-files", "--stage", "-z"]);
-  const worktreeDiff = await git(root, [
-    "diff",
-    "--raw",
-    "-z",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--",
-  ]);
   const names = (await git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]))
     .split("\0")
     .filter(Boolean);
   const paths = [...new Set(names)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
   if (paths.length > MAX_FILES) throw new Error("Task source exceeds file scan limit.");
   const hash = createHash("sha256");
-  hash
-    .update("group-source-v2\0")
-    .update(head)
-    .update("\0")
-    .update(index)
-    .update("\0")
-    .update(worktreeDiff)
-    .update("\0");
+  hash.update("group-source-v3\0").update(head).update("\0").update(index).update("\0");
   let total = 0;
   for (const path of paths) {
     if (

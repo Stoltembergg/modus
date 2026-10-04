@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -110,6 +110,14 @@ afterEach(async () => {
 });
 
 describe("git-service", () => {
+  it("keeps a source fingerprint stable across touch and index stat refresh", async () => {
+    const before = await getGroupSourceFingerprint(repo);
+    const stamp = new Date(Date.now() + 5_000);
+    await utimes(join(repo, "tracked.txt"), stamp, stamp);
+    expect(await getGroupSourceFingerprint(repo)).toBe(before);
+    await git(["update-index", "--refresh"]);
+    expect(await getGroupSourceFingerprint(repo)).toBe(before);
+  });
   it.skipIf(process.platform === "win32")(
     "invalidates a source fingerprint after an unstaged executable-bit change",
     async () => {

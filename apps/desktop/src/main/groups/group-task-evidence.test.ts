@@ -9,7 +9,8 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 const { getDatabase } = await import("../db/database");
 const { recordAgentEvent } = await import("../agent/agent-event-store");
-const { createAgentGroup, addAgentGroupMember, appendGroupMessage } = await import("./group-store");
+const { createAgentGroup, addAgentGroupMember, appendGroupMessage, removeAgentGroupMember } =
+  await import("./group-store");
 const {
   createGroupTask,
   bindGroupTaskRun,
@@ -298,6 +299,131 @@ describe("group task evidence", () => {
       operationId: crypto.randomUUID(),
       stage: "verify",
     });
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves owner QA when only the reviewer is removed and replaced", async () => {
+    const f = await fixture();
+    const firstRow = qa(f.owner, f.runId, f.sourceFingerprint);
+    const firstRefs = collectGroupTaskRunEvidence(f.binding, firstRow);
+    recordGroupTaskEvidence({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      actorSessionId: f.owner,
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+      evidenceRefs: firstRefs,
+    });
+    removeAgentGroupMember(f.group.id, f.reviewer);
+    const replacement = `${f.owner}-new-reviewer`;
+    const now = new Date().toISOString();
+    f.db
+      .prepare(
+        "insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at) values (?, ?, ?, ?, 'idle', ?, ?)",
+      )
+      .run(replacement, f.group.workspaceId ?? "", replacement, f.root, now, now);
+    addAgentGroupMember({ groupId: f.group.id, sessionId: replacement });
+    updateGroupTask(f.task.id, { reviewerSessionId: replacement });
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    const lateRow = qa(f.owner, f.runId, f.sourceFingerprint);
+    const lateRefs = collectGroupTaskRunEvidence(f.binding, lateRow);
+    expect(lateRefs).toHaveLength(1);
+    expect(
+      recordGroupTaskEvidence({
+        groupId: f.group.id,
+        taskId: f.task.id,
+        actorSessionId: f.owner,
+        expectedVersion: getGroupTask(f.task.id).stateVersion ?? 0,
+        operationId: crypto.randomUUID(),
+        evidenceRefs: lateRefs,
+      }).evidenceRefs,
+    ).toEqual(lateRefs);
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves an owner binding across a legacy reviewer-removal event", async () => {
+    const f = await fixture();
+    const row = qa(f.owner, f.runId, f.sourceFingerprint);
+    removeAgentGroupMember(f.group.id, f.reviewer);
+    f.db
+      .prepare(
+        "update group_task_events set result_json = null where task_id = ? and action = 'member_removed'",
+      )
+      .run(f.task.id);
+    expect(collectGroupTaskRunEvidence(f.binding, row)).toHaveLength(1);
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves reviewer QA when only the owner changes", async () => {
+    const f = await fixture();
+    const reviewTask = updateGroupTask(f.task.id, { status: "in_review" });
+    const reviewerRun = crypto.randomUUID();
+    const binding = {
+      ...f.binding,
+      taskVersion: reviewTask.stateVersion ?? 0,
+      sessionId: f.reviewer,
+      runId: reviewerRun,
+      role: "reviewer" as const,
+    };
+    bindGroupTaskRun({
+      ...binding,
+      expectedVersion: binding.taskVersion,
+      operationId: crypto.randomUUID(),
+    });
+    const replacement = `${f.owner}-replacement`;
+    const now = new Date().toISOString();
+    f.db
+      .prepare(
+        "insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at) values (?, ?, ?, ?, 'idle', ?, ?)",
+      )
+      .run(replacement, f.group.workspaceId ?? "", replacement, f.root, now, now);
+    addAgentGroupMember({ groupId: f.group.id, sessionId: replacement });
+    updateGroupTask(f.task.id, { ownerSessionId: replacement });
+    const row = qa(f.reviewer, reviewerRun, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(binding, row);
+    expect(refs).toHaveLength(1);
+    expect(
+      recordGroupTaskEvidence({
+        groupId: f.group.id,
+        taskId: f.task.id,
+        actorSessionId: f.reviewer,
+        expectedVersion: getGroupTask(f.task.id).stateVersion ?? 0,
+        operationId: crypto.randomUUID(),
+        evidenceRefs: refs,
+      }).evidenceRefs,
+    ).toEqual(refs);
+    expect(
+      resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
+        ?.status,
+    ).toBe("passed");
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("preserves a binding across branch, status, and identical-owner updates", async () => {
+    const f = await fixture();
+    updateGroupTask(f.task.id, { branch: "feature/same" });
+    updateGroupTask(f.task.id, { status: "in_progress" });
+    updateGroupTask(f.task.id, { ownerSessionId: f.owner });
+    const row = qa(f.owner, f.runId, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(f.binding, row);
+    expect(refs).toHaveLength(1);
+    expect(
+      recordGroupTaskEvidence({
+        groupId: f.group.id,
+        taskId: f.task.id,
+        actorSessionId: f.owner,
+        expectedVersion: getGroupTask(f.task.id).stateVersion ?? 0,
+        operationId: crypto.randomUUID(),
+        evidenceRefs: refs,
+      }).evidenceRefs,
+    ).toEqual(refs);
     expect(
       resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
         ?.status,
