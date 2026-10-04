@@ -224,6 +224,7 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 - [x] Implementar controle explícito e cards com próxima ação, destino e motivo. Editar sugestão significa enviar delegação explícita com tarefa/target validados; não editar reasonCode/QA/operationId pelo renderer. Aceitar após fim da chain exige ação explícita rotulada para iniciar nova execução, via o caminho existente de execução do usuário; preservar referência ao evento antigo, sem ressuscitar a chain encerrada. Reabertura carrega modo e sugestões persistidos; mudança para suggest cancela ações automáticas ainda não iniciadas, preservando jobs explícitos.
 - [x] Rodar os testes citados e `GroupActivityPanel.test.tsx`; esperar aprovação. Fase B fica utilizável.
 - [x] Commit: `feat(groups): expose proactivity mode and suggestions`.
+- [x] Revisão independente da implementação aprovada após o fix de recuperação; iniciar Tarefa 9 a partir do head aprovado.
 
 ## Tarefa 9: Metadados explícitos de capacidades
 
