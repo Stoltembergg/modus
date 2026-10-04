@@ -10,7 +10,12 @@ import { getAgentSession } from "../agent/agent-store";
 import { getDatabase } from "../db/database";
 import { getGroupSourceFingerprint } from "../git/git-service";
 import { GroupStoreError, getAgentGroup } from "./group-store";
-import { getGroupTask, getGroupTaskRunBinding, listGroupTasks } from "./group-task-store";
+import {
+  getGroupTask,
+  getGroupTaskRunBinding,
+  isGroupTaskRunAssignmentCurrent,
+  listGroupTasks,
+} from "./group-task-store";
 
 const CHECKS: readonly HarnessTaskCheckKind[] = ["tests", "typecheck", "lint", "build"];
 
@@ -63,7 +68,8 @@ function activeBinding(binding: GroupTaskRunBinding, task: GroupTask): boolean {
     stored.criteriaVersion === binding.criteriaVersion &&
     stored.executionId === binding.executionId &&
     stored.role === binding.role &&
-    stored.sourceFingerprint === binding.sourceFingerprint
+    stored.sourceFingerprint === binding.sourceFingerprint &&
+    isGroupTaskRunAssignmentCurrent(stored)
   );
 }
 

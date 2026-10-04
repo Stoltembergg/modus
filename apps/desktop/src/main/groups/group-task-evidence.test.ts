@@ -16,6 +16,7 @@ const {
   recordGroupTaskEvidence,
   reportGroupTaskProgress,
   getGroupTask,
+  updateGroupTask,
 } = await import("./group-task-store");
 const {
   collectGroupTaskRunEvidence,
@@ -301,6 +302,82 @@ describe("group task evidence", () => {
       resolveGroupTaskEvidence(getGroupTask(f.task.id), f.sourceFingerprint).criterionOutcomes[0]
         ?.status,
     ).toBe("passed");
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("rejects owner QA after assignment moves away and returns", async () => {
+    const f = await fixture();
+    const row = qa(f.owner, f.runId, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(f.binding, row);
+    expect(refs).toHaveLength(1);
+    updateGroupTask(f.task.id, { ownerSessionId: f.reviewer });
+    updateGroupTask(f.task.id, { ownerSessionId: f.owner });
+    expect(collectGroupTaskRunEvidence(f.binding, row)).toEqual([]);
+    expect(
+      resolveGroupTaskEvidence(
+        { ...getGroupTask(f.task.id), evidenceRefs: refs },
+        f.sourceFingerprint,
+      ).criterionOutcomes[0]?.status,
+    ).not.toBe("passed");
+    expect(() =>
+      recordGroupTaskEvidence({
+        groupId: f.group.id,
+        taskId: f.task.id,
+        actorSessionId: f.owner,
+        expectedVersion: 3,
+        operationId: crypto.randomUUID(),
+        evidenceRefs: refs,
+      }),
+    ).toThrow();
+    await rm(f.root, { recursive: true, force: true });
+  });
+
+  it("rejects reviewer QA after reviewer is removed and restored", async () => {
+    const f = await fixture();
+    const reviewTask = updateGroupTask(f.task.id, { status: "in_review" });
+    const reviewerRun = crypto.randomUUID();
+    bindGroupTaskRun({
+      groupId: f.group.id,
+      taskId: f.task.id,
+      taskVersion: reviewTask.stateVersion ?? 0,
+      criteriaVersion: reviewTask.criteriaVersion ?? 0,
+      sessionId: f.reviewer,
+      runId: reviewerRun,
+      executionId: f.binding.executionId,
+      role: "reviewer",
+      sourceFingerprint: f.sourceFingerprint,
+      expectedVersion: reviewTask.stateVersion ?? 0,
+      operationId: crypto.randomUUID(),
+    });
+    const binding = {
+      ...f.binding,
+      taskVersion: reviewTask.stateVersion ?? 0,
+      sessionId: f.reviewer,
+      runId: reviewerRun,
+      role: "reviewer" as const,
+    };
+    const row = qa(f.reviewer, reviewerRun, f.sourceFingerprint);
+    const refs = collectGroupTaskRunEvidence(binding, row);
+    expect(refs).toHaveLength(1);
+    updateGroupTask(f.task.id, { reviewerSessionId: null });
+    updateGroupTask(f.task.id, { reviewerSessionId: f.reviewer });
+    expect(collectGroupTaskRunEvidence(binding, row)).toEqual([]);
+    expect(
+      resolveGroupTaskEvidence(
+        { ...getGroupTask(f.task.id), evidenceRefs: refs },
+        f.sourceFingerprint,
+      ).criterionOutcomes[0]?.status,
+    ).not.toBe("passed");
+    expect(() =>
+      recordGroupTaskEvidence({
+        groupId: f.group.id,
+        taskId: f.task.id,
+        actorSessionId: f.reviewer,
+        expectedVersion: 4,
+        operationId: crypto.randomUUID(),
+        evidenceRefs: refs,
+      }),
+    ).toThrow();
     await rm(f.root, { recursive: true, force: true });
   });
 });

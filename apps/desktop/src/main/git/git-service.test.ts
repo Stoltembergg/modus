@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -110,6 +110,20 @@ afterEach(async () => {
 });
 
 describe("git-service", () => {
+  it.skipIf(process.platform === "win32")(
+    "invalidates a source fingerprint after an unstaged executable-bit change",
+    async () => {
+      await git(["config", "core.filemode", "true"]);
+      await writeFile(join(repo, "check.sh"), "#!/bin/sh\nexit 0\n");
+      await chmod(join(repo, "check.sh"), 0o755);
+      await git(["add", "check.sh"]);
+      await git(["commit", "-m", "script"]);
+      const before = await getGroupSourceFingerprint(repo);
+      await chmod(join(repo, "check.sh"), 0o644);
+      expect(await getGroupSourceFingerprint(repo)).not.toBe(before);
+      expect(await git(["rev-parse", "HEAD"])).toBeTruthy();
+    },
+  );
   it("fingerprints tracked and non-ignored untracked content without changing HEAD", async () => {
     const base = await getGroupSourceFingerprint(repo);
     await writeFile(join(repo, "tracked.txt"), "edited\n");

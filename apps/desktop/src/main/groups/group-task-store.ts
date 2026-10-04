@@ -463,6 +463,7 @@ function validateEvidenceRefs(task: GroupTask, refs: GroupTaskEvidenceRef[]): vo
       binding.taskId !== task.id ||
       binding.groupId !== task.groupId ||
       binding.criteriaVersion !== task.criteriaVersion ||
+      !isGroupTaskRunAssignmentCurrent(binding) ||
       task[binding.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] !== binding.sessionId
     ) {
       throw new GroupStoreError("stale-evidence", "Evidence reference has no matching task run.");
@@ -545,6 +546,21 @@ export function getGroupTaskRunBinding(
     .prepare(`select ${RUN_COLUMNS} from group_task_runs where session_id = ? and run_id = ?`)
     .get(sessionId, runId) as RunRow | undefined;
   return row ? toRun(row) : undefined;
+}
+
+/** Assignment changes invalidate a binding even when a session later regains the same role. */
+export function isGroupTaskRunAssignmentCurrent(binding: GroupTaskRunBinding): boolean {
+  const actions =
+    binding.role === "owner"
+      ? ["assign", "claim", "release", "member_removed", "update"]
+      : ["assign", "claim", "release", "request_review", "review", "member_removed", "update"];
+  const row = getDatabase()
+    .prepare(
+      `select 1 from group_task_events where task_id = ? and task_version > ?
+      and action in (${actions.map(() => "?").join(", ")}) limit 1`,
+    )
+    .get(binding.taskId, binding.taskVersion, ...actions);
+  return row === undefined;
 }
 
 export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
