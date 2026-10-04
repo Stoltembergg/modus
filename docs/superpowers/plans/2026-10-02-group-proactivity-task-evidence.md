@@ -238,6 +238,7 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 - [x] Expor seleção de capacidades/tipos no editor e respeitar schemas de criação de Grupo, edição e templates. Ler ferramentas ativas pelo registry/profile/overrides atuais durante snapshot, sem ativá-las para atender um match.
 - [x] Rodar comandos citados e testes de templates/IPC; esperar aprovação.
 - [x] Commit: `feat(agents): configure explicit group capabilities`.
+- [x] Revisão independente aprovou os metadados de capacidade e a cópia entre Grupos após fix; iniciar Tarefa 10 a partir do head aprovado.
 
 ## Tarefa 10: Roteamento e fluxo supervisionado tipados
 
