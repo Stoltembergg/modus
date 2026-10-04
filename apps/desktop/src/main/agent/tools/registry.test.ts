@@ -1,10 +1,12 @@
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PLAN_TOOL_UI, type ToolCatalogEntry } from "../../../shared/tools";
 import { recognizeCheckInvocation } from "../harness/qa-evidence";
 import { registerBrowserTools } from "./browser-tools";
 import { classifyShellCommand, getToolTarget, ToolRegistry, toolRegistry } from "./registry";
 import { registerTerminalTools } from "./terminal-tools";
+
+vi.mock("electron", () => ({ app: { getPath: () => "/tmp/task4-registry-unused" } }));
 
 function toolEvent(toolName: string, input: Record<string, unknown>): ToolCallEvent {
   return { type: "tool_call", toolCallId: "t1", toolName, input } as ToolCallEvent;
@@ -144,6 +146,23 @@ describe("ToolRegistry classify", () => {
     });
     expect(registry.classify(toolEvent("mcp_stale_search_dangerous", {}))).toEqual({
       action: "mcp.call",
+      dangerous: true,
+    });
+  });
+
+  it.each([
+    "npx vitest run",
+    "npx tsc --noEmit",
+    "npx eslint .",
+    "npx biome check",
+    "npx vite build",
+    "npx jest",
+    "npx mocha",
+  ])("requires approval without certifying npx QA: %s", (command) => {
+    expect(recognizeCheckInvocation("bash", command)).toBeUndefined();
+    expect(classifyShellCommand(command)).toEqual({ action: "shell.execute", dangerous: true });
+    expect(classifyShellCommand("vitest run")).toEqual({
+      action: "shell.execute",
       dangerous: true,
     });
   });
@@ -298,4 +317,21 @@ describe("Browser tool permissions", () => {
       dangerous: true,
     });
   });
+});
+
+it("registers bounded group context as read-only and progress as a write", async () => {
+  const { registerGroupTools } = await import("./group-tools");
+  registerGroupTools();
+  expect(toolRegistry.resolveActiveTools("plan")).toContain("group_get_work_state");
+  expect(toolRegistry.resolveActiveTools("plan")).not.toContain("group_report_progress");
+  expect(toolRegistry.resolveActiveTools("chat")).toContain("group_report_progress");
+  expect(toolRegistry.getEntry("group_get_work_state")).toMatchObject({
+    readOnly: true,
+    capabilities: ["read"],
+  });
+  expect(
+    getToolTarget(
+      toolEvent("group_report_progress", { taskId: "selected-task", expectedVersion: 2 }),
+    ),
+  ).toBe("selected-task");
 });

@@ -494,7 +494,10 @@ describe("group_assign_task reassignment keeps the task's branch (coordinator mo
     setAgentGroupLead(group.id, alpha);
     setAgentGroupMode(group.id, "coordinator");
     const bodies: string[] = [];
-    setGroupTaskWakeSink((wake) => bodies.push(wake.body));
+    setGroupTaskWakeSink((wake) => {
+      bodies.push(wake.body);
+      return { id: "test-delivery" };
+    });
     try {
       await startMemberWorktree(a);
       const alphaBranch = getAgentSession(alpha)?.subagentWorktree?.branch ?? "";

@@ -1574,10 +1574,18 @@ describe("PiSdkRuntime", () => {
     expect(activeToolNamesForSession(info(member), "chat")).toEqual(
       expect.arrayContaining([...GROUP_TOOL_NAMES]),
     );
+    const getActiveToolNames = (
+      runtime as unknown as {
+        getActiveToolNames?: (sessionId: string, profile: "chat" | "plan") => readonly string[];
+      }
+    ).getActiveToolNames;
+    expect(getActiveToolNames?.call(runtime, member, "chat")).toEqual(
+      activeToolNamesForSession(info(member), "chat"),
+    );
     // Plan mode keeps only the read-only ones.
     expect(
       activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
-    ).toEqual(["group_read_messages", "group_list_tasks"]);
+    ).toEqual(["group_read_messages", "group_list_tasks", "group_get_work_state"]);
     for (const profile of ["chat", "plan"] as const) {
       expect(
         activeToolNamesForSession(info(loner), profile).filter((name) =>
@@ -4828,7 +4836,7 @@ describe("PiSdkRuntime", () => {
           runId,
           toolCallId: "tests-before-restore",
           toolName: "bash",
-          args: { command: "npm test" },
+          args: { command: "vitest run" },
         });
         recordAgentEvent({
           type: "tool.ended",
@@ -6699,7 +6707,7 @@ describe("PiSdkRuntime", () => {
       },
     });
     const checkCalls = [
-      ["npx vitest run", false, { exitCode: 0 }],
+      ["vitest run", false, { exitCode: 0 }],
       ["tsc --noEmit", true, { exitCode: 1 }],
       ["eslint .", false, { skipped: true }],
     ] as const;

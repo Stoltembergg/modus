@@ -43,7 +43,7 @@ import type { MentionMember } from "./groupMentions";
 import { archivedMemberIds, replyAuthorOf } from "./groupModelChipRules";
 import { GroupRoomLocaleProvider, useGroupText } from "./groupRoomI18n";
 import { replyPreview } from "./groupThreads";
-import { memberLabels } from "./memberLabels";
+import { memberLabels, memberLabelText } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import { useGroupMessages } from "./useGroupMessages";
 import { type GroupMemberStatesById, isGroupRunning } from "./useWorkingGroups";
@@ -72,6 +72,8 @@ export type GroupRoomProps = {
   onUpdateMembers(change: GroupMembersChange): Promise<void>;
   onDelete(): void;
   onOpenFile?: ((path: string) => void) | undefined;
+  /** Open an existing agent session referenced by task QA evidence. */
+  onOpenSession?: ((sessionId: string, runId?: string) => void) | undefined;
   /** "Add agent" in the room menu (the agent dialog; A3). */
   onAddAgent?: (() => void) | undefined;
   /** Refresh groups after an agent is edited from the Agents panel. */
@@ -113,6 +115,7 @@ function GroupRoomContent({
   onUpdateMembers,
   onDelete,
   onOpenFile,
+  onOpenSession,
   onAddAgent,
   onAgentsChanged,
   chromeHost = null,
@@ -379,7 +382,15 @@ function GroupRoomContent({
           labels={labels}
           messages={messages}
           onCancelled={replace}
+          onTaskUpdated={replace}
+          {...(onOpenSession ? { onOpenSession } : {})}
           onSetMode={onSetMode}
+          proactivityMembers={group.members
+            .filter((member) => !member.archived)
+            .map((member) => ({
+              sessionId: member.sessionId,
+              label: memberLabelText(labels.get(member.sessionId) ?? { title: member.name }),
+            }))}
           projectContext={projectContext}
           stage={stage}
           tasks={tasks}

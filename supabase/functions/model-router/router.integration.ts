@@ -466,3 +466,58 @@ Deno.test({
     }
   },
 });
+
+Deno.test({
+  name: "L3a against a real Postgres: plans.default_model seeded, in the catalog, used when no model is named",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const up = fakeUpstream((seen) => {
+      const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
+      return new Response(
+        sse([
+          { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] },
+          { ...head, choices: [], usage: { prompt_tokens: 10, completion_tokens: 2 } },
+        ]),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const db = createPostgresRouterDb(dbUrl ?? "");
+    try {
+      const plans = await admin`select plan, allowed_models, default_model from public.plans`;
+      for (const p of plans) {
+        assertEquals(p.default_model, FLASH, `${p.plan}: seeded default`);
+        assert(
+          MODEL_CATALOG.some((m) => m.id === p.default_model),
+          `${p.plan}: default not in catalog`,
+        );
+        assert(
+          p.allowed_models === null || (p.allowed_models as string[]).includes(p.default_model),
+          `${p.plan}: default not allowed on the plan`,
+        );
+        assertEquals(await db.getPlanDefaultModel(p.plan as string), p.default_model);
+      }
+      assertEquals(await db.getPlanDefaultModel("no-such-plan"), null);
+
+      const [{ id: userId }] =
+        await admin`select tests.create_user('router-l3a@example.com', true) as id`;
+      const h = createRouterHandler({
+        db,
+        getUser: () => Promise.resolve({ id: userId as string, email: null }),
+        config: routerConfig(up.baseUrl),
+        catalog: MODEL_CATALOG,
+        waitUntil: () => {},
+        log: () => {},
+      });
+      const res = await h(completionRequest({ messages: MESSAGES }, { key: "l3a-default" }));
+      assertEquals(res.status, 200);
+      assertEquals(JSON.parse(await res.text()).model, FLASH);
+      assertEquals(up.seen[0].body.model, "deepseek-v4.1-flash");
+    } finally {
+      await up.close();
+      await admin.end();
+    }
+  },
+});

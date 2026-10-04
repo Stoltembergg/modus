@@ -44,7 +44,7 @@ type HandlerRegistration = {
 
 type ParsedAgentFields = { [K in keyof UpdateAgentInput]?: UpdateAgentInput[K] | undefined };
 
-/** Only the fields present in the parsed payload (exactOptionalPropertyTypes). */
+/** Only explicitly supplied fields change, including empty capability selections. */
 function definedFields(input: ParsedAgentFields): UpdateAgentInput {
   return Object.fromEntries(
     Object.entries(input).filter(([, value]) => value !== undefined),

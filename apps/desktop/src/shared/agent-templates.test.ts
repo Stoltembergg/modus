@@ -54,3 +54,20 @@ describe("agent templates", () => {
     expect(shapes.size).toBe(AGENT_AVATAR_SHAPES.length);
   });
 });
+
+it("template_capabilities_are_explicit", () => {
+  expect(getAgentTemplate("builder")).toMatchObject({
+    capabilityIds: ["implement", "verify"],
+    supportedTaskKinds: ["code"],
+  });
+  expect(getAgentTemplate("reviewer")).toMatchObject({
+    capabilityIds: ["review"],
+    supportedTaskKinds: ["code", "review"],
+  });
+  for (const template of AGENT_TEMPLATES) {
+    expect(template.capabilityIds.length).toBeGreaterThan(0);
+    expect(template.supportedTaskKinds.length).toBeGreaterThan(0);
+    expect(Object.keys(template)).not.toContain("tools");
+  }
+  expect(getAgentTemplate("custom-builder")).toBeUndefined();
+});

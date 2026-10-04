@@ -26,6 +26,7 @@ import {
   groupBlockedReason,
   groupMembersUpdateCountError,
 } from "../../shared/group-blocked";
+import { normalizeGroupMemberCapabilities } from "../../shared/group-capabilities";
 import { getAgentSession } from "../agent/agent-store";
 import { getDatabase, uniqueAgentName } from "../db/database";
 import {
@@ -64,13 +65,19 @@ type AgentRow = {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  capability_ids_json: string;
+  supported_task_kinds_json: string;
 };
 
 const AGENT_COLUMNS = `id, group_id, name, role, instructions, model_id, default_workspace_id,
-  avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at`;
+  avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json`;
 
 function toAgent(row: AgentRow): AgentInfo {
   return {
+    ...normalizeGroupMemberCapabilities({
+      capabilityIds: JSON.parse(row.capability_ids_json ?? "[]"),
+      supportedTaskKinds: JSON.parse(row.supported_task_kinds_json ?? "[]"),
+    }),
     id: row.id,
     ...(row.group_id !== null ? { groupId: row.group_id } : {}),
     name: row.name,
@@ -128,6 +135,14 @@ function requireAvatar<T extends string>(value: T, allowed: readonly T[], field:
     throw new GroupStoreError("invalid-value", `Invalid ${field} "${String(value)}".`);
   }
   return value;
+}
+
+function requireCapabilities(input: UpdateAgentInput) {
+  try {
+    return normalizeGroupMemberCapabilities(input);
+  } catch {
+    throw new GroupStoreError("invalid-value", "Invalid group member capabilities.");
+  }
 }
 
 type AgentCreateFields = CreateAgentInput & {
@@ -199,6 +214,7 @@ export function getAgent(agentId: string): AgentInfo | undefined {
  * row is a legacy-style ungrouped agent (store level only; IPC requires one).
  */
 export function createAgent(input: AgentCreateFields): AgentInfo {
+  const capabilities = requireCapabilities(input);
   const id = randomUUID();
   const now = new Date().toISOString();
   const avatar = agentAvatarForId(id);
@@ -214,7 +230,7 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
       : allocateNewGroupShape(groupId, id, preferredShape, input.avatarShape !== undefined);
   getDatabase()
     .prepare(
-      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null)`,
+      `insert into agents (${AGENT_COLUMNS}) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, null, ?, ?)`,
     )
     .run(
       id,
@@ -230,6 +246,8 @@ export function createAgent(input: AgentCreateFields): AgentInfo {
       input.templateId ?? null,
       now,
       now,
+      JSON.stringify(capabilities.capabilityIds),
+      JSON.stringify(capabilities.supportedTaskKinds),
     );
   return toAgent(requireAgentRow(id));
 }
@@ -247,6 +265,8 @@ function newAgentFields(input: NewGroupAgentInput, groupId: string | undefined):
     throw new GroupStoreError("invalid-value", `Unknown agent template: ${templateId}`);
   }
   return {
+    capabilityIds: template.capabilityIds,
+    supportedTaskKinds: template.supportedTaskKinds,
     role: template.role,
     instructions: template.instructions,
     avatarFace: template.avatarFace,
@@ -397,6 +417,14 @@ export function updateGroupMembers(input: UpdateAgentGroupMembersInput): {
 /** Changes only the given fields; `null` clears the model / default Project. */
 export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo {
   const row = requireAgentRow(agentId);
+  const capabilities = requireCapabilities({
+    capabilityIds:
+      input.capabilityIds !== undefined ? input.capabilityIds : JSON.parse(row.capability_ids_json),
+    supportedTaskKinds:
+      input.supportedTaskKinds !== undefined
+        ? input.supportedTaskKinds
+        : JSON.parse(row.supported_task_kinds_json),
+  });
   const nextModelId = input.modelId !== undefined ? input.modelId?.trim() || null : row.model_id;
   const avatarShape = requireAvatar(
     input.avatarShape ?? row.avatar_shape,
@@ -410,7 +438,7 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
     .prepare(
       `update agents
        set name = ?, role = ?, instructions = ?, model_id = ?, default_workspace_id = ?,
-           avatar_face = ?, avatar_color = ?, avatar_shape = ?, updated_at = ?
+           avatar_face = ?, avatar_color = ?, avatar_shape = ?, updated_at = ?, capability_ids_json = ?, supported_task_kinds_json = ?
        where id = ?`,
     )
     .run(
@@ -425,6 +453,8 @@ export function updateAgent(agentId: string, input: UpdateAgentInput): AgentInfo
       requireAvatar(input.avatarColor ?? row.avatar_color, AGENT_AVATAR_COLORS, "avatar color"),
       avatarShape,
       new Date().toISOString(),
+      JSON.stringify(capabilities.capabilityIds),
+      JSON.stringify(capabilities.supportedTaskKinds),
       agentId,
     );
   // The agent's 1:1 chat (A3) is titled after it.

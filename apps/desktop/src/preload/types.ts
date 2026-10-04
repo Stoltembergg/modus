@@ -53,12 +53,22 @@ import type {
   GitCommitResult,
   GitStatusSummary,
   GroupDecision,
+  GroupIntegrationPreview,
+  GroupIntegrationRecord,
+  GroupIntegrationState,
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
+  GroupProactivityMode,
   GroupProjectContextSnapshot,
   GroupRuntimeEvent,
+  GroupSuggestion,
+  GroupSuggestionResolution,
   GroupTask,
+  GroupTaskDetails,
+  GroupTaskTransitionEvent,
+  GroupTaskUserDraft,
+  GroupWorkState,
   HarnessInsight,
   HarnessInsightsQuery,
   HarnessInsightsResult,
@@ -250,8 +260,46 @@ export type ModusApi = {
     stop(groupId: string): Promise<void>;
     /** The group's tasks (created order) for the room's task panel. */
     listTasks(groupId: string): Promise<GroupTask[]>;
+    /** Bounded task state for agent context; renderer details use getTaskDetails. */
+    getWorkState(groupId: string, executionId?: string): Promise<GroupWorkState>;
+    /** Bounded user-facing criteria, current evidence outcomes and dependency details. */
+    getTaskDetails(groupId: string, taskId: string): Promise<GroupTaskDetails>;
+    /** Chronological task history (the main process caps the result). */
+    listTaskTransitions(taskId: string): Promise<GroupTaskTransitionEvent[]>;
+    /** User edits only the task draft; state and evidence remain main-owned. */
+    updateTask(
+      taskId: string,
+      draft: GroupTaskUserDraft,
+      expectedVersion: number,
+    ): Promise<GroupTask>;
+    /** Persisted, per-group proactivity preference (`suggest` by default). */
+    getProactivityMode(groupId: string): Promise<GroupProactivityMode>;
+    setProactivityMode(groupId: string, mode: GroupProactivityMode): Promise<GroupProactivityMode>;
+    /** Current safe user-facing suggestions; no conversation or QA output is included. */
+    listSuggestions(groupId: string): Promise<GroupSuggestion[]>;
+    /** Accept or discard exactly one suggestion using its displayed version. */
+    resolveSuggestion(
+      actionId: string,
+      decision: "accept" | "discard",
+      expectedVersion: number,
+      targetSessionId?: string,
+    ): Promise<GroupSuggestionResolution>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
+    /** Create a read-only, main-process integration preview for one task. */
+    previewTaskIntegration(taskId: string): Promise<GroupIntegrationPreview>;
+    /** Apply exactly the persisted preview after the user explicitly confirms it. */
+    applyTaskIntegration(input: {
+      taskId: string;
+      previewId: string;
+      confirmedByUser: true;
+    }): Promise<GroupIntegrationRecord>;
+    /** Abort a stored applied/conflicted no-commit merge after a fresh git.write decision. */
+    abortTaskIntegration(taskId: string): Promise<GroupIntegrationRecord>;
+    /** Read the latest persisted integration DTOs; no Git state is recomputed. */
+    getIntegrationState(taskId: string): Promise<GroupIntegrationState>;
+    /** Reconcile an interrupted apply record, or return the latest persisted DTOs. */
+    refreshTaskIntegrationState(taskId: string): Promise<GroupIntegrationState>;
     /** The group's decisions (newest first) for the side panel's "Decisions". */
     listDecisions(groupId: string): Promise<GroupDecision[]>;
     /** "Delete" a decision (physical; posts nothing in the room). */

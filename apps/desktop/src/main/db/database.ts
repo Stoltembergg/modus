@@ -496,6 +496,8 @@ export function migrateDatabase(db: DatabaseSync): void {
   // members point at it through agent_group_members.agent_id (unique: 1:1);
   // the room runtime stays keyed by the member's session_id.
   db.exec(`create table if not exists agents (${AGENTS_TABLE_BODY});`);
+  addColumn(db, "agents", "capability_ids_json", "text not null default '[]'");
+  addColumn(db, "agents", "supported_task_kinds_json", "text not null default '[]'");
   // Membership migrations may temporarily reassign an agent before the N6
   // normalization runs. Remove the final-write guards while migrating, then
   // migrateAgentAvatarShapesN6 restores them after all group links are stable.
@@ -562,12 +564,234 @@ export function migrateDatabase(db: DatabaseSync): void {
   // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
   addColumn(db, "group_tasks", "execution_id", "text");
   addColumn(db, "group_decisions", "execution_id", "text");
+  addColumn(db, "group_decisions", "operation_id", "text");
+  addColumn(db, "group_decisions", "operation_json", "text");
   db.exec(`
+    create unique index if not exists idx_group_decisions_operation on group_decisions(operation_id);
     create index if not exists idx_group_tasks_execution
       on group_tasks(group_id, execution_id);
     create index if not exists idx_group_decisions_execution
       on group_decisions(group_id, execution_id);
   `);
+  migrateGroupTaskState(db);
+  migrateGroupIntegrationState(db);
+}
+
+/** Durable, versioned previews and append-only integration state transitions. */
+function migrateGroupIntegrationState(db: DatabaseSync): void {
+  db.exec(`
+    create table if not exists group_integration_previews (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null check (task_version >= 1),
+      preview_json text not null check (json_valid(preview_json) and json_type(preview_json) = 'object'),
+      created_at text not null
+    );
+    create index if not exists idx_group_integration_previews_task
+      on group_integration_previews(task_id, created_at desc);
+    create table if not exists group_task_integrations (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      preview_id text not null unique references group_integration_previews(id) on delete cascade,
+      task_version integer not null check (task_version >= 1),
+      status text not null check (status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      version integer not null check (version >= 1),
+      record_json text not null check (json_valid(record_json) and json_type(record_json) = 'object'),
+      created_at text not null,
+      updated_at text not null,
+      unique(task_id, preview_id)
+    );
+    create index if not exists idx_group_task_integrations_task
+      on group_task_integrations(task_id, updated_at desc);
+    create table if not exists group_integration_events (
+      id text primary key,
+      integration_id text not null references group_task_integrations(id) on delete cascade,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      version integer not null check (version >= 1),
+      from_status text check (from_status is null or from_status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      to_status text not null check (to_status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      details_json text not null check (json_valid(details_json) and json_type(details_json) = 'object'),
+      created_at text not null,
+      unique(integration_id, version)
+    );
+    create index if not exists idx_group_integration_events_task
+      on group_integration_events(task_id, created_at, version);
+  `);
+}
+
+/** Rebuild only the old CHECK, copying every legacy column before adding state. */
+function migrateGroupTaskState(db: DatabaseSync): void {
+  const ddl = (
+    db
+      .prepare("select sql from sqlite_master where type = 'table' and name = 'group_tasks'")
+      .get() as { sql: string }
+  ).sql;
+  if (!hasColumn(db, "group_tasks", "state_version") || !ddl.includes("'blocked'")) {
+    const oldColumns = (
+      db.prepare("PRAGMA table_info(group_tasks)").all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    const columns = [
+      "id",
+      "group_id",
+      "title",
+      "description",
+      "status",
+      "owner_session_id",
+      "created_by_session_id",
+      "reviewer_session_id",
+      "branch",
+      "execution_id",
+      "created_at",
+      "updated_at",
+      "kind",
+      "priority",
+      "stage",
+      "blocked_reason",
+      "dependency_ids_json",
+      "criteria_json",
+      "criteria_version",
+      "verification_policy_json",
+      "evidence_refs_json",
+      "review_json",
+      "state_version",
+    ];
+    const defaults: Record<string, string> = {
+      kind: "'legacy'",
+      priority: "'normal'",
+      stage: "null",
+      blocked_reason: "null",
+      dependency_ids_json: "'[]'",
+      criteria_json: "'[]'",
+      criteria_version: "1",
+      verification_policy_json: '\'{"mode":"none","requireReview":false}\'',
+      evidence_refs_json: "'[]'",
+      review_json: "null",
+      state_version: "1",
+    };
+    db.exec("begin");
+    try {
+      db.exec(`create table group_tasks_replacement (
+        id text primary key,
+        group_id text not null references agent_groups(id) on delete cascade,
+        title text not null,
+        description text,
+        status text not null default 'open' check (status in ('open','in_progress','blocked','in_review','done','cancelled')),
+        owner_session_id text references agent_sessions(id) on delete set null,
+        created_by_session_id text references agent_sessions(id) on delete set null,
+        reviewer_session_id text references agent_sessions(id) on delete set null,
+        branch text,
+        execution_id text,
+        created_at text not null,
+        updated_at text not null,
+        kind text not null default 'legacy' check (kind in ('legacy','code','docs','design','review','research','question')),
+        priority text not null default 'normal' check (priority in ('low','normal','high')),
+        stage text,
+        blocked_reason text,
+        dependency_ids_json text not null default '[]' check (json_valid(dependency_ids_json) and json_type(dependency_ids_json) = 'array'),
+        criteria_json text not null default '[]' check (json_valid(criteria_json) and json_type(criteria_json) = 'array'),
+        criteria_version integer not null default 1 check (criteria_version >= 1),
+        verification_policy_json text not null default '{"mode":"none","requireReview":false}' check (json_valid(verification_policy_json) and json_type(verification_policy_json) = 'object'),
+        evidence_refs_json text not null default '[]' check (json_valid(evidence_refs_json) and json_type(evidence_refs_json) = 'array'),
+        review_json text,
+        state_version integer not null default 1 check (state_version >= 1)
+      )`);
+      db.exec(`insert into group_tasks_replacement (${columns.join(", ")})
+        select ${columns.map((column) => (oldColumns.includes(column) ? column : (defaults[column] ?? "null"))).join(", ")}
+        from group_tasks`);
+      db.exec("drop table group_tasks");
+      db.exec("alter table group_tasks_replacement rename to group_tasks");
+      db.exec(
+        "create index idx_group_tasks_group_status on group_tasks(group_id, status, updated_at desc)",
+      );
+      db.exec("create index idx_group_tasks_execution on group_tasks(group_id, execution_id)");
+      db.exec("commit");
+    } catch (error) {
+      db.exec("rollback");
+      throw error;
+    }
+  }
+  db.exec(`
+    create table if not exists group_task_events (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      action text not null,
+      actor_session_id text,
+      source_event_id text,
+      execution_id text,
+      from_status text not null,
+      to_status text not null,
+      operation_id text unique,
+      result_json text,
+      created_at text not null
+    );
+    create index if not exists idx_group_task_events_task_version on group_task_events(task_id, task_version);
+    create table if not exists group_task_runs (
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      criteria_version integer not null,
+      session_id text not null,
+      run_id text not null,
+      execution_id text not null,
+      role text not null check (role in ('owner','reviewer')),
+      source_fingerprint text not null,
+      operation_id text not null unique,
+      primary key (session_id, run_id)
+    );
+    create table if not exists group_tool_operations (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      operation_id text not null unique,
+      result_json text not null
+    );
+    create table if not exists group_task_dispatches (
+      operation_id text primary key,
+      source_event_id text unique,
+      group_id text not null references agent_groups(id) on delete cascade,
+      input_json text not null,
+      message_id text not null references group_messages(id) on delete cascade
+    );
+    create table if not exists group_proactivity_actions (
+      id text primary key,
+      idempotency_key text not null unique,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      execution_id text,
+      source_event_id text not null,
+      decision_json text not null,
+      delivery_state text not null check (delivery_state in ('suggested','pending','dispatched','discarded','invalidated')),
+      wake_message_id text references group_messages(id) on delete set null,
+      job_id text references group_jobs(id) on delete set null,
+      resolution_target_session_id text,
+      resolved_execution_id text,
+      requires_new_execution integer not null default 0 check (requires_new_execution in (0,1)),
+      version integer not null default 1,
+      created_at text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_group_proactivity_pending on group_proactivity_actions(delivery_state, group_id);
+    create unique index if not exists idx_group_proactivity_source on group_proactivity_actions(group_id, source_event_id);
+  `);
+  addColumn(
+    db,
+    "agent_groups",
+    "proactivity_mode",
+    "text not null default 'suggest' check (proactivity_mode in ('suggest','opt_in_auto'))",
+  );
+  addColumn(db, "group_proactivity_actions", "resolution_target_session_id", "text");
+  addColumn(db, "group_proactivity_actions", "resolved_execution_id", "text");
+  addColumn(
+    db,
+    "group_proactivity_actions",
+    "requires_new_execution",
+    "integer not null default 0 check (requires_new_execution in (0,1))",
+  );
 }
 
 /**
@@ -587,6 +811,8 @@ const AGENTS_TABLE_BODY = `
       avatar_color text not null check (avatar_color in (${sqlList(AGENT_AVATAR_COLORS)})),
       avatar_shape text not null check (avatar_shape in (${sqlList(AGENT_AVATAR_SHAPES)})),
       template_id text,
+      capability_ids_json text not null default '[]',
+      supported_task_kinds_json text not null default '[]',
       created_at text not null,
       updated_at text not null,
       archived_at text,
@@ -594,7 +820,8 @@ const AGENTS_TABLE_BODY = `
     `;
 /** Columns copied during agents rebuilds (group_id is filled by assignAgentGroups). */
 const AGENT_COPY_COLUMNS = `id, name, role, instructions, model_id, default_workspace_id,
-  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at`;
+  avatar_face, avatar_color, template_id, created_at, updated_at, archived_at,
+  capability_ids_json, supported_task_kinds_json`;
 
 /**
  * Two migration cases are still undecided; both are conservative (nothing is
@@ -819,14 +1046,14 @@ function assignAgentGroups(db: DatabaseSync): void {
   const copy = db.prepare(
     hasShape
       ? `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at)
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json)
          select ?, ?, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at
+           avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json
          from agents where id = ?`
       : `insert into agents (id, group_id, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at)
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json)
          select ?, ?, name, role, instructions, model_id, default_workspace_id,
-           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at
+           avatar_face, avatar_color, template_id, created_at, updated_at, archived_at, capability_ids_json, supported_task_kinds_json
          from agents where id = ?`,
   );
   const repoint = db.prepare(

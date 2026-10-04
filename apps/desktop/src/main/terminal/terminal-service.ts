@@ -14,12 +14,12 @@ import type {
 import { getDatabase } from "../db/database";
 import { IPC_CHANNELS } from "../ipc/channels";
 import { publishManagedProcessChange } from "../process/managed-process-bus";
+import { agentCommandExecution, controlledNpmScriptShell } from "./agent-command-policy";
 import { TerminalGrid } from "./terminal-grid";
 import {
   deriveTitle,
   interactiveShellArgs,
   matchesReadyLog,
-  shellCommandArgs,
   sliceSince,
   stripAnsi,
   tailText,
@@ -60,6 +60,7 @@ const MAX_EXITED_RETAINED = 40;
  * Disables animated progress redraws, pagers, and color. Runtime UTF-8 knobs
  * (Python) remain here; console CP 65001 is applied by the shared shell prelude.
  */
+const NPM_SCRIPT_SHELL = controlledNpmScriptShell();
 const AGENT_COMMAND_ENV: Record<string, string> = {
   CI: "1",
   NO_COLOR: "1",
@@ -68,6 +69,7 @@ const AGENT_COMMAND_ENV: Record<string, string> = {
   npm_config_fund: "false",
   npm_config_audit: "false",
   npm_config_color: "false",
+  ...(NPM_SCRIPT_SHELL ? { npm_config_script_shell: NPM_SCRIPT_SHELL } : {}),
   PIP_PROGRESS_BAR: "off",
   PIP_NO_INPUT: "1",
   PYTHONUTF8: "1",
@@ -744,18 +746,18 @@ export async function runAgentCommand(input: {
     }
   }
 
-  const shell = defaultShell();
+  const execution = agentCommandExecution(input.command, input.cwd, defaultShell());
   input.signal?.throwIfAborted();
   const record = spawnTerminal({
     workspaceId: input.workspaceId,
     cwd: input.cwd,
-    shell,
+    shell: execution.shell,
     cols: input.cols ?? 120,
     rows: input.rows ?? 30,
     origin: "agent",
     command: input.command,
     title: deriveTitle(input.command),
-    args: shellCommandArgs(shell, input.command, { utf8: true }),
+    args: execution.args,
     ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
     ...(input.window !== undefined ? { window: input.window } : {}),
   });

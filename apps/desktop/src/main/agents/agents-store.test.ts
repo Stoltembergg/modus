@@ -418,3 +418,143 @@ describe("migration: group members become agents", () => {
     expect(getAgentSession(session)?.kind).toBe("group_member");
   });
 });
+
+describe("explicit agent capabilities", () => {
+  it("custom_agent_can_edit_capabilities", () => {
+    const agent = createAgent({
+      name: uid("Custom"),
+      instructions: "Existing persona",
+      modelId: "m-1",
+      capabilityIds: ["verify", "implement", "verify"],
+      supportedTaskKinds: ["docs", "code", "docs"],
+    });
+    expect(getAgent(agent.id)).toMatchObject({
+      capabilityIds: ["implement", "verify"],
+      supportedTaskKinds: ["code", "docs"],
+      instructions: "Existing persona",
+      modelId: "m-1",
+    });
+    updateAgent(agent.id, { capabilityIds: ["review"], supportedTaskKinds: ["review"] });
+    expect(getAgent(agent.id)).toMatchObject({
+      capabilityIds: ["review"],
+      supportedTaskKinds: ["review"],
+      instructions: "Existing persona",
+      modelId: "m-1",
+    });
+    expect(Object.keys(getAgent(agent.id) ?? {})).not.toContain("tools");
+    updateAgent(agent.id, { capabilityIds: [], supportedTaskKinds: [] });
+    expect(getAgent(agent.id)).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+  });
+  it("legacy_missing_capabilities_stay_empty", () => {
+    const agent = createAgent({
+      name: uid("Reviewer"),
+      role: "Builder",
+      instructions: "Use shell to implement and verify",
+    });
+    expect(agent).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+  });
+  it("renaming_role_does_not_change_capabilities", () => {
+    const agent = createAgentFromTemplate("builder", { name: uid("Builder") });
+    updateAgent(agent.id, {
+      name: uid("Reviewer"),
+      role: "Researcher",
+      instructions: "Review everything",
+    });
+    expect(getAgent(agent.id)).toMatchObject({
+      capabilityIds: ["implement", "verify"],
+      supportedTaskKinds: ["code"],
+    });
+  });
+  it("template_capabilities_are_explicit and returned by the roster", () => {
+    const group = createGroupWithNewAgents({
+      name: uid("Capabilities"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Build", templateId: "builder" },
+        { name: "Custom Builder", role: "Builder", modelId: "m-1" },
+      ],
+    });
+    expect(group.members[0]).toMatchObject({
+      capabilityIds: ["implement", "verify"],
+      supportedTaskKinds: ["code"],
+    });
+    expect(group.members[1]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+    expectAgentError(() => createAgentFromTemplate("custom-builder"), "invalid-value");
+  });
+  it("migrates missing columns to empty and preserves all profile fields idempotently", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      migrateDatabase(db);
+      db.exec(
+        "alter table agents drop column capability_ids_json; alter table agents drop column supported_task_kinds_json;",
+      );
+      db.prepare(
+        "insert into agents (id, name, role, instructions, model_id, avatar_face, avatar_color, avatar_shape, template_id, created_at, updated_at, archived_at) values ('legacy-cap', 'Builder', 'Implement', 'Verify tests', 'm-1', 'wink', 'teal', 'circle', 'builder', 'created', 'updated', 'archived')",
+      ).run();
+      migrateDatabase(db);
+      migrateDatabase(db);
+      expect(db.prepare("select * from agents where id = 'legacy-cap'").get()).toMatchObject({
+        name: "Builder",
+        role: "Implement",
+        instructions: "Verify tests",
+        model_id: "m-1",
+        avatar_face: "wink",
+        avatar_color: "teal",
+        avatar_shape: "circle",
+        template_id: "builder",
+        created_at: "created",
+        updated_at: "updated",
+        archived_at: "archived",
+        capability_ids_json: "[]",
+        supported_task_kinds_json: "[]",
+      });
+      db.prepare(
+        "update agents set capability_ids_json = ?, supported_task_kinds_json = ? where id = 'legacy-cap'",
+      ).run('["docs"]', '["docs"]');
+      migrateDatabase(db);
+      expect(
+        db
+          .prepare(
+            "select capability_ids_json, supported_task_kinds_json from agents where id = 'legacy-cap'",
+          )
+          .get(),
+      ).toMatchObject({ capability_ids_json: '["docs"]', supported_task_kinds_json: '["docs"]' });
+    } finally {
+      db.close();
+    }
+  });
+});
+
+it("rejects malformed explicit metadata on update instead of keeping previous values", () => {
+  const agent = createAgent({
+    name: uid("Validate"),
+    capabilityIds: ["implement"],
+    supportedTaskKinds: ["code"],
+  });
+  expectAgentError(
+    () => updateAgent(agent.id, { capabilityIds: null as unknown as string[] }),
+    "invalid-value",
+  );
+  expect(getAgent(agent.id)).toMatchObject({
+    capabilityIds: ["implement"],
+    supportedTaskKinds: ["code"],
+  });
+});
+
+it("explicit empty template overrides survive group creation", () => {
+  const group = createGroupWithNewAgents({
+    name: uid("Override"),
+    workspaceId: insertWorkspace(),
+    members: [
+      { name: "No caps", templateId: "builder", capabilityIds: [], supportedTaskKinds: [] },
+      {
+        name: "Docs",
+        templateId: "builder",
+        capabilityIds: ["docs"],
+        supportedTaskKinds: ["docs"],
+      },
+    ],
+  });
+  expect(group.members[0]).toMatchObject({ capabilityIds: [], supportedTaskKinds: [] });
+  expect(group.members[1]).toMatchObject({ capabilityIds: ["docs"], supportedTaskKinds: ["docs"] });
+});

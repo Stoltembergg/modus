@@ -25,9 +25,8 @@ import type { MentionMember } from "./groupMentions";
  * - mentions          → models of the ACTIVE mentioned agents ("N models")
  * - reply, no mention → the replied-to author's model
  * - coordinator mode  → the Lead's model
- * - autonomous        → the Lead's model ("Lead answers by default": specialty
- *                       routing may pick another member) or, without an
- *                       eligible Lead, the active members' models
+ * - autonomous        → the Lead's model ("Lead answers by default"); when a
+ *                       configured Lead is archived, the active members are candidates
  * - nobody would wake → amber warning ("Archived" / "Lead archived")
  * An agent without `modelId` shows "Default model"; an unknown id shows raw.
  */
@@ -158,6 +157,9 @@ export function groupModelChip(input: GroupModelChipInput): GroupModelChip | und
         targets,
         entries,
       };
+    }
+    if (!input.leadSessionId || !byId.has(input.leadSessionId)) {
+      return nobody(rule.rule, t("noTarget"), [t("nobody"), t("noLeadRequiredHint")]);
     }
     const entries = entriesOf(eligible);
     return {

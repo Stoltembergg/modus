@@ -315,3 +315,48 @@ describe("agents IPC", () => {
     }
   });
 });
+
+it("validates and forwards explicit capabilities without granting tools", async () => {
+  const service = mockService();
+  const handlers = await register(service);
+  const { trusted, unregister } = await trustedEvent();
+  try {
+    handlers.get("agents:create")?.(trusted, {
+      groupId: "g-1",
+      name: "Custom",
+      modelId: MODEL,
+      capabilityIds: ["verify", "implement", "verify"],
+      supportedTaskKinds: ["code", "code"],
+    });
+    expect(service.createAgentInGroup).toHaveBeenCalledWith({
+      groupId: "g-1",
+      name: "Custom",
+      modelId: MODEL,
+      capabilityIds: ["implement", "verify"],
+      supportedTaskKinds: ["code"],
+    });
+    handlers.get("agents:update")?.(trusted, {
+      id: "a-1",
+      capabilityIds: [],
+      supportedTaskKinds: [],
+    });
+    expect(service.updateAgent).toHaveBeenCalledWith("a-1", {
+      capabilityIds: [],
+      supportedTaskKinds: [],
+    });
+    expect(() =>
+      handlers.get("agents:update")?.(trusted, { id: "a-1", capabilityIds: ["shell"] }),
+    ).toThrow(/Invalid IPC/);
+    expect(() =>
+      handlers.get("agents:create")?.(trusted, {
+        groupId: "g-1",
+        name: "Custom",
+        modelId: MODEL,
+        capabilityIds: ["implement"],
+        tools: ["shell"],
+      }),
+    ).toThrow(/Invalid IPC/);
+  } finally {
+    unregister();
+  }
+});

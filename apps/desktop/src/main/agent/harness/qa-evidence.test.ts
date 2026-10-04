@@ -1,11 +1,334 @@
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { dirname, join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import {
+  controlledAgentCommand,
+  parseControlledNpmCheck,
+} from "../../terminal/agent-command-policy";
 import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
 
 const sessionId = "session-safe-1";
 const runId = "run-safe-1";
+const manifestReadHook = vi.hoisted(() => ({
+  afterRead: undefined as (() => void) | undefined,
+  beforeAccess: undefined as ((path: unknown) => void) | undefined,
+  statOwner: undefined as { path: string; uid: number } | undefined,
+}));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    accessSync: (...args: Parameters<typeof actual.accessSync>) => {
+      manifestReadHook.beforeAccess?.(args[0]);
+      return actual.accessSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      const value = actual.statSync(...args);
+      const owner = manifestReadHook.statOwner;
+      if (value && owner && args[0] === owner.path) {
+        value.uid = typeof value.uid === "bigint" ? BigInt(owner.uid) : owner.uid;
+      }
+      return value;
+    },
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      const content = actual.readFileSync(...args);
+      manifestReadHook.afterRead?.();
+      return content;
+    },
+  };
+});
+
+describe("controlled package execution", () => {
+  it.each(["bash", "terminal_run"])("does not certify npx/npm exec through %s", (tool) => {
+    for (const command of [
+      "npx vitest run",
+      "npx tsc --noEmit",
+      "npx eslint .",
+      "npx vite build",
+      "npx biome check",
+      "npx jest",
+      "npx mocha",
+      "npm exec -- vitest run",
+    ]) {
+      expect(recognizeCheckInvocation(tool, command)).toBeUndefined();
+      const qa = summarize(commandPair(command, tool));
+      expect(qa).toMatchObject({ status: "missing" });
+      expect(qa.evidence.every((reference) => reference.status !== "passed")).toBe(true);
+    }
+    expect(recognizeCheckInvocation(tool, "vitest run")?.checkName).toBe("tests");
+    expect(recognizeCheckInvocation(tool, "tsc --noEmit")?.checkName).toBe("typecheck");
+  });
+  it("does not certify a package script whose body executes npx", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-npx-package-body-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "npx vitest run" } }),
+      );
+      expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)).toBeUndefined();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    "npm --script-shell=/bin/true test",
+    "npm --workspaces test",
+    "npm --prefix=/other test",
+    "npm --workspace @unknown/package test",
+    "npm --workspace @modus/desktop -w @modus/desktop test",
+    "npm test -- --run",
+    "NPM TEST",
+  ])("never certifies an npm command left unchanged by the runner: %s", async (command) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-package-grammar-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      expect(parseControlledNpmCheck(command)).toBeUndefined();
+      expect(controlledAgentCommand(command, cwd)).toBe(command);
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+  it.each([
+    ["bash", "npm test"],
+    ["terminal_run", "pnpm test"],
+    ["terminal_run", "yarn test"],
+  ])("does not certify package scripts from uncontrolled %s: %s", async (tool, command) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-uncontrolled-package-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      expect(recognizeCheckInvocation(tool, command, cwd)).toBeUndefined();
+      expect(recognizeCheckInvocation(tool, "vitest run", cwd)?.checkName).toBe("tests");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("manifest read consistency", () => {
+  it.skipIf(!process.getuid)(
+    "observes ancestors conservatively when uid and ACL ownership are unknown",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-unknown-uid-"));
+      const container = join(sandbox, "container");
+      const cwd = join(container, "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(undefined as unknown as number);
+      manifestReadHook.beforeAccess = () => {
+        const error = new Error(
+          "ACL write access denied, ownership unknown",
+        ) as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        mkdirSync(join(container, "changed-topology"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        uidSpy.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "observes sibling churn for a leaf directly inside the sticky temporary directory",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "modus-direct-leaf-churn-"));
+      let sibling: string | undefined;
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const uid = 2 ** 31 - 1;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(uid);
+      manifestReadHook.statOwner = { path: realpathSync(cwd), uid };
+      const protectedParent = dirname(realpathSync(tmpdir()));
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === protectedParent) {
+          const error = new Error(
+            "Global ancestor cannot be renamed by this uid",
+          ) as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-direct-leaf-sibling-"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        manifestReadHook.statOwner = undefined;
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "fails closed on global temporary churn when running as root",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-root-ancestor-"));
+      const cwd = join(sandbox, "container", "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      let sibling: string | undefined;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(0);
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-root-sibling-"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "observes an ancestor whose owner can chmod its unwritable parent",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-parent-owner-"));
+      const ownedParent = join(sandbox, "owned-parent");
+      const container = join(ownedParent, "container");
+      const cwd = join(container, "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const simulatedUid = 2 ** 31 - 1;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(simulatedUid);
+      manifestReadHook.statOwner = { path: ownedParent, uid: simulatedUid };
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === ownedParent) {
+          const error = new Error("Parent has no write permission yet") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        // Change only the container, preserving the parent's identity and the leaf's contents.
+        mkdirSync(join(container, "changed-topology"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        manifestReadHook.statOwner = undefined;
+        uidSpy.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "ignores sibling temporary artifacts when the ancestor is protected",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-protected-ancestor-"));
+      const cwd = join(sandbox, "container", "project");
+      mkdirSync(cwd, { recursive: true });
+      let sibling: string | undefined;
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const protectedParent = dirname(realpathSync(tmpdir()));
+      // Simulate a uid that neither owns the global temporary directory nor can rename it.
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(2 ** 31 - 1);
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === protectedParent) {
+          const error = new Error("Parent is not writable by this user") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-unrelated-temp-"));
+        expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)?.packageConfigDigest).toBe(
+          before?.packageConfigDigest,
+        );
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.for([
+    "root",
+    "workspace",
+  ])("rejects a %s manifest changed after its bytes are read", async (scope) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-read-consistency-"));
+    const workspaceRoot = join(cwd, "apps", "desktop");
+    mkdirSync(workspaceRoot, { recursive: true });
+    writeFileSync(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run" },
+        workspaces: ["apps/*"],
+      }),
+    );
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({
+        name: "@modus/desktop",
+        scripts: { typecheck: "tsc --noEmit" },
+      }),
+    );
+    let reads = 0;
+    manifestReadHook.afterRead = () => {
+      reads += 1;
+      if (reads !== (scope === "root" ? 1 : 2)) return;
+      manifestReadHook.afterRead = undefined;
+      writeFileSync(
+        join(scope === "root" ? cwd : workspaceRoot, "package.json"),
+        JSON.stringify({
+          name: "@modus/desktop",
+          scripts: { test: "node unsafe.js", typecheck: "node unsafe.js" },
+        }),
+      );
+    };
+    try {
+      const command =
+        scope === "root" ? "npm test" : "npm --workspace @modus/desktop run typecheck";
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+    } finally {
+      manifestReadHook.afterRead = undefined;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
 
 function pair(overrides: Partial<Extract<RunQAEvent, { type: "tool.ended" }>> = {}): RunQAEvent[] {
   const started: RunQAEvent = {
@@ -59,6 +382,7 @@ describe("summarizeRunQA", () => {
         kind: "check",
         status: "passed",
         label: "Tests",
+        checkName: "tests",
         eventId: "event-end-1",
         runId,
       }),
@@ -204,12 +528,11 @@ describe("summarizeRunQA", () => {
 
   it.each([
     "vitest run",
-    "npx vitest run",
-    "npx vitest run --root .",
+    "vitest run --root .",
+    "jest",
     "bash",
   ])("recognizes a supported full-project check invocation %s", (command) => {
-    const events =
-      command === "bash" ? commandPair("npx vitest run", "bash") : commandPair(command);
+    const events = command === "bash" ? commandPair("vitest run", "bash") : commandPair(command);
     expect(summarize(events)).toMatchObject({ status: "passed" });
   });
 
@@ -251,10 +574,10 @@ describe("summarizeRunQA", () => {
   });
 
   it.each([
-    "npx vitest run --help",
-    "npx vitest run -h",
-    "npx vitest run --version",
-    "npx vitest run -v",
+    "vitest run --help",
+    "vitest run -h",
+    "vitest run --version",
+    "vitest run -v",
     "npm test -- --help",
     "npm test -- -h",
     "npm test -- --version",
@@ -314,11 +637,11 @@ describe("summarizeRunQA", () => {
   });
 
   it("does not treat missing scope as blanket coverage for scoped checks", () => {
-    expect(summarize(commandPair("npx vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
+    expect(summarize(commandPair("vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
       status: "missing",
     });
     expect(
-      summarize(commandPair("npx vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
+      summarize(commandPair("vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
         "src/a.ts",
       ]),
     ).toMatchObject({ status: "passed" });
@@ -346,12 +669,14 @@ describe("summarizeRunQA", () => {
     };
     expect(summarize([...check, edit])).toMatchObject({ status: "missing" });
     expect(summarize([...check, shell])).toMatchObject({ status: "missing" });
-    expect(summarize([edit, ...commandPair("npx vitest run")])).toMatchObject({ status: "passed" });
+    expect(summarize([edit, ...commandPair("vitest run")])).toMatchObject({ status: "passed" });
   });
 
   it.each([
     "biome check --write src/a.ts",
     "eslint --fix src/a.ts",
+    "npx biome check --write src/a.ts",
+    "npx eslint --fix src/a.ts",
     "npm run lint -- --fix",
     "npm run lint -- --apply",
     "npm run lint -- --apply=unsafe",
@@ -363,9 +688,9 @@ describe("summarizeRunQA", () => {
 
   it("allows a fresh non-mutating check after a source-mutating invocation to pass", () => {
     const result = summarize([
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
       ...commandPair("npm run lint -- --fix"),
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
     ]);
     expect(result).toMatchObject({ required: true, status: "passed" });
     expect(result.evidence).toEqual([expect.objectContaining({ status: "passed" })]);
@@ -373,9 +698,9 @@ describe("summarizeRunQA", () => {
 
   it("allows a fresh check after an apply fixer but does not treat the fixer as the pass", () => {
     const result = summarize([
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
       ...commandPair("npm run lint -- --apply=unsafe"),
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
     ]);
     expect(result).toMatchObject({ status: "passed" });
     expect(result.evidence).toEqual([

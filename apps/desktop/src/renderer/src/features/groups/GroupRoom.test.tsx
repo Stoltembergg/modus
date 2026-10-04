@@ -93,6 +93,10 @@ let updateState: UpdateState;
 let tasks: GroupTask[];
 let decisions: GroupDecision[];
 const group = {
+  getProactivityMode: vi.fn(async () => "suggest" as const),
+  setProactivityMode: vi.fn(async (_groupId: string, mode: "suggest" | "opt_in_auto") => mode),
+  listSuggestions: vi.fn(async () => []),
+  resolveSuggestion: vi.fn(async () => undefined),
   listMessages: vi.fn(async (_input: unknown) => pages.shift() ?? []),
   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
     message("posted", { body: input.body }),
@@ -839,10 +843,10 @@ describe("GroupRoom decisions", () => {
       expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
     );
     expect(group.listDecisions).toHaveBeenCalledWith("g-1");
-    // Coordination precedes Decisions; Decisions precedes the checklist.
+    // Proactivity is first in Activity; coordination precedes Decisions and the checklist.
+    expect(panel.firstElementChild).toBe(within(panel).getByTestId("group-proactivity-controls"));
     const coordination = within(panel).getByTestId("group-activity-coordination");
     const section = within(panel).getByTestId("decision-section");
-    expect(panel.firstElementChild).toBe(coordination);
     expect(
       coordination.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();

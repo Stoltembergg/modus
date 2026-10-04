@@ -143,22 +143,29 @@ import {
   unstageFile,
 } from "../git/git-service";
 import { emitGitEvent, unwatchRepo, watchRepo } from "../git/git-watcher";
+import { createGroupIntegrationService } from "../groups/group-integration-service";
 import { emitGroupRuntimeEvent, getGroupRuntime } from "../groups/group-runtime-service";
 import {
   addAgentToGroup,
   cancelGroupTask,
   deleteGroupDecision,
+  getGroupTask,
   listAgentGroupMembers,
   listAgentGroupsWithMembers,
   listGroupDecisions,
   listGroupMessages,
   listGroupTasks,
+  listGroupTaskTransitions,
   renameAgentGroup,
   setAgentGroupLead,
   setAgentGroupMode,
   setAgentGroupWorkspace,
   setGroupMembershipMessageSink,
+  setGroupTaskChangedSink,
+  updateGroupTaskDraft,
 } from "../groups/group-store";
+import { getGroupTaskDetails } from "../groups/group-task-details";
+import { getGroupWorkState } from "../groups/group-work-state";
 import {
   ensurePersonalizationFile,
   getPersonalization,
@@ -229,8 +236,10 @@ import { registerAuthIpcHandlers } from "./auth-ipc";
 import { registerBillingIpcHandlers } from "./billing-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
+import { registerGroupIntegrationIpcHandlers } from "./group-integration-ipc";
 import { registerGroupIpcHandlers, toGroupIpcError } from "./group-ipc";
 import { registerGroupRuntimeIpcHandlers } from "./group-runtime-ipc";
+import { registerGroupWorkIpcHandlers } from "./group-work-ipc";
 import { registerHarnessInsightsIpcHandlers } from "./harness-insights-ipc";
 import { registerHyperPlanIpcHandlers } from "./hyperplan-ipc";
 import { registerProjectMemoryIpcHandlers } from "./project-memory-ipc";
@@ -1490,6 +1499,28 @@ export function registerAppIpc({
     listGroupDecisions: (groupId) => listGroupDecisions(groupId),
     deleteGroupDecision,
   });
+  registerGroupWorkIpcHandlers(ipcMain, assertTrustedSender, {
+    getGroupWorkState: (groupId, executionId) => getGroupWorkState(groupId, executionId),
+    getGroupTaskDetails: (groupId, taskId) => getGroupTaskDetails(groupId, taskId),
+    listGroupTaskTransitions: (taskId) => {
+      getGroupTask(taskId);
+      return listGroupTaskTransitions(taskId);
+    },
+    updateGroupTaskDraft,
+    getGroupProactivityMode: (groupId) => getGroupRuntime().getProactivityMode(groupId),
+    setGroupProactivityMode: (groupId, mode) => getGroupRuntime().setProactivityMode(groupId, mode),
+    listGroupSuggestions: (groupId) => getGroupRuntime().listSuggestions(groupId),
+    resolveGroupSuggestion: (input) => getGroupRuntime().resolveGroupSuggestion(input),
+  });
+  registerGroupIntegrationIpcHandlers(
+    ipcMain,
+    assertTrustedSender,
+    createGroupIntegrationService(),
+    emitGroupRuntimeEvent,
+  );
+  setGroupTaskChangedSink((change) =>
+    emitGroupRuntimeEvent({ type: "group.task-changed", ...change }),
+  );
   // "X joined as <role>" / "X left the group" reach the room live (A3), through
   // the same broadcast as room messages, once their transaction commits.
   setGroupMembershipMessageSink((message) =>

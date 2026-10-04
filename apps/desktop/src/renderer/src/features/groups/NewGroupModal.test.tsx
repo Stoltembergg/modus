@@ -225,6 +225,8 @@ describe("NewGroupModal (A4)", () => {
     const copy = create.mock.calls[0]?.[0].members[1];
     // The source is a template agent: the copy still carries no templateId.
     expect(copy).toEqual({
+      capabilityIds: [],
+      supportedTaskKinds: [],
       name: "Builder 2",
       role: "Fixer",
       instructions: "Fix what breaks.",
