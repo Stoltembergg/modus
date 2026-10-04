@@ -6,7 +6,7 @@
  * allowance first, then the lot; a refund takes back only the lot; a chargeback blocks.
  * Not a *.test.ts (needs the cluster).
  */
-import { assertEquals, assertGreater } from "jsr:@std/assert@1";
+import { assert, assertEquals, assertGreater } from "jsr:@std/assert@1";
 import postgres from "npm:postgres@3.4.9";
 import { createPostgresBillingDb } from "../_shared/db.ts";
 import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
@@ -21,6 +21,8 @@ const dbUrl = Deno.env.get("MODUS_TEST_DB_URL");
 const SECRET = "integration-webhook-secret";
 const EXPECT = { liveMode: false as const, collectorId: "777" };
 const PAID = "deepseek/deepseek-v4-pro";
+const FLASH = "deepseek/deepseek-flash";
+const STARTER_MODELS = [FLASH, "zai/glm-5.3-flash"];
 
 Deno.test({
   name: "L5a credit packs against a real Postgres: webhook -> lot -> router access -> allowance then lot -> refund / chargeback",
@@ -115,8 +117,11 @@ Deno.test({
       payments.set("660009", { ...pay, id: "660009", external_reference: null });
       assertEquals((await notify("660009", "pk-sub")).code, "unlinked");
 
-      // The lot unlocks the pack's access plan (starter: every model).
-      assertEquals(await routerDb.getPlan(userId), { plan: "starter", allowedModels: null });
+      // The lot unlocks the pack's access plan (starter: its explicit list, L5a review 2).
+      assertEquals(await routerDb.getPlan(userId), {
+        plan: "starter",
+        allowedModels: STARTER_MODELS,
+      });
       const h = createRouterHandler({
         db: routerDb,
         getUser: () => Promise.resolve({ id: userId as string, email: null }),
@@ -132,15 +137,18 @@ Deno.test({
         return res.status;
       };
 
+      // A model outside Starter's list is refused before reserving.
+      assertEquals(await call(PAID, "pk-not-starter"), 403);
+
       // Usage is charged from the allowance (1000) first: the lot is untouched.
-      assertEquals(await call(PAID, "pk-call-1"), 200);
+      assertEquals(await call(FLASH, "pk-call-1"), 200);
       const afterFirst = await state();
       assertEquals(afterFirst.endsWith("|5000"), true, `lot untouched: ${afterFirst}`);
 
       // Allowance spent (balance = lot only): the next call consumes the lot.
       await admin`update public.credit_wallets set balance = 5000 where user_id = ${userId}`;
       assertEquals(await state(), "5000+0|5000");
-      assertEquals(await call(PAID, "pk-call-2"), 200);
+      assertEquals(await call(FLASH, "pk-call-2"), 200);
       const used = 5000 - Number((await state()).split("+")[0]);
       assertGreater(used, 0);
       assertEquals(await state(), `${5000 - used}+0|${5000 - used}`);
@@ -189,13 +197,13 @@ Deno.test({
         { headers: { "content-type": "text/event-stream" } },
       );
     });
-    // Fable as a premium model: Starter lists the non-premium models, Pro keeps all (null).
-    const [{ allowed: starterBefore }] =
-      await admin`select allowed_models as allowed from public.plans where plan = 'starter'`;
+    // Fable is not in the production MODEL_CATALOG yet: injected here only into the handler's
+    // catalog. The plans are the REAL seed (no override): Starter's explicit list has no
+    // claude-fable-*, Pro keeps every model (NULL).
     try {
-      await admin`update public.plans
-                     set allowed_models = array['deepseek/deepseek-flash', 'zai/glm-5.3-flash']
-                   where plan = 'starter'`;
+      const [{ allowed }] =
+        await admin`select allowed_models as allowed from public.plans where plan = 'starter'`;
+      assertEquals(allowed, STARTER_MODELS, "the real Starter seed");
       const [{ id: userId }] =
         await admin`select tests.create_user('packs-fable@example.com', true) as id`;
       const h = createRouterHandler({
@@ -265,8 +273,36 @@ Deno.test({
       assertEquals((await routerDb.getPlan(userId)).plan, "starter");
       assertEquals(await call("fable-after-refund"), [403, "model_not_in_plan"]);
     } finally {
-      await admin`update public.plans set allowed_models = ${starterBefore} where plan = 'starter'`;
       await up.close();
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
+  name: "L5a review 2: every id in the migrated Starter allowed_models exists in the router's MODEL_CATALOG",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    try {
+      const rows = await admin`select plan, allowed_models from public.plans order by sort_order`;
+      const byPlan = new Map(
+        rows.map((r) => [r.plan as string, r.allowed_models as string[] | null]),
+      );
+      const starter = byPlan.get("starter");
+      assert(Array.isArray(starter) && starter.length > 0, "Starter has an explicit list");
+      const ids = new Set(MODEL_CATALOG.map((m) => m.id));
+      for (const id of starter) assert(ids.has(id), `Starter lists ${id}: not in MODEL_CATALOG`);
+      assertEquals(
+        [...starter].sort(),
+        [...ids].filter((id) => !/(^|\/)claude-fable-/.test(id)).sort(),
+        "Starter = MODEL_CATALOG minus claude-fable-*",
+      );
+      for (const plan of ["pro", "max", "ultra"]) assertEquals(byPlan.get(plan), null, plan);
+      assertEquals(byPlan.get("free"), STARTER_MODELS, "Free unchanged");
+    } finally {
       await admin.end();
     }
   },
