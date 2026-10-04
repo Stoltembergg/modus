@@ -96,20 +96,20 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  24, 'twenty-four functions in private (20 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper)');
+  26, 'twenty-six functions in private (20 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper + the Free renewal free_renewal_check / backfill_free_plan_allowance helpers)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  24, 'all private functions are SECURITY DEFINER with search_path=""');
+  26, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  array['claim_stripe_customer', 'debit_credits', 'grant_credits', 'grant_free_initial_credits',
+  array['backfill_free_plan_allowance', 'claim_stripe_customer', 'debit_credits', 'free_renewal_check', 'grant_credits', 'grant_free_initial_credits',
         'handle_new_user', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout',
         'mp_finish_notification', 'mp_link_checkout', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'process_mp_payment', 'process_mp_preapproval',
         'process_stripe_event', 'release_expired_reservations', 'renew_free_credits',
