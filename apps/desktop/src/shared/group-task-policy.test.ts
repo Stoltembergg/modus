@@ -52,6 +52,26 @@ function review(overrides: Partial<GroupTaskReview> = {}): GroupTaskReview {
   };
 }
 
+function multiCriterionQaInput(approvedCriterionIds: string[]) {
+  return {
+    task: task({
+      criteria: [
+        { id: "criterion-1", description: "Tests pass", requiredCheckKinds: ["tests"] },
+        { id: "criterion-2", description: "Types pass", requiredCheckKinds: ["typecheck"] },
+      ],
+    }),
+    review: review({ approvedCriterionIds }),
+    sourceFingerprint: fingerprint,
+    dependencies: [],
+    criterionOutcomes: ["criterion-1", "criterion-2"].map((criterionId) => ({
+      criterionId,
+      criteriaVersion: 2,
+      status: "passed" as const,
+      sourceFingerprint: fingerprint,
+    })),
+  };
+}
+
 describe("group task policy", () => {
   it("required_qa_is_not_satisfied_by_user_confirmation", () => {
     const input = {
@@ -129,6 +149,17 @@ describe("group task policy", () => {
     expect(
       evaluateGroupTaskGate({ ...current, review: review({ verdict: "changes" }) }).satisfied,
     ).toBe(false);
+  });
+
+  it("required_review_with_empty_approved_ids_cannot_complete_qa_criteria", () => {
+    expect(evaluateGroupTaskGate(multiCriterionQaInput([])).satisfied).toBe(false);
+  });
+
+  it("required_review_with_partial_approved_ids_cannot_complete_qa_criteria", () => {
+    expect(evaluateGroupTaskGate(multiCriterionQaInput(["criterion-1"])).satisfied).toBe(false);
+    expect(
+      evaluateGroupTaskGate(multiCriterionQaInput(["criterion-1", "criterion-2"])).satisfied,
+    ).toBe(true);
   });
 
   it("rejects_dependency_cycles_and_cross_group_ids", () => {

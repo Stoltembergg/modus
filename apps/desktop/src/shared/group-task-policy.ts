@@ -148,7 +148,12 @@ export function evaluateGroupTaskGate(input: GroupTaskGateInput): GroupTaskGateR
   const criteria = input.task.criteria ?? [];
   if (criteria.length === 0) reasons.add("verification-required");
   const review = currentReview(input);
-  if (input.task.verificationPolicy?.requireReview && !review) reasons.add("review-required");
+  if (
+    input.task.verificationPolicy?.requireReview &&
+    (!review || criteria.some((criterion) => !review.approvedCriterionIds.includes(criterion.id)))
+  ) {
+    reasons.add("review-required");
+  }
 
   for (const criterion of criteria) {
     const currentOutcomes = input.criterionOutcomes.filter(
