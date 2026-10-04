@@ -54,6 +54,8 @@ export const IPC_CHANNELS = {
   agentEnsure: "agent:ensure",
   agentReleaseRuntime: "agent:release-runtime",
   agentPrompt: "agent:prompt",
+  agentBranchState: "agent:branch-state",
+  agentSetBranch: "agent:set-branch",
   agentReviewPlanWithHyperPlan: "agent:review-plan-hyperplan",
   agentApplyHyperPlanRevision: "agent:apply-hyperplan-revision",
   agentCreateHyperPlanDraft: "agent:create-hyperplan-draft",

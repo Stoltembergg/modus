@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   startOriginalPlanBuild: vi.fn(),
   assertHyperPlanSessionAvailable: vi.fn(),
   startProviderAuth: vi.fn(),
+  getDefaultModelId: vi.fn(),
+  requireAgentChatWritable: vi.fn(),
   restoreCheckpoint: vi.fn(),
   fromWebContents: vi.fn(),
 }));
@@ -70,6 +72,11 @@ vi.mock("../agent/harness/hyperplan", async (importOriginal) => {
 vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
   startProviderAuth: mocks.startProviderAuth,
+  getDefaultModelId: mocks.getDefaultModelId,
+}));
+vi.mock("../agents/agents-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agents-store")>()),
+  requireAgentChatWritable: mocks.requireAgentChatWritable,
 }));
 
 import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../shared/contracts";
@@ -1124,5 +1131,49 @@ describe("subagent worktree IPC with Agent Group member sessions", () => {
     // Refused before looking up any parent session or touching git.
     expect(mocks.getAgentSession).toHaveBeenCalledTimes(1);
     expect(mocks.getAgentSession).toHaveBeenCalledWith("member-1");
+  });
+});
+
+describe("L2 agent:prompt forces the current Settings default model", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+  const prompt = vi.fn(async () => ({ outcome: "ok" }));
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    prompt.mockClear();
+    mocks.getDefaultModelId.mockReset().mockReturnValue("anthropic/claude-opus-5-5");
+    mocks.requireAgentChatWritable.mockReset();
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
+    mocks.getAgentRuntime.mockReturnValue({ prompt });
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("an old session's model (sent by the renderer) and its thinking are ignored for the run", async () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+    await handler?.(
+      trustedEvent as never,
+      {
+        sessionId: "session-1",
+        message: "hi",
+        model: "openai/old-disallowed",
+        thinkingVariant: "max",
+      } as never,
+    );
+    expect(prompt).toHaveBeenCalledTimes(1);
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input.model).toBe("anthropic/claude-opus-5-5");
+    expect(input).not.toHaveProperty("thinkingVariant");
+    expect(input).not.toHaveProperty("thinkingLevel");
+  });
+
+  it("refuses the turn when Settings has no default model", async () => {
+    mocks.getDefaultModelId.mockReturnValue(undefined);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+    await expect(
+      handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
+    ).rejects.toThrow("No model is configured");
+    expect(prompt).not.toHaveBeenCalled();
   });
 });

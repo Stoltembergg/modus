@@ -213,6 +213,8 @@ type AgentEventPayload =
     }
   | { type: "session.status"; sessionId: string; status: SessionRunStatus }
   | { type: "session.updated"; sessionId: string; title: string }
+  /** L2: the session switched branch while idle; the next run uses it. */
+  | { type: "session.branch_changed"; sessionId: string; branch: string }
   | { type: "runtime.error"; sessionId: string; message: string };
 
 export type TerminalStatus = "running" | "exited";

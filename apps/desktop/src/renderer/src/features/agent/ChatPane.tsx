@@ -34,6 +34,7 @@ import {
 import { ComposerDock } from "../composer/ComposerDock";
 import { contextItemKey } from "../composer/composerTokens";
 import type { MentionEditorPart } from "../composer/MentionEditor";
+import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
 import { ReviewPlanCard } from "../plan/ReviewPlanCard";
@@ -69,6 +70,11 @@ import { WorkingSubagentBar } from "./WorkingSubagentBar";
 /**
  * Full conversation surface bound to one active session.
  */
+
+/** L2: the model a 1:1 turn runs on is always the Settings default (session.model ignored). */
+export function turnModelForPane(defaultModel: string): string {
+  return defaultModel;
+}
 
 export function canSubmitPromptForSession(
   workspace: WorkspaceInfo | null,
@@ -690,6 +696,8 @@ export function ChatPane({
     createEmptyChatComposerDraft,
   );
   const [promptError, setPromptError] = useState<string | undefined>();
+  // L2: the session's saved branch no longer exists -> sending is blocked until replaced.
+  const [branchBlocked, setBranchBlocked] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [workingStats, setWorkingStats] = useState<WorkingChangeStats | undefined>();
@@ -1062,7 +1070,9 @@ export function ChatPane({
 
   /* ── Conversation actions ──────────────────────────────────────────── */
 
-  const paneModel = session.model ?? defaultModel;
+  // L2: no model picker, so the pane always shows / sends the CURRENT Settings default; a
+  // model stored on an old session is ignored (main enforces the same on agent:prompt).
+  const paneModel = turnModelForPane(defaultModel);
   const activeCwd = session.cwd;
   const retryStatus = sessionStatus.type === "retry" ? sessionStatus : undefined;
   // The decision card shows only while the plan is unbuilt and not dismissed.
@@ -1205,12 +1215,8 @@ export function ChatPane({
       }
       return item;
     });
-    // Bind THIS turn's execution params to the prompt: the model the composer
-    // currently shows + its provider-facing thinking variant. The runtime applies them at turn
-    // start, so the turn is self-describing — no stale model/thinking/mode after
-    // a mid-session switch, edit-and-resend, or resume.
-    const turnModel = models.find((item) => item.id === paneModel);
-    const turnThinking = turnModel?.thinkingVariant ?? turnModel?.thinkingLevel;
+    // L2: the model sent is the Settings default; main ignores it anyway and forces the
+    // current default (and that model's own thinking config) on every user turn.
     const userMessageId = `local-user:${crypto.randomUUID()}`;
     setAgentEvents((events) =>
       appendAgentEvents(
@@ -1236,7 +1242,6 @@ export function ChatPane({
         ...(skills && skills.length > 0 ? { skills } : {}),
         ...(mode ? { mode } : {}),
         ...(paneModel ? { model: paneModel } : {}),
-        ...(turnThinking ? { thinkingVariant: turnThinking } : {}),
         ...(planId ? { planId } : {}),
       })
       .then(() => onSessionsChanged())
@@ -1353,16 +1358,6 @@ export function ChatPane({
     // attaches the current model+thinking. Dropping mode here was why an edited
     // resend silently fell back to build mode.
     submitPrompt(message, contextItems ?? [], "normal", attachments, skills, composerMode);
-  }
-
-  async function changeModel(nextModel: string): Promise<void> {
-    if (!nextModel) {
-      return;
-    }
-    onModelChange(nextModel);
-    await window.modus.model.setDefault(nextModel);
-    await window.modus.agent.setModel({ sessionId, model: nextModel });
-    onSessionsChanged();
   }
 
   const openSubagentPreview = useCallback(
@@ -1608,11 +1603,19 @@ export function ChatPane({
                     >
                       <Composer
                         integrated
-                        canSubmit={canSubmitPromptForSession(
-                          workspace,
-                          session.workspaceId,
-                          paneModel,
-                        )}
+                        canSubmit={
+                          !branchBlocked &&
+                          canSubmitPromptForSession(workspace, session.workspaceId, paneModel)
+                        }
+                        branchControl={
+                          <SessionBranchPicker
+                            cwd={activeCwd}
+                            isRunning={isRunning}
+                            onBlockedChange={setBranchBlocked}
+                            onError={setPromptError}
+                            sessionId={sessionId}
+                          />
+                        }
                         contextItems={contextItems}
                         cwd={activeCwd}
                         draft={{
@@ -1631,8 +1634,6 @@ export function ChatPane({
                         onContextChange={setContextItems}
                         onDraftChange={setComposerFields}
                         onModeChange={setComposerMode}
-                        onModelChange={(next) => void changeModel(next)}
-                        onModelConfigChange={onModelConfigChange}
                         {...(onOpenConnections ? { onOpenConnections } : {})}
                         onSubmit={(message, context, delivery, attachments, skills, mode) =>
                           submitPrompt(message, context, delivery, attachments, skills, mode)

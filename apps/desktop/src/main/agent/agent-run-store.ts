@@ -122,3 +122,17 @@ export function listAgentRuns(sessionId: string): AgentRunInfo[] {
     .all(sessionId) as AgentRunRow[];
   return rows.map(toRun);
 }
+
+/** L2: the branch a run snapshotted at its start. Written once, never updated. */
+export function setAgentRunBranch(runId: string, branch: string): void {
+  getDatabase()
+    .prepare("update agent_runs set branch = ? where id = ? and branch is null")
+    .run(branch, runId);
+}
+
+export function getAgentRunBranch(runId: string): string | undefined {
+  const row = getDatabase().prepare("select branch from agent_runs where id = ?").get(runId) as
+    | { branch: string | null }
+    | undefined;
+  return row?.branch ?? undefined;
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   agentApplyHyperPlanRevisionSchema,
   agentPromptSchema,
+  agentSetBranchSchema,
   agentStartOriginalPlanBuildSchema,
   browserRecentSchema,
   diffCommitOrPushSchema,
@@ -397,6 +398,28 @@ describe("IPC schemas", () => {
         agentPromptSchema,
         { sessionId: "s1", message: "hi", thinkingLevel: "ultra" },
         "agent:prompt",
+      ),
+    ).toThrow("Invalid IPC payload");
+  });
+
+  it("L2 agent:set-branch takes only a session id and a branch NAME (never a path)", () => {
+    expect(
+      parseIpcInput(
+        agentSetBranchSchema,
+        { sessionId: "s1", branch: "feat/l2" },
+        "agent:set-branch",
+      ),
+    ).toEqual({ sessionId: "s1", branch: "feat/l2" });
+    for (const branch of ["/etc/passwd", "../x", "a..b", "-f", "x y", "feat/", "a.lock", ""]) {
+      expect(() =>
+        parseIpcInput(agentSetBranchSchema, { sessionId: "s1", branch }, "agent:set-branch"),
+      ).toThrow("Invalid IPC payload");
+    }
+    expect(() =>
+      parseIpcInput(
+        agentSetBranchSchema,
+        { sessionId: "s1", branch: "main", cwd: "/elsewhere" },
+        "agent:set-branch",
       ),
     ).toThrow("Invalid IPC payload");
   });

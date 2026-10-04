@@ -86,6 +86,7 @@ import {
   getActiveAgentRun,
   getAgentRun,
   listAgentRuns,
+  setAgentRunBranch,
   updateAgentRunStatus,
 } from "./agent-run-store";
 import {
@@ -167,6 +168,13 @@ import type {
   TurnSettledEvent,
   WaitMemoryCandidateSummary,
 } from "./runtime";
+import {
+  branchContextLine,
+  type RunBranchSnapshot,
+  SessionBranchError,
+  snapshotRunBranch,
+} from "./session-branch";
+import { createSessionBranchDeps } from "./session-branch-deps";
 import { deriveSessionTitle, shouldReplaceSessionTitle } from "./session-title";
 import { describeAgentShellForPrompt, resolveAgentShell } from "./shell-resolver";
 import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-config";
@@ -2516,6 +2524,20 @@ export class PiSdkRuntime implements AgentRuntime {
         }
       }
     }
+    // L2: snapshot the session's branch for this run (frozen for the whole run; a switch
+    // is refused while it is active). A saved branch that no longer exists blocks the send.
+    let runBranch: RunBranchSnapshot | undefined;
+    try {
+      runBranch = await snapshotRunBranch(
+        createSessionBranchDeps({ emit: runtimeSession.emit }),
+        input.sessionId,
+      );
+    } catch (error) {
+      // Only the session-branch rules refuse the send; a git/store hiccup degrades to
+      // "no branch line" (like checkpoints), never a failed turn.
+      if (error instanceof SessionBranchError) throw failEarlyPrompt(error);
+      console.warn("[modus] run branch snapshot skipped:", error);
+    }
     const runInput: Parameters<typeof createAgentRun>[0] = {
       sessionId: input.sessionId,
       prompt: input.message,
@@ -2540,6 +2562,13 @@ export class PiSdkRuntime implements AgentRuntime {
       throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
     }
     if (probe) probe.runId = run.id;
+    if (runBranch) {
+      try {
+        setAgentRunBranch(run.id, runBranch.branch);
+      } catch (error) {
+        console.warn("[modus] run branch snapshot not stored:", error);
+      }
+    }
     const userMessageId = earlyUserMessageId ?? input.userMessageId ?? `user:${run.id}`;
     let outputTracker!: RunOutputTracker;
     let requiredChecks: ReturnType<typeof requiredChecksForRun> = [];
@@ -2905,7 +2934,11 @@ export class PiSdkRuntime implements AgentRuntime {
         `[modus-timing] composeTurnMessage done +${Date.now() - outputTracker.startedAt}ms`,
       );
       const images = buildTurnImages(input);
-      let turnMessage = message;
+      // L2: fixed context line from the run's branch snapshot (model-facing only; the
+      // visible user message is unchanged).
+      let turnMessage = runBranch
+        ? `<session_context>${escapeContextText(branchContextLine(runBranch))}</session_context>\n\n${message}`
+        : message;
       if (intentAssumption) {
         const safeAssumption = intentAssumption
           .replace(/&/g, "&amp;")
@@ -4287,4 +4320,9 @@ function lastAssistantOutput(sessionId: string): string | undefined {
 
 function isSubagentBusy(status: AgentSessionInfo["status"]): boolean {
   return status === "starting" || status === "running" || status === "blocked";
+}
+
+/** Escapes text placed inside a model-facing XML-ish context tag. */
+function escapeContextText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }

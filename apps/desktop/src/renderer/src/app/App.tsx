@@ -1033,14 +1033,6 @@ export function App() {
       .finally(() => hubRef.current.cancelPrepare(session.id));
   }
 
-  async function changeDefaultModel(nextModel: string): Promise<void> {
-    if (!nextModel) {
-      return;
-    }
-    setModel(nextModel);
-    await window.modus.model.setDefault(nextModel);
-  }
-
   async function updateModelThinking(modelId: string, thinkingVariant: string): Promise<void> {
     await window.modus.model.updateConfig({ model: modelId, thinkingVariant });
     await window.modus.model.setDefault(modelId);
@@ -1615,10 +1607,6 @@ export function App() {
                                   models={models}
                                   onContextChange={setHeroContextItems}
                                   onModeChange={setHeroMode}
-                                  onModelChange={(next) => void changeDefaultModel(next)}
-                                  onModelConfigChange={(next, thinkingVariant) =>
-                                    void updateModelThinking(next, thinkingVariant)
-                                  }
                                   onSubmit={(
                                     message,
                                     context,

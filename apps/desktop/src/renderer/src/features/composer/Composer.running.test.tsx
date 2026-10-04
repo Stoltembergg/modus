@@ -16,7 +16,6 @@ function renderComposer(isRunning: boolean) {
       models={[]}
       onAbort={vi.fn()}
       onContextChange={vi.fn()}
-      onModelChange={vi.fn()}
       onSubmit={vi.fn()}
       workspaceId={undefined}
     />,
@@ -42,7 +41,6 @@ describe("Composer running state (replaces the WebGL waves)", () => {
         models={[]}
         onAbort={vi.fn()}
         onContextChange={vi.fn()}
-        onModelChange={vi.fn()}
         onSubmit={vi.fn()}
         workspaceId={undefined}
       />,

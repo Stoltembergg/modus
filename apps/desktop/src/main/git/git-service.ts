@@ -1150,15 +1150,38 @@ async function linkedWorktreeForBranch(cwd: string, branch: string): Promise<str
  * to (or create + track) the matching local branch instead of detaching HEAD.
  * Git refuses (and we surface the error) when uncommitted changes would be lost.
  */
+/**
+ * True when the working tree has anything uncommitted: staged, unstaged or untracked
+ * (not ignored) files. The session branch picker refuses a switch in that state (L2,
+ * Debbie): no `checkout -f`, no automatic stash, so nothing the user has not committed is
+ * ever moved to another branch or lost.
+ */
+export async function hasUncommittedChanges(cwd: string): Promise<boolean> {
+  const output = await git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+  return output.length > 0;
+}
+
+export const UNCOMMITTED_SWITCH_MESSAGE =
+  "Há alterações não commitadas nesta pasta. Faça commit (ou descarte) antes de trocar de branch.";
+
 export async function checkoutBranch(
   cwd: string,
   name: string,
   remote = false,
+  options: { requireClean?: boolean } = {},
 ): Promise<GitActionResult> {
   const target = name.trim();
   if (!target) {
     throw new Error("Branch name is required.");
   }
+  // L2: only the session branch picker asks for a clean tree (requireClean). The Changes
+  // panel and the new-chat tray keep plain `git switch` (git itself refuses conflicting
+  // changes and carries the rest).
+  const refuseDirty = async (): Promise<void> => {
+    if (options.requireClean && (await hasUncommittedChanges(cwd))) {
+      throw new Error(UNCOMMITTED_SWITCH_MESSAGE);
+    }
+  };
   if (!remote) {
     const worktreePath = await linkedWorktreeForBranch(cwd, target);
     if (worktreePath) {
@@ -1169,6 +1192,7 @@ export async function checkoutBranch(
         output: `Branch "${target}" is checked out in a linked worktree: ${worktreePath}`,
       };
     }
+    await refuseDirty();
     return { kind: "ok", output: await git(cwd, ["switch", target]) };
   }
   const localName = target.includes("/") ? target.slice(target.indexOf("/") + 1) : target;
@@ -1182,8 +1206,10 @@ export async function checkoutBranch(
         output: `Branch "${localName}" is checked out in a linked worktree: ${worktreePath}`,
       };
     }
+    await refuseDirty();
     return { kind: "ok", output: await git(cwd, ["switch", localName]) };
   }
+  await refuseDirty();
   return { kind: "ok", output: await git(cwd, ["switch", "--track", target]) };
 }
 

@@ -91,6 +91,7 @@ import type {
   ResolvedContext,
   ResumeGroupExecutionInput,
   RuleFileInfo,
+  SessionBranchState,
   SkillDetail,
   SkillInfo,
   SkillSelection,
@@ -327,6 +328,13 @@ export type ModusApi = {
       /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */
       planId?: string;
     }): Promise<void>;
+    /** L2: the session's branch (resolved in the main process). */
+    branchState(sessionId: string): Promise<SessionBranchState>;
+    /**
+     * L2: switch the session to a local branch by NAME (never a path). Refused while a run
+     * is active or the worktree has uncommitted changes.
+     */
+    setBranch(input: { sessionId: string; branch: string }): Promise<SessionBranchState>;
     reviewPlanWithHyperPlan(input: {
       sessionId: string;
       planId: string;

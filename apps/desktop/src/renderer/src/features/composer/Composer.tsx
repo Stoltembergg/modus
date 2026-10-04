@@ -1,10 +1,6 @@
-import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
-import { Slider } from "@base-ui/react/slider";
 import {
-  IconCheck,
   IconChevronDown,
-  IconHelpCircle,
   IconListCheck,
   IconLoader2,
   IconPlugConnected,
@@ -15,12 +11,10 @@ import {
 import { AnimatePresence, m } from "motion/react";
 import {
   type ClipboardEvent,
-  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
   useCallback,
-  useEffect,
   useRef,
   useState,
 } from "react";
@@ -32,24 +26,16 @@ import type {
   PromptDelivery,
   PromptImageAttachment,
   SkillSelection,
-  ThinkingOption,
 } from "../../../../shared/contracts";
 import { ComposerRunningSweep } from "../../components/ui/ComposerRunningSweep";
 import { ImageThumb } from "../../components/ui/ImageViewer";
 import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
-import {
-  modelThinkingOptions,
-  selectedThinkingLabel,
-  selectedThinkingOption,
-} from "../../lib/modelThinking";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
-import { ProviderLogo } from "../settings/ProviderLogo";
 import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
 import { MentionEditor, type MentionEditorHandle, type MentionEditorPart } from "./MentionEditor";
-import { MODEL_CHIP_BASE, MODEL_CHIP_INTERACTIVE, MODEL_CHIP_TONE } from "./modelChipStyle";
 import { SlashMenu } from "./SlashMenu";
 import {
   type ComposerImage,
@@ -83,8 +69,12 @@ type ComposerProps = {
   trailingActions?: ReactNode;
   /** Opens the first-class Connections view for Composio and provider access. */
   onOpenConnections?(): void;
-  onModelChange(model: string): void;
-  onModelConfigChange?(model: string, thinkingVariant: string): Promise<void> | void;
+  /**
+   * L2: the composer has NO model or effort picker for anyone; the model comes from the
+   * default (Settings › Model & Provider / plan default). Only the branch picker remains,
+   * rendered by the host (session state) in this slot.
+   */
+  branchControl?: ReactNode;
   onContextChange(items: ContextItem[]): void;
   onSubmit(
     message: string,
@@ -186,8 +176,7 @@ export function Composer({
   trailingActions,
   isRunning = false,
   onAbort,
-  onModelChange,
-  onModelConfigChange,
+  branchControl,
   onOpenConnections,
   onContextChange,
   onCompact,
@@ -261,16 +250,6 @@ export function Composer({
   const hasInlineTokens = contextItems.length > 0 || hasSelectedSkills;
   const hasContent = hasText || hasImages || contextItems.length > 0 || hasSelectedSkills;
   const currentModel = models.find((item) => item.id === model) ?? models[0];
-  const effortThinkingOptions = currentModel ? modelThinkingOptions(currentModel) : [];
-  const effortThinkingSelection = currentModel ? selectedThinkingOption(currentModel) : undefined;
-  const discreteEffortOptions = currentModel?.thinkingBudget ? [] : effortThinkingOptions;
-  const effortMaxed = Boolean(
-    currentModel?.supportsThinking &&
-      discreteEffortOptions.length > 1 &&
-      effortThinkingSelection &&
-      discreteEffortOptions[discreteEffortOptions.length - 1]?.value ===
-        effortThinkingSelection.value,
-  );
   const {
     activeIndex,
     isOpen,
@@ -585,7 +564,6 @@ export function Composer({
           submitting && "pointer-events-none opacity-60",
         )}
         {...(!integrated ? { "data-composer-surface": "" } : {})}
-        {...(effortMaxed ? { "data-effort-max": "" } : {})}
         onDragLeave={() => setDragging(false)}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
@@ -700,12 +678,7 @@ export function Composer({
                 onCycle={() => setMode(cycleComposerMode(mode))}
                 onExit={() => setMode("build")}
               />
-              <ModelSelect
-                model={model}
-                models={models}
-                onModelChange={onModelChange}
-                {...(onModelConfigChange ? { onModelConfigChange } : {})}
-              />
+              {branchControl}
               {onOpenConnections ? (
                 <button
                   aria-label="Connections"
@@ -834,312 +807,6 @@ function ModePill({
           <IconX aria-hidden size={ICON.xs} stroke={ICON_STROKE.xs} />
         </button>
       ) : null}
-    </div>
-  );
-}
-
-export function ModelSelect({
-  model,
-  models,
-  onModelChange,
-  onModelConfigChange,
-}: {
-  model: string;
-  models: ModelInfo[];
-  onModelChange(model: string): void;
-  onModelConfigChange?(model: string, thinkingVariant: string): Promise<void> | void;
-}) {
-  const current = models.find((item) => item.id === model) ?? models[0];
-  const thinkingOptions = current ? modelThinkingOptions(current) : [];
-  const thinkingSelection = current ? selectedThinkingOption(current) : undefined;
-  const effortAvailable = Boolean(
-    current?.supportsThinking && (current.thinkingBudget || thinkingOptions.length > 0),
-  );
-  const discreteEffortOptions = current?.thinkingBudget ? [] : thinkingOptions;
-  const effortLabel = effortAvailable && current ? selectedThinkingLabel(current) : "Off";
-  const [budgetDraft, setBudgetDraft] = useState("");
-  useEffect(() => {
-    if (!current?.id) {
-      setBudgetDraft("");
-      return;
-    }
-    setBudgetDraft(
-      current.thinkingLevel !== "off" && current.thinkingVariant
-        ? current.thinkingVariant
-        : current.thinkingBudget?.min !== undefined
-          ? String(current.thinkingBudget.min)
-          : "",
-    );
-  }, [current?.id, current?.thinkingBudget?.min, current?.thinkingLevel, current?.thinkingVariant]);
-
-  function applyBudget(): void {
-    const tokens = Number(budgetDraft);
-    const budget = current?.thinkingBudget;
-    if (
-      !budget ||
-      !Number.isSafeInteger(tokens) ||
-      tokens < 0 ||
-      (budget.min !== undefined && tokens < budget.min) ||
-      (budget.max !== undefined && tokens > budget.max)
-    ) {
-      return;
-    }
-    void onModelConfigChange?.(current.id, String(tokens));
-  }
-
-  const providerGroups = Array.from(
-    models
-      .reduce((groups, item) => {
-        const key = item.provider;
-        const group = groups.get(key);
-        if (group) {
-          group.models.push(item);
-        } else {
-          groups.set(key, {
-            provider: item.provider,
-            name: item.providerName ?? item.provider,
-            models: [item],
-          });
-        }
-        return groups;
-      }, new Map<string, { provider: string; name: string; models: ModelInfo[] }>())
-      .values(),
-  );
-
-  // C5: same chip look as the group composer's read-only model chip.
-  const chipClass = cn(MODEL_CHIP_BASE, MODEL_CHIP_TONE, MODEL_CHIP_INTERACTIVE);
-  // Prompt Bar: both model + effort chips turn spark purple at max effort.
-  const chipMaxClass =
-    "text-[color:var(--color-focus-ring-soft)] hover:text-[color:var(--color-focus-ring-soft)]";
-
-  if (!current) {
-    return (
-      <button className={`${chipClass} text-fg-faint`} type="button">
-        No model configured
-      </button>
-    );
-  }
-
-  const effortMaxed =
-    effortAvailable &&
-    discreteEffortOptions.length > 1 &&
-    thinkingSelection &&
-    discreteEffortOptions[discreteEffortOptions.length - 1]?.value === thinkingSelection.value;
-
-  return (
-    <div className="flex min-w-0 items-center gap-0.5">
-      <Menu.Root>
-        <Menu.Trigger
-          aria-label="Choose model"
-          className={cn(chipClass, effortMaxed && chipMaxClass)}
-        >
-          <ProviderLogo
-            framed={false}
-            name={current.providerName ?? current.provider}
-            provider={current.provider}
-            size="sm"
-          />
-          <span className="min-w-0 truncate">{current.name}</span>
-          <IconChevronDown className="shrink-0 opacity-70" size={ICON.xs} stroke={ICON_STROKE.xs} />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner align="start" side="top" sideOffset={8}>
-            <Menu.Popup
-              className="scroll-thin origin-(--transform-origin) w-[240px] max-w-[calc(100vw-24px)] overflow-y-auto popup-chrome popup-motion p-1"
-              style={{ maxHeight: "min(320px, var(--available-height))" }}
-            >
-              {providerGroups.map((group) => (
-                <div key={group.provider}>
-                  <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-2xs text-fg-faint uppercase tracking-wide">
-                    <ProviderLogo
-                      framed={false}
-                      name={group.name}
-                      provider={group.provider}
-                      size="sm"
-                    />
-                    <span className="truncate">{group.name}</span>
-                  </div>
-                  {group.models.map((item) => (
-                    <Menu.Item
-                      className="flex h-9 cursor-default items-center gap-2.5 rounded-lg px-2 text-sm outline-none select-none data-highlighted:bg-hover"
-                      key={item.id}
-                      onClick={() => onModelChange(item.id)}
-                    >
-                      <span className="min-w-0 flex-auto truncate font-medium text-fg">
-                        {item.name}
-                      </span>
-                      {!item.available ? (
-                        <span className="shrink-0 text-2xs text-fg-faint">off</span>
-                      ) : null}
-                      <span
-                        className="inline-flex w-4 shrink-0 justify-center text-fg-muted opacity-0 data-[on]:opacity-100"
-                        data-on={item.id === current.id ? "" : undefined}
-                      >
-                        <IconCheck size={ICON.sm} stroke={ICON_STROKE.sm} />
-                      </span>
-                    </Menu.Item>
-                  ))}
-                </div>
-              ))}
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
-
-      <Menu.Root>
-        <Menu.Trigger
-          aria-label="Choose effort"
-          className={cn(chipClass, effortMaxed && chipMaxClass)}
-          disabled={!effortAvailable || !onModelConfigChange}
-        >
-          <IconSparkles className="shrink-0" size={ICON.sm} stroke={ICON_STROKE.sm} />
-          <span className="max-w-[7rem] truncate @md:max-w-none">{effortLabel}</span>
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner align="start" side="top" sideOffset={8}>
-            <Menu.Popup className="origin-(--transform-origin) w-[248px] max-w-[calc(100vw-24px)] popup-chrome popup-motion px-3.5 pt-3 pb-3.5">
-              <div className="flex items-center gap-2 text-sm leading-[18px]">
-                <span className="text-fg-faint">Effort</span>
-                <span className="font-medium text-fg">{effortLabel}</span>
-                <span
-                  className="ml-auto inline-flex text-fg-faint"
-                  title="Higher effort thinks longer before answering"
-                >
-                  <IconHelpCircle size={ICON.sm} stroke={ICON_STROKE.sm} />
-                </span>
-              </div>
-
-              {current.thinkingBudget ? (
-                <div className="mt-3 grid gap-2">
-                  <Menu.Item
-                    className="flex h-8 cursor-default items-center justify-between gap-3 rounded-lg px-2 text-sm outline-none select-none data-highlighted:bg-hover"
-                    onClick={() => void onModelConfigChange?.(current.id, "off")}
-                  >
-                    <span>Off</span>
-                    {current.thinkingLevel === "off" ? (
-                      <IconCheck className="text-fg-muted" size={ICON.sm} stroke={ICON_STROKE.sm} />
-                    ) : null}
-                  </Menu.Item>
-                  <div className="grid grid-cols-[minmax(0,1fr)_28px] gap-1">
-                    <input
-                      aria-label="Thinking token budget"
-                      className="h-8 min-w-0 rounded-lg border border-hairline bg-canvas px-2.5 text-fg-subtle text-sm outline-none focus:border-fg-faint"
-                      max={current.thinkingBudget.max}
-                      min={current.thinkingBudget.min ?? 0}
-                      onChange={(event) => setBudgetDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        event.stopPropagation();
-                        if (event.key === "Enter") applyBudget();
-                      }}
-                      placeholder="Tokens"
-                      type="number"
-                      value={budgetDraft}
-                    />
-                    <button
-                      aria-label="Apply thinking token budget"
-                      className="flex size-7 items-center justify-center rounded-lg text-fg-faint transition-colors hover:bg-hover hover:text-fg"
-                      onClick={applyBudget}
-                      type="button"
-                    >
-                      <IconCheck size={ICON.sm} stroke={ICON_STROKE.sm} />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <div className="mt-3 flex justify-between text-xs leading-4 text-fg-faint">
-                    <span>Faster</span>
-                    <span>Smarter</span>
-                  </div>
-                  <EffortEnergySlider
-                    disabled={!onModelConfigChange || discreteEffortOptions.length < 2}
-                    label={effortLabel}
-                    options={discreteEffortOptions}
-                    selectedValue={thinkingSelection?.value}
-                    syncKey={`${current.id}:${thinkingSelection?.value ?? ""}`}
-                    onCommit={(value) => void onModelConfigChange?.(current.id, value)}
-                  />
-                </>
-              )}
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
-    </div>
-  );
-}
-
-function EffortEnergySlider({
-  disabled,
-  label,
-  options,
-  selectedValue,
-  syncKey,
-  onCommit,
-}: {
-  disabled: boolean;
-  label: string;
-  options: ThinkingOption[];
-  selectedValue: string | undefined;
-  syncKey: string;
-  onCommit(value: string): void;
-}) {
-  const selectedIndex = Math.max(
-    0,
-    options.findIndex((option) => option.value === selectedValue),
-  );
-  const [preview, setPreview] = useState({ index: selectedIndex, syncKey });
-  const max = Math.max(1, options.length - 1);
-  const index = Math.min(preview.syncKey === syncKey ? preview.index : selectedIndex, max);
-  const energy = options.length > 1 ? index / (options.length - 1) : 0;
-
-  return (
-    <div
-      className="effort-energy mt-2"
-      data-maximum={!disabled && options.length > 1 && index === options.length - 1}
-      style={
-        {
-          "--effort-opacity": 0.7 + energy * 0.3,
-        } as CSSProperties
-      }
-    >
-      <Slider.Root
-        aria-label="Effort"
-        className="relative w-full"
-        disabled={disabled}
-        max={max}
-        min={0}
-        step={1}
-        thumbAlignment="edge"
-        value={index}
-        onValueChange={(nextIndex) => setPreview({ index: nextIndex, syncKey })}
-        onValueCommitted={(nextIndex) => {
-          const option = options[nextIndex];
-          if (option && option.value !== selectedValue) onCommit(option.value);
-        }}
-      >
-        <Slider.Control className="effort-energy-control relative flex h-[22px] touch-none items-center select-none data-disabled:opacity-35">
-          <Slider.Track className="effort-energy-track relative h-[22px] w-full overflow-hidden rounded-[11px]">
-            <Slider.Indicator className="effort-energy-fill absolute inset-y-0 rounded-[11px]" />
-            {options.map((option, optionIndex) => (
-              <span
-                aria-hidden="true"
-                className="effort-energy-stop absolute top-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full"
-                data-unfilled={optionIndex > index}
-                key={option.value}
-                style={{
-                  left: `calc(${(optionIndex / max) * 100}% + ${8 - (optionIndex / max) * 16}px)`,
-                }}
-              />
-            ))}
-          </Slider.Track>
-          <Slider.Thumb
-            className="effort-energy-thumb size-3.5 rounded-[7px] outline-none focus-visible:ring-2 focus-visible:ring-focus-ring-soft"
-            getAriaLabel={() => "Effort"}
-            getAriaValueText={(_, value) => options[value]?.label ?? label}
-          />
-        </Slider.Control>
-      </Slider.Root>
     </div>
   );
 }
