@@ -24,7 +24,12 @@ function targetFor(candidate: Candidate): {
 } {
   const { task, trigger } = candidate;
   if (trigger.kind === "review_requested" || trigger.kind === "task_qa_updated") {
-    if (trigger.kind === "review_requested" || task.verificationPolicy?.requireReview) {
+    if (
+      trigger.kind === "review_requested" ||
+      (trigger.kind === "task_qa_updated" &&
+        task.status === "in_review" &&
+        task.verificationPolicy?.requireReview)
+    ) {
       return {
         kind: "wake_reviewer",
         targetSessionId: task.reviewerSessionId,
@@ -49,19 +54,13 @@ function decisionFor(
     (id) => dependencies.get(id) === "done",
   );
   const gate = snapshot.workState.gates[task.id];
-  const qaMissing =
-    !gate ||
-    gate.reasonCodes.some(
-      (reason) =>
-        reason === "criterion-unverified" ||
-        reason === "verification-required" ||
-        reason === "evidence-unavailable" ||
-        reason === "source-unavailable",
-    );
+  const qaReadyForReview = snapshot.reviewReadiness[task.id] === "ready";
+  const gateReadyForReview =
+    gate?.reasonCodes.every(
+      (reason) => reason === "review-required" || reason === "criterion-unverified",
+    ) ?? false;
   const reviewState = snapshot.reviewStates[task.id];
   const reviewReady = reviewState === "pending";
-  const gateReadyForReview =
-    gate?.reasonCodes.every((reason) => reason === "review-required") ?? false;
   const member = snapshot.workState.members.find((item) => item.sessionId === targetSessionId);
   const budget = snapshot.workState.budgets;
 
@@ -71,15 +70,21 @@ function decisionFor(
   } else if (task.status === "blocked" && trigger.kind !== "task_unblocked") {
     kind = "suggest";
     reasonCode = "task-blocked";
-  } else if (desired.kind === "wake_reviewer" && qaMissing) {
+  } else if (desired.kind === "wake_reviewer" && task.status !== "in_review") {
+    kind = "suggest";
+    reasonCode = "review-unavailable";
+  } else if (desired.kind === "wake_reviewer" && (!qaReadyForReview || !gateReadyForReview)) {
     kind = "suggest";
     reasonCode = "qa-missing";
-  } else if (desired.kind === "wake_reviewer" && (!gateReadyForReview || !reviewReady)) {
+  } else if (desired.kind === "wake_reviewer" && !reviewReady) {
     kind = "suggest";
     reasonCode = "review-unavailable";
   } else if (trigger.kind === "review_changes_requested" && reviewState !== "changes_requested") {
     kind = "suggest";
     reasonCode = "review-unavailable";
+  } else if (!snapshot.workState.execution?.id) {
+    kind = "suggest";
+    reasonCode = "execution-unavailable";
   } else if (!targetSessionId) {
     kind = "suggest";
     reasonCode = "target-unassigned";
@@ -93,6 +98,7 @@ function decisionFor(
   } else if (
     budget.remainingAgentMessages <= 0 ||
     budget.remainingMemberWakes <= 0 ||
+    (snapshot.remainingWakesByMember[targetSessionId] ?? 0) <= 0 ||
     budget.remainingInputTokens <= 0
   ) {
     kind = "suggest";
@@ -149,9 +155,17 @@ export function decideGroupNextAction(
       continue;
     if (trigger.groupId !== snapshot.workState.groupId || trigger.executionId !== execution?.id)
       continue;
+    if (
+      (trigger.kind === "review_requested" &&
+        (trigger.fromStatus !== "in_progress" || trigger.toStatus !== "in_review")) ||
+      (trigger.kind === "review_changes_requested" &&
+        (trigger.fromStatus !== "in_review" || trigger.toStatus !== "in_progress"))
+    )
+      continue;
     const task = tasks.get(trigger.taskId);
     if (!task || task.groupId !== trigger.groupId || task.executionId !== trigger.executionId)
       continue;
+    if (trigger.toStatus && task.status !== trigger.toStatus) continue;
     if (
       task.stateVersion !== trigger.taskVersion ||
       task.status === "done" ||
@@ -167,6 +181,6 @@ export function decideGroupNextAction(
       a.task.id.localeCompare(b.task.id) ||
       a.trigger.sourceEventId.localeCompare(b.trigger.sourceEventId),
   );
-  const winner = candidates[0];
-  return winner ? decisionFor(winner, snapshot) : null;
+  const decisions = candidates.map((candidate) => decisionFor(candidate, snapshot));
+  return decisions.find((decision) => decision.kind !== "suggest") ?? decisions[0] ?? null;
 }

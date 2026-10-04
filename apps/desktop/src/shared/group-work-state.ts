@@ -212,8 +212,15 @@ export type GroupDecisionSnapshot = {
   explicitWakeSourceEventIds: string[];
   /** Live runtime availability, including busy or otherwise unavailable members. */
   memberAvailability: Record<string, "available" | "unavailable">;
+  /** Remaining wakes for each current member in this execution. Omitted targets have no allowance. */
+  remainingWakesByMember: Record<string, number>;
   /** Current task review state, resolved separately from the completion gate. */
   reviewStates: Record<string, "pending" | "changes_requested" | "approved" | "unavailable">;
+  /** Required QA checks before review; review-only criteria can be ready before approval. */
+  reviewReadiness: Record<
+    string,
+    "ready" | "missing" | "failed" | "skipped" | "stale" | "unavailable" | "user_confirmed"
+  >;
   stopRequested: boolean;
   waitingForUser: boolean;
 };
@@ -232,6 +239,9 @@ export type GroupTaskTrigger = {
   sourceEventId: string;
   /** Stable monotonic order assigned by the persisted event source. */
   sequence: number;
+  /** Status transition for review events, validated against the current task. */
+  fromStatus?: GroupTaskStatus;
+  toStatus?: GroupTaskStatus;
 };
 
 export type GroupProactivityDecision = {

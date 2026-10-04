@@ -38,6 +38,11 @@ const trigger = (
   executionId: "execution",
   sourceEventId: "event",
   sequence: 1,
+  ...(kind === "review_requested"
+    ? { fromStatus: "in_progress" as const, toStatus: "in_review" as const }
+    : kind === "review_changes_requested"
+      ? { fromStatus: "in_review" as const, toStatus: "in_progress" as const }
+      : {}),
   ...overrides,
 });
 const snapshot = (overrides: Partial<GroupDecisionSnapshot> = {}): GroupDecisionSnapshot => ({
@@ -47,7 +52,9 @@ const snapshot = (overrides: Partial<GroupDecisionSnapshot> = {}): GroupDecision
   triggers: [trigger("task_assigned")],
   explicitWakeSourceEventIds: [],
   memberAvailability: { owner: "available", reviewer: "available" },
+  remainingWakesByMember: { owner: 3, reviewer: 3 },
   reviewStates: { t: "pending" },
+  reviewReadiness: { t: "ready" },
   workState: {
     groupId: "g",
     tasks: [task("t")],
@@ -72,6 +79,12 @@ describe("decideGroupNextAction", () => {
       decideGroupNextAction(
         snapshot({
           triggers: [trigger(kind)],
+          workState: {
+            ...snapshot().workState,
+            tasks: [
+              task("t", { status: expectedKind === "wake_reviewer" ? "in_review" : "in_progress" }),
+            ],
+          },
           reviewStates: {
             t: kind === "review_changes_requested" ? "changes_requested" : "pending",
           },
@@ -93,7 +106,14 @@ describe("decideGroupNextAction", () => {
     "task_qa_updated",
   ] as const)("suggest mode only suggests for %s", (kind) => {
     const decision = decideGroupNextAction(
-      snapshot({ mode: "suggest", triggers: [trigger(kind)] }),
+      snapshot({
+        mode: "suggest",
+        triggers: [trigger(kind)],
+        workState: {
+          ...snapshot().workState,
+          tasks: [task("t", { status: kind === "review_requested" ? "in_review" : "in_progress" })],
+        },
+      }),
     );
     expect(decision).toMatchObject({ kind: "suggest", taskId: "t", sourceEventId: "event" });
     expect(decision?.targetSessionId).toBeUndefined();
@@ -134,8 +154,10 @@ describe("decideGroupNextAction", () => {
     const decision = decideGroupNextAction(
       snapshot({
         triggers: [trigger("task_qa_updated")],
+        reviewReadiness: { t: "missing" },
         workState: {
           ...snapshot().workState,
+          tasks: [task("t", { status: "in_review" })],
           gates: {
             t: { satisfied: false, reasonCodes: ["criterion-unverified", "review-required"] },
           },
@@ -241,8 +263,10 @@ describe("decideGroupNextAction", () => {
       decideGroupNextAction(
         snapshot({
           triggers: [trigger("review_requested")],
+          reviewReadiness: { t: "missing" },
           workState: {
             ...snapshot().workState,
+            tasks: [task("t", { status: "in_review" })],
             gates: {
               t: { satisfied: false, reasonCodes: ["criterion-unverified", "review-required"] },
             },
@@ -250,6 +274,122 @@ describe("decideGroupNextAction", () => {
         }),
       ),
     ).toMatchObject({ kind: "suggest", reasonCode: "qa-missing" });
+  });
+
+  it("wakes the reviewer for a review-only criterion without claiming completion", () => {
+    const decision = decideGroupNextAction(
+      snapshot({
+        triggers: [trigger("review_requested")],
+        workState: {
+          ...snapshot().workState,
+          tasks: [
+            task("t", {
+              status: "in_review",
+              criteria: [
+                { id: "review-only", description: "Inspect result", requiredCheckKinds: [] },
+              ],
+            }),
+          ],
+          gates: {
+            t: { satisfied: false, reasonCodes: ["review-required", "criterion-unverified"] },
+          },
+        },
+        reviewReadiness: { t: "ready" },
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "wake_reviewer", targetSessionId: "reviewer" });
+  });
+
+  it("requires a current completion gate alongside pre-review readiness", () => {
+    const decision = decideGroupNextAction(
+      snapshot({
+        triggers: [trigger("review_requested")],
+        workState: {
+          ...snapshot().workState,
+          tasks: [task("t", { status: "in_review" })],
+          gates: {},
+        },
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "suggest", reasonCode: "qa-missing" });
+  });
+
+  it("keeps QA updates with the owner until review is requested", () => {
+    expect(
+      decideGroupNextAction(snapshot({ triggers: [trigger("task_qa_updated")] })),
+    ).toMatchObject({
+      kind: "wake_owner",
+      targetSessionId: "owner",
+    });
+    expect(
+      decideGroupNextAction(
+        snapshot({
+          triggers: [trigger("review_requested")],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("requires the review source transition to match the current review state", () => {
+    expect(
+      decideGroupNextAction(
+        snapshot({
+          triggers: [trigger("review_requested", { toStatus: "in_progress" })],
+          workState: { ...snapshot().workState, tasks: [task("t", { status: "in_review" })] },
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("never wakes without an active bound execution", () => {
+    const { executionId: _taskExecutionId, ...unboundTask } = task("t");
+    const { executionId: _triggerExecutionId, ...unboundTrigger } = trigger("task_assigned");
+    const { execution: _execution, ...unboundWorkState } = snapshot().workState;
+    const decision = decideGroupNextAction(
+      snapshot({
+        triggers: [unboundTrigger],
+        workState: { ...unboundWorkState, tasks: [unboundTask] },
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "suggest", reasonCode: "execution-unavailable" });
+  });
+
+  it("respects a capped owner despite positive aggregate wake budget", () => {
+    expect(
+      decideGroupNextAction(snapshot({ remainingWakesByMember: { owner: 0, reviewer: 3 } })),
+    ).toMatchObject({
+      kind: "suggest",
+      reasonCode: "budget-exhausted",
+    });
+  });
+
+  it("lets a ready lower-priority wake outrank a blocked higher-priority suggestion", () => {
+    const input = snapshot({
+      triggers: [
+        trigger("task_assigned", {
+          taskId: "blocked",
+          sourceEventId: "blocked-event",
+          sequence: 1,
+        }),
+        trigger("task_assigned", { taskId: "ready", sourceEventId: "ready-event", sequence: 2 }),
+      ],
+      workState: {
+        ...snapshot().workState,
+        tasks: [
+          task("blocked", { priority: "high", dependencyIds: ["missing"] }),
+          task("ready", { priority: "low" }),
+        ],
+        gates: {
+          blocked: { satisfied: false, reasonCodes: ["dependency-incomplete"] },
+          ready: { satisfied: true, reasonCodes: [] },
+        },
+      },
+    });
+    expect(decideGroupNextAction(input)).toMatchObject({
+      kind: "wake_owner",
+      taskId: "ready",
+      sourceEventId: "ready-event",
+    });
   });
 
   it("arbitrates priority, then sequence, then task ID", () => {
