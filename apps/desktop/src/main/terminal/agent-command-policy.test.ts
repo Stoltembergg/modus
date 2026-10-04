@@ -187,6 +187,23 @@ describe.skipIf(process.platform === "win32")("safe npm execution policy", () =>
       expect(protectedSelection.stdout).not.toMatch(/ROOT_SAFE|OTHER_SAFE/);
     });
   });
+  it("shows npx is outside the policy while inherited script-shell config remains effective", () => {
+    withFixture((cwd, env) => {
+      writeFileSync(join(cwd, ".npmrc"), "script-shell=/bin/true\n");
+      env.npm_config_script_shell = "/bin/true";
+      env.NPM_CONFIG_SCRIPT_SHELL = "/bin/true";
+      const result = spawnSync("npm", ["config", "get", "script-shell"], {
+        cwd,
+        env,
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe("/bin/true");
+      // Do not execute npx: npm exec consumes this same effective config.
+      expect(parseControlledNpmCheck("npx vitest run")).toBeUndefined();
+      expect(controlledAgentCommand("npx vitest run", cwd)).toBe("npx vitest run");
+    });
+  });
   it.each([
     "project",
     "user",

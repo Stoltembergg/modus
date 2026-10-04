@@ -2047,7 +2047,7 @@ fs.renameSync("original-manifest-link", "package.json");
     const commands = [
       ["bash", "npm test", undefined],
       ["terminal_run", "npm run typecheck", "typecheck"],
-      ["terminal_run", "npx vitest run", "tests"],
+      ["terminal_run", "npx vitest run", undefined],
       ["terminal_run", "npm --workspace @modus/desktop run typecheck", "typecheck"],
       ["terminal_run", "echo npm test", undefined],
       ["terminal_run", "printf 'vitest'", undefined],
@@ -2083,7 +2083,7 @@ fs.renameSync("original-manifest-link", "package.json");
     ).toEqual([
       undefined,
       "typecheck",
-      "tests",
+      undefined,
       "typecheck",
       undefined,
       undefined,

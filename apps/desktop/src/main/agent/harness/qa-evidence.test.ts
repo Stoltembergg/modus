@@ -41,6 +41,37 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 describe("controlled package execution", () => {
+  it.each(["bash", "terminal_run"])("does not certify npx/npm exec through %s", (tool) => {
+    for (const command of [
+      "npx vitest run",
+      "npx tsc --noEmit",
+      "npx eslint .",
+      "npx vite build",
+      "npx biome check",
+      "npx jest",
+      "npx mocha",
+      "npm exec -- vitest run",
+    ]) {
+      expect(recognizeCheckInvocation(tool, command)).toBeUndefined();
+      const qa = summarize(commandPair(command, tool));
+      expect(qa).toMatchObject({ status: "missing" });
+      expect(qa.evidence.every((reference) => reference.status !== "passed")).toBe(true);
+    }
+    expect(recognizeCheckInvocation(tool, "vitest run")?.checkName).toBe("tests");
+    expect(recognizeCheckInvocation(tool, "tsc --noEmit")?.checkName).toBe("typecheck");
+  });
+  it("does not certify a package script whose body executes npx", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-npx-package-body-"));
+    try {
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "npx vitest run" } }),
+      );
+      expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)).toBeUndefined();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
   it.each([
     "npm --script-shell=/bin/true test",
     "npm --workspaces test",
@@ -497,12 +528,11 @@ describe("summarizeRunQA", () => {
 
   it.each([
     "vitest run",
-    "npx vitest run",
-    "npx vitest run --root .",
+    "vitest run --root .",
+    "jest",
     "bash",
   ])("recognizes a supported full-project check invocation %s", (command) => {
-    const events =
-      command === "bash" ? commandPair("npx vitest run", "bash") : commandPair(command);
+    const events = command === "bash" ? commandPair("vitest run", "bash") : commandPair(command);
     expect(summarize(events)).toMatchObject({ status: "passed" });
   });
 
@@ -544,10 +574,10 @@ describe("summarizeRunQA", () => {
   });
 
   it.each([
-    "npx vitest run --help",
-    "npx vitest run -h",
-    "npx vitest run --version",
-    "npx vitest run -v",
+    "vitest run --help",
+    "vitest run -h",
+    "vitest run --version",
+    "vitest run -v",
     "npm test -- --help",
     "npm test -- -h",
     "npm test -- --version",
@@ -607,11 +637,11 @@ describe("summarizeRunQA", () => {
   });
 
   it("does not treat missing scope as blanket coverage for scoped checks", () => {
-    expect(summarize(commandPair("npx vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
+    expect(summarize(commandPair("vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
       status: "missing",
     });
     expect(
-      summarize(commandPair("npx vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
+      summarize(commandPair("vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
         "src/a.ts",
       ]),
     ).toMatchObject({ status: "passed" });
@@ -639,12 +669,14 @@ describe("summarizeRunQA", () => {
     };
     expect(summarize([...check, edit])).toMatchObject({ status: "missing" });
     expect(summarize([...check, shell])).toMatchObject({ status: "missing" });
-    expect(summarize([edit, ...commandPair("npx vitest run")])).toMatchObject({ status: "passed" });
+    expect(summarize([edit, ...commandPair("vitest run")])).toMatchObject({ status: "passed" });
   });
 
   it.each([
     "biome check --write src/a.ts",
     "eslint --fix src/a.ts",
+    "npx biome check --write src/a.ts",
+    "npx eslint --fix src/a.ts",
     "npm run lint -- --fix",
     "npm run lint -- --apply",
     "npm run lint -- --apply=unsafe",
@@ -656,9 +688,9 @@ describe("summarizeRunQA", () => {
 
   it("allows a fresh non-mutating check after a source-mutating invocation to pass", () => {
     const result = summarize([
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
       ...commandPair("npm run lint -- --fix"),
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
     ]);
     expect(result).toMatchObject({ required: true, status: "passed" });
     expect(result.evidence).toEqual([expect.objectContaining({ status: "passed" })]);
@@ -666,9 +698,9 @@ describe("summarizeRunQA", () => {
 
   it("allows a fresh check after an apply fixer but does not treat the fixer as the pass", () => {
     const result = summarize([
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
       ...commandPair("npm run lint -- --apply=unsafe"),
-      ...commandPair("npx vitest run"),
+      ...commandPair("vitest run"),
     ]);
     expect(result).toMatchObject({ status: "passed" });
     expect(result.evidence).toEqual([

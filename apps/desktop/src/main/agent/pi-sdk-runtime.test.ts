@@ -6707,7 +6707,7 @@ describe("PiSdkRuntime", () => {
       },
     });
     const checkCalls = [
-      ["npx vitest run", false, { exitCode: 0 }],
+      ["vitest run", false, { exitCode: 0 }],
       ["tsc --noEmit", true, { exitCode: 1 }],
       ["eslint .", false, { skipped: true }],
     ] as const;

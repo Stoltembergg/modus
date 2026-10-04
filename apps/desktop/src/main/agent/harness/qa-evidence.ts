@@ -521,6 +521,9 @@ export function recognizeCheckInvocation(
       kind = "build";
       argumentStart = 3;
     }
+    // npx routes through npm exec and its configurable script-shell. Neither
+    // executor applies a pinned policy for it; only mutation invalidation is safe.
+    if (!mutatesSource) return undefined;
   } else if (executable === "vitest" && tokens[1]?.toLowerCase() === "run") {
     kind = "tests";
     argumentStart = 2;
