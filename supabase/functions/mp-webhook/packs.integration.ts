@@ -92,13 +92,13 @@ Deno.test({
         await admin`select private.mp_create_purchase(${userId}, 'credits_5k') as r`;
       assertEquals(
         [purchase.code, purchase.credits, purchase.amount_minor],
-        ["created", 5000, 3490],
+        ["created", 5000, 3690],
       );
       const pay: MpPayment = {
         id: "660001",
         status: "approved",
         status_detail: "accredited",
-        amount_minor: 3490,
+        amount_minor: 3690,
         refunded_minor: 0,
         live_mode: false,
         collector_id: "777",
@@ -146,19 +146,126 @@ Deno.test({
       assertEquals(await state(), `${5000 - used}+0|${5000 - used}`);
 
       // Partial refund (50%): only this lot, capped at what is left.
-      payments.set(pay.id, { ...pay, refunded_minor: 1745 });
+      payments.set(pay.id, { ...pay, refunded_minor: 1845 });
       assertEquals((await notify(pay.id, "pk-3")).code, "reversed");
       assertEquals(await state(), `${2500 - used}+0|${2500 - used}`);
 
       // Chargeback: the rest of the lot, account blocked, Free models only.
-      payments.set(pay.id, { ...pay, status: "charged_back", refunded_minor: 3490 });
+      payments.set(pay.id, { ...pay, status: "charged_back", refunded_minor: 3690 });
       assertEquals((await notify(pay.id, "pk-4")).code, "reversed");
       assertEquals(await state(), "0+0|0");
       const [{ shortfall, status }] =
-        await admin`select shortfall, status from public.credit_purchases where id = ${purchase.purchase_id}`;
+        await admin`select l.shortfall, cp.status from public.credit_lots l
+                      join public.credit_purchases cp on cp.id = l.purchase_id
+                     where l.payment_id = ${Number(pay.id)}`;
       assertEquals([Number(shortfall), status], [used, "charged_back"]);
       assertEquals((await routerDb.getPlan(userId)).plan, "free");
     } finally {
+      await up.close();
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
+  name: "L5a review: the same purchase paid twice -> two lots via the webhook; a pro (25k) lot unlocks Fable, a starter lot does not",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false, onnotice: () => {} });
+    const billing = createPostgresBillingDb(dbUrl ?? "");
+    const routerDb = createPostgresRouterDb(dbUrl ?? "");
+    const FABLE = "anthropic/claude-fable-5";
+    const up = fakeUpstream(async (seen) => {
+      await Promise.resolve();
+      const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
+      return new Response(
+        sse([
+          { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] },
+          { ...head, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+          { ...head, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5 } },
+        ]),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    // Fable as a premium model: Starter lists the non-premium models, Pro keeps all (null).
+    const [{ allowed: starterBefore }] =
+      await admin`select allowed_models as allowed from public.plans where plan = 'starter'`;
+    try {
+      await admin`update public.plans
+                     set allowed_models = array['deepseek/deepseek-flash', 'zai/glm-5.3-flash']
+                   where plan = 'starter'`;
+      const [{ id: userId }] =
+        await admin`select tests.create_user('packs-fable@example.com', true) as id`;
+      const h = createRouterHandler({
+        db: routerDb,
+        getUser: () => Promise.resolve({ id: userId as string, email: null }),
+        config: routerConfig(up.baseUrl),
+        catalog: [...MODEL_CATALOG, { ...MODEL_CATALOG[0], id: FABLE, upstreamId: "fable" }],
+        log: () => {},
+      });
+      const call = async (key: string) => {
+        const res = await h(
+          completionRequest({ model: FABLE, messages: [{ role: "user", content: "hi" }] }, { key }),
+        );
+        const body = await res.json();
+        return [res.status, res.status === 200 ? body.model : body.error];
+      };
+      const pay = (id: string, ref: string, amount: number): MpPayment => ({
+        id,
+        status: "approved",
+        status_detail: "accredited",
+        amount_minor: amount,
+        refunded_minor: 0,
+        live_mode: false,
+        collector_id: "777",
+        currency: "BRL",
+        external_reference: ref,
+      });
+
+      // Starter (5k) lot: Fable not in the plan.
+      const [{ r: p5 }] =
+        await admin`select private.mp_create_purchase(${userId}, 'credits_5k') as r`;
+      const first = pay("690001", p5.purchase_id, 3690);
+      assertEquals((await billing.processMpPurchasePayment(first, EXPECT, null)).code, "credited");
+      assertEquals((await routerDb.getPlan(userId)).plan, "starter");
+      assertEquals(await call("fable-starter"), [403, "model_not_in_plan"]);
+
+      // The same purchase paid again (same preference): a second lot, credited once.
+      const second = pay("690002", p5.purchase_id, 3690);
+      const again = await billing.processMpPurchasePayment(second, EXPECT, null);
+      assertEquals([again.code, again.additional], ["credited", true]);
+      assertEquals(
+        (await billing.processMpPurchasePayment(second, EXPECT, null)).code,
+        "already_credited",
+      );
+      const lots =
+        await admin`select payment_id from public.credit_lots where purchase_id = ${p5.purchase_id}
+                    order by payment_id`;
+      assertEquals(
+        lots.map((l) => Number(l.payment_id)),
+        [690001, 690002],
+      );
+
+      // Pro (25k) lot: Fable unlocked.
+      const [{ r: p25 }] =
+        await admin`select private.mp_create_purchase(${userId}, 'credits_25k') as r`;
+      const big = pay("690003", p25.purchase_id, 18090);
+      assertEquals((await billing.processMpPurchasePayment(big, EXPECT, null)).code, "credited");
+      assertEquals(await routerDb.getPlan(userId), { plan: "pro", allowedModels: null });
+      assertEquals(await call("fable-pro"), [200, FABLE]);
+
+      // The pro lot refunded in full: back to the starter lots, Fable refused again.
+      const refunded = { ...big, status: "refunded", refunded_minor: 18090 };
+      assertEquals(
+        (await billing.processMpPurchasePayment(refunded, EXPECT, null)).code,
+        "reversed",
+      );
+      assertEquals((await routerDb.getPlan(userId)).plan, "starter");
+      assertEquals(await call("fable-after-refund"), [403, "model_not_in_plan"]);
+    } finally {
+      await admin`update public.plans set allowed_models = ${starterBefore} where plan = 'starter'`;
       await up.close();
       await admin.end();
     }

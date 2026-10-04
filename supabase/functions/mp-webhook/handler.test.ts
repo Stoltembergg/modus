@@ -361,7 +361,7 @@ Deno.test("L5a payment topic: not a purchase -> falls back to the subscription p
 });
 
 Deno.test("L5a payment topic: purchase rejections answer 200 and are not reprocessed", async () => {
-  for (const code of ["rejected_amount", "rejected_duplicate", "rejected_blocked", "pending"]) {
+  for (const code of ["rejected_amount", "rejected_collector", "rejected_blocked", "pending"]) {
     const { handler, names } = setup({ purchaseCode: code });
     const res = await handler(await notification({ requestId: `req-${code}` }));
     assertEquals([res.status, (await res.json()).code], [200, code]);

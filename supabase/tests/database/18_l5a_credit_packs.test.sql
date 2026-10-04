@@ -1,6 +1,6 @@
 -- L5a: Mercado Pago one-off credit packs. Subscriptions flag (default off),
 -- packs catalog, purchase creation, purchase payment webhook (verification,
--- pending vs approved, idempotency, duplicates), lots consumption order
+-- pending vs approved, idempotency, a purchase paid twice -> two lots), lots consumption order
 -- (allowance first, then lots oldest first), refund / chargeback (capped,
 -- shortfall, account block), Free top-up of the allowance part only, router
 -- access plan and the Free renewal batch isolation (a failing user).
@@ -12,7 +12,7 @@ select no_plan();
 \set expect '{"live_mode": false, "collector_id": "777"}'
 
 create function pg_temp.pay(p_ref uuid, p_id text, p_status text default 'approved',
-                            p_amount bigint default 3490, p_refunded bigint default 0,
+                            p_amount bigint default 3690, p_refunded bigint default 0,
                             p_live boolean default false, p_collector text default '777',
                             p_currency text default 'BRL')
 returns jsonb language sql as $$
@@ -81,7 +81,7 @@ select ok(not has_table_privilege('authenticated', 'public.credit_purchases', 'i
       and not has_table_privilege('anon', 'public.credit_lots', 'select'),
   'purchases / lots: clients never write; anon never reads');
 select ok(not has_column_privilege('authenticated', 'public.credit_purchases', 'checkout_url', 'select')
-      and not has_column_privilege('authenticated', 'public.credit_purchases', 'payment_id', 'select'),
+      and not has_column_privilege('authenticated', 'public.credit_lots', 'payment_id', 'select'),
   'purchases: authenticated reads no provider ids');
 select ok(not has_table_privilege('service_role', 'private.free_renewal_errors', 'insert')
       and not has_table_privilege('authenticated', 'private.free_renewal_errors', 'select'),
@@ -92,16 +92,16 @@ select ok(not has_table_privilege('service_role', 'private.free_renewal_errors',
 -- ---------------------------------------------------------------------------
 select is((select string_agg(pack_id || ':' || credits || ':' || currency || ':' || amount_minor || ':' || access_plan,
                              ',' order by sort_order) from public.credit_packs),
-  'credits_5k:5000:BRL:3490:starter,credits_10k:10000:BRL:6890:starter,credits_25k:25000:BRL:17190:ultra',
-  'exactly three packs, BRL, margin-checked prices (34,90 / 68,90 / 171,90)');
-select ok((select bool_and((amount_minor / 100.0) * (1 - 0.0498) / (credits * 0.001 * 5.22) >= 1.25)
+  'credits_5k:5000:BRL:3690:starter,credits_10k:10000:BRL:7290:starter,credits_25k:25000:BRL:18090:pro',
+  'exactly three packs, BRL, margin-checked prices (36,90 / 72,90 / 180,90); 25k -> pro');
+select ok((select bool_and((amount_minor / 100.0) * (1 - 0.0498) / (credits * 0.001 * 5.50) >= 1.25)
              from public.credit_packs),
-  'every pack: margin >= 1.25 after the 4.98% MP card fee at USD/BRL 5.22');
+  'every pack: margin >= 1.25 after the 4.98% MP card fee at the USD/BRL 5.50 buffer');
 
 update private.billing_settings set mercadopago_subscriptions_enabled = false;
 select tests.as_anon();
 select is((select string_agg(plan || ':' || kind || ':' || amount_minor, ',') from public.get_billing_catalog()),
-  'credits_5k:pack:3490,credits_10k:pack:6890,credits_25k:pack:17190',
+  'credits_5k:pack:3690,credits_10k:pack:7290,credits_25k:pack:18090',
   'subscriptions off: catalog lists only the packs');
 select tests.clear_authentication();
 select tests.create_user('l5-a@example.com', true) as a \gset
@@ -134,7 +134,7 @@ select pg_temp.buy(:'a', 'credits_5k') as p1 \gset
 select tests.clear_authentication();
 select is((select pack_id || ':' || credits || ':' || amount_minor || ':' || currency || ':' || status
              from public.credit_purchases where id = :'p1'),
-  'credits_5k:5000:3490:BRL:created', 'purchase frozen from the DB pack');
+  'credits_5k:5000:3690:BRL:created', 'purchase frozen from the DB pack');
 select tests.as_service_role();
 select is(private.mp_link_purchase(:'p1', 'pref-1', 'https://mp.test/p1') ->> 'code', 'linked', 'link preference');
 select is(private.mp_link_purchase(:'p1', 'pref-1', 'https://mp.test/p1') ->> 'code', 'already_linked', 'link again');
@@ -155,7 +155,7 @@ select is(private.process_mp_purchase_payment(
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_live => true)), 'rejected_live_mode', 'live_mode mismatch');
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_collector => '999')), 'rejected_collector', 'collector mismatch');
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_currency => 'USD')), 'rejected_currency', 'currency mismatch');
-select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_amount => 3489)), 'rejected_amount', 'amount below the frozen price');
+select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_amount => 3689)), 'rejected_amount', 'amount below the frozen price');
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001', p_amount => 9999)), 'rejected_amount',
   'the current pack price is not accepted for an older purchase');
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001', 'pending')), 'pending', 'pending: nothing granted');
@@ -163,17 +163,16 @@ select is(pg_temp.process(pg_temp.pay(:'p1', '5001', 'in_process')), 'pending', 
 select tests.clear_authentication();
 select is(pg_temp.state(:'a'), '1000+0|', 'still only the Free credits');
 select is((select status from public.credit_purchases where id = :'p1'), 'created', 'purchase still created');
-update public.credit_packs set amount_minor = 3490 where pack_id = 'credits_5k';
+update public.credit_packs set amount_minor = 3690 where pack_id = 'credits_5k';
 
 select tests.as_service_role();
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001')), 'credited', 'approved: credited');
 select is(pg_temp.process(pg_temp.pay(:'p1', '5001')), 'already_credited', 'redelivery: idempotent');
-select is(pg_temp.process(pg_temp.pay(:'p1', '5002')), 'rejected_duplicate',
-  'a second approved payment for the same purchase is not credited');
 select tests.clear_authentication();
 select is(pg_temp.state(:'a'), '6000+0|5000', 'balance 1000 + 5000, one lot of 5000');
-select is((select status || ':' || payment_id from public.credit_purchases where id = :'p1'), 'paid:5001',
-  'purchase paid by 5001');
+select is((select cp.status || ':' || l.payment_id from public.credit_purchases cp
+             join public.credit_lots l on l.purchase_id = cp.id where cp.id = :'p1'), 'paid:5001',
+  'purchase paid; its lot is keyed by payment 5001');
 select is((select string_agg(kind || ':' || amount, ',') from public.credit_transactions
             where user_id = :'a' and kind = 'purchase'), 'purchase:5000', 'one purchase ledger row');
 select is((select count(*)::int from public.credit_purchases where user_id = :'a'), 1, 'one purchase');
@@ -183,7 +182,7 @@ select is((select count(*)::int from public.credit_purchases where user_id = :'a
 -- ---------------------------------------------------------------------------
 select tests.as_service_role();
 select pg_temp.buy(:'a', 'credits_10k') as p2 \gset
-select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 6890)), 'credited', 'second pack credited');
+select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 7290)), 'credited', 'second pack credited');
 select tests.clear_authentication();
 update public.credit_lots set created_at = now() - interval '1 hour' where purchase_id = :'p1';
 select is(pg_temp.state(:'a'), '16000+0|5000,10000', 'two lots');
@@ -223,28 +222,29 @@ select is((select amount from public.credit_transactions
 -- Refunds / chargeback: only this purchase's lot, capped, shortfall
 -- ---------------------------------------------------------------------------
 select tests.as_service_role();
-select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 6890, p_refunded => 3445)), 'reversed',
+select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 7290, p_refunded => 3645)), 'reversed',
   'partial refund (50%): reversed');
-select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 6890, p_refunded => 3445)), 'already_credited',
+select is(pg_temp.process(pg_temp.pay(:'p2', '5003', p_amount => 7290, p_refunded => 3645)), 'already_credited',
   'same partial refund again: idempotent');
 select tests.clear_authentication();
 select is(pg_temp.state(:'a'), '5300+0|0,4300', 'half of the 10k pack (5000) taken from its lot');
-select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_purchases where id = :'p2'),
-  '5000:0:paid', 'purchase: 5000 reversed, no shortfall, still paid');
+select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_lots where payment_id = 5003),
+  '5000:0:credited', 'lot of 5003: 5000 reversed, no shortfall, still credited');
 select tests.as_service_role();
-select is(pg_temp.process(pg_temp.pay(:'p2', '5003', 'refunded', 6890, 6890)), 'reversed', 'full refund');
+select is(pg_temp.process(pg_temp.pay(:'p2', '5003', 'refunded', 7290, 7290)), 'reversed', 'full refund');
 select tests.clear_authentication();
 select is(pg_temp.state(:'a'), '1000+0|0,0', 'lot emptied; the allowance part is never taken by a refund');
-select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_purchases where id = :'p2'),
+select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_lots where payment_id = 5003),
   '10000:700:refunded', 'only 4300 left in the lot: shortfall 700 (spent credits)');
 select is((select private.account_blocked(:'a')), false, 'a refund does not block');
 -- The refunded 5k purchase (lot already empty): chargeback blocks, nothing to take.
 select tests.as_service_role();
-select is(pg_temp.process(pg_temp.pay(:'p1', '5001', 'charged_back', 3490, 3490)), 'reversed', 'chargeback');
+select is(pg_temp.process(pg_temp.pay(:'p1', '5001', 'charged_back', 3690, 3690)), 'reversed', 'chargeback');
 select tests.clear_authentication();
 select is(pg_temp.state(:'a'), '1000+0|0,0', 'chargeback never debits the allowance part');
-select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_purchases where id = :'p1'),
-  '5000:5000:charged_back', 'chargeback: full shortfall recorded');
+select is((select reversed_credits || ':' || shortfall || ':' || status from public.credit_lots where payment_id = 5001),
+  '5000:5000:charged_back', 'chargeback: full shortfall recorded on the lot');
+select is((select status from public.credit_purchases where id = :'p1'), 'charged_back', 'purchase charged_back');
 select is((select private.account_blocked(:'a')), true, 'chargeback blocks the account');
 select tests.as_service_role();
 select is(private.mp_create_purchase(:'a', 'credits_5k') ->> 'code', 'blocked', 'blocked: no new purchase');
@@ -252,7 +252,7 @@ select tests.clear_authentication();
 select is(private.free_renewal_check(:'a', now() - interval '1 day') ->> 'code', 'blocked', 'blocked: no Free renewal');
 -- A webhook for a purchase created before the block is not credited.
 insert into public.credit_purchases (id, user_id, pack_id, credits, amount_minor, currency)
-values ('00000000-0000-4000-8000-0000000000b1', :'a', 'credits_5k', 5000, 3490, 'BRL');
+values ('00000000-0000-4000-8000-0000000000b1', :'a', 'credits_5k', 5000, 3690, 'BRL');
 select tests.as_service_role();
 select is(pg_temp.process(pg_temp.pay('00000000-0000-4000-8000-0000000000b1', '5009')), 'rejected_blocked',
   'blocked: an approved payment is not credited');
@@ -268,13 +268,75 @@ select private.reserve_credits(:'c', 'l5-c1', 5500);
 select tests.clear_authentication();
 select is(pg_temp.state(:'c'), '500+5500|5000', 'C: 5500 reserved in flight');
 select tests.as_service_role();
-select is(pg_temp.process(pg_temp.pay(:'pc', '5010', 'refunded', 3490, 3490)), 'reversed', 'C: refund in flight');
+select is(pg_temp.process(pg_temp.pay(:'pc', '5010', 'refunded', 3690, 3690)), 'reversed', 'C: refund in flight');
 select tests.clear_authentication();
 select is(pg_temp.state(:'c'), '0+5500|4500', 'C: only the available balance (500) is taken, never the reserve');
-select is((select shortfall from public.credit_purchases where id = :'pc'), 4500::bigint, 'C: shortfall 4500');
+select is((select shortfall from public.credit_lots where payment_id = 5010), 4500::bigint, 'C: shortfall 4500');
 select ok((select sum(remaining) from public.credit_lots where user_id = :'c')
           <= (select balance + reserved from public.credit_wallets where user_id = :'c'),
   'C: invariant sum(remaining) <= balance + reserved');
+
+-- ---------------------------------------------------------------------------
+-- Review fix 2: one purchase paid twice (same preference) -> two lots, keyed by payment id
+-- ---------------------------------------------------------------------------
+select tests.create_user('l5-d@example.com', true) as d \gset
+select tests.as_service_role();
+select pg_temp.buy(:'d', 'credits_5k') as pd \gset
+select is(pg_temp.process(pg_temp.pay(:'pd', '7001')), 'credited', 'D: first payment credited');
+select is((private.process_mp_purchase_payment(pg_temp.pay(:'pd', '7002'), :'expect', null) ->> 'additional')::boolean,
+  true, 'D: a second approved payment of the same purchase is credited as an additional lot');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7002')), 'already_credited', 'D: second payment redelivered: idempotent');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7001')), 'already_credited', 'D: first payment redelivered: idempotent');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7003', p_amount => 3600)), 'rejected_amount',
+  'D: a third payment with the wrong amount');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7004', p_collector => '999')), 'rejected_collector',
+  'D: a third payment to another collector');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7005', p_live => true)), 'rejected_live_mode',
+  'D: a third payment in live mode');
+select is(pg_temp.process(pg_temp.pay(:'pd', '7006', p_currency => 'USD')), 'rejected_currency',
+  'D: a third payment in another currency');
+select tests.clear_authentication();
+select is(pg_temp.state(:'d'), '11000+0|5000,5000', 'D: two lots of 5000, nothing for the rejected payments');
+select is((select string_agg(payment_id::text, ',' order by payment_id) from public.credit_lots where user_id = :'d'),
+  '7001,7002', 'D: lots keyed by payment id');
+select is((select string_agg(idempotency_key || '=' || amount, ',' order by idempotency_key)
+             from public.credit_transactions where user_id = :'d' and kind = 'purchase'),
+  'mp:purchase-payment:7001=5000,mp:purchase-payment:7002=5000', 'D: one ledger row per payment id');
+select tests.as_service_role();
+select is(pg_temp.process(pg_temp.pay(:'pd', '7002', 'refunded', 3690, 3690)), 'reversed', 'D: refund of the second payment');
+select tests.clear_authentication();
+select is((select string_agg(payment_id || ':' || remaining || ':' || status, ',' order by payment_id)
+             from public.credit_lots where user_id = :'d'),
+  '7001:5000:credited,7002:0:refunded', 'D: only the second payment''s lot is touched');
+select is((select balance from public.credit_wallets where user_id = :'d'), 6000::bigint, 'D: balance 6000');
+select is((select status from public.credit_purchases where id = :'pd'), 'paid', 'D: purchase still paid, not blocked');
+select tests.as_service_role();
+select is(pg_temp.process(pg_temp.pay(:'pd', '7001', 'charged_back', 3690, 3690)), 'reversed', 'D: chargeback of the first');
+select tests.clear_authentication();
+select is((select private.account_blocked(:'d')), true, 'D: a chargeback of any payment blocks');
+select tests.as_service_role();
+select is(pg_temp.process(pg_temp.pay(:'pd', '7007')), 'rejected_blocked', 'D: blocked: a further payment grants nothing');
+select tests.clear_authentication();
+select is(pg_temp.state(:'d'), '1000+0|0,0', 'D: both lots reversed, the allowance part untouched');
+
+-- ---------------------------------------------------------------------------
+-- Review fix 3: no NULL / missing expectation (null vs null would pass IS DISTINCT FROM)
+-- ---------------------------------------------------------------------------
+select tests.as_service_role();
+select pg_temp.buy(:'c', 'credits_5k') as pn \gset
+select throws_ok(format($q$select private.process_mp_purchase_payment(%L::jsonb, '{"live_mode": false}', null)$q$,
+                        pg_temp.pay(:'pn', '7101', p_collector => null)),
+  '22023', 'invalid payment arguments', 'expected collector_id missing: refused');
+select throws_ok(format($q$select private.process_mp_purchase_payment(%L::jsonb, '{"live_mode": false, "collector_id": null}', null)$q$,
+                        pg_temp.pay(:'pn', '7101', p_collector => null)),
+  '22023', 'invalid payment arguments', 'expected collector_id null: refused even for a null payment collector');
+select throws_ok(format($q$select private.process_mp_purchase_payment(%L::jsonb, '{"collector_id": "777"}', null)$q$,
+                        pg_temp.pay(:'pn', '7101')),
+  '22023', 'invalid payment arguments', 'expected live_mode missing: refused');
+select is(pg_temp.process(pg_temp.pay(:'pn', '7101', p_collector => null)), 'rejected_collector',
+  'a payment without a collector is rejected');
+select tests.clear_authentication();
+select is((select count(*)::int from public.credit_lots where purchase_id = :'pn'), 0, 'nothing granted');
 
 -- ---------------------------------------------------------------------------
 -- Router access: highest pack access_plan while a lot has credits
@@ -286,8 +348,8 @@ select pg_temp.buy(:'r', 'credits_5k') as pr1 \gset
 select pg_temp.process(pg_temp.pay(:'pr1', '5020'));
 select is(private.purchase_access_plan(:'r'), 'starter', '5k lot: starter');
 select pg_temp.buy(:'r', 'credits_25k') as pr2 \gset
-select pg_temp.process(pg_temp.pay(:'pr2', '5021', p_amount => 17190));
-select is(private.purchase_access_plan(:'r'), 'ultra', '25k lot: top tier');
+select pg_temp.process(pg_temp.pay(:'pr2', '5021', p_amount => 18090));
+select is(private.purchase_access_plan(:'r'), 'pro', '25k lot: pro');
 select tests.clear_authentication();
 update public.credit_lots set remaining = 0 where purchase_id = :'pr2';
 select tests.as_service_role();

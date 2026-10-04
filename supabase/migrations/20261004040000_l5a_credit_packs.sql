@@ -6,16 +6,17 @@
 --   subscription paths stay intact (webhooks, cancel, renewals keep working
 --   for rows that already exist).
 -- * Packs: public.credit_packs (exactly credits_5k / credits_10k / credits_25k),
---   price and credits only from the DB. Prices satisfy margin >= 1.25 over
---   US$0.001/credit after the MP card fee (4.98%, D+0) at USD/BRL 5.22
---   (2026-10-03): 34,90 / 68,90 / 171,90 (see the L5 PR body).
---   access_plan: the plan whose models a holder of a lot from this pack gets
---   (starter; the 25k pack: ultra, the top tier).
+--   price and credits only from the DB. Final prices and tiers are set by
+--   20261004040100_l5a_review_fixes.sql (the seed below is superseded there):
+--   margin >= 1.25 over US$0.001/credit after the MP card fee (4.98%, D+0) at
+--   a USD/BRL 5.50 buffer (spot 5.22 on 2026-10-03): 36,90 / 72,90 / 180,90.
+--   access_plan: the plan whose models a holder of an unspent lot of this pack
+--   gets: 5k / 10k starter, 25k pro (see the L5 PR body).
 -- * Purchases: public.credit_purchases freezes pack, credits, amount, currency
 --   at creation (private.mp_create_purchase). Mercado Pago payments for it are
 --   verified by private.process_mp_purchase_payment against that frozen row.
--- * Lots: public.credit_lots, one per credited purchase (credits_granted,
---   remaining; no expiry: purchased credits never expire).
+-- * Lots: public.credit_lots, one per credited payment (keyed by the MP payment
+--   id since 20261004040100; credits_granted, remaining; no expiry).
 --   Balance split (per wallet):
 --     purchased part = sum(credit_lots.remaining)
 --     allowance part = (balance + reserved) - purchased part   (>= 0)
