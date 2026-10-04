@@ -522,7 +522,7 @@ export function SettingsPanel({
           {activeSection === "general" ? (
             <GeneralSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
           ) : null}
-          {activeSection === "account" ? <AccountSettingsPanel /> : null}
+          {activeSection === "account" ? <AccountSettingsPanel modusStatus={state?.modus} /> : null}
           {activeSection === "appearance" ? <AppearanceSettingsPanel /> : null}
           {activeSection === "personalization" ? <PersonalizationSettingsPanel /> : null}
           {activeSection === "skills" ? <SkillsSettingsPanel cwd={workspaceCwd} /> : null}
@@ -614,6 +614,18 @@ export function SettingsPanel({
               onSelectProvider={(provider) => void selectProvider(provider)}
               onSetAllModels={(enabled) => void setAllProviderModels(enabled)}
               onToggleModel={(model, enabled) => void toggleModel(model, enabled)}
+              models={state?.models}
+              defaultModel={state?.defaultModel}
+              onSetDefaultModel={(modelId) => {
+                setError(undefined);
+                void window.modus.model
+                  .setDefault(modelId)
+                  .then(() => onRefresh())
+                  .catch((err: unknown) =>
+                    setError(err instanceof Error ? err.message : String(err)),
+                  );
+              }}
+              onBuyCredits={() => setActiveSection("account")}
               popular={popular}
             />
           ) : null}

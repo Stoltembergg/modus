@@ -23,6 +23,7 @@ import {
   normalizeGroupMemberCapabilities,
 } from "../../../../shared/group-capabilities";
 import { cn } from "../../lib/cn";
+import { ModelOptions, pickModel } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
 import { AgentAvatar } from "./AgentAvatar";
@@ -169,7 +170,7 @@ export function AgentDialog(props: AgentDialogProps) {
     if (!custom) return "";
     return models.some((model) => model.id === defaultModelId)
       ? (defaultModelId ?? "")
-      : (models[0]?.id ?? "");
+      : (models.find((model) => !model.locked)?.id ?? "");
   });
   const [face, setFace] = useState<AgentAvatarFace>(initialAvatar.avatarFace);
   const [color, setColor] = useState<AgentAvatarColor>(initialAvatar.avatarColor);
@@ -365,7 +366,7 @@ export function AgentDialog(props: AgentDialogProps) {
             <span className="text-2xs text-fg-subtle">Model</span>
             <select
               className={cn(FIELD, "px-2")}
-              onChange={(event) => setModelId(event.target.value)}
+              onChange={(event) => pickModel(models, event.target.value, setModelId)}
               value={modelId}
             >
               {custom ? (
@@ -378,11 +379,7 @@ export function AgentDialog(props: AgentDialogProps) {
               {savedModelMissing && agent?.modelId ? (
                 <option value={agent.modelId}>{agent.modelId} (unavailable)</option>
               ) : null}
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name}
-                </option>
-              ))}
+              <ModelOptions models={models} />
             </select>
           </label>
         </div>

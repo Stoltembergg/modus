@@ -13,6 +13,7 @@ import { AnimatePresence, m } from "motion/react";
 import { type ReactNode, useMemo, useState } from "react";
 import type {
   CustomProviderConfig,
+  ModelInfo,
   ModelProviderDetail,
   ModelProviderInfo,
   ProviderAuthOperationState,
@@ -23,6 +24,7 @@ import { EmptyState } from "../../../components/ui/Panel";
 import { Tooltip } from "../../../components/ui/Tooltip";
 import { WorkingText } from "../../../components/ui/WorkingText";
 import { CustomProviderForm } from "../CustomProviderForm";
+import { DefaultModelSetting } from "../DefaultModelSetting";
 import { ProviderLogo } from "../ProviderLogo";
 import { ReadOnlyPill, SettingsPageHeader } from "../settings-layout";
 import {
@@ -74,6 +76,10 @@ export function ModelProviderSettingsPanel({
   onSelectProvider,
   onSetAllModels,
   onToggleModel,
+  models,
+  defaultModel,
+  onSetDefaultModel,
+  onBuyCredits,
 }: {
   authOperation: ProviderAuthOperationState | undefined;
   busy: boolean;
@@ -111,6 +117,12 @@ export function ModelProviderSettingsPanel({
   onSelectProvider(provider: ModelProviderInfo): void;
   onSetAllModels(enabled: boolean): void;
   onToggleModel(model: ProviderModelConfig, enabled: boolean): void;
+  /** L3b0: Settings default model picker (absent = not shown). */
+  models?: readonly ModelInfo[] | undefined;
+  defaultModel?: string | undefined;
+  onSetDefaultModel?(modelId: string): void;
+  /** A locked Modus model was chosen: open Buy credits (Settings › Account). */
+  onBuyCredits?(): void;
 }) {
   const [providerQuery, setProviderQuery] = useState("");
   const providers = useMemo(() => [...connected, ...popular], [connected, popular]);
@@ -158,6 +170,16 @@ export function ModelProviderSettingsPanel({
         <ReadOnlyPill>{`${enabledModelCount} enabled models`}</ReadOnlyPill>
         <ReadOnlyPill>{`${providers.length} providers`}</ReadOnlyPill>
       </div>
+
+      {models && onSetDefaultModel && onBuyCredits ? (
+        <DefaultModelSetting
+          busy={busy}
+          defaultModel={defaultModel}
+          models={models}
+          onBuyCredits={onBuyCredits}
+          onSetDefaultModel={onSetDefaultModel}
+        />
+      ) : null}
 
       <AnimatePresence initial={false}>
         {error ? (
