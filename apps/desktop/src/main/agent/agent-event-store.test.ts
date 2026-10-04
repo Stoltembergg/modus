@@ -20,6 +20,7 @@ const {
   getLatestHarnessTaskState,
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
+  getHarnessQAEventByRowId,
   listAgentEvents,
   recordAgentEvent,
 } = await import("./agent-event-store");
@@ -105,6 +106,21 @@ afterAll(async () => {
 });
 
 describe("getLatestHarnessTaskState", () => {
+  it("reads only the exact persisted QA row for its session and run", () => {
+    const sessionId = `qa-row-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const result = {
+      required: true,
+      status: "passed" as const,
+      reasonCode: "ok",
+      sourceFingerprint: "final",
+      evidence: [],
+    };
+    const rowId = recordAgentEvent({ type: "harness.qa", sessionId, runId: "run-a", result });
+    expect(getHarnessQAEventByRowId(rowId, sessionId, "run-a")?.result).toEqual(result);
+    expect(getHarnessQAEventByRowId(rowId, sessionId, "run-b")).toBeUndefined();
+    expect(getHarnessQAEventByRowId(rowId, "other", "run-a")).toBeUndefined();
+  });
   it("returns only the latest valid snapshot owned by the exact session and run", () => {
     const sessionId = `state-${crypto.randomUUID()}`;
     const siblingSessionId = `sibling-${crypto.randomUUID()}`;

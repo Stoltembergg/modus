@@ -59,6 +59,7 @@ describe("summarizeRunQA", () => {
         kind: "check",
         status: "passed",
         label: "Tests",
+        checkName: "tests",
         eventId: "event-end-1",
         runId,
       }),

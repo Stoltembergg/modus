@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
@@ -43,8 +43,16 @@ import {
   finishSubagentWorktree,
   getChangeStatsSinceStrict,
   getGitMemoryContext,
+  getGroupSourceFingerprint,
 } from "../git/git-service";
 import { getAgentGroupForSession } from "../groups/group-store";
+import { collectGroupTaskRunEvidence, getGroupTaskSourcePath } from "../groups/group-task-evidence";
+import {
+  bindGroupTaskRun,
+  getGroupTask,
+  getGroupTaskRunBinding,
+  recordGroupTaskEvidence,
+} from "../groups/group-task-store";
 import { resolveGlobalGuidancePrompt } from "../guidance/guidance-service";
 import {
   denyPendingQuestionRequestsForSession,
@@ -422,6 +430,21 @@ function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessT
       if (isPlanCriterionLinkedToTodos(criterion, plan.todos)) {
         checks.push(...(criterion.requiredCheckKinds ?? []));
       }
+    }
+  }
+  if (input.groupTask) {
+    try {
+      const task = getGroupTask(input.groupTask.taskId);
+      if (
+        task.groupId === input.groupTask.groupId &&
+        task.executionId === input.groupTask.executionId &&
+        task[input.groupTask.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] ===
+          input.sessionId
+      ) {
+        for (const criterion of task.criteria ?? []) checks.push(...criterion.requiredCheckKinds);
+      }
+    } catch {
+      /* A stale task seed must not remove the existing harness checks. */
     }
   }
   return [...new Set(checks)];
@@ -1458,6 +1481,19 @@ export class PiSdkRuntime implements AgentRuntime {
         }
       }
     }
+    if (input.groupTask) {
+      const binding = getGroupTaskRunBinding(input.sessionId, runId);
+      const task = binding ? getGroupTask(binding.taskId) : undefined;
+      const source = task ? getGroupTaskSourcePath(task) : undefined;
+      try {
+        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
+          throw new Error("Task checks did not run against the task owner's source.");
+        result.sourceFingerprint = await getGroupSourceFingerprint(source);
+      } catch {
+        result.status = "unavailable";
+        result.reasonCode = "task_source_unavailable";
+      }
+    }
     runtimeSession.emit({ type: "harness.qa", sessionId: input.sessionId, runId, result });
     tracker.lastQaStatus = result.status;
     if (changedPaths.length > 0) {
@@ -1509,6 +1545,32 @@ export class PiSdkRuntime implements AgentRuntime {
   ): (event: AgentEvent, options?: { idempotencyKey?: string }) => void {
     return (event, options) => {
       const rowId = recordAgentEvent(event, options);
+      if (event.type === "harness.qa") {
+        const binding = getGroupTaskRunBinding(event.sessionId, event.runId);
+        if (binding && event.result.sourceFingerprint) {
+          try {
+            const refs = collectGroupTaskRunEvidence(binding, rowId);
+            if (refs.length > 0) {
+              const task = getGroupTask(binding.taskId);
+              recordGroupTaskEvidence({
+                groupId: binding.groupId,
+                taskId: binding.taskId,
+                actorSessionId: binding.sessionId,
+                expectedVersion: task.stateVersion ?? 0,
+                operationId: `qa:${rowId}`,
+                evidenceRefs: [
+                  ...(task.evidenceRefs ?? []).filter(
+                    (ref) => ref.sessionId !== binding.sessionId || ref.runId !== binding.runId,
+                  ),
+                  ...refs,
+                ].slice(-256),
+              });
+            }
+          } catch (error) {
+            console.warn("[modus] group task QA evidence unavailable:", error);
+          }
+        }
+      }
       const observable = { ...event, eventCursor: rowId };
       for (const listener of this.eventListeners) {
         try {
@@ -2547,6 +2609,36 @@ export class PiSdkRuntime implements AgentRuntime {
     let startedEmitThrew = false;
     try {
       if (startInput && !startInput.existingRunId) startInput.onRunCreated(run.id);
+      if (input.groupTask) {
+        try {
+          const task = getGroupTask(input.groupTask.taskId);
+          const source = getGroupTaskSourcePath(task);
+          if (
+            !source ||
+            task.groupId !== input.groupTask.groupId ||
+            task.executionId !== input.groupTask.executionId ||
+            task[input.groupTask.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] !==
+              input.sessionId
+          )
+            throw new Error("Group task run seed is stale.");
+          const sourceFingerprint = await getGroupSourceFingerprint(source);
+          bindGroupTaskRun({
+            groupId: task.groupId,
+            taskId: task.id,
+            taskVersion: task.stateVersion ?? 0,
+            criteriaVersion: task.criteriaVersion ?? 0,
+            sessionId: input.sessionId,
+            runId: run.id,
+            executionId: input.groupTask.executionId,
+            role: input.groupTask.role,
+            sourceFingerprint,
+            expectedVersion: task.stateVersion ?? 0,
+            operationId: `run:${run.id}`,
+          });
+        } catch (error) {
+          console.warn("[modus] group task run evidence unavailable:", error);
+        }
+      }
       outputTracker = {
         runId: run.id,
         hasVisibleOutput: false,

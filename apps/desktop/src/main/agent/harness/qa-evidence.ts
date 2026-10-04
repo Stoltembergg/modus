@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { HarnessTaskCheckKind } from "../../../shared/contracts";
 
 export type VerificationEvidenceStatus =
   | "passed"
@@ -20,6 +21,7 @@ export type HarnessEvidenceRef = {
   revision?: string;
   paths?: string[];
   label: string;
+  checkName?: HarnessTaskCheckKind;
 };
 
 type ToolEventBase = {
@@ -78,6 +80,7 @@ export type HarnessQAResult = {
   status: AutoQAStatus;
   reasonCode: string;
   evidence: HarnessEvidenceRef[];
+  sourceFingerprint?: string;
 };
 
 const MAX_EVENTS = 500;
@@ -385,6 +388,9 @@ function evidenceRef(
     status,
     runId: input.runId,
     label: CHECK_LABELS[check]?.label ?? "Required check",
+    ...(["tests", "typecheck", "lint", "build"].includes(check)
+      ? { checkName: check as HarnessTaskCheckKind }
+      : {}),
   };
   if (eventId) result.eventId = eventId.slice(0, 120);
   if (revision) result.revision = revision.slice(0, 120);

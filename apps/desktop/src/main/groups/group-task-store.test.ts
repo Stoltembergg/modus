@@ -29,6 +29,7 @@ const {
   getGroupTaskRunBinding,
   listGroupTaskTransitions,
 } = await import("./group-task-store");
+const { recordAgentEvent } = await import("../agent/agent-event-store");
 
 beforeAll(async () => {
   userData = await mkdtemp(join(tmpdir(), "modus-task-store-"));
@@ -292,12 +293,33 @@ describe("versioned task state", () => {
     const evidenceRefs = [
       {
         criterionId: "check",
+        checkName: "tests" as const,
         criteriaVersion: 1,
         sessionId: owner,
         runId,
-        eventRowId: 42,
         evidenceId: "qa",
-        sourceFingerprint: "sha",
+        sourceFingerprint: "final-sha",
+        eventRowId: recordAgentEvent({
+          type: "harness.qa",
+          sessionId: owner,
+          runId,
+          result: {
+            required: true,
+            status: "passed",
+            reasonCode: "checks_passed",
+            sourceFingerprint: "final-sha",
+            evidence: [
+              {
+                id: "qa",
+                kind: "check",
+                status: "passed",
+                label: "Tests",
+                checkName: "tests",
+                runId,
+              },
+            ],
+          },
+        }),
       },
     ];
     const input = {

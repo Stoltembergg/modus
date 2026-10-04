@@ -46,6 +46,7 @@ const {
 } = await import("./group-runtime");
 const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
+const { createGroupTask } = await import("./group-task-store");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
@@ -228,6 +229,26 @@ describe("group runtime constants", () => {
 /* ── turn outcomes through the fake runtime (the 4 contract cases) ───── */
 
 describe("turn outcomes (fake runtime contract)", () => {
+  it("passes an exact task seed to the owner's queued wake", () => {
+    const { group, alpha } = squad();
+    const { runtime, groups, state } = setup({ window: false });
+    const user = groups.postUserMessage({ groupId: group.id, body: "do it" });
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Work",
+      ownerSessionId: alpha,
+      executionId: user.id,
+      status: "in_progress",
+    });
+    state.window = true;
+    groups.kick();
+    expect(runtime.calls[0]?.input.groupTask).toEqual({
+      taskId: task.id,
+      groupId: group.id,
+      executionId: user.id,
+      role: "owner",
+    });
+  });
   it("ok with text posts the reply as the member, in the same chain", async () => {
     const { group, alpha } = squad();
     const { runtime, groups } = setup();

@@ -191,6 +191,34 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
   return Number(insertResult.lastInsertRowid);
 }
 
+/** Read one persisted QA event by durable row identity and exact run ownership. */
+export function getHarnessQAEventByRowId(
+  rowId: number,
+  sessionId: string,
+  runId: string,
+): Extract<AgentEvent, { type: "harness.qa" }> | undefined {
+  if (!Number.isSafeInteger(rowId) || rowId < 1) return undefined;
+  const row = getDatabase()
+    .prepare(
+      "select payload_json from agent_events where rowid = ? and session_id = ? and type = 'harness.qa'",
+    )
+    .get(rowId, sessionId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const event = JSON.parse(row.payload_json) as AgentEvent;
+    return event?.type === "harness.qa" &&
+      event.sessionId === sessionId &&
+      event.runId === runId &&
+      event.result !== null &&
+      typeof event.result === "object" &&
+      Array.isArray(event.result.evidence)
+      ? event
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 type TaskStateScanRow = { event_rowid: number; payload_bytes: number; workspace_id: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {

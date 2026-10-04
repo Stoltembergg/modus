@@ -31,6 +31,7 @@ export type GroupTaskVerificationPolicy = { mode: "none" | "required"; requireRe
 /** Identity only. QA status is resolved from the persisted harness event when the gate is read. */
 export type GroupTaskEvidenceRef = {
   criterionId: string;
+  checkName?: HarnessTaskCheckKind;
   criteriaVersion: number;
   sessionId: string;
   runId: string;

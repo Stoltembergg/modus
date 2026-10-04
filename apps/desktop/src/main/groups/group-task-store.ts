@@ -15,6 +15,7 @@ import type {
   GroupTaskTransitionEvent,
   GroupTaskVerificationPolicy,
 } from "../../shared/group-work-state";
+import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getDatabase } from "../db/database";
 import { GroupStoreError, getAgentGroup } from "./group-store";
 
@@ -164,6 +165,8 @@ const evidence = (value: unknown): value is GroupTaskEvidenceRef[] =>
       typeof row.runId === "string" &&
       Number.isSafeInteger(row.eventRowId) &&
       typeof row.evidenceId === "string" &&
+      (row.checkName === undefined ||
+        ["tests", "typecheck", "lint", "build"].includes(String(row.checkName))) &&
       typeof row.sourceFingerprint === "string"
     );
   });
@@ -435,9 +438,12 @@ function validateEvidenceRefs(task: GroupTask, refs: GroupTaskEvidenceRef[]): vo
     throw new GroupStoreError("invalid-value", "Evidence refs must be an array.");
   const ids = new Set(task.criteria?.map((criterion) => criterion.id) ?? []);
   for (const ref of refs) {
+    const criterion = task.criteria?.find((item) => item.id === ref?.criterionId);
     if (
       !ref ||
       !ids.has(ref.criterionId) ||
+      !ref.checkName ||
+      !criterion?.requiredCheckKinds.includes(ref.checkName) ||
       ref.criteriaVersion !== task.criteriaVersion ||
       !Number.isSafeInteger(ref.eventRowId) ||
       ref.eventRowId < 1 ||
@@ -457,9 +463,19 @@ function validateEvidenceRefs(task: GroupTask, refs: GroupTaskEvidenceRef[]): vo
       binding.taskId !== task.id ||
       binding.groupId !== task.groupId ||
       binding.criteriaVersion !== task.criteriaVersion ||
-      binding.sourceFingerprint !== ref.sourceFingerprint
+      task[binding.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] !== binding.sessionId
     ) {
       throw new GroupStoreError("stale-evidence", "Evidence reference has no matching task run.");
+    }
+    const qa = getHarnessQAEventByRowId(ref.eventRowId, ref.sessionId, ref.runId);
+    if (
+      !qa?.result.sourceFingerprint ||
+      qa.result.sourceFingerprint !== ref.sourceFingerprint ||
+      !qa.result.evidence.some(
+        (item) => item.id === ref.evidenceId && item.checkName === ref.checkName,
+      )
+    ) {
+      throw new GroupStoreError("stale-evidence", "Evidence reference has no matching QA event.");
     }
   }
 }
@@ -728,6 +744,10 @@ function requireTask(taskId: string): GroupTask {
     throw new GroupStoreError("task-not-found", `Group task not found: ${taskId}`);
   }
   return toTask(row);
+}
+
+export function getGroupTask(taskId: string): GroupTask {
+  return requireTask(taskId);
 }
 
 /**

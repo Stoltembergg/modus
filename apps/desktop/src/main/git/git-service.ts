@@ -1,6 +1,7 @@
-import { existsSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type {
   DiffFilePatch,
@@ -55,6 +56,56 @@ export async function isGitRepository(rootPath: string): Promise<boolean> {
     existsSync(rootPath) &&
     (await gitSafe(rootPath, ["rev-parse", "--is-inside-work-tree"])) === "true"
   );
+}
+
+/** A bounded content snapshot of one complete Git worktree. Throws when it cannot be trusted. */
+export async function getGroupSourceFingerprint(cwd: string): Promise<string> {
+  const MAX_FILES = 10_000;
+  const MAX_FILE_BYTES = 8 * 1024 * 1024;
+  const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+  const root = realpathSync(cwd);
+  const top = realpathSync((await git(root, ["rev-parse", "--show-toplevel"])).trim());
+  if (root !== top) throw new Error("Task source must be a complete Git worktree.");
+  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  const index = await git(root, ["ls-files", "--stage", "-z"]);
+  const names = (await git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]))
+    .split("\0")
+    .filter(Boolean);
+  const paths = [...new Set(names)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  if (paths.length > MAX_FILES) throw new Error("Task source exceeds file scan limit.");
+  const hash = createHash("sha256");
+  hash.update("group-source-v1\0").update(head).update("\0").update(index).update("\0");
+  let total = 0;
+  for (const path of paths) {
+    if (
+      path.includes("\uFFFD") ||
+      path.includes("\0") ||
+      isAbsolute(path) ||
+      path.split(/[\\/]/).includes("..")
+    )
+      throw new Error("Unsafe task source path.");
+    const absolute = resolve(root, path);
+    if (!absolute.startsWith(`${root}${sep}`)) throw new Error("Task source escapes worktree.");
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(absolute);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        hash.update(path).update("\0deleted\0");
+        continue;
+      }
+      throw error;
+    }
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || total + stat.size > MAX_TOTAL_BYTES)
+      throw new Error("Task source is unsafe or exceeds scan limit.");
+    if (realpathSync(absolute) !== absolute) throw new Error("Task source traverses a symlink.");
+    const content = await readFile(absolute);
+    if (content.length > MAX_FILE_BYTES || total + content.length > MAX_TOTAL_BYTES)
+      throw new Error("Task source exceeds scan limit.");
+    total += content.length;
+    hash.update(path).update("\0").update(String(content.length)).update("\0").update(content);
+  }
+  return hash.digest("hex");
 }
 
 export async function initRepository(cwd: string): Promise<GitActionResult> {

@@ -21,6 +21,7 @@ import {
   getChangeStatsSince,
   getChangeStatsSinceStrict,
   getGitMemoryContext,
+  getGroupSourceFingerprint,
   getStatusSummary,
   getWorkingChangeStats,
   initRepository,
@@ -109,6 +110,17 @@ afterEach(async () => {
 });
 
 describe("git-service", () => {
+  it("fingerprints tracked and non-ignored untracked content without changing HEAD", async () => {
+    const base = await getGroupSourceFingerprint(repo);
+    await writeFile(join(repo, "tracked.txt"), "edited\n");
+    const edited = await getGroupSourceFingerprint(repo);
+    expect(edited).not.toBe(base);
+    await writeFile(join(repo, "new.ts"), "one\n");
+    const untracked = await getGroupSourceFingerprint(repo);
+    await writeFile(join(repo, "new.ts"), "two\n");
+    expect(await getGroupSourceFingerprint(repo)).not.toBe(untracked);
+    expect(await git(["rev-parse", "HEAD"])).toBeTruthy();
+  });
   it("collects branch, full HEAD, and all porcelain-v2 path forms in one Git invocation", async () => {
     const fullHead = "0123456789abcdef0123456789abcdef01234567";
     const output = `${[
