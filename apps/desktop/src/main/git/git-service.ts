@@ -1705,6 +1705,19 @@ export async function applySubagentWorktree(
     ) {
       throw new Error("Task source or Group Project changed immediately before Git apply.");
     }
+    const [sourceStatus, targetStatus, pendingMerge] = await Promise.all([
+      listChanges(worktree.path),
+      listChanges(targetRoot),
+      mergeHead(targetRoot),
+    ]);
+    if (pendingMerge)
+      throw new Error(
+        "Commit or abort the pending worktree apply before applying another worktree.",
+      );
+    if (sourceStatus.length > 0)
+      throw new Error("Task source must be clean immediately before Git apply.");
+    if (targetStatus.length > 0)
+      throw new Error("Apply requires a clean main workspace immediately before Git apply.");
   }
   const sourceRevision = expected?.sourceSha ?? worktree.branch;
   try {
@@ -1762,8 +1775,10 @@ export async function cleanupSubagentWorktree(
     throw new Error("Worktree cleanup requires a Git repository.");
   }
   assertManagedWorktreePath(repo.root, worktree.path);
-  if (await mergeHeadBelongsToWorktree(repo.root, worktree)) {
-    throw new Error("Commit or abort the pending worktree apply before cleanup.");
+  if (await mergeHead(repo.root)) {
+    if (await mergeHeadBelongsToWorktree(repo.root, worktree))
+      throw new Error("Commit or abort the pending worktree apply before cleanup.");
+    throw new Error("Abort the pending Git merge before cleaning up any worktree.");
   }
   await git(repo.root, ["worktree", "remove", "--force", worktree.path]);
   await gitSafe(repo.root, ["branch", "-D", worktree.branch]);

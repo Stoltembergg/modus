@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -44,6 +44,11 @@ let repo: string;
 async function git(args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd: repo, windowsHide: true });
   return stdout;
+}
+
+async function gitAt(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd, windowsHide: true });
+  return stdout.trim();
 }
 
 /** Release linked worktrees and in-progress merges so Windows can delete the temp repo. */
@@ -767,6 +772,111 @@ describe("git-service", () => {
     const summary = await getStatusSummary(repo);
     expect(summary.mergeInProgress).toBe(true);
     expect(summary.conflictFiles).toEqual(["tracked.txt"]);
+  });
+
+  it("keeps a conflicted source worktree until its exact pending merge is aborted", async () => {
+    const worktree = await createSubagentWorktree(repo, {
+      sessionId: "abcdef12-3333-0000-0000-ef1234567890",
+      name: "writer",
+    });
+    await writeFile(join(worktree.path, "tracked.txt"), "child\n");
+    const finished = await finishSubagentWorktree(worktree, "Child edit");
+    const sourceSha = await gitAt(worktree.path, ["rev-parse", "HEAD"]);
+    const targetBranch = await git(["symbolic-ref", "--short", "HEAD"]);
+
+    await writeFile(join(repo, "tracked.txt"), "main\n");
+    await git(["add", "tracked.txt"]);
+    await git(["commit", "-m", "main edit"]);
+    const targetSha = await git(["rev-parse", "HEAD"]);
+    const conflicted = await applySubagentWorktree(repo, finished, {
+      sourceSha,
+      targetSha: targetSha.trim(),
+      targetBranch: targetBranch.trim(),
+    });
+    expect(conflicted.integrationStatus).toBe("conflict");
+
+    await writeFile(join(worktree.path, "followup.txt"), "new source tip\n");
+    await gitAt(worktree.path, ["add", "followup.txt"]);
+    await gitAt(worktree.path, ["commit", "-m", "advance source branch"]);
+    const advancedSourceSha = await gitAt(worktree.path, ["rev-parse", "HEAD"]);
+    const pendingMergeSha = await git(["rev-parse", "MERGE_HEAD"]);
+    expect(advancedSourceSha).not.toBe(sourceSha);
+    expect(pendingMergeSha.trim()).toBe(sourceSha);
+
+    await expect(cleanupSubagentWorktree(repo, conflicted)).rejects.toThrow(/pending.*merge/i);
+    expect(existsSync(worktree.path)).toBe(true);
+    expect(await gitAt(repo, ["rev-parse", `refs/heads/${worktree.branch}`])).toBe(
+      advancedSourceSha,
+    );
+    expect((await git(["rev-parse", "MERGE_HEAD"])).trim()).toBe(sourceSha);
+
+    await abortSubagentWorktreeApply(repo, conflicted, {
+      sourceSha,
+      targetSha: targetSha.trim(),
+      targetBranch: targetBranch.trim(),
+    });
+    const cleaned = await cleanupSubagentWorktree(repo, conflicted);
+    expect(cleaned.integrationStatus).toBe("cleaned");
+    expect(existsSync(worktree.path)).toBe(false);
+    expect(await gitAt(repo, ["branch", "--list", worktree.branch])).toBe("");
+    expect((await getStatusSummary(repo)).mergeInProgress).toBe(false);
+  });
+
+  it("rejects expected apply when source gains uncommitted changes", async () => {
+    const worktree = await createSubagentWorktree(repo, {
+      sessionId: "abcdef12-4444-0000-0000-ef1234567890",
+      name: "writer",
+    });
+    await writeFile(join(worktree.path, "tracked.txt"), "child\n");
+    const finished = await finishSubagentWorktree(worktree, "Child edit");
+    const sourceSha = await gitAt(worktree.path, ["rev-parse", "HEAD"]);
+    const targetSha = await git(["rev-parse", "HEAD"]);
+    const targetBranch = await git(["symbolic-ref", "--short", "HEAD"]);
+    await writeFile(join(worktree.path, "late-edit.txt"), "must not be omitted\n");
+
+    await expect(
+      applySubagentWorktree(repo, finished, {
+        sourceSha,
+        targetSha: targetSha.trim(),
+        targetBranch: targetBranch.trim(),
+      }),
+    ).rejects.toThrow(/clean|changed/i);
+    expect((await getStatusSummary(repo)).mergeInProgress).toBe(false);
+    expect(await gitAt(repo, ["rev-parse", "HEAD"])).toBe(targetSha.trim());
+    expect(await gitAt(worktree.path, ["status", "--porcelain"])).toContain("late-edit.txt");
+  });
+
+  it("rechecks target cleanliness after expected refs are read", async () => {
+    const worktree = await createSubagentWorktree(repo, {
+      sessionId: "abcdef12-5555-0000-0000-ef1234567890",
+      name: "writer",
+    });
+    await writeFile(join(worktree.path, "tracked.txt"), "child\n");
+    const finished = await finishSubagentWorktree(worktree, "Child edit");
+    const sourceSha = await gitAt(worktree.path, ["rev-parse", "HEAD"]);
+    const targetSha = await git(["rev-parse", "HEAD"]);
+    const targetBranch = await git(["symbolic-ref", "--short", "HEAD"]);
+    let sourcePathReads = 0;
+    const racingWorktree = { ...finished };
+    Object.defineProperty(racingWorktree, "path", {
+      get: () => {
+        sourcePathReads += 1;
+        if (sourcePathReads === 2)
+          writeFileSync(join(repo, "late-target-edit.txt"), "must not be merged around\n");
+        return finished.path;
+      },
+    });
+
+    await expect(
+      applySubagentWorktree(repo, racingWorktree, {
+        sourceSha,
+        targetSha: targetSha.trim(),
+        targetBranch: targetBranch.trim(),
+      }),
+    ).rejects.toThrow(/clean|changed/i);
+    expect((await getStatusSummary(repo)).mergeInProgress).toBe(false);
+    expect(await gitAt(repo, ["rev-parse", "HEAD"])).toBe(targetSha.trim());
+    expect(await gitAt(repo, ["status", "--porcelain"])).toContain("late-target-edit.txt");
   });
 
   it("aborts a pending subagent apply back to ready", async () => {
