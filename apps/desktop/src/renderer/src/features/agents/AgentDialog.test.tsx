@@ -14,6 +14,7 @@ import type {
   GeneratedAgentProfile,
 } from "../../../../shared/contracts";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
+import { setBuyCreditsHandler } from "../../lib/modusModels";
 import { GROUP_ERROR_MESSAGES } from "../groups/groupErrors";
 import { AGENT_GENERATED_HINT, AgentDialog } from "./AgentDialog";
 import { AGENT_NAME_REQUIRED, agentDialogError, needsProfileGeneration } from "./agentDialogModel";
@@ -71,7 +72,7 @@ function renderDialog({
 }: {
   agent?: AgentInfo;
   group?: AgentGroupWithMembers;
-  models?: typeof MODELS;
+  models?: readonly { id: string; name: string; locked?: boolean }[];
   generate?: (input: GenerateAgentProfileInput) => Promise<GeneratedAgentProfile>;
   create?: ReturnType<typeof vi.fn<(input: unknown) => Promise<undefined>>>;
 } = {}) {
@@ -131,6 +132,35 @@ describe("agentDialogModel", () => {
 });
 
 describe("AgentDialog", () => {
+  it("L3b0: a locked Modus model shows a lock and opens Buy credits instead of being selected", async () => {
+    const user = userEvent.setup();
+    const buyCredits = vi.fn();
+    setBuyCreditsHandler(buyCredits);
+    try {
+      const { dialog } = renderDialog({
+        agent: ANA,
+        models: [
+          ...MODELS,
+          { id: "modus/anthropic/claude-fable-5-1", name: "Fable", locked: true },
+        ],
+      });
+      const select = within(dialog).getByRole("combobox", { name: "Model" }) as HTMLSelectElement;
+      const locked = select.querySelector<HTMLOptionElement>("option[data-locked]");
+      expect(locked?.textContent).toBe(
+        "🔒 Fable · Requires a credit pack that includes this model",
+      );
+      expect(select.value).toBe("m-1");
+      await user.selectOptions(select, "modus/anthropic/claude-fable-5-1");
+      expect(buyCredits).toHaveBeenCalledTimes(1);
+      expect(select.value).toBe("m-1");
+      await user.selectOptions(select, "m-2");
+      expect(select.value).toBe("m-2");
+      expect(buyCredits).toHaveBeenCalledTimes(1);
+    } finally {
+      setBuyCreditsHandler(undefined);
+    }
+  });
+
   it("shows every field with a 48 px animated preview that follows face and color", async () => {
     const user = userEvent.setup();
     const { dialog } = renderDialog();

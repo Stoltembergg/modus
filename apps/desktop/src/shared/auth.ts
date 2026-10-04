@@ -53,7 +53,8 @@ export type AuthStatus =
  */
 export type AuthPersistence = "encrypted" | "memory-only";
 
-export type AuthNotice = "confirm-email";
+/** "session-expired": the Modus router session could not be refreshed (B4b); sign in again. */
+export type AuthNotice = "confirm-email" | "session-expired";
 
 export type AuthState = {
   status: AuthStatus;

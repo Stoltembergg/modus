@@ -6,6 +6,8 @@ import {
   type AuthOAuthProviderId,
   type AuthState,
 } from "../../../../../shared/auth";
+import type { ModusModelsStatus } from "../../../../../shared/contracts";
+import { modusText } from "../../../../../shared/modus-text";
 import { WorkingText } from "../../../components/ui/WorkingText";
 import { Field } from "../form-controls";
 import {
@@ -44,7 +46,29 @@ export function accountStatusLabel(state: AuthState): string {
   }
 }
 
-export function AccountSettingsPanel() {
+/** L3b0: the Modus provider state the main process publishes (ModelSettingsState.modus). */
+export function modusStatusText(status: ModusModelsStatus): { label: string; detail: string } {
+  switch (status) {
+    case "ready":
+      return { label: modusText("modus.status.ready"), detail: "" };
+    case "loading":
+      return { label: modusText("modus.status.loading"), detail: "" };
+    case "unavailable":
+      return {
+        label: modusText("modus.status.unavailable"),
+        detail: modusText("modus.status.unavailableDetail"),
+      };
+    default:
+      return { label: "", detail: "" };
+  }
+}
+
+export function AccountSettingsPanel({
+  modusStatus,
+}: {
+  /** Absent = off (signed out / no Modus provider). */
+  modusStatus?: ModusModelsStatus | undefined;
+} = {}) {
   const [state, setState] = useState<AuthState | undefined>();
   const [mode, setMode] = useState<Mode>("sign-in");
   const [email, setEmail] = useState("");
@@ -117,6 +141,11 @@ export function AccountSettingsPanel() {
       />
 
       {shownError ? <p className="-mt-4 text-danger text-xs">{shownError}</p> : null}
+      {state?.notice === "session-expired" ? (
+        <p className="-mt-4 text-danger text-xs" role="status">
+          {modusText("modus.sessionExpired")}
+        </p>
+      ) : null}
       {state?.notice === "confirm-email" ? (
         <p className="-mt-4 text-success text-xs">
           Check your inbox to confirm your email, then sign in.
@@ -152,6 +181,13 @@ export function AccountSettingsPanel() {
                 }
                 title="Remember me"
               />
+              {modusStatus && modusStatus !== "off" ? (
+                <SettingsRow
+                  control={<ReadOnlyPill>{modusStatusText(modusStatus).label}</ReadOnlyPill>}
+                  description={modusStatusText(modusStatus).detail}
+                  title={modusText("modus.status.title")}
+                />
+              ) : null}
             </SettingsList>
           </SettingsSection>
           <AccountBillingSection />

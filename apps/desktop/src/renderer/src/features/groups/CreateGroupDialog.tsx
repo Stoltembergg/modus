@@ -10,6 +10,7 @@ import type {
 } from "../../../../shared/contracts";
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 import { cn } from "../../lib/cn";
+import { ModelOptions, pickModel } from "../../lib/modusModels";
 import { describeGroupError } from "./groupErrors";
 import { useGroupText } from "./groupRoomI18n";
 
@@ -24,7 +25,8 @@ export type GroupMembersChange = Omit<UpdateAgentGroupMembersInput, "groupId">;
 const newLeadValue = (key: number) => `new:${key}`;
 
 /** A model offered for the new agents (a configured provider's). */
-export type GroupDialogModel = { id: string; name: string };
+/** L3b0: `locked` = a Modus model not in the plan (listed, never selected; opens Buy credits). */
+export type GroupDialogModel = { id: string; name: string; locked?: boolean | undefined };
 
 type CreateGroupDialogProps = {
   open: boolean;
@@ -77,7 +79,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
     const initialModel =
       props.defaultModelId && models.some((model) => model.id === props.defaultModelId)
         ? props.defaultModelId
-        : (models[0]?.id ?? "");
+        : (models.find((model) => !model.locked)?.id ?? "");
     setModelId(initialModel);
     setRemoved([]);
     setAgents([]);
@@ -278,17 +280,13 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   <span className="text-2xs text-fg-subtle">{t("manage.modelForNew")}</span>
                   <select
                     className={cn(FIELD, "px-2")}
-                    onChange={(event) => setModelId(event.target.value)}
+                    onChange={(event) => pickModel(models, event.target.value, setModelId)}
                     value={modelId}
                   >
                     {models.length === 0 ? (
                       <option value="">{t("common.noModelConfigured")}</option>
                     ) : null}
-                    {models.map((model) => (
-                      <option key={model.id} value={model.id}>
-                        {model.name}
-                      </option>
-                    ))}
+                    <ModelOptions locale={t.locale} models={models} />
                   </select>
                 </label>
               ) : null}

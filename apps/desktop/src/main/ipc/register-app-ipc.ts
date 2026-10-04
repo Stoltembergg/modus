@@ -1452,7 +1452,9 @@ export function registerAppIpc({
   // then each tree is torn down (subagents, runtime, checkpoints) after the
   // commit, before the IPC answers (agents/agent-teardown).
   // The agent model rule: a model of a configured provider (listModels).
-  const isModelAvailable = (modelId: string) => listModels().some((model) => model.id === modelId);
+  // B4b: a locked (not in plan) Modus model is listed for the picker but is not usable.
+  const isModelAvailable = (modelId: string) =>
+    listModels().some((model) => model.id === modelId && !model.locked);
   registerAgentsIpcHandlers(ipcMain, assertTrustedSender, {
     listAgents,
     createAgentInGroup,
