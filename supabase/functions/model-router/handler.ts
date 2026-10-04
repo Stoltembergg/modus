@@ -37,7 +37,9 @@ import {
  *   3. Idempotency-Key (400 missing / malformed), body <= 1 MB (413), JSON (400/415)
  *   4. claim the key: a repeat is ALWAYS 409 (same body sha256 -> idempotency_replay,
  *      different body -> idempotency_conflict), whatever the first attempt returned
- *   5. model id `<provider>/<id>`: malformed 400 invalid_model; not in the server
+ *   5. model id `<provider>/<id>`: malformed 400 invalid_model. L3a: no model (absent or
+ *      null) -> the plan's public.plans.default_model (none -> 400 model_required; its group
+ *      key is checked before the claim); a named model is never substituted. Not in the server
  *      table -> 503 model_not_configured if the plan lists it, else 404
  *      model_not_found; not in plans.allowed_models -> 403 model_not_in_plan.
  *      All before reserving.
@@ -155,9 +157,25 @@ function peekModel(bytes: Uint8Array): string | undefined {
   }
 }
 
+/** L3a: a JSON object body with no `model` (absent or null): the plan default applies. */
+function omitsModel(bytes: Uint8Array): boolean {
+  try {
+    const value = JSON.parse(new TextDecoder().decode(bytes));
+    return (
+      !!value &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      (value.model === undefined || value.model === null)
+    );
+  } catch {
+    return false;
+  }
+}
+
 type Parsed = {
   body: Record<string, unknown>;
-  modelId: string;
+  /** Undefined = the request named no model (L3a: the plan default applies). */
+  modelId: string | undefined;
   stream: boolean;
   requestedMaxTokens: number | undefined;
   promptChars: number;
@@ -177,7 +195,8 @@ function parseCompletionBody(bytes: Uint8Array, contentType: string): Parsed {
     throw new HttpError(400, "invalid_body");
   }
   const body = value as Record<string, unknown>;
-  if (typeof body.model !== "string" || !MODEL_ID.test(body.model)) {
+  const omitted = body.model === undefined || body.model === null;
+  if (!omitted && (typeof body.model !== "string" || !MODEL_ID.test(body.model))) {
     throw new HttpError(400, "invalid_model");
   }
   if (!Array.isArray(body.messages) || body.messages.length === 0) {
@@ -197,7 +216,7 @@ function parseCompletionBody(bytes: Uint8Array, contentType: string): Parsed {
     (body.response_format === undefined ? 0 : JSON.stringify(body.response_format).length);
   return {
     body,
-    modelId: body.model,
+    modelId: omitted ? undefined : (body.model as string),
     stream: body.stream === true,
     requestedMaxTokens: requested,
     promptChars,
@@ -219,9 +238,12 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
 
   async function listModels(userId: string): Promise<Response> {
     const plan = await deps.db.getPlan(userId);
+    // L3a: the plan default (what a request without `model` runs on); null = none.
+    const defaultModel = await deps.db.getPlanDefaultModel(plan.plan);
     return json(200, {
       object: "list",
       plan: plan.plan,
+      default_model: defaultModel,
       data: deps.catalog.map((model) => ({
         id: model.id,
         object: "model",
@@ -257,14 +279,36 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     const peeked = peekModel(bytes);
     const peekedModel = peeked === undefined ? undefined : findModel(deps.catalog, peeked);
     if (peekedModel) upstreamFor(peekedModel, baseUrl);
+    // L3a: no model named -> the plan default; its group key is checked before the claim too.
+    if (peeked === undefined && omitsModel(bytes)) {
+      const fallback = await deps.db.getPlanDefaultModel((await deps.db.getPlan(userId)).plan);
+      const fallbackModel = fallback === null ? undefined : findModel(deps.catalog, fallback);
+      if (fallbackModel) upstreamFor(fallbackModel, baseUrl);
+    }
 
     const claim = await deps.db.claimRequest(userId, key, await sha256Hex(bytes));
     if (claim !== "claimed") throw new HttpError(409, claim);
 
     const parsed = parseCompletionBody(bytes, req.headers.get("content-type") ?? "");
     const plan = await deps.db.getPlan(userId);
-    const listed = plan.allowedModels?.includes(parsed.modelId) ?? false;
-    const model = findModel(deps.catalog, parsed.modelId);
+    // L3a: a request without a model runs on public.plans.default_model of the caller's plan
+    // (none -> 400 model_required). A NAMED model is never replaced: one above the plan stays
+    // 403 model_not_in_plan, unknown stays 404.
+    let modelId = parsed.modelId;
+    if (modelId === undefined) {
+      const fallback = await deps.db.getPlanDefaultModel(plan.plan);
+      if (fallback === null) throw new HttpError(400, "model_required");
+      modelId = fallback;
+      log({
+        event: "model_router.plan_default",
+        request_id: key,
+        user_id: userId,
+        plan: plan.plan,
+        model: modelId,
+      });
+    }
+    const listed = plan.allowedModels?.includes(modelId) ?? false;
+    const model = findModel(deps.catalog, modelId);
     if (!model)
       throw new HttpError(listed ? 503 : 404, listed ? "model_not_configured" : "model_not_found");
     if (plan.allowedModels !== null && !listed) throw new HttpError(403, "model_not_in_plan");

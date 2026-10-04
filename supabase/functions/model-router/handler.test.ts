@@ -1504,3 +1504,125 @@ Deno.test("L2: 403 only for a model above the plan (Free asking a Starter model)
     await up.close();
   }
 });
+
+// ---------------------------------------------------------------------------
+// L3a: plans.default_model when the request names no model.
+// ---------------------------------------------------------------------------
+Deno.test("L3a: no model (absent or null) runs on the plan default", async () => {
+  for (const [i, body] of [{ messages: MESSAGES }, { model: null, messages: MESSAGES }].entries()) {
+    const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+    try {
+      const db = new FakeDb(); // Free, default FLASH (the seed)
+      const logs: Logged = [];
+      const res = await handler(
+        db,
+        up.baseUrl,
+        {},
+        logs,
+      )(completionRequest(body, { key: `d${i}` }));
+      assertEquals(res.status, 200);
+      await res.json();
+      assertEquals(up.seen[0].body.model, FLASH.upstreamId);
+      assertEquals(db.settles[0].model, FLASH.id);
+      assertEquals(db.defaultModelCalls.includes("free"), true);
+      const event = logs.find((l) => l.event === "model_router.plan_default");
+      assertEquals([event?.plan, event?.model], ["free", FLASH.id]);
+    } finally {
+      await up.close();
+    }
+  }
+});
+
+Deno.test("L3a: the default is per plan (pro defaults to GLM here)", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb(100000, { plan: "pro", allowedModels: null });
+    db.defaultModels.set("pro", GLM.id);
+    const res = await handler(db, up.baseUrl)(completionRequest({ messages: MESSAGES }));
+    assertEquals(res.status, 200);
+    await res.json();
+    assertEquals(up.seen[0].body.model, GLM.upstreamId);
+    assertEquals(db.settles[0].model, GLM.id);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L3a: a plan without a default -> 400 model_required, nothing reserved or sent", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb();
+    db.defaultModels.set("free", null);
+    const res = await handler(
+      db,
+      up.baseUrl,
+    )(completionRequest({ messages: MESSAGES }, { key: "n1" }));
+    assertEquals([res.status, (await res.json()).error], [400, "model_required"]);
+    assertEquals(db.reservations.size, 0);
+    assertEquals(up.seen.length, 0);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L3a: a NAMED model is never substituted (above plan 403, unknown 404, malformed 400)", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb(); // Free: FLASH + GLM; default FLASH
+    const h = handler(db, up.baseUrl);
+    const above = await h(completionRequest({ model: PAID.id, messages: MESSAGES }, { key: "a1" }));
+    assertEquals([above.status, (await above.json()).error], [403, "model_not_in_plan"]);
+    const unknown = await h(
+      completionRequest({ model: "acme/not-a-model", messages: MESSAGES }, { key: "a2" }),
+    );
+    assertEquals([unknown.status, (await unknown.json()).error], [404, "model_not_found"]);
+    for (const [i, model] of ["", 42, "no-slash"].entries()) {
+      const bad = await h(completionRequest({ model, messages: MESSAGES }, { key: `a3${i}` }));
+      assertEquals([bad.status, (await bad.json()).error], [400, "invalid_model"]);
+    }
+    assertEquals(db.defaultModelCalls, [], "the default is only read when no model is named");
+    assertEquals(db.reservations.size, 0);
+    assertEquals(up.seen.length, 0);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L3a: the default's group key is checked BEFORE the claim (503, same key retries)", async () => {
+  const OPUS_DEFAULT = MODEL_CATALOG.find(
+    (m) => m.id === "anthropic/claude-opus-5-5",
+  ) as CatalogModel;
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb(1e9, { plan: "pro", allowedModels: null });
+    db.defaultModels.set("pro", OPUS_DEFAULT.id);
+    const missing = handler(db, up.baseUrl, { catalog: [FLASH, GLM, OPUS_DEFAULT] });
+    const first = await missing(completionRequest({ messages: MESSAGES }, { key: "k1" }));
+    assertEquals([first.status, (await first.json()).error], [503, "provider_not_configured"]);
+    assertEquals(db.claims.has("k1"), false, "nothing claimed");
+    const fixed = handler(db, up.baseUrl, {
+      catalog: [FLASH, GLM, OPUS_DEFAULT],
+      config: routerConfig(up.baseUrl, {
+        keys: { "model - china": "upstream-secret", claude: "claude-secret" },
+      }),
+    });
+    const retry = await fixed(completionRequest({ messages: MESSAGES }, { key: "k1" }));
+    assertEquals(retry.status, 200);
+    await retry.json();
+    assertEquals(up.seen[0].body.model, OPUS_DEFAULT.upstreamId);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L3a: GET /v1/models reports the plan default", async () => {
+  const db = new FakeDb();
+  const h = handler(db, "http://x");
+  const req = () =>
+    new Request("http://localhost/model-router/v1/models", {
+      headers: { authorization: "Bearer user.jwt.token" },
+    });
+  assertEquals((await (await h(req())).json()).default_model, FLASH.id);
+  db.defaultModels.set("free", null);
+  assertEquals((await (await h(req())).json()).default_model, null);
+});
