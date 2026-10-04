@@ -16,8 +16,14 @@ import {
   estimateTokens,
   type Markup,
   type Usage,
+  worstCaseCredits,
 } from "./pricing.ts";
-import { buildOpenAiCompletionsRequest, CompletionAssembler, SseUsageTracker } from "./upstream.ts";
+import {
+  buildOpenAiCompletionsRequest,
+  CompletionAssembler,
+  IGNORED_EFFORT_FIELDS,
+  SseUsageTracker,
+} from "./upstream.ts";
 
 /**
  * model-router (B4a). OpenAI-compatible:
@@ -264,6 +270,16 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     if (plan.allowedModels !== null && !listed) throw new HttpError(403, "model_not_in_plan");
     if (model.api !== "openai-completions") throw new HttpError(503, "provider_not_configured");
     const upstream = upstreamFor(model, baseUrl);
+    const ignoredEffort = IGNORED_EFFORT_FIELDS.filter((field) => parsed.body[field] !== undefined);
+    if (ignoredEffort.length > 0) {
+      log({
+        event: "model_router.effort_ignored",
+        request_id: key,
+        user_id: userId,
+        model: model.id,
+        fields: ignoredEffort,
+      });
+    }
 
     const promptTokens = estimateTokens(parsed.promptChars);
     if (promptTokens > model.contextWindow) throw new HttpError(400, "context_length_exceeded");
@@ -281,10 +297,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     if (maxTokens < Math.min(wanted, MIN_OUTPUT_TOKENS)) {
       throw new HttpError(402, "insufficient_credits");
     }
-    const reserved = Math.max(
-      1,
-      creditsFor(model, { promptTokens, cachedTokens: 0, completionTokens: maxTokens }, markup),
-    );
+    const reserved = Math.max(1, worstCaseCredits(model, promptTokens, maxTokens, markup));
     try {
       await deps.db.reserve(userId, key, reserved, limits.maxActive);
     } catch (error) {
@@ -395,6 +408,7 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
       model: ctx.model.id,
       input_tokens: final.promptTokens,
       cached_tokens: final.cachedTokens,
+      cache_write_tokens: final.cacheWriteTokens ?? 0,
       output_tokens: final.completionTokens,
       estimated,
       credits,

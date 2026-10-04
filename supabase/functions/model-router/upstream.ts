@@ -25,10 +25,14 @@ export const FORWARDED_FIELDS = [
   "response_format",
   "logprobs",
   "top_logprobs",
-  "reasoning_effort",
-  "thinking",
-  "enable_thinking",
 ] as const;
+
+/**
+ * L2: reasoning effort is decided server-side, never by the client. These request fields are
+ * dropped (not forwarded): the upstream applies the model's default. The handler logs
+ * `model_router.effort_ignored` when a request carried any of them.
+ */
+export const IGNORED_EFFORT_FIELDS = ["reasoning_effort", "thinking", "enable_thinking"] as const;
 
 export type UpstreamRequest = { url: string; init: RequestInit };
 
@@ -122,7 +126,29 @@ function tokenCount(value: unknown): number | null {
     : null;
 }
 
-/** OpenAI / DeepSeek usage object -> Usage; null when absent or malformed. */
+/**
+ * Prompt-cache WRITE tokens (L2), from the top-level / prompt_tokens_details fields vibi
+ * (New API) reports on the openai endpoint: prompt_tokens_details.cache_write_tokens,
+ * prompt_tokens_details.cached_creation_tokens, cache_write_tokens and
+ * claude_cache_creation_5_m_tokens. When several are present the LARGEST is used (they
+ * agreed in the probe; on a disagreement we bill the higher figure). NEVER
+ * billing_usage.claude_usage.* (its claude_cache_creation_5_m_tokens was 0 in the probe
+ * while the others said 3143). The 1-hour write count (claude_cache_creation_1_h_tokens) is
+ * not billed separately until it has its own field contract and price. None present ->
+ * undefined: writes stay inside the uncached part, billed at input (pre-L2 behaviour).
+ */
+export function cacheWriteTokens(u: Record<string, unknown>): number | undefined {
+  const details = u.prompt_tokens_details as Record<string, unknown> | undefined;
+  const found = [
+    tokenCount(details?.cache_write_tokens),
+    tokenCount(details?.cached_creation_tokens),
+    tokenCount(u.cache_write_tokens),
+    tokenCount(u.claude_cache_creation_5_m_tokens),
+  ].filter((n): n is number => n !== null);
+  return found.length ? Math.max(...found) : undefined;
+}
+
+/** OpenAI / DeepSeek / vibi usage object -> Usage; null when absent or malformed. */
 export function parseUsage(raw: unknown): Usage | null {
   if (!raw || typeof raw !== "object") return null;
   const u = raw as Record<string, unknown>;
@@ -131,11 +157,11 @@ export function parseUsage(raw: unknown): Usage | null {
   if (prompt === null || completion === null) return null;
   const details = u.prompt_tokens_details as Record<string, unknown> | undefined;
   const cached = tokenCount(details?.cached_tokens) ?? tokenCount(u.prompt_cache_hit_tokens) ?? 0;
-  return {
-    promptTokens: prompt,
-    cachedTokens: Math.min(cached, prompt),
-    completionTokens: completion,
-  };
+  const read = Math.min(cached, prompt);
+  const usage: Usage = { promptTokens: prompt, cachedTokens: read, completionTokens: completion };
+  const write = cacheWriteTokens(u);
+  if (write !== undefined) usage.cacheWriteTokens = Math.min(write, prompt - read);
+  return usage;
 }
 
 /** Non-stream response body: usage and output characters (for the fallback estimate). */
