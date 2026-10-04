@@ -32,6 +32,36 @@ export const FORWARDED_FIELDS = [
 
 export type UpstreamRequest = { url: string; init: RequestInit };
 
+/**
+ * L5d: fields stripped (at any depth) from `messages` and `tools` for models of the vibi
+ * "claude" group. A client `cache_control` (ephemeral 5 min or `ttl: "1h"`) makes the
+ * upstream write the prompt cache, which bills at 1.25x / 2x input, and the router does not
+ * bill cache writes until L2. Without it the request is still served (no prompt caching).
+ */
+const CLAUDE_STRIPPED_KEY = "cache_control";
+const STRIP_FIELDS = ["messages", "tools"] as const;
+
+/**
+ * A deep copy of `value` without any `cache_control` key (the input is never mutated).
+ * A tool's JSON Schema (`function.parameters`) is copied verbatim: a parameter that happens
+ * to be named `cache_control` is part of the tool's contract, not a cache marker.
+ */
+export function withoutCacheControl(value: unknown, parentKey?: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => withoutCacheControl(item));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, inner] of Object.entries(value)) {
+      if (key === CLAUDE_STRIPPED_KEY) continue;
+      out[key] =
+        parentKey === "function" && key === "parameters"
+          ? structuredClone(inner)
+          : withoutCacheControl(inner, key);
+    }
+    return out;
+  }
+  return value;
+}
+
 export function buildOpenAiCompletionsRequest(
   model: CatalogModel,
   body: Record<string, unknown>,
@@ -42,6 +72,11 @@ export function buildOpenAiCompletionsRequest(
   const payload: Record<string, unknown> = { model: model.upstreamId };
   for (const field of FORWARDED_FIELDS) {
     if (body[field] !== undefined) payload[field] = body[field];
+  }
+  if (model.upstreamGroup === "claude") {
+    for (const field of STRIP_FIELDS) {
+      if (payload[field] !== undefined) payload[field] = withoutCacheControl(payload[field]);
+    }
   }
   payload.max_tokens = maxTokens;
   payload.stream = true;
