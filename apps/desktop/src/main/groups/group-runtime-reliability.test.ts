@@ -208,7 +208,7 @@ describe("Groups runtime audit", () => {
     expect(queued.input.message).toContain("DADO_NOVO_RELEVANTE");
   });
 
-  it("F01 keeps distinct public messages in one turn and finalizes the original card by identity", async () => {
+  it("F01 joins public messages in one turn and finalizes the original card by identity", async () => {
     const { group, a } = squad();
     const env = setup();
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha implement" });
@@ -225,6 +225,9 @@ describe("Groups runtime audit", () => {
       delta: "First public message.",
     });
     env.emit({ type: "message.completed", sessionId: a, messageId: "one" });
+    expect(listGroupMessages(group.id).find((message) => message.id === firstId)?.status).toBe(
+      "writing",
+    );
     env.emit({ type: "message.started", sessionId: a, messageId: "two", role: "assistant" });
     env.emit({
       type: "message.delta",
@@ -238,14 +241,13 @@ describe("Groups runtime audit", () => {
       (m) => m.authorKind === "agent" && m.kind === "message",
     );
     expect(publicMessages.map((m) => m.body)).toEqual([
-      "First public message.",
-      "Second public message.",
+      "First public message.\n\nSecond public message.",
     ]);
     expect(publicMessages[0]!.id).toBe(firstId);
     expect(
       publicMessages.every((m) => m.status === "completed" && m.turnId && m.runId === "run-a"),
     ).toBe(true);
-    expect(new Set(publicMessages.map((m) => m.id)).size).toBe(2);
+    expect(new Set(publicMessages.map((m) => m.id)).size).toBe(1);
   });
 
   it("F03 ignores late output after cancellation while allowing other groups to proceed", async () => {
@@ -384,6 +386,14 @@ describe("Groups runtime audit", () => {
     const { group, a } = squad();
     const env = setup();
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha execute" });
+    const promptUserMessageId = env.calls[0]?.input.userMessageId;
+    env.emit({
+      type: "run.started",
+      sessionId: a,
+      runId: "run-public",
+      ...(promptUserMessageId ? { userMessageId: promptUserMessageId } : {}),
+      delivery: "normal",
+    });
     for (const messageId of ["thinking", "tool"]) {
       env.emit({ type: "message.started", sessionId: a, messageId, role: "assistant" });
       env.emit({ type: "message.completed", sessionId: a, messageId });

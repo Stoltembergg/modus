@@ -9,6 +9,10 @@
  */
 
 const GROUP_TASK_TEXT_EN = {
+  "agents.applyTemplateCapabilities": "Apply capabilities from {name}",
+  "agents.templateCapabilitiesHint": "Updates this draft's work capabilities only. Save to apply.",
+  "agents.capabilitiesUnconfigured":
+    "Capabilities are not configured. Choose capabilities and supported task kinds to receive typed tasks.",
   "integration.title": "Integrate task",
   "integration.close": "Close integration",
   "integration.loadingStatus": "Checking integration status…",
@@ -140,6 +144,11 @@ const GROUP_TASK_TEXT_EN = {
 } as const;
 
 const GROUP_TASK_TEXT_PT: Record<keyof typeof GROUP_TASK_TEXT_EN, string> = {
+  "agents.applyTemplateCapabilities": "Aplicar capacidades de {name}",
+  "agents.templateCapabilitiesHint":
+    "Atualiza somente as capacidades de trabalho deste rascunho. Salve para aplicar.",
+  "agents.capabilitiesUnconfigured":
+    "As capacidades não estão configuradas. Escolha capacidades e tipos de tarefa para receber tarefas tipadas.",
   "integration.title": "Integrar tarefa",
   "integration.close": "Fechar integração",
   "integration.loadingStatus": "Verificando o status da integração…",
@@ -272,6 +281,9 @@ const GROUP_TASK_TEXT_PT: Record<keyof typeof GROUP_TASK_TEXT_EN, string> = {
 };
 
 const GROUP_TASK_TEXT_ZH: Record<keyof typeof GROUP_TASK_TEXT_EN, string> = {
+  "agents.applyTemplateCapabilities": "应用 {name} 的能力配置",
+  "agents.templateCapabilitiesHint": "仅更新此草稿的工作能力。保存后生效。",
+  "agents.capabilitiesUnconfigured": "尚未配置能力。请选择能力和支持的任务类型，以接收结构化任务。",
   "integration.title": "集成任务",
   "integration.close": "关闭集成窗口",
   "integration.loadingStatus": "正在检查集成状态…",

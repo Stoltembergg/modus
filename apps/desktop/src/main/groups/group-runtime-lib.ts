@@ -123,6 +123,8 @@ export type GroupRuntimeHost = {
 /** A wake requested by a member task tool (see GroupRuntime.handleTaskWake). */
 export type GroupTaskWake = {
   taskId?: string;
+  /** Control notifications request help; they do not dispatch the task's current stage. */
+  purpose?: "task" | "control";
   operationId?: string;
   sourceEventId?: string;
   groupId: string;
@@ -137,6 +139,17 @@ export type GroupTaskWake = {
    */
   wake?: boolean;
 };
+
+/** Validate a concrete delegation without granting tools or changing the task. */
+export type GroupTaskDispatchInput = {
+  groupId: string;
+  actorSessionId: string;
+  targetSessionId: string;
+  task?: GroupTask;
+};
+
+/** A stored status does not by itself prove that a recipient turn was queued. */
+export type GroupTaskWakeResult = GroupMessage & { deliveryNotice?: string };
 
 /** group_start_worktree moved a member's cwd (see GroupRuntime.handleWorktreeReady). */
 export type GroupWorktreeReady = { groupId: string; sessionId: string; branch: string };
@@ -170,6 +183,8 @@ export type Wake = {
   id?: string;
   messageId?: string;
   runId?: string;
+  /** Unique user-message identity for this concrete prompt attempt. */
+  promptUserMessageId?: string;
   publicMessageIds?: Map<string, string>;
   assistantMessageIds?: Set<string>;
   questionRequestIds?: Set<string>;
@@ -194,6 +209,8 @@ export type Wake = {
   compose?: () => string | undefined;
   /** The turn opened the intent gate: its chain ended and it no longer holds a slot. */
   gated?: boolean;
+  /** Control wakes deliver a request about a task without running that task. */
+  purpose?: "task" | "control";
   /** group_start_worktree moved the member's cwd during this turn: re-wake it there. */
   worktreeBranch?: string;
 };
@@ -216,6 +233,8 @@ export type MemberRef = {
   /** Short description of the agent (agentDescription). */
   description?: string;
   archived?: boolean;
+  capabilityIds?: readonly string[];
+  supportedTaskKinds?: readonly string[];
 };
 
 /** Max length of a roster description. */
@@ -247,6 +266,8 @@ export function membersOf(groupId: string): MemberRef[] {
       ...(role ? { role } : {}),
       ...(description ? { description } : {}),
       ...(member.archived ? { archived: true } : {}),
+      capabilityIds: member.capabilityIds ?? [],
+      supportedTaskKinds: member.supportedTaskKinds ?? [],
     };
   });
 }
@@ -471,8 +492,10 @@ export function composeGroupWakePrompt(input: {
     `<group_room name="${escapeText(input.group.name)}">`,
     `You are @${escapeText(self)}, a member of this group. Members right now:`,
     ...roster.map((line) => escapeText(line)),
+    `<group_member_capabilities>${escapeText(JSON.stringify(input.members.map((member) => ({ sessionId: member.sessionId, capabilityIds: member.capabilityIds ?? [], supportedTaskKinds: member.supportedTaskKinds ?? [] }))))}</group_member_capabilities>`,
     "Reply with what the group should read — short and natural. Mentions identify people; they do not dispatch work. Delegate through group task tools using the target sessionId from the roster. The user can direct a task with @Name.",
     "Use group_get_work_state for authoritative task versions, stages, blockers, dependencies and QA summaries. Pass expectedVersion and a stable operationId for task writes. group_report_progress clears a blocker with blockedReason=null; group_agree and review approval require current evidence. Handoff with taskTitle creates and assigns atomically.",
+    "Before delegating a typed task, check the recipient's declared capabilityIds and supportedTaskKinds against the current task stage. Names and role labels are not capabilities. Empty metadata needs the user to configure the agent; report this once and stop retrying the same delegation. A code task at plan needs plan; its active owner must explicitly advance it to implement before handing it to an implementer. After requested changes, read group_get_work_state: code/docs/research tasks return from review/verify/deliver to implement, while design/questions return to plan. A rejected dispatch did not start the recipient; do not claim otherwise or retry until the reason changes.",
     "If the trigger is a greeting or social ping and you have nothing useful to add, reply empty and stay silent. Do not explore files or start tools without a real objective.",
     GROUP_COLLAB_WAKE_PROTOCOL,
   ].join("\n");

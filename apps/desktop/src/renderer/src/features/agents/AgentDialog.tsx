@@ -26,6 +26,7 @@ import { cn } from "../../lib/cn";
 import { ModelOptions, pickModel } from "../../lib/modusModels";
 import type { GroupDialogModel } from "../groups/CreateGroupDialog";
 import { describeGroupError } from "../groups/groupErrors";
+import { useGroupText } from "../groups/groupRoomI18n";
 import { AgentAvatar } from "./AgentAvatar";
 import { AGENT_AVATAR_FILL } from "./agentAvatarModel";
 import { agentDialogError, needsProfileGeneration } from "./agentDialogModel";
@@ -114,6 +115,8 @@ export function AgentDialog(props: AgentDialogProps) {
     draft: target,
   } = props;
   const initial = target?.initial;
+  const t = useGroupText();
+  const capabilityTemplate = getAgentTemplate(agent?.templateId ?? initial?.templateId ?? "");
   const custom = !(agent?.templateId ?? initial?.templateId);
   // Mounted per open (the parent renders it only while open): state starts from the agent.
   const surface = props.surface ?? "dialog";
@@ -439,6 +442,22 @@ export function AgentDialog(props: AgentDialogProps) {
         <p className="text-2xs text-fg-subtle">
           Choose the work this agent supports. These choices do not grant tool access.
         </p>
+        {(!capabilities.capabilityIds.length || !capabilities.supportedTaskKinds.length) && (
+          <p className="text-2xs text-warning">{t("agents.capabilitiesUnconfigured")}</p>
+        )}
+        {capabilityTemplate && (
+          <div className="flex flex-col items-start gap-1">
+            <button
+              type="button"
+              className="rounded-lg border border-hairline px-2 py-1 text-2xs text-fg-subtle hover:text-fg"
+              disabled={busy !== null}
+              onClick={() => setCapabilities(normalizeGroupMemberCapabilities(capabilityTemplate))}
+            >
+              {t("agents.applyTemplateCapabilities", { name: capabilityTemplate.name })}
+            </button>
+            <span className="text-2xs text-fg-subtle">{t("agents.templateCapabilitiesHint")}</span>
+          </div>
+        )}
         {(
           [
             ["capabilityIds", "Capabilities", "Capability", GROUP_CAPABILITY_IDS],

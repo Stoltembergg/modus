@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
   AgentEvent,
@@ -42,7 +43,11 @@ import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-sto
 import { profileForMode } from "../agent/plan-prompt";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import { getDatabase } from "../db/database";
-import { type GroupRoutingResult, routeGroupTask } from "./group-capability-router";
+import {
+  type GroupRoutingResult,
+  groupTaskRoutingStage,
+  routeGroupTask,
+} from "./group-capability-router";
 import {
   getGroupJob,
   listRecoverableGroupJobs,
@@ -81,7 +86,9 @@ import {
   type GroupChainLimits,
   type GroupRuntimeHost,
   type GroupRuntimeOptions,
+  type GroupTaskDispatchInput,
   type GroupTaskWake,
+  type GroupTaskWakeResult,
   type GroupWorktreeReady,
   instructionsOf,
   type MemberRef,
@@ -139,7 +146,9 @@ export {
   type GroupRuntimeHost,
   type GroupRuntimeOptions,
   type GroupSnapshotMember,
+  type GroupTaskDispatchInput,
   type GroupTaskWake,
+  type GroupTaskWakeResult,
   type GroupWorktreeReady,
   isUpdatePendingState,
   parseGroupMentions,
@@ -538,6 +547,7 @@ export class GroupRuntime {
     const {
       error: _error,
       runId: _runId,
+      promptUserMessageId: _promptUserMessageId,
       lastEventCursor: _lastEventCursor,
       startedAt: _startedAt,
       lastProgressAt: _lastProgressAt,
@@ -690,11 +700,39 @@ export class GroupRuntime {
    * chat) it opens a new chain. With `wake: false` the status only posts
    * (no route, no hop, no new chain counters).
    */
-  handleTaskWake(input: GroupTaskWake): GroupMessage | undefined {
+  handleTaskWake(input: GroupTaskWake): GroupTaskWakeResult | undefined {
     if (this.disposed || this.cancelling.has(input.actorSessionId)) return undefined;
     const message = this.durableDispatch(() => this.saveTaskWake(input));
     this.pump();
     return message;
+  }
+
+  /** Explicit task tools may queue a busy recipient, but never invent capabilities or tools. */
+  validateTaskDispatch(input: GroupTaskDispatchInput): void {
+    if (this.disposed || this.cancelling.has(input.actorSessionId))
+      throw new GroupStoreError("invalid-value", "Dispatch refused: the acting turn was stopped.");
+    if (input.task && input.task.groupId !== input.groupId)
+      throw new GroupStoreError("invalid-value", "Dispatch task belongs to another group.");
+    const group = getAgentGroup(input.groupId);
+    if (!group) throw new GroupStoreError("group-not-found", "Dispatch group no longer exists.");
+    const blocked = groupBlockedReason(group, membersOf(input.groupId));
+    if (blocked)
+      throw new GroupStoreError(
+        "invalid-value",
+        "Dispatch refused: configure the group's project and members first.",
+      );
+    const result = this.capabilityRoute(
+      input.groupId,
+      input.task,
+      input.targetSessionId,
+      undefined,
+      true,
+    );
+    if (result.kind === "needs_user")
+      throw new GroupStoreError(
+        "invalid-value",
+        `Dispatch refused: ${result.reasonCode} — ${this.routingDescription(input.groupId, result, input.task)}. No recipient turn was started; retry only after the cause changes.`,
+      );
   }
 
   /** Consume only an exact committed task event; public room text is never a trigger. */
@@ -1123,7 +1161,7 @@ export class GroupRuntime {
     }
   }
 
-  private saveTaskWake(input: GroupTaskWake): GroupMessage | undefined {
+  private saveTaskWake(input: GroupTaskWake): GroupTaskWakeResult | undefined {
     const db = getDatabase();
     const identity = groupTaskOperationFingerprint(input);
     if (input.operationId) {
@@ -1143,12 +1181,32 @@ export class GroupRuntime {
         const message = getGroupMessage(previous.message_id);
         // Publish at least once: a prior durable commit may have lost its live event.
         if (message) this.emitMessage(message);
-        return message;
+        const queued = db
+          .prepare("select 1 from group_jobs where trigger_message_id = ? limit 1")
+          .get(previous.message_id);
+        return message && input.wake !== false && input.targetSessionId && !queued
+          ? {
+              ...message,
+              deliveryNotice:
+                "Recorded, but the recipient was not started. Check the execution state before retrying; an ended execution needs a new user action.",
+            }
+          : message;
       }
+    }
+    if (input.wake !== false && input.targetSessionId) {
+      this.validateTaskDispatch({
+        groupId: input.groupId,
+        actorSessionId: input.actorSessionId,
+        targetSessionId: input.targetSessionId,
+        ...(input.taskId && input.purpose !== "control"
+          ? { task: getGroupTask(input.taskId) }
+          : {}),
+      });
     }
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
     const joined =
       turn && turn.groupId === input.groupId ? this.chains.get(turn.chainId) : undefined;
+    const deferred = Boolean(joined?.ended || joined?.retired);
     let message: GroupMessage;
     try {
       message = appendGroupMessage({
@@ -1166,9 +1224,23 @@ export class GroupRuntime {
       return undefined;
     }
     this.emitMessage(message);
-    if (input.wake !== false && input.targetSessionId) {
+    if (input.wake !== false && input.targetSessionId && !deferred) {
       const chain = joined ?? this.openChain(input.groupId, message.id);
-      this.route(chain, message, [input.targetSessionId], false, false, input.taskId);
+      if (
+        !this.route(
+          chain,
+          message,
+          [input.targetSessionId],
+          false,
+          false,
+          input.purpose === "control" ? undefined : input.taskId,
+          input.purpose,
+        )
+      )
+        throw new GroupStoreError(
+          "invalid-value",
+          "Dispatch refused: no recipient turn was queued. Check the execution state, task dependencies and remaining context/wake budgets before retrying.",
+        );
       this.retireIdleChains();
     }
     if (input.operationId) {
@@ -1178,7 +1250,13 @@ export class GroupRuntime {
       // Delivery and marker commit with the message, jobs and budget counters.
       markGroupTaskExplicitDispatch(input.operationId);
     }
-    return message;
+    return input.wake !== false && input.targetSessionId && deferred
+      ? {
+          ...message,
+          deliveryNotice:
+            "Recorded, but the recipient was not started because this execution ended. A new user execution is required; do not repeat this handoff in the ended execution.",
+        }
+      : message;
   }
 
   /**
@@ -1484,6 +1562,15 @@ export class GroupRuntime {
     }
     const wake = this.running.get(event.sessionId) ?? this.gated.get(event.sessionId);
     if (!wake || wake.cancelled || this.disposed) return;
+    if (!wake.runId && event.type !== "run.started") return;
+    if (event.type === "run.started") {
+      if (
+        wake.promptUserMessageId &&
+        event.userMessageId &&
+        event.userMessageId !== wake.promptUserMessageId
+      )
+        return;
+    }
     if (wake.runId && "runId" in event && event.runId && event.runId !== wake.runId) return;
     if (event.eventCursor !== undefined) {
       if (wake.lastEventCursor !== undefined && event.eventCursor <= wake.lastEventCursor) return;
@@ -1614,6 +1701,7 @@ export class GroupRuntime {
     task?: GroupTask,
     explicitMentionSessionId?: string,
     reservedWake?: Wake,
+    allowQueuedTarget = false,
   ): GroupRoutingResult {
     const workState = getGroupWorkState(groupId);
     workState.tasks = listGroupTasks(groupId);
@@ -1640,9 +1728,12 @@ export class GroupRuntime {
       memberAvailability[id] =
         !session ||
         session.archivedAt ||
-        currentLoad[id] > 0 ||
+        ((!allowQueuedTarget || explicitMentionSessionId !== id) && currentLoad[id] > 0) ||
         (this.cancelling.has(id) && !supersededGate) ||
-        (active !== reservedWake && !supersededGate && this.runtime.isSessionStreaming(id))
+        ((!allowQueuedTarget || explicitMentionSessionId !== id) &&
+          active !== reservedWake &&
+          !supersededGate &&
+          this.runtime.isSessionStreaming(id))
           ? "unavailable"
           : "available";
       // Group prompts omit mode; use the SDK's default profile and exact filtered tool set.
@@ -1691,21 +1782,37 @@ export class GroupRuntime {
       .join("\n");
   }
 
-  private routingUnavailable(chain: ChainState, result: GroupRoutingResult): void {
+  private routingDescription(
+    groupId: string,
+    result: GroupRoutingResult,
+    task?: GroupTask,
+  ): string {
     const target = result.targetSessionId
-      ? membersOf(chain.groupId).find((member) => member.sessionId === result.targetSessionId)
+      ? listAgentGroupMembers(groupId).find((member) => member.sessionId === result.targetSessionId)
       : undefined;
-    const targetName = target?.title ?? result.targetSessionId;
-    const description =
-      result.reasonCode === "member-archived"
-        ? `${targetName ?? "The mentioned member"} is archived`
-        : result.reasonCode === "member-unavailable"
-          ? `${targetName ?? "The mentioned member"} is busy or unavailable`
-          : result.reasonCode === "capability-incompatible"
-            ? `${targetName ?? "The mentioned member"} lacks the required task capability`
-            : result.reasonCode === "tools-inactive"
-              ? `${targetName ?? "The mentioned member"} lacks an active required tool`
-              : undefined;
+    const targetName = target?.name ?? result.targetSessionId ?? "The requested member";
+    switch (result.reasonCode) {
+      case "member-archived":
+        return `${targetName} is archived`;
+      case "member-unavailable":
+        return `${targetName} is busy or unavailable`;
+      case "capabilities-unconfigured":
+        return `${targetName} has no configured capabilities or supported task kinds; open Edit agent and select them, or apply its official template capabilities`;
+      case "capability-incompatible":
+        return `${targetName} cannot take kind=${task?.kind ?? "unknown"}, stage=${task ? groupTaskRoutingStage(task) : "unknown"}; declared capabilityIds=${JSON.stringify(target?.capabilityIds ?? [])}, supportedTaskKinds=${JSON.stringify(target?.supportedTaskKinds ?? [])}${task?.stage === "plan" && (task.kind === "code" || task.kind === "docs") ? "; the active owner must explicitly advance the task to implement before handing it to an implementer" : ""}`;
+      case "tools-inactive":
+        return `${targetName} lacks an active required tool`;
+      default:
+        return `check the live group work state (${result.reasonCode})`;
+    }
+  }
+
+  private routingUnavailable(
+    chain: ChainState,
+    result: GroupRoutingResult,
+    task?: GroupTask,
+  ): void {
+    const description = this.routingDescription(chain.groupId, result, task);
     this.emitMessage(
       appendGroupMessage({
         createdAt: this.stamp(),
@@ -1713,7 +1820,7 @@ export class GroupRuntime {
         authorKind: "system",
         kind: "status",
         chainId: chain.chainId,
-        body: `Routing needs user: ${result.reasonCode}${description ? ` — ${description}` : targetName ? ` (${targetName})` : ""}.`,
+        body: `Routing needs user: ${result.reasonCode} — ${description}.`,
       }),
     );
   }
@@ -1779,13 +1886,14 @@ export class GroupRuntime {
     allowSelf = false,
     deferPump = false,
     taskId?: string,
-  ): void {
-    if (chain.ended) return;
+    purpose?: GroupTaskWake["purpose"],
+  ): boolean {
+    if (chain.ended) return false;
     const group = getAgentGroup(chain.groupId);
-    if (!group) return;
+    if (!group) return false;
     const members = membersOf(group.id);
     // A blocked group (no folder, or fewer than 2 members) is read-only: nobody is woken.
-    if (groupBlockedReason(group, members)) return;
+    if (groupBlockedReason(group, members)) return false;
     let wanted = this.wakeTargets(group, message, explicitTargets, allowSelf);
     const userRule =
       message.authorKind === "user"
@@ -1814,19 +1922,21 @@ export class GroupRuntime {
       const task = taskId ? getGroupTask(taskId) : undefined;
       const explicit = explicitTargets ?? (message.mentions.length ? message.mentions : undefined);
       const results = explicit
-        ? explicit.map((id) => this.capabilityRoute(group.id, task, id))
+        ? explicit.map((id) =>
+            this.capabilityRoute(group.id, task, id, undefined, Boolean(taskId && explicitTargets)),
+          )
         : taskId || wanted[0] || userRule?.rule === "autonomous"
           ? [this.capabilityRoute(group.id, task, wanted[0])]
           : [];
       wanted = results.flatMap((result) => {
         if (result.kind === "needs_user") {
-          this.routingUnavailable(chain, result);
+          this.routingUnavailable(chain, result, task);
           return [];
         }
         return result.targetSessionId ? [result.targetSessionId] : [];
       });
     }
-    if (wanted.length === 0) return;
+    if (wanted.length === 0) return false;
     const history = listGroupMessages(group.id, {
       before: { createdAt: message.createdAt, id: message.id },
       limit: 100,
@@ -1835,6 +1945,7 @@ export class GroupRuntime {
     const decisions = listGroupDecisions(group.id);
     const leadSessionId = group.leadSessionId;
     const coordinating = isCoordinatorModeActive(group) && leadSessionId !== undefined;
+    let dispatched = false;
     for (const sessionId of wanted) {
       if (chain.agentMessages >= this.limits.maxAgentMessages) {
         this.endChain(chain, "max-agent-messages");
@@ -1852,7 +1963,9 @@ export class GroupRuntime {
           sessionId,
           ...(instructions ? { instructions } : {}),
           trigger: message,
-          supervisedFlow: this.typedFlowFor(current.id, sessionId, chain.chainId),
+          ...(purpose === "control"
+            ? {}
+            : { supervisedFlow: this.typedFlowFor(current.id, sessionId, chain.chainId) }),
           history,
           decisions,
           ...(coordinating && sessionId === leadSessionId
@@ -1884,14 +1997,17 @@ export class GroupRuntime {
         chainId: chain.chainId,
         triggerMessageId: message.id,
         prompt,
+        ...(purpose ? { purpose } : {}),
         compose: () => {
           const current = getAgentGroup(group.id);
           return current ? compose(current, membersOf(current.id)) : undefined;
         },
       });
+      dispatched = true;
     }
     this.emitActivity(group.id);
     if (!deferPump) this.pump();
+    return dispatched;
   }
 
   /** "<name> is archived": a status line in place of the wake (wakes nobody). */
@@ -2353,6 +2469,7 @@ export class GroupRuntime {
   }
 
   private start(window: BrowserWindowType, wake: Wake): void {
+    wake.promptUserMessageId = `group-wake:${randomUUID()}`;
     this.running.set(wake.sessionId, wake);
     this.lastServedGroupId = wake.groupId;
     wake.startedAt = wake.lastProgressAt = Date.now();
@@ -2367,7 +2484,10 @@ export class GroupRuntime {
       const contextItems = (trigger?.contextItems ??
         []) as import("../../shared/contracts").ContextItem[];
       const model = modelIdOf(wake.groupId, wake.sessionId);
-      const groupTask = findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
+      const groupTask =
+        wake.purpose === "control"
+          ? undefined
+          : findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
       if (groupTask) {
         const task = getGroupTask(groupTask.taskId);
         if (task.kind && task.kind !== "legacy") {
@@ -2381,6 +2501,7 @@ export class GroupRuntime {
         message: this.freshPrompt(wake),
         context: contextItems,
         delivery: "normal",
+        userMessageId: wake.promptUserMessageId,
         ...(groupTask ? { groupTask } : {}),
         ...(model ? { model } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
@@ -2416,7 +2537,9 @@ export class GroupRuntime {
       members,
       sessionId: wake.sessionId,
       trigger,
-      supervisedFlow: this.typedFlowFor(group.id, wake.sessionId, wake.chainId),
+      ...(wake.purpose === "control"
+        ? {}
+        : { supervisedFlow: this.typedFlowFor(group.id, wake.sessionId, wake.chainId) }),
       history,
       decisions: listGroupDecisions(group.id),
       ...(instructions ? { instructions } : {}),
@@ -2439,7 +2562,8 @@ export class GroupRuntime {
   }
 
   private finishTurn(wake: Wake, result: PromptTurnResult): void {
-    if (wake.error && !result.error) result = { ...result, error: wake.error };
+    if (result.outcome !== "ok" && wake.error && !result.error)
+      result = { ...result, error: wake.error };
     this.clearWatchdog(wake);
     if (this.cancelling.get(wake.sessionId) === wake) this.cancelling.delete(wake.sessionId);
     if (this.disposed || wake.cancelled) {

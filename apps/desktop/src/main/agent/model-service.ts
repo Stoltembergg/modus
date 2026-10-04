@@ -798,6 +798,13 @@ function catalogReasoningCapabilityForModel(model: Model<Api> | undefined) {
   return model ? catalogReasoningCapabilities.get(modelToId(model)) : undefined;
 }
 
+function isOpenRouterDynamicRoute(model: Model<Api> | undefined): boolean {
+  return (
+    model?.provider === "openrouter" &&
+    (model.id === "openrouter/free" || model.id === "openrouter/auto")
+  );
+}
+
 function thinkingOptionsForModel(
   model: Model<Api> | undefined,
   config: ModelConfigRow | undefined,
@@ -830,7 +837,13 @@ function thinkingOptionsForModel(
   }
   const capability = catalogReasoningCapabilityForModel(model);
   if (capability?.type === "options") {
-    return capability.options;
+    return isOpenRouterDynamicRoute(model)
+      ? capability.options.map((option) =>
+          option.level === "off"
+            ? { value: option.value, label: "Provider default", level: option.level }
+            : option,
+        )
+      : capability.options;
   }
 
   const map = thinkingLevelMapForModel(model, config);
@@ -839,7 +852,7 @@ function thinkingOptionsForModel(
     const value = typeof mapped === "string" && mapped.trim() ? mapped.trim() : level;
     return {
       value,
-      label: value,
+      label: level === "off" && isOpenRouterDynamicRoute(model) ? "Provider default" : value,
       level,
       ...(value !== level ? { wireValue: value } : {}),
     };
@@ -2224,6 +2237,19 @@ export function resolveModelThinking(
       ? (budgetThinkingOption(thinkingVariant, thinking.budget) ?? thinking.selected)
       : clampThinkingVariant(thinkingVariant, thinking.options)
     : thinking.selected;
+
+  if (selected.level === "off" && isOpenRouterDynamicRoute(model)) {
+    // Router aliases can select a model that requires reasoning. PI normally
+    // sends reasoning.effort="none" for Off. Suppress that control on this
+    // runtime descriptor so the routed provider chooses its default. A null
+    // off mapping would instead make PI clamp Off to an explicit effort.
+    // The registry retains the original reasoning capability for other levels.
+    return {
+      model: { ...model, reasoning: false },
+      thinkingLevel: "off",
+      variant: selected.value,
+    };
+  }
 
   const native =
     model.provider === "antigravity"

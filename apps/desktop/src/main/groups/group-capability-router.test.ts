@@ -68,7 +68,7 @@ describe("routeGroupTask", () => {
     }
     expect(
       routeGroupTask({ ...input([member("b", [])]), explicitMentionSessionId: "b" }),
-    ).toMatchObject({ kind: "needs_user", reasonCode: "capability-incompatible" });
+    ).toMatchObject({ kind: "needs_user", reasonCode: "capabilities-unconfigured" });
     expect(
       routeGroupTask({
         ...input([{ ...member("b"), archived: true }]),

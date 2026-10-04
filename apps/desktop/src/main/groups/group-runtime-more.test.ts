@@ -397,6 +397,7 @@ describe("task tool wakes", () => {
         { id: task.id, reviewer: "Beta" },
       );
       expect(text).toContain("Review requested from @Beta");
+      expect(text).toContain("Recorded, but the recipient was not started");
       expect(listGroupTasks(group.id)[0]).toMatchObject({
         status: "in_review",
         reviewerSessionId: beta,
@@ -424,6 +425,7 @@ describe("task tool wakes", () => {
     await flush();
     const status = groups.handleTaskWake(review(group.id, alpha, gamma));
     expect(status?.chainId).toBe(user.id);
+    expect(status?.deliveryNotice).toContain("this execution ended");
     expect(runtime.pendingSessions()).toEqual([alpha]);
     expect(runtime.started).not.toContain(gamma);
   });

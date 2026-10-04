@@ -12,7 +12,7 @@ import {
   shortExecutionLabel,
 } from "../../../../shared/group-execution-link";
 import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
-import { isNearBottom } from "../../../../shared/group-room-transcript";
+import { coalesceGroupTurnMessages, isNearBottom } from "../../../../shared/group-room-transcript";
 import { GroupMessageRow, type WorkingMemberAvatar } from "./GroupMessageRow";
 import { GroupWorkingStatus } from "./GroupWorkingStatus";
 import { deriveGroupDelivery, indexTurnRepliesByTrigger } from "./groupDelivery";
@@ -102,9 +102,13 @@ export function GroupMessageList({
     nearBottom: true,
   });
   const labels = useMemo(() => memberLabels(members), [members]);
-  const roomMessages = useMemo(
+  const storedRoomMessages = useMemo(
     () => messages.filter((message) => message.groupId === groupId),
     [messages, groupId],
+  );
+  const roomMessages = useMemo(
+    () => coalesceGroupTurnMessages(storedRoomMessages),
+    [storedRoomMessages],
   );
   // An agent may complete a turn silently. Keep its canonical record in the
   // store, but leave no empty "Completed" bubble in the user's conversation.
@@ -143,8 +147,8 @@ export function GroupMessageList({
   );
   const tokenAnchors = useMemo(() => executionTokenAnchorIds(renderedMessages), [renderedMessages]);
   const byId = useMemo(
-    () => new Map(roomMessages.map((message) => [message.id, message])),
-    [roomMessages],
+    () => new Map(storedRoomMessages.map((message) => [message.id, message])),
+    [storedRoomMessages],
   );
   // Delivery footers read every loaded turn card, even ones the filters hide.
   const repliesByTrigger = useMemo(() => indexTurnRepliesByTrigger(roomMessages), [roomMessages]);

@@ -18,6 +18,7 @@ type JobRow = {
   message_id: string;
   seq: number;
   prompt: string;
+  purpose: "task" | "control";
   status: GroupJobStatus;
   error: string | null;
 };
@@ -51,8 +52,8 @@ export function persistGroupJob(wake: Wake): void {
   const now = new Date().toISOString();
   getDatabase()
     .prepare(`insert into group_jobs
-    (id, group_id, session_id, chain_id, trigger_message_id, message_id, seq, prompt, status, created_at, updated_at)
-    values (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?) on conflict(id) do nothing`)
+    (id, group_id, session_id, chain_id, trigger_message_id, message_id, seq, prompt, purpose, status, created_at, updated_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?) on conflict(id) do nothing`)
     .run(
       wake.id,
       wake.groupId,
@@ -62,6 +63,7 @@ export function persistGroupJob(wake: Wake): void {
       wake.messageId,
       wake.seq,
       wake.prompt,
+      wake.purpose ?? "task",
       now,
       now,
     );
@@ -84,6 +86,7 @@ function wakeFromRow(row: JobRow): Wake {
     triggerMessageId: row.trigger_message_id,
     seq: row.seq,
     prompt: row.prompt,
+    purpose: row.purpose,
   };
 }
 

@@ -11,6 +11,7 @@ export type GroupRoutingReason =
   | "member-absent"
   | "member-archived"
   | "member-unavailable"
+  | "capabilities-unconfigured"
   | "capability-incompatible"
   | "tools-inactive"
   | "dependency-incomplete"
@@ -40,7 +41,7 @@ export type GroupRoutingResult = {
   eligibleSessionIds: string[];
 };
 
-function stageOf(task: GroupTask): GroupTaskStage {
+export function groupTaskRoutingStage(task: GroupTask): GroupTaskStage {
   if (task.status === "in_review" || task.kind === "review") return "review";
   return task.stage ?? (task.kind === "design" || task.kind === "question" ? "plan" : "implement");
 }
@@ -49,7 +50,7 @@ function stageOf(task: GroupTask): GroupTaskStage {
 export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
   const { task, workState } = input;
   const registry = input.toolRegistry ?? toolRegistry;
-  const stage = task ? stageOf(task) : undefined;
+  const stage = task ? groupTaskRoutingStage(task) : undefined;
   const unavailable = (member: AgentGroupMember): GroupRoutingReason | undefined =>
     member.archived
       ? "member-archived"
@@ -58,6 +59,8 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
         : undefined;
   const compatible = (member: AgentGroupMember): GroupRoutingReason | undefined => {
     if (!task || task.kind === "legacy" || !task.kind) return undefined;
+    if (!member.capabilityIds?.length || !member.supportedTaskKinds?.length)
+      return "capabilities-unconfigured";
     const capability =
       task.kind === "research" && stage === "implement"
         ? "research"
@@ -89,7 +92,11 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
       !tools.includes("bash")
     )
       return "tools-inactive";
-    if (stage === "review" && member.sessionId === task.ownerSessionId)
+    if (
+      stage === "review" &&
+      member.sessionId === task.ownerSessionId &&
+      !(task.kind === "review" && task.status !== "in_review")
+    )
       return "capability-incompatible";
     return undefined;
   };

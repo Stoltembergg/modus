@@ -1503,7 +1503,7 @@ export function updateGroupMessage(
     runId?: string;
     sdkMessageId?: string;
     status?: GroupMessageStatus;
-    error?: string;
+    error?: string | null;
   },
 ): GroupMessage | undefined {
   const current = getGroupMessage(messageId);
@@ -1519,7 +1519,7 @@ export function updateGroupMessage(
       patch.runId ?? current.runId ?? null,
       patch.sdkMessageId ?? current.sdkMessageId ?? null,
       patch.status ?? current.status ?? null,
-      patch.error ?? current.error ?? null,
+      patch.error === undefined ? (current.error ?? null) : patch.error,
       revision,
       messageId,
     );
