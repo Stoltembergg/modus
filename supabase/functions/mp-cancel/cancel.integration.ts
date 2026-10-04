@@ -107,7 +107,7 @@ Deno.test({
                                         cancel_requested_at is not null as requested
                                    from public.subscriptions
                                  where provider_subscription_id = ${PRE}`;
-        // [status, cancel_at_period_end (never written by L1e), cancel requested]
+        // [status, cancel_at_period_end (L1g grace: only for a paid row), cancel requested]
         return [r.status, r.cancel_at_period_end, r.requested];
       };
 

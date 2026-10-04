@@ -16,10 +16,26 @@ const PRIMARY_BUTTON =
 const DANGER_BUTTON =
   "flex h-8 items-center gap-1.5 rounded-md border border-hairline bg-surface px-2.5 text-danger text-xs transition-colors hover:bg-hover disabled:opacity-40";
 
-/** L1e: confirm copy for cancelling an active Mercado Pago subscription. */
-export function cancelConfirmMessage(planName: string): string {
-  return `Cancel your ${planName} subscription? Mercado Pago stops future charges. Nothing is refunded, and the credits you already have stay in your account.`;
+/**
+ * L1e/L1g: confirm copy for cancelling a Mercado Pago subscription. `accessUntil` is the
+ * formatted current_period_end when the plan stays until then (an active/trialing row, L1g), or
+ * null when it doesn't (a paused row: already on the Free plan's models).
+ */
+export function cancelConfirmMessage(
+  planName: string,
+  accessUntil: string | null,
+  keepsPlan = true,
+): string {
+  const keep = !keepsPlan
+    ? ""
+    : accessUntil
+      ? ` You keep ${planName} until ${accessUntil}; after that you move to Free.`
+      : ` You keep ${planName} until the end of the period you paid for; after that you move to Free.`;
+  return `Cancel your ${planName} subscription? Mercado Pago stops future charges.${keep} Nothing is refunded, and the credits you already have stay in your account.`;
 }
+
+/** L1g: the router keeps the plan for these statuses until current_period_end after a cancel. */
+const GRACE_FROM = new Set(["active", "trialing"]);
 
 const RETURN_NOTICES: Record<string, string> = {
   success: "Payment received. Your plan updates as soon as the payment is confirmed.",
@@ -129,6 +145,13 @@ export function BillingSectionView({
   const paymentPending = mpSubscription && state.subscription?.status === "incomplete";
   const planName = current?.name ?? state.currentPlan;
   const paused = state.subscription?.status === "paused";
+  /** L1g: cancelled by Mercado Pago, still paid until current_period_end (then Free). */
+  const ending =
+    mpSubscription &&
+    state.subscription?.status === "canceled" &&
+    state.subscription.cancelAtPeriodEnd;
+  /** Whether a cancel now keeps the plan until the period end (same rule as the server). */
+  const keepsPlan = GRACE_FROM.has(state.subscription?.status ?? "");
   const statusLabel = paymentPending
     ? "payment pending"
     : paused
@@ -168,19 +191,23 @@ export function BillingSectionView({
             </div>
           }
           description={
-            subscribed
-              ? `${statusLabel}${
-                  mpCancelling
-                    ? " · cancelling"
-                    : state.subscription?.cancelAtPeriodEnd
-                      ? renews
-                        ? ` · ends ${renews}`
-                        : " · ends at period end"
-                      : renews && !paused
-                        ? ` · renews ${renews}`
-                        : ""
-                }`
-              : "No paid subscription."
+            ending
+              ? renews
+                ? `Cancelled · ${planName} until ${renews}`
+                : `Cancelled · ${planName} until the period ends`
+              : subscribed
+                ? `${statusLabel}${
+                    mpCancelling
+                      ? " · cancelling"
+                      : state.subscription?.cancelAtPeriodEnd
+                        ? renews
+                          ? ` · ends ${renews}`
+                          : " · ends at period end"
+                        : renews && !paused
+                          ? ` · renews ${renews}`
+                          : ""
+                  }`
+                : "No paid subscription."
           }
           title="Current plan"
         />
@@ -214,6 +241,14 @@ export function BillingSectionView({
               description="Upgrade, downgrade, cancel or update the payment method in Stripe."
               title="Change plan"
             />
+          ) : ending ? (
+            <SettingsRow
+              control={null}
+              description={`Mercado Pago won't charge you again. You keep ${planName} until ${
+                renews ?? "the period ends"
+              }; after that you move to Free and can subscribe again. Your credits stay.`}
+              title="Subscription cancelled"
+            />
           ) : mpCancelling ? (
             <SettingsRow
               control={
@@ -229,7 +264,9 @@ export function BillingSectionView({
               description={
                 state.cancelling
                   ? "Cancelling with Mercado Pago…"
-                  : "Cancellation requested. Waiting for Mercado Pago to confirm; you can subscribe again once it does."
+                  : keepsPlan && renews
+                    ? `Cancellation requested. Waiting for Mercado Pago to confirm. You keep ${planName} until ${renews}.`
+                    : "Cancellation requested. Waiting for Mercado Pago to confirm; you can subscribe again once it does."
               }
               title="Cancelling…"
             />
@@ -269,14 +306,20 @@ export function BillingSectionView({
                     className={DANGER_BUTTON}
                     disabled={busy || loading}
                     onClick={() => {
-                      if (window.confirm(cancelConfirmMessage(planName))) onCancel();
+                      if (window.confirm(cancelConfirmMessage(planName, renews, keepsPlan))) {
+                        onCancel();
+                      }
                     }}
                     type="button"
                   >
                     Cancel subscription
                   </button>
                 }
-                description="Stops future Mercado Pago charges. No refund; your credits stay."
+                description={
+                  keepsPlan && renews
+                    ? `Stops future Mercado Pago charges. You keep ${planName} until ${renews}, then Free. No refund; your credits stay.`
+                    : "Stops future Mercado Pago charges. No refund; your credits stay."
+                }
                 title="Cancel subscription"
               />
             </>

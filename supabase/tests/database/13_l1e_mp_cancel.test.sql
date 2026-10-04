@@ -198,8 +198,8 @@ select is((select count(*)::int from public.credit_transactions where user_id = 
 select (select balance from public.credit_wallets where user_id = :'b') as b_bal \gset
 select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'canceled'), :'expect') ->> 'code',
   'subscription_canceled', 'B: MP canceled -> subscription_canceled');
-select is(pg_temp.sub('PRELB1'), 'canceled:false:false',
-  'B: status left the live set -> cancel_requested_at cleared');
+select is(pg_temp.sub('PRELB1'), 'canceled:true:false',
+  'B: status left the live set -> cancel_requested_at cleared (L1g: paid until period end)');
 select is(pg_temp.targets(:'b'), '', 'B: no target left (cancel again is a no-op)');
 select is((select balance from public.credit_wallets where user_id = :'b'), :'b_bal'::bigint,
   'B: credits kept, no refund / debit');

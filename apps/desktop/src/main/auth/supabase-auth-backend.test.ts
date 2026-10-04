@@ -53,11 +53,55 @@ describe("Supabase auth backend", () => {
       try {
         const snapshot = await backend.fetchBilling("11111111-1111-4111-8111-111111111111");
         expect(snapshot.subscription).toBeNull();
-        const subs = calls.find((c) => c.url.includes("/rest/v1/subscriptions"));
-        const status = new URL(subs?.url ?? "http://x").searchParams.get("status");
-        expect(status).toBe("in.(active,trialing,past_due,unpaid,incomplete,paused)");
+        const subs = calls.filter((c) => c.url.includes("/rest/v1/subscriptions"));
+        const params = subs.map((c) => new URL(c.url).searchParams);
+        expect(params.map((p) => p.get("status"))).toEqual([
+          "in.(active,trialing,past_due,unpaid,incomplete,paused)",
+          "eq.canceled",
+        ]);
+        // L1g grace read: own Mercado Pago row, cancelled, paid until a future period end.
+        const grace = params[1];
+        expect(grace?.get("provider")).toBe("eq.mercadopago");
+        expect(grace?.get("cancel_at_period_end")).toBe("eq.true");
+        expect(grace?.get("current_period_end")).toMatch(/^gt\.\d{4}-\d{2}-\d{2}T/);
+        expect(grace?.get("user_id")).toBe("eq.11111111-1111-4111-8111-111111111111");
       } finally {
         backend.dispose();
+      }
+    });
+
+    it("fetchBilling prefers the live row and falls back to the L1g grace row", async () => {
+      const row = (status: string, ending: boolean) => ({
+        plan: "starter",
+        provider: "mercadopago",
+        status,
+        current_period_end: "2099-01-01T00:00:00Z",
+        cancel_at_period_end: ending,
+        cancel_requested_at: null,
+        updated_at: "2026-10-03T00:00:00Z",
+      });
+      for (const [live, expected] of [
+        [row("active", false), "active"],
+        [null, "canceled"],
+      ] as const) {
+        const { backend } = withFetch(() => Response.json([]));
+        vi.stubGlobal(
+          "fetch",
+          vi.fn(async (input: RequestInfo | URL) => {
+            const url = new URL(String(input instanceof Request ? input.url : input));
+            if (!url.pathname.endsWith("/subscriptions")) return Response.json([]);
+            const body =
+              url.searchParams.get("status") === "eq.canceled" ? row("canceled", true) : live;
+            return Response.json(body ? [body] : []);
+          }),
+        );
+        try {
+          const snapshot = await backend.fetchBilling("11111111-1111-4111-8111-111111111111");
+          expect(snapshot.subscription?.status).toBe(expected);
+          expect(snapshot.subscription?.cancelAtPeriodEnd).toBe(expected === "canceled");
+        } finally {
+          backend.dispose();
+        }
       }
     });
 

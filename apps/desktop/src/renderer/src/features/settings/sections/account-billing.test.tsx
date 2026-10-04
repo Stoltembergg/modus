@@ -245,6 +245,8 @@ describe("Mercado Pago cancel (L1e)", () => {
     cancelAtPeriodEnd: false,
     cancelRequestedAt: null,
   };
+  /** How the view formats MP_ACTIVE.currentPeriodEnd (client locale / zone). */
+  const UNTIL = new Date("2026-11-03T00:00:00Z").toLocaleDateString();
   const subscribed = (
     sub: Partial<BillingSubscription> = {},
     patch: Partial<BillingState> = {},
@@ -287,7 +289,71 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(html).toContain("Cancel subscription");
     expect(html).not.toContain("Subscribe</button>");
     expect(html).not.toContain("Payment pending");
-    expect(cancelConfirmMessage("Starter")).toMatch(/Starter.*Nothing is refunded.*credits/);
+    expect(cancelConfirmMessage("Starter", UNTIL)).toMatch(/Starter.*Nothing is refunded.*credits/);
+  });
+
+  it("L1g: the cancel copy promises the plan until current_period_end, then Free", () => {
+    expect(cancelConfirmMessage("Starter", "11/3/2026")).toBe(
+      "Cancel your Starter subscription? Mercado Pago stops future charges. You keep Starter until 11/3/2026; after that you move to Free. Nothing is refunded, and the credits you already have stay in your account.",
+    );
+    expect(cancelConfirmMessage("Starter", null)).toContain(
+      "You keep Starter until the end of the period you paid for; after that you move to Free.",
+    );
+    // A paused row is already on the Free plan's models: no "you keep" promise.
+    expect(cancelConfirmMessage("Starter", "11/3/2026", false)).toBe(
+      "Cancel your Starter subscription? Mercado Pago stops future charges. Nothing is refunded, and the credits you already have stay in your account.",
+    );
+    const html = markup(subscribed());
+    expect(html).toContain(
+      `You keep Starter until ${UNTIL}, then Free. No refund; your credits stay.`,
+    );
+    expect(markup(subscribed({ status: "paused" }))).not.toContain("You keep");
+  });
+
+  it("L1g: cancelled but paid until the period end: Starter until <date>, no buttons, no Subscribe", () => {
+    const grace = subscribed({ status: "canceled", cancelAtPeriodEnd: true });
+    const html = markup(grace);
+    expect(html).toContain(`Cancelled · Starter until ${UNTIL}`);
+    expect(html).toContain("Subscription cancelled");
+    expect(html).toContain(`You keep Starter until ${UNTIL}; after that you move to Free`);
+    expect(html).not.toContain(">Cancel subscription</button>");
+    expect(html).not.toContain("Check again");
+    expect(html).not.toContain("Subscribe</button>");
+    expect(html).not.toContain("renews");
+    // A late cancelRequestedAt never brings back the "cancel requested" state here.
+    expect(
+      markup(
+        subscribed({
+          status: "canceled",
+          cancelAtPeriodEnd: true,
+          cancelRequestedAt: "2026-10-03T23:50:00Z",
+        }),
+      ),
+    ).not.toContain("Waiting for Mercado Pago to confirm");
+    // Without a date the copy still holds.
+    expect(
+      markup(subscribed({ status: "canceled", cancelAtPeriodEnd: true, currentPeriodEnd: null })),
+    ).toContain("Cancelled · Starter until the period ends");
+  });
+
+  it("L1g: after the period end the grace row is gone and Free + Subscribe are back", async () => {
+    const confirm = stubConfirm().mockReturnValue(true);
+    const grace = subscribed({ status: "canceled", cancelAtPeriodEnd: true });
+    const { push } = mount(subscribed(), async () => grace);
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
+    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter", UNTIL));
+    await screen.findByText(`Cancelled · Starter until ${UNTIL}`);
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
+    // The next read no longer finds the row (current_period_end passed): Free.
+    push(READY);
+    await screen.findByRole("button", { name: /^Subscribe$/ });
+    expect(screen.getByText("No paid subscription.")).toBeTruthy();
+    confirm.mockRestore();
+  });
+
+  it("L1g: while waiting for Mercado Pago the requested copy repeats the until-date", () => {
+    const html = markup(subscribed({ cancelRequestedAt: "2026-10-03T23:50:00Z" }));
+    expect(html).toContain(`Waiting for Mercado Pago to confirm. You keep Starter until ${UNTIL}.`);
   });
 
   it("incomplete: Payment pending with Cancel and try again, never a Subscribe button", () => {
@@ -366,7 +432,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(screen.queryByText(/renews/)).toBeNull();
     expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
-    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter"));
+    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter", UNTIL, false));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith());
     await screen.findByRole("button", { name: /^Subscribe$/ });
   });
@@ -381,7 +447,7 @@ describe("Mercado Pago cancel (L1e)", () => {
     const confirm = stubConfirm().mockReturnValueOnce(false);
     const { cancel } = mount(subscribed(), async () => READY);
     fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
-    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter"));
+    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter", UNTIL));
     expect(cancel).not.toHaveBeenCalled();
     confirm.mockReturnValueOnce(true);
     fireEvent.click(screen.getByRole("button", { name: "Cancel subscription" }));

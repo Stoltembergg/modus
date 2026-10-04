@@ -86,7 +86,11 @@ export type BillingState = {
   plans: BillingPlan[];
   /** Sellable offers from get_billing_catalog(); null when the catalog could not be loaded. */
   catalog: BillingCatalogEntry[] | null;
-  /** The live subscription (active, trialing, past_due, unpaid, incomplete, paused), if any. */
+  /**
+   * The live subscription (active, trialing, past_due, unpaid, incomplete, paused), if any; else
+   * (L1g) a cancelled Mercado Pago one still paid until current_period_end (status `canceled`,
+   * cancelAtPeriodEnd true).
+   */
   subscription: BillingSubscription | null;
   wallet: BillingWallet | null;
   /** subscription.plan when subscribed, otherwise "free". */

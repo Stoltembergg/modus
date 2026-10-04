@@ -190,7 +190,9 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
     },
 
     async fetchBilling(userId) {
-      const [plans, catalog, subscription, wallet] = await Promise.all([
+      const columns =
+        "plan, provider, status, current_period_end, cancel_at_period_end, cancel_requested_at, updated_at";
+      const [plans, catalog, subscription, grace, wallet] = await Promise.all([
         client
           .from("plans")
           .select("plan, name, price_usd_cents, stripe_price_id, monthly_credits, sort_order")
@@ -200,12 +202,24 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
         client.rpc("get_billing_catalog"),
         client
           .from("subscriptions")
-          .select(
-            "plan, provider, status, current_period_end, cancel_at_period_end, cancel_requested_at, updated_at",
-          )
+          .select(columns)
           .eq("user_id", userId)
           .in("status", [...LIVE_SUBSCRIPTION_STATUSES])
           .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        // L1g: a cancelled Mercado Pago subscription still paid until current_period_end (same
+        // condition as the router's getPlan). Shown only when there is no live row. The client
+        // clock only decides what is displayed; the router decides access.
+        client
+          .from("subscriptions")
+          .select(columns)
+          .eq("user_id", userId)
+          .eq("provider", "mercadopago")
+          .eq("status", "canceled")
+          .eq("cancel_at_period_end", true)
+          .gt("current_period_end", new Date().toISOString())
+          .order("current_period_end", { ascending: false })
           .limit(1)
           .maybeSingle(),
         client
@@ -214,14 +228,14 @@ export function createSupabaseAuthBackend(config: AuthConfig): AuthBackend & Bil
           .eq("user_id", userId)
           .maybeSingle(),
       ]);
-      for (const result of [plans, subscription, wallet]) {
+      for (const result of [plans, subscription, grace, wallet]) {
         if (result.error) throw new AuthBackendError("other", "billing read failed");
       }
       return mapBillingRows({
         plans: (plans.data ?? []) as unknown[],
         // A catalog failure must not hide the plan / credits: the UI shows "plans unavailable".
         catalog: catalog.error ? null : ((catalog.data ?? []) as unknown[]),
-        subscription: subscription.data,
+        subscription: subscription.data ?? grace.data,
         wallet: wallet.data,
       });
     },

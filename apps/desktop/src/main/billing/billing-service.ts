@@ -194,7 +194,12 @@ export function createBillingService(deps: Deps): BillingService {
       return setState({ error: ERRORS.unauthorized ?? GENERIC_ERROR });
     }
     if (state.cancelling) return snapshot();
-    if (state.status !== "ready" || state.subscription?.provider !== "mercadopago") {
+    if (
+      state.status !== "ready" ||
+      state.subscription?.provider !== "mercadopago" ||
+      // L1g: a cancelled row kept until current_period_end has nothing left to cancel.
+      state.subscription.status === "canceled"
+    ) {
       return setState({ error: ERRORS.cancel_not_available ?? GENERIC_ERROR });
     }
     const run = generation;
