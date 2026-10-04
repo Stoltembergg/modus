@@ -541,7 +541,7 @@ describe("L5b credit packs", () => {
       name: "25,000 credits",
       credits: 25000,
       currency: "BRL",
-      amountMinor: 18090,
+      amountMinor: 18190,
       sortOrder: 3,
     },
   ];
@@ -552,7 +552,7 @@ describe("L5b credit packs", () => {
     const html = markup(PACKS_ONLY);
     expect(html).toContain("5,000 credits · R$ 36,90");
     expect(html).toContain("10,000 credits · R$ 72,90");
-    expect(html).toContain("25,000 credits · R$ 180,90");
+    expect(html).toContain("25,000 credits · R$ 181,90");
     expect(html.match(/Buy credits<\/button>/g)).toHaveLength(3);
     expect(html).toContain("One-time payment with Pix or card");
     expect(html).toContain("Buy credit packs through Mercado Pago");

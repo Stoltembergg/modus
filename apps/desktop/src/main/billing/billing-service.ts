@@ -75,6 +75,8 @@ const ERRORS: Record<string, string> = {
     "Purchases are blocked on this account after a payment dispute. Contact support.",
   subscriptions_disabled: "Subscriptions are not available right now. Buy a credit pack instead.",
   purchase_conflict: "This purchase is already being set up. Try again in a moment.",
+  too_many_purchases:
+    "Too many checkouts opened in the last few minutes. Finish or wait for one, then try again.",
   unauthorized: "Sign in again to manage billing.",
 };
 const GENERIC_ERROR = "Billing is unavailable right now. Try again.";

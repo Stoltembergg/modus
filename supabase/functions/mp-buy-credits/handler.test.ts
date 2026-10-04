@@ -137,10 +137,11 @@ Deno.test("auth, email, method and config", async () => {
   assertEquals(get.status, 405);
 });
 
-Deno.test("blocked account 403 and unknown / inactive pack 404: no preference created", async () => {
+Deno.test("blocked account 403, unknown / inactive pack 404, rate limited 429: no preference created", async () => {
   for (const [code, status, error] of [
     ["blocked", 403, "account_blocked"],
     ["unknown_pack", 404, "unknown_pack"],
+    ["too_many_purchases", 429, "too_many_purchases"],
   ] as const) {
     const { handler, names } = setup({ purchase: { code } });
     const res = await handler(request({ packId: "credits_25k" }));

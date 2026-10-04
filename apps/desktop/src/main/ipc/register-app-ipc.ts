@@ -85,6 +85,9 @@ import {
   setAgentArchived,
   updateAgent,
 } from "../agents/agents-store";
+import type { AppearanceController } from "../appearance/appearance-controller";
+import { authIpcService } from "../auth/auth-service-instance";
+import { billingIpcService } from "../billing/billing-service-instance";
 import { deleteBrowserRecent, listBrowserRecents } from "../browser/browser-recents-store";
 import {
   closeBrowserTab,
@@ -220,6 +223,9 @@ import {
 import { upsertWorkspace } from "../workspace/workspace-store";
 import { registerAdaptiveHarnessIpcHandlers } from "./adaptive-harness-ipc";
 import { registerAgentsIpcHandlers } from "./agents-ipc";
+import { registerAppearanceIpcHandlers } from "./appearance-ipc";
+import { registerAuthIpcHandlers } from "./auth-ipc";
+import { registerBillingIpcHandlers } from "./billing-ipc";
 import { IPC_CHANNELS } from "./channels";
 import { registerComposioIpcHandlers } from "./composio-ipc";
 import { registerGroupIntegrationIpcHandlers } from "./group-integration-ipc";
@@ -356,9 +362,13 @@ function getSenderWindow(event: IpcMainInvokeEvent): BrowserWindowType {
 
 export function registerAppIpc({
   startupTimeline,
+  appearance,
 }: {
   startupTimeline?: StartupTimeline;
+  appearance?: Pick<AppearanceController, "getState" | "set">;
 } = {}): void {
+  if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
+
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
     return app.getVersion();
@@ -1393,6 +1403,8 @@ export function registerAppIpc({
   });
 
   registerUpdateIpcHandlers(ipcMain, assertTrustedSender, getUpdateService());
+  registerAuthIpcHandlers(ipcMain, assertTrustedSender, authIpcService);
+  registerBillingIpcHandlers(ipcMain, assertTrustedSender, billingIpcService);
 
   // A member leaving (remove, update, group or agent delete) takes its hidden
   // room session and its 1:1 chat with it: the store transaction detaches them,

@@ -98,7 +98,7 @@ export const PACKS: BillingCreditPack[] = [
     name: "25,000 credits",
     credits: 25000,
     currency: "BRL",
-    amountMinor: 18090,
+    amountMinor: 18190,
     sortOrder: 3,
   },
 ];

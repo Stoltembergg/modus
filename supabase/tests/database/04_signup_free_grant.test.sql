@@ -84,7 +84,7 @@ select is((select allowed_models from public.plans where plan = 'free'),
 -- L5a review 2: Starter has an explicit list (the router catalog minus claude-fable-*);
 -- Pro / Max / Ultra stay NULL (all models).
 select is((select allowed_models from public.plans where plan = 'starter'),
-  array['deepseek/deepseek-flash', 'zai/glm-5.3-flash'],
+  array['deepseek/deepseek-flash', 'zai/glm-5.3-flash', 'anthropic/claude-opus-5-5'],
   'Starter allows exactly the router catalog''s models except claude-fable-* (explicit list)');
 select is((select count(*)::int from public.plans where plan not in ('free', 'starter') and allowed_models is not null), 0,
   'pro / max / ultra: allowed_models NULL (all models)');

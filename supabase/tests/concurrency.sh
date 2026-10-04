@@ -299,4 +299,22 @@ echo "refund/chargeback vs settle: deadlocks=$deadlocks9 errors=$errors9 reverse
   || { cat "$out"/rf*; fail "refund / chargeback racing settle_usage"; }
 echo "ok - refund + chargeback racing 16 reserve/settle on the same user: no deadlock, one reversal per payment, invariant kept, chargeback blocks"
 
+# 10) L5c: purchase rate limit. 6 parallel mp_create_purchase calls for one user: the profile
+#     row lock serializes them and the count of 'created' purchases in the last 10 minutes is
+#     taken under it, so exactly 5 are created and 1 gets too_many_purchases. No error.
+uid10="$(q "select tests.create_user('race-ratelimit@example.com', true)")"
+for i in $(seq 1 6); do
+  ( "$PSQL" -X -q -t -A -c "set role service_role; select private.mp_create_purchase('$uid10', 'credits_5k') ->> 'code'" \
+      >"$out/rl$i" 2>&1 || true ) &
+done
+wait
+created10="$(cat "$out"/rl* | grep -c '^created$' || true)"
+limited10="$(cat "$out"/rl* | grep -c '^too_many_purchases$' || true)"
+errors10="$(cat "$out"/rl* | grep -c 'ERROR' || true)"
+rows10="$(q "select count(*) from public.credit_purchases where user_id = '$uid10'")"
+echo "purchase rate limit: created=$created10 too_many=$limited10 errors=$errors10 rows=$rows10"
+[[ "$created10" == 5 && "$limited10" == 1 && "$errors10" == 0 && "$rows10" == 5 ]] \
+  || { cat "$out"/rl*; fail "purchase rate limit under concurrency"; }
+echo "ok - 6 parallel purchases for one user: exactly 5 created, 1 too_many_purchases"
+
 rm -rf "$out"

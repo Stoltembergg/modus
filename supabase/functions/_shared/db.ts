@@ -36,6 +36,8 @@ export type MpLinkResult = {
 export type MpPurchase =
   | { code: "unknown_pack" }
   | { code: "blocked" }
+  /** L5c: 5 purchases still `created` in the last 10 minutes. */
+  | { code: "too_many_purchases" }
   | {
       code: "created";
       purchaseId: string;
@@ -225,7 +227,8 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
       asServiceRole(async (tx) => {
         const rows = await tx`select private.mp_create_purchase(${userId}, ${packId}) as r`;
         const r = rows[0].r as Record<string, unknown>;
-        if (r.code === "unknown_pack" || r.code === "blocked") return { code: r.code };
+        if (r.code === "unknown_pack" || r.code === "blocked" || r.code === "too_many_purchases")
+          return { code: r.code };
         if (r.code !== "created") throw new Error("unexpected purchase code");
         return {
           code: "created",

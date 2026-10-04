@@ -1,3 +1,6 @@
+import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
+import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
+import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
 import type {
   AddDocInput,
   AgentEvent,
@@ -156,10 +159,21 @@ export type ModusApi = {
     windowChrome: WindowChromeMode;
     /** Whether this host supports the native glass effect used by the shell. */
     nativeGlass: boolean;
-    /** Current native glass state, including an OS failure discovered after startup. */
+    /**
+     * Whether glass is on right now: host support, the Transparency preference
+     * and OS accessibility settings all agree (same glass in every theme).
+     */
     isNativeGlassAvailable(): boolean;
-    /** Main-process fallback when the OS declines a native glass request. */
+    /** Fires whenever the effective glass state flips (preference, theme, OS or a native failure). */
     onNativeGlassChange(handler: (available: boolean) => void): () => void;
+    /** Theme / Transparency preferences mirrored in the main process (nativeTheme + window material). */
+    appearance: {
+      /** State at window creation, read synchronously for a flash-free first paint. */
+      initial: AppearanceState | null;
+      get(): Promise<AppearanceState>;
+      set(input: AppearanceSetInput): Promise<AppearanceState>;
+      onChange(handler: (state: AppearanceState) => void): () => void;
+    };
     version(): Promise<string>;
     securityState(): Promise<SecurityState>;
     startupMetric(input: StartupMetricInput): Promise<void>;
@@ -761,6 +775,38 @@ export type ModusApi = {
     /** Once per start: the UI state saved by the previous version, or null. */
     takeRestoredUiState(): Promise<UpdateRestoreUiState | null>;
     onStateChange(listener: (state: UpdateState) => void): () => void;
+  };
+  /**
+   * Modus account (Supabase Auth). Sign-in runs in main; replies carry display data only,
+   * never tokens or the OAuth code.
+   */
+  auth: {
+    getState(): Promise<AuthState>;
+    signUp(input: AuthCredentialsInput): Promise<AuthState>;
+    signInWithPassword(input: AuthCredentialsInput): Promise<AuthState>;
+    /** Opens the default browser; resolves after the callback was handled, failed or timed out. */
+    signInWithOAuth(input: AuthOAuthInput): Promise<AuthState>;
+    cancelOAuth(): Promise<AuthState>;
+    /** Clears the stored session even when offline. */
+    signOut(): Promise<AuthState>;
+    onStateChange(listener: (state: AuthState) => void): () => void;
+  };
+  /**
+   * Plan and credits (Mercado Pago, optionally Stripe, via Supabase Edge Functions). Checkout /
+   * Portal open in the default browser; replies carry display data only, never tokens, provider
+   * ids or session URLs.
+   */
+  billing: {
+    getState(): Promise<BillingState>;
+    refresh(): Promise<BillingState>;
+    /** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
+    checkout(input: BillingCheckoutInput): Promise<BillingState>;
+    openPortal(): Promise<BillingState>;
+    /** L1e: cancel the own Mercado Pago subscription; main finds it, no id is passed. */
+    cancelSubscription(): Promise<BillingState>;
+    /** L5b: Mercado Pago Checkout Pro for a credit pack (only the pack id crosses IPC). */
+    buyCredits(input: BillingBuyCreditsInput): Promise<BillingState>;
+    onStateChange(listener: (state: BillingState) => void): () => void;
   };
   clipboard: {
     /** Write PNG bytes to the OS clipboard as an image. */

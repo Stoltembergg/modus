@@ -48,6 +48,18 @@
  *                        enable_groups ["model - china"]
  *                        -> x 0.8: 0.96 / 3.18 / 0.32 US$ per 1M
  *   (derived values rounded to 6 decimals)
+ *
+ * L5c PROVISIONAL (pending the one-off upstream-probe Edge Function): claude group (ratio 1),
+ *   /api/pricing fetched 2026-10-03 22:51 BRT, pricing_version unchanged.
+ *   claude-opus-5-5   billing_mode tiered_expr
+ *                     tier("standard", p * 6 + cr * 0.85 + cc * 7.5 + cc1h * 9 + c * 30)
+ *                     -> 6 / 30 / 0.85 / 7.5 US$ per 1M (input / output / cache read /
+ *                     5-min cache write); 1-hour write (cc1h 9) not modelled yet.
+ *   claude-fable-5-1  model_ratio 5  completion_ratio 5  cache_ratio 0.025
+ *                     create_cache_ratio 1.25 -> 10 / 50 / 0.25 / 12.5 US$ per 1M
+ *   Cache writes are NOT billed by the router yet (pricing.ts bills uncached input, cached
+ *   input and output only): wiring cache_creation usage (absent -> 1-hour ceiling, explicit
+ *   0 -> zero) is L2. Starter lists claude-opus-5-5; claude-fable-* is Pro+ only.
  */
 
 /** group_ratio per group in the snapshot (/api/pricing `group_ratio`). */
@@ -89,8 +101,12 @@ export const PRICING_SNAPSHOT = {
 
 export type ModelApi = "openai-completions";
 
-/** US$ per 1M tokens. */
-export type TokenPrice = { input: number; output: number; cacheRead: number };
+/**
+ * US$ per 1M tokens. `cacheWrite` is the 5-minute prompt-cache write price (catalog data
+ * only for now: the router does not bill cache writes yet, see L5c in the header). The
+ * 1-hour cache write is left out until the upstream probe shows how vibi reports and bills it.
+ */
+export type TokenPrice = { input: number; output: number; cacheRead: number; cacheWrite?: number };
 
 export type CatalogModel = {
   /** `<native provider>/<native id>`, matched exactly against plans.allowed_models. */
@@ -123,17 +139,25 @@ export function newApiPrice(ratios: {
   completionRatio: number;
   cacheRatio: number;
   groupRatio: number;
+  /** create_cache_ratio (5-minute cache write); omitted -> no cacheWrite field. */
+  createCacheRatio?: number;
 }): TokenPrice {
   const input = ratios.modelRatio * 2;
-  return {
+  const price: TokenPrice = {
     input: usd(input, ratios.groupRatio),
     output: usd(input * ratios.completionRatio, ratios.groupRatio),
     cacheRead: usd(input * ratios.cacheRatio, ratios.groupRatio),
   };
+  if (ratios.createCacheRatio !== undefined) {
+    price.cacheWrite = usd(input * ratios.createCacheRatio, ratios.groupRatio);
+  }
+  return price;
 }
 
 const CHINA = ["model - china"] as const;
 const CHINA_RATIO = UPSTREAM_GROUPS["model - china"].ratio;
+const CLAUDE = ["claude"] as const;
+const CLAUDE_RATIO = UPSTREAM_GROUPS.claude.ratio;
 
 export const MODEL_CATALOG: readonly CatalogModel[] = [
   {
@@ -170,6 +194,43 @@ export const MODEL_CATALOG: readonly CatalogModel[] = [
       completionRatio: 3.3125,
       cacheRatio: 0.333333333333,
       groupRatio: CHINA_RATIO,
+    }),
+  },
+  // L5c PROVISIONAL: listed by vibi /api/pricing (group "claude", openai endpoint supported) but
+  // not yet confirmed by a real call (upstream-probe). Prices from the 2026-10-03 22:51 BRT
+  // snapshot (same pricing_version), 5-minute cache write; see the L5c note in the header.
+  {
+    id: "anthropic/claude-opus-5-5",
+    provider: "anthropic",
+    upstreamId: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    api: "openai-completions",
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    enableGroups: CLAUDE,
+    upstreamGroup: "claude",
+    groupRatio: CLAUDE_RATIO,
+    // billing_mode tiered_expr: tier("standard", p * 6 + cr * 0.85 + cc * 7.5 + cc1h * 9 + c * 30)
+    // (US$ per 1M directly, x group_ratio 1). cc1h (1-hour cache write, 9) left out for now.
+    cost: { input: 6, output: 30, cacheRead: 0.85, cacheWrite: 7.5 },
+  },
+  {
+    id: "anthropic/claude-fable-5-1",
+    provider: "anthropic",
+    upstreamId: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
+    api: "openai-completions",
+    contextWindow: 1000000,
+    maxTokens: 128000,
+    enableGroups: CLAUDE,
+    upstreamGroup: "claude",
+    groupRatio: CLAUDE_RATIO,
+    cost: newApiPrice({
+      modelRatio: 5,
+      completionRatio: 5,
+      cacheRatio: 0.025,
+      createCacheRatio: 1.25,
+      groupRatio: CLAUDE_RATIO,
     }),
   },
 ];

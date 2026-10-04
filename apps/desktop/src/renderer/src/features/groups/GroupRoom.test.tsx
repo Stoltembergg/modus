@@ -368,9 +368,11 @@ describe("GroupRoom", () => {
     expect(within(userRow as HTMLElement).getByTestId("group-user-avatar")).toBeTruthy();
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
-    // The author's avatar (A3): still in a list, the member's face and color.
+    // The author's avatar (A3): still in a list, the member's face and color,
+    // now small inside the `name · time` header (C4).
     const authorAvatar = within(memberRow as HTMLElement).getByTestId("agent-avatar");
-    expect(authorAvatar.dataset.size).toBe("20");
+    expect(authorAvatar.dataset.size).toBe("16");
+    expect(authorAvatar.closest('[data-testid="group-message-header"]')).toBeTruthy();
     expect(authorAvatar.dataset.animated).toBe("false");
     // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });
@@ -721,7 +723,7 @@ describe("GroupRoom", () => {
     expect(screen.queryByTestId("group-update-banner")).toBeNull();
   });
 
-  it("task panel: closed by default with a counter, checklist + Spring Check, cancelled hidden", async () => {
+  it("task panel: closed by default with a counter, checklist + task check, cancelled hidden", async () => {
     const user = userEvent.setup();
     const task = (id: string, status: GroupTask["status"], extra: Partial<GroupTask> = {}) => ({
       id,
@@ -759,7 +761,9 @@ describe("GroupRoom", () => {
     expect(within(review).getByTestId("task-status-badge").textContent).toBe("In review");
     expect(review.textContent).toContain("Planner");
     const done = rows.find((row) => row.textContent?.includes("Task 4")) as HTMLElement;
-    expect(within(done).getByTestId("spring-check").querySelector("input")?.checked).toBe(true);
+    const check = within(done).getByRole("img", { name: "Done" });
+    expect(check.dataset.state).toBe("checked");
+    expect(check.querySelector("input")).toBeNull();
     // Done and cancelled tasks have no cancel action.
     for (const id of ["4", "5"]) {
       const row = rows.find((item) => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
