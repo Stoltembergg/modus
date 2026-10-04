@@ -731,6 +731,25 @@ export function App() {
     setActiveSessionId(session.id);
   }
 
+  async function openGroupTaskSession(sessionId: string): Promise<void> {
+    const existing = agentSessions.find((session) => session.id === sessionId);
+    if (existing) {
+      selectSession(existing);
+      return;
+    }
+    try {
+      const persistedSessions: AgentSessionInfo[] = await window.modus.agent.list({
+        includeSessionId: sessionId,
+      });
+      const persisted = persistedSessions.find(
+        (session: AgentSessionInfo) => session.id === sessionId,
+      );
+      if (persisted) selectSession(persisted);
+    } catch (error) {
+      setSessionCreateError(describeGroupError(error));
+    }
+  }
+
   function openSubagent(childSessionId: string): void {
     setSelectedSubagentId(childSessionId);
     setInspectorTab("subagents");
@@ -1477,6 +1496,7 @@ export function App() {
                                   void runGroupAction(() => window.modus.group.remove(id));
                                 }}
                                 onOpenFile={openWorkspaceFile}
+                                onOpenSession={(sessionId) => void openGroupTaskSession(sessionId)}
                                 onAgentsChanged={() => void refreshGroups()}
                                 onAddAgent={() => setAgentDialog({ groupId: visibleGroup.id })}
                                 onRename={(name) =>

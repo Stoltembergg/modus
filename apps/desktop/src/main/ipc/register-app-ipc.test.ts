@@ -1052,6 +1052,20 @@ describe("dedicated HyperPlan review IPC", () => {
   });
 });
 
+describe("group integration IPC registration", () => {
+  beforeEach(() => mocks.handlers.clear());
+
+  it("registers all integration preview, mutation, state, and refresh handlers", () => {
+    registerAppIpc();
+
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationPreview)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationApply)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationAbort)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationState)).toBe(true);
+    expect(mocks.handlers.has(IPC_CHANNELS.groupIntegrationRefresh)).toBe(true);
+  });
+});
+
 describe("provider auth start IPC", () => {
   it("forwards the acknowledgement to the main service", async () => {
     const sender = { mainFrame: { url: "file:///app/index.html" } };

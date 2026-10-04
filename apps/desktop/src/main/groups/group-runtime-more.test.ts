@@ -506,14 +506,15 @@ describe("queue", () => {
       queuedSessionIds: [gamma],
       waitingSessionIds: [],
     });
-    // A second wake for Alpha waits behind its running turn.
+    // An explicit mention of the busy Alpha returns a reason instead of silently queuing work.
     groups.postUserMessage({ groupId: group.id, body: "@Alpha also this" });
+    expect(room(group.id).at(-1)?.body).toContain("member-unavailable");
     runtime.take(beta).resolve({ outcome: "ok" });
     await flush();
     expect(runtime.pendingSessions()).toEqual([alpha, gamma]);
     runtime.take(alpha).resolve({ outcome: "ok" });
     await flush();
-    expect(runtime.pendingSessions()).toEqual([gamma, alpha]);
+    expect(runtime.pendingSessions()).toEqual([gamma]);
   });
 
   it("waits while the member is streaming (never steers into it)", async () => {
@@ -941,7 +942,7 @@ describe("agents in the room", () => {
     expect(room(group.id).at(-1)).toMatchObject({
       authorKind: "system",
       kind: "status",
-      body: `${builder.name} is archived`,
+      body: expect.stringContaining(`member-archived — ${builder.name} is archived`),
     });
     // An explicit target (a task tool wake) is refused the same way.
     groups.handleTaskWake({

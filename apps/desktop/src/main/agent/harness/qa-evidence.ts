@@ -1,5 +1,23 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  accessSync,
+  type BigIntStats,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
+import { dirname, join, parse, resolve, sep } from "node:path";
+import type { HarnessTaskCheckKind } from "../../../shared/contracts";
+import {
+  controlledNpmScriptShell,
+  parseControlledNpmCheck,
+} from "../../terminal/agent-command-policy";
 
 export type VerificationEvidenceStatus =
   | "passed"
@@ -20,6 +38,7 @@ export type HarnessEvidenceRef = {
   revision?: string;
   paths?: string[];
   label: string;
+  checkName?: HarnessTaskCheckKind;
 };
 
 type ToolEventBase = {
@@ -43,12 +62,14 @@ export type RecognizedCheckInvocation = {
   paths?: string[];
   workspace?: string;
   mutatesSource?: boolean;
+  packageConfigDigest?: string;
 };
 
 export type RunQAEvent =
   | (ToolEventBase & { type: "tool.started" })
   | (ToolEventBase & {
       type: "tool.ended";
+      checkConfigStable?: boolean;
       exitCode?: number;
       error?: boolean;
       aborted?: boolean;
@@ -78,6 +99,7 @@ export type HarnessQAResult = {
   status: AutoQAStatus;
   reasonCode: string;
   evidence: HarnessEvidenceRef[];
+  sourceFingerprint?: string;
 };
 
 const MAX_EVENTS = 500;
@@ -118,20 +140,165 @@ export function resolvePackageCheckScript(
   cwd: string,
   packageName: string | undefined,
   scriptName: string,
-): { body: string; workspaceRoot?: string } | undefined {
-  const readManifest = (path: string): Record<string, unknown> | undefined => {
+): { body: string; configDigest: string; workspaceRoot?: string } | undefined {
+  const artifactDirectories = new Set<string>();
+  const artifactContainers = new Set<string>();
+  const entryMayBeRenamed = (path: string, entry: BigIntStats): boolean => {
+    if (dirname(path) === path) return false;
+    const uid = process.getuid?.();
+    // Without uid/ACL ownership, permission changes cannot be ruled out safely.
+    if (uid === undefined) return true;
+    const parent = dirname(path);
     try {
-      const text = readFileSync(path, "utf8");
-      if (Buffer.byteLength(text, "utf8") > 256 * 1024) return undefined;
-      const value = JSON.parse(text) as Record<string, unknown>;
-      return value && typeof value === "object" ? value : undefined;
+      const parentEntry = statSync(parent, { bigint: true });
+      if (uid === 0 || (uid !== undefined && parentEntry.uid === BigInt(uid))) return true;
+      accessSync(parent, constants.W_OK | constants.X_OK);
+      // Sticky parents allow removal only to root, the parent owner or the entry owner.
+      return (
+        uid === undefined ||
+        uid === 0 ||
+        (parentEntry.mode & 0o1000n) === 0n ||
+        parentEntry.uid === BigInt(uid) ||
+        entry.uid === BigInt(uid)
+      );
+    } catch (error) {
+      if (["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+        return false;
+      }
+      throw error;
+    }
+  };
+  const addArtifactDirectory = (path: string): void => {
+    const resolved = realpathSync(path);
+    artifactDirectories.add(resolved);
+    if (entryMayBeRenamed(resolved, statSync(resolved, { bigint: true }))) {
+      // The parent must detect leaf replacement even when the parent itself is protected.
+      artifactContainers.add(dirname(resolved));
+    }
+  };
+  try {
+    addArtifactDirectory(cwd);
+    if (packageName) {
+      const trustedWorkspace = RECOGNIZED_WORKSPACE_ROOTS[packageName];
+      if (!trustedWorkspace) return undefined;
+      addArtifactDirectory(join(cwd, trustedWorkspace));
+    }
+  } catch {
+    return undefined;
+  }
+  const directoryNeedsMetadata = (path: string, entry: BigIntStats): boolean => {
+    if (artifactContainers.has(path)) return true;
+    if (artifactDirectories.has(path)) return false;
+    const uid = process.getuid?.();
+    // Owners can chmod a protected ancestor, temporarily enabling descendant replacement.
+    return (
+      uid === undefined ||
+      uid === 0 ||
+      (uid !== undefined && entry.uid === BigInt(uid)) ||
+      entryMayBeRenamed(path, entry)
+    );
+  };
+  const entryIdentity = (entry: BigIntStats, path: string): string[] => {
+    if (entry.isDirectory() && !directoryNeedsMetadata(realpathSync(path), entry)) {
+      return [entry.dev, entry.ino].map(String);
+    }
+    return [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs].map(String);
+  };
+  // Observe every directory and link used to resolve the path, including link targets.
+  // Renameable/owned ancestors include metadata; artifact roots/protected globals use dev/ino.
+  const resolutionEntries = (path: string): unknown[] => {
+    let resolved = parse(resolve(path)).root;
+    let remaining = resolve(path).slice(resolved.length).split(sep).filter(Boolean);
+    const root = lstatSync(resolved, { bigint: true });
+    const entries: unknown[] = [
+      {
+        type: "directory",
+        entry: entryIdentity(root, resolved),
+      },
+    ];
+    let linkCount = 0;
+    while (remaining.length > 0) {
+      const component = remaining.shift();
+      if (!component) continue;
+      const candidate = join(resolved, component);
+      const entry = lstatSync(candidate, { bigint: true });
+      if (entry.isSymbolicLink()) {
+        if (++linkCount > 40) throw new Error("Too many links in manifest resolution.");
+        const destination = readlinkSync(candidate);
+        entries.push({
+          type: "symlink",
+          entry: [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs].map(String),
+          destination,
+        });
+        const target = resolve(dirname(candidate), destination);
+        resolved = parse(target).root;
+        remaining = [...target.slice(resolved.length).split(sep).filter(Boolean), ...remaining];
+      } else {
+        if (entry.isDirectory()) {
+          entries.push({
+            type: "directory",
+            entry: entryIdentity(entry, candidate),
+          });
+        }
+        resolved = candidate;
+      }
+    }
+    return entries;
+  };
+  const manifestIdentity = (path: string): string | undefined => {
+    try {
+      const entry = lstatSync(path, { bigint: true });
+      const target = statSync(path, { bigint: true });
+      return JSON.stringify({
+        entry: entryIdentity(entry, path),
+        target: entryIdentity(target, path),
+        link: entry.isSymbolicLink() ? readlinkSync(path) : null,
+        resolutionEntries: resolutionEntries(path),
+      });
     } catch {
       return undefined;
     }
   };
-  const root = readManifest(join(cwd, "package.json"));
-  if (!root) return undefined;
+  const readManifest = (
+    path: string,
+  ): { value: Record<string, unknown>; identity: string } | undefined => {
+    let fd: number | undefined;
+    try {
+      const before = manifestIdentity(path);
+      if (!before) return undefined;
+      fd = openSync(path, "r");
+      const fileIdentity = () => {
+        const stat = fstatSync(fd as number, { bigint: true });
+        return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
+      };
+      const opened = JSON.stringify(fileIdentity());
+      if (opened !== JSON.stringify(JSON.parse(before).target)) return undefined;
+      const text = readFileSync(fd, "utf8");
+      if (Buffer.byteLength(text, "utf8") > 256 * 1024) return undefined;
+      if (opened !== JSON.stringify(fileIdentity()) || before !== manifestIdentity(path)) {
+        return undefined;
+      }
+      const value = JSON.parse(text) as Record<string, unknown>;
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? { value, identity: before }
+        : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
+    }
+  };
+  const rootManifestPath = join(cwd, "package.json");
+  // Cwd itself permits artifacts; its observed ancestors detect directory replacement.
+  const cwdIdentity = manifestIdentity(cwd);
+  const rootSnapshot = readManifest(rootManifestPath);
+  if (!rootSnapshot || !cwdIdentity) return undefined;
+  const root = rootSnapshot.value;
+  const rootIdentity = rootSnapshot.identity;
   let manifest = root;
+  let manifestPath = rootManifestPath;
+  let checkManifestIdentity = rootIdentity;
+  let workspaceContainerIdentity: string | null | undefined = null;
   let workspaceRoot: string | undefined;
   if (packageName) {
     workspaceRoot = RECOGNIZED_WORKSPACE_ROOTS[packageName];
@@ -149,9 +316,25 @@ export function resolvePackageCheckScript(
     ) {
       return undefined;
     }
-    manifest = readManifest(join(cwd, workspaceRoot, "package.json")) ?? {};
+    // Keep the trusted workspace container in the final coherent-read revalidation.
+    workspaceContainerIdentity = manifestIdentity(join(cwd, dirname(workspaceRoot)));
+    if (!workspaceContainerIdentity) return undefined;
+    manifestPath = join(cwd, workspaceRoot, "package.json");
+    const workspaceSnapshot = readManifest(manifestPath);
+    if (!workspaceSnapshot) return undefined;
+    manifest = workspaceSnapshot.value;
+    checkManifestIdentity = workspaceSnapshot.identity;
     if (manifest.name !== packageName) return undefined;
   }
+  // Reject mixed snapshots if any relevant resolution changed during these reads.
+  if (
+    rootIdentity !== manifestIdentity(rootManifestPath) ||
+    checkManifestIdentity !== manifestIdentity(manifestPath) ||
+    cwdIdentity !== manifestIdentity(cwd) ||
+    (workspaceRoot &&
+      workspaceContainerIdentity !== manifestIdentity(join(cwd, dirname(workspaceRoot))))
+  )
+    return undefined;
   const scripts = manifest.scripts;
   const packageScripts =
     scripts && typeof scripts === "object" && !Array.isArray(scripts)
@@ -159,15 +342,30 @@ export function resolvePackageCheckScript(
       : undefined;
   const body = packageScripts?.[scriptName];
   if (typeof body !== "string" || !body.trim()) return undefined;
+  const preHook = packageScripts?.[`pre${scriptName}`];
+  const postHook = packageScripts?.[`post${scriptName}`];
   if (
-    [`pre${scriptName}`, `post${scriptName}`].some((hook) => {
-      const hookBody = packageScripts?.[hook];
-      return typeof hookBody === "string" && hookBody.trim().length > 0;
-    })
+    [preHook, postHook].some(
+      (hookBody) => typeof hookBody === "string" && hookBody.trim().length > 0,
+    )
   ) {
     return undefined;
   }
-  return { body, ...(workspaceRoot ? { workspaceRoot } : {}) };
+  const configDigest = createHash("sha256")
+    .update(
+      JSON.stringify({
+        scriptName,
+        body,
+        preHook: typeof preHook === "string" ? preHook : null,
+        postHook: typeof postHook === "string" ? postHook : null,
+        rootIdentity,
+        cwdIdentity,
+        checkManifestIdentity,
+        workspaceContainerIdentity,
+      }),
+    )
+    .digest("hex");
+  return { body, configDigest, ...(workspaceRoot ? { workspaceRoot } : {}) };
 }
 
 function scopedPaths(arguments_: string[]): string[] | undefined {
@@ -261,6 +459,13 @@ export function recognizeCheckInvocation(
     if (kind && mutatesSource) {
       return { checkName: kind, fullProject: true, mutatesSource: true };
     }
+    // Only terminal_run applies the npm CLI policy. Pi bash and other package
+    // managers have independent config/env semantics and cannot certify scripts.
+    const controlled =
+      toolName === "terminal_run" && controlledNpmScriptShell()
+        ? parseControlledNpmCheck(text)
+        : undefined;
+    if (!controlled) return undefined;
     if (kind && cwd && tokens.length === argumentStart) {
       const resolved = resolvePackageCheckScript(cwd, workspace, script ?? "");
       if (!resolved) return undefined;
@@ -270,6 +475,7 @@ export function recognizeCheckInvocation(
       if (!body || body.checkName !== kind || body.mutatesSource) return undefined;
       return {
         ...body,
+        packageConfigDigest: resolved.configDigest,
         fullProject: workspace ? false : body.fullProject,
         ...(workspace
           ? {
@@ -315,6 +521,9 @@ export function recognizeCheckInvocation(
       kind = "build";
       argumentStart = 3;
     }
+    // npx routes through npm exec and its configurable script-shell. Neither
+    // executor applies a pinned policy for it; only mutation invalidation is safe.
+    if (!mutatesSource) return undefined;
   } else if (executable === "vitest" && tokens[1]?.toLowerCase() === "run") {
     kind = "tests";
     argumentStart = 2;
@@ -385,6 +594,9 @@ function evidenceRef(
     status,
     runId: input.runId,
     label: CHECK_LABELS[check]?.label ?? "Required check",
+    ...(["tests", "typecheck", "lint", "build"].includes(check)
+      ? { checkName: check as HarnessTaskCheckKind }
+      : {}),
   };
   if (eventId) result.eventId = eventId.slice(0, 120);
   if (revision) result.revision = revision.slice(0, 120);
@@ -454,6 +666,12 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     if (event.type === "tool.ended" && invalidatingActions.delete(event.toolCallId)) {
       generation += 1;
       latest.clear();
+    }
+
+    if (event.type === "tool.ended" && event.checkConfigStable === false) {
+      generation += 1;
+      latest.clear();
+      continue;
     }
 
     if (event.type === "check.confirmed") {

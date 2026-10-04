@@ -1,6 +1,7 @@
-import { existsSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { appendFile, mkdir, readFile, rm } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { createTwoFilesPatch } from "diff";
 import type {
   DiffFilePatch,
@@ -55,6 +56,293 @@ export async function isGitRepository(rootPath: string): Promise<boolean> {
     existsSync(rootPath) &&
     (await gitSafe(rootPath, ["rev-parse", "--is-inside-work-tree"])) === "true"
   );
+}
+
+/** A bounded content snapshot of one complete Git worktree. Throws when it cannot be trusted. */
+export async function getGroupSourceFingerprint(cwd: string): Promise<string> {
+  const MAX_FILES = 10_000;
+  const MAX_FILE_BYTES = 8 * 1024 * 1024;
+  const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+  const root = realpathSync(cwd);
+  const top = realpathSync((await git(root, ["rev-parse", "--show-toplevel"])).trim());
+  if (root !== top) throw new Error("Task source must be a complete Git worktree.");
+  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  const index = await git(root, ["ls-files", "--stage", "-z"]);
+  const names = (await git(root, ["ls-files", "--cached", "--others", "--exclude-standard", "-z"]))
+    .split("\0")
+    .filter(Boolean);
+  const paths = [...new Set(names)].sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)));
+  if (paths.length > MAX_FILES) throw new Error("Task source exceeds file scan limit.");
+  const hash = createHash("sha256");
+  hash.update("group-source-v3\0").update(head).update("\0").update(index).update("\0");
+  let total = 0;
+  for (const path of paths) {
+    if (
+      path.includes("\uFFFD") ||
+      path.includes("\0") ||
+      isAbsolute(path) ||
+      path.split(/[\\/]/).includes("..")
+    )
+      throw new Error("Unsafe task source path.");
+    const absolute = resolve(root, path);
+    if (!absolute.startsWith(`${root}${sep}`)) throw new Error("Task source escapes worktree.");
+    let stat: ReturnType<typeof lstatSync>;
+    try {
+      stat = lstatSync(absolute);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        hash.update(path).update("\0deleted\0");
+        continue;
+      }
+      throw error;
+    }
+    if (!stat.isFile() || stat.size > MAX_FILE_BYTES || total + stat.size > MAX_TOTAL_BYTES)
+      throw new Error("Task source is unsafe or exceeds scan limit.");
+    if (realpathSync(absolute) !== absolute) throw new Error("Task source traverses a symlink.");
+    const content = await readFile(absolute);
+    if (content.length > MAX_FILE_BYTES || total + content.length > MAX_TOTAL_BYTES)
+      throw new Error("Task source exceeds scan limit.");
+    total += content.length;
+    hash
+      .update(path)
+      .update("\0")
+      .update(String(stat.mode & 0o111))
+      .update("\0")
+      .update(String(content.length))
+      .update("\0")
+      .update(content);
+  }
+  return hash.digest("hex");
+}
+
+export type GroupIntegrationGitSnapshot = {
+  sourceRoot: string;
+  targetRoot: string;
+  commonGitDir: string;
+  sourceBranch: string;
+  sourceSha: string;
+  sourceFingerprint: string;
+  sourceStatus: FileChange[];
+  sourceMergeHead?: string;
+  targetBranch: string;
+  targetSha: string;
+  targetFingerprint: string;
+  targetStatus: FileChange[];
+  targetMergeHead?: string;
+  commits: Array<{ sha: string; subject: string }>;
+  omittedCommitCount: number;
+  changedFiles: Array<{
+    path: string;
+    status: "added" | "modified" | "deleted" | "renamed" | "copied" | "type_changed" | "unmerged";
+  }>;
+  omittedChangedFileCount: number;
+  diffSummary: string;
+};
+
+function branchName(cwd: string): Promise<string> {
+  return git(cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]).then((branch) => branch.trim());
+}
+
+function parseIntegrationFileChanges(output: string): GroupIntegrationGitSnapshot["changedFiles"] {
+  const tokens = output.split("\0").filter(Boolean);
+  const changes: GroupIntegrationGitSnapshot["changedFiles"] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const status = tokens[index] ?? "";
+    const firstPath = tokens[index + 1];
+    if (!firstPath) continue;
+    index += 1;
+    const code = status[0] ?? "M";
+    if (code === "R" || code === "C") {
+      const renamedPath = tokens[index + 1];
+      if (renamedPath !== undefined) {
+        changes.push({ path: renamedPath, status: code === "R" ? "renamed" : "copied" });
+        index += 1;
+      }
+      continue;
+    }
+    const kind =
+      code === "A"
+        ? "added"
+        : code === "D"
+          ? "deleted"
+          : code === "T"
+            ? "type_changed"
+            : code === "U"
+              ? "unmerged"
+              : "modified";
+    changes.push({ path: firstPath, status: kind });
+  }
+  return changes;
+}
+
+/** Read-only, bounded branch inspection for confirmed Group task integration. */
+export async function inspectGroupIntegrationGitState(input: {
+  sourcePath: string;
+  targetPath: string;
+  expectedSourceBranch: string;
+  expectedTargetBranch?: string;
+}): Promise<GroupIntegrationGitSnapshot> {
+  const sourceRepo = resolveRepo(input.sourcePath);
+  const targetRepo = resolveRepo(input.targetPath);
+  if (!sourceRepo || !targetRepo)
+    throw new Error("Task source and Group Project must both be Git worktrees.");
+  if (sourceRepo.commonGitDir !== targetRepo.commonGitDir)
+    throw new Error("Task branch and Group Project belong to different Git repositories.");
+  const sourceRoot = realpathSync(sourceRepo.root);
+  const targetRoot = realpathSync(targetRepo.root);
+  const sourceBranch = await branchName(sourceRoot);
+  const targetBranch = await branchName(targetRoot);
+  if (!sourceBranch || sourceBranch !== input.expectedSourceBranch)
+    throw new Error("Task source branch changed or is detached.");
+  if (input.expectedTargetBranch && targetBranch !== input.expectedTargetBranch)
+    throw new Error("Group Project target branch changed or is detached.");
+  const sourceSha = (await git(sourceRoot, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+  const targetSha = (await git(targetRoot, ["rev-parse", "--verify", "HEAD^{commit}"])).trim();
+  const sourceStatus = await listChanges(sourceRoot);
+  const targetStatus = await listChanges(targetRoot);
+  const sourceMergeHead = await mergeHead(sourceRoot);
+  const targetMergeHead = await mergeHead(targetRoot);
+  const [sourceFingerprint, targetFingerprint] = await Promise.all([
+    getGroupSourceFingerprint(sourceRoot),
+    getGroupSourceFingerprint(targetRoot),
+  ]);
+  const commitOutput = await git(targetRoot, [
+    "log",
+    "--format=%H%x09%s%x00",
+    "-n",
+    "101",
+    `${targetSha}..${sourceSha}`,
+  ]);
+  const commitRows = commitOutput
+    .split("\0")
+    .filter(Boolean)
+    .map((line) => {
+      const separator = line.indexOf("\t");
+      return {
+        sha: (separator < 0 ? line : line.slice(0, separator)).trim(),
+        subject: (separator < 0 ? "" : line.slice(separator + 1)).trim().slice(0, 1000),
+      };
+    })
+    .filter((commit) => commit.sha.length > 0);
+  const mergeBase = (await git(targetRoot, ["merge-base", targetSha, sourceSha])).trim();
+  const changedOutput = await git(targetRoot, [
+    "diff",
+    "--name-status",
+    "-z",
+    mergeBase,
+    sourceSha,
+  ]);
+  const allChangedFiles = parseIntegrationFileChanges(changedOutput);
+  const numberOutput = await git(targetRoot, ["diff", "--numstat", "-z", mergeBase, sourceSha]);
+  let added = 0;
+  let deleted = 0;
+  for (const token of numberOutput.split("\0")) {
+    const match = /^(\d+|-)\t(\d+|-)\t/.exec(token);
+    if (!match) continue;
+    added += Number(match[1] === "-" ? 0 : match[1]);
+    deleted += Number(match[2] === "-" ? 0 : match[2]);
+  }
+  const totalCommitCount = Number(
+    (await git(targetRoot, ["rev-list", "--count", `${targetSha}..${sourceSha}`])).trim(),
+  );
+  const commits = commitRows.slice(0, 100);
+  const changes = allChangedFiles.slice(0, 200);
+  return {
+    sourceRoot,
+    targetRoot,
+    commonGitDir: sourceRepo.commonGitDir,
+    sourceBranch,
+    sourceSha,
+    sourceFingerprint,
+    sourceStatus,
+    ...(sourceMergeHead ? { sourceMergeHead } : {}),
+    targetBranch,
+    targetSha,
+    targetFingerprint,
+    targetStatus,
+    ...(targetMergeHead ? { targetMergeHead } : {}),
+    commits,
+    omittedCommitCount: Math.max(0, totalCommitCount - commits.length),
+    changedFiles: changes,
+    omittedChangedFileCount: Math.max(0, allChangedFiles.length - changes.length),
+    diffSummary:
+      allChangedFiles.length === 0
+        ? "No changes to integrate."
+        : `${totalCommitCount} commit${totalCommitCount === 1 ? "" : "s"}; ${allChangedFiles.length} file${allChangedFiles.length === 1 ? "" : "s"} changed; ${added} insertion${added === 1 ? "" : "s"}, ${deleted} deletion${deleted === 1 ? "" : "s"}.`,
+  };
+}
+
+/** Reconcile a no-commit apply after restart without touching Git state. */
+export async function inspectGroupIntegrationApply(input: {
+  targetPath: string;
+  sourceBranch: string;
+  sourceSha: string;
+  targetBranch: string;
+  targetSha: string;
+}): Promise<{
+  mergeHeadSha?: string;
+  sourceBranchSha?: string;
+  targetBranch: string;
+  targetSha: string;
+  targetStatus: FileChange[];
+  conflictFiles: string[];
+  ownedPendingMerge: boolean;
+  committedMergeSha?: string;
+}> {
+  const repo = resolveRepo(input.targetPath);
+  if (!repo) throw new Error("Group Project is not a Git repository.");
+  const root = realpathSync(repo.root);
+  const [targetBranch, targetSha, targetStatus, mergeHeadSha, sourceBranchSha] = await Promise.all([
+    gitSafe(root, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+    gitSafe(root, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    listChanges(root),
+    mergeHead(root),
+    gitSafe(root, ["rev-parse", "--verify", `refs/heads/${input.sourceBranch}^{commit}`]),
+  ]);
+  const conflictFiles = await unmergedFiles(root);
+  if (mergeHeadSha) {
+    return {
+      mergeHeadSha,
+      ...(sourceBranchSha ? { sourceBranchSha } : {}),
+      targetBranch,
+      targetSha,
+      targetStatus,
+      conflictFiles,
+      ownedPendingMerge:
+        mergeHeadSha === input.sourceSha &&
+        targetBranch === input.targetBranch &&
+        targetSha === input.targetSha,
+    };
+  }
+  const revisions = (
+    await gitSafe(root, ["rev-list", "--first-parent", `${input.targetSha}..HEAD`])
+  )
+    .split("\n")
+    .filter(Boolean);
+  for (const revision of revisions) {
+    const parents = (await gitSafe(root, ["rev-list", "--parents", "-n", "1", revision]))
+      .split(" ")
+      .slice(1);
+    if (parents.length === 2 && parents[0] === input.targetSha && parents[1] === input.sourceSha) {
+      return {
+        ...(sourceBranchSha ? { sourceBranchSha } : {}),
+        targetBranch,
+        targetSha,
+        targetStatus,
+        conflictFiles,
+        ownedPendingMerge: false,
+        committedMergeSha: revision,
+      };
+    }
+  }
+  return {
+    ...(sourceBranchSha ? { sourceBranchSha } : {}),
+    targetBranch,
+    targetSha,
+    targetStatus,
+    conflictFiles,
+    ownedPendingMerge: false,
+  };
 }
 
 export async function initRepository(cwd: string): Promise<GitActionResult> {
@@ -1419,15 +1707,47 @@ export async function finishSubagentWorktree(
 export async function applySubagentWorktree(
   parentCwd: string,
   worktree: SubagentWorktreeInfo,
+  expected?: { sourceSha: string; targetSha: string; targetBranch: string },
 ): Promise<SubagentWorktreeInfo> {
+  const repo = resolveRepo(parentCwd);
+  if (!repo) throw new Error("Worktree apply requires a Git repository.");
+  const targetRoot = repo.root;
   if (await mergeHead(parentCwd)) {
     throw new Error("Commit or abort the pending worktree apply before applying another worktree.");
   }
-  if ((await gitSafe(parentCwd, ["status", "--porcelain=v1"])).trim()) {
+  if ((await gitSafe(targetRoot, ["status", "--porcelain=v1"])).trim()) {
     throw new Error("Apply requires a clean main workspace.");
   }
+  if (expected) {
+    const [targetBranch, targetSha, sourceSha] = await Promise.all([
+      gitSafe(targetRoot, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+      gitSafe(targetRoot, ["rev-parse", "--verify", "HEAD^{commit}"]),
+      gitSafe(worktree.path, ["rev-parse", "--verify", `refs/heads/${worktree.branch}^{commit}`]),
+    ]);
+    if (
+      targetBranch !== expected.targetBranch ||
+      targetSha !== expected.targetSha ||
+      sourceSha !== expected.sourceSha
+    ) {
+      throw new Error("Task source or Group Project changed immediately before Git apply.");
+    }
+    const [sourceStatus, targetStatus, pendingMerge] = await Promise.all([
+      listChanges(worktree.path),
+      listChanges(targetRoot),
+      mergeHead(targetRoot),
+    ]);
+    if (pendingMerge)
+      throw new Error(
+        "Commit or abort the pending worktree apply before applying another worktree.",
+      );
+    if (sourceStatus.length > 0)
+      throw new Error("Task source must be clean immediately before Git apply.");
+    if (targetStatus.length > 0)
+      throw new Error("Apply requires a clean main workspace immediately before Git apply.");
+  }
+  const sourceRevision = expected?.sourceSha ?? worktree.branch;
   try {
-    await git(parentCwd, ["merge", "--no-commit", "--no-ff", worktree.branch]);
+    await git(targetRoot, ["merge", "--no-commit", "--no-ff", sourceRevision]);
     return {
       path: worktree.path,
       branch: worktree.branch,
@@ -1436,7 +1756,7 @@ export async function applySubagentWorktree(
       ...(worktree.changedFiles ? { changedFiles: worktree.changedFiles } : {}),
     };
   } catch (error) {
-    const conflictFiles = await unmergedFiles(parentCwd);
+    const conflictFiles = await unmergedFiles(targetRoot);
     if (conflictFiles.length > 0) {
       return { ...worktree, integrationStatus: "conflict", conflictFiles };
     }
@@ -1447,11 +1767,24 @@ export async function applySubagentWorktree(
 export async function abortSubagentWorktreeApply(
   parentCwd: string,
   worktree: SubagentWorktreeInfo,
+  expected?: { sourceSha: string; targetSha: string; targetBranch: string },
 ): Promise<SubagentWorktreeInfo> {
-  if (!(await mergeHead(parentCwd))) {
+  const currentMergeHead = await mergeHead(parentCwd);
+  if (!currentMergeHead) {
     throw new Error("No pending worktree apply to abort.");
   }
-  if (!(await mergeHeadBelongsToWorktree(parentCwd, worktree))) {
+  let belongsToWorktree = await mergeHeadBelongsToWorktree(parentCwd, worktree);
+  if (expected) {
+    const [targetBranch, targetSha] = await Promise.all([
+      gitSafe(parentCwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+      gitSafe(parentCwd, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    ]);
+    belongsToWorktree =
+      currentMergeHead === expected.sourceSha &&
+      targetBranch === expected.targetBranch &&
+      targetSha === expected.targetSha;
+  }
+  if (!belongsToWorktree) {
     throw new Error("The pending merge does not belong to this subagent worktree.");
   }
   await git(parentCwd, ["merge", "--abort"]);
@@ -1468,8 +1801,10 @@ export async function cleanupSubagentWorktree(
     throw new Error("Worktree cleanup requires a Git repository.");
   }
   assertManagedWorktreePath(repo.root, worktree.path);
-  if (await mergeHeadBelongsToWorktree(repo.root, worktree)) {
-    throw new Error("Commit or abort the pending worktree apply before cleanup.");
+  if (await mergeHead(repo.root)) {
+    if (await mergeHeadBelongsToWorktree(repo.root, worktree))
+      throw new Error("Commit or abort the pending worktree apply before cleanup.");
+    throw new Error("Abort the pending Git merge before cleaning up any worktree.");
   }
   await git(repo.root, ["worktree", "remove", "--force", worktree.path]);
   await gitSafe(repo.root, ["branch", "-D", worktree.branch]);

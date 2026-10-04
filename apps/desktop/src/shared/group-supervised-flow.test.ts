@@ -1,193 +1,307 @@
 import { describe, expect, it } from "vitest";
-import {
-  classifySupervisedAsk,
-  composeSupervisedFlowSection,
-  planSupervisedCodeFlow,
-} from "./group-supervised-flow";
+import type { AgentGroupMember, GroupTask } from "./contracts";
+import { composeSupervisedFlowSection, planSupervisedCodeFlow } from "./group-supervised-flow";
+import type { GroupWorkState } from "./group-work-state";
 
-/** CI keepalive: re-trigger Package after cancelled arm64 (2026-10-01T10:33Z). */
-
-const roster = [
-  { sessionId: "lead", title: "Planner", role: "Lead" },
-  { sessionId: "build", title: "Builder", role: "Builder" },
-  { sessionId: "review", title: "Reviewer", role: "Reviewer" },
-] as const;
-
-describe("classifySupervisedAsk", () => {
-  it("detects social, docs, trivial, design, review-only, and code asks", () => {
-    expect(classifySupervisedAsk("hi team")).toBe("social");
-    expect(classifySupervisedAsk("Update the README with install steps")).toBe("docs");
-    expect(classifySupervisedAsk("fix typo in the error string")).toBe("trivial");
-    expect(classifySupervisedAsk("Propose an architecture approach for auth")).toBe("design");
-    expect(classifySupervisedAsk("Please review this PR for edge cases")).toBe("review-only");
-    expect(classifySupervisedAsk("Implement the login feature with tests")).toBe("code");
-  });
+const member = (id: string, capabilityIds: string[]): AgentGroupMember => ({
+  sessionId: id,
+  agentId: id,
+  groupId: "g",
+  name: id,
+  agentRole: "",
+  joinedAt: "now",
+  capabilityIds,
+  supportedTaskKinds: ["code", "docs", "design", "review"],
 });
 
-describe("planSupervisedCodeFlow skippable stages", () => {
-  it("does not apply to social or simple questions", () => {
-    const social = planSupervisedCodeFlow({
-      body: "hey",
-      members: roster,
-      leadSessionId: "lead",
-    });
-    expect(social.applies).toBe(false);
-    expect(social.delegations).toEqual([]);
+const task: GroupTask = {
+  id: "t",
+  groupId: "g",
+  title: "hi",
+  kind: "code",
+  stage: "implement",
+  status: "in_progress",
+  ownerSessionId: "build",
+  reviewerSessionId: "review",
+  createdBySessionId: "lead",
+  verificationPolicy: { mode: "required", requireReview: true },
+  criteria: [{ id: "c", description: "test", requiredCheckKinds: ["tests"] }],
+  createdAt: "now",
+  updatedAt: "now",
+};
 
-    const question = planSupervisedCodeFlow({
-      body: "What is the Groups model?",
-      members: roster,
-      leadSessionId: "lead",
-    });
-    expect(question.applies).toBe(false);
-  });
+const workState: GroupWorkState = {
+  groupId: "g",
+  tasks: [task],
+  members: [
+    member("lead", ["plan"]),
+    member("build", ["implement", "verify", "docs"]),
+    member("review", ["review"]),
+  ],
+  gates: { t: { satisfied: false, reasonCodes: ["criteria-incomplete"] } },
+  omitted: { tasks: 0, members: 0, criteria: 0 },
+  budgets: { remainingAgentMessages: 10, remainingMemberWakes: 10, remainingInputTokens: 10000 },
+};
 
-  it("keeps all stages for full code work and requires Builder + Reviewer tools", () => {
-    const plan = planSupervisedCodeFlow({
-      body: "Implement workspace symlink escape fixes with tests",
-      members: roster,
-      leadSessionId: "lead",
-    });
-    expect(plan.applies).toBe(true);
+describe("typed supervised flow", () => {
+  it("plans only the current typed stage and carries task ID and gate metadata", () => {
+    const plan = planSupervisedCodeFlow({ task, workState });
     expect(plan.kind).toBe("code");
-    expect(plan.stages.map((stage) => [stage.id, stage.skip])).toEqual([
-      ["plan", false],
-      ["implement", false],
-      ["review", false],
-      ["deliver", false],
-    ]);
-    expect(plan.stages.find((stage) => stage.id === "plan")?.ownerSessionId).toBe("lead");
-    expect(plan.stages.find((stage) => stage.id === "implement")?.ownerSessionId).toBe("build");
-    expect(plan.stages.find((stage) => stage.id === "review")?.ownerSessionId).toBe("review");
-    expect(plan.stages.find((stage) => stage.id === "deliver")?.ownerSessionId).toBe("lead");
+    expect(plan.stages.find((s) => s.id === "implement")).toMatchObject({
+      skip: false,
+      blocked: false,
+      ownerSessionId: "build",
+    });
+    expect(plan.stages.find((s) => s.id === "verify")).toMatchObject({
+      skip: false,
+      blocked: true,
+      reason: "stage-pending",
+      ownerSessionId: "build",
+    });
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({
+      skip: false,
+      blocked: true,
+      reason: "stage-pending",
+      ownerSessionId: "review",
+    });
+    expect(plan.stages.find((s) => s.id === "deliver")).toMatchObject({
+      blocked: true,
+      reason: "stage-pending",
+      ownerSessionId: "lead",
+    });
     expect(plan.delegations).toEqual([
       expect.objectContaining({
+        taskId: "t",
         stage: "implement",
-        tool: "group_handoff",
         memberId: "build",
-      }),
-      expect.objectContaining({
-        stage: "review",
-        tool: "group_request_review",
-        memberId: "review",
+        tool: "group_assign_task",
       }),
     ]);
+    const leadFlow = composeSupervisedFlowSection(plan, {
+      sessionId: "lead",
+      leadSessionId: "lead",
+      taskOwnerSessionId: "build",
+    });
+    expect(leadFlow).toContain("taskId=t");
+    expect(leadFlow).toContain("criteria-incomplete");
+    expect(leadFlow).toContain("group_assign_task(taskId=t, memberId=build)");
   });
 
-  it("skips Reviewer for docs-only asks but still plans implement + deliver", () => {
-    const plan = planSupervisedCodeFlow({
-      body: "Update the README documentation for Groups setup",
-      members: roster,
-      leadSessionId: "lead",
+  it("keeps typed stage context for everyone and scopes delegation to its authorized actor", () => {
+    const implementPlan = planSupervisedCodeFlow({ task, workState });
+    const render = (sessionId: string) =>
+      composeSupervisedFlowSection(implementPlan, {
+        sessionId,
+        leadSessionId: "lead",
+        taskOwnerSessionId: "build",
+      });
+
+    const leadFlow = render("lead");
+    const ownerFlow = render("build");
+    const reviewerFlow = render("review");
+    for (const flow of [leadFlow, ownerFlow, reviewerFlow]) {
+      expect(flow).toContain("Typed task: t; kind: code");
+      expect(flow).toContain('Gate: {"satisfied":false,"reasonCodes":["criteria-incomplete"]}');
+      expect(flow).toContain("implement: RUN");
+    }
+    expect(leadFlow).toContain("group_assign_task(taskId=t, memberId=build)");
+    expect(ownerFlow).not.toContain("group_assign_task");
+    expect(reviewerFlow).not.toContain("group_assign_task");
+    expect(
+      composeSupervisedFlowSection(implementPlan, {
+        sessionId: "lead",
+        taskOwnerSessionId: "build",
+      }),
+    ).not.toContain("group_assign_task");
+
+    const reviewTask = { ...task, stage: "review" as const };
+    const reviewPlan = planSupervisedCodeFlow({
+      task: reviewTask,
+      workState: { ...workState, tasks: [reviewTask] },
     });
-    expect(plan.applies).toBe(true);
-    expect(plan.kind).toBe("docs");
-    expect(plan.stages.find((stage) => stage.id === "review")).toMatchObject({
+    const reviewFlow = (sessionId: string) =>
+      composeSupervisedFlowSection(reviewPlan, {
+        sessionId,
+        leadSessionId: "lead",
+        taskOwnerSessionId: "build",
+      });
+    const leadReviewFlow = reviewFlow("lead");
+    const ownerReviewFlow = reviewFlow("build");
+    const reviewerReviewFlow = reviewFlow("review");
+    for (const flow of [leadReviewFlow, ownerReviewFlow, reviewerReviewFlow]) {
+      expect(flow).toContain("review: RUN");
+      expect(flow).toContain("Typed task: t; kind: code");
+      expect(flow).toContain('Gate: {"satisfied":false,"reasonCodes":["criteria-incomplete"]}');
+    }
+    expect(leadReviewFlow).not.toContain("group_request_review");
+    expect(ownerReviewFlow).toContain("group_request_review(taskId=t, memberId=review)");
+    expect(reviewerReviewFlow).not.toContain("group_request_review");
+  });
+
+  it("reexpresses docs-only skipping from typed policy rather than title keywords", () => {
+    const docsTask = {
+      ...task,
+      id: "docs",
+      kind: "docs" as const,
+      title: "anything at all",
+      stage: "implement" as const,
+      verificationPolicy: { mode: "none" as const, requireReview: false },
+    };
+    const plan = planSupervisedCodeFlow({
+      task: docsTask,
+      workState: { ...workState, tasks: [docsTask] },
+    });
+    expect(plan.stages.find((s) => s.id === "implement")).toMatchObject({
+      skip: false,
+      blocked: false,
+      ownerSessionId: "build",
+    });
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({
       skip: true,
-      reason: expect.stringContaining("docs-only"),
+      reason: "stage-not-required",
     });
-    expect(plan.stages.filter((stage) => !stage.skip).map((stage) => stage.id)).toEqual([
-      "plan",
-      "implement",
-      "deliver",
+    expect(plan.stages.find((s) => s.id === "verify")).toMatchObject({
+      skip: true,
+      reason: "stage-not-required",
+    });
+    expect(plan.delegations).toEqual([
+      expect.objectContaining({ taskId: "docs", stage: "implement", memberId: "build" }),
     ]);
-    expect(plan.delegations.map((item) => item.stage)).toEqual(["implement"]);
-    expect(plan.delegations.some((item) => item.stage === "review")).toBe(false);
   });
 
-  it("skips plan and review for trivial fixes", () => {
+  it("reexpresses review-only skipping from the typed review task kind", () => {
+    const reviewTask = {
+      ...task,
+      kind: "review" as const,
+      stage: "review" as const,
+      status: "in_review" as const,
+      verificationPolicy: { mode: "none" as const, requireReview: false },
+    };
     const plan = planSupervisedCodeFlow({
-      body: "Fix typo in the button label",
-      members: roster,
-      leadSessionId: "lead",
+      task: reviewTask,
+      workState: { ...workState, tasks: [reviewTask] },
     });
-    expect(plan.kind).toBe("trivial");
-    expect(plan.stages.filter((stage) => stage.skip).map((stage) => stage.id)).toEqual([
-      "plan",
-      "review",
-    ]);
-    expect(plan.delegations.map((item) => item.stage)).toEqual(["implement"]);
-  });
-
-  it("skips implement and review for design-only asks", () => {
-    const plan = planSupervisedCodeFlow({
-      body: "Propose an architecture approach for the queue",
-      members: roster,
-      leadSessionId: "lead",
+    expect(plan.stages.find((s) => s.id === "plan")).toMatchObject({ skip: true });
+    expect(plan.stages.find((s) => s.id === "implement")).toMatchObject({ skip: true });
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({
+      skip: false,
+      blocked: false,
+      ownerSessionId: "review",
     });
-    expect(plan.kind).toBe("design");
-    expect(plan.stages.filter((stage) => stage.skip).map((stage) => stage.id)).toEqual([
-      "implement",
-      "review",
-    ]);
-    expect(plan.delegations).toEqual([]);
-  });
-
-  it("skips plan and implement for review-only asks", () => {
-    const plan = planSupervisedCodeFlow({
-      body: "Please review this PR for regressions",
-      members: roster,
-      leadSessionId: "lead",
-    });
-    expect(plan.kind).toBe("review-only");
-    expect(plan.stages.filter((stage) => stage.skip).map((stage) => stage.id)).toEqual([
-      "plan",
-      "implement",
-    ]);
     expect(plan.delegations).toEqual([
       expect.objectContaining({
+        taskId: "t",
         stage: "review",
-        tool: "group_request_review",
         memberId: "review",
+        tool: "group_request_review",
       }),
     ]);
   });
 
-  it("omits Builder/Reviewer delegations when those members are absent", () => {
-    const plan = planSupervisedCodeFlow({
-      body: "Implement feature X with tests",
-      members: [{ sessionId: "lead", title: "Planner", role: "Lead" }],
-      leadSessionId: "lead",
+  it("blocks implementation without a capable owner instead of falling back to the Lead", () => {
+    const noImplementer = {
+      ...workState,
+      members: workState.members.filter((row) => row.sessionId !== "build"),
+    };
+    const plan = planSupervisedCodeFlow({ task, workState: noImplementer });
+    expect(plan.stages.find((stage) => stage.id === "implement")).toMatchObject({
+      skip: false,
+      blocked: true,
+      reason: "owner-unavailable",
     });
-    expect(plan.applies).toBe(true);
     expect(plan.delegations).toEqual([]);
-    expect(plan.stages.find((stage) => stage.id === "implement")?.ownerSessionId).toBe("lead");
   });
-});
 
-describe("composeSupervisedFlowSection", () => {
-  it("returns empty when the flow does not apply", () => {
+  it("runs only the planning stage for a typed design task", () => {
+    const { ownerSessionId: _ownerSessionId, ...taskWithoutOwner } = task;
+    const designTask = {
+      ...taskWithoutOwner,
+      kind: "design" as const,
+      stage: "plan" as const,
+      verificationPolicy: { mode: "none" as const, requireReview: false },
+    };
     const plan = planSupervisedCodeFlow({
-      body: "hi",
-      members: roster,
-      leadSessionId: "lead",
+      task: designTask,
+      workState: { ...workState, tasks: [designTask] },
     });
-    expect(composeSupervisedFlowSection(plan)).toBe("");
+    expect(plan.stages.find((s) => s.id === "plan")).toMatchObject({
+      skip: false,
+      blocked: false,
+      ownerSessionId: "lead",
+    });
+    expect(plan.stages.find((s) => s.id === "implement")).toMatchObject({ skip: true });
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({ skip: true });
+    expect(plan.stages.find((s) => s.id === "verify")).toMatchObject({ skip: true });
+    expect(plan.delegations).toEqual([]);
   });
 
-  it("lists skip reasons and required tool delegations for code work", () => {
-    const code = planSupervisedCodeFlow({
-      body: "Implement the login feature with tests",
-      members: roster,
-      leadSessionId: "lead",
+  it("reviewer_removal_blocks_review", () => {
+    const plan = planSupervisedCodeFlow({
+      task: { ...task, stage: "review", status: "in_review" },
+      workState: {
+        ...workState,
+        members: workState.members.filter((m) => m.sessionId !== "review"),
+      },
     });
-    const section = composeSupervisedFlowSection(code);
-    expect(section).toContain("<supervised_flow>");
-    expect(section).toContain("group_handoff");
-    expect(section).toContain("group_request_review");
-    expect(section).toContain("memberId=build");
-    expect(section).toContain("memberId=review");
-    expect(section).toContain("implement: RUN");
-    expect(section).toContain("review: RUN");
-
-    const docs = planSupervisedCodeFlow({
-      body: "Update the README documentation",
-      members: roster,
-      leadSessionId: "lead",
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({
+      skip: false,
+      blocked: true,
+      reason: "reviewer-unavailable",
     });
-    const docsSection = composeSupervisedFlowSection(docs);
-    expect(docsSection).toContain("review: SKIP");
-    expect(docsSection).toContain("docs-only");
-    expect(docsSection).not.toContain("memberId=review");
+    expect(plan.delegations).toEqual([]);
+  });
+  it("PT and EN titles roles and keywords do not change typed stages or targets", () => {
+    const baseline = planSupervisedCodeFlow({ task, workState });
+    for (const text of ["review README", "oi", "implemente a correção".repeat(100)]) {
+      const renamed = {
+        ...workState,
+        members: workState.members.map((m) => ({ ...m, name: text, role: text, agentRole: text })),
+      };
+      expect(
+        planSupervisedCodeFlow({
+          task: { ...task, title: text, description: text },
+          workState: renamed,
+        }),
+      ).toEqual(baseline);
+    }
+  });
+  it("uses verification policy instead of docs keywords", () => {
+    const plan = planSupervisedCodeFlow({
+      task: { ...task, kind: "docs", verificationPolicy: { mode: "none", requireReview: false } },
+      workState,
+    });
+    expect(plan.stages.find((s) => s.id === "review")).toMatchObject({ skip: true });
+    expect(plan.stages.find((s) => s.id === "verify")).toMatchObject({ skip: true });
+  });
+  it("blocks incomplete dependencies stopped executions and incomplete delivery gates", () => {
+    for (const changed of [
+      { ...task, dependencyIds: ["missing"] },
+      { ...task, stage: "deliver" as const },
+    ]) {
+      const plan = planSupervisedCodeFlow({ task: changed, workState });
+      expect(plan.delegations).toEqual([]);
+      expect(plan.stages.find((s) => s.id === changed.stage)?.blocked).toBe(true);
+    }
+    expect(
+      planSupervisedCodeFlow({
+        task,
+        workState: { ...workState, execution: { id: "e", stopped: true, waitingForUser: false } },
+      }).delegations,
+    ).toEqual([]);
+  });
+  it("does not apply to legacy and terminal tasks", () => {
+    for (const changed of [
+      { ...task, kind: "legacy" as const },
+      { ...task, status: "done" as const },
+      { ...task, status: "cancelled" as const },
+    ]) {
+      expect(
+        composeSupervisedFlowSection(planSupervisedCodeFlow({ task: changed, workState }), {
+          sessionId: "lead",
+          leadSessionId: "lead",
+          taskOwnerSessionId: "build",
+        }),
+      ).toBe("");
+    }
   });
 });

@@ -1,4 +1,17 @@
 /** Gap 4 contracts split part 8 — Agent Groups DTOs from #62 */
+
+import type { GroupMemberCapabilities } from "../group-capabilities";
+import type {
+  GroupIntegrationRecord,
+  GroupProactivityMode,
+  GroupTaskCriterion,
+  GroupTaskEvidenceRef,
+  GroupTaskKind,
+  GroupTaskPriority,
+  GroupTaskReview,
+  GroupTaskStage,
+  GroupTaskVerificationPolicy,
+} from "../group-work-state";
 /* ── Agent Groups (rooms of normal agent sessions) ─────────────────────── */
 
 export type AgentGroupMode = "free" | "coordinator";
@@ -14,7 +27,8 @@ export type AgentGroupInfo = {
   updatedAt: string;
 };
 
-export type AgentGroupMember = {
+/** Capability metadata is optional on legacy DTOs; current stores always project arrays. */
+export type AgentGroupMember = Partial<GroupMemberCapabilities> & {
   groupId: string;
   /** The pair's hidden room session (kind 'group_member'): the runtime's member key. */
   sessionId: string;
@@ -96,7 +110,7 @@ export const AGENT_AVATAR_SHAPES = [
 export type AgentAvatarShape = (typeof AGENT_AVATAR_SHAPES)[number];
 
 /** An agent: belongs to ONE group, name unique in it (case-insensitive), persona and defaults. */
-export type AgentInfo = {
+export type AgentInfo = Partial<GroupMemberCapabilities> & {
   id: string;
   /** Its group (A2). Absent only for legacy agents that had no membership. */
   groupId?: string;
@@ -119,7 +133,7 @@ export type AgentInfo = {
 };
 
 /** `agents:create` payload. */
-export type CreateAgentInput = {
+export type CreateAgentInput = Partial<GroupMemberCapabilities> & {
   name: string;
   role?: string;
   instructions?: string;
@@ -269,7 +283,13 @@ export type GroupMessage = {
 /** Message pagination cursor: the (createdAt, id) total order of group messages. */
 export type GroupMessageCursor = { createdAt: string; id: string };
 
-export type GroupTaskStatus = "open" | "in_progress" | "in_review" | "done" | "cancelled";
+export type GroupTaskStatus =
+  | "open"
+  | "in_progress"
+  | "blocked"
+  | "in_review"
+  | "done"
+  | "cancelled";
 
 export type GroupTask = {
   id: string;
@@ -280,6 +300,18 @@ export type GroupTask = {
   ownerSessionId?: string;
   createdBySessionId?: string;
   reviewerSessionId?: string;
+  /** Optional until the Group task store migration projects defaults for legacy rows. */
+  kind?: GroupTaskKind;
+  priority?: GroupTaskPriority;
+  stage?: GroupTaskStage;
+  blockedReason?: string;
+  dependencyIds?: string[];
+  criteria?: GroupTaskCriterion[];
+  criteriaVersion?: number;
+  verificationPolicy?: GroupTaskVerificationPolicy;
+  evidenceRefs?: GroupTaskEvidenceRef[];
+  review?: GroupTaskReview;
+  stateVersion?: number;
   branch?: string;
   /**
    * Ask-spanning execution id (`GroupMessage.chainId`). Links the checklist
@@ -377,6 +409,26 @@ export type GroupProjectContextSnapshot = {
  */
 export type GroupRuntimeEvent =
   | { type: "group.message"; groupId: string; message: GroupMessage }
+  | {
+      type: "group.suggestion-changed";
+      groupId: string;
+      actionId: string;
+      version: number;
+    }
+  | { type: "group.proactivity-mode-changed"; groupId: string; mode: GroupProactivityMode }
+  | {
+      type: "group.task-changed";
+      groupId: string;
+      taskId: string;
+      stateVersion: number;
+    }
+  | {
+      type: "group.integration-changed";
+      groupId: string;
+      taskId: string;
+      record: GroupIntegrationRecord;
+      version: number;
+    }
   | {
       type: "group.activity";
       groupId: string;

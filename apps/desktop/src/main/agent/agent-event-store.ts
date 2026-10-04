@@ -39,6 +39,17 @@ type AgentRunPromptRow = {
 
 type AgentEventItem = { id: string; event: AgentEvent; createdAt: string };
 const MAX_RUN_TOOL_EVENTS = 500;
+// Main-owned fields stored beside durable events; listAgentEvents strips them before IPC.
+const QA_CHECK_SNAPSHOT_FIELD = "__qaCheckSnapshot";
+const QA_CHECK_CONFIG_STABLE_FIELD = "__qaCheckConfigStable";
+type PersistedQACheckSnapshot = {
+  version: 1;
+  checkName?: HarnessTaskCheckKind;
+  paths?: string[];
+  fullProject?: true;
+  mutatesSource?: true;
+  packageConfigDigest?: string;
+};
 const MAX_CODEGRAPH_DISCOVERY_EVENTS = 200;
 const MAX_CODEGRAPH_DISCOVERY_REFS = 200;
 const MAX_HARNESS_INSIGHT_RUNS = 500;
@@ -147,14 +158,228 @@ function safeToolPaths(args: Record<string, unknown>): string[] | undefined {
     .slice(0, 20);
 }
 
+function eventWithoutQACheckSnapshot(event: AgentEvent): Record<string, unknown> {
+  const payload = { ...event } as Record<string, unknown>;
+  delete payload[QA_CHECK_SNAPSHOT_FIELD];
+  delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+  return payload;
+}
+
+/** Capture only typed recognition metadata from the event's owning session at start time. */
+function createQACheckSnapshot(
+  event: Extract<AgentEvent, { type: "tool.started" }>,
+  db: ReturnType<typeof getDatabase>,
+): PersistedQACheckSnapshot {
+  if (event.toolName !== "bash" && event.toolName !== "terminal_run") {
+    return { version: 1 };
+  }
+  const args = toolArgs(event);
+  const session = db.prepare("select cwd from agent_sessions where id = ?").get(event.sessionId) as
+    | { cwd?: string }
+    | undefined;
+  const invocation = recognizeCheckInvocation(
+    event.toolName,
+    typeof args.command === "string" ? args.command : undefined,
+    session?.cwd,
+  );
+  const checkName = invocation?.checkName;
+  const paths = invocation?.paths ?? (checkName ? safeToolPaths(args) : undefined);
+  const fullProject = checkName && !paths ? invocation?.fullProject : false;
+  const mutatesSource = invocation?.mutatesSource;
+  return {
+    version: 1,
+    ...(checkName ? { checkName } : {}),
+    ...(paths ? { paths } : {}),
+    ...(fullProject ? { fullProject: true as const } : {}),
+    ...(mutatesSource ? { mutatesSource: true as const } : {}),
+    ...(invocation?.packageConfigDigest
+      ? { packageConfigDigest: invocation.packageConfigDigest }
+      : {}),
+  };
+}
+
+/** Revalidate package-script identity against the owning session before storing the end event. */
+function packageCheckConfigIsStableAtEnd(
+  event: Extract<AgentEvent, { type: "tool.ended" }>,
+  db: ReturnType<typeof getDatabase>,
+): boolean | undefined {
+  if (!event.runId) return undefined;
+  const row = db
+    .prepare(
+      `select payload_json from agent_events
+       where session_id = ? and type = 'tool.started'
+         and json_extract(payload_json, '$.runId') = ?
+         and json_extract(payload_json, '$.toolCallId') = ?
+       order by rowid asc limit 1`,
+    )
+    .get(event.sessionId, event.runId, event.toolCallId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    const started = payload as unknown as Extract<AgentEvent, { type: "tool.started" }>;
+    if (
+      started.type !== "tool.started" ||
+      started.sessionId !== event.sessionId ||
+      started.runId !== event.runId ||
+      started.toolCallId !== event.toolCallId ||
+      (event.toolName !== undefined && started.toolName !== event.toolName)
+    ) {
+      return undefined;
+    }
+    const snapshot = readQACheckSnapshot(payload);
+    if (snapshot.state !== "valid" || !snapshot.snapshot.packageConfigDigest) return undefined;
+    const args = toolArgs(started);
+    const session = db
+      .prepare("select cwd from agent_sessions where id = ?")
+      .get(event.sessionId) as { cwd?: string } | undefined;
+    const invocation = recognizeCheckInvocation(
+      started.toolName,
+      typeof args.command === "string" ? args.command : undefined,
+      session?.cwd,
+    );
+    return (
+      invocation?.checkName === snapshot.snapshot.checkName &&
+      invocation?.packageConfigDigest === snapshot.snapshot.packageConfigDigest
+    );
+  } catch {
+    return false;
+  }
+}
+
+function serializeAgentEvent(event: AgentEvent, db: ReturnType<typeof getDatabase>): string {
+  const payload = eventWithoutQACheckSnapshot(event);
+  if (event.type === "tool.started") {
+    payload[QA_CHECK_SNAPSHOT_FIELD] = createQACheckSnapshot(event, db);
+  } else if (event.type === "tool.ended") {
+    const stable = packageCheckConfigIsStableAtEnd(event, db);
+    if (stable !== undefined) payload[QA_CHECK_CONFIG_STABLE_FIELD] = stable;
+  }
+  return JSON.stringify(payload);
+}
+
+function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "version",
+      "checkName",
+      "paths",
+      "fullProject",
+      "mutatesSource",
+      "packageConfigDigest",
+    ]) ||
+    value.version !== 1 ||
+    (value.checkName !== undefined &&
+      (typeof value.checkName !== "string" ||
+        !TASK_STATE_CHECK_KINDS.includes(value.checkName as HarnessTaskCheckKind))) ||
+    (value.paths !== undefined &&
+      (!Array.isArray(value.paths) ||
+        value.paths.length > 20 ||
+        !value.paths.every(
+          (path) =>
+            typeof path === "string" &&
+            path.length > 0 &&
+            path.length <= 240 &&
+            !path.includes("\0") &&
+            path === path.trim(),
+        ))) ||
+    (value.fullProject !== undefined && value.fullProject !== true) ||
+    (value.mutatesSource !== undefined && value.mutatesSource !== true) ||
+    (value.packageConfigDigest !== undefined &&
+      (typeof value.packageConfigDigest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.packageConfigDigest))) ||
+    (value.checkName === undefined &&
+      (value.paths !== undefined ||
+        value.fullProject !== undefined ||
+        value.mutatesSource !== undefined ||
+        value.packageConfigDigest !== undefined))
+  ) {
+    return undefined;
+  }
+  return {
+    version: 1,
+    ...(value.checkName ? { checkName: value.checkName as HarnessTaskCheckKind } : {}),
+    ...(value.paths ? { paths: value.paths as string[] } : {}),
+    ...(value.fullProject ? { fullProject: true as const } : {}),
+    ...(value.mutatesSource ? { mutatesSource: true as const } : {}),
+    ...(value.packageConfigDigest
+      ? { packageConfigDigest: value.packageConfigDigest as string }
+      : {}),
+  };
+}
+
+function readQACheckSnapshot(
+  payload: Record<string, unknown>,
+):
+  | { state: "missing" }
+  | { state: "invalid" }
+  | { state: "valid"; snapshot: PersistedQACheckSnapshot } {
+  if (!Object.hasOwn(payload, QA_CHECK_SNAPSHOT_FIELD)) return { state: "missing" };
+  const snapshot = validQACheckSnapshot(payload[QA_CHECK_SNAPSHOT_FIELD]);
+  return snapshot ? { state: "valid", snapshot } : { state: "invalid" };
+}
+
+/** One tool call has one authoritative start and end, regardless of delivery keys. */
+function existingToolLifecycleEvent(
+  event: AgentEvent,
+  db: ReturnType<typeof getDatabase>,
+): { rowid: number; payload_json: string } | undefined {
+  if ((event.type !== "tool.started" && event.type !== "tool.ended") || !event.runId) {
+    return undefined;
+  }
+  const row = db
+    .prepare(
+      `select rowid, payload_json from agent_events
+     where session_id = ? and type = ?
+       and json_extract(payload_json, '$.runId') = ?
+       and json_extract(payload_json, '$.toolCallId') = ?
+     order by rowid asc limit 1`,
+    )
+    .get(event.sessionId, event.type, event.runId, event.toolCallId) as
+    | { rowid: number; payload_json: string }
+    | undefined;
+  if (
+    row &&
+    JSON.stringify(eventWithoutQACheckSnapshot(JSON.parse(row.payload_json))) !==
+      JSON.stringify(eventWithoutQACheckSnapshot(event))
+  ) {
+    throw new Error("Tool event identity was reused for a different event.");
+  }
+  return row;
+}
+
 export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?: string }): number {
   if (options?.idempotencyKey !== undefined) {
     if (!options.idempotencyKey.trim()) {
       throw new Error("Agent event idempotency key cannot be empty.");
     }
     const id = `event:${createHash("sha256").update(options.idempotencyKey).digest("hex")}`;
-    const payload = JSON.stringify(event);
     const db = getDatabase();
+    const eventIdentity = JSON.stringify(eventWithoutQACheckSnapshot(event));
+    const existingBeforeInsert = db
+      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .get(id) as
+      | { rowid: number; session_id: string; type: string; payload_json: string }
+      | undefined;
+    if (existingBeforeInsert) {
+      const existingEvent = JSON.parse(existingBeforeInsert.payload_json) as Record<
+        string,
+        unknown
+      >;
+      delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
+      delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
+      if (
+        existingBeforeInsert.session_id !== event.sessionId ||
+        existingBeforeInsert.type !== event.type ||
+        JSON.stringify(existingEvent) !== eventIdentity
+      ) {
+        throw new Error("Agent event idempotency key was reused for a different event.");
+      }
+      return Number(existingBeforeInsert.rowid);
+    }
+    // Bind a new delivery key to the original payload; never recompute QA on replay.
+    const originalToolEvent = existingToolLifecycleEvent(event, db);
+    const payload = originalToolEvent?.payload_json ?? serializeAgentEvent(event, db);
     db.prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)
        values (?, ?, ?, ?, ?)
@@ -166,17 +391,23 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
       | { rowid: number; session_id: string; type: string; payload_json: string }
       | undefined;
     if (!existing) throw new Error("Idempotent agent event could not be read after insertion.");
+    const existingEvent = JSON.parse(existing.payload_json) as Record<string, unknown>;
+    delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
+    delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
     if (
       existing.session_id !== event.sessionId ||
       existing.type !== event.type ||
-      existing.payload_json !== payload
+      JSON.stringify(existingEvent) !== eventIdentity
     ) {
       throw new Error("Agent event idempotency key was reused for a different event.");
     }
     return Number(existing.rowid);
   }
 
-  const insertResult = getDatabase()
+  const db = getDatabase();
+  const originalToolEvent = existingToolLifecycleEvent(event, db);
+  if (originalToolEvent) return Number(originalToolEvent.rowid);
+  const insertResult = db
     .prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)
        values (?, ?, ?, ?, ?)`,
@@ -185,10 +416,38 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
       randomUUID(),
       event.sessionId,
       event.type,
-      JSON.stringify(event),
+      serializeAgentEvent(event, db),
       new Date().toISOString(),
     );
   return Number(insertResult.lastInsertRowid);
+}
+
+/** Read one persisted QA event by durable row identity and exact run ownership. */
+export function getHarnessQAEventByRowId(
+  rowId: number,
+  sessionId: string,
+  runId: string,
+): Extract<AgentEvent, { type: "harness.qa" }> | undefined {
+  if (!Number.isSafeInteger(rowId) || rowId < 1) return undefined;
+  const row = getDatabase()
+    .prepare(
+      "select payload_json from agent_events where rowid = ? and session_id = ? and type = 'harness.qa'",
+    )
+    .get(rowId, sessionId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const event = JSON.parse(row.payload_json) as AgentEvent;
+    return event?.type === "harness.qa" &&
+      event.sessionId === sessionId &&
+      event.runId === runId &&
+      event.result !== null &&
+      typeof event.result === "object" &&
+      Array.isArray(event.result.evidence)
+      ? event
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 type TaskStateScanRow = { event_rowid: number; payload_bytes: number; workspace_id: string };
@@ -539,8 +798,10 @@ export function getLatestTodoContinuationAttempt(sessionId: string, runId: strin
 }
 
 /**
- * Return a bounded, redacted tool-call projection for one exact run. This query
- * never joins or reads agent_runs, so prompt/transcript text cannot enter QA.
+ * Return a bounded, redacted tool-call projection for one exact run. Persisted
+ * starts supply their frozen classification; legacy starts only use direct
+ * command recognition. This projection never reads the current package files.
+ * The query never joins or reads agent_runs, so prompt/transcript text cannot enter QA.
  */
 export function getRunToolEvidence(
   sessionId: string,
@@ -548,16 +809,20 @@ export function getRunToolEvidence(
   afterRowId?: number,
 ): RunQAEvent[] {
   if (afterRowId !== undefined && (!Number.isSafeInteger(afterRowId) || afterRowId <= 0)) return [];
-  const session = getDatabase()
-    .prepare("select cwd from agent_sessions where id = ?")
-    .get(sessionId) as { cwd?: string } | undefined;
   const rows = getDatabase()
     .prepare(
-      `select id, payload_json from agent_events
-       where session_id = ? and type in ('tool.started', 'tool.ended')
-         and json_extract(payload_json, '$.runId') = ?
-         and (? is null or rowid > ?)
-       order by rowid desc
+      `select e.id, e.payload_json from agent_events e
+       where e.session_id = ? and e.type in ('tool.started', 'tool.ended')
+         and json_extract(e.payload_json, '$.runId') = ?
+         and (? is null or e.rowid > ?)
+         and not exists (
+           select 1 from agent_events original
+           where original.session_id = e.session_id and original.type = e.type
+             and original.rowid < e.rowid
+             and json_extract(original.payload_json, '$.runId') = json_extract(e.payload_json, '$.runId')
+             and json_extract(original.payload_json, '$.toolCallId') = json_extract(e.payload_json, '$.toolCallId')
+         )
+       order by e.rowid desc
        limit ?`,
     )
     .all(sessionId, runId, afterRowId ?? null, afterRowId ?? null, MAX_RUN_TOOL_EVENTS)
@@ -571,34 +836,63 @@ export function getRunToolEvidence(
       paths?: string[];
       fullProject?: boolean;
       mutatesSource?: boolean;
+      packageConfigDigest?: string;
     }
   >();
   const evidence: RunQAEvent[] = [];
   for (const row of rows) {
+    let payload: Record<string, unknown>;
     let event: AgentEvent;
     try {
-      event = JSON.parse(row.payload_json) as AgentEvent;
+      const parsed = JSON.parse(row.payload_json) as unknown;
+      if (!isRecord(parsed)) continue;
+      payload = parsed;
+      event = parsed as unknown as AgentEvent;
     } catch {
       continue;
     }
     if (event.sessionId !== sessionId || !("runId" in event) || event.runId !== runId) continue;
     if (event.type === "tool.started") {
       const args = toolArgs(event);
-      const invocation = recognizeCheckInvocation(
-        event.toolName,
-        typeof args.command === "string" ? args.command : undefined,
-        session?.cwd,
-      );
-      const checkName = invocation?.checkName;
-      const paths = invocation?.paths ?? (checkName ? safeToolPaths(args) : undefined);
-      const fullProject = checkName && !paths ? invocation?.fullProject : false;
-      const mutatesSource = invocation?.mutatesSource;
+      const snapshot = readQACheckSnapshot(payload);
+      const legacyInvocation =
+        snapshot.state === "missing"
+          ? recognizeCheckInvocation(
+              event.toolName,
+              typeof args.command === "string" ? args.command : undefined,
+            )
+          : undefined;
+      const checkName =
+        snapshot.state === "valid" ? snapshot.snapshot.checkName : legacyInvocation?.checkName;
+      const paths =
+        snapshot.state === "valid"
+          ? snapshot.snapshot.paths
+          : snapshot.state === "missing"
+            ? (legacyInvocation?.paths ?? (checkName ? safeToolPaths(args) : undefined))
+            : undefined;
+      const fullProject =
+        checkName && !paths
+          ? snapshot.state === "valid"
+            ? snapshot.snapshot.fullProject
+            : snapshot.state === "missing"
+              ? legacyInvocation?.fullProject
+              : false
+          : false;
+      const mutatesSource =
+        snapshot.state === "valid"
+          ? snapshot.snapshot.mutatesSource
+          : snapshot.state === "missing"
+            ? legacyInvocation?.mutatesSource
+            : undefined;
       starts.set(event.toolCallId, {
         toolName: event.toolName,
         ...(checkName ? { checkName } : {}),
         ...(paths ? { paths } : {}),
         ...(fullProject ? { fullProject: true } : {}),
         ...(mutatesSource ? { mutatesSource: true } : {}),
+        ...(snapshot.state === "valid" && snapshot.snapshot.packageConfigDigest
+          ? { packageConfigDigest: snapshot.snapshot.packageConfigDigest }
+          : {}),
       });
       evidence.push({
         type: "tool.started",
@@ -617,6 +911,10 @@ export function getRunToolEvidence(
     if (event.type !== "tool.ended") continue;
     const started = starts.get(event.toolCallId);
     if (!started || (event.toolName && started.toolName !== event.toolName)) continue;
+    const checkConfigStable =
+      started.packageConfigDigest !== undefined
+        ? payload[QA_CHECK_CONFIG_STABLE_FIELD] === true
+        : undefined;
     const exitCode =
       event.exitCode ??
       (started.toolName === "bash" &&
@@ -637,6 +935,7 @@ export function getRunToolEvidence(
       ...(started.paths ? { paths: started.paths } : {}),
       ...(started.fullProject ? { fullProject: true } : {}),
       ...(started.mutatesSource ? { mutatesSource: true } : {}),
+      ...(checkConfigStable !== undefined ? { checkConfigStable } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
       error: event.isError,
       ...(event.aborted ? { aborted: true } : {}),
@@ -927,11 +1226,16 @@ export function listAgentEvents(
        order by created_at asc, rowid asc`,
     )
     .all(sessionId) as AgentEventRow[];
-  const events = rows.map((row) => ({
-    id: row.id,
-    event: { ...JSON.parse(row.payload_json), eventCursor: row.event_cursor } as AgentEvent,
-    createdAt: row.created_at,
-  }));
+  const events = rows.map((row) => {
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    delete payload[QA_CHECK_SNAPSHOT_FIELD];
+    delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+    return {
+      id: row.id,
+      event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,
+      createdAt: row.created_at,
+    };
+  });
   const runs = db
     .prepare(
       `select id, user_message_id, prompt, started_at

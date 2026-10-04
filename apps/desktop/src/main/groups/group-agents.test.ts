@@ -1103,7 +1103,8 @@ describe("A2 migration (on an A1-shaped database)", () => {
       const snapshot = () =>
         db
           .prepare(
-            `select a.id, a.group_id, a.name, a.role, a.instructions, a.model_id, m.session_id
+            `select a.id, a.group_id, a.name, a.role, a.instructions, a.model_id,
+                    a.capability_ids_json, a.supported_task_kinds_json, m.session_id
              from agents a left join agent_group_members m on m.agent_id = a.id
              order by a.name, a.group_id`,
           )
@@ -1119,6 +1120,8 @@ describe("A2 migration (on an A1-shaped database)", () => {
         role: string;
         instructions: string;
         model_id: string | null;
+        capability_ids_json: string;
+        supported_task_kinds_json: string;
         session_id: string | null;
       }>;
       expect(rows.map((row) => [row.name, row.group_id, row.session_id])).toEqual([
@@ -1129,6 +1132,12 @@ describe("A2 migration (on an A1-shaped database)", () => {
         ["Shared", "g1", inOne],
         // and a copy (new id, same persona) takes the other membership.
         ["Shared", "g2", inTwo],
+      ]);
+      expect(rows.map((row) => [row.capability_ids_json, row.supported_task_kinds_json])).toEqual([
+        ["[]", "[]"],
+        ["[]", "[]"],
+        ["[]", "[]"],
+        ["[]", "[]"],
       ]);
       const [, , original, copy] = rows;
       expect(original?.id).toBe("shared");
@@ -1159,6 +1168,8 @@ describe("A2 migration (on an A1-shaped database)", () => {
         "avatar_color",
         "avatar_shape",
         "template_id",
+        "capability_ids_json",
+        "supported_task_kinds_json",
         "created_at",
         "updated_at",
         "archived_at",

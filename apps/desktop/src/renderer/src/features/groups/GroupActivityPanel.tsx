@@ -15,6 +15,7 @@ import {
 import { cn } from "../../lib/cn";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { GroupDecisionsSection } from "./GroupDecisions";
+import { GroupProactivityControls } from "./GroupProactivityControls";
 import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import { GroupStageChip } from "./GroupRoomHeader";
 import { activeTaskCount, GroupTaskPanel } from "./GroupTaskPanel";
@@ -38,7 +39,10 @@ export function GroupActivityPanel({
   messages = [],
   projectContext,
   onCancelled,
+  onTaskUpdated,
+  onOpenSession,
   onSetMode,
+  proactivityMembers = [],
 }: {
   groupId: string;
   tasks: readonly GroupTask[];
@@ -52,7 +56,10 @@ export function GroupActivityPanel({
   /** Project Setup diagnostics (fingerprint, CodeGraph, edges). */
   projectContext?: GroupProjectContextSnapshot | undefined;
   onCancelled(task: GroupTask): void;
+  onTaskUpdated?(task: GroupTask): void;
+  onOpenSession?(sessionId: string, runId?: string): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
+  proactivityMembers?: readonly { sessionId: string; label: string }[];
 }) {
   const t = useGroupText();
   const details = collectRoomMessageDetails(messages).slice(-12);
@@ -63,12 +70,16 @@ export function GroupActivityPanel({
   return (
     <GroupTaskPanel
       ariaLabel={t("activity.title")}
+      groupId={groupId}
       labels={labels}
       onCancelled={onCancelled}
+      {...(onTaskUpdated ? { onTaskUpdated } : {})}
+      {...(onOpenSession ? { onOpenSession } : {})}
       tasks={tasks}
       testId="group-activity-panel"
       top={
         <>
+          <GroupProactivityControls groupId={groupId} memberOptions={proactivityMembers} />
           <ActivityLiveSection labels={labels} rows={workingRows} />
           <ActivityCoordinationSection
             coordinating={coordinating}

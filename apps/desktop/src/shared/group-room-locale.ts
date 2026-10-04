@@ -300,6 +300,7 @@ export type GroupModelChipTextKey =
   | "archivedHint"
   | "leadArchivedHint"
   | "noTargetHint"
+  | "noLeadRequiredHint"
   | "archivedSkipped";
 
 const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, string>> = {
@@ -317,6 +318,7 @@ const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, str
     archivedHint: "Mention an active member or unarchive the agent",
     leadArchivedHint: "Mention an active member or unarchive the Lead",
     noTargetHint: "The author is no longer in the room. Mention an active member",
+    noLeadRequiredHint: "Set a Lead or mention an active member",
     archivedSkipped: "Archived, will not be woken",
   },
   pt: {
@@ -333,6 +335,7 @@ const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, str
     archivedHint: "Mencione um membro ativo ou desarquive o agente",
     leadArchivedHint: "Mencione um membro ativo ou desarquive o Lead",
     noTargetHint: "O autor não está mais na sala. Mencione um membro ativo",
+    noLeadRequiredHint: "Defina um Lead ou mencione um membro ativo",
     archivedSkipped: "Arquivado, não será acordado",
   },
   zh: {
@@ -349,6 +352,7 @@ const MODEL_CHIP_TEXT: Record<GroupRoomLocale, Record<GroupModelChipTextKey, str
     archivedHint: "请提及一位活跃成员，或取消归档该智能体",
     leadArchivedHint: "请提及一位活跃成员，或取消归档 Lead",
     noTargetHint: "作者已不在群组中。请提及一位活跃成员",
+    noLeadRequiredHint: "请设置 Lead 或提及一位活跃成员",
     archivedSkipped: "已归档，不会被唤醒",
   },
 };

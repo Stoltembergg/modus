@@ -286,6 +286,8 @@ describe("AgentDialog", () => {
       name: "Ana",
       role: GENERATED.role,
       instructions: GENERATED.instructions,
+      capabilityIds: [],
+      supportedTaskKinds: [],
       avatarFace: "wink",
       avatarColor: "pink",
       avatarShape: "squircle",
@@ -336,5 +338,91 @@ describe("AgentDialog", () => {
     expect(model.options[0]?.textContent).toBe("App default");
     expect(within(dialog).queryByRole("button", { name: "Regenerate" })).toBeNull();
     expect(within(dialog).queryByRole("textbox", { name: /What should it help with/ })).toBeNull();
+  });
+});
+
+describe("AgentDialog explicit capabilities", () => {
+  it("custom_agent_can_edit_capabilities", async () => {
+    const user = userEvent.setup();
+    const { dialog, onUpdate } = renderDialog({ agent: ANA });
+    await user.click(within(dialog).getByRole("checkbox", { name: "Capability implement" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Task kind code" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ capabilityIds: ["implement"], supportedTaskKinds: ["code"] }),
+      ),
+    );
+  });
+  it("creating a custom agent preserves explicit choices across persona generation", async () => {
+    const user = userEvent.setup();
+    const { dialog, create } = renderDialog();
+    await user.type(field(dialog, "Name"), "Writer");
+    await user.click(within(dialog).getByRole("checkbox", { name: "Capability docs" }));
+    await user.click(within(dialog).getByRole("checkbox", { name: "Task kind docs" }));
+    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
+    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ capabilityIds: ["docs"], supportedTaskKinds: ["docs"] }),
+      ),
+    );
+  });
+  it("renaming_role_does_not_change_capabilities", async () => {
+    const user = userEvent.setup();
+    const { dialog, onUpdate } = renderDialog({
+      agent: { ...ANA, capabilityIds: ["verify"], supportedTaskKinds: ["code"] },
+    });
+    await user.clear(field(dialog, "Role"));
+    await user.type(field(dialog, "Role"), "Planner");
+    await user.click(within(dialog).getByRole("button", { name: "Regenerate" }));
+    await waitFor(() => expect(field(dialog, "Role").value).toBe(GENERATED.role));
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(onUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ capabilityIds: ["verify"], supportedTaskKinds: ["code"] }),
+      ),
+    );
+  });
+  it("template selection fills explicit metadata and supports clearing it in group drafts", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(
+      <AgentDialog
+        open
+        models={MODELS}
+        onOpenChange={() => undefined}
+        onGenerate={async () => GENERATED}
+        draft={{
+          title: "Draft",
+          seed: "seed",
+          takenNames: [],
+          roles: [],
+          initial: { name: "Build", role: "Builder", templateId: "builder" },
+          onAdd,
+        }}
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name: "Capability implement" })).toHaveProperty(
+      "checked",
+      true,
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Capability implement" }));
+    await user.click(screen.getByRole("button", { name: "Add" }));
+    expect(onAdd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        templateId: "builder",
+        capabilityIds: ["verify"],
+        supportedTaskKinds: ["code"],
+      }),
+    );
+  });
+  it("legacy template agents keep empty metadata when editing", () => {
+    renderDialog({ agent: { ...ANA, templateId: "builder" } });
+    expect(screen.getByRole("checkbox", { name: "Capability implement" })).toHaveProperty(
+      "checked",
+      false,
+    );
   });
 });

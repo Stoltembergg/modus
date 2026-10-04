@@ -3,6 +3,7 @@ import type { GroupRuntimeEvent, GroupTask, GroupTaskStatus } from "../../../../
 import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
 import { TaskCheck } from "../../components/ui/TaskCheck";
 import { cn } from "../../lib/cn";
+import { GroupTaskDetails } from "./GroupTaskDetails";
 import { describeGroupError } from "./groupErrors";
 import { type GroupTextFn, useGroupText } from "./groupRoomI18n";
 import { shouldRefreshGroupSidePanel } from "./groupSidePanelRefresh";
@@ -29,6 +30,7 @@ export function checklistProgress(tasks: readonly GroupTask[]): { done: number; 
 function statusBadge(status: GroupTaskStatus, t: GroupTextFn): string | undefined {
   if (status === "in_progress") return t("tasks.inProgress");
   if (status === "in_review") return t("tasks.inReview");
+  if (status === "blocked") return t("tasks.blocked");
   if (status === "open") return t("tasks.open");
   return undefined;
 }
@@ -63,9 +65,10 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
   const rank: Record<GroupTaskStatus, number> = {
     in_progress: 0,
     in_review: 1,
-    open: 2,
-    done: 3,
-    cancelled: 4,
+    blocked: 2,
+    open: 3,
+    done: 4,
+    cancelled: 5,
   };
   return [...tasks].sort((a, b) => {
     const byStatus = rank[a.status] - rank[b.status];
@@ -80,22 +83,29 @@ function sortTasks(tasks: readonly GroupTask[]): GroupTask[] {
  * display-only. N2: shell is labeled Activity; checklist stays infrastructure.
  */
 export function GroupTaskPanel({
+  groupId,
   tasks,
   labels,
   onCancelled,
+  onTaskUpdated,
+  onOpenSession,
   top,
   ariaLabel,
   testId = "group-activity-panel",
 }: {
+  groupId: string;
   tasks: readonly GroupTask[];
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
+  onTaskUpdated?(task: GroupTask): void;
+  onOpenSession?(sessionId: string, runId?: string): void;
   top?: ReactNode;
   ariaLabel?: string;
   testId?: string;
 }) {
   const t = useGroupText();
   const [showCancelled, setShowCancelled] = useState(false);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
   const progress = checklistProgress(tasks);
   const visible = sortTasks(tasks.filter((task) => task.status !== "cancelled" || showCancelled));
   const cancelledCount = tasks.filter((task) => task.status === "cancelled").length;
@@ -125,9 +135,25 @@ export function GroupTaskPanel({
           </div>
           <ul className="flex flex-col gap-0.5" data-testid="task-checklist">
             {visible.map((task) => (
-              <TaskCheckRow key={task.id} labels={labels} onCancelled={onCancelled} task={task} />
+              <TaskCheckRow
+                key={task.id}
+                labels={labels}
+                onCancelled={onCancelled}
+                onShowDetails={() => setSelectedTaskId(task.id)}
+                task={task}
+              />
             ))}
           </ul>
+          {selectedTaskId ? (
+            <GroupTaskDetails
+              groupId={groupId}
+              labels={labels}
+              onClose={() => setSelectedTaskId(undefined)}
+              {...(onOpenSession ? { onOpenSession } : {})}
+              {...(onTaskUpdated ? { onTaskUpdated } : {})}
+              taskId={selectedTaskId}
+            />
+          ) : null}
           {cancelledCount > 0 ? (
             <button
               aria-expanded={showCancelled}
@@ -150,10 +176,12 @@ function TaskCheckRow({
   task,
   labels,
   onCancelled,
+  onShowDetails,
 }: {
   task: GroupTask;
   labels: ReadonlyMap<string, MemberLabel>;
   onCancelled(task: GroupTask): void;
+  onShowDetails(): void;
 }) {
   const t = useGroupText();
   const [confirming, setConfirming] = useState(false);
@@ -229,6 +257,13 @@ function TaskCheckRow({
               </span>
             ) : null}
           </div>
+          <button
+            className="mt-1 text-2xs text-accent hover:underline"
+            onClick={onShowDetails}
+            type="button"
+          >
+            {t("taskDetails.details")}
+          </button>
           {error ? <div className="mt-1 text-danger">{error}</div> : null}
           {cancellable ? (
             <button

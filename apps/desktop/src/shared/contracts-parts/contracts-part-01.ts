@@ -148,12 +148,14 @@ export type HarnessEvidenceRef = {
   revision?: string;
   paths?: string[];
   label: string;
+  checkName?: HarnessTaskCheckKind;
 };
 export type HarnessQAResult = {
   required: boolean;
   status: AutoQAStatus;
   reasonCode: string;
   evidence: HarnessEvidenceRef[];
+  sourceFingerprint?: string;
 };
 export type HarnessTaskClassification = {
   taskType: HarnessTaskType;

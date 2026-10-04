@@ -100,6 +100,40 @@ const api: ModusApi = {
     memberStates: () => ipcRenderer.invoke("group:member-states"),
     listTasks: (groupId) => ipcRenderer.invoke("group:list-tasks", { groupId }),
     cancelTask: (taskId) => ipcRenderer.invoke("group:cancel-task", { taskId }),
+    previewTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-preview", { taskId }),
+    applyTaskIntegration: (input) => ipcRenderer.invoke("group:integration-apply", input),
+    abortTaskIntegration: (taskId) => ipcRenderer.invoke("group:integration-abort", { taskId }),
+    getIntegrationState: (taskId) => ipcRenderer.invoke("group:integration-state", { taskId }),
+    refreshTaskIntegrationState: (taskId) =>
+      ipcRenderer.invoke("group:integration-refresh", { taskId }),
+    getWorkState: (groupId, executionId) =>
+      ipcRenderer.invoke("group:get-work-state", {
+        groupId,
+        ...(executionId ? { executionId } : {}),
+      }),
+    getTaskDetails: (groupId, taskId) =>
+      ipcRenderer.invoke("group:get-task-details", {
+        groupId,
+        taskId,
+      }),
+    listTaskTransitions: (taskId) => ipcRenderer.invoke("group:list-task-transitions", { taskId }),
+    updateTask: (taskId, draft, expectedVersion) =>
+      ipcRenderer.invoke("group:update-task", {
+        taskId,
+        draft,
+        expectedVersion,
+      }),
+    getProactivityMode: (groupId) => ipcRenderer.invoke("group:get-proactivity-mode", { groupId }),
+    setProactivityMode: (groupId, mode) =>
+      ipcRenderer.invoke("group:set-proactivity-mode", { groupId, mode }),
+    listSuggestions: (groupId) => ipcRenderer.invoke("group:list-suggestions", { groupId }),
+    resolveSuggestion: (actionId, decision, expectedVersion, targetSessionId) =>
+      ipcRenderer.invoke("group:resolve-suggestion", {
+        actionId,
+        decision,
+        expectedVersion,
+        ...(targetSessionId ? { targetSessionId } : {}),
+      }),
     listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
     deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),

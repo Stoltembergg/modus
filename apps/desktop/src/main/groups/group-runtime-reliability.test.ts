@@ -190,20 +190,20 @@ describe("Groups runtime audit", () => {
     expect(env.calls).toHaveLength(1);
   });
   it("F10 a queued prompt includes collaboration completed while it waited", async () => {
-    const { group, a, b } = squad();
+    const { group, a, b, c } = squad();
     const env = setup();
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha primeiro" });
+    // The explicit busy target is reported; it is not silently substituted or queued.
     env.groups.postUserMessage({ groupId: group.id, body: "@Alpha segundo" });
+    expect(env.calls.filter((call) => call.input.sessionId === a)).toHaveLength(1);
+    expect(listGroupMessages(group.id).at(-1)?.body).toContain("member-unavailable");
     env.groups.postUserMessage({ groupId: group.id, body: "@Beta descubra" });
+    env.groups.postUserMessage({ groupId: group.id, body: "@Gamma aguarde" });
     env.calls
       .find((call) => call.input.sessionId === b)!
       .resolve({ outcome: "ok", finalText: "DADO_NOVO_RELEVANTE\nAgreed" });
     await flush();
-    env.calls
-      .find((call) => call.input.sessionId === a)!
-      .resolve({ outcome: "ok", finalText: "Primeiro finalizado\nAgreed" });
-    await flush();
-    const queued = env.calls.filter((call) => call.input.sessionId === a).at(-1)!;
+    const queued = env.calls.filter((call) => call.input.sessionId === c).at(-1)!;
     expect(queued.input.message).toContain("segundo");
     expect(queued.input.message).toContain("DADO_NOVO_RELEVANTE");
   });
@@ -435,4 +435,233 @@ describe("Groups runtime audit", () => {
     const folded = listAgentEvents(a).find((item) => item.event.type === "message.delta");
     expect(folded?.event).toMatchObject({ delta: "samesame", eventCursor: cursor });
   });
+});
+
+const { runGroupTool, runGroupVerifiedTool, setGroupTaskWakeSink } = await import(
+  "../agent/tools/group-tools"
+);
+const { hasGroupTaskExplicitDispatch } = await import("./group-task-store");
+const { listGroupDecisions } = await import("./group-store");
+
+it.each([
+  "handoff",
+  "taskless-handoff",
+  "taskless-agree",
+] as const)("retries %s after an actual runtime status persistence failure", async (kind) => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const operationId = crypto.randomUUID();
+  setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
+  const invoke = () =>
+    kind !== "taskless-agree"
+      ? runGroupTool(
+          "group_handoff",
+          { sessionId: a },
+          {
+            memberId: b,
+            objective: "Durable objective",
+            ...(kind === "handoff" ? { taskTitle: "Delivery retry" } : {}),
+            operationId,
+          },
+        )
+      : runGroupVerifiedTool(
+          "group_agree",
+          { sessionId: a },
+          { note: "Durable agreement", operationId },
+        );
+  const db = getDatabase();
+  db.exec(
+    "create trigger fail_task_status before insert on group_messages when new.kind = 'status' begin select raise(abort, 'status unavailable'); end",
+  );
+  try {
+    await invoke();
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(false);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      0,
+    );
+  } finally {
+    db.exec("drop trigger fail_task_status");
+  }
+  try {
+    await invoke();
+    await invoke();
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      1,
+    );
+    if (kind === "taskless-agree") expect(listGroupDecisions(group.id)).toHaveLength(1);
+    else
+      expect(db.prepare("select id from group_jobs where group_id = ?").all(group.id)).toHaveLength(
+        1,
+      );
+  } finally {
+    setGroupTaskWakeSink(undefined);
+  }
+});
+
+it("reuses durable task delivery after post-commit emit failure and runtime reconstruction", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const wake = {
+    groupId: group.id,
+    actorSessionId: a,
+    targetSessionId: b,
+    body: "Durable wake",
+    operationId: crypto.randomUUID(),
+    sourceEventId: crypto.randomUUID(),
+  };
+  const emit = vi.spyOn(env.host, "emit").mockImplementationOnce(() => {
+    throw new Error("emit after commit failed");
+  });
+  expect(() => env.groups.handleTaskWake(wake)).toThrow("emit after commit failed");
+  const before = listGroupMessages(group.id);
+  const jobs = getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id);
+  const chains = getDatabase()
+    .prepare("select * from group_execution_chains where group_id = ?")
+    .all(group.id);
+  expect(jobs).toHaveLength(1);
+  emit.mockRestore();
+  env.groups.dispose();
+  const recovered = new GroupRuntime({
+    runtime: env.runtime,
+    host: env.host,
+    recoverPending: true,
+  });
+  instances.push(recovered);
+  expect(recovered.handleTaskWake(wake)?.id).toBe(
+    before.find((message) => message.body === wake.body)?.id,
+  );
+  const persistedMessages = (messages: typeof before) =>
+    messages.map(({ id, body, kind, status }) => ({ id, body, kind, status }));
+  expect(persistedMessages(listGroupMessages(group.id))).toEqual(persistedMessages(before));
+  expect(
+    getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id),
+  ).toEqual(jobs);
+  expect(
+    getDatabase().prepare("select * from group_execution_chains where group_id = ?").all(group.id),
+  ).toEqual(chains);
+  expect(() => recovered.handleTaskWake({ ...wake, body: "Conflicting payload" })).toThrow(
+    "Operation",
+  );
+});
+
+it("does not duplicate a tool wake when acknowledgement is lost after durable commit", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  let attempts = 0;
+  setGroupTaskWakeSink((wake) => {
+    const ack = env.groups.handleTaskWake(wake);
+    attempts++;
+    return attempts === 1 ? undefined : ack;
+  });
+  const operationId = crypto.randomUUID();
+  const invoke = () =>
+    runGroupTool(
+      "group_handoff",
+      { sessionId: a },
+      { memberId: b, objective: "Ack loss", taskTitle: "Already durable", operationId },
+    );
+  try {
+    expect(invoke()).toContain("not acknowledged");
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+    expect(invoke()).toContain("[in_progress]");
+    expect(attempts).toBe(2);
+    expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
+      1,
+    );
+    expect(
+      getDatabase().prepare("select id from group_jobs where group_id = ?").all(group.id),
+    ).toHaveLength(1);
+  } finally {
+    setGroupTaskWakeSink(undefined);
+  }
+});
+
+it("republishes the persisted message on runtime replay after post-commit event failure", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const wake = {
+    groupId: group.id,
+    actorSessionId: a,
+    targetSessionId: b,
+    body: "Live delivery retry",
+    operationId: crypto.randomUUID(),
+    sourceEventId: crypto.randomUUID(),
+  };
+  const emit = vi.spyOn(env.host, "emit").mockImplementationOnce(() => {
+    throw new Error("live event failed");
+  });
+  try {
+    expect(() => env.groups.handleTaskWake(wake)).toThrow("live event failed");
+    const persisted = listGroupMessages(group.id).find((message) => message.body === wake.body);
+    const messages = listGroupMessages(group.id);
+    const jobs = getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id);
+    const budgets = getDatabase()
+      .prepare("select * from group_execution_chains where group_id = ?")
+      .all(group.id);
+    emit.mockClear();
+    expect(env.groups.handleTaskWake(wake)).toEqual(persisted);
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "group.message", message: persisted }),
+    );
+    expect(listGroupMessages(group.id)).toEqual(messages);
+    expect(
+      getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id),
+    ).toEqual(jobs);
+    expect(
+      getDatabase()
+        .prepare("select * from group_execution_chains where group_id = ?")
+        .all(group.id),
+    ).toEqual(budgets);
+  } finally {
+    emit.mockRestore();
+  }
+});
+
+it("tool retry republishes a committed dispatch after live event failure", () => {
+  const { group, a, b } = squad();
+  const env = setup(true);
+  const operationId = crypto.randomUUID();
+  setGroupTaskWakeSink((wake) => env.groups.handleTaskWake(wake));
+  const emit = vi.spyOn(env.host, "emit").mockImplementationOnce(() => {
+    throw new Error("tool live event failed");
+  });
+  const invoke = () =>
+    runGroupTool(
+      "group_handoff",
+      { sessionId: a },
+      {
+        memberId: b,
+        objective: "Republish tool status",
+        taskTitle: "Already committed",
+        operationId,
+      },
+    );
+  try {
+    expect(invoke()).toContain("tool live event failed");
+    expect(hasGroupTaskExplicitDispatch(operationId)).toBe(true);
+    const messages = listGroupMessages(group.id);
+    const persisted = messages.find((message) => message.kind === "status");
+    const jobs = getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id);
+    const budgets = getDatabase()
+      .prepare("select * from group_execution_chains where group_id = ?")
+      .all(group.id);
+    emit.mockClear();
+    expect(invoke()).toContain("[in_progress]");
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "group.message", message: persisted }),
+    );
+    expect(listGroupMessages(group.id)).toEqual(messages);
+    expect(
+      getDatabase().prepare("select * from group_jobs where group_id = ?").all(group.id),
+    ).toEqual(jobs);
+    expect(
+      getDatabase()
+        .prepare("select * from group_execution_chains where group_id = ?")
+        .all(group.id),
+    ).toEqual(budgets);
+  } finally {
+    emit.mockRestore();
+    setGroupTaskWakeSink(undefined);
+  }
 });

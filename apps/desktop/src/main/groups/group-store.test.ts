@@ -216,7 +216,7 @@ describe("group schema", () => {
       db
         .prepare(
           `insert into group_tasks (id, group_id, title, status, created_at, updated_at)
-           values (?, ?, 't', 'blocked', ?, ?)`,
+           values (?, ?, 't', 'invalid', ?, ?)`,
         )
         .run(uid("t"), group.id, now, now),
     ).toThrow(/CHECK constraint failed/);
@@ -768,11 +768,11 @@ describe("tasks", () => {
     const task = createGroupTask({ groupId: group.id, title: "Task" });
 
     expectStoreError(
-      () => updateGroupTask(task.id, { status: "blocked" as "open" }),
+      () => updateGroupTask(task.id, { status: "invalid" as "open" }),
       "invalid-value",
     );
     expectStoreError(
-      () => createGroupTask({ groupId: group.id, title: "T", status: "blocked" as "open" }),
+      () => createGroupTask({ groupId: group.id, title: "T", status: "invalid" as "open" }),
       "invalid-value",
     );
     expectStoreError(() => updateGroupTask(task.id, { ownerSessionId: outsider }), "not-a-member");
@@ -1304,6 +1304,8 @@ describe("decisions", () => {
         "source_message_id",
         "created_at",
         "execution_id",
+        "operation_id",
+        "operation_json",
       ]);
       const rows = db
         .prepare("select id, text, author_session_id from group_decisions order by id")
@@ -1317,6 +1319,10 @@ describe("decisions", () => {
       ).map((index) => index.name);
       expect(indexes).toContain("idx_group_decisions_group_created");
       expect(indexes).toContain("idx_group_decisions_execution");
+      expect(indexes).toContain("idx_group_decisions_operation");
+      expect(
+        db.prepare("select operation_id, operation_json from group_decisions limit 1").get(),
+      ).toEqual({ operation_id: null, operation_json: null });
     } finally {
       db.close();
       await rm(dir, { recursive: true, force: true });

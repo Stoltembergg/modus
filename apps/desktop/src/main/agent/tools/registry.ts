@@ -2,11 +2,11 @@ import type { ToolCallEvent, ToolDefinition } from "@earendil-works/pi-coding-ag
 import type { PermissionAction } from "../../../shared/contracts";
 import {
   BUILTIN_TOOL_CATALOG,
+  GROUP_MEMBER_TOOL_NAMES,
   type ToolCapability,
   type ToolCatalogEntry,
   type ToolProfileName,
 } from "../../../shared/tools";
-import { recognizeCheckInvocation } from "../harness/qa-evidence";
 
 /**
  * Runtime tool registry. Wraps the shared catalog with PI-SDK-dependent behavior:
@@ -43,6 +43,11 @@ const DEFAULT_ACTION: PermissionAction = "mcp.call";
 
 /** Primary target string for a tool call (command, path, else the raw input). */
 export function getToolTarget(event: ToolCallEvent): string {
+  if ((GROUP_MEMBER_TOOL_NAMES as readonly string[]).includes(event.toolName)) {
+    const input = event.input as Record<string, unknown>;
+    const taskId = input.taskId ?? input.id;
+    if (typeof taskId === "string") return taskId;
+  }
   if ("command" in event.input && typeof event.input.command === "string") {
     return event.input.command;
   }
@@ -108,17 +113,35 @@ function isExpandedCheckCommand(command: string): boolean {
   return /^(?:npx\s+)?(?:vitest|jest|mocha|tsc|eslint|biome|vite)\b/i.test(command.trimStart());
 }
 
+/** Risk classification is conservative and independent of QA certification. */
+function isCheckExecutionCommand(command: string): boolean {
+  if (
+    command
+      .split(/\s+/)
+      .some((token) =>
+        /^(?:--help|--version|--listtests|--list-tests|--list|--showconfig)(?:=.*)?$|^-[hv]$/i.test(
+          token,
+        ),
+      )
+  ) {
+    return false;
+  }
+  return /^(?:npx\s+)?(?:(?:vitest\s+run|biome\s+check|vite\s+build)(?:\s|$)|(?:jest|mocha|tsc|eslint)(?:\s|$))/i.test(
+    command.trimStart(),
+  );
+}
+
 /**
  * Risk verdict for a raw shell command string. Shared by the built-in `bash`
  * tool and the custom `terminal_run` tool so both gate dangerous commands the
- * same way: git-write and mutating commands prompt; everything else runs.
+ * same way: git-write, check execution and mutating commands prompt.
  */
 export function classifyShellCommand(command: string): ToolClassification {
   if (isGitWriteCommand(command)) {
     return { action: "git.write", dangerous: true };
   }
   if (
-    recognizeCheckInvocation("bash", command) ||
+    isCheckExecutionCommand(command) ||
     isUnresolvedPackageManagerCheckCommand(command) ||
     isExpandedCheckCommand(command)
   ) {
@@ -127,7 +150,7 @@ export function classifyShellCommand(command: string): ToolClassification {
   return { action: "shell.execute", dangerous: isMutatingShellCommand(command) };
 }
 
-/** Built-in bash classifier: only git-write / mutating commands require approval. */
+/** Built-in bash shares terminal_run's raw-command risk policy. */
 const bashClassifier: ToolClassifier = (event) => classifyShellCommand(getToolTarget(event));
 
 export class ToolRegistry {

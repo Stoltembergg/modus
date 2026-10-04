@@ -445,3 +445,23 @@ export function getToolUiMeta(name: string): ToolUiMeta | undefined {
 export function toolRenderKind(name: string): ToolRenderKind {
   return getToolUiMeta(name)?.render ?? "flat";
 }
+
+/** Shared names used by registration, group activation and tool presentation. */
+export const GROUP_MEMBER_TOOL_NAMES = [
+  "group_read_messages",
+  "group_list_tasks",
+  "group_create_task",
+  "group_claim_task",
+  "group_release_task",
+  "group_request_review",
+  "group_review_task",
+  "group_start_worktree",
+  "group_record_decision",
+  "group_assign_task",
+  "group_propose_agreement",
+  "group_agree",
+  "group_block",
+  "group_handoff",
+  "group_report_progress",
+  "group_get_work_state",
+] as const;

@@ -10,8 +10,10 @@ vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
-const { claimGroupTask, createAgentGroupWithMembers, listGroupMessages, listGroupTasks } =
+const { updateAgent } = await import("../agents/agents-store");
+const { createAgentGroupWithMembers, listAgentGroupMembers, listGroupMessages, listGroupTasks } =
   await import("./group-store");
+const { createGroupTask } = await import("./group-task-store");
 const { GROUP_CHAIN_LIMITS, GroupRuntime } = await import("./group-runtime");
 const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/group-tools");
 
@@ -57,6 +59,12 @@ class FakeAgentRuntime {
   calls: Call[] = [];
   started: string[] = [];
   streaming = new Set<string>();
+  effectiveTools = new Map<string, string[]>();
+  toolProfileQueries: Array<{ sessionId: string; profile: string }> = [];
+  getActiveToolNames(sessionId: string, profile: string): string[] | undefined {
+    this.toolProfileQueries.push({ sessionId, profile });
+    return this.effectiveTools.get(sessionId);
+  }
   async abort(sessionId: string): Promise<void> {
     const index = this.calls.findIndex((call) => call.input.sessionId === sessionId);
     if (index < 0) return;
@@ -97,7 +105,7 @@ const flush = async (): Promise<void> => {
 
 const created: InstanceType<typeof GroupRuntime>[] = [];
 
-function setup() {
+function setup(options: { maxConcurrentTurns?: number } = {}) {
   const runtime = new FakeAgentRuntime();
   const events: GroupRuntimeEvent[] = [];
   const groups = new GroupRuntime({
@@ -109,6 +117,7 @@ function setup() {
     },
     retryDelayMs: 5,
     limits: GROUP_CHAIN_LIMITS,
+    ...options,
   });
   created.push(groups);
   return { runtime, groups, events };
@@ -130,6 +139,18 @@ function crew() {
     ],
     leadSessionId: planner,
   });
+  for (const member of listAgentGroupMembers(group.id)) {
+    const capabilityIds =
+      member.sessionId === planner
+        ? ["plan"]
+        : member.sessionId === builder
+          ? ["implement", "verify", "docs"]
+          : ["review", "verify"];
+    updateAgent(member.agentId, {
+      capabilityIds,
+      supportedTaskKinds: ["code", "docs", "design", "review"],
+    });
+  }
   return { group, planner, builder, reviewer };
 }
 
@@ -147,39 +168,18 @@ afterAll(async () => {
 });
 
 describe("supervised code flow (runtime)", () => {
-  it("injects the supervised plan into the Lead wake for code work", () => {
-    const { group, planner, builder, reviewer } = crew();
-    const { runtime, groups } = setup();
-    groups.postUserMessage({
-      groupId: group.id,
-      body: "Implement workspace symlink escape fixes with tests",
-    });
-    expect(runtime.pendingSessions()).toEqual([planner]);
-    const prompt = runtime.calls[0]?.input.message ?? "";
-    expect(prompt).toContain("<supervised_flow>");
-    expect(prompt).toContain("Ask kind: code");
-    expect(prompt).toContain("implement: RUN");
-    expect(prompt).toContain("review: RUN");
-    expect(prompt).toContain(`memberId=${builder}`);
-    expect(prompt).toContain(`memberId=${reviewer}`);
-    expect(prompt).toContain("group_handoff");
-    expect(prompt).toContain("group_request_review");
-  });
-
-  it("skips Reviewer in the Lead prompt for docs-only asks", () => {
-    const { group, planner, builder, reviewer } = crew();
-    const { runtime, groups } = setup();
-    groups.postUserMessage({
-      groupId: group.id,
-      body: "Update the README documentation for Groups setup",
-    });
-    expect(runtime.pendingSessions()).toEqual([planner]);
-    const prompt = runtime.calls[0]?.input.message ?? "";
-    expect(prompt).toContain("<supervised_flow>");
-    expect(prompt).toContain("Ask kind: docs");
-    expect(prompt).toContain("review: SKIP");
-    expect(prompt).toContain(`memberId=${builder}`);
-    expect(prompt).not.toContain(`memberId=${reviewer}`);
+  it("does not launch a supervised pipeline from free text keywords or length", () => {
+    for (const body of [
+      "Implement code fixes with tests",
+      "Update README documentation",
+      "implemente a correção".repeat(100),
+    ]) {
+      const { group, planner } = crew();
+      const { runtime, groups } = setup();
+      groups.postUserMessage({ groupId: group.id, body });
+      expect(runtime.pendingSessions()).toEqual([planner]);
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
+    }
   });
 
   it("does not inject supervised flow for social pings", () => {
@@ -201,7 +201,7 @@ describe("supervised code flow (runtime)", () => {
         body: "Implement the login feature with tests",
       });
       expect(runtime.pendingSessions()).toEqual([planner]);
-      expect(runtime.calls[0]?.input.message).toContain("group_handoff");
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
 
       runGroupTool("group_handoff", lead, {
         memberId: builder,
@@ -219,11 +219,12 @@ describe("supervised code flow (runtime)", () => {
 
       const task = listGroupTasks(group.id).find((row) => row.title === "Login feature");
       expect(task).toBeDefined();
-      claimGroupTask(group.id, task!.id, builder);
+      if (!task) throw new Error("The handoff did not create the Login feature task.");
+      expect(task).toMatchObject({ status: "in_progress", ownerSessionId: builder });
       runGroupTool(
         "group_request_review",
         { sessionId: builder, groupId: group.id },
-        { id: task!.id, reviewer },
+        { id: task.id, reviewer },
       );
       expect(runtime.pendingSessions()).toEqual([builder, reviewer]);
       runtime
@@ -234,6 +235,191 @@ describe("supervised code flow (runtime)", () => {
       expect(
         listGroupMessages(group.id, { limit: 50 }).some((m) => m.authorSessionId === builder),
       ).toBe(true);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  });
+
+  it("shows typed assignment guidance to the Lead after task metadata is recorded", async () => {
+    const { group, planner, builder, reviewer } = crew();
+    const { runtime, groups } = setup({ maxConcurrentTurns: 1 });
+    try {
+      groups.postUserMessage({ groupId: group.id, body: "@Reviewer hold this turn" });
+      expect(runtime.started).toEqual([reviewer]);
+      const intake = groups.postUserMessage({ groupId: group.id, body: "@Planner coordinate" });
+      if (!intake.chainId) throw new Error("The Lead intake did not start an execution.");
+
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Login feature",
+        description: "Implement the login feature with tests",
+        createdBySessionId: planner,
+        executionId: intake.chainId,
+        kind: "code",
+        stage: "implement",
+        priority: "high",
+        dependencyIds: [],
+        criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+        verificationPolicy: { mode: "required", requireReview: true },
+        reviewerSessionId: reviewer,
+        ownerSessionId: builder,
+      });
+      createGroupTask({
+        groupId: group.id,
+        title: "Review login",
+        description: "Review the typed implementation",
+        createdBySessionId: planner,
+        executionId: intake.chainId,
+        kind: "code",
+        stage: "review",
+        priority: "normal",
+        dependencyIds: [],
+        criteria: [
+          { id: "review", description: "Review the implementation", requiredCheckKinds: [] },
+        ],
+        verificationPolicy: { mode: "required", requireReview: true },
+        reviewerSessionId: reviewer,
+        ownerSessionId: builder,
+      });
+
+      runtime.take(reviewer).resolve({ outcome: "ok", finalText: "Done holding." });
+      await flush();
+      const leadPrompt = runtime.calls.find((call) => call.input.sessionId === planner)?.input
+        .message;
+      const leadSnapshot =
+        leadPrompt?.match(/<group_snapshot>[\s\S]*?<\/group_snapshot>/)?.[0] ?? "";
+      const leadFlow = leadPrompt?.match(/<supervised_flow>[\s\S]*?<\/supervised_flow>/)?.[0] ?? "";
+      expect(leadFlow).toContain(`Typed task: ${task.id}; kind: code`);
+      expect(leadFlow).toContain("implement: RUN");
+      expect(leadFlow).toContain(`group_assign_task(taskId=${task.id}, memberId=${builder})`);
+      expect(leadFlow).not.toContain(`group_assign_task(taskId=${task.id}, memberId=${planner})`);
+      expect(leadFlow).not.toContain("group_request_review");
+      expect(leadSnapshot).toContain("stage=review");
+      expect(leadSnapshot).not.toContain("group_request_review");
+    } finally {
+      await runtime.abort(planner);
+    }
+  });
+
+  it("keeps typed owner and reviewer prompts contextual without self delegation", async () => {
+    const { group, planner, builder, reviewer } = crew();
+    const { runtime, groups } = setup();
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const lead = { sessionId: planner, groupId: group.id };
+      const intake = groups.postUserMessage({
+        groupId: group.id,
+        body: "Implement the login feature with tests",
+      });
+      const executionId = intake.chainId;
+      if (!executionId) throw new Error("The intake message did not start an execution.");
+      expect(runtime.pendingSessions()).toEqual([planner]);
+      expect(runtime.calls[0]?.input.message).not.toContain("<supervised_flow>");
+
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Login feature",
+        description: "Implement the login feature with tests",
+        createdBySessionId: planner,
+        executionId,
+        kind: "code",
+        stage: "implement",
+        priority: "high",
+        dependencyIds: [],
+        criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+        verificationPolicy: { mode: "required", requireReview: true },
+        reviewerSessionId: reviewer,
+      });
+      runGroupTool("group_assign_task", lead, {
+        taskId: task.id,
+        memberId: builder,
+        operationId: "typed-task-assign",
+      });
+      expect(runtime.pendingSessions()).toEqual([planner, builder]);
+      expect(
+        runtime.calls.find((call) => call.input.sessionId === planner)?.input.message,
+      ).not.toContain("<supervised_flow>");
+      const assignedPrompt =
+        runtime.calls.find((call) => call.input.sessionId === builder)?.input.message ?? "";
+      const ownerFlow =
+        assignedPrompt.match(/<supervised_flow>[\s\S]*?<\/supervised_flow>/)?.[0] ?? "";
+      expect(ownerFlow).toContain(`Typed task: ${task.id}; kind: code`);
+      expect(ownerFlow).toContain("criterion-unverified");
+      expect(ownerFlow).toContain("implement: RUN");
+      expect(ownerFlow).toContain("review: BLOCKED");
+      expect(ownerFlow).not.toContain("group_assign_task");
+      expect(ownerFlow).not.toContain("group_request_review");
+
+      runtime.take(planner).resolve({ outcome: "ok", finalText: "Plan ready." });
+      await flush();
+      expect(runtime.pendingSessions()).toEqual([builder]);
+
+      runGroupTool(
+        "group_request_review",
+        { sessionId: builder, groupId: group.id },
+        { id: task.id, reviewer, operationId: "typed-task-review" },
+      );
+      expect(runtime.pendingSessions()).toEqual([builder, reviewer]);
+      const reviewPrompt =
+        runtime.calls.find((call) => call.input.sessionId === reviewer)?.input.message ?? "";
+      const reviewerFlow =
+        reviewPrompt.match(/<supervised_flow>[\s\S]*?<\/supervised_flow>/)?.[0] ?? "";
+      expect(reviewerFlow).toContain(`Typed task: ${task.id}; kind: code`);
+      expect(reviewerFlow).toContain("review: RUN");
+      expect(reviewerFlow).toContain("criterion-unverified");
+      expect(reviewerFlow).not.toContain("group_request_review");
+
+      runtime.take(builder).resolve({ outcome: "ok", finalText: "Implementation ready." });
+      await flush();
+      expect(runtime.pendingSessions()).toEqual([reviewer]);
+    } finally {
+      setGroupTaskWakeSink(undefined);
+    }
+  });
+
+  it("revalidates the effective active tool set immediately before a queued typed prompt", async () => {
+    const { group, planner, builder, reviewer } = crew();
+    const { runtime, groups } = setup({ maxConcurrentTurns: 1 });
+    runtime.effectiveTools.set(builder, ["read", "edit", "write"]);
+    setGroupTaskWakeSink((wake) => groups.handleTaskWake(wake));
+    try {
+      const intake = groups.postUserMessage({ groupId: group.id, body: "@Planner assign work" });
+      if (!intake.chainId) throw new Error("The Lead intake did not start an execution.");
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Login feature",
+        description: "Implement the login feature with tests",
+        createdBySessionId: planner,
+        executionId: intake.chainId,
+        kind: "code",
+        stage: "implement",
+        priority: "normal",
+        dependencyIds: [],
+        criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+        verificationPolicy: { mode: "required", requireReview: true },
+        reviewerSessionId: reviewer,
+      });
+      runGroupTool(
+        "group_assign_task",
+        { sessionId: planner, groupId: group.id },
+        {
+          taskId: task.id,
+          memberId: builder,
+          operationId: "active-tools-revalidation",
+        },
+      );
+      expect(runtime.started).toEqual([planner]);
+      expect(runtime.toolProfileQueries).toContainEqual({ sessionId: builder, profile: "chat" });
+
+      runtime.effectiveTools.set(builder, ["read"]);
+      runtime.take(planner).resolve({ outcome: "ok", finalText: "Assignment queued." });
+      await flush();
+
+      expect(runtime.started).toEqual([planner]);
+      expect(runtime.calls.map((call) => call.input.sessionId)).not.toContain(builder);
+      expect(
+        runtime.toolProfileQueries.filter((query) => query.sessionId === builder),
+      ).toHaveLength(3);
     } finally {
       setGroupTaskWakeSink(undefined);
     }
