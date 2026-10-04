@@ -419,7 +419,9 @@ describe("supervised code flow (runtime)", () => {
       expect(runtime.calls.map((call) => call.input.sessionId)).not.toContain(builder);
       expect(
         runtime.toolProfileQueries.filter((query) => query.sessionId === builder),
-      ).toHaveLength(3);
+        // Intake, transactional assignment preflight, dispatch routing, and
+        // execution-time revalidation before the queued prompt starts.
+      ).toHaveLength(4);
     } finally {
       setGroupTaskWakeSink(undefined);
     }

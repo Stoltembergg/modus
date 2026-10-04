@@ -1193,14 +1193,23 @@ export class GroupRuntime {
           : message;
       }
     }
-    if (input.wake !== false && input.targetSessionId) {
+    if (
+      input.wake !== false &&
+      input.targetSessionId &&
+      input.taskId &&
+      input.purpose !== "control"
+    ) {
+      const task = getGroupTask(input.taskId);
+      if (!task)
+        throw new GroupStoreError(
+          "invalid-value",
+          `Dispatch refused: task ${input.taskId} no longer exists.`,
+        );
       this.validateTaskDispatch({
         groupId: input.groupId,
         actorSessionId: input.actorSessionId,
         targetSessionId: input.targetSessionId,
-        ...(input.taskId && input.purpose !== "control"
-          ? { task: getGroupTask(input.taskId) }
-          : {}),
+        task,
       });
     }
     const turn = this.running.get(input.actorSessionId) ?? this.gated.get(input.actorSessionId);
@@ -1224,23 +1233,21 @@ export class GroupRuntime {
       return undefined;
     }
     this.emitMessage(message);
+    let deliveryNotice: string | undefined;
     if (input.wake !== false && input.targetSessionId && !deferred) {
       const chain = joined ?? this.openChain(input.groupId, message.id);
-      if (
-        !this.route(
-          chain,
-          message,
-          [input.targetSessionId],
-          false,
-          false,
-          input.purpose === "control" ? undefined : input.taskId,
-          input.purpose,
-        )
-      )
-        throw new GroupStoreError(
-          "invalid-value",
-          "Dispatch refused: no recipient turn was queued. Check the execution state, task dependencies and remaining context/wake budgets before retrying.",
-        );
+      const queued = this.route(
+        chain,
+        message,
+        [input.targetSessionId],
+        false,
+        false,
+        input.purpose === "control" ? undefined : input.taskId,
+        input.purpose,
+      );
+      if (!queued)
+        deliveryNotice =
+          "Recorded, but the recipient was not started because the execution could not queue another wake. Check the Group status before retrying.";
       this.retireIdleChains();
     }
     if (input.operationId) {
@@ -1250,13 +1257,10 @@ export class GroupRuntime {
       // Delivery and marker commit with the message, jobs and budget counters.
       markGroupTaskExplicitDispatch(input.operationId);
     }
-    return input.wake !== false && input.targetSessionId && deferred
-      ? {
-          ...message,
-          deliveryNotice:
-            "Recorded, but the recipient was not started because this execution ended. A new user execution is required; do not repeat this handoff in the ended execution.",
-        }
-      : message;
+    if (input.wake !== false && input.targetSessionId && deferred)
+      deliveryNotice =
+        "Recorded, but the recipient was not started because this execution ended. A new user execution is required; do not repeat this handoff in the ended execution.";
+    return deliveryNotice ? { ...message, deliveryNotice } : message;
   }
 
   /**
