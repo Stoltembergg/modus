@@ -570,6 +570,52 @@ export function migrateDatabase(db: DatabaseSync): void {
       on group_decisions(group_id, execution_id);
   `);
   migrateGroupTaskState(db);
+  migrateGroupIntegrationState(db);
+}
+
+/** Durable, versioned previews and append-only integration state transitions. */
+function migrateGroupIntegrationState(db: DatabaseSync): void {
+  db.exec(`
+    create table if not exists group_integration_previews (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null check (task_version >= 1),
+      preview_json text not null check (json_valid(preview_json) and json_type(preview_json) = 'object'),
+      created_at text not null
+    );
+    create index if not exists idx_group_integration_previews_task
+      on group_integration_previews(task_id, created_at desc);
+    create table if not exists group_task_integrations (
+      id text primary key,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      preview_id text not null unique references group_integration_previews(id) on delete cascade,
+      task_version integer not null check (task_version >= 1),
+      status text not null check (status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      version integer not null check (version >= 1),
+      record_json text not null check (json_valid(record_json) and json_type(record_json) = 'object'),
+      created_at text not null,
+      updated_at text not null,
+      unique(task_id, preview_id)
+    );
+    create index if not exists idx_group_task_integrations_task
+      on group_task_integrations(task_id, updated_at desc);
+    create table if not exists group_integration_events (
+      id text primary key,
+      integration_id text not null references group_task_integrations(id) on delete cascade,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      version integer not null check (version >= 1),
+      from_status text check (from_status is null or from_status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      to_status text not null check (to_status in ('ready','applying','applied','conflict','aborted','no_changes')),
+      details_json text not null check (json_valid(details_json) and json_type(details_json) = 'object'),
+      created_at text not null,
+      unique(integration_id, version)
+    );
+    create index if not exists idx_group_integration_events_task
+      on group_integration_events(task_id, created_at, version);
+  `);
 }
 
 /** Rebuild only the old CHECK, copying every legacy column before adding state. */

@@ -26,6 +26,7 @@ export const GROUP_ERROR_CODES = [
   "task-taken",
   "invalid-transition",
   "verification-required",
+  "permission-denied",
   "stale-task",
   "dependency-cycle",
   "invalid-dependency",

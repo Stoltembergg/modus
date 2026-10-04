@@ -174,6 +174,193 @@ export type GroupTaskRunBinding = {
   sourceFingerprint: string;
 };
 
+export type GroupIntegrationStatus =
+  | "ready"
+  | "applying"
+  | "applied"
+  | "conflict"
+  | "aborted"
+  | "no_changes";
+
+export type GroupIntegrationCommit = { sha: string; subject: string };
+export type GroupIntegrationFileChange = {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed" | "copied" | "type_changed" | "unmerged";
+};
+
+/** Immutable, main-process generated preview. It contains no filesystem paths. */
+export type GroupIntegrationPreview = {
+  id: string;
+  groupId: string;
+  taskId: string;
+  taskVersion: number;
+  sourceBranch: string;
+  sourceSha: string;
+  sourceFingerprint: string;
+  targetBranch: string;
+  targetSha: string;
+  targetFingerprint: string;
+  commits: GroupIntegrationCommit[];
+  omittedCommitCount: number;
+  changedFiles: GroupIntegrationFileChange[];
+  omittedChangedFileCount: number;
+  diffSummary: string;
+  createdAt: string;
+  status: "ready" | "no_changes";
+};
+
+/** Durable outcome for one preview/apply attempt; it never claims commit or push. */
+export type GroupIntegrationRecord = {
+  id: string;
+  groupId: string;
+  taskId: string;
+  previewId: string;
+  taskVersion: number;
+  sourceBranch: string;
+  sourceSha: string;
+  targetBranch: string;
+  targetSha: string;
+  status: GroupIntegrationStatus;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  mergeHeadSha?: string;
+  conflictFiles?: string[];
+};
+
+const INTEGRATION_STATUSES: readonly GroupIntegrationStatus[] = [
+  "ready",
+  "applying",
+  "applied",
+  "conflict",
+  "aborted",
+  "no_changes",
+];
+const INTEGRATION_SHA = /^[a-f0-9]{40,64}$/i;
+
+function recordObject(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function safeRelativeIntegrationPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    !value.includes("\0") &&
+    !value.startsWith("/") &&
+    !/^[a-z]:[\\/]/i.test(value) &&
+    !value.split(/[\\/]/).includes("..")
+  );
+}
+
+/** Validate persisted and renderer-facing previews before accepting their JSON shape. */
+export function isGroupIntegrationPreview(value: unknown): value is GroupIntegrationPreview {
+  const row = recordObject(value);
+  return Boolean(
+    row &&
+      typeof row.id === "string" &&
+      row.id.length > 0 &&
+      typeof row.groupId === "string" &&
+      row.groupId.length > 0 &&
+      typeof row.taskId === "string" &&
+      row.taskId.length > 0 &&
+      Number.isSafeInteger(row.taskVersion) &&
+      (row.taskVersion as number) >= 1 &&
+      typeof row.sourceBranch === "string" &&
+      row.sourceBranch.length > 0 &&
+      typeof row.sourceSha === "string" &&
+      INTEGRATION_SHA.test(row.sourceSha) &&
+      typeof row.sourceFingerprint === "string" &&
+      INTEGRATION_SHA.test(row.sourceFingerprint) &&
+      typeof row.targetBranch === "string" &&
+      row.targetBranch.length > 0 &&
+      typeof row.targetSha === "string" &&
+      INTEGRATION_SHA.test(row.targetSha) &&
+      typeof row.targetFingerprint === "string" &&
+      INTEGRATION_SHA.test(row.targetFingerprint) &&
+      Array.isArray(row.commits) &&
+      row.commits.length <= 100 &&
+      row.commits.every((commit) => {
+        const item = recordObject(commit);
+        return Boolean(
+          item &&
+            typeof item.sha === "string" &&
+            INTEGRATION_SHA.test(item.sha) &&
+            typeof item.subject === "string" &&
+            item.subject.length <= 1000,
+        );
+      }) &&
+      Number.isSafeInteger(row.omittedCommitCount) &&
+      (row.omittedCommitCount as number) >= 0 &&
+      Array.isArray(row.changedFiles) &&
+      row.changedFiles.length <= 200 &&
+      row.changedFiles.every((file) => {
+        const item = recordObject(file);
+        return Boolean(
+          item &&
+            safeRelativeIntegrationPath(item.path) &&
+            [
+              "added",
+              "modified",
+              "deleted",
+              "renamed",
+              "copied",
+              "type_changed",
+              "unmerged",
+            ].includes(String(item.status)),
+        );
+      }) &&
+      Number.isSafeInteger(row.omittedChangedFileCount) &&
+      (row.omittedChangedFileCount as number) >= 0 &&
+      typeof row.diffSummary === "string" &&
+      row.diffSummary.length <= 32_768 &&
+      typeof row.createdAt === "string" &&
+      Number.isFinite(Date.parse(row.createdAt)) &&
+      (row.status === "ready" || row.status === "no_changes"),
+  );
+}
+
+/** Validate durable integration records on every database read and write. */
+export function isGroupIntegrationRecord(value: unknown): value is GroupIntegrationRecord {
+  const row = recordObject(value);
+  return Boolean(
+    row &&
+      typeof row.id === "string" &&
+      row.id.length > 0 &&
+      typeof row.groupId === "string" &&
+      row.groupId.length > 0 &&
+      typeof row.taskId === "string" &&
+      row.taskId.length > 0 &&
+      typeof row.previewId === "string" &&
+      row.previewId.length > 0 &&
+      Number.isSafeInteger(row.taskVersion) &&
+      (row.taskVersion as number) >= 1 &&
+      typeof row.sourceBranch === "string" &&
+      row.sourceBranch.length > 0 &&
+      typeof row.sourceSha === "string" &&
+      INTEGRATION_SHA.test(row.sourceSha) &&
+      typeof row.targetBranch === "string" &&
+      row.targetBranch.length > 0 &&
+      typeof row.targetSha === "string" &&
+      INTEGRATION_SHA.test(row.targetSha) &&
+      INTEGRATION_STATUSES.includes(row.status as GroupIntegrationStatus) &&
+      Number.isSafeInteger(row.version) &&
+      (row.version as number) >= 1 &&
+      typeof row.createdAt === "string" &&
+      Number.isFinite(Date.parse(row.createdAt)) &&
+      typeof row.updatedAt === "string" &&
+      Number.isFinite(Date.parse(row.updatedAt)) &&
+      (row.mergeHeadSha === undefined ||
+        (typeof row.mergeHeadSha === "string" && INTEGRATION_SHA.test(row.mergeHeadSha))) &&
+      (row.conflictFiles === undefined ||
+        (Array.isArray(row.conflictFiles) &&
+          row.conflictFiles.length <= 10_000 &&
+          row.conflictFiles.every(safeRelativeIntegrationPath))),
+  );
+}
+
 export type BindGroupTaskRunInput = GroupTaskRunBinding & {
   expectedVersion: number;
   operationId: string;

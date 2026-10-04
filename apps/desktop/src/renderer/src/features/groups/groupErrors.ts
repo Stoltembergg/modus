@@ -20,6 +20,7 @@ export const GROUP_ERROR_MESSAGES: Record<GroupErrorCode, string> = {
   "task-taken": "That task already has an owner.",
   "invalid-transition": "That task can't move to that status from where it is.",
   "verification-required": "Complete the task's required verification before closing it.",
+  "permission-denied": "Allow Git access before applying or aborting this task integration.",
   "stale-task": "The task changed. Refresh it and try again.",
   "dependency-cycle": "The task dependencies contain a cycle.",
   "invalid-dependency": "Choose tasks in this group as dependencies.",

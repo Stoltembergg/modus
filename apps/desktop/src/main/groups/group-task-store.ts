@@ -5,6 +5,9 @@ import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { evaluateGroupTaskGate, validateGroupTaskDraft } from "../../shared/group-task-policy";
 import type {
   BindGroupTaskRunInput,
+  GroupIntegrationPreview,
+  GroupIntegrationRecord,
+  GroupIntegrationStatus,
   GroupTaskCriterion,
   GroupTaskDraft,
   GroupTaskEvidenceInput,
@@ -17,6 +20,7 @@ import type {
   GroupTaskUserDraft,
   GroupTaskVerificationPolicy,
 } from "../../shared/group-work-state";
+import { isGroupIntegrationPreview, isGroupIntegrationRecord } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getDatabase } from "../db/database";
 import type { GroupTaskWake } from "./group-runtime-lib";
@@ -1836,5 +1840,416 @@ export function completeGroupTaskForAgreement(
     if (CLOSED_TASK_STATUSES.includes(status))
       throw invalidTransition(task, "complete by agreement");
     return writeTaskTransition(taskId, { status: "done" }, "agreement", actorSessionId);
+  });
+}
+
+type IntegrationEventRow = {
+  id: string;
+  integration_id: string;
+  group_id: string;
+  task_id: string;
+  version: number;
+  from_status: GroupIntegrationStatus | null;
+  to_status: GroupIntegrationStatus;
+  details_json: string;
+  created_at: string;
+};
+
+function parseIntegrationPreview(json: string): GroupIntegrationPreview {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new GroupStoreError("invalid-value", "Stored integration preview is not valid JSON.");
+  }
+  if (!isGroupIntegrationPreview(value))
+    throw new GroupStoreError("invalid-value", "Stored integration preview has an invalid shape.");
+  return value;
+}
+
+function parseIntegrationRecord(json: string): GroupIntegrationRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new GroupStoreError("invalid-value", "Stored integration record is not valid JSON.");
+  }
+  if (!isGroupIntegrationRecord(value))
+    throw new GroupStoreError("invalid-value", "Stored integration record has an invalid shape.");
+  return value;
+}
+
+function integrationRecordByPreview(
+  db: DatabaseSync,
+  taskId: string,
+  previewId: string,
+): GroupIntegrationRecord | undefined {
+  const row = db
+    .prepare("select record_json from group_task_integrations where task_id = ? and preview_id = ?")
+    .get(taskId, previewId) as { record_json: string } | undefined;
+  return row ? parseIntegrationRecord(row.record_json) : undefined;
+}
+
+function integrationPreviewById(
+  db: DatabaseSync,
+  taskId: string,
+  previewId: string,
+): GroupIntegrationPreview | undefined {
+  const row = db
+    .prepare("select preview_json from group_integration_previews where task_id = ? and id = ?")
+    .get(taskId, previewId) as { preview_json: string } | undefined;
+  return row ? parseIntegrationPreview(row.preview_json) : undefined;
+}
+
+function writeIntegrationEvent(
+  db: DatabaseSync,
+  record: GroupIntegrationRecord,
+  fromStatus: GroupIntegrationStatus | null,
+  details: Record<string, unknown>,
+): void {
+  db.prepare(`insert into group_integration_events
+    (id, integration_id, group_id, task_id, version, from_status, to_status, details_json, created_at)
+    values (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    randomUUID(),
+    record.id,
+    record.groupId,
+    record.taskId,
+    record.version,
+    fromStatus,
+    record.status,
+    JSON.stringify(details),
+    record.updatedAt,
+  );
+}
+
+function transitionIntegrationRecord(
+  db: DatabaseSync,
+  current: GroupIntegrationRecord,
+  input: {
+    expectedVersion: number;
+    status: GroupIntegrationStatus;
+    mergeHeadSha?: string;
+    conflictFiles?: string[];
+    details?: Record<string, unknown>;
+  },
+): GroupIntegrationRecord {
+  if (current.version !== input.expectedVersion) {
+    throw new GroupStoreError(
+      "stale-task",
+      `Integration ${current.id} changed since version ${input.expectedVersion}.`,
+    );
+  }
+  const allowed: Readonly<Record<GroupIntegrationStatus, readonly GroupIntegrationStatus[]>> = {
+    ready: ["applying"],
+    applying: ["ready", "applied", "conflict"],
+    applied: ["aborted"],
+    conflict: ["aborted"],
+    aborted: [],
+    no_changes: [],
+  };
+  if (!allowed[current.status].includes(input.status)) {
+    throw new GroupStoreError(
+      "invalid-transition",
+      `Cannot transition integration ${current.id} from ${current.status} to ${input.status}.`,
+    );
+  }
+  const next: GroupIntegrationRecord = {
+    ...current,
+    status: input.status,
+    version: current.version + 1,
+    updatedAt: new Date().toISOString(),
+  };
+  if (input.mergeHeadSha !== undefined) next.mergeHeadSha = input.mergeHeadSha;
+  if (input.conflictFiles !== undefined) next.conflictFiles = input.conflictFiles;
+  if (!isGroupIntegrationRecord(next))
+    throw new GroupStoreError("invalid-value", "Integration update has an invalid shape.");
+  const result = db
+    .prepare(`update group_task_integrations set status = ?, version = ?, record_json = ?, updated_at = ?
+      where id = ? and version = ?`)
+    .run(
+      next.status,
+      next.version,
+      JSON.stringify(next),
+      next.updatedAt,
+      current.id,
+      input.expectedVersion,
+    );
+  if (result.changes !== 1)
+    throw new GroupStoreError("stale-task", `Integration ${current.id} changed concurrently.`);
+  writeIntegrationEvent(db, next, current.status, input.details ?? {});
+  return next;
+}
+
+/** Persist an immutable preview and its initial durable state in one transaction. */
+export function persistGroupIntegrationPreview(
+  preview: GroupIntegrationPreview,
+): GroupIntegrationRecord {
+  if (!isGroupIntegrationPreview(preview))
+    throw new GroupStoreError("invalid-value", "Integration preview has an invalid shape.");
+  const db = getDatabase();
+  return transaction(db, () => {
+    const task = requireTask(preview.taskId);
+    requireVersion(task, preview.taskVersion);
+    if (task.groupId !== preview.groupId)
+      throw new GroupStoreError("task-not-found", "Integration preview crossed groups.");
+    if (task.status !== "done" || task.branch !== preview.sourceBranch)
+      throw new GroupStoreError(
+        "stale-task",
+        "Task status or branch changed before the preview was stored.",
+      );
+    const prior = integrationRecordByPreview(db, preview.taskId, preview.id);
+    if (prior) {
+      const saved = integrationPreviewById(db, preview.taskId, preview.id);
+      if (JSON.stringify(saved) !== JSON.stringify(preview))
+        throw new GroupStoreError(
+          "invalid-value",
+          "Preview ID was reused for different Git state.",
+        );
+      return prior;
+    }
+    db.prepare(`insert into group_integration_previews
+      (id, group_id, task_id, task_version, preview_json, created_at) values (?, ?, ?, ?, ?, ?)`).run(
+      preview.id,
+      preview.groupId,
+      preview.taskId,
+      preview.taskVersion,
+      JSON.stringify(preview),
+      preview.createdAt,
+    );
+    const record: GroupIntegrationRecord = {
+      id: randomUUID(),
+      groupId: preview.groupId,
+      taskId: preview.taskId,
+      previewId: preview.id,
+      taskVersion: preview.taskVersion,
+      sourceBranch: preview.sourceBranch,
+      sourceSha: preview.sourceSha,
+      targetBranch: preview.targetBranch,
+      targetSha: preview.targetSha,
+      status: preview.status,
+      version: 1,
+      createdAt: preview.createdAt,
+      updatedAt: preview.createdAt,
+    };
+    db.prepare(`insert into group_task_integrations
+      (id, group_id, task_id, preview_id, task_version, status, version, record_json, created_at, updated_at)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      record.id,
+      record.groupId,
+      record.taskId,
+      record.previewId,
+      record.taskVersion,
+      record.status,
+      record.version,
+      JSON.stringify(record),
+      record.createdAt,
+      record.updatedAt,
+    );
+    writeIntegrationEvent(db, record, null, { kind: "preview_created" });
+    return record;
+  });
+}
+
+export function getGroupIntegrationPreview(
+  taskId: string,
+  previewId: string,
+): GroupIntegrationPreview | undefined {
+  return integrationPreviewById(getDatabase(), taskId, previewId);
+}
+
+export function getGroupTaskIntegrationRecord(
+  taskId: string,
+  previewId?: string,
+): GroupIntegrationRecord | undefined {
+  const db = getDatabase();
+  if (previewId) return integrationRecordByPreview(db, taskId, previewId);
+  const row = db
+    .prepare(`select record_json from group_task_integrations where task_id = ?
+      order by updated_at desc, rowid desc limit 1`)
+    .get(taskId) as { record_json: string } | undefined;
+  return row ? parseIntegrationRecord(row.record_json) : undefined;
+}
+
+export function listGroupTaskIntegrationRecords(taskId: string): GroupIntegrationRecord[] {
+  const rows = getDatabase()
+    .prepare(`select record_json from group_task_integrations where task_id = ?
+      order by created_at, rowid`)
+    .all(taskId) as Array<{ record_json: string }>;
+  return rows.map((row) => parseIntegrationRecord(row.record_json));
+}
+
+export function listGroupIntegrationEvents(taskId: string): Array<{
+  id: string;
+  integrationId: string;
+  version: number;
+  fromStatus?: GroupIntegrationStatus;
+  toStatus: GroupIntegrationStatus;
+  createdAt: string;
+}> {
+  return (
+    getDatabase()
+      .prepare(`select id, integration_id, version, from_status, to_status, created_at
+      from group_integration_events where task_id = ? order by created_at, rowid`)
+      .all(taskId) as IntegrationEventRow[]
+  ).map((row) => ({
+    id: row.id,
+    integrationId: row.integration_id,
+    version: row.version,
+    ...(row.from_status ? { fromStatus: row.from_status } : {}),
+    toStatus: row.to_status,
+    createdAt: row.created_at,
+  }));
+}
+
+/** Persist apply intent before the caller performs the first Git write. */
+export function beginGroupTaskIntegrationApply(
+  taskId: string,
+  previewId: string,
+  expectedTaskVersion: number,
+  expectedRecordVersion: number,
+): GroupIntegrationRecord {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const task = requireTask(taskId);
+    requireVersion(task, expectedTaskVersion);
+    if (task.status !== "done")
+      throw new GroupStoreError("invalid-transition", "Only a completed task can be integrated.");
+    const preview = integrationPreviewById(db, taskId, previewId);
+    const record = integrationRecordByPreview(db, taskId, previewId);
+    if (!preview || !record || preview.taskVersion !== expectedTaskVersion)
+      throw new GroupStoreError("stale-task", "Integration preview is missing or stale.");
+    if (record.status === "applying") return record;
+    return transitionIntegrationRecord(db, record, {
+      expectedVersion: expectedRecordVersion,
+      status: "applying",
+      details: { kind: "apply_intent_persisted" },
+    });
+  });
+}
+
+export function reconcileGroupTaskIntegration(
+  taskId: string,
+  previewId: string,
+  expectedRecordVersion: number,
+  outcome:
+    | { status: "ready"; details: Record<string, unknown> }
+    | { status: "applied"; mergeHeadSha: string; details: Record<string, unknown> },
+): GroupIntegrationRecord {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const record = integrationRecordByPreview(db, taskId, previewId);
+    if (!record) throw new GroupStoreError("task-not-found", "Integration record not found.");
+    if (record.status !== "applying")
+      throw new GroupStoreError("invalid-transition", "Only an applying record can be recovered.");
+    return transitionIntegrationRecord(db, record, {
+      expectedVersion: expectedRecordVersion,
+      status: outcome.status,
+      ...(outcome.status === "applied" ? { mergeHeadSha: outcome.mergeHeadSha } : {}),
+      details: outcome.details,
+    });
+  });
+}
+
+/** The only API allowed to turn `done` into `blocked` for a confirmed merge conflict. */
+export function recordGroupTaskIntegrationConflict(input: {
+  taskId: string;
+  previewId: string;
+  expectedTaskVersion: number;
+  expectedRecordVersion: number;
+  mergeHeadSha: string;
+  conflictFiles: string[];
+}): { task: GroupTask; record: GroupIntegrationRecord } {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const task = requireTask(input.taskId);
+    requireVersion(task, input.expectedTaskVersion);
+    const record = integrationRecordByPreview(db, input.taskId, input.previewId);
+    if (
+      record?.status !== "applying" ||
+      record.sourceSha !== input.mergeHeadSha ||
+      input.conflictFiles.length === 0
+    )
+      throw new GroupStoreError(
+        "invalid-transition",
+        "Git conflict does not match this integration.",
+      );
+    const nextRecord = transitionIntegrationRecord(db, record, {
+      expectedVersion: input.expectedRecordVersion,
+      status: "conflict",
+      mergeHeadSha: input.mergeHeadSha,
+      conflictFiles: input.conflictFiles,
+      details: { kind: "git_conflict", conflictFiles: input.conflictFiles },
+    });
+    if (task.status === "done") {
+      const changed = db
+        .prepare(`update group_tasks set status = 'blocked', blocked_reason = ?, updated_at = ?
+          where id = ? and state_version = ? and status = 'done'`)
+        .run(
+          `Git integration conflict (${record.id}): ${input.conflictFiles.join(", ")}`,
+          new Date().toISOString(),
+          input.taskId,
+          input.expectedTaskVersion,
+        );
+      if (changed.changes !== 1)
+        throw new GroupStoreError(
+          "stale-task",
+          `Task ${input.taskId} changed during conflict recovery.`,
+        );
+      recordGroupTaskLegacyTransition(task, "integration_conflict");
+    }
+    return { task: requireTask(task.id), record: nextRecord };
+  });
+}
+
+/** Complete abort history and restore delivery state only when the service revalidated evidence. */
+export function completeGroupTaskIntegrationAbort(input: {
+  taskId: string;
+  previewId: string;
+  expectedTaskVersion: number;
+  expectedRecordVersion: number;
+  restoreTask: boolean;
+}): { task: GroupTask; record: GroupIntegrationRecord } {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const task = requireTask(input.taskId);
+    requireVersion(task, input.expectedTaskVersion);
+    const record = integrationRecordByPreview(db, input.taskId, input.previewId);
+    if (!record || (record.status !== "conflict" && record.status !== "applied"))
+      throw new GroupStoreError("invalid-transition", "There is no owned integration to abort.");
+    if (record.status === "conflict") {
+      const marker = `(${record.id})`;
+      const ownsTaskBlock = task.status === "blocked" && task.blockedReason?.includes(marker);
+      if (ownsTaskBlock && input.restoreTask) {
+        const changed = db
+          .prepare(`update group_tasks set status = 'done', blocked_reason = null, updated_at = ?
+          where id = ? and state_version = ? and status = 'blocked'`)
+          .run(new Date().toISOString(), input.taskId, input.expectedTaskVersion);
+        if (changed.changes !== 1)
+          throw new GroupStoreError("stale-task", `Task ${input.taskId} changed during abort.`);
+      } else if (ownsTaskBlock) {
+        const changed = db
+          .prepare(`update group_tasks set blocked_reason = ?, updated_at = ?
+          where id = ? and state_version = ? and status = 'blocked'`)
+          .run(
+            "Integration was aborted; current source needs verification and review.",
+            new Date().toISOString(),
+            input.taskId,
+            input.expectedTaskVersion,
+          );
+        if (changed.changes !== 1)
+          throw new GroupStoreError("stale-task", `Task ${input.taskId} changed during abort.`);
+      }
+      if (ownsTaskBlock)
+        recordGroupTaskLegacyTransition(
+          task,
+          input.restoreTask ? "integration_abort_restored" : "integration_abort_needs_verification",
+        );
+    }
+    const nextRecord = transitionIntegrationRecord(db, record, {
+      expectedVersion: input.expectedRecordVersion,
+      status: "aborted",
+      details: { kind: "integration_aborted", restoredTask: input.restoreTask },
+    });
+    return { task: requireTask(input.taskId), record: nextRecord };
   });
 }
