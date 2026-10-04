@@ -75,8 +75,9 @@ select is(
         'mp_claim_notification', 'mp_create_checkout', 'mp_finish_notification', 'mp_link_checkout',
         'mp_mark_cancel_requested', 'process_mp_payment',
         'process_mp_preapproval', 'process_stripe_event', 'release_expired_reservations',
+        'renew_free_credits', 'renew_free_credits_for_user',
         'reserve_credits', 'router_claim_request', 'router_reserve', 'router_store_cost', 'settle_usage'],
-  'service_role can execute exactly the eighteen RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost + B6a debit_credits / mp_* / process_mp_* + L1e mp_cancel_targets / mp_mark_cancel_requested; not the trigger functions nor the mp_preapproval_mismatch helper)');
+  'service_role can execute exactly the twenty RPCs (B1 five + B3 claim_stripe_customer + B4a router_claim_request / router_reserve / router_store_cost + B6a debit_credits / mp_* / process_mp_* + L1e mp_cancel_targets / mp_mark_cancel_requested + Free renewal renew_free_credits / renew_free_credits_for_user; not the trigger functions nor the mp_preapproval_mismatch helper)');
 
 -- service_role: every RPC works.
 select tests.as_service_role();
@@ -95,13 +96,13 @@ select tests.clear_authentication();
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'),
-  22, 'twenty-two functions in private (18 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper)');
+  24, 'twenty-four functions in private (20 RPCs + 3 trigger functions + the B6a mp_preapproval_mismatch helper)');
 select is(
   (select count(*)::int from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'private'
       and p.prosecdef
       and p.proconfig @> array['search_path=""']),
-  22, 'all private functions are SECURITY DEFINER with search_path=""');
+  24, 'all private functions are SECURITY DEFINER with search_path=""');
 select is(
   (select array_agg(p.proname::text order by p.proname)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -111,7 +112,8 @@ select is(
   array['claim_stripe_customer', 'debit_credits', 'grant_credits', 'grant_free_initial_credits',
         'handle_new_user', 'mp_cancel_targets', 'mp_claim_notification', 'mp_create_checkout',
         'mp_finish_notification', 'mp_link_checkout', 'mp_mark_cancel_requested', 'mp_preapproval_mismatch', 'process_mp_payment', 'process_mp_preapproval',
-        'process_stripe_event', 'release_expired_reservations', 'reserve_credits', 'router_claim_request',
+        'process_stripe_event', 'release_expired_reservations', 'renew_free_credits',
+        'renew_free_credits_for_user', 'reserve_credits', 'router_claim_request',
         'router_reserve', 'router_store_cost', 'set_updated_at', 'settle_usage'],
   'including the trigger functions handle_new_user, grant_free_initial_credits, set_updated_at');
 

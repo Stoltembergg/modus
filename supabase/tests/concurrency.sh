@@ -164,4 +164,45 @@ echo "mp payment x6: credited=$credited6 errors=$errors6 balance=$balance6 ledge
   || { cat "$out"/mp*; fail "concurrent Mercado Pago deliveries: credited exactly once"; }
 echo "ok - 6 concurrent deliveries of one approved Mercado Pago payment: credited exactly once (1000 + 20000)"
 
+
+# 7) Free monthly renewal: one due Free user, renewed by many sessions at once
+#    (direct per-user calls and the cron batch). Session 1 renews and holds
+#    its transaction open; the others run meanwhile (wallet locked: SKIP
+#    LOCKED -> busy / skipped, never waiting or granting) and again after it
+#    committed (not due). Exactly one renewal row, +1000 once.
+uid7="$(q "select tests.create_user('race-free@example.com', true)")"
+q "update public.credit_wallets set period_end = now() - interval '1 second' where user_id = '$uid7'" >/dev/null
+( "$PSQL" -X -q -t -A -v ON_ERROR_STOP=1 >"$out/fr0" 2>&1 <<SQL
+begin;
+set local role service_role;
+select private.renew_free_credits_for_user('$uid7') ->> 'code';
+select pg_sleep(1.2);
+commit;
+SQL
+  echo "exit=$?" >>"$out/fr0" ) &
+sleep 0.4
+for i in $(seq 1 8); do
+  if (( i % 2 )); then call="private.renew_free_credits_for_user('$uid7') ->> 'code'"; else call="private.renew_free_credits()"; fi
+  ( "$PSQL" -X -q -t -A -c "set role service_role; select $call" >"$out/fr$i" 2>&1 || true ) &
+done
+wait
+for i in $(seq 1 8); do
+  if (( i % 2 )); then call="private.renew_free_credits_for_user('$uid7') ->> 'code'"; else call="private.renew_free_credits()"; fi
+  ( "$PSQL" -X -q -t -A -c "set role service_role; select $call" >"$out/fs$i" 2>&1 || true ) &
+done
+wait
+renewed7="$(cat "$out"/fr0 | grep -c '^renewed$' || true)"
+busy7="$(cat "$out"/fr[1-8] | grep -c '^busy$' || true)"
+# Second round: not due (or busy while a sibling of this round holds the lock).
+notdue7="$(cat "$out"/fs* | grep -cE '^(not_due|busy)$' || true)"
+again7="$(cat "$out"/fs* | grep -c '^renewed$' || true)"
+errors7="$(cat "$out"/fr* "$out"/fs* | grep -c 'ERROR' || true)"
+balance7="$(q "select balance || ':' || plan_allowance from public.credit_wallets where user_id = '$uid7'")"
+ledger7="$(q "select count(*) from public.credit_transactions where user_id = '$uid7' and idempotency_key like 'free-renewal:%'")"
+echo "free renewal x17: renewed=$renewed7 busy=$busy7 not_due_or_busy_after=$notdue7 renewed_after=$again7 errors=$errors7 wallet=$balance7 ledger_rows=$ledger7"
+[[ "$renewed7" == 1 && "$busy7" == 4 && "$notdue7" == 4 && "$again7" == 0 && "$errors7" == 0 \
+   && "$balance7" == 2000:1000 && "$ledger7" == 1 ]] \
+  || { cat "$out"/fr* "$out"/fs*; fail "concurrent Free renewals: renewed exactly once"; }
+echo "ok - Free renewal racing itself (per-user + cron batch, wallet held): renewed once (+1000), others busy / not due"
+
 rm -rf "$out"
