@@ -2186,7 +2186,15 @@ export function getDefaultModelId(models = listModels()): string | undefined {
     return configured;
   }
 
-  return (models.find((model) => !model.locked) ?? models[0])?.id;
+  // L3b0 fallback (Settings default unset or no longer usable): a Modus model when signed in
+  // and the router answered /v1/models ("ready"); otherwise the user's own provider. Never a
+  // locked (not in plan) Modus model.
+  const usable = models.filter((model) => model.enabled && !model.locked);
+  const modus =
+    modusProvider?.status() === "ready"
+      ? usable.find((model) => model.provider === MODUS_PROVIDER_ID)
+      : undefined;
+  return (modus ?? usable.find((model) => model.provider !== MODUS_PROVIDER_ID) ?? usable[0])?.id;
 }
 
 export function getModelThinkingLevel(modelId: string | undefined): ThinkingLevel {
@@ -2271,14 +2279,17 @@ export function setDefaultModel(modelId: string | undefined): void {
     return;
   }
   const models = listModels();
-  if (!models.some((model) => model.id === modelId)) {
+  const target = models.find((model) => model.id === modelId);
+  if (!target) {
     throw new Error(`Model is not enabled: ${modelId}`);
   }
+  // L3b0: a locked (not in plan) Modus model is never the default; the UI offers credits instead.
+  if (target.locked) throw new Error(`Model is not in your plan: ${modelId}`);
   writeSetting("model.default", modelId);
 }
 
 export function cycleDefaultModel(direction: "forward" | "backward" = "forward"): ModelInfo {
-  const models = listModels();
+  const models = listModels().filter((model) => !model.locked);
   if (models.length === 0) {
     throw new Error("No Modus models are configured. Open Settings to connect a provider.");
   }

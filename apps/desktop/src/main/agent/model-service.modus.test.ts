@@ -292,6 +292,46 @@ describe("Modus provider in the model service", () => {
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
+  it("L3b0 fallback default: signed in with Modus ready → a usable (unlocked) Modus model", async () => {
+    ms.setDefaultModel(undefined);
+    const auth = authSource("signed-in");
+    const modus = installModus(auth, () => READY);
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    expect(ms.getDefaultModelId()).toBe("modus/deepseek/deepseek-flash");
+    expect(ms.getModelSettings().defaultModel).toBe("modus/deepseek/deepseek-flash");
+    // A locked model can never become the Settings default, nor be cycled onto.
+    expect(() => ms.setDefaultModel("modus/zai/glm-4.6")).toThrow(/not in your plan/);
+    for (let i = 0; i < 6; i += 1) expect(ms.cycleDefaultModel().locked).toBeUndefined();
+    ms.setDefaultModel(undefined);
+  });
+
+  it("L3b0 fallback default: signed out, or Modus unavailable → the user's own provider", async () => {
+    ms.setDefaultModel(undefined);
+    const auth = authSource("signed-out");
+    let result: ModusModelsResult = READY;
+    const modus = installModus(auth, () => result);
+    expect(modus.status()).toBe("off");
+    const signedOut = ms.getDefaultModelId();
+    expect(signedOut).toBeDefined();
+    expect(signedOut?.startsWith("modus/")).toBe(false);
+
+    result = { ok: false, reason: "unavailable" };
+    auth.set("signed-in");
+    await vi.waitFor(() => expect(modus.status()).toBe("unavailable"));
+    const unavailable = ms.getDefaultModelId();
+    expect(unavailable).toBeDefined();
+    expect(unavailable?.startsWith("modus/")).toBe(false);
+
+    // A Settings default that is no longer usable (Modus went away) falls back the same way.
+    result = READY;
+    modus.retryIfUnavailable();
+    await vi.waitFor(() => expect(modus.status()).toBe("ready"));
+    ms.setDefaultModel("modus/deepseek/deepseek-flash");
+    auth.set("signed-out");
+    expect(ms.getDefaultModelId()?.startsWith("modus/")).toBe(false);
+    ms.setDefaultModel(undefined);
+  });
+
   it('"modus" is reserved: no BYOK key, custom provider, sign-in or disconnect', async () => {
     await expect(ms.configureProvider({ provider: "modus", apiKey: "x" })).rejects.toThrow(
       /Modus account/,

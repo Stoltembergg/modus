@@ -14,7 +14,7 @@ const STATE: AuthState = {
   error: null,
 };
 
-function mountWith(state: AuthState) {
+function mountWith(state: AuthState, modusStatus?: "ready" | "loading" | "unavailable") {
   (window as unknown as { modus: unknown }).modus = {
     auth: {
       getState: vi.fn(async () => state),
@@ -25,7 +25,7 @@ function mountWith(state: AuthState) {
       onStateChange: vi.fn(() => () => undefined),
     },
   };
-  return render(<AccountSettingsPanel />);
+  return render(<AccountSettingsPanel modusStatus={modusStatus} />);
 }
 
 afterEach(() => {
@@ -45,5 +45,39 @@ describe("Account: Modus session expired (B4b)", () => {
     mountWith({ ...STATE, notice: null });
     await screen.findByText("Signed out");
     expect(screen.queryByText("Your session expired. Please sign in again.")).toBeNull();
+  });
+});
+
+describe("Account: Modus status (L3b0)", () => {
+  const SIGNED_IN: AuthState = {
+    ...STATE,
+    status: "signed-in",
+    notice: null,
+    user: {
+      id: "11111111-1111-4111-8111-111111111111",
+      email: "ana@example.com",
+      displayName: "Ana",
+      avatarUrl: null,
+      emailConfirmed: true,
+      provider: "email",
+    },
+  };
+
+  it("shows Modus unavailable as a status row (no modal) when the main process says so", async () => {
+    mountWith(SIGNED_IN, "unavailable");
+    expect(await screen.findByText("Modus models")).toBeTruthy();
+    expect(screen.getByText("Unavailable")).toBeTruthy();
+    expect(screen.getByText(/didn't answer/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows Available when ready, and no row when Modus is off", async () => {
+    const { unmount } = mountWith(SIGNED_IN, "ready");
+    expect(await screen.findByText("Modus models")).toBeTruthy();
+    expect(screen.getByText("Available")).toBeTruthy();
+    unmount();
+    mountWith(SIGNED_IN);
+    await screen.findByText("Remember me");
+    expect(screen.queryByText("Modus models")).toBeNull();
   });
 });

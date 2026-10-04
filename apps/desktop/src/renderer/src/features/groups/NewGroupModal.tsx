@@ -18,6 +18,7 @@ import type {
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 import type { GroupTextKey } from "../../../../shared/group-room-locale";
 import { cn } from "../../lib/cn";
+import { ModelOptions, pickModel } from "../../lib/modusModels";
 import { AgentAvatar } from "../agents/AgentAvatar";
 import { AgentDialog, type AgentDialogDraftTarget } from "../agents/AgentDialog";
 import type { GroupDialogModel } from "./CreateGroupDialog";
@@ -139,7 +140,7 @@ export function NewGroupModal({
   const fallbackModelId =
     defaultModelId && models.some((model) => model.id === defaultModelId)
       ? defaultModelId
-      : (models[0]?.id ?? "");
+      : (models.find((model) => !model.locked)?.id ?? "");
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: loaded once per open.
   useEffect(() => {
@@ -613,7 +614,9 @@ export function NewGroupModal({
                             aria-label={t("newGroup.modelOf", { name: label })}
                             className={cn(FIELD, "h-7 px-2 text-xs")}
                             onChange={(event) =>
-                              update(member.key, { modelId: event.target.value })
+                              pickModel(models, event.target.value, (modelId) =>
+                                update(member.key, { modelId }),
+                              )
                             }
                             value=""
                           >
@@ -622,11 +625,7 @@ export function NewGroupModal({
                                 ? t("common.noModelConfigured")
                                 : t("newGroup.chooseModel")}
                             </option>
-                            {models.map((model) => (
-                              <option key={model.id} value={model.id}>
-                                {model.name}
-                              </option>
-                            ))}
+                            <ModelOptions locale={t.locale} models={models} />
                           </select>
                         ) : null}
                       </li>

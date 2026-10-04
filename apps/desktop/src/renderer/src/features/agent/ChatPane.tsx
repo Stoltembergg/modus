@@ -9,6 +9,7 @@ import type {
   ContextUsageInfo,
   HyperPlanRevision,
   ModelInfo,
+  ModusModelsStatus,
   PermissionDecision,
   PermissionRequest,
   PlanRef,
@@ -51,6 +52,7 @@ import {
 } from "./agentEventHub";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ChangesStrip } from "./changes/ChangesStrip";
+import { ModusUnavailableNotice } from "./ModusUnavailableNotice";
 import { latestPendingPermissionRequest } from "./permissionRequests";
 import { latestPendingQuestionRequest } from "./questionRequests";
 import { RetryStatusBar } from "./RetryStatusBar";
@@ -370,6 +372,8 @@ type ChatPaneProps = {
   models: ModelInfo[];
   /** App-level default model id — fallback when the session has none. */
   defaultModel: string;
+  /** L3b0: Modus provider state (ModelSettingsState.modus) for the inline unavailable notice. */
+  modusStatus?: ModusModelsStatus | undefined;
   contextUsage?: ContextUsageInfo | undefined;
   workspace: WorkspaceInfo | null;
   initialEvents?: AgentEventItem[] | undefined;
@@ -666,6 +670,7 @@ export function ChatPane({
   hub,
   models,
   defaultModel,
+  modusStatus,
   contextUsage,
   workspace,
   initialEvents,
@@ -1567,6 +1572,10 @@ export function ChatPane({
                   />
                 ) : (
                   <>
+                    <ModusUnavailableNotice
+                      modelIds={[paneModel, session.model]}
+                      status={modusStatus}
+                    />
                     {retryStatus ? <RetryStatusBar status={retryStatus} /> : null}
                     <ComposerDock
                       rails={

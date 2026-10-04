@@ -1,6 +1,6 @@
 /**
- * Modus provider copy (B4b): router errors shown in the chat, the model picker
- * states and the session-expired notice, in en / pt / zh. Same convention as
+ * Modus provider copy (B4b, L3b0): router errors shown in the chat, locked-model and
+ * availability states, and the session-expired notice, in en / pt / zh. Same convention as
  * `files-search-text.ts` (C6 / C6.2): keys are `area.name`, `{name}`
  * placeholders, the en table defines the key set, pt / zh are type-checked to
  * the same keys and covered by the parity test. No tag means en (C6.2).
@@ -26,9 +26,17 @@ export const MODUS_TEXT_EN = {
   "modus.requestTooLarge": "This request is too large for Modus models.",
   "modus.badRequest": "Modus couldn't process this request.",
   "modus.cancelled": "The request was cancelled.",
-  "modus.picker.unavailable": "Modus is unavailable right now.",
-  "modus.picker.upgrade": "Upgrade",
-  "modus.picker.upgradeLabel": "Upgrade your plan to use {model}",
+  "modus.locked.badge": "Locked",
+  "modus.locked.unlock": "Requires a credit pack that includes this model",
+  "modus.locked.buyCredits": "Buy credits to unlock {model}",
+  "modus.status.title": "Modus models",
+  "modus.status.ready": "Available",
+  "modus.status.loading": "Loading…",
+  "modus.status.unavailable": "Unavailable",
+  "modus.status.unavailableDetail":
+    "The Modus model router didn't answer. The app tries again on the next model refresh.",
+  "modus.status.unavailableNotice":
+    "Modus is unavailable right now. Messages to Modus models can't be sent until it's back.",
 } as const;
 
 export type ModusTextKey = keyof typeof MODUS_TEXT_EN;
@@ -50,9 +58,17 @@ export const MODUS_TEXT_PT: Record<ModusTextKey, string> = {
   "modus.requestTooLarge": "Esta solicitação é grande demais para os modelos Modus.",
   "modus.badRequest": "O Modus não conseguiu processar esta solicitação.",
   "modus.cancelled": "A solicitação foi cancelada.",
-  "modus.picker.unavailable": "Modus indisponível no momento.",
-  "modus.picker.upgrade": "Fazer upgrade",
-  "modus.picker.upgradeLabel": "Faça upgrade do plano para usar {model}",
+  "modus.locked.badge": "Bloqueado",
+  "modus.locked.unlock": "Requer um pacote de créditos que inclua este modelo",
+  "modus.locked.buyCredits": "Compre créditos para desbloquear {model}",
+  "modus.status.title": "Modelos Modus",
+  "modus.status.ready": "Disponíveis",
+  "modus.status.loading": "Carregando…",
+  "modus.status.unavailable": "Indisponível",
+  "modus.status.unavailableDetail":
+    "O roteador de modelos Modus não respondeu. O app tenta de novo na próxima atualização dos modelos.",
+  "modus.status.unavailableNotice":
+    "Modus indisponível no momento. As mensagens para modelos Modus não podem ser enviadas até ele voltar.",
 };
 
 export const MODUS_TEXT_ZH: Record<ModusTextKey, string> = {
@@ -70,9 +86,15 @@ export const MODUS_TEXT_ZH: Record<ModusTextKey, string> = {
   "modus.requestTooLarge": "此请求对 Modus 模型来说过大。",
   "modus.badRequest": "Modus 无法处理此请求。",
   "modus.cancelled": "请求已取消。",
-  "modus.picker.unavailable": "Modus 暂时不可用。",
-  "modus.picker.upgrade": "升级",
-  "modus.picker.upgradeLabel": "升级套餐以使用 {model}",
+  "modus.locked.badge": "已锁定",
+  "modus.locked.unlock": "需要包含此模型的积分包",
+  "modus.locked.buyCredits": "购买积分以解锁 {model}",
+  "modus.status.title": "Modus 模型",
+  "modus.status.ready": "可用",
+  "modus.status.loading": "加载中…",
+  "modus.status.unavailable": "不可用",
+  "modus.status.unavailableDetail": "Modus 模型路由没有响应。应用会在下次刷新模型时重试。",
+  "modus.status.unavailableNotice": "Modus 暂时不可用。恢复之前，无法向 Modus 模型发送消息。",
 };
 
 export const MODUS_TEXT: Record<GroupRoomLocale, Record<ModusTextKey, string>> = {

@@ -24,19 +24,22 @@ describe("modusText", () => {
   it("defaults to en without a tag (C6.2) and resolves pt / zh tags", () => {
     expect(modusText("modus.sessionExpired")).toBe("Your session expired. Please sign in again.");
     expect(modusText("modus.sessionExpired", "pt-BR")).toBe("Sua sessão expirou, entre de novo.");
-    expect(modusText("modus.picker.unavailable", "pt")).toBe("Modus indisponível no momento.");
+    expect(modusText("modus.status.unavailable", "pt")).toBe("Indisponível");
     expect(modusText("modus.timeout", "pt-PT")).toBe(
       "O modelo demorou demais para responder. Alguns créditos podem ter sido usados.",
     );
     expect(modusText("modus.timeout")).toBe(
       "The model took too long to respond. Some credits may have been used.",
     );
-    expect(modusText("modus.picker.unavailable", "fr")).toBe("Modus is unavailable right now.");
+    expect(modusText("modus.status.unavailable", "fr")).toBe("Unavailable");
   });
 
   it("fills placeholders and only the 504 copy mentions credits being used", () => {
-    expect(modusText("modus.picker.upgradeLabel", null, { model: "GLM" })).toBe(
-      "Upgrade your plan to use GLM",
+    expect(modusText("modus.locked.buyCredits", null, { model: "GLM" })).toBe(
+      "Buy credits to unlock GLM",
+    );
+    expect(modusText("modus.locked.buyCredits", "pt", { model: "GLM" })).toBe(
+      "Compre créditos para desbloquear GLM",
     );
     expect(modusText("modus.unavailable")).not.toMatch(/credit/i);
   });

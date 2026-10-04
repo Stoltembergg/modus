@@ -108,6 +108,7 @@ import {
 } from "../features/update/restoreUiState";
 import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
+import { setBuyCreditsHandler } from "../lib/modusModels";
 import { useGitBranch } from "../lib/useGitBranch";
 import { beginInitialAppHydration, type InitialAppHydration } from "./initial-hydration";
 import { reportRendererStartup } from "./startup-report";
@@ -215,6 +216,11 @@ export function App() {
     },
     [navigateToPrimary],
   );
+  // L3b0: a locked Modus model in a picker opens the existing Buy credits flow (Settings › Account).
+  useEffect(() => {
+    setBuyCreditsHandler(() => openSettings("account"));
+    return () => setBuyCreditsHandler(undefined);
+  }, [openSettings]);
   const closeSettings = useCallback(() => {
     primaryNavigationTouchedRef.current = true;
     setPrimaryNavigation((current) => closeSettingsNavigation(current));
@@ -962,7 +968,11 @@ export function App() {
     () =>
       models
         .filter((item) => item.available && item.enabled)
-        .map((item) => ({ id: item.id, name: item.name })),
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          ...(item.locked ? { locked: true } : {}),
+        })),
     [models],
   );
 
@@ -1533,6 +1543,7 @@ export function App() {
                                   }
                                   contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
+                                  modusStatus={modelSettings?.modus}
                                   hub={hubRef.current}
                                   initialEvents={initialEventsBySession[visibleSession.id]}
                                   key={visibleSession.id}
