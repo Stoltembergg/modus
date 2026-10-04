@@ -5,6 +5,7 @@ import {
   type BillingReturnStatus,
   type BillingState,
   isBillingProvider,
+  isCreditPackId,
 } from "../../shared/billing";
 import { AuthBackendError } from "../auth/auth-backend";
 import {
@@ -23,6 +24,11 @@ export interface BillingService {
    * with that provider; the Function maps it to the price.
    */
   startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
+  /**
+   * L5b: opens Mercado Pago Checkout Pro (Pix or card) for a credit pack the catalog offers.
+   * Only the pack id goes to mp-buy-credits; credits arrive with the payment webhook.
+   */
+  buyCredits(packId: string): Promise<BillingState>;
   /** Opens the Stripe Customer Portal (upgrade / downgrade / cancel / payment method). */
   openPortal(): Promise<BillingState>;
   /**
@@ -64,6 +70,11 @@ const ERRORS: Record<string, string> = {
   stripe_disabled: "Card payments through Stripe are turned off right now.",
   no_billing_account: "No billing account yet. Choose a plan first.",
   unknown_plan: "This plan is not available.",
+  unknown_pack: "This credit pack is not available.",
+  account_blocked:
+    "Purchases are blocked on this account after a payment dispute. Contact support.",
+  subscriptions_disabled: "Subscriptions are not available right now. Buy a credit pack instead.",
+  purchase_conflict: "This purchase is already being set up. Try again in a moment.",
   unauthorized: "Sign in again to manage billing.",
 };
 const GENERIC_ERROR = "Billing is unavailable right now. Try again.";
@@ -80,6 +91,7 @@ function emptyState(status: BillingState["status"]): BillingState {
     status,
     plans: [],
     catalog: null,
+    packs: null,
     subscription: null,
     wallet: null,
     currentPlan: "free",
@@ -140,6 +152,7 @@ export function createBillingService(deps: Deps): BillingService {
         status: "ready",
         plans: data.plans,
         catalog: data.catalog,
+        packs: data.packs,
         subscription: data.subscription,
         wallet: data.wallet,
         currentPlan: data.subscription?.plan ?? "free",
@@ -266,6 +279,30 @@ export function createBillingService(deps: Deps): BillingService {
         return Promise.resolve(setState({ error: ERRORS[code] ?? GENERIC_ERROR }));
       }
       return openSession("checkout", plan, provider);
+    },
+
+    async buyCredits(packId) {
+      const unavailable = () => setState({ error: ERRORS.unknown_pack ?? GENERIC_ERROR });
+      if (!isCreditPackId(packId)) return unavailable();
+      if (!backend || !signedInUser()) {
+        return setState({ error: ERRORS.unauthorized ?? GENERIC_ERROR });
+      }
+      // Only what the catalog currently sells.
+      if (state.status !== "ready" || !state.packs?.some((pack) => pack.packId === packId)) {
+        return unavailable();
+      }
+      try {
+        const result = await backend.createBillingSession("mp-buy-credits", { packId });
+        if (!result.ok)
+          return setState({ pending: null, error: ERRORS[result.code] ?? GENERIC_ERROR });
+        if (!isStripeHostedUrl(result.url, CHECKOUT_URL_PREFIXES.mercadopago)) {
+          return setState({ pending: null, error: GENERIC_ERROR });
+        }
+        await deps.openExternal(result.url);
+        return setState({ pending: "checkout", lastReturn: null, error: null });
+      } catch (error) {
+        return setState({ pending: null, error: userFacing(error) });
+      }
     },
 
     openPortal() {

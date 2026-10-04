@@ -1,11 +1,13 @@
 import {
   BILLING_PLAN_KEY_PATTERN,
   type BillingCatalogEntry,
+  type BillingCreditPack,
   type BillingPlan,
   type BillingProvider,
   type BillingSubscription,
   type BillingWallet,
   isBillingProvider,
+  isCreditPackId,
 } from "../../shared/billing";
 
 /**
@@ -27,6 +29,8 @@ export type BillingSnapshot = {
   plans: BillingPlan[];
   /** get_billing_catalog() rows; null when that RPC failed (plans / wallet still load). */
   catalog: BillingCatalogEntry[] | null;
+  /** L5b: the catalog's credit packs (kind 'pack'); null when the catalog RPC failed. */
+  packs: BillingCreditPack[] | null;
   subscription: BillingSubscription | null;
   wallet: BillingWallet | null;
 };
@@ -34,7 +38,9 @@ export type BillingSnapshot = {
 export type BillingFunctionName =
   | "create-checkout-session"
   | "create-portal-session"
-  | "mp-checkout";
+  | "mp-checkout"
+  /** L5b: POST { packId } -> { url } of a Mercado Pago Checkout Pro page. */
+  | "mp-buy-credits";
 
 /** Edge Function that opens a checkout for each provider (both: POST { plan } -> { url }). */
 export const CHECKOUT_FUNCTIONS: Record<BillingProvider, BillingFunctionName> = {
@@ -143,6 +149,38 @@ export function mapCatalogRows(rows: unknown[]): BillingCatalogEntry[] {
   });
 }
 
+/** L5b: get_billing_catalog() rows of kind 'pack' → credit packs; anything malformed is dropped. */
+export function mapPackRows(rows: unknown[]): BillingCreditPack[] {
+  return rows
+    .flatMap((raw): BillingCreditPack[] => {
+      const row = (raw ?? {}) as Record<string, unknown>;
+      if (row.kind !== "pack") return [];
+      const currency = str(row.currency);
+      const amountMinor = num(row.amount_minor);
+      const credits = num(row.monthly_credits);
+      if (
+        !isCreditPackId(row.plan) ||
+        row.provider !== "mercadopago" ||
+        currency !== "BRL" ||
+        amountMinor <= 0 ||
+        credits <= 0
+      ) {
+        return [];
+      }
+      return [
+        {
+          packId: row.plan,
+          name: str(row.name) ?? row.plan,
+          credits,
+          currency,
+          amountMinor,
+          sortOrder: num(row.sort_order),
+        },
+      ];
+    })
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.credits - b.credits);
+}
+
 /** PostgREST rows → display data. Stripe ids are dropped here (only `purchasable` survives). */
 export function mapBillingRows(rows: {
   plans: unknown[];
@@ -170,6 +208,7 @@ export function mapBillingRows(rows: {
   return {
     plans,
     catalog: rows.catalog ? mapCatalogRows(rows.catalog) : null,
+    packs: rows.catalog ? mapPackRows(rows.catalog) : null,
     subscription:
       sub && str(sub.plan)
         ? {

@@ -2,9 +2,11 @@ import { z } from "zod";
 import {
   BILLING_PLAN_KEY_PATTERN,
   BILLING_PROVIDERS,
+  type BillingBuyCreditsInput,
   type BillingCheckoutInput,
   type BillingProvider,
   type BillingState,
+  CREDIT_PACK_IDS,
 } from "../../shared/billing";
 import { IPC_CHANNELS } from "./channels";
 import { parseIpcInput } from "./schemas";
@@ -16,6 +18,7 @@ export type BillingIpcService = {
   startCheckout(plan: string, provider?: BillingProvider): Promise<BillingState>;
   openPortal(): Promise<BillingState>;
   cancelSubscription(): Promise<BillingState>;
+  buyCredits(packId: string): Promise<BillingState>;
 };
 
 type HandlerRegistration = {
@@ -31,6 +34,11 @@ export const billingCheckoutSchema = z
     provider: z.enum(BILLING_PROVIDERS as [BillingProvider, ...BillingProvider[]]).optional(),
   })
   .strict() as z.ZodType<BillingCheckoutInput>;
+
+/** L5b: only a known pack id; mp-buy-credits reads credits and price from the database. */
+export const billingBuyCreditsSchema = z
+  .object({ packId: z.enum(CREDIT_PACK_IDS) })
+  .strict() as z.ZodType<BillingBuyCreditsInput>;
 
 /**
  * L1e: cancelling takes nothing from the renderer (no subscription / preapproval id): nothing or
@@ -60,4 +68,7 @@ export function registerBillingIpcHandlers(
   );
   handle(IPC_CHANNELS.billingPortal, billingNoInputSchema, () => service.openPortal());
   handle(IPC_CHANNELS.billingCancel, billingCancelSchema, () => service.cancelSubscription());
+  handle(IPC_CHANNELS.billingBuyCredits, billingBuyCreditsSchema, (input) =>
+    service.buyCredits(input.packId),
+  );
 }

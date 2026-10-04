@@ -44,6 +44,28 @@ export type BillingCatalogEntry = {
   sortOrder: number;
 };
 
+/**
+ * L5b: the one-off Mercado Pago credit packs the server sells (L5a public.credit_packs, seeded
+ * with exactly these ids). Only the id crosses IPC; credits and price come from the catalog.
+ */
+export const CREDIT_PACK_IDS = ["credits_5k", "credits_10k", "credits_25k"] as const;
+export type CreditPackId = (typeof CREDIT_PACK_IDS)[number];
+
+export function isCreditPackId(value: unknown): value is CreditPackId {
+  return typeof value === "string" && (CREDIT_PACK_IDS as readonly string[]).includes(value);
+}
+
+/** One get_billing_catalog() row of kind 'pack': a one-off credit pack (public data only). */
+export type BillingCreditPack = {
+  packId: CreditPackId;
+  name: string;
+  credits: number;
+  /** ISO 4217 ("BRL"). */
+  currency: string;
+  amountMinor: number;
+  sortOrder: number;
+};
+
 export type BillingSubscription = {
   plan: string;
   /** Who bills this subscription; decides whether the Stripe Portal applies. */
@@ -87,6 +109,12 @@ export type BillingState = {
   /** Sellable offers from get_billing_catalog(); null when the catalog could not be loaded. */
   catalog: BillingCatalogEntry[] | null;
   /**
+   * L5b: one-off credit packs from the same catalog (kind 'pack'); null when the catalog could
+   * not be loaded. Subscription plans are only in `catalog`, which has no Mercado Pago plan while
+   * the server's mercadopago_subscriptions_enabled flag is off.
+   */
+  packs: BillingCreditPack[] | null;
+  /**
    * The live subscription (active, trialing, past_due, unpaid, incomplete, paused), if any; else
    * (L1g) a cancelled Mercado Pago one still paid until current_period_end (status `canceled`,
    * cancelAtPeriodEnd true).
@@ -108,3 +136,6 @@ export type BillingState = {
 
 /** Only a plan key (+ provider, default Mercado Pago); the server maps it to the price. */
 export type BillingCheckoutInput = { plan: string; provider?: BillingProvider };
+
+/** L5b: only the pack id; mp-buy-credits reads credits and price from the database. */
+export type BillingBuyCreditsInput = { packId: CreditPackId };

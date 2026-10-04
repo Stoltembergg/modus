@@ -2,6 +2,7 @@ import { IconExternalLink, IconRefresh } from "@tabler/icons-react";
 import { useEffect, useState } from "react";
 import type {
   BillingCatalogEntry,
+  BillingCreditPack,
   BillingPlan,
   BillingProvider,
   BillingState,
@@ -38,7 +39,7 @@ export function cancelConfirmMessage(
 const GRACE_FROM = new Set(["active", "trialing"]);
 
 const RETURN_NOTICES: Record<string, string> = {
-  success: "Payment received. Your plan updates as soon as the payment is confirmed.",
+  success: "Payment received. Your plan or credits update as soon as the payment is confirmed.",
   cancel: "Checkout was cancelled. Nothing was charged.",
   portal: "Back from billing. Showing the latest plan.",
 };
@@ -118,7 +119,44 @@ type ViewProps = {
   onRefresh(): void;
   /** L1e: cancel the own Mercado Pago subscription (main finds it; no id here). */
   onCancel(): void;
+  /** L5b: Mercado Pago Checkout Pro for a credit pack (only the pack id). */
+  onBuyCredits(packId: BillingCreditPack["packId"]): void;
 };
+
+/** L5b: one row per credit pack, a "Buy credits" button each. */
+function CreditPackRows({
+  packs,
+  disabled,
+  onBuyCredits,
+}: {
+  packs: BillingCreditPack[];
+  disabled: boolean;
+  onBuyCredits(packId: BillingCreditPack["packId"]): void;
+}) {
+  return (
+    <>
+      {packs.map((pack) => (
+        <SettingsRow
+          control={
+            <button
+              aria-label={`Buy ${formatCredits(pack.credits)} credits`}
+              className={PRIMARY_BUTTON}
+              disabled={disabled}
+              onClick={() => onBuyCredits(pack.packId)}
+              type="button"
+            >
+              <IconExternalLink size={13} stroke={2} />
+              Buy credits
+            </button>
+          }
+          description="One-time payment with Pix or card. Purchased credits don't expire."
+          key={pack.packId}
+          title={`${formatCredits(pack.credits)} credits · ${formatMoney(pack.amountMinor, pack.currency)}`}
+        />
+      ))}
+    </>
+  );
+}
 
 /** Presentational: everything comes from BillingState (display data only). */
 export function BillingSectionView({
@@ -128,6 +166,7 @@ export function BillingSectionView({
   onPortal,
   onRefresh,
   onCancel,
+  onBuyCredits,
 }: ViewProps) {
   if (!state || state.status === "unavailable" || state.status === "signed-out") return null;
   const current: BillingPlan | undefined = state.plans.find(
@@ -137,6 +176,12 @@ export function BillingSectionView({
   const renews = formatDate(state.subscription?.currentPeriodEnd ?? null);
   const loading = state.status === "loading";
   const catalog = state.catalog ? groupCatalog(state.catalog) : null;
+  const packs = state.packs ?? [];
+  /**
+   * L5b: with Mercado Pago subscriptions switched off server-side the catalog has no plan to
+   * subscribe to: show only the credit packs (no Subscribe, no "No plans available").
+   */
+  const packsOnly = catalog !== null && catalog.length === 0 && packs.length > 0;
   const stripeSubscription = state.subscription?.provider === "stripe";
   const mpSubscription = state.subscription?.provider === "mercadopago";
   /** Requested (in flight, or flagged and waiting for Mercado Pago's confirmation). */
@@ -160,7 +205,11 @@ export function BillingSectionView({
 
   return (
     <SettingsSection
-      description="Plans are paid through Mercado Pago in your browser, billed monthly in Brazilian reais. Credits are added as soon as the payment is confirmed."
+      description={
+        packsOnly
+          ? "Buy credit packs through Mercado Pago in your browser, with Pix or card, in Brazilian reais. Credits are added as soon as the payment is confirmed."
+          : "Plans are paid through Mercado Pago in your browser, billed monthly in Brazilian reais. Credits are added as soon as the payment is confirmed."
+      }
       title="Plan & credits"
     >
       {state.error ? <p className="mb-3 text-danger text-xs">{state.error}</p> : null}
@@ -324,7 +373,7 @@ export function BillingSectionView({
               />
             </>
           )
-        ) : loading ? null : catalog === null ? (
+        ) : loading || packsOnly ? null : catalog === null ? (
           <SettingsRow
             control={null}
             description="Plans couldn't be loaded. Refresh to try again."
@@ -366,6 +415,18 @@ export function BillingSectionView({
           ))
         )}
       </SettingsList>
+      {!loading && packs.length > 0 ? (
+        <div className="mt-4">
+          <h3 className="mb-2 font-medium text-fg text-xs">Buy credits</h3>
+          <SettingsList>
+            <CreditPackRows
+              disabled={busy || loading || Boolean(state.pending)}
+              onBuyCredits={onBuyCredits}
+              packs={packs}
+            />
+          </SettingsList>
+        </div>
+      ) : null}
     </SettingsSection>
   );
 }
@@ -411,6 +472,7 @@ export function AccountBillingSection() {
       onPortal={() => void run(() => window.modus.billing.openPortal())}
       onRefresh={() => void run(() => window.modus.billing.refresh())}
       onCancel={() => void run(() => window.modus.billing.cancelSubscription())}
+      onBuyCredits={(packId) => void run(() => window.modus.billing.buyCredits({ packId }))}
       state={state}
     />
   );

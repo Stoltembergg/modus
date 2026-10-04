@@ -30,6 +30,7 @@ export const billingIpcService: BillingIpcService = {
   startCheckout: (plan, provider) => getBillingService().startCheckout(plan, provider),
   openPortal: () => getBillingService().openPortal(),
   cancelSubscription: () => getBillingService().cancelSubscription(),
+  buyCredits: (packId) => getBillingService().buyCredits(packId),
 };
 
 export function shutdownBillingService(): void {

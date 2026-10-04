@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { AuthState } from "../../shared/auth";
-import type { BillingCatalogEntry } from "../../shared/billing";
+import type { BillingCatalogEntry, BillingCreditPack } from "../../shared/billing";
 import type {
   BillingBackend,
   BillingCancelResult,
@@ -12,6 +12,9 @@ import type {
 
 export const SECRET_CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_SECRET_session";
 export const SECRET_PORTAL_URL = "https://billing.stripe.com/p/session/test_SECRET_portal";
+/** L5b: a Checkout Pro (credit pack) init_point. */
+export const SECRET_MP_PACK_URL =
+  "https://www.mercadopago.com.br/checkout/v1/redirect?pref_id=SECRET_preference";
 export const SECRET_MP_URL =
   "https://www.mercadopago.com.br/subscriptions/checkout?preapproval_id=SECRET_preapproval";
 
@@ -72,6 +75,34 @@ export function createFakeAuth(initial: AuthState) {
   };
 }
 
+/** L5b: the three credit packs as mapped from get_billing_catalog() (kind 'pack'). */
+export const PACKS: BillingCreditPack[] = [
+  {
+    packId: "credits_5k",
+    name: "5,000 credits",
+    credits: 5000,
+    currency: "BRL",
+    amountMinor: 3690,
+    sortOrder: 1,
+  },
+  {
+    packId: "credits_10k",
+    name: "10,000 credits",
+    credits: 10000,
+    currency: "BRL",
+    amountMinor: 7290,
+    sortOrder: 2,
+  },
+  {
+    packId: "credits_25k",
+    name: "25,000 credits",
+    credits: 25000,
+    currency: "BRL",
+    amountMinor: 18090,
+    sortOrder: 3,
+  },
+];
+
 export function snapshot(overrides: Partial<BillingSnapshot> = {}): BillingSnapshot {
   return {
     plans: [
@@ -86,6 +117,7 @@ export function snapshot(overrides: Partial<BillingSnapshot> = {}): BillingSnaps
       { plan: "pro", name: "Pro", priceUsdCents: 2000, monthlyCredits: 25000, purchasable: true },
     ],
     catalog: [MP_STARTER],
+    packs: [],
     subscription: null,
     wallet: { balance: 1000, reserved: 0, planAllowance: 1000, periodEnd: null },
     ...overrides,
@@ -101,9 +133,11 @@ export function createFakeBillingBackend() {
         url:
           fn === "mp-checkout"
             ? SECRET_MP_URL
-            : fn === "create-checkout-session"
-              ? SECRET_CHECKOUT_URL
-              : SECRET_PORTAL_URL,
+            : fn === "mp-buy-credits"
+              ? SECRET_MP_PACK_URL
+              : fn === "create-checkout-session"
+                ? SECRET_CHECKOUT_URL
+                : SECRET_PORTAL_URL,
       }),
     ),
     cancelSubscription: vi.fn(

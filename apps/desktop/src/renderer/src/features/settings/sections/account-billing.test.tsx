@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   BillingCatalogEntry,
+  BillingCreditPack,
   BillingState,
   BillingSubscription,
 } from "../../../../../shared/billing";
@@ -53,6 +54,7 @@ const READY: BillingState = {
   status: "ready",
   plans: PLANS,
   catalog: [MP_STARTER],
+  packs: [],
   subscription: null,
   wallet: { balance: 1000, reserved: 0, planAllowance: 1000, periodEnd: null },
   currentPlan: "free",
@@ -71,6 +73,7 @@ const markup = (state: BillingState | undefined) =>
       onPortal={noop}
       onRefresh={noop}
       onCancel={noop}
+      onBuyCredits={noop}
       state={state}
     />,
   );
@@ -189,6 +192,7 @@ describe("Account billing section", () => {
         onPortal={noop}
         onRefresh={noop}
         onCancel={noop}
+        onBuyCredits={noop}
         state={{ ...READY, pending: "checkout" }}
       />,
     );
@@ -372,6 +376,7 @@ describe("Mercado Pago cancel (L1e)", () => {
         onPortal={noop}
         onRefresh={noop}
         onCancel={noop}
+        onBuyCredits={noop}
         state={subscribed({}, { cancelling: true })}
       />,
     );
@@ -410,6 +415,7 @@ describe("Mercado Pago cancel (L1e)", () => {
           onPortal={noop}
           onRefresh={noop}
           onCancel={noop}
+          onBuyCredits={noop}
           state={state}
         />,
       );
@@ -509,5 +515,123 @@ describe("Mercado Pago cancel (L1e)", () => {
     );
     expect(html).toContain("Mercado Pago is unavailable");
     expect(html).toContain("Cancel and try again");
+  });
+});
+
+describe("L5b credit packs", () => {
+  const PACKS: BillingCreditPack[] = [
+    {
+      packId: "credits_5k",
+      name: "5,000 credits",
+      credits: 5000,
+      currency: "BRL",
+      amountMinor: 3690,
+      sortOrder: 1,
+    },
+    {
+      packId: "credits_10k",
+      name: "10,000 credits",
+      credits: 10000,
+      currency: "BRL",
+      amountMinor: 7290,
+      sortOrder: 2,
+    },
+    {
+      packId: "credits_25k",
+      name: "25,000 credits",
+      credits: 25000,
+      currency: "BRL",
+      amountMinor: 18090,
+      sortOrder: 3,
+    },
+  ];
+  /** Mercado Pago subscriptions off server-side: the catalog has no plan, only packs. */
+  const PACKS_ONLY: BillingState = { ...READY, catalog: [], packs: PACKS };
+
+  it("subscriptions off: Buy credits for each pack, no Subscribe and no 'No plans available'", () => {
+    const html = markup(PACKS_ONLY);
+    expect(html).toContain("5,000 credits · R$ 36,90");
+    expect(html).toContain("10,000 credits · R$ 72,90");
+    expect(html).toContain("25,000 credits · R$ 180,90");
+    expect(html.match(/Buy credits<\/button>/g)).toHaveLength(3);
+    expect(html).toContain("One-time payment with Pix or card");
+    expect(html).toContain("Buy credit packs through Mercado Pago");
+    expect(html).not.toContain("Subscribe</button>");
+    expect(html).not.toContain("No plans available");
+    expect(html).not.toContain("billed monthly");
+  });
+
+  it("with a subscription plan on sale, packs are offered next to Subscribe", () => {
+    const html = markup({ ...READY, packs: PACKS });
+    expect(html).toContain("Subscribe</button>");
+    expect(html.match(/Buy credits<\/button>/g)).toHaveLength(3);
+  });
+
+  it("no packs (or the catalog failed): no Buy credits section", () => {
+    expect(markup(READY)).not.toContain("Buy credits");
+    expect(markup({ ...READY, catalog: null, packs: null })).not.toContain("Buy credits");
+    expect(markup({ ...PACKS_ONLY, status: "loading" })).not.toContain("Buy credits</button>");
+  });
+
+  it("a subscriber can still buy credits", () => {
+    const html = markup({
+      ...PACKS_ONLY,
+      currentPlan: "starter",
+      subscription: {
+        plan: "starter",
+        provider: "mercadopago",
+        status: "active",
+        currentPeriodEnd: null,
+        cancelAtPeriodEnd: false,
+        cancelRequestedAt: null,
+      },
+    });
+    expect(html).toContain("Cancel subscription");
+    expect(html.match(/Buy credits<\/button>/g)).toHaveLength(3);
+  });
+
+  it("clicking Buy credits passes only the pack id; disabled while a checkout is pending", () => {
+    const onBuyCredits = vi.fn();
+    const view = (state: BillingState) =>
+      render(
+        <BillingSectionView
+          busy={false}
+          onCheckout={noop}
+          onPortal={noop}
+          onRefresh={noop}
+          onCancel={noop}
+          onBuyCredits={onBuyCredits}
+          state={state}
+        />,
+      );
+    view(PACKS_ONLY);
+    fireEvent.click(screen.getByRole("button", { name: "Buy 10,000 credits" }));
+    expect(onBuyCredits).toHaveBeenCalledWith("credits_10k");
+    cleanup();
+    view({ ...PACKS_ONLY, pending: "checkout" });
+    for (const button of screen.getAllByRole("button", { name: /^Buy .* credits$/ })) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  it("AccountBillingSection sends billing.buyCredits({ packId }) and shows the reply", async () => {
+    const after: BillingState = { ...PACKS_ONLY, pending: "checkout" };
+    const buyCredits = vi.fn(async (_input: { packId: string }) => after);
+    (window as { modus?: unknown }).modus = {
+      billing: {
+        getState: vi.fn(async () => PACKS_ONLY),
+        refresh: vi.fn(async () => PACKS_ONLY),
+        checkout: vi.fn(async () => PACKS_ONLY),
+        openPortal: vi.fn(async () => PACKS_ONLY),
+        cancelSubscription: vi.fn(async () => PACKS_ONLY),
+        buyCredits,
+        onStateChange: vi.fn(() => () => undefined),
+      },
+    };
+    render(<AccountBillingSection />);
+    const button = await screen.findByRole("button", { name: "Buy 25,000 credits" });
+    fireEvent.click(button);
+    await waitFor(() => expect(buyCredits).toHaveBeenCalledWith({ packId: "credits_25k" }));
+    await screen.findByText("Finish in your browser, then come back to Modus.");
   });
 });
