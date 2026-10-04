@@ -99,6 +99,7 @@ export function GroupAgentsPopover({
   models = [],
   defaultModelId,
   onAgentsChanged,
+  maxVisible,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
@@ -106,8 +107,15 @@ export function GroupAgentsPopover({
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
   onAgentsChanged?(): void;
+  /** L3c: narrow headers show this many avatars, then a "+N" chip (names in its tooltip). */
+  maxVisible?: number | undefined;
 }) {
   const t = useGroupText();
+  const visible =
+    maxVisible !== undefined && group.members.length > maxVisible
+      ? group.members.slice(0, Math.max(1, maxVisible - 1))
+      : group.members;
+  const hidden = group.members.slice(visible.length);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
@@ -132,7 +140,7 @@ export function GroupAgentsPopover({
         className="m-0 flex shrink-0 items-center border-0 p-0 -space-x-2"
         data-testid="group-agent-presence"
       >
-        {group.members.map((member) => {
+        {visible.map((member) => {
           const avatar = avatars.get(member.sessionId) ?? {
             agentId: member.agentId,
             ...memberAvatar(member),
@@ -196,6 +204,22 @@ export function GroupAgentsPopover({
             </button>
           );
         })}
+        {hidden.length > 0 ? (
+          <span
+            aria-label={t("header.moreAgents", {
+              count: hidden.length,
+              names: hidden.map((member) => member.name).join(", "),
+            })}
+            className="relative z-0 flex size-8 shrink-0 items-center justify-center"
+            data-testid="group-agent-overflow"
+            role="img"
+            title={hidden.map((member) => member.name).join(", ")}
+          >
+            <span className="flex size-6 items-center justify-center rounded-full border border-hairline bg-chip text-2xs text-fg-muted tabular-nums">
+              +{hidden.length}
+            </span>
+          </span>
+        ) : null}
       </fieldset>
     </div>
   );

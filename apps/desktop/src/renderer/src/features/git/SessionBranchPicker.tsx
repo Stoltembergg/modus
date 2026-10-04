@@ -5,6 +5,7 @@ import type { GitBranchSummary, SessionBranchState } from "../../../../shared/co
 import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { useComposerToolbarTier } from "../composer/composerToolbarTier";
 import {
   MODEL_CHIP_BASE,
   MODEL_CHIP_INTERACTIVE,
@@ -41,6 +42,8 @@ export function SessionBranchPicker({
   const [open, setOpen] = useState(false);
   const [summary, setSummary] = useState<GitBranchSummary | undefined>();
   const [busy, setBusy] = useState<string | undefined>();
+  // L3c: the composer toolbar's width tier; `sm` = compact chip (icon + short name).
+  const tier = useComposerToolbarTier();
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -113,12 +116,15 @@ export function SessionBranchPicker({
       <span className="inline-flex min-w-0" title={title}>
         <Menu.Trigger
           aria-label={isRunning ? BRANCH_BUSY_TOOLTIP : "Choose branch"}
+          aria-description={current ? `Branch da sessão: ${current}` : undefined}
           className={cn(
             MODEL_CHIP_BASE,
             MODEL_CHIP_INTERACTIVE,
             missing ? "border-danger/40 text-danger" : MODEL_CHIP_TONE,
+            tier === "sm" && "px-1.5",
           )}
           data-branch-missing={missing ? "" : undefined}
+          data-compact={tier === "sm" ? "" : undefined}
           data-testid="session-branch-picker"
           disabled={disabled}
         >
@@ -127,8 +133,16 @@ export function SessionBranchPicker({
           ) : (
             <IconGitBranch size={ICON.sm} stroke={ICON_STROKE.sm} />
           )}
-          <span className="max-w-[9rem] truncate">{current ?? "No branch"}</span>
-          <IconChevronDown size={12} stroke={2} />
+          <span
+            className={cn(
+              "truncate",
+              tier === "sm" ? "max-w-[4.5rem]" : tier === "md" ? "max-w-[6rem]" : "max-w-[9rem]",
+            )}
+            data-testid="session-branch-label"
+          >
+            {current ?? "No branch"}
+          </span>
+          {tier === "sm" ? null : <IconChevronDown size={12} stroke={2} />}
         </Menu.Trigger>
       </span>
       <Menu.Portal>

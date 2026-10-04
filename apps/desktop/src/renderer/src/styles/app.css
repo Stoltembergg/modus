@@ -390,6 +390,22 @@
   justify-content: flex-end;
   gap: 8px;
 }
+/* L3c: narrower headers (see GROUP_HEADER_BREAKPOINTS). The controls column sizes to its
+   content so it is never clipped; the title column truncates instead. */
+.group-room-header-row-chrome[data-width-tier="md"] {
+  grid-template-columns: minmax(0, 1fr) minmax(96px, 180px) auto;
+}
+.group-room-header-row-chrome[data-width-tier="sm"] {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.group-room-header-search-toggle {
+  grid-column: 2;
+  grid-row: 1;
+}
+/* sm with the search open: the field takes the title's place. */
+.group-room-header-row-chrome[data-search-over-title] .group-room-header-search-centered {
+  grid-column: 1 / span 2;
+}
 .group-identity-icon {
   color: hsl(
     var(--group-icon-hue, 260deg) var(--group-icon-saturation) var(--group-icon-lightness)

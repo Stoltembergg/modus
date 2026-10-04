@@ -1,6 +1,8 @@
+import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import {
   IconChevronDown,
+  IconDots,
   IconListCheck,
   IconLoader2,
   IconPlugConnected,
@@ -27,14 +29,17 @@ import type {
   PromptImageAttachment,
   SkillSelection,
 } from "../../../../shared/contracts";
+import { GroupMenuItem } from "../../components/sidebar-groups/helpers";
 import { ComposerRunningSweep } from "../../components/ui/ComposerRunningSweep";
 import { ImageThumb } from "../../components/ui/ImageViewer";
 import { SendStopIcon } from "../../components/ui/SendStopIcon";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
+import { useWidthTier } from "../../lib/useWidthTier";
 import { ContextMentionMenu } from "./ContextMentionMenu";
 import { contextItemKey } from "./composerTokens";
+import { COMPOSER_TOOLBAR_BREAKPOINTS, ComposerToolbarTierContext } from "./composerToolbarTier";
 import { MentionEditor, type MentionEditorHandle, type MentionEditorPart } from "./MentionEditor";
 import { SlashMenu } from "./SlashMenu";
 import {
@@ -236,6 +241,9 @@ export function Composer({
   };
   const editorRef = useRef<MentionEditorHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [toolbarRef, toolbarTier] = useWidthTier<HTMLDivElement>(COMPOSER_TOOLBAR_BREAKPOINTS);
+  // sm: secondary actions (Attach, Connections) collapse into one overflow menu.
+  const toolbarOverflow = toolbarTier === "sm" && !isInlineEdit;
   const { addFiles, clearImages, images, removeImage, toAttachments, updateImage } =
     useComposerImages({
       images: activeDraft.images,
@@ -645,112 +653,155 @@ export function Composer({
           </div>
         ) : null}
 
-        {/* @container: controls collapse their labels to icons as the composer
-          narrows (responsive to the composer's own width, not the viewport). */}
-        <div className="@container flex items-center gap-1 px-3 pt-1.5 pb-2.5">
-          <button
-            aria-label="Attach files"
-            className="app-no-drag flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-            onClick={() => fileInputRef.current?.click()}
-            title="Attach files"
-            type="button"
+        {/* L3c: the toolbar collapses by its own width (composerToolbarTier.ts), not the
+          viewport's: labels to icons, then secondary actions into "More actions". */}
+        <ComposerToolbarTierContext.Provider value={toolbarTier}>
+          <div
+            className="flex min-w-0 items-center gap-1 px-3 pt-1.5 pb-2.5"
+            data-testid="composer-toolbar"
+            data-width-tier={toolbarTier}
+            ref={toolbarRef}
           >
-            <IconPlus size={ICON.md} stroke={ICON_STROKE.md} />
-          </button>
-          <input
-            accept="image/*"
-            className="hidden"
-            multiple
-            onChange={(event) => {
-              if (event.target.files?.length) {
-                void addFiles(event.target.files);
-              }
-              event.target.value = "";
-            }}
-            ref={fileInputRef}
-            type="file"
-          />
-
-          {!isInlineEdit ? (
-            <>
-              <ModePill
-                mode={mode}
-                onCycle={() => setMode(cycleComposerMode(mode))}
-                onExit={() => setMode("build")}
-              />
-              {branchControl}
-              {onOpenConnections ? (
-                <button
-                  aria-label="Connections"
-                  className="app-no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-                  onClick={onOpenConnections}
-                  title="Manage Connections and Composio access"
-                  type="button"
+            {toolbarOverflow ? (
+              <Menu.Root>
+                <Menu.Trigger
+                  aria-label="More actions"
+                  className="app-no-drag flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-subtle outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ring/50 data-popup-open:bg-hover"
+                  data-testid="composer-overflow-trigger"
+                  title="More actions"
                 >
-                  <IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />
-                  <span className="hidden @[520px]:inline">Connections</span>
-                </button>
-              ) : null}
-            </>
-          ) : null}
-
-          <div className="flex-1" />
-
-          {submitError ? (
-            <span className="min-w-0 truncate text-2xs text-danger" title={submitError}>
-              {submitError}
-            </span>
-          ) : null}
-
-          {!isInlineEdit ? (
-            <ContextUsageIndicator
-              {...(currentModel?.contextWindow
-                ? { contextWindow: currentModel.contextWindow }
-                : {})}
-              {...(contextUsage ? { usage: contextUsage } : {})}
+                  <IconDots size={ICON.md} stroke={ICON_STROKE.md} />
+                </Menu.Trigger>
+                <Menu.Portal>
+                  <Menu.Positioner align="start" side="top" sideOffset={6}>
+                    <Menu.Popup
+                      className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1"
+                      data-testid="composer-overflow-menu"
+                    >
+                      <GroupMenuItem
+                        icon={<IconPlus size={ICON.sm} stroke={ICON_STROKE.sm} />}
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        Attach files
+                      </GroupMenuItem>
+                      {onOpenConnections ? (
+                        <GroupMenuItem
+                          icon={<IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />}
+                          onClick={onOpenConnections}
+                        >
+                          Connections
+                        </GroupMenuItem>
+                      ) : null}
+                    </Menu.Popup>
+                  </Menu.Positioner>
+                </Menu.Portal>
+              </Menu.Root>
+            ) : (
+              <button
+                aria-label="Attach files"
+                className="app-no-drag flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                onClick={() => fileInputRef.current?.click()}
+                title="Attach files"
+                type="button"
+              >
+                <IconPlus size={ICON.md} stroke={ICON_STROKE.md} />
+              </button>
+            )}
+            <input
+              accept="image/*"
+              className="hidden"
+              multiple
+              onChange={(event) => {
+                if (event.target.files?.length) {
+                  void addFiles(event.target.files);
+                }
+                event.target.value = "";
+              }}
+              ref={fileInputRef}
+              type="file"
             />
-          ) : null}
 
-          {trailingActions}
+            {!isInlineEdit ? (
+              <>
+                <ModePill
+                  mode={mode}
+                  onCycle={() => setMode(cycleComposerMode(mode))}
+                  onExit={() => setMode("build")}
+                />
+                {branchControl}
+                {onOpenConnections && !toolbarOverflow ? (
+                  <button
+                    aria-label="Connections"
+                    className="app-no-drag inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                    onClick={onOpenConnections}
+                    title="Manage Connections and Composio access"
+                    type="button"
+                  >
+                    <IconPlugConnected size={ICON.sm} stroke={ICON_STROKE.sm} />
+                    {toolbarTier === "lg" ? <span>Connections</span> : null}
+                  </button>
+                ) : null}
+              </>
+            ) : null}
 
-          {onCancel ? (
+            <div className="flex-1" />
+
+            {submitError ? (
+              <span className="min-w-0 truncate text-2xs text-danger" title={submitError}>
+                {submitError}
+              </span>
+            ) : null}
+
+            {!isInlineEdit ? (
+              <ContextUsageIndicator
+                {...(currentModel?.contextWindow
+                  ? { contextWindow: currentModel.contextWindow }
+                  : {})}
+                {...(contextUsage ? { usage: contextUsage } : {})}
+              />
+            ) : null}
+
+            {trailingActions}
+
+            {onCancel ? (
+              <button
+                aria-label="Cancel"
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
+                disabled={submitting}
+                onClick={onCancel}
+                type="button"
+              >
+                <IconX size={ICON.md} stroke={ICON_STROKE.md} />
+              </button>
+            ) : null}
+
+            {/* One control: arrow → square morph while the agent is running. */}
             <button
-              aria-label="Cancel"
-              className="flex size-7 shrink-0 items-center justify-center rounded-lg text-fg-subtle transition-colors hover:bg-hover hover:text-fg"
-              disabled={submitting}
-              onClick={onCancel}
+              aria-label={isRunning ? "Stop" : "Send"}
+              className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-fg text-canvas transition-colors hover:bg-fg-muted active:scale-[0.94] disabled:bg-chip-strong disabled:text-fg-faint"
+              disabled={
+                isRunning
+                  ? !onAbort
+                  : !hasContent || !canSubmit || submitting || models.length === 0 || !model
+              }
+              onClick={() => {
+                if (isRunning) onAbort?.();
+                else send();
+              }}
               type="button"
             >
-              <IconX size={ICON.md} stroke={ICON_STROKE.md} />
+              {submitting && !isRunning ? (
+                <IconLoader2
+                  className="animate-spin motion-reduce:animate-none"
+                  size={ICON.sm}
+                  stroke={ICON_STROKE.sm}
+                />
+              ) : (
+                <SendStopIcon busy={isRunning} className="size-3.5" />
+              )}
             </button>
-          ) : null}
-
-          {/* One control: arrow → square morph while the agent is running. */}
-          <button
-            aria-label={isRunning ? "Stop" : "Send"}
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-fg text-canvas transition-colors hover:bg-fg-muted active:scale-[0.94] disabled:bg-chip-strong disabled:text-fg-faint"
-            disabled={
-              isRunning
-                ? !onAbort
-                : !hasContent || !canSubmit || submitting || models.length === 0 || !model
-            }
-            onClick={() => {
-              if (isRunning) onAbort?.();
-              else send();
-            }}
-            type="button"
-          >
-            {submitting && !isRunning ? (
-              <IconLoader2
-                className="animate-spin motion-reduce:animate-none"
-                size={ICON.sm}
-                stroke={ICON_STROKE.sm}
-              />
-            ) : (
-              <SendStopIcon busy={isRunning} className="size-3.5" />
-            )}
-          </button>
-        </div>
+          </div>
+        </ComposerToolbarTierContext.Provider>
         {footer ? (
           <div className="relative z-10 border-t border-hairline-soft px-3 py-1.5">{footer}</div>
         ) : null}

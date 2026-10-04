@@ -2,6 +2,8 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionBranchState } from "../../../../shared/contracts";
+import type { WidthTier } from "../../lib/useWidthTier";
+import { ComposerToolbarTierContext } from "../composer/composerToolbarTier";
 import { BRANCH_BUSY_TOOLTIP, SessionBranchPicker } from "./SessionBranchPicker";
 
 afterEach(cleanup);
@@ -89,5 +91,47 @@ describe("SessionBranchPicker (L2)", () => {
     });
     expect(onError).toHaveBeenCalledWith("Há alterações não commitadas nesta pasta.");
     expect(trigger.textContent).toContain("main");
+  });
+});
+
+describe("SessionBranchPicker compact (L3c)", () => {
+  const renderIn = (tier: WidthTier) =>
+    render(
+      <ComposerToolbarTierContext.Provider value={tier}>
+        <SessionBranchPicker cwd="/repo" isRunning={false} sessionId="s1" />
+      </ComposerToolbarTierContext.Provider>,
+    );
+
+  it("sm: icon + truncated name, full branch in the tooltip, still opens the menu", async () => {
+    branchState = { ...branchState, branch: "feat/l3c-responsive-bars" };
+    renderIn("sm");
+    const trigger = await screen.findByTestId("session-branch-picker");
+    await waitFor(() => expect(trigger.textContent).toContain("feat/l3c-responsive-bars"));
+    expect(trigger.hasAttribute("data-compact")).toBe(true);
+    const label = screen.getByTestId("session-branch-label");
+    expect(label.className).toContain("truncate");
+    expect(label.className).toContain("max-w-[4.5rem]");
+    expect(trigger.parentElement?.getAttribute("title")).toBe(
+      "Branch da sessão: feat/l3c-responsive-bars",
+    );
+    expect(trigger.getAttribute("aria-label")).toBe("Choose branch");
+    await act(async () => {
+      fireEvent.click(trigger);
+    });
+    expect(await screen.findByText("feat/l2")).toBeTruthy();
+  });
+
+  it("md / lg: wider label limits and the chevron", async () => {
+    renderIn("md");
+    const trigger = await screen.findByTestId("session-branch-picker");
+    await waitFor(() => expect(trigger.textContent).toContain("main"));
+    expect(trigger.hasAttribute("data-compact")).toBe(false);
+    expect(screen.getByTestId("session-branch-label").className).toContain("max-w-[6rem]");
+    expect(trigger.querySelectorAll("svg")).toHaveLength(2);
+    cleanup();
+    renderIn("lg");
+    await waitFor(() =>
+      expect(screen.getByTestId("session-branch-label").className).toContain("max-w-[9rem]"),
+    );
   });
 });
