@@ -1462,6 +1462,7 @@ function writeTaskTransition(
     reviewer?: string | null;
     branch?: string;
     executionId?: string;
+    stage?: NonNullable<GroupTask["stage"]>;
     clearReview?: boolean;
   },
   action: string,
@@ -1488,6 +1489,10 @@ function writeTaskTransition(
   if (fields.executionId !== undefined) {
     sets.push("execution_id = ?");
     params.push(fields.executionId);
+  }
+  if (fields.stage !== undefined) {
+    sets.push("stage = ?");
+    params.push(fields.stage);
   }
   if (fields.clearReview) sets.push("review_json = null");
   sets.push("updated_at = ?");
@@ -1815,6 +1820,17 @@ export function reviewGroupTask(
       taskId,
       {
         status: next === "approve" ? "done" : IN_PROGRESS_TASK_STATUS,
+        ...(next === "changes" &&
+        (task.stage === "review" || task.stage === "verify" || task.stage === "deliver")
+          ? {
+              stage:
+                task.kind === "design" || task.kind === "question"
+                  ? "plan"
+                  : task.kind === "review"
+                    ? "review"
+                    : "implement",
+            }
+          : {}),
       },
       "review",
       actorSessionId,

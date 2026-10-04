@@ -29,6 +29,7 @@ import {
 import {
   ESTIMATED_CONTEXT_TOKENS_PER_WAKE,
   estimateGroupTokens,
+  type GroupTaskDispatchInput,
   type GroupTaskWake,
   type GroupWorktreeReady,
 } from "../../groups/group-runtime";
@@ -120,12 +121,19 @@ const MAX_NOTE_CHARS = 500;
 
 /* ── wake sink (set by the app wiring; the GroupRuntime routes the wake) ── */
 
-type TaskWakeSink = (wake: GroupTaskWake) => Pick<GroupMessage, "id"> | undefined;
+type TaskWakeSink = (
+  wake: GroupTaskWake,
+) => (Pick<GroupMessage, "id"> & { deliveryNotice?: string }) | undefined;
 let taskWakeSink: TaskWakeSink | undefined;
+let taskDispatchValidator: ((input: GroupTaskDispatchInput) => void) | undefined;
 
 /** A persisted message ID acknowledges durable delivery; absence leaves the operation retryable. */
-export function setGroupTaskWakeSink(sink: TaskWakeSink | undefined): void {
+export function setGroupTaskWakeSink(
+  sink: TaskWakeSink | undefined,
+  validateTaskDispatch?: (input: GroupTaskDispatchInput) => void,
+): void {
   taskWakeSink = sink;
+  taskDispatchValidator = sink ? validateTaskDispatch : undefined;
 }
 
 let worktreeReadySink: ((ready: GroupWorktreeReady) => boolean) | undefined;
@@ -396,9 +404,9 @@ function dispatchTaskOperation(
   operation: GroupTaskOperationInput | undefined,
   result: GroupTaskOperationResult | undefined,
   caller: GroupToolCaller,
-): void {
-  if (!taskWakeSink) return;
-  if (operation && result && !shouldDeliverTaskOperation(operation.operationId)) return;
+): string | undefined {
+  if (!taskWakeSink) return undefined;
+  if (operation && result && !shouldDeliverTaskOperation(operation.operationId)) return undefined;
   const ack = taskWakeSink({
     ...wake,
     ...(operation &&
@@ -414,6 +422,7 @@ function dispatchTaskOperation(
   if (!ack?.id)
     throw new Error("Group task delivery was not acknowledged; retry the same operation.");
   if (operation && result) markGroupTaskExplicitDispatch(operation.operationId);
+  return ack.deliveryNotice;
 }
 
 /** Runs one member tool for `caller`; always returns text (errors included). */
@@ -436,14 +445,31 @@ export function runGroupTool<N extends SyncGroupToolName>(
     const actor = caller.sessionId;
     const op = operationInput(name, caller, groupId, params as TaskOperationParams);
     let operationResult: GroupTaskOperationResult | undefined;
+    let deliveryNotice: string | undefined;
     const mutate = (
       write: () => GroupTask | { task: GroupTask; data?: Record<string, string> },
+      dispatchTarget?: string,
     ) => {
-      operationResult = applyGroupTaskOperation(op, write);
+      operationResult = applyGroupTaskOperation(op, () => {
+        const result = write();
+        if (dispatchTarget && dispatchTarget !== actor) {
+          // Validation is inside the Task Store transaction: a refusal rolls back
+          // ownership/review changes and creates neither an event nor a room status.
+          taskDispatchValidator?.({
+            groupId,
+            actorSessionId: actor,
+            targetSessionId: dispatchTarget,
+            task: "task" in result ? result.task : result,
+          });
+        }
+        return result;
+      });
       return operationResult.task;
     };
-    const dispatch = (wake: GroupTaskWake) =>
-      dispatchTaskOperation(wake, op, operationResult, caller);
+    const dispatch = (wake: GroupTaskWake) => {
+      deliveryNotice = dispatchTaskOperation(wake, op, operationResult, caller);
+    };
+    const deliveredText = (text: string) => (deliveryNotice ? `${text}\n${deliveryNotice}` : text);
     switch (name) {
       case "group_get_work_state":
         return JSON.stringify(
@@ -507,14 +533,19 @@ export function runGroupTool<N extends SyncGroupToolName>(
       case "group_request_review": {
         const input = params as GroupToolParams["group_request_review"];
         const reviewer = resolveMember(members, input.reviewer);
-        const task = mutate(() => requestGroupTaskReview(groupId, input.id, actor, reviewer));
+        const task = mutate(
+          () => requestGroupTaskReview(groupId, input.id, actor, reviewer),
+          reviewer,
+        );
         dispatch({
           groupId,
           actorSessionId: actor,
           targetSessionId: reviewer,
           body: `Review requested: "${task.title}" (task ${task.id}) ${label(members, reviewer)}`,
         });
-        return `Review requested from ${label(members, reviewer)}: ${formatTask(members, task)}`;
+        return deliveredText(
+          `Review requested from ${label(members, reviewer)}: ${formatTask(members, task)}`,
+        );
       }
       case "group_record_decision": {
         const { text } = params as GroupToolParams["group_record_decision"];
@@ -558,7 +589,7 @@ export function runGroupTool<N extends SyncGroupToolName>(
               ? { data: { previousOwnerSessionId: assigned.previousOwnerSessionId } }
               : {}),
           };
-        });
+        }, assignee);
         const previousOwnerSessionId = operationResult?.data?.previousOwnerSessionId;
         const note = input.note?.trim().slice(0, MAX_NOTE_CHARS);
         const subject = `"${task.title}" (task ${task.id})`;
@@ -576,7 +607,9 @@ export function runGroupTool<N extends SyncGroupToolName>(
           body: note ? `${body}: ${note}` : body,
           ...(assignee === actor ? { wake: false } : {}),
         });
-        return `${previousOwnerSessionId ? "Reassigned" : "Assigned"} ${formatTask(members, task)}`;
+        return deliveredText(
+          `${previousOwnerSessionId ? "Reassigned" : "Assigned"} ${formatTask(members, task)}`,
+        );
       }
       case "group_propose_agreement": {
         const input = params as GroupToolParams["group_propose_agreement"];
@@ -589,7 +622,10 @@ export function runGroupTool<N extends SyncGroupToolName>(
         if (taskId) {
           if (input.confirmer) {
             const confirmer = resolveMember(members, input.confirmer);
-            const task = mutate(() => requestGroupTaskReview(groupId, taskId, actor, confirmer));
+            const task = mutate(
+              () => requestGroupTaskReview(groupId, taskId, actor, confirmer),
+              confirmer,
+            );
             dispatch({
               groupId,
               actorSessionId: actor,
@@ -619,7 +655,7 @@ export function runGroupTool<N extends SyncGroupToolName>(
             wake: false,
           });
         }
-        return `Proposed agreement: ${summary}.${taskLine}`;
+        return deliveredText(`Proposed agreement: ${summary}.${taskLine}`);
       }
       case "group_block": {
         const input = params as GroupToolParams["group_block"];
@@ -647,11 +683,12 @@ export function runGroupTool<N extends SyncGroupToolName>(
           groupId,
           actorSessionId: actor,
           body,
+          purpose: "control",
           ...(returnTo ? { targetSessionId: returnTo } : {}),
           ...(!returnTo || returnTo === actor ? { wake: false } : {}),
         });
         const taskNote = input.taskId ? ` (task ${input.taskId})` : "";
-        return `Blocked${taskNote}: ${reason}`;
+        return deliveredText(`Blocked${taskNote}: ${reason}`);
       }
       case "group_handoff": {
         const input = params as GroupToolParams["group_handoff"];
@@ -674,16 +711,18 @@ export function runGroupTool<N extends SyncGroupToolName>(
         if (input.taskId || taskTitle) {
           const executionId = sessionExecutionId(actor);
           const branch = memberWorktreeBranch(groupId, target);
-          const task = mutate(() =>
-            handoffGroupTask({
-              groupId,
-              actorSessionId: actor,
-              targetSessionId: target,
-              description: objective,
-              ...(input.taskId ? { taskId: input.taskId } : { title: taskTitle ?? "" }),
-              ...(executionId ? { executionId } : {}),
-              ...(branch ? { branch } : {}),
-            }),
+          const task = mutate(
+            () =>
+              handoffGroupTask({
+                groupId,
+                actorSessionId: actor,
+                targetSessionId: target,
+                description: objective,
+                ...(input.taskId ? { taskId: input.taskId } : { title: taskTitle ?? "" }),
+                ...(executionId ? { executionId } : {}),
+                ...(branch ? { branch } : {}),
+              }),
+            target,
           );
           taskLine = ` ${input.taskId ? "Assigned" : "Created"} ${formatTask(members, task)}.`;
         }
@@ -715,8 +754,9 @@ export function runGroupTool<N extends SyncGroupToolName>(
                 "Group task delivery was not acknowledged; retry the same operation.",
               );
             markGroupTaskExplicitDispatch(op.operationId);
+            deliveryNotice = ack.deliveryNotice;
           }
-          return saved.text;
+          return deliveredText(saved.text);
         }
         dispatch({
           groupId,
@@ -725,7 +765,7 @@ export function runGroupTool<N extends SyncGroupToolName>(
           body,
           ...(target === actor ? { wake: false } : {}),
         });
-        return `Handed off to ${label(members, target)}: ${objective}.${taskLine}`;
+        return deliveredText(`Handed off to ${label(members, target)}: ${objective}.${taskLine}`);
       }
       default:
         throw new ToolInputError("invalid-value", `Unknown group tool ${String(name)}.`);
@@ -809,16 +849,24 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
           eventId: op.operationId,
           approvedCriterionIds: [],
         };
-        result = applyGroupTaskOperation(op, () =>
-          commitVerifiedGroupTask({
+        result = applyGroupTaskOperation(op, () => {
+          const updated = commitVerifiedGroupTask({
             groupId,
             taskId,
             actorSessionId: actor,
             action: "changes",
             snapshot,
             review,
-          }),
-        );
+          });
+          if (updated.ownerSessionId && updated.ownerSessionId !== actor)
+            taskDispatchValidator?.({
+              groupId,
+              actorSessionId: actor,
+              targetSessionId: updated.ownerSessionId,
+              task: updated,
+            });
+          return updated;
+        });
       } else {
         let snapshot = await verifyGroupTaskForTransition({
           taskId,
@@ -913,12 +961,14 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
         ? `[group-error:verification-required] Task ${task.id} cannot complete: ${result.data.gateReason}. ${decision}`
         : `Agreed. Closed ${formatTask(members, task)}. ${decision}`;
     }
+    let deliveryNotice: string | undefined;
     if (task.ownerSessionId)
-      dispatchTaskOperation(
+      deliveryNotice = dispatchTaskOperation(
         {
           groupId,
           actorSessionId: actor,
           targetSessionId: task.ownerSessionId,
+          taskId: task.id,
           body:
             reviewParams.verdict === "approve"
               ? note
@@ -931,7 +981,7 @@ export async function runGroupVerifiedTool<N extends "group_review_task" | "grou
         result,
         caller,
       );
-    return `${reviewParams.verdict === "approve" ? "Approved" : "Changes requested"}: ${formatTask(members, task)}`;
+    return `${reviewParams.verdict === "approve" ? "Approved" : "Changes requested"}: ${formatTask(members, task)}${deliveryNotice ? `\n${deliveryNotice}` : ""}`;
   } catch (error) {
     return errorText(error);
   }
@@ -1328,7 +1378,7 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
     group_assign_task: {
       label: "Assign group task",
       description:
-        "Coordinator mode, Lead only: give a task to a member (yourself included). An open task moves to in_progress with that owner; an in_progress task owned by someone else is reassigned. Posts the assignment in the room and wakes the new owner (not you). in_review, done and cancelled tasks cannot be assigned.",
+        "Coordinator mode, Lead only: give a task to a member (yourself included). Check declared capabilityIds/supportedTaskKinds against its current stage first; empty metadata needs user configuration. An open task moves to in_progress with that owner; an in_progress task owned by someone else is reassigned. Posts and queues the new owner only when dispatch is accepted; a refusal is an error, not a successful wake. in_review, done and cancelled tasks cannot be assigned.",
       snippet:
         "group_assign_task(taskId, memberId, note?, expectedVersion?, operationId?) — as coordinator, hand a task to a member.",
     },
@@ -1356,7 +1406,7 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
     group_handoff: {
       label: "Handoff to member",
       description:
-        "Delegate a concrete objective to a member using their session ID. Assigns an existing taskId or atomically creates and assigns taskTitle before waking; a self handoff only records the status. Public @mentions alone do not delegate work.",
+        "Delegate a concrete objective to a member using their session ID. Check declared capabilities and task kinds against the current task stage first. Assigns an existing taskId or atomically creates and assigns taskTitle before waking; a self handoff only records the status. A refusal did not start the recipient; report the cause once and retry only after it changes. Public @mentions alone do not delegate work.",
       snippet:
         "group_handoff(memberId, objective, taskTitle?, taskId?, expectedVersion?, operationId?) — hand work to the next owner.",
     },

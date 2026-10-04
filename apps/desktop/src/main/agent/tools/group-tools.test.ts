@@ -145,6 +145,7 @@ describe("group member tools", () => {
       groupId: group.id,
       actorSessionId: beta,
       targetSessionId: alpha,
+      taskId: id,
       body: `Changes requested on "Parser" (task ${id}) @Alpha: add tests`,
     });
 
@@ -158,6 +159,7 @@ describe("group member tools", () => {
       groupId: group.id,
       actorSessionId: beta,
       targetSessionId: alpha,
+      taskId: id,
       body: "Approved",
       wake: false,
     });
@@ -817,6 +819,7 @@ describe("agreement tools (P1b)", () => {
         actorSessionId: beta,
         targetSessionId: alpha,
         body: "Blocked · missing tests",
+        purpose: "control",
       },
     ]);
   });
@@ -842,6 +845,7 @@ describe("agreement tools (P1b)", () => {
         targetSessionId: alpha,
         body: "Blocked · waiting for user input",
         wake: false,
+        purpose: "control",
       },
     ]);
   });

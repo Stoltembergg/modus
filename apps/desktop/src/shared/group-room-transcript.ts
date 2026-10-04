@@ -3,10 +3,57 @@
  * Ops packets and typed collab lines stay parseable; the room shows conversation.
  */
 
+import type { GroupMessage } from "./contracts";
 import type { GroupCollabStatus } from "./group-collab-status";
 import { parseGroupCollabStatusLine } from "./group-collab-status";
 import { formatGroupProgressLabel } from "./group-progress-label";
 import { groupRoomLabel, groupText } from "./group-room-locale";
+
+/** Display older SDK-per-message records as one card per member turn, without rewriting history. */
+export function coalesceGroupTurnMessages(messages: readonly GroupMessage[]): GroupMessage[] {
+  const result: GroupMessage[] = [];
+  const turns = new Map<string, { index: number; state: GroupMessage }>();
+  for (const message of messages) {
+    if (message.authorKind !== "agent" || message.kind !== "message" || !message.turnId) {
+      result.push(message);
+      continue;
+    }
+    const key = JSON.stringify([
+      message.groupId,
+      message.turnId,
+      message.authorSessionId,
+      message.chainId,
+      message.replyToMessageId,
+    ]);
+    const existing = turns.get(key);
+    if (!existing) {
+      turns.set(key, { index: result.length, state: message });
+      result.push(message);
+      continue;
+    }
+    const first = result[existing.index];
+    if (!first) {
+      turns.set(key, { index: result.length, state: message });
+      result.push(message);
+      continue;
+    }
+    const revision = (item: GroupMessage) => Date.parse(item.updatedAt ?? item.createdAt) || 0;
+    const state = revision(message) >= revision(existing.state) ? message : existing.state;
+    existing.state = state;
+    const merged: GroupMessage = {
+      ...first,
+      body: [first.body, message.body].filter((body) => body.trim()).join("\n\n"),
+      mentions: [...new Set([...first.mentions, ...message.mentions])],
+    };
+    // The first card is the durable job identity, including the run selected on retry.
+    if (state.status !== undefined) merged.status = state.status;
+    if (state.updatedAt !== undefined) merged.updatedAt = state.updatedAt;
+    if (state.error !== undefined) merged.error = state.error;
+    else delete merged.error;
+    result[existing.index] = merged;
+  }
+  return result;
+}
 
 /** Rigid handoff-packet keys moved out of the main timeline into Activity/Details. */
 export const HANDOFF_PACKET_KEYS = [

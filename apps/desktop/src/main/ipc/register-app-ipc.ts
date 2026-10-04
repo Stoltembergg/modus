@@ -1550,7 +1550,10 @@ export function registerAppIpc({
     emitGroupRuntimeEvent({ type: "group.message", groupId: message.groupId, message }),
   );
   // Member task tools (review / changes) wake members through the GroupRuntime.
-  setGroupTaskWakeSink((wake) => getGroupRuntime().handleTaskWake(wake));
+  setGroupTaskWakeSink(
+    (wake) => getGroupRuntime().handleTaskWake(wake),
+    (input) => getGroupRuntime().validateTaskDispatch(input),
+  );
   setGroupWorktreeReadySink((ready) => getGroupRuntime().handleWorktreeReady(ready));
   // Resolved lazily: the GroupRuntime subscribes to the agent runtime on first use.
   registerGroupRuntimeIpcHandlers(ipcMain, assertTrustedSender, {

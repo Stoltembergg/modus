@@ -417,7 +417,8 @@ function ReplyQuote({
 }
 
 function MessageError({ message }: { message: GroupMessage }) {
-  if (!message.error?.trim()) return null;
+  // Older retries could retain an error on an otherwise completed card.
+  if (message.status === "completed" || !message.error?.trim()) return null;
   return (
     <div
       className="break-words rounded-md bg-danger/10 px-2 py-1.5 text-xs text-danger"

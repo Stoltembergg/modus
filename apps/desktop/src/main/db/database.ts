@@ -561,6 +561,12 @@ export function migrateDatabase(db: DatabaseSync): void {
     );
     create index if not exists idx_group_jobs_pending on group_jobs(status, seq);
   `);
+  addColumn(
+    db,
+    "group_jobs",
+    "purpose",
+    "text not null default 'task' check (purpose in ('task','control'))",
+  );
   // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
   addColumn(db, "group_tasks", "execution_id", "text");
   addColumn(db, "group_decisions", "execution_id", "text");
