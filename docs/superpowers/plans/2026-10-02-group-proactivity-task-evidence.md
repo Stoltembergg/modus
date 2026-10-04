@@ -83,7 +83,27 @@ type GroupTaskReview = {
   criteriaVersion: number; sourceFingerprint: string; eventId: string;
   approvedCriterionIds: string[];
 };
+type GroupTaskDraft = {
+  groupId: string; title: string; description?: string;
+  kind: GroupTaskKind; priority: GroupTaskPriority;
+  dependencyIds: string[]; criteria: GroupTaskCriterion[];
+  verificationPolicy: GroupTaskVerificationPolicy;
+  reviewerSessionId?: string;
+};
+type GroupTaskCriterionOutcome = {
+  criterionId: string; criteriaVersion: number;
+  status: VerificationEvidenceStatus | "review_approved";
+  sourceFingerprint: string;
+};
+type GroupTaskGateInput = {
+  task: GroupTask; criterionOutcomes: GroupTaskCriterionOutcome[];
+  review?: GroupTaskReview; sourceFingerprint: string;
+  dependencies: Array<Pick<GroupTask, "id" | "status">>;
+};
 type GroupTaskGateResult = { satisfied: boolean; reasonCodes: string[] };
+type GroupTaskValidationResult = {
+  issues: Array<{ code: string; field: string; message: string }>;
+};
 ```
 
 Adicionar a `GroupTask`: `kind`, `priority`, `stage?`, `blockedReason?`, `dependencyIds`, `criteria`, `criteriaVersion`, `verificationPolicy`, `evidenceRefs`, `review?` e `stateVersion`. `stateVersion` cresce a cada mutação; `criteriaVersion` cresce quando critérios/política mudam. Adicionar somente `blocked` aos statuses atuais. Não guardar status QA afirmado pelo agente na referência: o resultado resolvido é transitório e lido da fonte persistida.
@@ -94,7 +114,7 @@ Adicionar a `GroupTask`: `kind`, `priority`, `stage?`, `blockedReason?`, `depend
 
 **Files:** criar `desktop/shared/group-work-state.ts`, `group-task-policy.ts`, `group-task-policy.test.ts`; modificar `desktop/shared/contracts.ts`, `contracts-parts/contracts-part-08.ts`, `group-errors.ts`.
 
-**Interfaces:** consome `HarnessTaskCheckKind` existente. Produz os tipos acima, `validateGroupTaskDraft(draft: GroupTaskDraft, tasks: readonly GroupTask[]): GroupTaskValidationResult` e `evaluateGroupTaskGate(input: GroupTaskGateInput): GroupTaskGateResult`. Definir os tipos de input/result no módulo compartilhado; input do gate inclui tarefa, outcomes resolvidos por critério, revisão e fingerprint atual. `GroupTaskDraft` contém título, descrição opcional e os campos novos editáveis.
+**Interfaces:** consome `HarnessTaskCheckKind` e `VerificationEvidenceStatus` existentes. Produz os tipos acima, `validateGroupTaskDraft(draft: GroupTaskDraft, tasks: readonly GroupTask[]): GroupTaskValidationResult` e `evaluateGroupTaskGate(input: GroupTaskGateInput): GroupTaskGateResult`. `criterionOutcomes` representa os resultados resolvidos pelo serviço main; `review_approved` só aparece quando o reviewer aprovou aquele critério para a versão/fingerprint atual. `sourceFingerprint` é a revisão corrente e dependências são snapshots do mesmo grupo.
 
 - [ ] Adicionar testes `required_qa_is_not_satisfied_by_user_confirmation`, `review_is_bound_to_criteria_and_source`, `rejects_dependency_cycles_and_cross_group_ids`, `required_policy_rejects_empty_criteria`, `legacy_none_policy_can_complete`: assertar que `passed` atual satisfaz QA, demais statuses não; revisão/fingerprint antigos não satisfazem; ciclos e outro Grupo são rejeitados; required sem critérios é inválido; tarefa legada sem gate mantém conclusão.
 - [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/shared/group-task-policy.test.ts`; esperar falha nas interfaces novas.
