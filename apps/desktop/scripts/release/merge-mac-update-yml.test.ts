@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import yaml from "js-yaml";
+import { load as loadYaml } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   macMetadataFileName,
@@ -31,7 +31,7 @@ function archYml(version: string, arch: "arm64" | "x64", releaseDate: string) {
   ].join("\n");
 }
 
-const load = (text: string, label = "fixture") => validateUpdateInfo(yaml.load(text), label);
+const load = (text: string, label = "fixture") => validateUpdateInfo(loadYaml(text), label);
 
 describe("mergeMacUpdateInfo", () => {
   it("keeps both arches with their sha512/size and points legacy fields at x64", () => {
@@ -138,7 +138,7 @@ describe("mergeFiles (CLI path)", () => {
       out,
       inputs: [writeArch(version, "arm64", name), writeArch(version, "x64", name)],
     });
-    const written = yaml.load(readFileSync(out, "utf8")) as {
+    const written = loadYaml(readFileSync(out, "utf8")) as {
       version: string;
       files: { url: string }[];
     };

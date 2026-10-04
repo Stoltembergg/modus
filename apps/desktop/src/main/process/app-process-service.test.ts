@@ -34,7 +34,8 @@ describe("app-process-service", () => {
       expect(result.alive).toBe(true);
       expect(result.pid).toBeGreaterThan(0);
       expect(pidAlive(result.pid)).toBe(true);
-      expect(result.name.toLowerCase()).toContain("node");
+      expect(result.command).toBe(NODE);
+      expect(result.name).toBeTruthy();
       expect(isAppId(result.id)).toBe(true);
 
       const listed = listApps({ sessionId: "test-session" }).find((a) => a.id === result.id);
