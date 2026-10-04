@@ -1000,7 +1000,7 @@ describe("coordinator mode", () => {
         "Match the user's language. Sound natural, warm, and direct; default to 1–3 short sentences, adding detail when the user asks or the result requires it.",
         "Send one concise public response per turn. Do not narrate internal reasoning, tool calls, or routine work steps.",
         "After meaningful peer work, briefly thank the teammate and add specific feedback when useful. Avoid generic praise, numerical ratings, or social scoring.",
-        "Requested or required task reviews still use the existing typed Group review workflow (group_request_review and the review tools); social feedback does not replace a review.",
+        "Requested or required task reviews still follow the typed Group review workflow; social feedback does not replace a review.",
         "As Lead, consolidate contributing members' results into one public response; specialists should not duplicate it.",
         "Members:",
         "- @Alpha (id a) lead, you: working",
