@@ -1,16 +1,33 @@
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
 
 const sessionId = "session-safe-1";
 const runId = "run-safe-1";
-const manifestReadHook = vi.hoisted(() => ({ afterRead: undefined as (() => void) | undefined }));
+const manifestReadHook = vi.hoisted(() => ({
+  afterRead: undefined as (() => void) | undefined,
+  beforeAccess: undefined as ((path: unknown) => void) | undefined,
+  statOwner: undefined as { path: string; uid: number } | undefined,
+}));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
   return {
     ...actual,
+    accessSync: (...args: Parameters<typeof actual.accessSync>) => {
+      manifestReadHook.beforeAccess?.(args[0]);
+      return actual.accessSync(...args);
+    },
+    statSync: (...args: Parameters<typeof actual.statSync>) => {
+      const value = actual.statSync(...args);
+      const owner = manifestReadHook.statOwner;
+      if (value && owner && args[0] === owner.path) {
+        value.uid = typeof value.uid === "bigint" ? BigInt(owner.uid) : owner.uid;
+      }
+      return value;
+    },
     readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
       const content = actual.readFileSync(...args);
       manifestReadHook.afterRead?.();
@@ -20,6 +37,104 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 describe("manifest read consistency", () => {
+  it.skipIf(!process.getuid)(
+    "fails closed on global temporary churn when running as root",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-root-ancestor-"));
+      const cwd = join(sandbox, "container", "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      let sibling: string | undefined;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(0);
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-root-sibling-"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "observes an ancestor whose owner can chmod its unwritable parent",
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "modus-parent-owner-"));
+      const ownedParent = join(sandbox, "owned-parent");
+      const container = join(ownedParent, "container");
+      const cwd = join(container, "project");
+      mkdirSync(cwd, { recursive: true });
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const simulatedUid = 2 ** 31 - 1;
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(simulatedUid);
+      manifestReadHook.statOwner = { path: ownedParent, uid: simulatedUid };
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === ownedParent) {
+          const error = new Error("Parent has no write permission yet") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        // Change only the container, preserving the parent's identity and the leaf's contents.
+        mkdirSync(join(container, "changed-topology"));
+        const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(after?.checkName).toBe("tests");
+        expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        manifestReadHook.statOwner = undefined;
+        uidSpy.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
+  it.skipIf(!process.getuid)(
+    "ignores sibling temporary artifacts when the ancestor is protected",
+    async () => {
+      const cwd = await mkdtemp(join(tmpdir(), "modus-protected-ancestor-"));
+      let sibling: string | undefined;
+      await writeFile(
+        join(cwd, "package.json"),
+        JSON.stringify({ scripts: { test: "vitest run" } }),
+      );
+      const protectedParent = dirname(realpathSync(tmpdir()));
+      // Simulate a uid that neither owns the global temporary directory nor can rename it.
+      const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(2 ** 31 - 1);
+      manifestReadHook.beforeAccess = (path) => {
+        if (path === protectedParent) {
+          const error = new Error("Parent is not writable by this user") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+      };
+      try {
+        const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
+        expect(before?.checkName).toBe("tests");
+        sibling = await mkdtemp(join(tmpdir(), "modus-unrelated-temp-"));
+        expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)?.packageConfigDigest).toBe(
+          before?.packageConfigDigest,
+        );
+      } finally {
+        manifestReadHook.beforeAccess = undefined;
+        uidSpy.mockRestore();
+        if (sibling) await rm(sibling, { recursive: true, force: true });
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
   it.for([
     "root",
     "workspace",
@@ -501,5 +616,3 @@ describe("summarizeRunQA", () => {
     });
   });
 });
-
-import { mkdirSync, writeFileSync } from "node:fs";

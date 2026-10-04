@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import {
+  accessSync,
+  type BigIntStats,
   closeSync,
+  constants,
   fstatSync,
   lstatSync,
   openSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   statSync,
 } from "node:fs";
 import { dirname, join, parse, resolve, sep } from "node:path";
@@ -133,20 +137,67 @@ export function resolvePackageCheckScript(
   packageName: string | undefined,
   scriptName: string,
 ): { body: string; configDigest: string; workspaceRoot?: string } | undefined {
-  // Observe links in directory components too, including links in a link's target.
-  const resolutionLinks = (path: string): unknown[] => {
+  const artifactDirectories = new Set<string>();
+  try {
+    artifactDirectories.add(realpathSync(cwd));
+  } catch {
+    return undefined;
+  }
+  const directoryNeedsMetadata = (path: string, entry: BigIntStats): boolean => {
+    if (artifactDirectories.has(path)) return false;
+    const uid = process.getuid?.();
+    // Owners can chmod a protected ancestor, temporarily enabling descendant replacement.
+    if (uid === 0 || (uid !== undefined && entry.uid === BigInt(uid))) return true;
+    if (dirname(path) === path) return false;
+    const parent = dirname(path);
+    try {
+      const parentEntry = statSync(parent, { bigint: true });
+      if (uid !== undefined && parentEntry.uid === BigInt(uid)) return true;
+      accessSync(parent, constants.W_OK | constants.X_OK);
+      // Sticky parents allow removal only to root, the parent owner or the entry owner.
+      return (
+        uid === undefined ||
+        uid === 0 ||
+        (parentEntry.mode & 0o1000n) === 0n ||
+        parentEntry.uid === BigInt(uid) ||
+        entry.uid === BigInt(uid)
+      );
+    } catch (error) {
+      if (["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+        return false;
+      }
+      throw error;
+    }
+  };
+  const entryIdentity = (entry: BigIntStats, path: string): string[] => {
+    if (entry.isDirectory() && !directoryNeedsMetadata(realpathSync(path), entry)) {
+      return [entry.dev, entry.ino].map(String);
+    }
+    return [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs].map(String);
+  };
+  // Observe every directory and link used to resolve the path, including link targets.
+  // Renameable/owned ancestors include metadata; artifact roots/protected globals use dev/ino.
+  const resolutionEntries = (path: string): unknown[] => {
     let resolved = parse(resolve(path)).root;
     let remaining = resolve(path).slice(resolved.length).split(sep).filter(Boolean);
-    const links: unknown[] = [];
+    const root = lstatSync(resolved, { bigint: true });
+    const entries: unknown[] = [
+      {
+        type: "directory",
+        entry: entryIdentity(root, resolved),
+      },
+    ];
+    let linkCount = 0;
     while (remaining.length > 0) {
       const component = remaining.shift();
       if (!component) continue;
       const candidate = join(resolved, component);
       const entry = lstatSync(candidate, { bigint: true });
       if (entry.isSymbolicLink()) {
-        if (links.length >= 40) throw new Error("Too many links in manifest resolution.");
+        if (++linkCount > 40) throw new Error("Too many links in manifest resolution.");
         const destination = readlinkSync(candidate);
-        links.push({
+        entries.push({
+          type: "symlink",
           entry: [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs].map(String),
           destination,
         });
@@ -154,22 +205,26 @@ export function resolvePackageCheckScript(
         resolved = parse(target).root;
         remaining = [...target.slice(resolved.length).split(sep).filter(Boolean), ...remaining];
       } else {
+        if (entry.isDirectory()) {
+          entries.push({
+            type: "directory",
+            entry: entryIdentity(entry, candidate),
+          });
+        }
         resolved = candidate;
       }
     }
-    return links;
+    return entries;
   };
   const manifestIdentity = (path: string): string | undefined => {
     try {
       const entry = lstatSync(path, { bigint: true });
       const target = statSync(path, { bigint: true });
-      const identity = (stat: typeof entry) =>
-        [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
       return JSON.stringify({
-        entry: identity(entry),
-        target: identity(target),
+        entry: entryIdentity(entry, path),
+        target: entryIdentity(target, path),
         link: entry.isSymbolicLink() ? readlinkSync(path) : null,
-        resolutionLinks: resolutionLinks(path),
+        resolutionEntries: resolutionEntries(path),
       });
     } catch {
       return undefined;
@@ -205,7 +260,7 @@ export function resolvePackageCheckScript(
     }
   };
   const rootManifestPath = join(cwd, "package.json");
-  // Cwd ctime deliberately rejects changes to top-level items as well as rename/restore.
+  // Cwd itself permits artifacts; its observed ancestors detect directory replacement.
   const cwdIdentity = manifestIdentity(cwd);
   const rootSnapshot = readManifest(rootManifestPath);
   if (!rootSnapshot || !cwdIdentity) return undefined;
@@ -219,6 +274,11 @@ export function resolvePackageCheckScript(
   if (packageName) {
     workspaceRoot = RECOGNIZED_WORKSPACE_ROOTS[packageName];
     if (!workspaceRoot) return undefined;
+    try {
+      artifactDirectories.add(realpathSync(join(cwd, workspaceRoot)));
+    } catch {
+      return undefined;
+    }
     const patterns = Array.isArray(root.workspaces)
       ? root.workspaces
       : root.workspaces &&
@@ -232,7 +292,7 @@ export function resolvePackageCheckScript(
     ) {
       return undefined;
     }
-    // Observe the container, leaving package-root ctime free to change for out/dist.
+    // Keep the trusted workspace container in the final coherent-read revalidation.
     workspaceContainerIdentity = manifestIdentity(join(cwd, dirname(workspaceRoot)));
     if (!workspaceContainerIdentity) return undefined;
     manifestPath = join(cwd, workspaceRoot, "package.json");

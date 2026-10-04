@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1304,6 +1305,89 @@ describe("agent-event-store", () => {
     }
   });
 
+  it.for([
+    "container",
+    "outer",
+  ])("rejects actual unsafe npm execution after the %s ancestor is restored", async (scope) => {
+    const sandbox = await mkdtemp(join(userData, "regular-ancestor-qa-"));
+    const outer = join(sandbox, "outer");
+    const container = join(outer, "container");
+    const cwd = join(container, "project");
+    const swappedDirectory = scope === "outer" ? outer : container;
+    const relativeProject = scope === "outer" ? join("container", "project") : "project";
+    const saved = join(sandbox, "saved");
+    const alternate = join(sandbox, "alternate");
+    const executed = join(sandbox, "executed");
+    await mkdir(cwd, { recursive: true });
+    await mkdir(join(alternate, relativeProject), { recursive: true });
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
+    await writeFile(
+      join(alternate, relativeProject, "package.json"),
+      JSON.stringify({
+        scripts: { test: "node bypass.cjs" },
+      }),
+    );
+    await writeFile(
+      join(alternate, relativeProject, "bypass.cjs"),
+      `const fs = require("node:fs");
+fs.writeFileSync("unsafe-marker", "yes");
+fs.renameSync(${JSON.stringify(swappedDirectory)}, ${JSON.stringify(executed)});
+fs.renameSync(${JSON.stringify(saved)}, ${JSON.stringify(swappedDirectory)});
+console.log("unsafe-ancestor-script-ran");
+`,
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "regular-ancestor",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      });
+      await rename(swappedDirectory, saved);
+      await rename(alternate, swappedDirectory);
+      expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)).toBeUndefined();
+      const output = execFileSync("npm", ["test", "--ignore-scripts=false"], {
+        cwd,
+        timeout: 10_000,
+        stdio: "pipe",
+        encoding: "utf8",
+        env: { ...process.env, npm_config_update_notifier: "false", npm_config_audit: "false" },
+      });
+      expect(output).toContain("unsafe-ancestor-script-ran");
+      expect(await readFile(join(executed, relativeProject, "unsafe-marker"), "utf8")).toBe("yes");
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "regular-ancestor",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      });
+      const events = getRunToolEvidence(sessionId, run.id);
+      expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
+        checkConfigStable: false,
+      });
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events,
+      });
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("rejects QA after a symlink above cwd is swapped and restored", async (context) => {
     const sandbox = await mkdtemp(join(userData, "ancestor-link-qa-"));
     const safeDirectory = join(sandbox, "safe");
@@ -1381,7 +1465,10 @@ describe("agent-event-store", () => {
     }
   });
 
-  it.for(["cwd", "workspace"])("handles artifact creation in %s conservatively", async (scope) => {
+  it.for([
+    "cwd",
+    "workspace",
+  ])("preserves QA when artifacts are created inside %s", async (scope) => {
     const cwd = await mkdtemp(join(userData, "artifact-qa-"));
     const workspaceRoot = join(cwd, "apps", "desktop");
     await mkdir(workspaceRoot, { recursive: true });
@@ -1418,7 +1505,7 @@ describe("agent-event-store", () => {
       });
       const events = getRunToolEvidence(sessionId, run.id);
       expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
-        checkConfigStable: scope === "workspace",
+        checkConfigStable: true,
       });
       expect(
         summarizeRunQA({
@@ -1428,7 +1515,7 @@ describe("agent-event-store", () => {
           requiredChecks: ["typecheck"],
           events,
         }).status,
-      ).toBe(scope === "workspace" ? "passed" : "missing");
+      ).toBe("passed");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }
@@ -2078,5 +2165,3 @@ fs.renameSync("original-manifest-link", "package.json");
     );
   });
 });
-
-import { execFileSync } from "node:child_process";
