@@ -25,6 +25,12 @@ export type SupervisedFlowPlan = {
   delegations: SupervisedDelegation[];
 };
 
+export type SupervisedFlowAudience = {
+  sessionId: string;
+  leadSessionId?: string;
+  taskOwnerSessionId?: string;
+};
+
 /** Stage decisions use persisted task metadata only. Future stages never dispatch prematurely. */
 export function planSupervisedCodeFlow(input: {
   task: GroupTask;
@@ -130,20 +136,37 @@ export function planSupervisedCodeFlow(input: {
   return { applies, taskId: task.id, kind, gate, stages, delegations };
 }
 
-export function composeSupervisedFlowSection(plan: SupervisedFlowPlan): string {
+export function composeSupervisedFlowSection(
+  plan: SupervisedFlowPlan,
+  audience: SupervisedFlowAudience,
+): string {
   if (!plan.applies) return "";
+  const delegations = projectSupervisedDelegations(plan, audience);
   return [
     "<supervised_flow>",
     `Typed task: ${plan.taskId}; kind: ${plan.kind}`,
     `Gate: ${JSON.stringify(plan.gate)}`,
-    "Only RUN stages are ready. Use task tools with task ID, expectedVersion and a stable operationId; recheck live member availability before delegating.",
+    "Only RUN stages are ready. The delegation line, when present, is actionable only for its authorized actor; recheck live member availability before using it.",
     ...plan.stages.map(
       (s) =>
         `- ${s.id}: ${s.skip ? "SKIP" : s.blocked ? "BLOCKED" : "RUN"}; owner=${s.ownerSessionId ?? "unassigned"}; reason=${s.reason ?? "ready"}`,
     ),
-    ...plan.delegations.map(
+    ...delegations.map(
       (d) => `- ${d.stage}: ${d.tool}(taskId=${d.taskId}, memberId=${d.memberId})`,
     ),
     "</supervised_flow>",
   ].join("\n");
+}
+
+/** Keep the intended target while exposing actions only to their initiating participant. */
+export function projectSupervisedDelegations(
+  plan: SupervisedFlowPlan,
+  audience: SupervisedFlowAudience,
+): SupervisedDelegation[] {
+  return plan.delegations.filter((delegation) => {
+    if (delegation.memberId === audience.sessionId) return false;
+    return delegation.tool === "group_assign_task"
+      ? audience.sessionId === audience.leadSessionId
+      : audience.sessionId === audience.taskOwnerSessionId;
+  });
 }

@@ -816,6 +816,12 @@ export class PiSdkRuntime implements AgentRuntime {
     registerGroupTools();
   }
 
+  /** Active tool names for routing, using the same filter as prompt construction. */
+  getActiveToolNames(sessionId: string, profile: ToolProfileName): readonly string[] {
+    const info = this.sessions.get(sessionId)?.info ?? getAgentSession(sessionId);
+    return info ? activeToolNamesForSession(info, profile) : [];
+  }
+
   private cancelPendingIntentGate(sessionId: string): void {
     this.pendingIntentGates.get(sessionId)?.controller.abort();
   }

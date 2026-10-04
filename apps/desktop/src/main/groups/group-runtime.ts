@@ -20,6 +20,7 @@ import { bindSessionExecution, unbindSessionExecution } from "../../shared/group
 import {
   composeSupervisedFlowSection,
   planSupervisedCodeFlow,
+  projectSupervisedDelegations,
 } from "../../shared/group-supervised-flow";
 import type {
   GroupDecisionSnapshot,
@@ -33,6 +34,7 @@ import type {
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
+import { profileForMode } from "../agent/plan-prompt";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import { getDatabase } from "../db/database";
 import { type GroupRoutingResult, routeGroupTask } from "./group-capability-router";
@@ -1612,7 +1614,11 @@ export class GroupRuntime {
     workState.members = listAgentGroupMembers(groupId);
     const memberAvailability: Record<string, "available" | "unavailable"> = {};
     const currentLoad: Record<string, number> = {};
-    const toolConfigurations: Record<string, { profile: "chat" }> = {};
+    const profile = profileForMode(undefined);
+    const toolConfigurations: Record<
+      string,
+      { profile: typeof profile; activeToolNames?: readonly string[] }
+    > = {};
     for (const member of workState.members) {
       const id = member.sessionId;
       const session = getAgentSession(id);
@@ -1633,8 +1639,12 @@ export class GroupRuntime {
         (active !== reservedWake && !supersededGate && this.runtime.isSessionStreaming(id))
           ? "unavailable"
           : "available";
-      // Group members run ordinary normal prompts; the SDK selects the chat profile.
-      toolConfigurations[id] = { profile: "chat" };
+      // Group prompts omit mode; use the SDK's default profile and exact filtered tool set.
+      const activeToolNames = this.runtime.getActiveToolNames?.(id, profile);
+      toolConfigurations[id] = {
+        profile,
+        ...(activeToolNames === undefined ? {} : { activeToolNames }),
+      };
     }
     const leadSessionId = getAgentGroup(groupId)?.leadSessionId;
     return routeGroupTask({
@@ -1650,6 +1660,8 @@ export class GroupRuntime {
 
   private typedFlowFor(groupId: string, sessionId: string, chainId: string): string {
     const workState = getGroupWorkState(groupId);
+    const group = getAgentGroup(groupId);
+    const leadSessionId = group && isCoordinatorModeActive(group) ? group.leadSessionId : undefined;
     const candidates = workState.tasks.filter(
       (task) =>
         task.executionId === chainId &&
@@ -1662,7 +1674,13 @@ export class GroupRuntime {
           task.reviewerSessionId === sessionId),
     );
     return candidates
-      .map((task) => composeSupervisedFlowSection(planSupervisedCodeFlow({ task, workState })))
+      .map((task) =>
+        composeSupervisedFlowSection(planSupervisedCodeFlow({ task, workState }), {
+          sessionId,
+          ...(leadSessionId ? { leadSessionId } : {}),
+          ...(task.ownerSessionId ? { taskOwnerSessionId: task.ownerSessionId } : {}),
+        }),
+      )
       .filter(Boolean)
       .join("\n");
   }
@@ -2538,7 +2556,17 @@ export class GroupRuntime {
             task.status !== "done" &&
             task.status !== "cancelled",
         )
-        .map((task) => [task.id, planSupervisedCodeFlow({ task, workState }).delegations]),
+        .map((task) => {
+          const plan = planSupervisedCodeFlow({ task, workState });
+          return [
+            task.id,
+            projectSupervisedDelegations(plan, {
+              sessionId: leadSessionId,
+              leadSessionId,
+              ...(task.ownerSessionId ? { taskOwnerSessionId: task.ownerSessionId } : {}),
+            }),
+          ];
+        }),
     );
     return composeGroupSnapshotSection({
       sessionId: leadSessionId,

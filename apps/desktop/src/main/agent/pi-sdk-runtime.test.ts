@@ -1574,6 +1574,14 @@ describe("PiSdkRuntime", () => {
     expect(activeToolNamesForSession(info(member), "chat")).toEqual(
       expect.arrayContaining([...GROUP_TOOL_NAMES]),
     );
+    const getActiveToolNames = (
+      runtime as unknown as {
+        getActiveToolNames?: (sessionId: string, profile: "chat" | "plan") => readonly string[];
+      }
+    ).getActiveToolNames;
+    expect(getActiveToolNames?.call(runtime, member, "chat")).toEqual(
+      activeToolNamesForSession(info(member), "chat"),
+    );
     // Plan mode keeps only the read-only ones.
     expect(
       activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),

@@ -25,7 +25,10 @@ export type GroupRoutingInput = {
   explicitMentionSessionId?: string;
   memberAvailability: Record<string, "available" | "unavailable">;
   currentLoad: Record<string, number>;
-  toolConfigurations: Record<string, { profile: ToolProfileName; overrides?: ToolOverrides }>;
+  toolConfigurations: Record<
+    string,
+    { profile: ToolProfileName; overrides?: ToolOverrides; activeToolNames?: readonly string[] }
+  >;
   toolRegistry?: Pick<ToolRegistry, "resolveActiveTools">;
 };
 
@@ -70,7 +73,9 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
       return "capability-incompatible";
     const configuration = input.toolConfigurations[member.sessionId];
     if (!configuration) return "tools-inactive";
-    const tools = registry.resolveActiveTools(configuration.profile, configuration.overrides);
+    const tools =
+      configuration.activeToolNames ??
+      registry.resolveActiveTools(configuration.profile, configuration.overrides);
     if (
       stage === "implement" &&
       (task.kind === "code" || task.kind === "docs") &&

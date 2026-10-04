@@ -15,6 +15,7 @@ import {
 } from "../../shared/group-collab-status";
 import type { SupervisedDelegation } from "../../shared/group-supervised-flow";
 import type { GroupTaskGateResult } from "../../shared/group-work-state";
+import type { ToolProfileName } from "../../shared/tools";
 import type {
   PromptAgentInput,
   PromptTurnOutcome,
@@ -95,6 +96,8 @@ export function isUpdatePendingState(state: UpdateState): boolean {
 /** The slice of the agent runtime the group runtime needs (PiSdkRuntime satisfies it). */
 export type GroupAgentRuntime = {
   prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult>;
+  /** Effective tools for the profile used by the next prompt, including runtime filters. */
+  getActiveToolNames?(sessionId: string, profile: ToolProfileName): readonly string[] | undefined;
   /** Stops a session's running turn (it settles as `aborted`). */
   abort(sessionId: string): Promise<void>;
   isSessionStreaming(sessionId: string): boolean;

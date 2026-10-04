@@ -98,6 +98,28 @@ describe("routeGroupTask", () => {
     expect(config.overrides).toEqual({ disable: ["edit", "write"] });
     expect(registry.resolveActiveTools("chat", config.overrides)).not.toContain("edit");
   });
+  it("routes against the runtime's effective active tools when available", () => {
+    const registry = new ToolRegistry();
+    const resolve = vi.spyOn(registry, "resolveActiveTools");
+    const base = input();
+    const result = routeGroupTask({
+      ...base,
+      task: { ...task, ownerSessionId: "a" },
+      toolConfigurations: {
+        a: { profile: "chat", activeToolNames: ["read"] },
+        b: { profile: "chat", activeToolNames: ["read", "edit"] },
+        lead: { profile: "chat", activeToolNames: ["read"] },
+      },
+      toolRegistry: registry,
+    });
+
+    expect(result).toMatchObject({
+      kind: "selected",
+      targetSessionId: "b",
+      reasonCode: "capability-match",
+    });
+    expect(resolve).not.toHaveBeenCalled();
+  });
   it("renamed_portuguese_and_english_roles_route_identically", () => {
     const base = input();
     for (const title of ["oi", "review implement README", "implemente correção".repeat(80)]) {

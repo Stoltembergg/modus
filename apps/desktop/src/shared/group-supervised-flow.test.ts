@@ -77,8 +77,65 @@ describe("typed supervised flow", () => {
         tool: "group_assign_task",
       }),
     ]);
-    expect(composeSupervisedFlowSection(plan)).toContain("taskId=t");
-    expect(composeSupervisedFlowSection(plan)).toContain("criteria-incomplete");
+    const leadFlow = composeSupervisedFlowSection(plan, {
+      sessionId: "lead",
+      leadSessionId: "lead",
+      taskOwnerSessionId: "build",
+    });
+    expect(leadFlow).toContain("taskId=t");
+    expect(leadFlow).toContain("criteria-incomplete");
+    expect(leadFlow).toContain("group_assign_task(taskId=t, memberId=build)");
+  });
+
+  it("keeps typed stage context for everyone and scopes delegation to its authorized actor", () => {
+    const implementPlan = planSupervisedCodeFlow({ task, workState });
+    const render = (sessionId: string) =>
+      composeSupervisedFlowSection(implementPlan, {
+        sessionId,
+        leadSessionId: "lead",
+        taskOwnerSessionId: "build",
+      });
+
+    const leadFlow = render("lead");
+    const ownerFlow = render("build");
+    const reviewerFlow = render("review");
+    for (const flow of [leadFlow, ownerFlow, reviewerFlow]) {
+      expect(flow).toContain("Typed task: t; kind: code");
+      expect(flow).toContain('Gate: {"satisfied":false,"reasonCodes":["criteria-incomplete"]}');
+      expect(flow).toContain("implement: RUN");
+    }
+    expect(leadFlow).toContain("group_assign_task(taskId=t, memberId=build)");
+    expect(ownerFlow).not.toContain("group_assign_task");
+    expect(reviewerFlow).not.toContain("group_assign_task");
+    expect(
+      composeSupervisedFlowSection(implementPlan, {
+        sessionId: "lead",
+        taskOwnerSessionId: "build",
+      }),
+    ).not.toContain("group_assign_task");
+
+    const reviewTask = { ...task, stage: "review" as const };
+    const reviewPlan = planSupervisedCodeFlow({
+      task: reviewTask,
+      workState: { ...workState, tasks: [reviewTask] },
+    });
+    const reviewFlow = (sessionId: string) =>
+      composeSupervisedFlowSection(reviewPlan, {
+        sessionId,
+        leadSessionId: "lead",
+        taskOwnerSessionId: "build",
+      });
+    const leadReviewFlow = reviewFlow("lead");
+    const ownerReviewFlow = reviewFlow("build");
+    const reviewerReviewFlow = reviewFlow("review");
+    for (const flow of [leadReviewFlow, ownerReviewFlow, reviewerReviewFlow]) {
+      expect(flow).toContain("review: RUN");
+      expect(flow).toContain("Typed task: t; kind: code");
+      expect(flow).toContain('Gate: {"satisfied":false,"reasonCodes":["criteria-incomplete"]}');
+    }
+    expect(leadReviewFlow).not.toContain("group_request_review");
+    expect(ownerReviewFlow).toContain("group_request_review(taskId=t, memberId=review)");
+    expect(reviewerReviewFlow).not.toContain("group_request_review");
   });
 
   it("reexpresses docs-only skipping from typed policy rather than title keywords", () => {
@@ -239,7 +296,11 @@ describe("typed supervised flow", () => {
       { ...task, status: "cancelled" as const },
     ]) {
       expect(
-        composeSupervisedFlowSection(planSupervisedCodeFlow({ task: changed, workState })),
+        composeSupervisedFlowSection(planSupervisedCodeFlow({ task: changed, workState }), {
+          sessionId: "lead",
+          leadSessionId: "lead",
+          taskOwnerSessionId: "build",
+        }),
       ).toBe("");
     }
   });
