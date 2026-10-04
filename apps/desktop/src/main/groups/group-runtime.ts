@@ -16,6 +16,12 @@ import {
 } from "../../shared/group-blocked";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { bindSessionExecution, unbindSessionExecution } from "../../shared/group-execution-link";
+import type {
+  GroupDecisionSnapshot,
+  GroupTaskTransitionEvent,
+  GroupTaskTrigger,
+} from "../../shared/group-work-state";
+import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
@@ -28,6 +34,17 @@ import {
   readGroupChain,
   updateGroupJob,
 } from "./group-job-store";
+import { decideGroupNextAction } from "./group-proactivity-policy";
+import {
+  type GroupActionRecord,
+  getGroupAction,
+  getGroupActionBySource,
+  getGroupProactivityMode,
+  invalidateGroupAction,
+  listPendingGroupActions,
+  markGroupActionDispatched,
+  persistGroupProactivityDecision,
+} from "./group-proactivity-store";
 import {
   type ChainState,
   composeGroupSnapshotSection,
@@ -64,9 +81,18 @@ import {
   listGroupTasks,
   memberWorktreeBranchPrefix,
 } from "./group-store";
+import { getGroupTaskDetails } from "./group-task-details";
 import { findGroupTaskForWake } from "./group-task-evidence";
-import { groupTaskOperationFingerprint, markGroupTaskExplicitDispatch } from "./group-task-store";
+import {
+  getGroupTask,
+  getGroupTaskRunBinding,
+  groupTaskOperationFingerprint,
+  isGroupTaskRunAssignmentCurrent,
+  markGroupTaskExplicitDispatch,
+  onGroupTaskTransition,
+} from "./group-task-store";
 import { GroupTurnTranscript } from "./group-turn-transcript";
+import { getGroupWorkState } from "./group-work-state";
 
 export {
   agentDescription,
@@ -111,6 +137,7 @@ export class GroupRuntime {
   /** Live chains: removed once no wake of theirs is queued, running or gated. */
   private readonly chains = new Map<string, ChainState>();
   private readonly retiredChains = new Map<string, ChainState>();
+  private readonly processingChains = new Map<string, number>();
   /** Per-session FIFO of pending wakes. */
   private readonly queues = new Map<string, Wake[]>();
   /** Group turns holding one of the concurrency slots. */
@@ -143,7 +170,11 @@ export class GroupRuntime {
     ];
     if (this.runtime.onEvent)
       this.unsubscribers.push(this.runtime.onEvent((event) => this.handleAgentEvent(event)));
-    if (options.recoverPending) this.recoverJobs();
+    this.unsubscribers.push(onGroupTaskTransition((event) => this.handleTaskTransition(event)));
+    if (options.recoverPending) {
+      this.recoverJobs();
+      void this.recoverPendingActions();
+    }
   }
 
   /** A user message into the room: new execution by default; Complementar joins one. */
@@ -211,8 +242,9 @@ export class GroupRuntime {
         `Execution chain not found for ${input.executionId}.`,
       );
     }
-    if (chain.ended) {
+    if (chain.ended || chain.retired) {
       delete chain.ended;
+      delete chain.retired;
       persistGroupChain(chain);
     }
     this.retiredChains.delete(chain.chainId);
@@ -380,6 +412,367 @@ export class GroupRuntime {
     return message;
   }
 
+  /** Consume only an exact committed task event; public room text is never a trigger. */
+  handleTaskTransition(event: GroupTaskTransitionEvent): void {
+    if (this.disposed || !event.executionId) return;
+    const chain = this.chains.get(event.executionId);
+    if (!chain || chain.ended || chain.retired || chain.groupId !== event.groupId) return;
+    const trigger = this.persistedTrigger(event);
+    if (!trigger) return;
+    this.processingChains.set(chain.chainId, (this.processingChains.get(chain.chainId) ?? 0) + 1);
+    void this.processTaskTrigger(trigger)
+      .catch((error) => {
+        console.warn("[modus] group task decision failed:", error);
+      })
+      .finally(() => {
+        const count = (this.processingChains.get(chain.chainId) ?? 1) - 1;
+        if (count > 0) this.processingChains.set(chain.chainId, count);
+        else this.processingChains.delete(chain.chainId);
+        this.retireIdleChains();
+      });
+  }
+
+  private persistedTrigger(event: GroupTaskTransitionEvent): GroupTaskTrigger | undefined {
+    const row = getDatabase()
+      .prepare(`select rowid as sequence, group_id, task_id, task_version,
+      execution_id, action, from_status, to_status, operation_id from group_task_events where id = ?`)
+      .get(event.id) as
+      | {
+          sequence: number;
+          group_id: string;
+          task_id: string;
+          task_version: number;
+          execution_id: string | null;
+          action: string;
+          from_status: GroupTaskTrigger["fromStatus"];
+          to_status: GroupTaskTrigger["toStatus"];
+          operation_id: string | null;
+        }
+      | undefined;
+    if (
+      !row ||
+      row.group_id !== event.groupId ||
+      row.task_id !== event.taskId ||
+      row.task_version !== event.taskVersion ||
+      row.execution_id !== event.executionId ||
+      row.action !== event.action ||
+      row.from_status !== event.fromStatus ||
+      row.to_status !== event.toStatus
+    )
+      return undefined;
+    let kind: GroupTaskTrigger["kind"] | undefined;
+    if (
+      ["assign", "claim", "group_assign_task", "group_claim_task", "group_handoff"].includes(
+        row.action,
+      ) &&
+      row.to_status === "in_progress"
+    )
+      kind = "task_assigned";
+    else if (
+      ["progress", "group_report_progress"].includes(row.action) &&
+      row.from_status === "blocked" &&
+      row.to_status === "in_progress"
+    )
+      kind = "task_unblocked";
+    else if (
+      ["request_review", "group_request_review"].includes(row.action) &&
+      row.from_status === "in_progress" &&
+      row.to_status === "in_review"
+    )
+      kind = "review_requested";
+    else if (
+      ["review", "group_review_task"].includes(row.action) &&
+      row.from_status === "in_review" &&
+      row.to_status === "in_progress"
+    )
+      kind = "review_changes_requested";
+    else if (
+      ["evidence", "group_record_task_evidence"].includes(row.action) &&
+      row.operation_id?.startsWith("qa:")
+    ) {
+      const rowId = Number(row.operation_id.slice(3));
+      // Agent events have run identity in their payload, not a separate SQL column.
+      const qaRecord = getDatabase()
+        .prepare(
+          "select session_id, payload_json from agent_events where rowid = ? and type = 'harness.qa'",
+        )
+        .get(rowId) as { session_id: string; payload_json: string } | undefined;
+      if (!qaRecord) return undefined;
+      let runId: string;
+      try {
+        runId = (JSON.parse(qaRecord.payload_json) as { runId?: string }).runId ?? "";
+      } catch {
+        return undefined;
+      }
+      const binding = getGroupTaskRunBinding(qaRecord.session_id, runId);
+      if (
+        !binding ||
+        !getHarnessQAEventByRowId(rowId, qaRecord.session_id, runId) ||
+        binding.groupId !== row.group_id ||
+        binding.taskId !== row.task_id ||
+        binding.executionId !== row.execution_id ||
+        !isGroupTaskRunAssignmentCurrent(binding)
+      )
+        return undefined;
+      const task = getGroupTask(row.task_id);
+      if (
+        task.criteriaVersion !== binding.criteriaVersion ||
+        task[binding.role === "owner" ? "ownerSessionId" : "reviewerSessionId"] !==
+          binding.sessionId ||
+        !(task.evidenceRefs ?? []).some(
+          (ref) =>
+            ref.eventRowId === rowId &&
+            ref.sessionId === binding.sessionId &&
+            ref.runId === binding.runId,
+        )
+      )
+        return undefined;
+      kind = "task_qa_updated";
+    }
+    if (!kind) return undefined;
+    return {
+      kind,
+      groupId: row.group_id,
+      taskId: row.task_id,
+      taskVersion: row.task_version,
+      ...(row.execution_id ? { executionId: row.execution_id } : {}),
+      sourceEventId: event.id,
+      sequence: row.sequence,
+      fromStatus: row.from_status,
+      toStatus: row.to_status,
+    };
+  }
+
+  private async decisionSnapshot(
+    trigger: GroupTaskTrigger,
+  ): Promise<GroupDecisionSnapshot | undefined> {
+    const executionId = trigger.executionId;
+    if (!executionId || this.disposed) return undefined;
+    const chain = this.chains.get(executionId);
+    if (
+      !chain ||
+      chain.ended ||
+      chain.retired ||
+      chain.groupId !== trigger.groupId ||
+      !getAgentGroup(trigger.groupId)
+    )
+      return undefined;
+    const task = getGroupTask(trigger.taskId);
+    if (
+      task.groupId !== trigger.groupId ||
+      task.executionId !== executionId ||
+      task.stateVersion !== trigger.taskVersion
+    )
+      return undefined;
+    const details = await getGroupTaskDetails(trigger.groupId, trigger.taskId);
+    if (this.disposed || this.chains.get(executionId) !== chain || chain.ended || chain.retired)
+      return undefined;
+    const current = getGroupTask(trigger.taskId);
+    if (current.stateVersion !== trigger.taskVersion) return undefined;
+    const workState = getGroupWorkState(trigger.groupId, executionId);
+    workState.tasks = listGroupTasks(trigger.groupId);
+    workState.members = listAgentGroupMembers(trigger.groupId);
+    workState.gates[task.id] = details.gate;
+    workState.budgets = {
+      remainingAgentMessages: Math.max(0, this.limits.maxAgentMessages - chain.agentMessages),
+      remainingMemberWakes: Math.max(
+        0,
+        workState.members.length * this.limits.maxWakesPerMember -
+          [...chain.wakesByMember.values()].reduce((sum, wakes) => sum + wakes, 0),
+      ),
+      remainingInputTokens: Math.max(0, this.limits.maxEstimatedInputTokens - chain.inputTokens),
+    };
+    const availability: GroupDecisionSnapshot["memberAvailability"] = {};
+    const remainingWakesByMember: GroupDecisionSnapshot["remainingWakesByMember"] = {};
+    for (const member of workState.members) {
+      const session = getAgentSession(member.sessionId);
+      availability[member.sessionId] =
+        member.archived ||
+        !session ||
+        session.archivedAt ||
+        this.running.has(member.sessionId) ||
+        this.gated.has(member.sessionId) ||
+        (this.queues.get(member.sessionId)?.length ?? 0) > 0 ||
+        this.cancelling.has(member.sessionId) ||
+        this.runtime.isSessionStreaming(member.sessionId)
+          ? "unavailable"
+          : "available";
+      remainingWakesByMember[member.sessionId] = Math.max(
+        0,
+        this.limits.maxWakesPerMember - (chain.wakesByMember.get(member.sessionId) ?? 0),
+      );
+    }
+    const reviewReadiness =
+      details.source.availability !== "available" &&
+      (task.criteria ?? []).some((criterion) => criterion.requiredCheckKinds.length > 0)
+        ? "unavailable"
+        : details.criteria
+            .filter((criterion) => criterion.requiredCheckKinds.length > 0)
+            .reduce<GroupDecisionSnapshot["reviewReadiness"][string]>(
+              (status, criterion) =>
+                status !== "ready"
+                  ? status
+                  : criterion.status === "passed"
+                    ? "ready"
+                    : criterion.status === "failed" ||
+                        criterion.status === "stale" ||
+                        criterion.status === "unavailable"
+                      ? criterion.status
+                      : "missing",
+              "ready",
+            );
+    const receipt = getDatabase()
+      .prepare("select 1 from group_task_dispatches where group_id = ? and source_event_id = ?")
+      .get(trigger.groupId, trigger.sourceEventId);
+    return {
+      workState,
+      mode: getGroupProactivityMode(trigger.groupId),
+      triggers: [trigger],
+      explicitWakeSourceEventIds: receipt ? [trigger.sourceEventId] : [],
+      memberAvailability: availability,
+      remainingWakesByMember,
+      reviewStates: {
+        [task.id]: details.review.status === "not_required" ? "pending" : details.review.status,
+      },
+      reviewReadiness: { [task.id]: reviewReadiness },
+      stopRequested: Boolean(chain.ended),
+      waitingForUser:
+        [...this.gated.values()].some((wake) => wake.chainId === executionId) ||
+        [...this.awaitingUser.values()].includes(executionId),
+    };
+  }
+
+  private async processTaskTrigger(trigger: GroupTaskTrigger): Promise<void> {
+    if (getGroupActionBySource(trigger.groupId, trigger.sourceEventId)) return;
+    const snapshot = await this.decisionSnapshot(trigger);
+    if (!snapshot) return;
+    const decision = decideGroupNextAction(snapshot);
+    if (
+      !decision ||
+      this.disposed ||
+      getGroupActionBySource(trigger.groupId, trigger.sourceEventId)
+    )
+      return;
+    const action = persistGroupProactivityDecision(decision);
+    if (action.deliveryState === "pending") await this.materializeAction(action, trigger);
+  }
+
+  private invalidatePendingAction(id: string): void {
+    if (this.disposed) return;
+    if (getGroupAction(id)?.deliveryState === "pending") invalidateGroupAction(id);
+  }
+
+  private async materializeAction(
+    action: GroupActionRecord,
+    trigger: GroupTaskTrigger,
+  ): Promise<void> {
+    if (action.deliveryState !== "pending" || this.disposed) return;
+    const snapshot = await this.decisionSnapshot(trigger);
+    if (this.disposed) return;
+    const current = snapshot ? decideGroupNextAction(snapshot) : null;
+    if (
+      !current ||
+      current.kind === "suggest" ||
+      current.idempotencyKey !== action.decision.idempotencyKey ||
+      current.targetSessionId !== action.decision.targetSessionId
+    ) {
+      this.invalidatePendingAction(action.id);
+      return;
+    }
+    const target = current.targetSessionId;
+    const chain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
+    if (!target || !chain || chain.ended || chain.retired) {
+      this.invalidatePendingAction(action.id);
+      return;
+    }
+    try {
+      this.durableDispatch(() => {
+        const fresh = this.chains.get(chain.chainId);
+        if (
+          !fresh ||
+          fresh.ended ||
+          fresh.retired ||
+          getGroupProactivityMode(action.groupId) !== "opt_in_auto" ||
+          getGroupTask(action.taskId).stateVersion !== action.taskVersion ||
+          getDatabase()
+            .prepare("select 1 from group_task_dispatches where source_event_id = ?")
+            .get(action.sourceEventId)
+        )
+          throw new Error("Proactive action became stale before dispatch.");
+        const message = appendGroupMessage({
+          createdAt: this.stamp(),
+          groupId: action.groupId,
+          authorKind: "system",
+          kind: "status",
+          body: `Task ${current.kind === "wake_reviewer" ? "review" : "work"} ready: ${getGroupTask(action.taskId).title}`,
+          mentions: [target],
+          chainId: chain.chainId,
+        });
+        this.emitMessage(message);
+        this.route(fresh, message, [target], false, true);
+        const wake = this.queues.get(target)?.find((item) => item.triggerMessageId === message.id);
+        if (!wake?.id) throw new Error("Proactive wake exceeded chain limits.");
+        markGroupActionDispatched(action.id, message.id, wake.id);
+      });
+      this.pump();
+    } catch {
+      this.invalidatePendingAction(action.id);
+    }
+  }
+
+  private async recoverPendingActions(): Promise<void> {
+    for (const action of listPendingGroupActions()) {
+      if (this.disposed) return;
+      try {
+        const chain = action.executionId ? readGroupChain(action.executionId) : undefined;
+        if (!chain || chain.ended || chain.retired || chain.groupId !== action.groupId) {
+          this.invalidatePendingAction(action.id);
+          continue;
+        }
+        this.chains.set(chain.chainId, chain);
+        const row = getDatabase()
+          .prepare(`select id, group_id, task_id, task_version, action,
+        execution_id, from_status, to_status, created_at from group_task_events where id = ?`)
+          .get(action.sourceEventId) as
+          | {
+              id: string;
+              group_id: string;
+              task_id: string;
+              task_version: number;
+              action: string;
+              execution_id: string | null;
+              from_status: GroupTaskTransitionEvent["fromStatus"];
+              to_status: GroupTaskTransitionEvent["toStatus"];
+              created_at: string;
+            }
+          | undefined;
+        const trigger =
+          row &&
+          this.persistedTrigger({
+            id: row.id,
+            groupId: row.group_id,
+            taskId: row.task_id,
+            taskVersion: row.task_version,
+            action: row.action,
+            ...(row.execution_id ? { executionId: row.execution_id } : {}),
+            fromStatus: row.from_status,
+            toStatus: row.to_status,
+            createdAt: row.created_at,
+          });
+        if (!trigger) {
+          this.invalidatePendingAction(action.id);
+          continue;
+        }
+        await this.materializeAction(action, trigger);
+        this.retireIdleChains();
+      } catch (error) {
+        if (this.disposed) return;
+        this.invalidatePendingAction(action.id);
+        console.warn("[modus] pending group action could not be recovered:", error);
+      }
+    }
+  }
+
   private saveTaskWake(input: GroupTaskWake): GroupMessage | undefined {
     const db = getDatabase();
     const identity = groupTaskOperationFingerprint(input);
@@ -468,13 +861,24 @@ export class GroupRuntime {
     const awaiting = [...this.awaitingUser.keys()].filter(
       (id) => getAgentGroupForSession(id)?.id === groupId,
     );
+    const pendingActions = listPendingGroupActions(groupId);
     if (
       queued.length === 0 &&
       running.length === 0 &&
       waiting.length === 0 &&
-      awaiting.length === 0
+      awaiting.length === 0 &&
+      pendingActions.length === 0
     )
       return;
+    for (const action of pendingActions) {
+      this.invalidatePendingAction(action.id);
+      if (!action.executionId) continue;
+      const chain = this.chains.get(action.executionId) ?? readGroupChain(action.executionId);
+      if (chain && !chain.ended) {
+        chain.ended = "stopped";
+        persistGroupChain(chain);
+      }
+    }
     for (const chain of [...this.chains.values()]) {
       if (chain.groupId === groupId) this.endChain(chain, "stopped");
     }
@@ -676,6 +1080,44 @@ export class GroupRuntime {
   }
 
   private handleAgentEvent(event: AgentEvent): void {
+    if (event.type === "harness.qa" && Number.isSafeInteger(event.eventCursor)) {
+      const binding = getGroupTaskRunBinding(event.sessionId, event.runId);
+      if (binding && isGroupTaskRunAssignmentCurrent(binding)) {
+        const row = getDatabase()
+          .prepare(`select id, group_id, task_id, task_version, action,
+          execution_id, from_status, to_status, created_at from group_task_events where operation_id = ?`)
+          .get(`qa:${event.eventCursor}`) as
+          | {
+              id: string;
+              group_id: string;
+              task_id: string;
+              task_version: number;
+              action: string;
+              execution_id: string | null;
+              from_status: GroupTaskTransitionEvent["fromStatus"];
+              to_status: GroupTaskTransitionEvent["toStatus"];
+              created_at: string;
+            }
+          | undefined;
+        if (
+          row &&
+          row.task_id === binding.taskId &&
+          row.group_id === binding.groupId &&
+          row.execution_id === binding.executionId
+        )
+          this.handleTaskTransition({
+            id: row.id,
+            groupId: row.group_id,
+            taskId: row.task_id,
+            taskVersion: row.task_version,
+            action: row.action,
+            ...(row.execution_id ? { executionId: row.execution_id } : {}),
+            fromStatus: row.from_status,
+            toStatus: row.to_status,
+            createdAt: row.created_at,
+          });
+      }
+    }
     const wake = this.running.get(event.sessionId) ?? this.gated.get(event.sessionId);
     if (!wake || wake.cancelled || this.disposed) return;
     if (wake.runId && "runId" in event && event.runId && event.runId !== wake.runId) return;
@@ -787,8 +1229,12 @@ export class GroupRuntime {
     for (const wake of this.gated.values()) busy.add(wake.chainId);
     for (const queue of this.queues.values()) for (const wake of queue) busy.add(wake.chainId);
     for (const [chainId, chain] of this.chains) {
-      if (busy.has(chainId)) continue;
+      if (busy.has(chainId) || this.processingChains.has(chainId)) continue;
       this.chains.delete(chainId);
+      if (!this.disposed) {
+        chain.retired = true;
+        persistGroupChain(chain);
+      }
       this.retiredChains.set(chainId, chain);
     }
     while (this.retiredChains.size > RETIRED_CHAIN_HISTORY) {
@@ -863,6 +1309,7 @@ export class GroupRuntime {
     message: GroupMessage,
     explicitTargets?: readonly string[],
     allowSelf = false,
+    deferPump = false,
   ): void {
     if (chain.ended) return;
     const group = getAgentGroup(chain.groupId);
@@ -941,7 +1388,7 @@ export class GroupRuntime {
       });
     }
     this.emitActivity(group.id);
-    this.pump();
+    if (!deferPump) this.pump();
   }
 
   /** "<name> is archived": a status line in place of the wake (wakes nobody). */

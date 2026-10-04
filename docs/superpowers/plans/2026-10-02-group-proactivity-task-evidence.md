@@ -204,12 +204,12 @@ A captura usa o fingerprint-base antes do run para `GroupTaskRunBinding` e um fi
 
 **Interfaces:** consome Tarefas 2, 4 e 6. Produz `persistGroupProactivityDecision(decision: GroupProactivityDecision): GroupActionRecord`, `listPendingGroupActions(groupId?: string): GroupActionRecord[]` e `GroupRuntime.handleTaskTransition(event: GroupTaskTransitionEvent): void`. `GroupActionRecord` inclui decision, deliveryState (`suggested | pending | dispatched | discarded | invalidated`), wakeMessageId/jobId opcionais e versão.
 
-- [ ] Adicionar testes de recuperação em três pontos: depois de decisão persistida, depois de criar message/job e antes do pump, depois de iniciar job. Assertar uma mensagem/job por chave e retomada de ação pending; Stop/archive/removal entre decisão e dispatch invalida; budgets não dobram após retry.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-proactivity-store.test.ts apps/desktop/src/main/groups/group-proactivity-runtime.test.ts`; esperar falhas novas.
-- [ ] Persistir modo por Grupo com default `suggest` e tabela `group_proactivity_actions` com chave única. Usar outbox transacional para decisão pendente; criação de message/job e marcação dispatched ocorrem na mesma transação da persistência atual do runtime. Só chamar pump depois do commit; recuperar pela infraestrutura atual, sem timer adicional.
-- [ ] Revalidar tarefa/versão, execução ainda ativa, budgets, Stop, espera pelo usuário, membro e dependências imediatamente antes de materializar wake. Processar a transição tipada antes de aposentar a chain idle no encerramento do turno. Não usar `handleTaskWake` de forma que um evento automático tardio abra outra chain após a original terminar. Consumir transições existentes e QA vinculado; não adicionar ferramentas de Grupo ao safe-dispatch individual.
-- [ ] Rodar testes citados, `group-runtime-reliability.test.ts`, `group-runtime.test.ts` e `group-runtime-supersede.test.ts`; esperar aprovação, incluindo silêncio sem retomada.
-- [ ] Commit: `feat(groups): dispatch proactive wakes durably`.
+- [x] Adicionar testes de recuperação em três pontos: depois de decisão persistida, depois de criar message/job e antes do pump, depois de iniciar job. Assertar uma mensagem/job por chave e retomada de ação pending; Stop/archive/removal entre decisão e dispatch invalida; budgets não dobram após retry.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/main/groups/group-proactivity-store.test.ts apps/desktop/src/main/groups/group-proactivity-runtime.test.ts`; esperar falhas novas.
+- [x] Persistir modo por Grupo com default `suggest` e tabela `group_proactivity_actions` com chave única. Usar outbox transacional para decisão pendente; criação de message/job e marcação dispatched ocorrem na mesma transação da persistência atual do runtime. Só chamar pump depois do commit; recuperar pela infraestrutura atual, sem timer adicional.
+- [x] Revalidar tarefa/versão, execução ainda ativa, budgets, Stop, espera pelo usuário, membro e dependências imediatamente antes de materializar wake. Processar a transição tipada antes de aposentar a chain idle no encerramento do turno. Não usar `handleTaskWake` de forma que um evento automático tardio abra outra chain após a original terminar. Consumir transições existentes e QA vinculado; não adicionar ferramentas de Grupo ao safe-dispatch individual.
+- [x] Rodar testes citados, `group-runtime-reliability.test.ts`, `group-runtime.test.ts` e `group-runtime-supersede.test.ts`; esperar aprovação, incluindo silêncio sem retomada.
+- [x] Commit: `feat(groups): dispatch proactive wakes durably`.
 
 ## Tarefa 8: Preferência, sugestões e aprovação de próxima ação
 

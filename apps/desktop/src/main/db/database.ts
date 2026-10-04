@@ -704,7 +704,31 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       input_json text not null,
       message_id text not null references group_messages(id) on delete cascade
     );
+    create table if not exists group_proactivity_actions (
+      id text primary key,
+      idempotency_key text not null unique,
+      group_id text not null references agent_groups(id) on delete cascade,
+      task_id text not null references group_tasks(id) on delete cascade,
+      task_version integer not null,
+      execution_id text,
+      source_event_id text not null,
+      decision_json text not null,
+      delivery_state text not null check (delivery_state in ('suggested','pending','dispatched','discarded','invalidated')),
+      wake_message_id text references group_messages(id) on delete set null,
+      job_id text references group_jobs(id) on delete set null,
+      version integer not null default 1,
+      created_at text not null,
+      updated_at text not null
+    );
+    create index if not exists idx_group_proactivity_pending on group_proactivity_actions(delivery_state, group_id);
+    create unique index if not exists idx_group_proactivity_source on group_proactivity_actions(group_id, source_event_id);
   `);
+  addColumn(
+    db,
+    "agent_groups",
+    "proactivity_mode",
+    "text not null default 'suggest' check (proactivity_mode in ('suggest','opt_in_auto'))",
+  );
 }
 
 /**

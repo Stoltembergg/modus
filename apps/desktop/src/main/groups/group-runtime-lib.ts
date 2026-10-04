@@ -158,6 +158,8 @@ export type ChainState = {
   inputTokens: number;
   wakesByMember: Map<string, number>;
   ended?: GroupChainEndReason;
+  /** Persisted idle retirement fences late controller decisions after restart. */
+  retired?: boolean;
 };
 
 export type Wake = {

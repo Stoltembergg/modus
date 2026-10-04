@@ -30,7 +30,52 @@ const {
   bindGroupTaskRun,
   getGroupTaskRunBinding,
   listGroupTaskTransitions,
+  onGroupTaskTransition,
 } = await import("./group-task-store");
+
+it("publishes committed task transitions with sequence only to active main-process subscribers", async () => {
+  const { db, group, task, owner } = fixture();
+  const seen: Array<{ id: string; sequence: number; taskVersion: number }> = [];
+  const unsubscribe = onGroupTaskTransition((event) =>
+    seen.push({ id: event.id, sequence: event.sequence, taskVersion: event.taskVersion }),
+  );
+  db.exec("savepoint outer_task_test");
+  reportGroupTaskProgress({
+    groupId: group.id,
+    taskId: task.id,
+    actorSessionId: owner,
+    expectedVersion: task.stateVersion ?? 1,
+    operationId: crypto.randomUUID(),
+    stage: "verify",
+  });
+  db.exec("rollback to outer_task_test; release outer_task_test");
+  await Promise.resolve();
+  expect(seen).toEqual([]);
+  const persisted = reportGroupTaskProgress({
+    groupId: group.id,
+    taskId: task.id,
+    actorSessionId: owner,
+    expectedVersion: task.stateVersion ?? 1,
+    operationId: crypto.randomUUID(),
+    stage: "verify",
+  });
+  await Promise.resolve();
+  expect(seen).toMatchObject([
+    { id: listGroupTaskTransitions(task.id).at(-1)?.id, taskVersion: persisted.stateVersion },
+  ]);
+  expect(seen[0]?.sequence).toBeGreaterThan(0);
+  unsubscribe();
+  reportGroupTaskProgress({
+    groupId: group.id,
+    taskId: task.id,
+    actorSessionId: owner,
+    expectedVersion: persisted.stateVersion ?? 1,
+    operationId: crypto.randomUUID(),
+    stage: "deliver",
+  });
+  await Promise.resolve();
+  expect(seen).toHaveLength(1);
+});
 const { recordAgentEvent } = await import("../agent/agent-event-store");
 
 beforeAll(async () => {

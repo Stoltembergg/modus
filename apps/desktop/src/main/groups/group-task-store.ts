@@ -270,6 +270,39 @@ const pendingTaskChanges = new Map<
     sink: (change: { groupId: string; taskId: string; stateVersion: number }) => void;
   }
 >();
+const taskTransitionListeners = new Set<
+  (event: GroupTaskTransitionEvent & { sequence: number }) => void
+>();
+
+/** Main-process transition source, independent of renderer task-change notifications. */
+export function onGroupTaskTransition(
+  listener: (event: GroupTaskTransitionEvent & { sequence: number }) => void,
+): () => void {
+  taskTransitionListeners.add(listener);
+  return () => taskTransitionListeners.delete(listener);
+}
+
+function notifyTaskTransitionAfterCommit(id: string): void {
+  const listeners = [...taskTransitionListeners];
+  if (listeners.length === 0) return;
+  queueMicrotask(() => {
+    const row = getDatabase()
+      .prepare(`select rowid as sequence, id, group_id, task_id, task_version, action,
+      actor_session_id, source_event_id, execution_id, from_status, to_status, created_at
+      from group_task_events where id = ?`)
+      .get(id) as (EventRow & { sequence: number }) | undefined;
+    if (!row) return; // A surrounding transaction rolled back.
+    const event = toTransition(row);
+    for (const listener of listeners) {
+      if (!taskTransitionListeners.has(listener)) continue;
+      try {
+        listener({ ...event, sequence: row.sequence });
+      } catch (error) {
+        console.warn("[modus] group task transition listener failed:", error);
+      }
+    }
+  });
+}
 
 export function setGroupTaskChangedSink(
   sink: ((change: { groupId: string; taskId: string; stateVersion: number }) => void) | undefined,
@@ -736,11 +769,12 @@ function recordEvent(
     reviewerBefore: task.reviewerSessionId ?? null,
     reviewerAfter: next.reviewerSessionId ?? null,
   };
+  const id = randomUUID();
   db.prepare(`insert into group_task_events
     (id, group_id, task_id, task_version, action, actor_session_id, execution_id,
      from_status, to_status, operation_id, result_json, created_at)
     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-    randomUUID(),
+    id,
     task.groupId,
     task.id,
     next.stateVersion ?? 1,
@@ -756,6 +790,7 @@ function recordEvent(
     }),
     new Date().toISOString(),
   );
+  notifyTaskTransitionAfterCommit(id);
 }
 
 /** Called within the existing group-store transaction after a legacy task mutation. */
@@ -1041,7 +1076,11 @@ export function listGroupTaskTransitions(taskId: string): GroupTaskTransitionEve
     actor_session_id, source_event_id, execution_id, from_status, to_status, created_at
     from group_task_events where task_id = ? order by task_version, created_at, id`)
     .all(taskId) as EventRow[];
-  return rows.map((row) => ({
+  return rows.map(toTransition);
+}
+
+function toTransition(row: EventRow): GroupTaskTransitionEvent {
+  return {
     id: row.id,
     groupId: row.group_id,
     taskId: row.task_id,
@@ -1053,7 +1092,7 @@ export function listGroupTaskTransitions(taskId: string): GroupTaskTransitionEve
     fromStatus: row.from_status,
     toStatus: row.to_status,
     createdAt: row.created_at,
-  }));
+  };
 }
 
 /* ── Tasks ─────────────────────────────────────────────────────────────── */
