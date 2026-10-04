@@ -8,13 +8,19 @@ import {
   isBillingProvider,
 } from "../../shared/billing";
 
-/** Subscription statuses that block a new Checkout (same list as the Edge Function). */
+/**
+ * Subscription statuses that count as live: shown in Account and blocking a new Checkout. Same
+ * list as the Edge Functions (_shared/db.ts) and L1e's mp_cancel_targets; the DB's one-live-per-
+ * user index covers all of them except `incomplete`. `paused` (a Mercado Pago pause) is live: no
+ * second subscription on top of it, and it can be cancelled.
+ */
 export const LIVE_SUBSCRIPTION_STATUSES = [
   "active",
   "trialing",
   "past_due",
   "unpaid",
   "incomplete",
+  "paused",
 ] as const;
 
 export type BillingSnapshot = {

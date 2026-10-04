@@ -326,6 +326,28 @@ describe("Mercado Pago cancel (L1e)", () => {
     expect(periodEnd).toContain("Cancel subscription");
   });
 
+  it("paused: Subscription paused, Cancel subscription visible, Subscribe blocked", () => {
+    const html = markup(subscribed({ status: "paused" }));
+    expect(html).toContain("Subscription paused");
+    expect(html).toContain("only the Free plan&#x27;s models");
+    expect(html).toContain(">Cancel subscription</button>");
+    expect(html).not.toContain("Subscribe</button>");
+    expect(html).not.toContain("Payment pending");
+  });
+
+  it("paused: Cancel subscription asks to confirm, then calls cancelSubscription()", async () => {
+    const confirm = stubConfirm().mockReturnValue(true);
+    const { cancel } = mount(subscribed({ status: "paused" }), async () => READY);
+    // The status line and the row title; a paused subscription does not "renew".
+    expect(await screen.findAllByText("Subscription paused")).toHaveLength(2);
+    expect(screen.queryByText(/renews/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Subscribe$/ })).toBeNull();
+    fireEvent.click(await screen.findByRole("button", { name: "Cancel subscription" }));
+    expect(confirm).toHaveBeenCalledWith(cancelConfirmMessage("Starter"));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith());
+    await screen.findByRole("button", { name: /^Subscribe$/ });
+  });
+
   it("Stripe subscribers get no Mercado Pago cancel button", () => {
     const html = markup(subscribed({ provider: "stripe" }));
     expect(html).not.toContain("Cancel subscription");
