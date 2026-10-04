@@ -14,7 +14,7 @@ Use `group_get_work_state` or `group_list_tasks` to read authoritative task stat
 
 ## Criteria, QA evidence, and review freshness
 
-Each criterion has a stable `id`, a description, and `requiredCheckKinds`, whose supported values are `tests`, `typecheck`, `lint`, and `build`. A required verification policy must have at least one criterion. A criterion with no QA check must be covered by a required current review.
+Each criterion has a stable `id`, a description, and `requiredCheckKinds`, whose supported values are `tests`, `typecheck`, `lint`, and `build`. A required verification policy must have at least one criterion. When `verificationPolicy.mode` is `required`, a criterion with no QA check must be covered by a current review that is required by policy. When the mode is `none`, the legacy completion path applies without adding a QA or review barrier.
 
 Group verification consumes QA already persisted by the individual harness. The Group records identity references to the exact task-bound run and its `harness.qa` event, including typed check names and a source fingerprint; it does not copy raw logs or transcripts. Every required check for a criterion must have `passed` evidence in the same exact QA event. `failed`, `skipped`, `missing`, `unavailable`, and `user_confirmed` are not automatic QA passes. An unrelated individual run is not task evidence.
 
