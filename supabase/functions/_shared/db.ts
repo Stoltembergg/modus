@@ -15,6 +15,8 @@ export type BillingPlan = { plan: string; stripePriceId: string };
 export type MpCheckout =
   | { code: "unknown_plan" }
   | { code: "already_subscribed" }
+  /** L1g: a cancelled MP subscription is still paid until current_period_end. */
+  | { code: "cancel_grace_active" }
   | {
       code: "created" | "reused";
       checkoutId: string;
@@ -159,7 +161,12 @@ export function createPostgresBillingDb(dbUrl: string): BillingDb {
       asServiceRole(async (tx) => {
         const rows = await tx`select private.mp_create_checkout(${userId}, ${plan}) as r`;
         const r = rows[0].r as Record<string, unknown>;
-        if (r.code === "unknown_plan" || r.code === "already_subscribed") return { code: r.code };
+        if (
+          r.code === "unknown_plan" ||
+          r.code === "already_subscribed" ||
+          r.code === "cancel_grace_active"
+        )
+          return { code: r.code };
         if (r.code !== "created" && r.code !== "reused")
           throw new Error("unexpected checkout code");
         return {

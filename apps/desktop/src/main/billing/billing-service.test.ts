@@ -162,6 +162,8 @@ describe("billing service", () => {
       [502, "unexpected_preapproval", /unavailable right now/],
       [409, "checkout_conflict", /already being created/],
       [409, "already_subscribed", /already have a subscription/],
+      // L1g: the server refuses a checkout while a cancelled plan is still paid.
+      [409, "cancel_grace_active", /stays active until the end of the period.*subscribe again/],
       [400, "email_required", /email address/],
       [503, "stripe_disabled", /turned off/],
     ];
@@ -342,7 +344,9 @@ describe("billing service", () => {
         currentPlan: "starter",
         subscription: { status: "canceled", cancelAtPeriodEnd: true },
       });
-      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      expect((await service.startCheckout("starter")).error).toMatch(
+        /cancelled plan stays active.*subscribe again after that/,
+      );
       expect(backend.createBillingSession).not.toHaveBeenCalled();
       expect((await service.cancelSubscription()).error).toMatch(/no Mercado Pago/);
       expect(backend.cancelSubscription).not.toHaveBeenCalled();

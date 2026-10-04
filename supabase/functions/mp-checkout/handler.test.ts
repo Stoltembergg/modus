@@ -112,10 +112,11 @@ Deno.test("401 without a user; 400 without an email; 503 without BILLING_RETURN_
   assertEquals((await setup().handler(request({ plan: "pro" }, { method: "GET" }))).status, 405);
 });
 
-Deno.test("unknown plan 404; already subscribed (any provider) 409; no preapproval created", async () => {
+Deno.test("unknown plan 404; already subscribed (any provider) / L1g grace 409; no preapproval created", async () => {
   for (const [code, status] of [
     ["unknown_plan", 404],
     ["already_subscribed", 409],
+    ["cancel_grace_active", 409],
   ] as const) {
     const { handler, names } = setup({ checkout: { code } });
     const res = await handler(request({ plan: "pro" }));

@@ -4,7 +4,8 @@
 -- sets subscriptions.cancel_requested_at without touching the status or
 -- cancel_at_period_end; later webhooks that keep the row live keep the flag;
 -- the final 'canceled' comes from process_mp_preapproval (webhook / re-fetch),
--- which clears it, after which a new checkout is possible again.
+-- which clears it, after which a new checkout is possible again (L1g: once the
+-- paid period ends; see 16_l1g_checkout_grace).
 begin;
 set local search_path = public, extensions;
 select no_plan();
@@ -207,8 +208,8 @@ select is(private.mp_mark_cancel_requested(:'b', 'PRELB1') ->> 'code', 'not_foun
   'B: flagging a canceled row is a no-op');
 select is(private.process_mp_preapproval(pg_temp.pre('PRELB1', :'cob', 'canceled'), :'expect') ->> 'code',
   'subscription_canceled', 'B: repeated cancel confirmation is idempotent');
-select is(private.mp_create_checkout(:'b', 'starter') ->> 'code', 'created',
-  'B: after the confirmed cancel a new checkout is possible');
+select is(private.mp_create_checkout(:'b', 'starter') ->> 'code', 'cancel_grace_active',
+  'B: after the confirmed cancel a paid row is in grace: no new checkout until period end (L1g)');
 
 -- Incomplete: "Cancel and try again".
 select is(private.mp_mark_cancel_requested(:'a', 'PRELA1') ->> 'code', 'marked', 'A: incomplete flagged');

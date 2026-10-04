@@ -57,6 +57,8 @@ const ERRORS: Record<string, string> = {
   already_subscribed: "You already have a subscription.",
   checkout_conflict: "A checkout is already being created. Try again in a moment.",
   cancel_not_available: "There is no Mercado Pago subscription to cancel.",
+  cancel_grace_active:
+    "Your cancelled plan stays active until the end of the period you paid for. You can subscribe again after that.",
   email_required: "Add an email address to your account before subscribing.",
   mercadopago_unavailable: "Mercado Pago is unavailable right now. Try again in a few minutes.",
   stripe_disabled: "Card payments through Stripe are turned off right now.",
@@ -257,7 +259,11 @@ export function createBillingService(deps: Deps): BillingService {
         return Promise.resolve(setState({ error: ERRORS.unknown_plan ?? GENERIC_ERROR }));
       }
       if (state.subscription) {
-        return Promise.resolve(setState({ error: ERRORS.already_subscribed ?? GENERIC_ERROR }));
+        // L1g: a cancelled Mercado Pago row kept until current_period_end (mp-checkout refuses
+        // it too, with cancel_grace_active).
+        const code =
+          state.subscription.status === "canceled" ? "cancel_grace_active" : "already_subscribed";
+        return Promise.resolve(setState({ error: ERRORS[code] ?? GENERIC_ERROR }));
       }
       return openSession("checkout", plan, provider);
     },

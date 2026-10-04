@@ -68,6 +68,8 @@ export function createMpCheckoutHandler(deps: MpCheckoutDeps): (req: Request) =>
       const checkout = await deps.db.mpCreateCheckout(user.id, body.plan);
       if (checkout.code === "unknown_plan") throw new HttpError(404, "unknown_plan");
       if (checkout.code === "already_subscribed") throw new HttpError(409, "already_subscribed");
+      // L1g: cancelled but paid until current_period_end; subscribe again after that date.
+      if (checkout.code === "cancel_grace_active") throw new HttpError(409, "cancel_grace_active");
       if (checkout.checkoutUrl) {
         if (!isMpCheckoutUrl(checkout.checkoutUrl))
           throw new HttpError(502, "unexpected_preapproval");
