@@ -407,10 +407,8 @@ export class GroupRuntime {
       if (!latestMember || latestMember.archived || !latestSession || latestSession.archivedAt)
         throw new GroupStoreError("not-a-member", "The selected target left the group.");
 
-      const existing = action.executionId ? this.chains.get(action.executionId) : undefined;
-      const joinsExisting = Boolean(
-        existing && existing.groupId === action.groupId && !existing.ended && !existing.retired,
-      );
+      const existing = this.continuableSuggestionChain(latestAction);
+      const joinsExisting = Boolean(existing && !latestAction.requiresNewExecution);
       if (!joinsExisting && !latestAction.requiresNewExecution)
         throw new GroupStoreError(
           "stale-task",
@@ -1920,21 +1918,26 @@ export class GroupRuntime {
   }
 
   private refreshSuggestionConfirmations(groupId: string): void {
-    const executionIds = new Set(
-      listGroupActions(groupId)
-        .filter(
-          (action) =>
-            action.deliveryState === "suggested" &&
-            !action.requiresNewExecution &&
-            action.executionId,
-        )
-        .map((action) => action.executionId as string),
-    );
-    for (const executionId of executionIds) {
-      const chain = this.chains.get(executionId) ?? readGroupChain(executionId);
-      if (!chain || chain.ended || chain.retired)
-        this.requireNewExecutionForSuggestions(executionId);
+    const executionIds = new Set<string>();
+    for (const action of listGroupActions(groupId)) {
+      if (
+        action.deliveryState === "suggested" &&
+        !action.requiresNewExecution &&
+        action.executionId &&
+        !this.continuableSuggestionChain(action)
+      )
+        executionIds.add(action.executionId);
     }
+    for (const executionId of executionIds) this.requireNewExecutionForSuggestions(executionId);
+  }
+
+  /** A durable chain is joinable only when recovery admitted it to this runtime. */
+  private continuableSuggestionChain(action: GroupActionRecord): ChainState | undefined {
+    if (!action.executionId) return undefined;
+    const chain = this.chains.get(action.executionId);
+    return chain && chain.groupId === action.groupId && !chain.ended && !chain.retired
+      ? chain
+      : undefined;
   }
 
   private requireNewExecutionForSuggestions(executionId: string): void {
@@ -1949,10 +1952,7 @@ export class GroupRuntime {
     if (action.version !== expectedVersion)
       throw new GroupStoreError("stale-task", "Suggestion changed. Refresh it before acting.");
     if (action.deliveryState !== "suggested" || action.requiresNewExecution) return;
-    const chain = action.executionId
-      ? (this.chains.get(action.executionId) ?? readGroupChain(action.executionId))
-      : undefined;
-    if (chain && !chain.ended && !chain.retired) return;
+    if (this.continuableSuggestionChain(action)) return;
     this.requireNewExecutionForSuggestions(action.executionId ?? "");
     throw new GroupStoreError(
       "stale-task",

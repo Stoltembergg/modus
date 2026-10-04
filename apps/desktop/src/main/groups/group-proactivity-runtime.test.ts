@@ -1104,6 +1104,84 @@ describe("user-resolved proactive suggestions", () => {
     env.groups.dispose();
   });
 
+  it("keeps a source chain with a pending recovered wake continuable", async () => {
+    const { group, owner, env, root, suggestion } = await suggestedAssignment();
+    const recovered = runtime(false, true);
+    expect(recovered.groups.liveChainIds()).toContain(root.id);
+    const refreshed = must(recovered.groups.listSuggestions(group.id)[0]);
+    expect(refreshed).toMatchObject({
+      version: suggestion.version,
+      startNewExecution: false,
+    });
+
+    const action = await recovered.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: refreshed.version,
+      targetSessionId: owner,
+    });
+    expect(action).toMatchObject({
+      deliveryState: "dispatched",
+      executionId: root.id,
+      resolvedExecutionId: root.id,
+      sourceEventId: suggestion.source.eventId,
+    });
+    env.groups.dispose();
+    recovered.groups.dispose();
+  });
+
+  it("requires a new execution for a suggestion whose interrupted chain was not recovered", async () => {
+    const { group, owner, env, root, suggestion, db } = await suggestedAssignment();
+    const job = db
+      .prepare("select id from group_jobs where group_id = ? and chain_id = ?")
+      .get(group.id, root.id) as { id: string } | undefined;
+    if (!job) throw new Error("Expected the source chain to have one durable job.");
+    db.prepare("update group_jobs set status = 'running' where id = ?").run(job.id);
+
+    const recovered = runtime(false, true);
+    expect(db.prepare("select status from group_jobs where id = ?").get(job.id)).toMatchObject({
+      status: "interrupted",
+    });
+    expect(recovered.groups.liveChainIds()).not.toContain(root.id);
+    await expect(
+      recovered.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: owner,
+      }),
+    ).rejects.toThrow(/stale|changed|refresh/i);
+    const refreshed = must(recovered.groups.listSuggestions(group.id)[0]);
+    expect(refreshed.version).toBeGreaterThan(suggestion.version);
+    expect(refreshed.startNewExecution).toBe(true);
+    expect(recovered.events).toContainEqual({
+      type: "group.suggestion-changed",
+      groupId: group.id,
+      actionId: suggestion.actionId,
+      version: refreshed.version,
+    });
+
+    const action = await recovered.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: refreshed.version,
+      targetSessionId: owner,
+    });
+    expect(action).toMatchObject({
+      deliveryState: "dispatched",
+      executionId: root.id,
+      sourceEventId: suggestion.source.eventId,
+    });
+    expect(action.resolvedExecutionId).toBeDefined();
+    expect(action.resolvedExecutionId).not.toBe(root.id);
+    expect((await import("./group-task-store")).getGroupTask(suggestion.task.id)).toMatchObject({
+      executionId: action.resolvedExecutionId,
+      ownerSessionId: owner,
+    });
+    env.groups.dispose();
+    recovered.groups.dispose();
+  });
+
   it("associates a new accepted execution with its task and persists owner reassignment", async () => {
     const { group, lead, env, root, task, suggestion } = await suggestedAssignment(true);
     must(env.calls[0]).resolve({ outcome: "ok" });
