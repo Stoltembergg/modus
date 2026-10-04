@@ -387,7 +387,7 @@ type ChatPaneProps = {
   /** Explicitly open a completed timeline plan in the inspector. */
   onOpenPlan?(plan: PlanRef): void;
   /** Open a workspace file in the Files inspector panel. */
-  onOpenFile?(path: string): void;
+  onOpenFile?(path: string, line?: number): void;
   /** Open a background terminal in the Terminal inspector panel. */
   onOpenTerminal?(terminalId: string): void;
   /**
@@ -858,7 +858,7 @@ export function ChatPane({
       }
       autoScrollResumeRef.current();
     };
-    // ThoughtLine / WorkFold layout settles across a couple frames; without
+    // WorkStatusLine / WorkFold layout settles across a couple frames; without
     // retries an idle remount stays at scrollTop 0 (session start).
     requestAnimationFrame(() => {
       apply();
@@ -1456,7 +1456,6 @@ export function ChatPane({
               await window.modus.checkpoint.restore({ checkpointId });
               refreshStats();
             }}
-            scrollContainerRef={scrollContainerRef}
             workspaceId={workspace?.id}
           />
         </ChatViewport>
@@ -1526,8 +1525,8 @@ export function ChatPane({
                 {pendingQuestion ? (
                   <QuestionsCard
                     key={pendingQuestion.id}
-                    onSkip={() => void respondQuestion([], true)}
-                    onSubmit={(answers) => void respondQuestion(answers, false)}
+                    onSkip={() => respondQuestion([], true)}
+                    onSubmit={(answers) => respondQuestion(answers, false)}
                     request={pendingQuestion}
                   />
                 ) : null}

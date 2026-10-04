@@ -1,8 +1,10 @@
 import { useMemo } from "react";
 import type { QuestionAnswer, QuestionRequest } from "../../../../shared/contracts";
+import { groupStatusLabel } from "../../../../shared/group-room-locale";
+import { QuestionCard } from "../../components/question/QuestionCard";
 import { latestPendingQuestionRequest } from "../agent/questionRequests";
-import { QuestionsCard } from "../plan/QuestionsCard";
 import { useGroupAgentEvents } from "./groupAgentEvents";
+import { useGroupRoomLocale } from "./groupRoomI18n";
 import { type MemberLabel, memberLabelText } from "./memberLabels";
 
 /**
@@ -34,6 +36,7 @@ export function GroupMemberQuestions({
   labels: ReadonlyMap<string, MemberLabel>;
 }) {
   const pending = useGroupMemberQuestions(waitingSessionIds);
+  const locale = useGroupRoomLocale();
   if (pending.size === 0) return null;
 
   async function respond(
@@ -54,11 +57,14 @@ export function GroupMemberQuestions({
         const name = label ? memberLabelText(label) : sessionId;
         return (
           <div data-member-session={sessionId} key={request.id}>
-            <div className="mb-1.5 text-2xs text-fg-faint">{name} · Waiting for you</div>
-            <QuestionsCard
-              onSkip={() => void respond(request, [], true)}
-              onSubmit={(answers) => void respond(request, answers, false)}
-              request={request}
+            <div className="mb-1.5 text-2xs text-fg-faint">
+              {name} · {groupStatusLabel("waitingForYou", locale)}
+            </div>
+            <QuestionCard
+              mode="question"
+              onSkip={() => respond(request, [], true)}
+              onSubmit={(answers) => respond(request, answers, false)}
+              questions={request.questions}
             />
           </div>
         );

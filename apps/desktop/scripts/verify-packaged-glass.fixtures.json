@@ -1,0 +1,178 @@
+{
+  "beforeFull": {
+    "scenario": {
+      "theme": "dark",
+      "glass": true,
+      "mode": "full"
+    },
+    "measured": {
+      "nativeGlass": "true",
+      "stylesheets": 2,
+      "html": 0,
+      "body": 0,
+      "root": 0,
+      "shell": 0,
+      "rail": 0.78,
+      "sidebar": 0.78,
+      "main": 0.94,
+      "own": {
+        "rail": 0.78,
+        "sidebar": 0.78,
+        "main": 0.94
+      },
+      "blur": {
+        "shell": false,
+        "rail": true,
+        "sidebar": true,
+        "main": false
+      },
+      "edges": {
+        "railDivider": 0.03,
+        "mainLeft": 0.067,
+        "mainRight": 0.067
+      },
+      "focusRing": true
+    }
+  },
+  "afterSidebar": {
+    "scenario": {
+      "theme": "dark",
+      "glass": true,
+      "mode": "sidebar"
+    },
+    "measured": {
+      "nativeGlass": "true",
+      "stylesheets": 2,
+      "html": 0,
+      "body": 0,
+      "root": 0,
+      "shell": 0.78,
+      "rail": 0.78,
+      "sidebar": 0.78,
+      "main": 1,
+      "own": {
+        "rail": 0,
+        "sidebar": 0,
+        "main": 1
+      },
+      "blur": {
+        "shell": true,
+        "rail": false,
+        "sidebar": false,
+        "main": false
+      },
+      "edges": {
+        "railDivider": 0,
+        "mainLeft": 0,
+        "mainRight": 0.067
+      },
+      "focusRing": true
+    }
+  },
+  "afterFull": {
+    "scenario": {
+      "theme": "dark",
+      "glass": true,
+      "mode": "full"
+    },
+    "measured": {
+      "nativeGlass": "true",
+      "stylesheets": 2,
+      "html": 0,
+      "body": 0,
+      "root": 0,
+      "shell": 0.78,
+      "rail": 0.78,
+      "sidebar": 0.78,
+      "main": 0.78,
+      "own": {
+        "rail": 0,
+        "sidebar": 0,
+        "main": 0
+      },
+      "blur": {
+        "shell": true,
+        "rail": false,
+        "sidebar": false,
+        "main": false
+      },
+      "edges": {
+        "railDivider": 0,
+        "mainLeft": 0,
+        "mainRight": 0
+      },
+      "focusRing": true
+    }
+  },
+  "afterOff": {
+    "scenario": {
+      "theme": "dark",
+      "glass": false,
+      "mode": "off"
+    },
+    "measured": {
+      "nativeGlass": "false",
+      "stylesheets": 2,
+      "html": 1,
+      "body": 0.97,
+      "root": 0.97,
+      "shell": 0.97,
+      "rail": 1,
+      "sidebar": 1,
+      "main": 1,
+      "own": {
+        "rail": 0.94,
+        "sidebar": 1,
+        "main": 1
+      },
+      "blur": {
+        "shell": false,
+        "rail": false,
+        "sidebar": false,
+        "main": false
+      },
+      "edges": {
+        "railDivider": 0.03,
+        "mainLeft": 0.067,
+        "mainRight": 0.067
+      },
+      "focusRing": true
+    }
+  },
+  "afterReduced": {
+    "scenario": {
+      "theme": "dark",
+      "glass": true,
+      "mode": "sidebar",
+      "os": "reduced-transparency"
+    },
+    "measured": {
+      "nativeGlass": "true",
+      "stylesheets": 2,
+      "html": 0,
+      "body": 1,
+      "root": 1,
+      "shell": 1,
+      "rail": 1,
+      "sidebar": 1,
+      "main": 1,
+      "own": {
+        "rail": 1,
+        "sidebar": 1,
+        "main": 1
+      },
+      "blur": {
+        "shell": false,
+        "rail": false,
+        "sidebar": false,
+        "main": false
+      },
+      "edges": {
+        "railDivider": 0.03,
+        "mainLeft": 0.067,
+        "mainRight": 0.067
+      },
+      "focusRing": true
+    }
+  }
+}

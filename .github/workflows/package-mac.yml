@@ -79,6 +79,9 @@ jobs:
         env:
           # Large renderer (Monaco/Mermaid) can abort under default heap on GHA mac runners.
           NODE_OPTIONS: --max-old-space-size=8192
+          MAIN_VITE_SUPABASE_URL: ${{ vars.MAIN_VITE_SUPABASE_URL }}
+          MAIN_VITE_SUPABASE_ANON_KEY: ${{ vars.MAIN_VITE_SUPABASE_ANON_KEY }}
+          MAIN_VITE_AUTH_EMAIL_REDIRECT_URL: ${{ vars.MAIN_VITE_AUTH_EMAIL_REDIRECT_URL || 'https://modus-site-ruby.vercel.app/auth/confirmed' }}
         run: |
           set +e
           npm --workspace @modus/desktop exec -- electron-vite build > electron-vite-build.log 2>&1
@@ -94,6 +97,11 @@ jobs:
             echo "::error title=electron-vite::${MSG}"
             exit "$status"
           fi
+
+      - name: Verify packaged glass (D2)
+        # Main window options + the built renderer in headless Chrome: <html> and the
+        # shell must stay transparent under native glass (PR #152 regression).
+        run: node apps/desktop/scripts/verify-packaged-glass.mjs apps/desktop/out
 
       - name: Upload electron-vite log on failure
         if: failure()

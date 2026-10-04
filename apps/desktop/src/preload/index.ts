@@ -1,5 +1,8 @@
 import type { IpcRendererEvent } from "electron";
 import { contextBridge, ipcRenderer } from "electron";
+import type { AppearanceState } from "../shared/appearance";
+import type { AuthState } from "../shared/auth";
+import type { BillingState } from "../shared/billing";
 import type {
   AgentEvent,
   BrowserEvent,
@@ -18,13 +21,30 @@ const windowAppearance = resolveWindowAppearance(
   process.platform,
   process.getSystemVersion?.() ?? "",
 );
-let nativeGlassAvailable = windowAppearance.glass === "native";
-const nativeGlassListeners = new Set<(available: boolean) => void>();
+const APPEARANCE_ARGUMENT_PREFIX = "--modus-appearance=";
 
-ipcRenderer.on("window:glass-event", (_event: IpcRendererEvent, available: unknown) => {
-  if (typeof available !== "boolean") return;
-  nativeGlassAvailable = available;
-  for (const listener of nativeGlassListeners) listener(available);
+function readInitialAppearance(): AppearanceState | null {
+  const raw = process.argv.find((arg) => arg.startsWith(APPEARANCE_ARGUMENT_PREFIX));
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw.slice(APPEARANCE_ARGUMENT_PREFIX.length)) as AppearanceState;
+    return typeof parsed?.glass === "boolean" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const initialAppearance = readInitialAppearance();
+let nativeGlassAvailable = initialAppearance?.glass ?? windowAppearance.glass === "native";
+const nativeGlassListeners = new Set<(available: boolean) => void>();
+const appearanceListeners = new Set<(state: AppearanceState) => void>();
+
+ipcRenderer.on("appearance:event", (_event: IpcRendererEvent, state: AppearanceState) => {
+  if (typeof state?.glass !== "boolean") return;
+  for (const listener of appearanceListeners) listener(state);
+  if (state.glass === nativeGlassAvailable) return;
+  nativeGlassAvailable = state.glass;
+  for (const listener of nativeGlassListeners) listener(state.glass);
 });
 
 const api: ModusApi = {
@@ -36,6 +56,15 @@ const api: ModusApi = {
     onNativeGlassChange(handler) {
       nativeGlassListeners.add(handler);
       return () => nativeGlassListeners.delete(handler);
+    },
+    appearance: {
+      initial: initialAppearance,
+      get: () => ipcRenderer.invoke("appearance:get") as Promise<AppearanceState>,
+      set: (input) => ipcRenderer.invoke("appearance:set", input) as Promise<AppearanceState>,
+      onChange(handler) {
+        appearanceListeners.add(handler);
+        return () => appearanceListeners.delete(handler);
+      },
     },
     version: () => ipcRenderer.invoke("app:version") as Promise<string>,
     securityState: () => ipcRenderer.invoke("app:security-state") as Promise<SecurityState>,
@@ -381,6 +410,36 @@ const api: ModusApi = {
         callback(payload as UpdateState);
       ipcRenderer.on("update:state-event", listener);
       return () => ipcRenderer.removeListener("update:state-event", listener);
+    },
+  },
+  auth: {
+    getState: () => ipcRenderer.invoke("auth:get-state") as Promise<AuthState>,
+    signUp: (input) => ipcRenderer.invoke("auth:sign-up", input) as Promise<AuthState>,
+    signInWithPassword: (input) =>
+      ipcRenderer.invoke("auth:sign-in-password", input) as Promise<AuthState>,
+    signInWithOAuth: (input) =>
+      ipcRenderer.invoke("auth:sign-in-oauth", input) as Promise<AuthState>,
+    cancelOAuth: () => ipcRenderer.invoke("auth:cancel-oauth") as Promise<AuthState>,
+    signOut: () => ipcRenderer.invoke("auth:sign-out") as Promise<AuthState>,
+    onStateChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, payload: unknown) =>
+        callback(payload as AuthState);
+      ipcRenderer.on("auth:state-event", listener);
+      return () => ipcRenderer.removeListener("auth:state-event", listener);
+    },
+  },
+  billing: {
+    getState: () => ipcRenderer.invoke("billing:get-state") as Promise<BillingState>,
+    refresh: () => ipcRenderer.invoke("billing:refresh") as Promise<BillingState>,
+    checkout: (input) => ipcRenderer.invoke("billing:checkout", input) as Promise<BillingState>,
+    openPortal: () => ipcRenderer.invoke("billing:portal") as Promise<BillingState>,
+    cancelSubscription: () => ipcRenderer.invoke("billing:cancel") as Promise<BillingState>,
+    buyCredits: (input) => ipcRenderer.invoke("billing:buyCredits", input) as Promise<BillingState>,
+    onStateChange: (callback) => {
+      const listener = (_event: IpcRendererEvent, payload: unknown) =>
+        callback(payload as BillingState);
+      ipcRenderer.on("billing:state-event", listener);
+      return () => ipcRenderer.removeListener("billing:state-event", listener);
     },
   },
   clipboard: {

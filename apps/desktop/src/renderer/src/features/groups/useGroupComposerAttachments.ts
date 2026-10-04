@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import type { GroupMessageContextItem, PromptImageAttachment } from "../../../../shared/contracts";
 import { formatAttachmentSize } from "../../../../shared/group-prompt-kit";
+import { groupText } from "../../../../shared/group-room-locale";
 
 const IMAGE_MIME = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 export const MAX_GROUP_ATTACHMENTS = 8;
@@ -31,7 +32,7 @@ function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file."));
+    reader.onerror = () => reject(reader.error ?? new Error(groupText("attachments.readFailed")));
     reader.readAsDataURL(file);
   });
 }
@@ -48,7 +49,10 @@ function dataUrlPayload(dataUrl: string): string {
 export function useGroupComposerAttachments(options?: {
   attachments?: GroupComposerAttachment[];
   onChange?: (update: GroupComposerAttachmentUpdate) => void;
+  /** Room locale for the per-file errors (default: the renderer locale). */
+  locale?: string | null | undefined;
 }) {
+  const locale = options?.locale;
   const [uncontrolled, setUncontrolled] = useState<GroupComposerAttachment[]>([]);
   const attachments = options?.attachments ?? uncontrolled;
   const setAttachments = options?.onChange ?? setUncontrolled;
@@ -69,7 +73,9 @@ export function useGroupComposerAttachments(options?: {
               mimeType,
               size,
               status: "error",
-              error: "Image too large (max 10 MB)",
+              error: groupText("attachments.imageTooLarge", locale, {
+                max: MAX_IMAGE_BYTES / 1024 / 1024,
+              }),
               kind: "image",
             });
             continue;
@@ -92,7 +98,7 @@ export function useGroupComposerAttachments(options?: {
               mimeType,
               size,
               status: "error",
-              error: "Could not read image",
+              error: groupText("attachments.imageUnreadable", locale),
               kind: "image",
             });
           }
@@ -105,7 +111,9 @@ export function useGroupComposerAttachments(options?: {
             mimeType,
             size,
             status: "error",
-            error: "File too large (max 20 MB)",
+            error: groupText("attachments.fileTooLarge", locale, {
+              max: MAX_FILE_BYTES / 1024 / 1024,
+            }),
             kind: "file",
           });
           continue;
@@ -118,7 +126,7 @@ export function useGroupComposerAttachments(options?: {
             mimeType,
             size,
             status: "error",
-            error: "File path unavailable",
+            error: groupText("attachments.pathUnavailable", locale),
             kind: "file",
           });
           continue;
@@ -138,7 +146,7 @@ export function useGroupComposerAttachments(options?: {
       }
       return next;
     },
-    [setAttachments],
+    [setAttachments, locale],
   );
 
   const remove = useCallback(

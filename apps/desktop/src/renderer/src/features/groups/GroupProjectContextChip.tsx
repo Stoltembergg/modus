@@ -3,6 +3,7 @@ import type {
   GroupProjectContextStatus,
 } from "../../../../shared/contracts";
 import { formatGroupProjectContextLabel } from "../../../../shared/group-project";
+import { useGroupText } from "./groupRoomI18n";
 
 /** Compact room chip: Mapping… / Project context · Ready|Updating|Needs refresh. */
 export function GroupProjectContextChip({
@@ -10,15 +11,16 @@ export function GroupProjectContextChip({
 }: {
   status: GroupProjectContextStatus | undefined;
 }) {
+  const t = useGroupText();
   if (!status) return null;
   return (
     <span
       className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
       data-status={status}
       data-testid="group-project-context-chip"
-      title="Shared project map for this group's Project"
+      title={t("project.contextTitle")}
     >
-      {formatGroupProjectContextLabel(status)}
+      {formatGroupProjectContextLabel(status, t.locale)}
     </span>
   );
 }

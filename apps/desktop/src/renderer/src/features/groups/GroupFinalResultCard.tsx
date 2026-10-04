@@ -1,4 +1,5 @@
 import type { GroupFinalResultCard as GroupFinalResultCardModel } from "../../../../shared/group-result-card";
+import { useGroupText } from "./groupRoomI18n";
 
 function ResultSection({
   title,
@@ -31,29 +32,32 @@ function ResultSection({
  * open items. Renders inside the Lead's message — not a nested marketing card.
  */
 export function GroupFinalResultCard({ card }: { card: GroupFinalResultCardModel }) {
+  const t = useGroupText();
   return (
     <div
       className="mt-1 space-y-2.5 border-hairline border-l-2 pl-3"
       data-testid="group-final-result-card"
     >
       <div data-testid="group-final-result-outcome">
-        <div className="font-medium text-2xs text-fg-faint tracking-wide">Outcome</div>
+        <div className="font-medium text-2xs text-fg-faint tracking-wide">
+          {t("result.outcome")}
+        </div>
         <p className="mt-0.5 whitespace-pre-wrap text-fg text-sm leading-relaxed">{card.outcome}</p>
       </div>
       <ResultSection
         items={card.validations}
         testId="group-final-result-validations"
-        title="Validations"
+        title={t("result.validations")}
       />
       <ResultSection
         items={card.changedFiles}
         testId="group-final-result-changed-files"
-        title="Changed files"
+        title={t("result.changedFiles")}
       />
       <ResultSection
         items={card.openItems}
         testId="group-final-result-open-items"
-        title="Open items"
+        title={t("result.openItems")}
       />
     </div>
   );

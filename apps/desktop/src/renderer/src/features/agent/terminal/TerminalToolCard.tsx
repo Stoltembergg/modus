@@ -1,7 +1,7 @@
 import { IconAlertCircle, IconCheck, IconChevronRight } from "@tabler/icons-react";
 import { memo, useMemo, useState } from "react";
 import { CollapsibleMotion } from "../../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../../components/ui/ShinyText";
+import { WorkingText } from "../../../components/ui/WorkingText";
 import { cn } from "../../../lib/cn";
 import { parseTerminalOutput } from "./parseTerminal";
 
@@ -69,7 +69,7 @@ export const TerminalToolCard = memo(
           type="button"
         >
           <span className="min-w-0 flex-1 truncate" title={command}>
-            {running ? <ShinyText>{summary}</ShinyText> : summary}
+            {running ? <WorkingText>{summary}</WorkingText> : summary}
           </span>
           <IconChevronRight
             className={cn(

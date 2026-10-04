@@ -10,6 +10,7 @@ import { AgentPresenceDot } from "../agents/AgentPresenceDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
+import { useGroupText } from "./groupRoomI18n";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 import type { GroupActivityState, GroupMemberStatesById } from "./useWorkingGroups";
@@ -27,25 +28,27 @@ export function GroupStageChip({
   stage: GroupCollabStageSnapshot;
   labels: ReadonlyMap<string, MemberLabel>;
 }) {
+  const t = useGroupText();
   const ownerLabel = stage.ownerSessionId
     ? (labels.get(stage.ownerSessionId) ??
       (stage.ownerName ? { title: stage.ownerName } : undefined))
     : stage.ownerName
       ? { title: stage.ownerName }
       : undefined;
+  const stageName = t(`stage.${stage.stage}`);
   return (
     <span
       className="shrink-0 rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
       data-stage={stage.stage}
       data-testid="group-stage-chip"
-      title="Collaboration stage (from the room transcript)"
+      title={t("header.stageTitle")}
     >
       {ownerLabel ? (
         <>
-          Owner: <MemberName label={ownerLabel} /> · {stage.stage}
+          {t("header.owner")} <MemberName label={ownerLabel} /> · {stageName}
         </>
       ) : (
-        <>Stage · {stage.stage}</>
+        t("header.stage", { stage: stageName })
       )}
     </span>
   );
@@ -92,6 +95,7 @@ export function GroupRoomHeader({
   variant?: "chrome" | "standalone";
 }) {
   const [renaming, setRenaming] = useState(false);
+  const t = useGroupText();
   const coordinating = isCoordinatorModeActive(group);
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -137,7 +141,7 @@ export function GroupRoomHeader({
             className="min-w-0 shrink truncate rounded-sm border border-hairline px-1.5 py-px text-2xs text-fg-muted"
             data-testid="group-project-badge"
           >
-            {projectName ?? "No project"}
+            {projectName ?? t("header.noProject")}
           </span>
         </div>
         <label
@@ -150,16 +154,16 @@ export function GroupRoomHeader({
         >
           <IconSearch className="shrink-0 text-fg-faint" size={ICON.sm} stroke={ICON_STROKE.sm} />
           <input
-            aria-label="Search in conversation"
+            aria-label={t("header.search")}
             className="min-w-0 flex-1 bg-transparent text-fg text-xs outline-none placeholder:text-fg-faint"
             onChange={(event) => onSearchChange(event.currentTarget.value)}
-            placeholder="Search in conversation"
+            placeholder={t("header.search")}
             type="search"
             value={searchQuery}
           />
           {searchQuery ? (
             <button
-              aria-label="Clear search"
+              aria-label={t("header.clearSearch")}
               className="shrink-0 text-fg-faint hover:text-fg"
               onClick={() => onSearchChange("")}
               type="button"
@@ -186,11 +190,11 @@ export function GroupRoomHeader({
             <button
               className="flex h-6 shrink-0 items-center gap-1 rounded-md border border-hairline px-2 text-fg-muted text-xs transition-colors hover:bg-hover hover:text-fg"
               onClick={onStop}
-              title="End the chain and stop running member turns"
+              title={t("header.stopTitle")}
               type="button"
             >
               <IconPlayerStop size={ICON.xs} stroke={ICON_STROKE.xs} />
-              Stop
+              {t("header.stop")}
             </button>
           ) : null}
           {tasksButton}
@@ -202,7 +206,7 @@ export function GroupRoomHeader({
             open={menuOpen}
           >
             <Menu.Trigger
-              aria-label="Group actions"
+              aria-label={t("header.groupActions")}
               className="flex size-6 shrink-0 items-center justify-center rounded-md text-fg-faint outline-none transition-colors hover:bg-hover hover:text-fg-muted data-popup-open:bg-hover"
             >
               <IconDots size={ICON.sm} stroke={ICON_STROKE.sm} />

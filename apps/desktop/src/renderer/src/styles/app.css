@@ -222,13 +222,26 @@
   --surface-app: color-mix(in srgb, var(--color-panel) 97%, transparent);
   --surface-sidebar: color-mix(in srgb, var(--color-panel) 94%, transparent);
   --surface-main: var(--color-canvas);
-  --surface-main-glass: color-mix(in srgb, var(--color-canvas) 94%, transparent);
   --surface-raised: var(--color-elevated);
   /* Solid on unsupported hosts; native translucency is applied by the scoped
      data-native-glass rules below. */
   --surface-glass: var(--surface-raised);
-  --surface-glass-sidebar: color-mix(in srgb, var(--color-panel) 78%, transparent);
-  --surface-glass-elevated: color-mix(in srgb, var(--color-elevated) 82%, transparent);
+  --surface-glass-sidebar: color-mix(
+    in srgb,
+    var(--color-panel) var(--glass-alpha-chrome),
+    transparent
+  );
+  /* Uniform glass: the one tint layer behind rail, sidebar and (Full) main. */
+  --surface-glass-window: color-mix(
+    in srgb,
+    var(--color-panel) var(--glass-alpha-chrome),
+    transparent
+  );
+  --surface-glass-elevated: color-mix(
+    in srgb,
+    var(--color-elevated) var(--glass-alpha-overlay),
+    transparent
+  );
 
   --text-primary: var(--color-fg);
   --text-secondary: var(--color-fg-muted);
@@ -271,8 +284,17 @@
   --motion-ui: 160ms;
   --motion-overlay: 180ms;
   --ease-ui: cubic-bezier(0.22, 1, 0.36, 1);
-  --glass-filter: blur(18px) saturate(1.12);
-  --glass-scrim-filter: blur(2px);
+  /* Glass tokens (D1). Opacity tiers of the native-glass surfaces, as color-mix
+     percentages; one set for every theme (no per-theme override), so the
+     reduced-transparency fallback at the end of this file always wins.
+     Text contrast on these tiers is pinned by styles/glassTokens.test.ts. */
+  --glass-alpha-chrome: 78%; /* window tint: rail + sidebar, and main in Full */
+  --glass-alpha-overlay: 82%; /* raised/glass surfaces, popups, pdf + mermaid chrome */
+  --glass-blur: 18px;
+  --glass-saturate: 1.12;
+  --glass-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  --glass-scrim-blur: 2px;
+  --glass-scrim-filter: blur(var(--glass-scrim-blur));
   --group-icon-saturation: 66%;
   --group-icon-lightness: 72%;
   --overlay-shadow: var(--shadow-popup);
@@ -450,6 +472,37 @@
 .group-prompt-bar:focus-within {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-composer);
+}
+/* C2.1: "open at line" flash in the code editor; re-created per flash so the fade restarts. */
+.modus-line-flash {
+  background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  animation: modus-line-flash-a 1.6s ease-out forwards;
+}
+.modus-line-flash-1 {
+  animation-name: modus-line-flash-b;
+}
+@keyframes modus-line-flash-a {
+  0%,
+  40% {
+    background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@keyframes modus-line-flash-b {
+  0%,
+  40% {
+    background-color: color-mix(in srgb, var(--color-focus-ring) 22%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modus-line-flash {
+    animation: none;
+  }
 }
 .group-composer-toolbar {
   background-color: color-mix(in srgb, var(--surface-raised) 76%, transparent);
@@ -842,9 +895,21 @@ body {
   height: 100vh;
 }
 
-/* Desktop glass is scoped to the rail, context sidebar and raised surfaces.
-   The conversation canvas gets a light tint only; transcript content and media
-   keep their own surfaces, and the canvas itself does not add another blur. */
+/* Desktop glass (D2). The window material (vibrancy / Mica) is on whenever
+   data-native-glass="true"; data-transparency picks how much of the app shows it:
+   - "sidebar" (default): only the left chrome (rail + context sidebar, one
+     column) is translucent; the canvas, overlays and every other surface keep
+     their opaque defaults.
+   - "full": rail, sidebar and canvas share one tint; overlays / scrims are
+     glass too.
+   Same rules in every theme. The rules right below are the solid-compatible
+   base (what reduced transparency / more contrast / forced colors keep); the
+   uniform block after them is what a normal desktop sees.
+   Always -webkit-backdrop-filter first: Lightning CSS drops the standard
+   property when it comes first, and Chromium ignores the prefixed one. */
+/* <html> too: `:root { background: var(--color-canvas) }` paints the whole
+   window canvas and would hide the material entirely. */
+:root[data-native-glass="true"],
 :root[data-native-glass="true"] body,
 :root[data-native-glass="true"] #root,
 :root[data-native-glass="true"] .app-shell,
@@ -854,31 +919,66 @@ body {
 :root[data-native-glass="true"] .app-rail,
 :root[data-native-glass="true"] .app-context-sidebar {
   background-color: var(--surface-glass-sidebar);
-  backdrop-filter: var(--glass-filter);
-  -webkit-backdrop-filter: var(--glass-filter);
 }
 :root[data-native-glass="true"] .app-context-sidebar-body {
   background-color: transparent;
 }
-:root[data-native-glass="true"] .surface-main {
-  background-color: var(--surface-main-glass);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-:root[data-native-glass="true"] .surface-raised,
-:root[data-native-glass="true"] .surface-glass {
+:root[data-native-glass="true"][data-transparency="full"] .surface-raised,
+:root[data-native-glass="true"][data-transparency="full"] .surface-glass {
   background-color: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
-:root[data-native-glass="true"] .popup-chrome {
+:root[data-native-glass="true"][data-transparency="full"] .popup-chrome {
   background: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
-:root[data-native-glass="true"] .dialog-scrim {
-  backdrop-filter: var(--glass-scrim-filter);
+:root[data-native-glass="true"][data-transparency="full"] .dialog-scrim {
   -webkit-backdrop-filter: var(--glass-scrim-filter);
+  backdrop-filter: var(--glass-scrim-filter);
+}
+
+/* Uniform glass (D2, Gabriel 2026-10-03 17:23). One tint + blur layer at the
+   window level (.app-shell); rail, sidebar, settings and (Full) main / inspector
+   are transparent on top of it, with no backdrop-filter of their own, so tints
+   and blurs never stack. Dividers between those areas go transparent and the
+   gutters stay as spacing (they now carry the same tint, no dark strip).
+   Sidebar mode keeps main opaque and only drops the sidebar|main line.
+   Gated off for reduced transparency, more contrast, forced colors and hosts
+   without backdrop-filter support; there the base rules above apply unchanged.
+   Focus rings / outlines are untouched (only border-color of panel edges). */
+@media (prefers-reduced-transparency: no-preference) and (prefers-contrast: no-preference) {
+  @media (forced-colors: none) {
+    @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+      :root[data-native-glass="true"] .app-shell {
+        background-color: var(--surface-glass-window);
+        -webkit-backdrop-filter: var(--glass-filter);
+        backdrop-filter: var(--glass-filter);
+      }
+      :root[data-native-glass="true"] .app-rail,
+      :root[data-native-glass="true"] .app-context-sidebar,
+      :root[data-native-glass="true"] .app-settings-sidebar,
+      :root[data-native-glass="true"] .app-layout-row > .surface-app {
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-native-glass="true"] .app-rail::after {
+        border-color: transparent;
+      }
+      :root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-main,
+      :root[data-native-glass="true"][data-transparency="full"] .app-layout-row .surface-sidebar {
+        border-color: transparent;
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-native-glass="true"][data-transparency="sidebar"] .app-layout-row .surface-main {
+        border-left-color: transparent;
+      }
+    }
+  }
 }
 
 :root[data-native-glass="false"] body,
@@ -1077,7 +1177,7 @@ body {
   /**
    * Thinking states — Transitions.dev status-line shimmer + swap.
    * https://transitions.dev/transitions/thinking-states/
-   * Left-aligned so it sits inline with ThoughtLine's glyph / timer.
+   * Left-aligned so it sits inline with WorkStatusLine's glyph / timer.
    */
   .t-think {
     --think-base: currentColor;
@@ -1165,214 +1265,6 @@ body {
    * Conversation top-edge blur — sticky viewport chrome, not per-message filter.
    * Stronger near the top border; mask fades blur → sharp down the band.
    */
-  /* React Bits TextType caret */
-  .text-type {
-    display: inline;
-    white-space: pre-wrap;
-  }
-  .text-type__cursor {
-    display: inline-block;
-    margin-left: 0.08em;
-    color: var(--color-fg-muted);
-    font-weight: 400;
-    animation: text-type-blink 0.9s steps(1, end) infinite;
-  }
-  @keyframes text-type-blink {
-    0%,
-    45% {
-      opacity: 1;
-    }
-    50%,
-    100% {
-      opacity: 0;
-    }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .text-type__cursor {
-      animation: none;
-      opacity: 0.7;
-    }
-  }
-
-  /* React Bits BranchedMenu */
-  .branched-menu {
-    --bm-w: 240px;
-    --bm-ink: var(--color-fg);
-    --bm-accent: var(--color-accent);
-    --bm-line: var(--color-hairline-strong);
-    --bm-font: 12px;
-    --bm-row: 30px;
-    --bm-indent: 36px;
-    --bm-line-w: 1.5;
-    --bm-draw: 420ms;
-    --bm-fold: 320ms;
-    --bm-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-    --bm-muted: var(--color-fg-muted);
-
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    width: fit-content;
-    max-width: min(var(--bm-w), 100%);
-    padding-left: 14px;
-    color: var(--bm-ink);
-    font-size: var(--bm-font);
-    line-height: 1.2;
-  }
-  .branched-menu::before {
-    content: "";
-    position: absolute;
-    top: 8px;
-    bottom: 0;
-    left: 0;
-    width: 2px;
-    border-radius: 1px;
-    background: linear-gradient(to bottom, var(--bm-line) 0%, var(--bm-line) 55%, transparent 100%);
-  }
-  .branched-menu__marker {
-    position: absolute;
-    top: -1px;
-    left: 0;
-    z-index: 1;
-    width: 2px;
-    height: 16px;
-    border-radius: 1px;
-    background: var(--bm-accent);
-    opacity: 0;
-    transition:
-      top 220ms var(--bm-ease-out),
-      opacity 150ms ease;
-  }
-  .branched-menu__marker[data-on] {
-    opacity: 1;
-  }
-  .branched-menu__section {
-    display: flex;
-    flex-direction: column;
-  }
-  .branched-menu__head {
-    display: block;
-    margin: 0;
-    padding: 8px 0;
-    border: 0;
-    background: none;
-    color: var(--bm-muted);
-    font: inherit;
-    font-size: calc(var(--bm-font) + 1px);
-    font-weight: 500;
-    text-align: left;
-    cursor: pointer;
-    outline: none;
-    transition: color 200ms ease;
-  }
-  .branched-menu__section[data-open] .branched-menu__head,
-  .branched-menu__head[data-active] {
-    color: var(--bm-ink);
-  }
-  @media (hover: hover) and (pointer: fine) {
-    .branched-menu__head:hover {
-      color: var(--bm-ink);
-    }
-  }
-  .branched-menu__body {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows var(--bm-fold) var(--bm-ease-out);
-  }
-  .branched-menu__section[data-open] .branched-menu__body {
-    grid-template-rows: 1fr;
-  }
-  .branched-menu__fold {
-    min-height: 0;
-    overflow: hidden;
-  }
-  .branched-menu__tree {
-    position: relative;
-    padding: 6px 0;
-    box-sizing: border-box;
-  }
-  .branched-menu__lines {
-    position: absolute;
-    top: 0;
-    left: 0;
-    overflow: visible;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 200ms ease;
-  }
-  .branched-menu__section[data-open] .branched-menu__lines {
-    opacity: 1;
-    transition: opacity 250ms ease 100ms;
-  }
-  .branched-menu__base,
-  .branched-menu__reach {
-    fill: none;
-    stroke-width: var(--bm-line-w);
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-  .branched-menu__base {
-    stroke: var(--bm-line);
-  }
-  .branched-menu__reach {
-    stroke: var(--bm-accent);
-    transition: stroke-dashoffset var(--bm-draw) var(--bm-ease-out);
-  }
-  .branched-menu__item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-    height: var(--bm-row);
-    margin: 0;
-    padding: 0 0 0 var(--bm-indent);
-    border: 0;
-    background: none;
-    color: var(--bm-muted);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-    outline: none;
-    box-sizing: border-box;
-    transition: color 200ms ease;
-  }
-  @media (hover: hover) and (pointer: fine) {
-    .branched-menu__item:hover {
-      color: var(--bm-ink);
-    }
-  }
-  .branched-menu__item[data-active] {
-    color: var(--bm-accent);
-    font-weight: 500;
-  }
-  .branched-menu__icon {
-    display: inline-flex;
-    flex: none;
-  }
-  .branched-menu__label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .branched-menu__meta {
-    margin-left: auto;
-    flex: none;
-    color: var(--color-fg-faint);
-    font-size: 10px;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .branched-menu__marker {
-      transition: opacity 150ms ease;
-    }
-    .branched-menu__body {
-      transition: none;
-    }
-    .branched-menu__reach {
-      transition: none;
-    }
-  }
-
   /**
    * Single-line title dissolve (sidebar sessions, etc.) — same mask family as
    * clip-fade / scroll-fade, axis flipped. Prefer over Tailwind `truncate`
@@ -1414,9 +1306,9 @@ body {
    * the same budget. Applied as a step (no transition) — at 1px the arrival is
    * imperceptible, and it then costs nothing while the sheet sits open.
    */
-  :root[data-native-glass="true"] .subagent-preview-scrim[data-settled] {
-    backdrop-filter: var(--glass-scrim-filter);
+  :root[data-native-glass="true"][data-transparency="full"] .subagent-preview-scrim[data-settled] {
     -webkit-backdrop-filter: var(--glass-scrim-filter);
+    backdrop-filter: var(--glass-scrim-filter);
     will-change: auto;
   }
 
@@ -1431,45 +1323,6 @@ body {
     to {
       opacity: 1;
     }
-  }
-
-  .modus-gradient-waves {
-    background: transparent;
-    border-radius: 11px;
-    overflow: hidden;
-  }
-  .modus-gradient-waves::before {
-    position: absolute;
-    inset: 0;
-    background:
-      radial-gradient(
-        ellipse 75% 82% at 14% 112%,
-        color-mix(in srgb, var(--color-focus-ring) 22%, transparent),
-        transparent 74%
-      ),
-      radial-gradient(
-        ellipse 58% 65% at 76% 116%,
-        color-mix(in srgb, var(--color-focus-ring-soft) 17%, transparent),
-        transparent 75%
-      ),
-      linear-gradient(
-        180deg,
-        transparent 24%,
-        color-mix(in srgb, var(--color-focus-ring) 6%, transparent) 100%
-      );
-    content: "";
-    opacity: 0.8;
-  }
-  .modus-gradient-waves:has([data-webgl="ready"])::before {
-    opacity: 0;
-  }
-  .modus-gradient-waves canvas {
-    position: absolute;
-    inset: 0;
-    display: block;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
   }
 
   /*
@@ -1631,6 +1484,243 @@ body {
   }
   .composer-prompt-shell[data-effort-max]::before {
     opacity: 1;
+  }
+}
+
+/*
+ * L0 motion primitives (clean-room, written from /workspace/agent-groups/l0-specs.md).
+ * Component layer so a caller's Tailwind utilities (e.g. `text-canvas`) still win.
+ * No filter / backdrop-filter anywhere: that would create a backdrop root over the glass.
+ */
+@layer components {
+  /* WorkingText: subtle colour by default, light band swept over currentColor. */
+  .working-text {
+    color: var(--color-fg-subtle);
+  }
+  .working-text--sweep {
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in srgb, currentColor 55%, transparent) 0%,
+      color-mix(in srgb, currentColor 55%, transparent) 38%,
+      currentColor 50%,
+      color-mix(in srgb, currentColor 55%, transparent) 62%,
+      color-mix(in srgb, currentColor 55%, transparent) 100%
+    );
+    background-size: 250% 100%;
+    background-repeat: no-repeat;
+    background-position: 100% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: working-text-sweep 2.4s ease-in-out infinite;
+  }
+  @keyframes working-text-sweep {
+    0% {
+      background-position: 100% 0;
+    }
+    80%,
+    100% {
+      background-position: 0% 0;
+    }
+  }
+
+  /* StreamingCaret: binary ~1 s blink. */
+  .streaming-caret {
+    display: inline-block;
+    margin-left: 1px;
+    color: var(--color-fg-muted);
+    user-select: none;
+    animation: streaming-caret-blink 1s steps(1, end) infinite;
+  }
+  @keyframes streaming-caret-blink {
+    0% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0;
+    }
+  }
+
+  /* Composer running state: thin accent line sweeping along the top border. */
+  .composer-running-sweep {
+    position: absolute;
+    top: -1px;
+    left: 14px;
+    right: 14px;
+    height: 1px;
+    pointer-events: none;
+    z-index: 11;
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-accent) 55%, transparent) 50%,
+      transparent 100%
+    );
+    background-size: 40% 100%;
+    background-repeat: no-repeat;
+    animation: composer-running-sweep 2.4s linear infinite;
+  }
+  @keyframes composer-running-sweep {
+    from {
+      background-position: -70% 0;
+    }
+    to {
+      background-position: 170% 0;
+    }
+  }
+
+  /* TaskCheck: read-only checkbox glyph. */
+  .task-check {
+    display: inline-flex;
+    flex-shrink: 0;
+    transform-origin: center;
+  }
+  .task-check__box {
+    fill: transparent;
+    stroke: var(--color-fg-muted);
+    stroke-width: 1.5;
+    transition:
+      fill 120ms ease-out,
+      stroke 120ms ease-out;
+  }
+  .task-check[data-state="checked"] .task-check__box {
+    fill: var(--color-accent);
+    stroke: var(--color-accent);
+  }
+  .task-check__mark {
+    stroke: var(--color-on-accent);
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 1;
+    stroke-dashoffset: 0;
+  }
+  .task-check[data-pop] {
+    animation: task-check-pop 320ms ease-out;
+  }
+  .task-check[data-pop] .task-check__mark {
+    animation: task-check-draw 240ms ease-out 60ms both;
+  }
+  @keyframes task-check-pop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(0.86);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes task-check-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+
+  /* WorkStatusLine. */
+  .work-status-line {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    line-height: 1.45;
+  }
+  .work-status-line__row {
+    display: flex;
+    min-width: 0;
+    max-width: 100%;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+  }
+  .work-status-line__toggle {
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .work-status-line__glyph {
+    flex-shrink: 0;
+    opacity: 0.55;
+  }
+  .work-status-line__glyph[data-working] {
+    animation: work-status-breathe 1.5s ease-in-out infinite;
+  }
+  @keyframes work-status-breathe {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.4;
+    }
+  }
+  /* Both labels share one grid cell: the line keeps the wider one's width. */
+  .work-status-line__labels {
+    display: grid;
+    min-width: 0;
+  }
+  .work-status-line__label {
+    grid-area: 1 / 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: opacity 300ms ease-out;
+  }
+  .work-status-line__label[data-visible="false"] {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .work-status-line__chevron {
+    flex-shrink: 0;
+    opacity: 0.7;
+    transition: transform 160ms ease-out;
+  }
+  .work-status-line__chevron[data-open] {
+    transform: rotate(90deg);
+  }
+  .work-status-line__steps {
+    margin: 2px 0 0;
+    padding-left: 20px;
+    list-style: none;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .working-text--sweep {
+      animation: none;
+      background-image: none;
+      -webkit-text-fill-color: currentColor;
+    }
+    .streaming-caret {
+      animation: none;
+      opacity: 0.55;
+    }
+    .composer-running-sweep {
+      animation: none;
+      background-size: 100% 100%;
+      background-image: linear-gradient(
+        90deg,
+        transparent 0%,
+        color-mix(in srgb, var(--color-accent) 35%, transparent) 50%,
+        transparent 100%
+      );
+    }
+    .task-check[data-pop],
+    .task-check[data-pop] .task-check__mark,
+    .work-status-line__glyph[data-working] {
+      animation: none;
+    }
+    .task-check__box,
+    .work-status-line__label,
+    .work-status-line__chevron {
+      transition: none;
+    }
   }
 }
 
@@ -2616,26 +2706,23 @@ body
   background: color-mix(in srgb, var(--color-fg) 8%, transparent);
 }
 
-:root[data-native-glass="true"]
+:root[data-native-glass="true"][data-transparency="full"]
   body
   > div.fixed.inset-0:has([data-streamdown="mermaid"])
   > button.absolute,
-:root[data-native-glass="true"]
+:root[data-native-glass="true"][data-transparency="full"]
   body
   > div.fixed.inset-0:has([data-streamdown="mermaid"])
   [data-streamdown="mermaid"]
   [class*="absolute"][class*="rounded-md"],
-:root[data-native-glass="true"] .pdf-page-chrome {
+:root[data-native-glass="true"][data-transparency="full"] .pdf-page-chrome {
   background: var(--surface-glass-elevated);
-  backdrop-filter: var(--glass-filter);
   -webkit-backdrop-filter: var(--glass-filter);
+  backdrop-filter: var(--glass-filter);
 }
 .pdf-rect-tool.is-active {
   color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 14%, transparent);
-}
-:root[data-theme="light"] .pdf-page-chrome {
-  background: color-mix(in srgb, var(--color-elevated) 94%, transparent);
 }
 
 .inspector-tab-panel {
@@ -2796,5 +2883,44 @@ body
   .agent-avatar .agent-avatar-eyes,
   .agent-avatar .agent-avatar-ring {
     animation: none;
+  }
+}
+
+/*
+ * Glass fallback (D1). Reduced transparency, increased contrast, forced colors
+ * and hosts without backdrop-filter get solid surfaces: every glass tier goes to
+ * 100% and every glass blur to none. It must stay the LAST block of this file:
+ * the tokens are only declared on :root (no theme overrides them), and the
+ * body / #root / .app-shell rules repeat the native-glass selectors, so source
+ * order decides. Pinned by styles/glassTokens.test.ts.
+ */
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  :root {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+  :root[data-native-glass="true"] body,
+  :root[data-native-glass="true"] #root {
+    background-color: var(--color-canvas);
+  }
+  :root[data-native-glass="true"] .app-shell {
+    background-color: var(--color-panel);
+  }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root {
+    --glass-alpha-chrome: 100%;
+    --glass-alpha-overlay: 100%;
+    --glass-filter: none;
+    --glass-scrim-filter: none;
+  }
+  :root[data-native-glass="true"] body,
+  :root[data-native-glass="true"] #root {
+    background-color: var(--color-canvas);
+  }
+  :root[data-native-glass="true"] .app-shell {
+    background-color: var(--color-panel);
   }
 }

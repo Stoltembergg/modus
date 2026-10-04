@@ -19,10 +19,12 @@
     "package:win": "npm run prepare:fast-codebase && electron-builder --win --config electron-builder.config.ts",
     "package:linux": "npm run prepare:fast-codebase && electron-builder --linux --config electron-builder.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --root ../.. apps/desktop/src apps/desktop/scripts"
+    "test": "vitest run --root ../.. apps/desktop/src apps/desktop/scripts",
+    "check:case": "vitest run --root ../.. apps/desktop/scripts/case-collisions"
   },
   "devDependencies": {
     "@colbymchenry/codegraph": "^1.1.1",
+    "@tailwindcss/node": "^4.3.0",
     "@tailwindcss/vite": "^4.3.0",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
@@ -53,6 +55,7 @@
     "@streamdown/code": "^1.1.1",
     "@streamdown/math": "^1.0.2",
     "@streamdown/mermaid": "^1.0.2",
+    "@supabase/supabase-js": "^2.117.2",
     "@tabler/icons-react": "^3.44.0",
     "@tanstack/react-virtual": "3.14.6",
     "@xterm/addon-fit": "^0.11.0",
@@ -67,7 +70,6 @@
     "material-icon-theme": "^5.36.1",
     "monaco-editor": "^0.55.1",
     "motion": "^12.40.0",
-    "ogl": "^1.0.11",
     "pdfjs-dist": "^6.1.200",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",

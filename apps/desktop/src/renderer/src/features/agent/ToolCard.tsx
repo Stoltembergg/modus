@@ -8,11 +8,13 @@ import {
   WAIT_TOOL_NAME,
 } from "../../../../shared/tools";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import { PlanTimelineCard } from "../plan/PlanTimelineCard";
 import { DiffToolCard } from "./diff/DiffToolCard";
 import { QuestionToolCard } from "./QuestionToolCard";
+import { SearchToolCard } from "./SearchToolCard";
+import { isSearchToolName } from "./searchResults";
 import { TerminalToolCard } from "./terminal/TerminalToolCard";
 import { toolIcon } from "./toolIcons";
 import { VisualToolCard } from "./VisualToolCard";
@@ -23,7 +25,10 @@ type ToolCardProps = {
   output: string;
   isError?: boolean;
   isComplete?: boolean;
-  onOpenFile?: ((path: string) => void) | undefined;
+  /** `line` is optional (C2.1): search result rows open at their match. */
+  onOpenFile?: ((path: string, line?: number) => void) | undefined;
+  /** Session cwd: search rows resolve their paths in it (and never leave it). */
+  cwd?: string | undefined;
   questionRequest?: QuestionRequest;
   questionAnswers?: QuestionAnswer[];
   questionSkipped?: boolean;
@@ -50,6 +55,7 @@ export const ToolCard = memo(
     isComplete = false,
     isError = false,
     onOpenFile,
+    cwd,
     questionRequest,
     questionAnswers,
     questionSkipped,
@@ -125,6 +131,31 @@ export const ToolCard = memo(
       return <VisualToolCard args={args} isComplete={isComplete} isError={isError} />;
     }
 
+    if (render === "flat" && isSearchToolName(name)) {
+      // grep / find / web_search get the Search Tool card; it renders the
+      // generic row itself when the call failed or the output can't be parsed.
+      return (
+        <SearchToolCard
+          args={args}
+          {...(cwd ? { cwd } : {})}
+          {...(onOpenFile ? { onOpenFile } : {})}
+          fallback={
+            <FlatToolRow
+              args={args}
+              isComplete={isComplete}
+              isError={isError}
+              name={name}
+              output={output}
+            />
+          }
+          isComplete={isComplete}
+          isError={isError}
+          name={name}
+          output={output}
+        />
+      );
+    }
+
     return (
       <FlatToolRow
         args={args}
@@ -141,6 +172,7 @@ export const ToolCard = memo(
     prev.isComplete === next.isComplete &&
     prev.isError === next.isError &&
     prev.onOpenFile === next.onOpenFile &&
+    prev.cwd === next.cwd &&
     prev.questionRequest === next.questionRequest &&
     prev.questionAnswers === next.questionAnswers &&
     prev.questionSkipped === next.questionSkipped &&
@@ -204,7 +236,7 @@ function LiveToolCard({
       >
         {view.icon ? <span className="shrink-0 text-fg-faint">{view.icon}</span> : null}
         {running ? (
-          <ShinyText className="shrink-0">{view.verb}</ShinyText>
+          <WorkingText className="shrink-0">{view.verb}</WorkingText>
         ) : (
           <span className={cn("shrink-0", isError ? "text-danger" : "text-fg-subtle")}>
             {view.verb}
@@ -267,7 +299,7 @@ function FlatToolRow({
       {view.icon ? <span className="shrink-0 text-fg-faint">{view.icon}</span> : null}
       {running ? (
         <>
-          <ShinyText className="shrink-0">{view.verb}</ShinyText>
+          <WorkingText className="shrink-0">{view.verb}</WorkingText>
           {status ? (
             <span className="min-w-0 flex-1 truncate text-fg-faint" title={status}>
               {status}

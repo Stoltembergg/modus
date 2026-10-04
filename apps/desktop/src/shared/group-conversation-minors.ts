@@ -5,6 +5,8 @@
  * Pure helpers — keep renderer/main free of duplicated date/token math.
  */
 
+import { formatGroupRoomDate, groupRoomIntlLocale, groupText } from "./group-room-locale";
+
 /** Rough token estimate (same rule as Group Runtime chain budget). */
 export function estimateGroupTokens(text: string): number {
   return Math.ceil(text.length / 4);
@@ -21,19 +23,24 @@ export function groupMessageDayKey(iso: string): string {
 }
 
 /** Transcript day label: Today / Yesterday / weekday / short date. */
-export function formatGroupDaySeparator(iso: string, now: Date = new Date()): string {
+export function formatGroupDaySeparator(
+  iso: string,
+  now: Date = new Date(),
+  locale?: string | null,
+): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return "";
   const date = new Date(ms);
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const startOfThat = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const dayMs = 24 * 60 * 60 * 1000;
-  if (startOfThat === startOfToday) return "Today";
-  if (startOfThat === startOfToday - dayMs) return "Yesterday";
+  if (startOfThat === startOfToday) return groupText("day.today", locale);
+  if (startOfThat === startOfToday - dayMs) return groupText("day.yesterday", locale);
+  const intl = groupRoomIntlLocale(locale);
   if (startOfThat >= startOfToday - 6 * dayMs) {
-    return date.toLocaleDateString([], { weekday: "long" });
+    return formatGroupRoomDate(date, { weekday: "long" }, intl);
   }
-  return date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+  return formatGroupRoomDate(date, { month: "short", day: "numeric", year: "numeric" }, intl);
 }
 
 export type GroupTranscriptItem<T extends { id: string; createdAt: string }> =
@@ -44,6 +51,7 @@ export type GroupTranscriptItem<T extends { id: string; createdAt: string }> =
 export function withGroupDaySeparators<T extends { id: string; createdAt: string }>(
   messages: readonly T[],
   now: Date = new Date(),
+  locale?: string | null,
 ): GroupTranscriptItem<T>[] {
   const items: GroupTranscriptItem<T>[] = [];
   let previousDay: string | undefined;
@@ -53,7 +61,7 @@ export function withGroupDaySeparators<T extends { id: string; createdAt: string
       items.push({
         type: "day",
         key: `day-${day}`,
-        label: formatGroupDaySeparator(message.createdAt, now),
+        label: formatGroupDaySeparator(message.createdAt, now, locale),
       });
       previousDay = day;
     }

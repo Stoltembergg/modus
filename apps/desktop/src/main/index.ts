@@ -1,14 +1,31 @@
-import { app, BrowserWindow, type BrowserWindow as BrowserWindowType } from "electron";
+import { app, BrowserWindow, type BrowserWindow as BrowserWindowType, nativeTheme } from "electron";
+import { resolveWindowAppearance } from "../shared/window-appearance";
 import {
   shutdownProviderAuthOperations,
   startRemoteModelCatalog,
   stopRemoteModelCatalog,
 } from "./agent/model-service";
+import {
+  type AppearanceController,
+  createAppearanceController,
+} from "./appearance/appearance-controller";
+import { createAppearanceStore } from "./appearance/appearance-store";
+import {
+  deepLinkCallbackHub,
+  initializeAuthService,
+  shutdownAuthService,
+} from "./auth/auth-service-instance";
+import { getBillingService, shutdownBillingService } from "./billing/billing-service-instance";
 import { resolveBrowserLocale } from "./browser/browser-locale";
 import {
   initializeComposioService,
   shutdownComposioService,
 } from "./composio/composio-service-instance";
+import {
+  createDeepLinkRouter,
+  findDeepLinkInArgv,
+  registerModusProtocol,
+} from "./deep-link/deep-link";
 import { disposeGroupRuntime } from "./groups/group-runtime-service";
 import { IPC_CHANNELS } from "./ipc/channels";
 import { registerAppIpc } from "./ipc/register-app-ipc";
@@ -34,6 +51,7 @@ try {
 
 let mainWindow: BrowserWindowType | null = null;
 let ipcRegistered = false;
+let appearance: AppearanceController | null = null;
 const startupTimeline = createStartupTimeline();
 const SHUTDOWN_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -50,39 +68,86 @@ function drainShutdown(tasks: Promise<unknown>[]): Promise<void> {
 
 startupTimeline.mark("main.entry");
 
+/** Created after `ready`: reads userData/appearance.json and syncs nativeTheme once. */
+function getAppearance(): AppearanceController {
+  appearance ??= createAppearanceController({
+    nativeTheme,
+    store: createAppearanceStore(app.getPath("userData")),
+    windowAppearance: resolveWindowAppearance(process.platform, process.getSystemVersion?.() ?? ""),
+  });
+  return appearance;
+}
+
 function ensureAppIpcRegistered(): void {
   if (ipcRegistered) {
     return;
   }
 
-  registerAppIpc({ startupTimeline });
+  registerAppIpc({ startupTimeline, appearance: getAppearance() });
   ipcRegistered = true;
 }
 
 function openMainWindow(): void {
   ensureAppIpcRegistered();
 
-  mainWindow = createMainWindow({ startupTimeline });
+  mainWindow = createMainWindow({ startupTimeline, appearance: getAppearance() });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
 }
 
+function focusMainWindow(): void {
+  if (!mainWindow) {
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.focus();
+}
+
+// modus://auth/callback (deep-link OAuth transport) and modus://billing/return (Stripe).
+// Links that arrive before the window exists are queued until markReady().
+const deepLinks = createDeepLinkRouter({
+  onAuthCallback: (link) => {
+    deepLinkCallbackHub.deliver(link);
+  },
+  onBillingReturn: (link) => {
+    void getBillingService()
+      .handleReturn(link.status)
+      .catch(() => undefined);
+  },
+  focus: focusMainWindow,
+});
+
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on("second-instance", () => {
-    if (!mainWindow) {
-      return;
-    }
+  try {
+    registerModusProtocol(app, process);
+  } catch {
+    // Registration is best effort (e.g. sandboxed Linux without xdg-mime).
+  }
 
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
-    }
-
-    mainWindow.focus();
+  // macOS delivers modus:// links here (also before ready on a cold start).
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    deepLinks.handle(url);
   });
+
+  // Windows / Linux: a second launch carries the link in argv; this instance keeps the lock.
+  app.on("second-instance", (_event, argv) => {
+    focusMainWindow();
+    const link = findDeepLinkInArgv(argv);
+    if (link) deepLinks.handle(link);
+  });
+
+  // Cold start on Windows / Linux with the link as an argument.
+  const launchLink = findDeepLinkInArgv(process.argv);
+  if (launchLink) deepLinks.handle(launchLink);
 
   app
     .whenReady()
@@ -99,6 +164,9 @@ if (!app.requestSingleInstanceLock()) {
       openMainWindow();
       // Restore the profile after the first renderer exists; do not block agent startup on Composio.
       void initializeComposioService().catch(() => undefined);
+      // Restore the Supabase session (encrypted refresh token) without blocking the window.
+      void initializeAuthService().catch(() => undefined);
+      deepLinks.markReady();
       // No-op in dev, beta builds and unsupported platforms; first check runs after a delay.
       startUpdateServiceInBackground();
 
@@ -139,8 +207,10 @@ if (!app.requestSingleInstanceLock()) {
     shutdownTerminals();
     // Stop the group queue's retry timer and its agent-runtime subscriptions.
     disposeGroupRuntime();
+    shutdownBillingService();
     void drainShutdown([
       shutdownProviderAuthOperations(),
+      shutdownAuthService(),
       (async () => {
         try {
           await shutdownComposioService();

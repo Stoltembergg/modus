@@ -21,6 +21,9 @@ const updateChannel = /-beta\.(0|[1-9]\d*)$/.test(appVersion) ? "beta" : "latest
 const config: Configuration = {
   appId: "dev.modus.desktop",
   productName: "Modus",
+  // modus://auth/callback and modus://billing/return (main/deep-link). Info.plist on macOS,
+  // MimeType x-scheme-handler on Linux; Windows registers at runtime (setAsDefaultProtocolClient).
+  protocols: [{ name: "Modus", schemes: ["modus"] }],
   electronVersion: "42.3.0",
   npmRebuild: false,
   nodeGypRebuild: false,
@@ -42,6 +45,16 @@ const config: Configuration = {
     {
       from: "resources/licenses",
       to: "licenses",
+    },
+    // Repo-root LICENSE and third-party notices (Agent Elements) ship in every
+    // package: Contents/Resources on macOS, resources\ on Windows, resources/ on Linux.
+    {
+      from: "../../LICENSE",
+      to: "LICENSE",
+    },
+    {
+      from: "../../THIRD_PARTY_NOTICES.md",
+      to: "THIRD_PARTY_NOTICES.md",
     },
     {
       from: `../../target/release/${ptyHostBinary}`,

@@ -3,6 +3,7 @@ import {
   type GroupProjectContextSnapshot,
   type GroupProjectContextStatus,
 } from "./contracts";
+import { groupText } from "./group-room-locale";
 
 export type { GroupProjectContextSnapshot, GroupProjectContextStatus };
 
@@ -19,17 +20,20 @@ export function groupNeedsProject(group: { workspaceId?: string | null | undefin
 }
 
 /** Primary room label: Mapping… or compact Ready / Updating / Needs refresh. */
-export function formatGroupProjectContextLabel(status: GroupProjectContextStatus): string {
+export function formatGroupProjectContextLabel(
+  status: GroupProjectContextStatus,
+  locale?: string | null,
+): string {
   switch (status) {
     case "mapping":
-      return "Mapping project…";
+      return groupText("project.mapping", locale);
     case "ready":
-      return "Project context · Ready";
+      return groupText("project.ready", locale);
     case "updating":
-      return "Project context · Updating";
+      return groupText("project.updating", locale);
     case "needs_refresh":
     case "failed":
-      return "Project context · Needs refresh";
+      return groupText("project.needsRefresh", locale);
   }
 }
 

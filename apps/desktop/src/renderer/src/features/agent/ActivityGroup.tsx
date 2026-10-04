@@ -4,9 +4,9 @@ import { memo, type ReactNode, useEffect, useId, useState } from "react";
 import type { ModelInfo, PlanRef } from "../../../../shared/contracts";
 import { getToolUiMeta, type ToolSummaryMeta } from "../../../../shared/tools";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
-import { ShinyText } from "../../components/ui/ShinyText";
 import { ThinkingStates } from "../../components/ui/ThinkingStates";
-import { ThoughtLine } from "../../components/ui/ThoughtLine";
+import { WorkingText } from "../../components/ui/WorkingText";
+import { WorkStatusLine } from "../../components/ui/WorkStatusLine";
 import { cn } from "../../lib/cn";
 import { MessageBlock } from "./MessageBlock";
 import { SubagentRow } from "./SubagentRow";
@@ -21,6 +21,7 @@ import type {
 } from "./Timeline";
 import { TodosCard } from "./TodosCard";
 import { ToolCard } from "./ToolCard";
+import { ToolGroup } from "./ToolGroup";
 
 export function formatElapsed(end: number, start: number): string {
   const seconds = Math.max(0, Math.round((end - start) / 1000));
@@ -30,7 +31,7 @@ export function formatElapsed(end: number, start: number): string {
   return rest === 0 ? `${minutes}m` : `${minutes}m ${rest}s`;
 }
 
-/** Single-line tool-style compaction status (ShinyText while running). */
+/** Single-line tool-style compaction status (WorkingText while running). */
 export function CompactionRow({ status, detail }: Pick<CompactionBlockItem, "status" | "detail">) {
   const running = status === "running";
   const danger = status === "aborted" || status === "error";
@@ -38,51 +39,12 @@ export function CompactionRow({ status, detail }: Pick<CompactionBlockItem, "sta
   return (
     <div className="flex min-w-0 items-center gap-2 text-sm">
       {running ? (
-        <ShinyText className="shrink-0 font-medium">{label}</ShinyText>
+        <WorkingText className="shrink-0 font-medium">{label}</WorkingText>
       ) : (
         <span className={cn("shrink-0 font-medium", danger ? "text-danger" : "text-fg-subtle")}>
           {label}
         </span>
       )}
-    </div>
-  );
-}
-
-function FoldHeader({
-  active = false,
-  controlsId,
-  label,
-  onToggle,
-  open,
-}: {
-  active?: boolean;
-  controlsId?: string;
-  label: string;
-  onToggle(): void;
-  open: boolean;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <button
-        aria-controls={controlsId}
-        aria-expanded={open}
-        className="group/activity flex min-w-0 max-w-full items-center gap-1.5 rounded-md py-0.5 text-left text-sm text-fg-subtle transition-colors hover:text-fg-muted"
-        onClick={onToggle}
-        type="button"
-      >
-        {active ? (
-          <ShinyText className="min-w-0 truncate">{label}</ShinyText>
-        ) : (
-          <span className="min-w-0 truncate text-fg-subtle">{label}</span>
-        )}
-        <m.span
-          animate={{ rotate: open ? 90 : 0 }}
-          className="flex size-4 shrink-0 items-center justify-center text-fg-faint"
-          transition={{ duration: 0.16, ease: "easeOut" }}
-        >
-          <IconChevronRight size={12} stroke={1.8} />
-        </m.span>
-      </button>
     </div>
   );
 }
@@ -154,7 +116,30 @@ export function workActivityPresentation(items: GroupedWorkActivityItem[]) {
   return {
     label: danger && !activeItem ? `Failed: ${label}` : label,
     active: !!activeItem,
+    streamCounts: workActivityStreamCounts(items),
   };
+}
+
+const FILE_TOOLS = new Set(["read", "edit", "write"]);
+const SEARCH_TOOLS = new Set(["grep", "find", "web_search"]);
+
+/**
+ * Live counts shown next to a streaming group's label (ported from Agent
+ * Elements' tool-group): distinct files touched and searches run so far,
+ * e.g. "2 files, 1 search". Empty when the group has neither.
+ */
+export function workActivityStreamCounts(items: GroupedWorkActivityItem[]): string {
+  const files = new Set<string>();
+  let searches = 0;
+  for (const item of items) {
+    if (item.type !== "tool") continue;
+    if (FILE_TOOLS.has(item.name)) files.add(toolTarget(item) ?? item.id);
+    else if (SEARCH_TOOLS.has(item.name)) searches += 1;
+  }
+  const parts: string[] = [];
+  if (files.size > 0) parts.push(`${files.size} ${files.size === 1 ? "file" : "files"}`);
+  if (searches > 0) parts.push(`${searches} ${searches === 1 ? "search" : "searches"}`);
+  return parts.join(", ");
 }
 
 /**
@@ -215,7 +200,7 @@ export function workFoldPhaseLabel(items: WorkFoldItem[]): string | undefined {
 
 /**
  * Visual-only phase label for the fold header (Transitions.dev thinking-states).
- * Accessible copy stays on ThoughtLine's stable "Working…" status; this line is
+ * Accessible copy stays on WorkStatusLine's stable "Working…" status; this line is
  * aria-hidden so assistive tech doesn't chatter on every tool hop.
  */
 function PhaseSwapLabel({ label }: { label: string }) {
@@ -230,34 +215,35 @@ function WorkActivityGroup({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const contentId = useId();
   const presentation = workActivityPresentation(group.items);
   return (
-    <div className="min-w-0">
-      <FoldHeader
-        active={presentation.active}
-        controlsId={contentId}
-        label={presentation.label}
-        onToggle={() => setOpen((value) => !value)}
-        open={open}
-      />
-      <CollapsibleMotion id={contentId} open={open} preset="timeline">
-        <div className="mt-1.5 space-y-2.5">{children}</div>
-      </CollapsibleMotion>
-    </div>
+    <ToolGroup
+      active={presentation.active}
+      label={presentation.label}
+      onToggle={() => setOpen((value) => !value)}
+      open={open}
+      {...(presentation.active && presentation.streamCounts
+        ? { detail: presentation.streamCounts }
+        : {})}
+    >
+      {children}
+    </ToolGroup>
   );
 }
 
 export function WorkActivityRow({
   item,
   models,
+  cwd,
   onOpenFile,
   onOpenSubagent,
   onOpenPlan,
 }: {
   item: WorkActivityItem;
   models?: ModelInfo[];
-  onOpenFile?(path: string): void;
+  /** Session cwd: search result rows resolve and contain their paths in it. */
+  cwd?: string | undefined;
+  onOpenFile?(path: string, line?: number): void;
   onOpenSubagent?(childSessionId: string): void;
   onOpenPlan?(plan: PlanRef): void;
 }) {
@@ -266,7 +252,7 @@ export function WorkActivityRow({
     const preview = thoughtText(item.text);
     if (item.streaming) {
       return (
-        <ThoughtLine
+        <WorkStatusLine
           className="text-fg-faint"
           collapsible={false}
           color="var(--color-fg-faint)"
@@ -278,9 +264,8 @@ export function WorkActivityRow({
       );
     }
     return (
-      <ThoughtLine
+      <WorkStatusLine
         className="text-fg-faint"
-        collapseOnSettle={false}
         color="var(--color-fg-faint)"
         doneLabel="Thought"
         fontSize={12}
@@ -306,6 +291,7 @@ export function WorkActivityRow({
   return (
     <ToolCard
       {...item}
+      {...(cwd ? { cwd } : {})}
       {...(onOpenFile ? { onOpenFile } : {})}
       {...(item.plan && onOpenPlan ? { onOpenPlan, plan: item.plan } : {})}
     />
@@ -320,6 +306,7 @@ export const WorkFold = memo(function WorkFold({
   run,
   items,
   models,
+  cwd,
   onOpenFile,
   onOpenSubagent,
   onOpenPlan,
@@ -327,7 +314,8 @@ export const WorkFold = memo(function WorkFold({
   run: RunBlockItem;
   items: WorkFoldItem[];
   models?: ModelInfo[];
-  onOpenFile?(path: string): void;
+  cwd?: string | undefined;
+  onOpenFile?(path: string, line?: number): void;
   onOpenSubagent?(childSessionId: string): void;
   onOpenPlan?(plan: PlanRef): void;
 }) {
@@ -359,7 +347,7 @@ export const WorkFold = memo(function WorkFold({
   return (
     <div className="min-w-0 text-sm">
       <div className="flex min-w-0 items-start gap-1.5">
-        <ThoughtLine
+        <WorkStatusLine
           className="min-w-0"
           color="var(--color-fg-subtle)"
           doneLabel={terminal ?? "Worked for"}
@@ -400,6 +388,7 @@ export const WorkFold = memo(function WorkFold({
                         item={activity}
                         key={activity.id}
                         {...(models ? { models } : {})}
+                        {...(cwd ? { cwd } : {})}
                         {...(onOpenFile ? { onOpenFile } : {})}
                         {...(onOpenPlan ? { onOpenPlan } : {})}
                         {...(onOpenSubagent ? { onOpenSubagent } : {})}
@@ -414,6 +403,7 @@ export const WorkFold = memo(function WorkFold({
                     item={item}
                     key={item.id}
                     {...(models ? { models } : {})}
+                    {...(cwd ? { cwd } : {})}
                     {...(onOpenFile ? { onOpenFile } : {})}
                     {...(onOpenPlan ? { onOpenPlan } : {})}
                     {...(onOpenSubagent ? { onOpenSubagent } : {})}

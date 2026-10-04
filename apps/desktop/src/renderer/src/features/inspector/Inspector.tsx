@@ -62,13 +62,15 @@ type InspectorProps = {
   onModelConfigChange(model: string, thinkingVariant: string): Promise<void> | void;
   onOpenReview(cwd?: string): void;
   onOpenSubagent(childSessionId: string): void;
-  onOpenFile?(path: string): void;
+  onOpenFile?(path: string, line?: number): void;
   onOpenPlan?(plan: PlanRef): void;
   onPlanUpdated(plan: PlanRef): void;
   onOpenChange(open: boolean): void;
   onWidthChange(width: number): void;
   onAddToChat?(item: ContextItem): void;
   revealPath?: string | undefined;
+  /** Line to open `revealPath` at (C2.1); `key` changes per request. */
+  revealLine?: { line: number; key: number } | undefined;
   onRevealConsumed?(): void;
   /** Select this terminal when the Terminal tab opens (composer rail click). */
   revealTerminalId?: string | undefined;
@@ -164,6 +166,7 @@ export function Inspector({
   onWidthChange,
   onAddToChat,
   revealPath,
+  revealLine,
   onRevealConsumed,
   revealTerminalId,
   onRevealTerminalConsumed,
@@ -378,6 +381,7 @@ export function Inspector({
                       cwd={cwd}
                       onAddToChat={onAddToChat}
                       onRevealConsumed={onRevealConsumed}
+                      revealLine={revealLine}
                       revealPath={revealPath}
                     />
                   </ContentTransition>

@@ -11,6 +11,7 @@ import type {
   WorkspaceInfo,
 } from "../../../../shared/contracts";
 import { ContentTransition } from "../../components/ui/ContentTransition";
+import { AccountSettingsPanel } from "./sections/account";
 import { AppearanceSettingsPanel } from "./sections/appearance";
 import { GeneralSettingsPanel } from "./sections/general";
 import { McpSettingsPanel } from "./sections/mcp";
@@ -521,6 +522,7 @@ export function SettingsPanel({
           {activeSection === "general" ? (
             <GeneralSettingsPanel cwd={workspaceCwd} workspaces={workspaces} />
           ) : null}
+          {activeSection === "account" ? <AccountSettingsPanel /> : null}
           {activeSection === "appearance" ? <AppearanceSettingsPanel /> : null}
           {activeSection === "personalization" ? <PersonalizationSettingsPanel /> : null}
           {activeSection === "skills" ? <SkillsSettingsPanel cwd={workspaceCwd} /> : null}

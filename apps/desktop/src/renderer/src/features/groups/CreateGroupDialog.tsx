@@ -11,6 +11,7 @@ import type {
 import { GROUP_MAX_MEMBERS, GROUP_MIN_MEMBERS } from "../../../../shared/group-blocked";
 import { cn } from "../../lib/cn";
 import { describeGroupError } from "./groupErrors";
+import { useGroupText } from "./groupRoomI18n";
 
 /**
  * What "Manage members" sends, as ONE `group:update-members` call: new agents
@@ -58,6 +59,7 @@ const FIELD = cn(
 export function CreateGroupDialog(props: CreateGroupDialogProps) {
   const { open, onOpenChange, workspaces, models } = props;
   const editGroup = props.group;
+  const t = useGroupText();
   const [modelId, setModelId] = useState("");
   const [agents, setAgents] = useState<DraftAgent[]>([]);
   const [removed, setRemoved] = useState<string[]>([]);
@@ -102,16 +104,16 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
   const canAddAgent = total < GROUP_MAX_MEMBERS;
   const projectName = editGroup.workspaceId
     ? (projects.find((project) => project.id === editGroup.workspaceId)?.displayName ??
-      "Unknown project")
-    : "No folder";
+      t("manage.unknownProject"))
+    : t("manage.noFolder");
   const hint = duplicate
-    ? "Each agent needs a different name."
+    ? t("hint.names")
     : total < GROUP_MIN_MEMBERS
-      ? `A group needs at least ${GROUP_MIN_MEMBERS} agents.`
+      ? t("hint.min", { count: GROUP_MIN_MEMBERS })
       : !countOk
-        ? `A group can have at most ${GROUP_MAX_MEMBERS} agents.`
+        ? t("hint.max", { count: GROUP_MAX_MEMBERS })
         : needsModel
-          ? "Choose a model for the new agents."
+          ? t("manage.modelRequired")
           : undefined;
 
   function updateAgent(key: number, patch: Partial<DraftAgent>): void {
@@ -149,7 +151,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
       });
       onOpenChange(false);
     } catch (caught) {
-      setError(describeGroupError(caught));
+      setError(describeGroupError(caught, t.locale));
     } finally {
       setBusy(false);
     }
@@ -190,7 +192,9 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
             }}
           >
             <div className="px-4 pt-3.5 pb-1">
-              <Dialog.Title className="font-medium text-fg text-sm">Manage members</Dialog.Title>
+              <Dialog.Title className="font-medium text-fg text-sm">
+                {t("manage.title")}
+              </Dialog.Title>
               <Dialog.Description className="mt-0.5 truncate text-2xs text-fg-faint">
                 {`${editGroup.name} · ${projectName}`}
               </Dialog.Description>
@@ -198,7 +202,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
 
             <div className="flex flex-col gap-3 px-4 pt-2">
               <fieldset className="flex min-w-0 flex-col gap-1">
-                <legend className="mb-1 text-2xs text-fg-subtle">Agents</legend>
+                <legend className="mb-1 text-2xs text-fg-subtle">{t("manage.agents")}</legend>
                 <ul className="scroll-thin flex max-h-56 flex-col gap-1 overflow-y-auto">
                   {kept.map((member) => (
                     <li
@@ -212,14 +216,14 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                         ) : null}
                       </span>
                       <button
-                        aria-label={`Remove ${member.name}`}
+                        aria-label={t("common.remove", { name: member.name })}
                         className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg disabled:opacity-40"
                         disabled={kept.length + named.length <= GROUP_MIN_MEMBERS}
                         onClick={() => {
                           setRemoved((current) => [...current, member.sessionId]);
                           if (lead === member.sessionId) setLead("");
                         }}
-                        title="Removing a member deletes its agent"
+                        title={t("manage.removeTitle")}
                         type="button"
                       >
                         <IconX size={12} />
@@ -229,23 +233,23 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   {agents.map((agent, index) => (
                     <li className="flex items-center gap-1.5" key={agent.key}>
                       <input
-                        aria-label={`Agent ${index + 1} name`}
+                        aria-label={t("manage.agentName", { index: index + 1 })}
                         className={FIELD}
                         maxLength={80}
                         onChange={(event) => updateAgent(agent.key, { name: event.target.value })}
-                        placeholder="Name"
+                        placeholder={t("manage.namePlaceholder")}
                         value={agent.name}
                       />
                       <input
-                        aria-label={`Agent ${index + 1} role`}
+                        aria-label={t("manage.agentRole", { index: index + 1 })}
                         className={FIELD}
                         maxLength={80}
                         onChange={(event) => updateAgent(agent.key, { role: event.target.value })}
-                        placeholder="Role (optional)"
+                        placeholder={t("manage.rolePlaceholder")}
                         value={agent.role}
                       />
                       <button
-                        aria-label={`Remove agent ${index + 1}`}
+                        aria-label={t("manage.removeAgent", { index: index + 1 })}
                         className="rounded p-1 text-fg-faint hover:bg-hover hover:text-fg"
                         onClick={() => {
                           setAgents((current) => current.filter((item) => item.key !== agent.key));
@@ -265,19 +269,21 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   type="button"
                 >
                   <IconPlus size={12} />
-                  Add agent
+                  {t("room.addAgent")}
                 </button>
               </fieldset>
 
               {agents.length > 0 ? (
                 <label className="flex flex-col gap-1">
-                  <span className="text-2xs text-fg-subtle">Model for new agents</span>
+                  <span className="text-2xs text-fg-subtle">{t("manage.modelForNew")}</span>
                   <select
                     className={cn(FIELD, "px-2")}
                     onChange={(event) => setModelId(event.target.value)}
                     value={modelId}
                   >
-                    {models.length === 0 ? <option value="">No model configured</option> : null}
+                    {models.length === 0 ? (
+                      <option value="">{t("common.noModelConfigured")}</option>
+                    ) : null}
                     {models.map((model) => (
                       <option key={model.id} value={model.id}>
                         {model.name}
@@ -290,7 +296,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
               <label className="flex flex-col gap-1">
                 <span className="flex items-center gap-1 text-2xs text-fg-subtle">
                   <IconCrown size={12} stroke={1.7} />
-                  Lead
+                  {t("common.lead")}
                 </span>
                 <select
                   className={cn(FIELD, "px-2 disabled:opacity-50")}
@@ -298,7 +304,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                   onChange={(event) => setLead(event.target.value)}
                   value={leadOptions.some((option) => option.value === lead) ? lead : ""}
                 >
-                  <option value="">No lead</option>
+                  <option value="">{t("manage.noLead")}</option>
                   {leadOptions.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
@@ -324,7 +330,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                 onClick={() => onOpenChange(false)}
                 type="button"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
               <button
                 className={cn(
@@ -336,7 +342,7 @@ export function CreateGroupDialog(props: CreateGroupDialogProps) {
                 disabled={!canSubmit}
                 type="submit"
               >
-                {busy ? "Saving…" : "Save members"}
+                {busy ? t("manage.saving") : t("manage.save")}
               </button>
             </div>
           </form>

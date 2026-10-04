@@ -1,0 +1,211 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  authState,
+  createFakeAuth,
+  createFakeBillingBackend,
+  PACKS,
+  SECRET_ACCESS_TOKEN_IN_BILLING,
+  SECRET_MP_PACK_URL,
+  snapshot,
+} from "../billing/billing.test-helpers";
+import { createBillingService } from "../billing/billing-service";
+import {
+  billingBuyCreditsSchema,
+  billingCancelSchema,
+  registerBillingIpcHandlers,
+} from "./billing-ipc";
+import {
+  assertTrustedSender,
+  registerTrustedSender,
+  type TrustedSenderEvent,
+} from "./trusted-sender";
+
+const BILLING_CHANNELS = [
+  "billing:get-state",
+  "billing:refresh",
+  "billing:checkout",
+  "billing:portal",
+  "billing:cancel",
+  "billing:buyCredits",
+];
+
+type Handler = (event: TrustedSenderEvent, input?: unknown) => unknown;
+
+describe("billing IPC", () => {
+  let unregister: (() => void) | undefined;
+
+  afterEach(() => {
+    unregister?.();
+  });
+
+  function setup() {
+    const backend = createFakeBillingBackend();
+    const openExternal = vi.fn(async (_url: string) => undefined);
+    const service = createBillingService({
+      auth: createFakeAuth(authState(true)),
+      backend,
+      openExternal,
+      setTimer: () => ({ cancel: () => undefined }),
+    });
+    const broadcasts: unknown[] = [];
+    service.onStateChange((state) => broadcasts.push(structuredClone(state)));
+    const handlers = new Map<string, Handler>();
+    registerBillingIpcHandlers(
+      { handle: (channel, handler) => handlers.set(channel, handler) },
+      assertTrustedSender,
+      service,
+    );
+    const sender = { mainFrame: { url: "file:///index.html" } };
+    unregister = registerTrustedSender(sender, "file:///index.html");
+    const trusted = { sender, senderFrame: sender.mainFrame };
+    const call = async (channel: string, input?: unknown) =>
+      structuredClone(await handlers.get(channel)?.(trusted, input));
+    return { backend, openExternal, handlers, broadcasts, call };
+  }
+
+  it("registers every billing command and rejects untrusted senders", () => {
+    const { handlers, backend } = setup();
+    expect([...handlers.keys()].sort()).toEqual([...BILLING_CHANNELS].sort());
+    const event = { senderFrame: { url: "https://attacker.invalid/" } };
+    for (const channel of BILLING_CHANNELS) {
+      expect(() => handlers.get(channel)?.(event, { plan: "pro" })).toThrow(/untrusted/);
+    }
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
+  });
+
+  it("L5b billing:buyCredits accepts only {packId} with one of the three pack ids", async () => {
+    const { call, backend } = setup();
+    for (const input of [
+      undefined,
+      {},
+      { packId: "credits_1m" },
+      { packId: "starter" },
+      { packId: "credits_5k", amountMinor: 1 },
+      { packId: "credits_5k", credits: 1_000_000 },
+      { packId: "credits_5k", userId: "11111111-1111-4111-8111-111111111111" },
+      { packId: 5000 },
+      { plan: "credits_5k" },
+    ]) {
+      expect(billingBuyCreditsSchema.safeParse(input).success).toBe(false);
+      await expect(call("billing:buyCredits", input)).rejects.toThrow(/Invalid IPC payload/);
+    }
+    for (const packId of ["credits_5k", "credits_10k", "credits_25k"]) {
+      expect(billingBuyCreditsSchema.safeParse({ packId }).success).toBe(true);
+    }
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
+  });
+
+  it("L5b billing:buyCredits opens Checkout Pro in main and replies with display data only", async () => {
+    const { call, backend, openExternal, broadcasts } = setup();
+    backend.fetchBilling.mockResolvedValue(snapshot({ catalog: [], packs: PACKS }));
+    await call("billing:refresh");
+    const reply = (await call("billing:buyCredits", { packId: "credits_10k" })) as {
+      pending: string | null;
+      error: string | null;
+    };
+    expect(backend.createBillingSession).toHaveBeenCalledWith("mp-buy-credits", {
+      packId: "credits_10k",
+    });
+    expect(openExternal).toHaveBeenCalledWith(SECRET_MP_PACK_URL);
+    expect([reply.pending, reply.error]).toEqual(["checkout", null]);
+    const payload = JSON.stringify({ reply, broadcasts });
+    expect(payload).not.toMatch(/mercadopago\.com|SECRET_preference|pref_id/);
+  });
+
+  it("accepts only {plan, provider?} for checkout: no price, customer, user id or URL", async () => {
+    const { call, backend } = setup();
+    for (const input of [
+      { plan: "pro", price: "price_123" },
+      { plan: "pro", customer: "cus_123" },
+      { plan: "pro", userId: "11111111-1111-4111-8111-111111111111" },
+      { plan: "pro", successUrl: "https://evil.example" },
+      { plan: "PRO" },
+      { plan: "pro", provider: "paypal" },
+      { plan: "pro", provider: "" },
+      { price: "price_123" },
+      undefined,
+    ]) {
+      await expect(call("billing:checkout", input)).rejects.toThrow(/Invalid IPC payload/);
+    }
+    await expect(call("billing:portal", { customer: "cus_123" })).rejects.toThrow();
+    await expect(call("billing:refresh", { force: true })).rejects.toThrow();
+    expect(backend.createBillingSession).not.toHaveBeenCalled();
+  });
+
+  it("replies with display data only (no session URLs, Stripe ids or tokens)", async () => {
+    const { call, broadcasts, openExternal } = setup();
+    const replies = [
+      await call("billing:refresh"),
+      await call("billing:checkout", { plan: "starter" }),
+      await call("billing:checkout", { plan: "starter", provider: "mercadopago" }),
+      await call("billing:portal"),
+      await call("billing:get-state"),
+    ];
+    expect(openExternal).toHaveBeenCalledTimes(3);
+    const payload = JSON.stringify({ replies, broadcasts });
+    expect(payload).not.toMatch(
+      /stripe\.com|mercadopago\.com|preapproval|cs_test_|cus_|price_|sub_/,
+    );
+    expect(payload).not.toContain(SECRET_ACCESS_TOKEN_IN_BILLING);
+    for (const reply of [...replies, ...broadcasts]) {
+      expect(Object.keys(reply as object).sort()).toEqual(
+        [
+          "cancelling",
+          "catalog",
+          "currentPlan",
+          "error",
+          "lastReturn",
+          "packs",
+          "pending",
+          "plans",
+          "status",
+          "subscription",
+          "wallet",
+        ].sort(),
+      );
+    }
+  });
+
+  it("billing:cancel takes no id: nothing or {} only (strict), any key is rejected", async () => {
+    expect(billingCancelSchema.safeParse(undefined).success).toBe(true);
+    expect(billingCancelSchema.safeParse({}).success).toBe(true);
+    const { call, backend } = setup();
+    for (const input of [
+      { preapprovalId: "SECRET_preapproval" },
+      { subscriptionId: "sub_123" },
+      { id: "x" },
+      { userId: "11111111-1111-4111-8111-111111111111" },
+      "PRE1",
+      [],
+      null,
+    ]) {
+      expect(billingCancelSchema.safeParse(input).success).toBe(false);
+      await expect(call("billing:cancel", input)).rejects.toThrow(/Invalid IPC payload/);
+    }
+    expect(backend.cancelSubscription).not.toHaveBeenCalled();
+  });
+
+  it("billing:cancel calls the backend without arguments and replies with display data", async () => {
+    const { call, backend, broadcasts } = setup();
+    const mp = {
+      plan: "starter",
+      provider: "mercadopago" as const,
+      status: "active",
+      currentPeriodEnd: "2026-11-03T00:00:00Z",
+      cancelAtPeriodEnd: false,
+      cancelRequestedAt: null,
+    };
+    backend.fetchBilling.mockImplementation(async () => snapshot({ subscription: mp }));
+    await call("billing:refresh");
+    backend.fetchBilling.mockImplementation(async () => snapshot({ subscription: null }));
+    const reply = (await call("billing:cancel")) as { subscription: unknown; cancelling: boolean };
+    expect(backend.cancelSubscription).toHaveBeenCalledTimes(1);
+    expect(backend.cancelSubscription.mock.calls[0]).toEqual([]);
+    expect(reply.subscription).toBeNull();
+    expect(reply.cancelling).toBe(false);
+    expect(broadcasts.some((s) => (s as { cancelling: boolean }).cancelling)).toBe(true);
+    const payload = JSON.stringify({ reply, broadcasts });
+    expect(payload).not.toMatch(/preapproval|mercadopago\.com|PRE[A-Z0-9]/);
+    expect(payload).not.toContain(SECRET_ACCESS_TOKEN_IN_BILLING);
+  });
+});

@@ -16,7 +16,7 @@ export function ActivityTimeline({
   hub: AgentEventHub;
   sessionId: string | undefined;
   cwd: string | undefined;
-  onOpenFile?(path: string): void;
+  onOpenFile?(path: string, line?: number): void;
   onOpenPlan?(plan: PlanRef): void;
   onOpenSubagent?(childSessionId: string): void;
 }) {
@@ -55,7 +55,6 @@ export function ActivityTimeline({
             blocks={activityBlocks}
             cwd={cwd}
             embedded
-            scrollContainerRef={scrollContainerRef}
             {...(onOpenFile ? { onOpenFile } : {})}
             {...(onOpenPlan ? { onOpenPlan } : {})}
             {...(onOpenSubagent ? { onOpenSubagent } : {})}

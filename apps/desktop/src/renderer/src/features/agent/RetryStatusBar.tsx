@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { SessionRunStatus } from "../../../../shared/contracts";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 
 /**
  * Single non-fatal line shown while the runtime auto-retries a transient
@@ -37,7 +37,7 @@ export function RetryStatusBar({
         <span className="truncate" title={status.message}>
           {status.message}
         </span>
-        <ShinyText className="ml-2 text-fg-faint">{`retrying${info ? ` · ${info}` : ""}`}</ShinyText>
+        <WorkingText className="ml-2 text-fg-faint">{`retrying${info ? ` · ${info}` : ""}`}</WorkingText>
       </div>
     </div>
   );

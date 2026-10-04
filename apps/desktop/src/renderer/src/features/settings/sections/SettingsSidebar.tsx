@@ -8,6 +8,7 @@ import {
   IconServerCog,
   IconSettings,
   IconUser,
+  IconUserCircle,
   IconUsers,
 } from "@tabler/icons-react";
 import { type ReactNode, useEffect, useState } from "react";
@@ -17,6 +18,7 @@ import { filterSettingsNav, groupSettingsNav, SETTINGS_NAV_ITEMS } from "../sett
 
 const SETTINGS_NAV_ICONS: Record<SettingsSectionId, ReactNode> = {
   general: <IconSettings size={16} stroke={1.7} />,
+  account: <IconUserCircle size={16} stroke={1.7} />,
   "model-provider": <IconServerCog size={16} stroke={1.7} />,
   appearance: <IconPalette size={16} stroke={1.7} />,
   personalization: <IconUser size={16} stroke={1.7} />,
@@ -43,7 +45,7 @@ export function SettingsSidebar({
   const version = useAppVersion();
 
   return (
-    <aside className="flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
+    <aside className="app-settings-sidebar flex w-[260px] shrink-0 flex-col bg-panel px-2.5 py-3">
       <button
         className="mb-4 flex h-8 items-center gap-2 rounded-md px-2 text-sm text-fg-muted transition-colors hover:bg-hover hover:text-fg"
         onClick={onBack}

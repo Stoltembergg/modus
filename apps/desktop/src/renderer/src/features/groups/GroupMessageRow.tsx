@@ -15,6 +15,12 @@ import { messageExecutionId } from "../../../../shared/group-execution-link";
 import { classifyGroupSystemStatus } from "../../../../shared/group-prompt-kit";
 import { parseGroupFinalResultCard } from "../../../../shared/group-result-card";
 import {
+  groupMemberCardText,
+  groupStatusLabel,
+  isLegacyWaitingForYouBody,
+  localizeGroupStatusBody,
+} from "../../../../shared/group-room-locale";
+import {
   collabStatusTone,
   extractUsefulSources,
   formatNaturalCollabStatus,
@@ -26,7 +32,6 @@ import {
 } from "../../../../shared/group-room-transcript";
 import { CopyButton } from "../../components/ui/CopyButton";
 import { cn } from "../../lib/cn";
-import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { AgentAvatar } from "../agents/AgentAvatar";
@@ -35,9 +40,14 @@ import type { RunSource } from "../sources/runSources";
 import { useRunSources } from "../sources/useRunSources";
 import { GroupFinalResultCard } from "./GroupFinalResultCard";
 import { GroupMemberLiveTurn } from "./GroupMemberLiveTurn";
+import { GroupDeliveryFooter, GroupMessageHeader } from "./GroupMessageHeader";
+import type { GroupDelivery } from "./groupDelivery";
+import { describeGroupError } from "./groupErrors";
 import type { GroupLiveTurnSnapshot } from "./groupLiveTurn";
 import { linkMentionsInMarkdown, type MentionMember, splitMentions } from "./groupMentions";
+import { useGroupText } from "./groupRoomI18n";
 import { replyPreview } from "./groupThreads";
+import { groupMessageWaitingState, isGroupMessageWaitingForYou } from "./groupWaiting";
 import { MemberName } from "./MemberName";
 import { MentionChip } from "./MentionChip";
 import type { MemberLabel } from "./memberLabels";
@@ -46,7 +56,6 @@ import {
   PromptChainOfThought,
   PromptMessage,
   PromptMessageBody,
-  PromptMessageIdentity,
   PromptSystemMessage,
 } from "./prompt-kit/PromptKit";
 
@@ -137,9 +146,14 @@ export function StatusText({ text, members }: { text: string; members: readonly 
   );
 }
 
-/** "Waiting for you" and its limit / budget variants (amber, like the waiting dot). */
+export { isGroupMessageWaitingForYou } from "./groupWaiting";
+
+/**
+ * Legacy text check of a "Waiting for you" status body (rows from before the
+ * structured `awaiting_user` card status). Prefer `isGroupMessageWaitingForYou`.
+ */
 export function isWaitingStatus(body: string): boolean {
-  return body.startsWith("Waiting for you");
+  return isLegacyWaitingForYouBody(body);
 }
 
 export function isNoNextOwnerStatus(body: string): boolean {
@@ -149,6 +163,7 @@ export function isNoNextOwnerStatus(body: string): boolean {
 /**
  * Amber "Waiting for you" is only for an *active* pending ask_user/approval.
  * Historical status lines stay in the transcript but lose the sticky amber tone.
+ * Text-only (legacy rows); the row uses `groupMessageWaitingState`.
  */
 export function isActiveWaitingStatus(
   body: string,
@@ -171,7 +186,8 @@ function CollabStatusLine({
   members: readonly MentionMember[];
   onHandoffClick?: ((targetName: string) => void) | undefined;
 }) {
-  const text = formatNaturalCollabStatus(status);
+  const t = useGroupText();
+  const text = formatNaturalCollabStatus(status, t.locale);
   const tone = collabStatusTone(status);
   if (status.kind === "handoff" && onHandoffClick && status.targetName.trim()) {
     return (
@@ -234,22 +250,25 @@ function MessageMeta({
   message,
   executionTokenTotal,
   onExecutionFilter,
+  locale,
 }: {
   message: GroupMessage;
+  locale?: string | null | undefined;
   executionTokenTotal?: number | undefined;
   onExecutionFilter?: ((executionId: string | undefined) => void) | undefined;
 }) {
+  const t = useGroupText(locale);
   const status = message.status;
   const executionId = messageExecutionId(message);
   const showChip = message.authorKind === "user" || Boolean(message.chainId);
   const executionChip = showChip ? (
     <button
-      aria-label="Filter conversation to this execution"
+      aria-label={t("row.filterExecution")}
       className="flex size-5 shrink-0 items-center justify-center rounded text-fg-faint transition-colors hover:bg-hover hover:text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-focus-ring-soft)]"
       data-execution-id={executionId}
       data-testid="group-execution-filter"
       onClick={() => onExecutionFilter?.(executionId)}
-      title="Filter conversation to this execution"
+      title={t("row.filterExecution")}
       type="button"
     >
       <IconFilter aria-hidden size={12} stroke={1.8} />
@@ -261,52 +280,58 @@ function MessageMeta({
       : "";
   // Live turns already show concrete phases — do not stamp opaque "Working".
   // Hoist executionChip so running/writing rows still expose the filter control.
-  if (!status || status === "running" || status === "writing")
+  // The time lives in the header (`name · time`).
+  if (!status || status === "running" || status === "writing") {
+    if (!executionChip && !tokenLabel) return null;
     return (
-      <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+      <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
         {executionChip}
-        <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
-          {formatClock(Date.parse(message.createdAt))}
-        </time>
         {tokenLabel ? (
           <span
             className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
             data-testid="group-execution-tokens"
-            title="Estimated tokens for this execution (characters ÷ 4)"
+            title={t("row.tokensTitle")}
           >
-            ~{tokenLabel} tokens
+            {t("row.tokens", { count: tokenLabel })}
           </span>
         ) : null}
       </span>
     );
-  const label = {
-    queued: "Queued",
-    awaiting_user: "Waiting for you",
-    completed: "Completed",
-    failed: "Failed",
-    cancelled: "Cancelled",
-    interrupted: "Interrupted",
-  }[status];
+  }
+  const label = groupStatusLabel(
+    (
+      {
+        queued: "queued",
+        awaiting_user: "waitingForYou",
+        completed: "completed",
+        failed: "failed",
+        cancelled: "cancelled",
+        interrupted: "interrupted",
+      } as const
+    )[status],
+    t.locale,
+  );
   const warning = status === "failed" || status === "interrupted";
   return (
-    <span className="ml-auto inline-flex flex-wrap items-baseline gap-x-1.5 font-normal text-2xs text-fg-faint">
+    <span className="ml-auto inline-flex flex-wrap items-center gap-x-1.5 font-normal text-2xs text-fg-faint">
       {executionChip}
-      <time dateTime={message.createdAt} title={new Date(message.createdAt).toLocaleString()}>
-        {formatClock(Date.parse(message.createdAt))}
-      </time>
       {tokenLabel ? (
         <span
           className="rounded-md bg-chip-faint px-1.5 py-0.5 text-fg-subtle tabular-nums"
           data-testid="group-execution-tokens"
-          title="Estimated tokens for this execution (characters ÷ 4)"
+          title={t("row.tokensTitle")}
         >
-          ~{tokenLabel} tokens
+          {t("row.tokens", { count: tokenLabel })}
         </span>
       ) : null}
       {label ? (
         <span
           className={
-            warning ? "text-danger" : status === "awaiting_user" ? "text-amber-400" : undefined
+            warning
+              ? "text-danger"
+              : isGroupMessageWaitingForYou(message)
+                ? "text-amber-400"
+                : undefined
           }
           data-testid="group-message-status"
         >
@@ -328,6 +353,7 @@ function MessageActions({
   message: GroupMessage;
   align: "start" | "end";
 }) {
+  const t = useGroupText();
   if (!copyText.trim() && !onReply) return null;
   return (
     <div
@@ -337,16 +363,16 @@ function MessageActions({
       )}
       data-testid="group-message-actions"
     >
-      {copyText.trim() ? <CopyButton label="Copy message" text={copyText} /> : null}
+      {copyText.trim() ? <CopyButton label={t("row.copyMessage")} text={copyText} /> : null}
       {onReply ? (
         <button
-          aria-label="Reply to message"
+          aria-label={t("row.replyToMessage")}
           className="text-2xs text-fg-faint hover:text-fg-muted"
           data-testid="group-message-reply"
           onClick={() => onReply(message)}
           type="button"
         >
-          Reply
+          {t("row.reply")}
         </button>
       ) : null}
     </div>
@@ -362,13 +388,14 @@ function ReplyQuote({
   replyToMessage: GroupMessage | undefined;
   labels: ReadonlyMap<string, MemberLabel>;
 }) {
+  const t = useGroupText();
   if (!message.replyToMessageId) return null;
   const author =
     replyToMessage?.authorKind === "user"
-      ? "You"
+      ? t("row.you")
       : replyToMessage?.authorSessionId
-        ? (labels.get(replyToMessage.authorSessionId)?.title ?? "Member")
-        : "Message";
+        ? (labels.get(replyToMessage.authorSessionId)?.title ?? t("row.member"))
+        : t("row.message");
   return (
     <blockquote
       className="rounded-md bg-canvas/60 px-2.5 py-1.5 text-2xs text-fg-subtle"
@@ -378,10 +405,12 @@ function ReplyQuote({
         className="block truncate font-medium text-fg-muted hover:text-fg"
         href={`#group-message-${message.replyToMessageId}`}
       >
-        Replying to {author}
+        {t("row.replyingTo", { name: author })}
       </a>
       <span className="block break-words">
-        {replyToMessage ? replyPreview(replyToMessage.body, 96) || "Attachment" : "Earlier message"}
+        {replyToMessage
+          ? replyPreview(replyToMessage.body, 96) || t("row.attachment")
+          : t("row.earlierMessage")}
       </span>
     </blockquote>
   );
@@ -399,16 +428,19 @@ function MessageError({ message }: { message: GroupMessage }) {
   );
 }
 
-function fallbackProgressLabel(status: GroupMessage["status"]): string | undefined {
+function fallbackProgressLabel(
+  status: GroupMessage["status"],
+  locale?: string | null,
+): string | undefined {
   switch (status) {
     case "queued":
-      return "Waiting for its turn";
+      return groupMemberCardText("waitingForTurn", locale);
     case "running":
-      return "Working on the task";
+      return groupMemberCardText("workingOnTask", locale);
     case "writing":
-      return "Writing a reply";
+      return groupMemberCardText("writingReply", locale);
     case "awaiting_user":
-      return "Waiting for you";
+      return groupStatusLabel("waitingForYou", locale);
     default:
       return undefined;
   }
@@ -431,6 +463,8 @@ export function GroupMessageRow({
   streaming,
   replyToMessage,
   executionTokenTotal,
+  delivery,
+  locale: localeProp,
 }: {
   message: GroupMessage;
   replyToMessage?: GroupMessage | undefined;
@@ -455,7 +489,13 @@ export function GroupMessageRow({
   liveTurn?: { mode: "running" | "queued"; live: GroupLiveTurnSnapshot } | undefined;
   /** Marks public text as streaming for transient fallback cards. */
   streaming?: boolean | undefined;
+  /** Delivery footer (queued / delivered / working / answered), derived by the list. */
+  delivery?: GroupDelivery | undefined;
+  /** Room locale override (tests); defaults to the room provider, then the browser locale. */
+  locale?: string | null | undefined;
 }) {
+  const t = useGroupText(localeProp);
+  const locale = t.locale;
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | undefined>();
   const runSources = useRunSources(
@@ -472,7 +512,7 @@ export function GroupMessageRow({
     try {
       await onRetry(message);
     } catch (cause) {
-      setRetryError(cause instanceof Error ? cause.message : String(cause));
+      setRetryError(describeGroupError(cause, locale));
     } finally {
       setRetrying(false);
     }
@@ -493,15 +533,20 @@ export function GroupMessageRow({
     const collab = parseGroupCollabStatusLine(message.body);
     // Keep handoffs and protocol agreement summaries out of the conversational transcript.
     if (collab?.kind === "handoff" || collab?.kind === "agreed") return null;
-    const activeWaiting = isActiveWaitingStatus(
-      message.body,
-      message.authorSessionId,
-      activeWaitingSessionIds ?? [],
-    );
-    const waiting = isWaitingStatus(message.body);
+    // Structured `awaiting_user` first, legacy "Waiting for you" text second.
+    const waitingState = groupMessageWaitingState(message, activeWaitingSessionIds ?? []);
+    const activeWaiting = waitingState === "active";
+    const waiting = waitingState !== undefined;
     const nudge = isNoNextOwnerStatus(message.body);
-    const display = collab ? formatNaturalCollabStatus(collab) : message.body;
-    const classified = classifyGroupSystemStatus(display);
+    // Classify the canonical English text (what the runtime stores); show it localised.
+    const canonical = collab ? formatNaturalCollabStatus(collab, "en") : message.body;
+    const display = collab
+      ? formatNaturalCollabStatus(collab, locale)
+      : localizeGroupStatusBody(message.body, locale);
+    const classified =
+      waitingState === "active" && !isLegacyWaitingForYouBody(canonical)
+        ? ({ show: "system", variant: "action" } as const)
+        : classifyGroupSystemStatus(canonical);
     if (classified?.show === "hide") return null;
     if (classified?.show === "system" || activeWaiting || nudge) {
       const variant =
@@ -551,7 +596,6 @@ export function GroupMessageRow({
     return (
       <div className="group/msg flex w-full flex-col items-end gap-0.5" data-tone="normal">
         <PromptMessage
-          className="flex-row-reverse"
           data-align="right"
           data-kind="user"
           data-message-id={message.id}
@@ -559,20 +603,25 @@ export function GroupMessageRow({
           data-testid="group-message"
           id={`group-message-${message.id}`}
         >
-          <span
-            aria-hidden
-            className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-fg-muted text-2xs"
-            data-testid="group-user-avatar"
-          >
-            Y
-          </span>
           <PromptMessageBody>
-            <PromptMessageIdentity
-              name="You"
-              role={role?.trim() || "Human"}
+            <GroupMessageHeader
+              avatar={
+                <span
+                  aria-hidden
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full bg-elevated font-medium text-[9px] text-fg-muted"
+                  data-testid="group-user-avatar"
+                >
+                  {t("row.youInitial")}
+                </span>
+              }
+              createdAt={message.createdAt}
+              locale={locale}
+              name={t("row.you")}
+              memberRole={role?.trim() || t("row.human")}
               trailing={
                 <MessageMeta
                   executionTokenTotal={executionTokenTotal}
+                  locale={locale}
                   message={message}
                   onExecutionFilter={onExecutionFilter}
                 />
@@ -588,12 +637,16 @@ export function GroupMessageRow({
             <MessageError message={message} />
           </PromptMessageBody>
         </PromptMessage>
+        {delivery ? (
+          <GroupDeliveryFooter align="end" delivery={delivery} labels={labels} locale={locale} />
+        ) : null}
         <MessageActions align="end" copyText={message.body} message={message} onReply={onReply} />
       </div>
     );
   }
   const sessionId = message.authorSessionId ?? "";
-  const label = author ?? { title: "Member" };
+  const label = author ?? { title: t("row.member") };
+  const cardWaiting = groupMessageWaitingState(message, activeWaitingSessionIds ?? []);
   const title = label.title;
   const liveText = liveTurn?.live.streamText ?? "";
   const body = message.body.trim() ? message.body : liveText;
@@ -608,7 +661,9 @@ export function GroupMessageRow({
     rawStatuses.some((status) => status.kind === "ready") &&
     statuses.length === 0;
   const fallbackProgress =
-    !liveTurn && message.authorKind === "agent" ? fallbackProgressLabel(message.status) : undefined;
+    !liveTurn && message.authorKind === "agent"
+      ? fallbackProgressLabel(message.status, locale)
+      : undefined;
   // Hide Planner→peer handoff dumps that have no user-facing prose.
   if (
     !writing &&
@@ -648,32 +703,38 @@ export function GroupMessageRow({
         data-message-id={message.id}
         data-status={message.status}
         data-testid="group-message"
+        data-waiting-active={cardWaiting === "active" || undefined}
+        data-waiting-stale={cardWaiting === "stale" || undefined}
         id={`group-message-${message.id}`}
       >
-        {avatar ? (
-          <AgentAvatar
-            animated={false}
-            className="mt-0.5"
-            color={avatar.color}
-            face={avatar.face}
-            seed={avatar.agentId}
-            shape={avatar.shape}
-            size={20}
-            state={avatar.archived ? "archived" : "idle"}
-          />
-        ) : (
-          <span
-            aria-hidden
-            className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full font-medium text-white text-xs"
-            style={{ backgroundColor: memberColor(sessionId) }}
-          >
-            {title.trim().charAt(0).toLocaleUpperCase() || "?"}
-          </span>
-        )}
         <PromptMessageBody>
-          <PromptMessageIdentity
+          <GroupMessageHeader
+            avatar={
+              avatar ? (
+                <AgentAvatar
+                  animated={false}
+                  color={avatar.color}
+                  face={avatar.face}
+                  seed={avatar.agentId}
+                  shape={avatar.shape}
+                  size={16}
+                  state={avatar.archived ? "archived" : "idle"}
+                />
+              ) : (
+                <span
+                  aria-hidden
+                  className="flex size-4 shrink-0 items-center justify-center rounded-full font-medium text-[9px] text-white"
+                  data-testid="group-member-initial"
+                  style={{ backgroundColor: memberColor(sessionId) }}
+                >
+                  {title.trim().charAt(0).toLocaleUpperCase() || "?"}
+                </span>
+              )
+            }
+            createdAt={message.createdAt}
+            locale={locale}
             name={<MemberName label={label} />}
-            role={role?.trim() || "Agent"}
+            memberRole={role?.trim() || t("row.agent")}
             trailing={
               <>
                 {toLabel ? (
@@ -683,6 +744,7 @@ export function GroupMessageRow({
                 ) : null}
                 <MessageMeta
                   executionTokenTotal={executionTokenTotal}
+                  locale={locale}
                   message={message}
                   onExecutionFilter={onExecutionFilter}
                 />
@@ -691,7 +753,7 @@ export function GroupMessageRow({
                     className="font-normal text-amber-400/90 text-2xs"
                     data-testid="group-ready-ephemeral"
                   >
-                    {formatNaturalCollabStatus({ kind: "ready" })}
+                    {formatNaturalCollabStatus({ kind: "ready" }, locale)}
                   </span>
                 ) : null}
               </>
@@ -730,7 +792,10 @@ export function GroupMessageRow({
               onClick={() => void retry()}
               type="button"
             >
-              {retrying ? "Sending…" : message.status === "failed" ? "Retry task" : "Resume task"}
+              {groupMemberCardText(
+                retrying ? "sending" : message.status === "failed" ? "retryTask" : "resumeTask",
+                locale,
+              )}
             </button>
           ) : null}
           {retryError ? (
@@ -749,6 +814,9 @@ export function GroupMessageRow({
           ))}
         </PromptMessageBody>
       </PromptMessage>
+      {delivery ? (
+        <GroupDeliveryFooter align="start" delivery={delivery} labels={labels} locale={locale} />
+      ) : null}
       <MessageActions
         align="start"
         copyText={prose || message.body}

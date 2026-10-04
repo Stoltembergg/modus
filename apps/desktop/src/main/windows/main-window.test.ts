@@ -12,6 +12,11 @@ const electronState = vi.hoisted(() => ({
   loadURL: vi.fn(),
   loadFile: vi.fn(),
   lastWindow: undefined as unknown,
+  lastOptions: undefined as unknown,
+  appearance: {
+    attach: vi.fn(),
+    rendererArgument: vi.fn(() => "--modus-appearance={}"),
+  },
 }));
 
 vi.mock("electron", () => ({
@@ -42,8 +47,9 @@ vi.mock("electron", () => ({
     loadURL = electronState.loadURL;
     loadFile = electronState.loadFile;
 
-    constructor() {
+    constructor(options: unknown) {
       electronState.lastWindow = this;
+      electronState.lastOptions = options;
     }
   },
   screen: {
@@ -97,9 +103,22 @@ describe("main window renderer target and redirects", () => {
       startupTimeline: { mark: vi.fn() } as unknown as Parameters<
         typeof createMainWindow
       >[0]["startupTimeline"],
+      appearance: electronState.appearance,
     });
     return electronState.lastWindow;
   }
+
+  it("hands the window to the appearance controller and passes its first-paint state", async () => {
+    electronState.appearance.attach.mockReset();
+    const window = await createWindow();
+
+    expect(electronState.appearance.attach).toHaveBeenCalledWith(window, {
+      nativeGlassAvailable: expect.any(Boolean),
+    });
+    expect(electronState.lastOptions).toMatchObject({
+      webPreferences: { additionalArguments: ["--modus-appearance={}"], sandbox: true },
+    });
+  });
 
   it("ignores an attacker-provided renderer URL when packaged", async () => {
     electronState.app.isPackaged = true;

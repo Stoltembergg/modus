@@ -21,7 +21,7 @@ import type {
 } from "../../../../shared/contracts";
 import { CollapsibleMotion } from "../../components/ui/CollapsibleMotion";
 import { EmptyState } from "../../components/ui/Panel";
-import { ShinyText } from "../../components/ui/ShinyText";
+import { WorkingText } from "../../components/ui/WorkingText";
 import { cn } from "../../lib/cn";
 import {
   modelThinkingOptions,
@@ -245,7 +245,7 @@ export function ProviderDetail({
             <div className="flex flex-wrap items-center justify-end gap-2">
               {busy ? (
                 <span className="rounded-full bg-chip px-2.5 py-1 text-xs text-fg-muted">
-                  <ShinyText>Saving</ShinyText>
+                  <WorkingText>Saving</WorkingText>
                 </span>
               ) : (
                 <ReadOnlyPill>{modelResultLabel(filteredModels.length)}</ReadOnlyPill>
@@ -478,7 +478,7 @@ export function ProviderCredentials({
           type="submit"
         >
           {busy ? (
-            <ShinyText className="text-canvas">Connecting…</ShinyText>
+            <WorkingText className="text-canvas">Connecting…</WorkingText>
           ) : detail.configured ? (
             "Update"
           ) : (
@@ -797,7 +797,7 @@ export function ProviderDetailLoading() {
       initial={{ opacity: 0, y: 8 }}
       transition={{ duration: 0.16, ease: "easeOut" }}
     >
-      <ShinyText className="text-sm">Loading provider</ShinyText>
+      <WorkingText className="text-sm">Loading provider</WorkingText>
     </m.section>
   );
 }

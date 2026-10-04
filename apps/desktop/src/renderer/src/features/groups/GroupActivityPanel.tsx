@@ -7,6 +7,7 @@ import type {
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { estimateTokensByExecution } from "../../../../shared/group-conversation-minors";
 import { formatGroupProjectContextDetails } from "../../../../shared/group-project";
+import { groupText } from "../../../../shared/group-room-locale";
 import {
   collectRoomMessageDetails,
   type HandoffPacketField,
@@ -17,6 +18,7 @@ import { GroupDecisionsSection } from "./GroupDecisions";
 import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import { GroupStageChip } from "./GroupRoomHeader";
 import { activeTaskCount, GroupTaskPanel } from "./GroupTaskPanel";
+import { useGroupText } from "./groupRoomI18n";
 import { MemberName } from "./MemberName";
 import type { MemberLabel } from "./memberLabels";
 import type { GroupMemberWorkingRow } from "./useGroupMemberWorking";
@@ -52,6 +54,7 @@ export function GroupActivityPanel({
   onCancelled(task: GroupTask): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
 }) {
+  const t = useGroupText();
   const details = collectRoomMessageDetails(messages).slice(-12);
   const executionTokens = estimateTokensByExecution(messages);
   const allTokenRows = [...executionTokens.entries()].filter(([, total]) => total > 0);
@@ -59,7 +62,7 @@ export function GroupActivityPanel({
   const tokenRows = allTokenRows.slice(-8).reverse();
   return (
     <GroupTaskPanel
-      ariaLabel="Activity"
+      ariaLabel={t("activity.title")}
       labels={labels}
       onCancelled={onCancelled}
       tasks={tasks}
@@ -97,13 +100,15 @@ function ActivityTokenSection({
   grand: number;
   executionCount: number;
 }) {
+  const t = useGroupText();
   if (executionCount === 0) return null;
   return (
     <section className="mb-3 px-1" data-testid="group-activity-tokens">
-      <h3 className="mb-1.5 text-2xs text-fg-faint uppercase tracking-wide">Tokens</h3>
+      <h3 className="mb-1.5 text-2xs text-fg-faint uppercase tracking-wide">
+        {t("activity.tokens")}
+      </h3>
       <p className="mb-1.5 text-2xs text-fg-faint">
-        Estimated · ~{formatTokenCount(grand)} across {executionCount}{" "}
-        {executionCount === 1 ? "execution" : "executions"}
+        {t.plural("activity.tokensSummary", executionCount, { total: formatTokenCount(grand) })}
       </p>
       <ul className="space-y-1">
         {rows.map(([executionId, total]) => (
@@ -123,12 +128,15 @@ function ActivityTokenSection({
 }
 
 /** Header toggle label + open-task count for the Activity button. */
-export function activityButtonMeta(tasks: readonly GroupTask[]): {
+export function activityButtonMeta(
+  tasks: readonly GroupTask[],
+  locale?: string | null,
+): {
   openCount: number;
   label: string;
 } {
   const openCount = activeTaskCount(tasks);
-  return { openCount, label: `Activity (${openCount} active)` };
+  return { openCount, label: groupText("activity.buttonActive", locale, { count: openCount }) };
 }
 
 function ActivityLiveSection({
@@ -144,11 +152,14 @@ function ActivityLiveSection({
       !row.live.collapsed &&
       (row.live.tools.length > 0 || row.live.thoughtPreview || row.live.presence.activity),
   );
+  const t = useGroupText();
   if (detailed.length === 0) return null;
 
   return (
     <section className="mb-3" data-testid="group-activity-live">
-      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">Live</h3>
+      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">
+        {t("activity.live")}
+      </h3>
       <ul className="flex flex-col gap-2">
         {detailed.map((row) => {
           const label = labels.get(row.sessionId) ?? { title: row.sessionId };
@@ -188,10 +199,13 @@ function ActivityLiveSection({
 }
 
 function ActivityDetailsSection({ fields }: { fields: readonly HandoffPacketField[] }) {
+  const t = useGroupText();
   if (fields.length === 0) return null;
   return (
     <section className="mb-3" data-testid="group-activity-details">
-      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">Details</h3>
+      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">
+        {t("activity.details")}
+      </h3>
       <dl className="flex flex-col gap-1 px-1 text-2xs">
         {fields.map((field, index) => (
           <div
@@ -242,18 +256,21 @@ function ActivityCoordinationSection({
   hasLead: boolean;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
 }) {
+  const t = useGroupText();
   return (
     <section className="mb-3" data-testid="group-activity-coordination">
-      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">Coordination</h3>
+      <h3 className="mb-1.5 px-1 text-2xs text-fg-faint uppercase tracking-wide">
+        {t("activity.coordination")}
+      </h3>
       <div className="flex flex-col gap-1.5 px-1">
         {stage ? (
           <GroupStageChip labels={labels} stage={stage} />
         ) : (
-          <span className="text-2xs text-fg-faint">No active handoff</span>
+          <span className="text-2xs text-fg-faint">{t("activity.noHandoff")}</span>
         )}
         <div className="flex items-center justify-between gap-2 text-2xs text-fg-muted">
           <span data-testid="group-activity-coordinator-status">
-            {coordinating ? "Coordinator on" : "Free collaboration"}
+            {coordinating ? t("activity.coordinatorOn") : t("activity.freeCollab")}
           </span>
           {onSetMode ? (
             <button
@@ -266,13 +283,13 @@ function ActivityCoordinationSection({
               title={
                 hasLead
                   ? coordinating
-                    ? "Turn off Coordinator mode"
-                    : "Lead coordinates untargeted messages"
-                  : "Add a Lead to enable Coordinator mode"
+                    ? t("activity.turnOffCoordinator")
+                    : t("activity.leadCoordinates")
+                  : t("activity.addLeadForCoordinator")
               }
               type="button"
             >
-              {coordinating ? "Disable" : "Enable"}
+              {coordinating ? t("activity.disable") : t("activity.enable")}
             </button>
           ) : null}
         </div>

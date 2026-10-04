@@ -60,8 +60,6 @@ import {
   restorePrimaryNavigation,
 } from "../components/shell/navigation-state";
 import { TopBar } from "../components/shell/TopBar";
-import { Aurora } from "../components/ui/Aurora";
-import { FadeContent } from "../components/ui/FadeContent";
 import { ImageViewerProvider } from "../components/ui/ImageViewer";
 import { ModusLoadingFallback } from "../components/ui/ModusLoadingMark";
 import { NativeSurfaceProvider } from "../components/ui/nativeSurface";
@@ -227,6 +225,10 @@ export function App() {
   const [inspectorWidth, setInspectorWidth] = useState(384);
   const [inspectorTab, setInspectorTab] = useState("changes");
   const [filesRevealPath, setFilesRevealPath] = useState<string | undefined>();
+  const [filesRevealLine, setFilesRevealLine] = useState<
+    { line: number; key: number } | undefined
+  >();
+  const filesRevealKeyRef = useRef(0);
   const [terminalRevealId, setTerminalRevealId] = useState<string | undefined>();
   const [reviewCwd, setReviewCwd] = useState<string | undefined>();
   const [selectedSubagentId, setSelectedSubagentId] = useState<string | undefined>();
@@ -1191,9 +1193,12 @@ export function App() {
     [activeSession, updateSessionComposerDraft],
   );
 
-  const openWorkspaceFile = useCallback((path: string) => {
+  // `line` is optional (C2.1): every `onOpenFile(path)` caller is unchanged.
+  const openWorkspaceFile = useCallback((path: string, line?: number) => {
     setInspectorOpen(true);
     setInspectorTab("files");
+    filesRevealKeyRef.current += 1;
+    setFilesRevealLine(line ? { line, key: filesRevealKeyRef.current } : undefined);
     setFilesRevealPath(path);
   }, []);
 
@@ -1214,7 +1219,7 @@ export function App() {
                   band above the chat header. */}
               {settingsOpen ? <MenuBar /> : null}
 
-              <FadeContent blur className="flex min-h-0 min-w-0 flex-1 flex-col" duration={0.7}>
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <div
                   className="app-layout-row surface-app flex min-h-0 min-w-0 flex-1"
                   ref={layoutRowRef}
@@ -1590,12 +1595,6 @@ export function App() {
                                 ease: "easeOut",
                               }}
                             >
-                              <Aurora
-                                amplitude={1.15}
-                                blend={0.65}
-                                className="opacity-95"
-                                speed={0.85}
-                              />
                               <div className="relative z-10 w-full max-w-[680px] -translate-y-4">
                                 <Composer
                                   onOpenConnections={openConnections}
@@ -1682,6 +1681,7 @@ export function App() {
                             onAddToChat={addContextToChat}
                             onRevealConsumed={() => setFilesRevealPath(undefined)}
                             onRevealTerminalConsumed={() => setTerminalRevealId(undefined)}
+                            revealLine={filesRevealLine}
                             revealPath={filesRevealPath}
                             revealTerminalId={terminalRevealId}
                             open={inspectorOpen}
@@ -1699,7 +1699,7 @@ export function App() {
                     </>
                   )}
                 </div>
-              </FadeContent>
+              </div>
             </AppShell>
           </ImageViewerProvider>
         </NativeSurfaceProvider>
