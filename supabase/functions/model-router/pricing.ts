@@ -3,7 +3,10 @@ import type { CatalogModel, TokenPrice } from "../_shared/model-catalog.ts";
 
 /**
  * Credits: 1 credit = US$ 0.001 of provider cost, times CREDIT_MARKUP (server env).
- *   cost_usd = (uncached_prompt * input + cached_prompt * cacheRead + completion * output) / 1e6
+ *   cost_usd = (uncached * input + read * cacheRead + write * cacheWrite + completion * output) / 1e6
+ *   uncached = prompt - read - write (clamped at 0): the upstream prompt_tokens INCLUDES the
+ *   cache reads and the cache writes (vibi probe 2026-10-03: 274 = 12 + 87 read + 175 write).
+ *   A model without a cacheWrite price bills its write tokens at input (pre-L2 behaviour).
  *   credits  = ceil(cost_usd * 1000 * CREDIT_MARKUP)
  * Computed with BigInt on scaled integers (prices in 1e-6 US$ per 1M tokens, markup in
  * 1e-4), so the ceil is exact (no 576.0000001 -> 577).
@@ -41,17 +44,35 @@ export function priceFor(model: CatalogModel, promptTokens: number): TokenPrice 
   return model.cost;
 }
 
-export type Usage = { promptTokens: number; cachedTokens: number; completionTokens: number };
+/**
+ * `cachedTokens` = prompt-cache reads, `cacheWriteTokens` = prompt-cache writes (L2; absent
+ * or 0 when the upstream reports none). Both are part of `promptTokens`.
+ */
+export type Usage = {
+  promptTokens: number;
+  cachedTokens: number;
+  completionTokens: number;
+  cacheWriteTokens?: number;
+};
+
+/** Prompt split into its billed parts: read <= prompt, write <= prompt - read. */
+export function promptParts(usage: Usage): { uncached: number; read: number; write: number } {
+  const prompt = Math.max(0, Math.floor(usage.promptTokens));
+  const read = Math.min(prompt, Math.max(0, Math.floor(usage.cachedTokens)));
+  const write = Math.min(prompt - read, Math.max(0, Math.floor(usage.cacheWriteTokens ?? 0)));
+  return { uncached: prompt - read - write, read, write };
+}
 
 export function creditsFor(model: CatalogModel, usage: Usage, markup: Markup): number {
   const prompt = Math.max(0, Math.floor(usage.promptTokens));
-  const cached = Math.min(prompt, Math.max(0, Math.floor(usage.cachedTokens)));
+  const { uncached, read, write } = promptParts(usage);
   const completion = Math.max(0, Math.floor(usage.completionTokens));
   const price = priceFor(model, prompt);
   // sum is in 1e-12 US$ (tokens * 1e-6 US$/1M tokens).
   const sum =
-    BigInt(prompt - cached) * micro(price.input) +
-    BigInt(cached) * micro(price.cacheRead) +
+    BigInt(uncached) * micro(price.input) +
+    BigInt(read) * micro(price.cacheRead) +
+    BigInt(write) * micro(price.cacheWrite ?? price.input) +
     BigInt(completion) * micro(price.output);
   // credits = sum * 1e-12 * 1000 * markup = sum * scaled / 1e13
   const numerator = sum * markup.scaled;
@@ -76,7 +97,32 @@ export function estimateOutputTokens(outputChars: number): number {
 }
 
 /**
- * Largest output cap (<= wanted) whose worst case (no cache hits) fits in `balance`
+ * Worst case for a prompt of `promptTokens` and `completionTokens` output: no cache reads and
+ * every prompt token at max(input, cacheWrite) (L2: a prompt that is all cache writes must
+ * still fit the reservation). Used for the reservation and the affordable output cap.
+ */
+export function worstCaseCredits(
+  model: CatalogModel,
+  promptTokens: number,
+  completionTokens: number,
+  markup: Markup,
+): number {
+  const price = priceFor(model, Math.max(0, Math.floor(promptTokens)));
+  const writeIsWorse = (price.cacheWrite ?? 0) > price.input;
+  return creditsFor(
+    model,
+    {
+      promptTokens,
+      cachedTokens: 0,
+      cacheWriteTokens: writeIsWorse ? promptTokens : 0,
+      completionTokens,
+    },
+    markup,
+  );
+}
+
+/**
+ * Largest output cap (<= wanted) whose worst case (worstCaseCredits) fits in `balance`
  * credits; 0 when not even one token fits.
  */
 export function affordableMaxTokens(
@@ -86,8 +132,7 @@ export function affordableMaxTokens(
   balance: number,
   markup: Markup,
 ): number {
-  const cost = (out: number) =>
-    creditsFor(model, { promptTokens, cachedTokens: 0, completionTokens: out }, markup);
+  const cost = (out: number) => worstCaseCredits(model, promptTokens, out, markup);
   if (cost(wanted) <= balance) return wanted;
   if (cost(0) > balance) return 0;
   let lo = 0;

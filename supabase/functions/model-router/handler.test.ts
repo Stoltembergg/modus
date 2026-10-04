@@ -1,8 +1,16 @@
 import { assert, assertEquals, assertGreater, assertLessOrEqual } from "jsr:@std/assert@1";
 import type { AuthenticatedUser } from "../_shared/auth.ts";
+import type { CatalogModel } from "../_shared/model-catalog.ts";
+import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
 import { USER } from "../_shared/test-helpers.ts";
 import { createRouterHandler, type RouterDeps } from "./handler.ts";
-import { creditsFor, estimateOutputTokens, estimateTokens, parseCreditMarkup } from "./pricing.ts";
+import {
+  creditsFor,
+  estimateOutputTokens,
+  estimateTokens,
+  parseCreditMarkup,
+  worstCaseCredits,
+} from "./pricing.ts";
 import {
   completionRequest,
   FakeDb,
@@ -1309,4 +1317,190 @@ Deno.test("GET /v1/models: the table with allowed per plan", async () => {
   db.plan = { plan: "pro", allowedModels: null };
   const pro = await (await h(req)).json();
   assert(pro.data.every((m: { allowed: boolean }) => m.allowed));
+});
+
+// ---------------------------------------------------------------------------
+// L2: cache billing end to end, worst-case reservation, effort ignored, 403 above plan.
+// ---------------------------------------------------------------------------
+const OPUS = MODEL_CATALOG.find((m) => m.id === "anthropic/claude-opus-5-5") as CatalogModel;
+const FABLE = MODEL_CATALOG.find((m) => m.id === "anthropic/claude-fable-5-1") as CatalogModel;
+
+function claudeHandler(db: FakeDb, baseUrl: string, logs: Logged = []) {
+  return handler(
+    db,
+    baseUrl,
+    {
+      config: routerConfig(baseUrl, {
+        keys: { "model - china": "upstream-secret", claude: "claude-secret" },
+      }),
+      catalog: [FLASH, GLM, OPUS, FABLE],
+    },
+    logs,
+  );
+}
+
+Deno.test("L2: opus usage with cache read + write (probe numbers) is billed per part, reservation = worst case", async () => {
+  const usage = {
+    prompt_tokens: 274,
+    completion_tokens: 1,
+    prompt_tokens_details: {
+      cached_tokens: 87,
+      cached_creation_tokens: 175,
+      cache_write_tokens: 175,
+    },
+    claude_cache_creation_5_m_tokens: 175,
+    billing_usage: { claude_usage: { claude_cache_creation_5_m_tokens: 0 } },
+  };
+  // ~10k prompt tokens so the write-vs-input difference shows after the credit ceil.
+  const BIG = [{ role: "user", content: "x".repeat(40_000) }];
+  const BIG_TOKENS = estimateTokens(JSON.stringify(BIG).length);
+  const up = fakeUpstream(() => okCompletion(usage));
+  try {
+    const db = new FakeDb(1e9, { plan: "pro", allowedModels: null });
+    const logs: Logged = [];
+    const res = await claudeHandler(
+      db,
+      up.baseUrl,
+      logs,
+    )(completionRequest({ model: OPUS.id, messages: BIG, max_tokens: 1000 }, { key: "c1" }));
+    await res.json();
+    const r = reservationOf(db, "c1");
+    assertEquals(
+      r.charged,
+      creditsFor(
+        OPUS,
+        { promptTokens: 274, cachedTokens: 87, cacheWriteTokens: 175, completionTokens: 1 },
+        M125,
+      ),
+    );
+    assertEquals(r.amount, worstCaseCredits(OPUS, BIG_TOKENS, 1000, M125));
+    assertGreater(
+      r.amount,
+      creditsFor(
+        OPUS,
+        { promptTokens: PROMPT_TOKENS, cachedTokens: 0, completionTokens: 1000 },
+        M125,
+      ),
+      "the reservation prices the prompt at the write rate (7.5 > input 6)",
+    );
+    const settled = logs.find((l) => l.event === "model_router.settled");
+    assertEquals([settled?.cached_tokens, settled?.cache_write_tokens], [87, 175]);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L2: stream, opus all-write prompt (probe call 5) and Fable without cache", async () => {
+  const cases = [
+    {
+      model: OPUS,
+      usage: {
+        prompt_tokens: 3143,
+        completion_tokens: 1,
+        prompt_tokens_details: {
+          cached_tokens: 0,
+          cached_creation_tokens: 3143,
+          cache_write_tokens: 3143,
+        },
+        claude_cache_creation_5_m_tokens: 3143,
+      },
+      expected: {
+        promptTokens: 3143,
+        cachedTokens: 0,
+        cacheWriteTokens: 3143,
+        completionTokens: 1,
+      },
+    },
+    {
+      model: FABLE,
+      usage: {
+        prompt_tokens: 11,
+        completion_tokens: 1,
+        prompt_tokens_details: { cached_tokens: 0 },
+        claude_cache_creation_5_m_tokens: 0,
+      },
+      expected: { promptTokens: 11, cachedTokens: 0, cacheWriteTokens: 0, completionTokens: 1 },
+    },
+  ];
+  for (const [i, c] of cases.entries()) {
+    const up = fakeUpstream(() => okCompletion(c.usage));
+    try {
+      const db = new FakeDb(1e9, { plan: "pro", allowedModels: null });
+      const res = await claudeHandler(
+        db,
+        up.baseUrl,
+      )(
+        completionRequest(
+          { model: c.model.id, messages: MESSAGES, stream: true, max_tokens: 64 },
+          { key: `cs${i}` },
+        ),
+      );
+      await res.text();
+      // Capped at the reservation; the reservation covers the estimate, not vibi's hidden prefix.
+      const r = reservationOf(db, `cs${i}`);
+      assertEquals(r.charged, Math.min(r.amount, creditsFor(c.model, c.expected, M125)));
+    } finally {
+      await up.close();
+    }
+  }
+});
+
+Deno.test("L2: reasoning effort in the request is never forwarded, and the override is logged", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb(1e9);
+    const logs: Logged = [];
+    const res = await handler(
+      db,
+      up.baseUrl,
+      {},
+      logs,
+    )(
+      completionRequest(
+        {
+          model: FLASH.id,
+          messages: MESSAGES,
+          reasoning_effort: "high",
+          thinking: { type: "enabled", budget_tokens: 100000 },
+          enable_thinking: true,
+        },
+        { key: "e1" },
+      ),
+    );
+    assertEquals(res.status, 200);
+    await res.json();
+    const sent = up.seen[0].body;
+    for (const field of ["reasoning_effort", "thinking", "enable_thinking"]) {
+      assertEquals(sent[field], undefined, field);
+    }
+    const ignored = logs.find((l) => l.event === "model_router.effort_ignored");
+    assertEquals(ignored?.fields, ["reasoning_effort", "thinking", "enable_thinking"]);
+    // Same upstream payload as a request without any effort field.
+    const plain = await handler(
+      db,
+      up.baseUrl,
+    )(completionRequest({ model: FLASH.id, messages: MESSAGES }, { key: "e2" }));
+    await plain.json();
+    assertEquals(up.seen[1].body, sent);
+    assertEquals(logs.filter((l) => l.event === "model_router.effort_ignored").length, 1);
+  } finally {
+    await up.close();
+  }
+});
+
+Deno.test("L2: 403 only for a model above the plan (Free asking a Starter model)", async () => {
+  const up = fakeUpstream(() => okCompletion({ prompt_tokens: 9, completion_tokens: 1 }));
+  try {
+    const db = new FakeDb(1e9); // Free: FLASH + GLM
+    const h = claudeHandler(db, up.baseUrl);
+    const above = await h(completionRequest({ model: OPUS.id, messages: MESSAGES }, { key: "p1" }));
+    assertEquals([above.status, (await above.json()).error], [403, "model_not_in_plan"]);
+    const ok = await h(completionRequest({ model: GLM.id, messages: MESSAGES }, { key: "p2" }));
+    assertEquals(ok.status, 200);
+    await ok.json();
+    assertEquals(db.reservations.has("p1"), false, "nothing reserved for the 403");
+    assertEquals(up.seen.length, 1);
+  } finally {
+    await up.close();
+  }
 });
