@@ -8,6 +8,12 @@ import { type RefCallback, useCallback, useLayoutEffect, useState } from "react"
 export type WidthTier = "sm" | "md" | "lg";
 export type WidthTierBreakpoints = { readonly md: number; readonly lg: number };
 
+/**
+ * Window top bars (group room header and the 1:1 session bar): `lg` ≥ 760px,
+ * `md` 520–759px, `sm` < 520px.
+ */
+export const TOP_BAR_BREAKPOINTS: WidthTierBreakpoints = { md: 520, lg: 760 };
+
 export function widthTier(width: number, breakpoints: WidthTierBreakpoints): WidthTier {
   if (!(width > 0)) return "lg";
   if (width < breakpoints.md) return "sm";

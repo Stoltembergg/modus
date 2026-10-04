@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentGroupWithMembers } from "../../../../shared/contracts";
 import { installFixedWidthResizeObserver } from "../../lib/widthTierTestUtils";
@@ -28,10 +29,12 @@ const GROUP: AgentGroupWithMembers = {
 let restore: (() => void) | undefined;
 const onToggle = vi.fn();
 const onSearchChange = vi.fn();
+const onManageMembers = vi.fn();
 
 beforeEach(() => {
   onToggle.mockReset();
   onSearchChange.mockReset();
+  onManageMembers.mockReset();
   (window as unknown as { modus: unknown }).modus = { agents: { list: vi.fn(async () => []) } };
 });
 afterEach(() => {
@@ -39,6 +42,38 @@ afterEach(() => {
   restore?.();
   restore = undefined;
 });
+
+function Header({ searchQuery, onSearch }: { searchQuery: string; onSearch(q: string): void }) {
+  return (
+    <GroupRoomHeader
+      activity={{
+        count: 2,
+        label: "Activity, 2 open",
+        onToggle,
+        open: false,
+        title: "Show activity",
+      }}
+      avatars={new Map()}
+      group={GROUP}
+      memberStates={new Map()}
+      onDelete={vi.fn()}
+      onManageMembers={onManageMembers}
+      onRename={vi.fn()}
+      onSearchChange={onSearch}
+      onStop={vi.fn()}
+      projectName="Repo"
+      running
+      searchQuery={searchQuery}
+      variant="chrome"
+    />
+  );
+}
+
+/** Controlled search, like GroupRoom. */
+function StatefulHeader() {
+  const [query, setQuery] = useState("");
+  return <Header onSearch={setQuery} searchQuery={query} />;
+}
 
 function renderAt(width: number | undefined, extra: { searchQuery?: string } = {}) {
   if (width !== undefined) restore = installFixedWidthResizeObserver(width);
@@ -55,7 +90,7 @@ function renderAt(width: number | undefined, extra: { searchQuery?: string } = {
       group={GROUP}
       memberStates={new Map()}
       onDelete={vi.fn()}
-      onManageMembers={vi.fn()}
+      onManageMembers={onManageMembers}
       onRename={vi.fn()}
       onSearchChange={onSearchChange}
       onStop={vi.fn()}
@@ -157,5 +192,56 @@ describe("GroupRoomHeader responsive (L3c)", () => {
     expect(
       (screen.getByRole("searchbox", { name: "Search in conversation" }) as HTMLInputElement).value,
     ).toBe("deploy");
+  });
+
+  it("+N chip opens a keyboard menu of the hidden members; Esc closes it back on the chip", async () => {
+    const user = userEvent.setup();
+    renderAt(600);
+    const chip = screen.getByRole("button", { name: "2 more agents: Writer, Tester" });
+    chip.focus();
+    await user.keyboard("{Enter}");
+    const menu = await screen.findByTestId("group-agent-overflow-menu");
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items.map((item) => item.textContent)).toEqual(["WriterIdle", "TesterIdle"]);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement?.textContent).toBe("TesterIdle");
+    await user.keyboard("{Escape}");
+    await vi.waitFor(() => expect(screen.queryByTestId("group-agent-overflow-menu")).toBeNull());
+    expect(document.activeElement).toBe(chip);
+    // Space opens it too; picking a member opens Manage members.
+    await user.keyboard(" ");
+    await user.click(await screen.findByRole("menuitem", { name: /Tester/u }));
+    expect(onManageMembers).toHaveBeenCalledTimes(1);
+  });
+
+  it("sm search: Esc closes, title back, focus on the toggle", async () => {
+    const user = userEvent.setup();
+    restore = installFixedWidthResizeObserver(400);
+    render(<StatefulHeader />);
+    await user.click(screen.getByRole("button", { name: "Search in conversation" }));
+    await user.keyboard("deploy");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.getByTestId("group-room-title")).toBeTruthy();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Search in conversation" }),
+    );
+  });
+
+  it("sm search: blur with an empty field closes it; blur with text keeps it open", async () => {
+    const user = userEvent.setup();
+    restore = installFixedWidthResizeObserver(400);
+    render(<StatefulHeader />);
+    await user.click(screen.getByRole("button", { name: "Search in conversation" }));
+    expect(screen.getByRole("searchbox")).toBeTruthy();
+    await user.click(screen.getByTestId("group-room-header"));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.getByTestId("group-room-title")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Search in conversation" }));
+    await user.keyboard("deploy");
+    await user.click(screen.getByTestId("group-room-header"));
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("deploy");
+    expect(screen.queryByTestId("group-room-title")).toBeNull();
   });
 });

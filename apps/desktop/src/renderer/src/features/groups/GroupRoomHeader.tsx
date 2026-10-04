@@ -7,14 +7,19 @@ import {
   IconSearch,
   IconX,
 } from "@tabler/icons-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentGroupMode, AgentGroupWithMembers } from "../../../../shared/contracts";
 import type { GroupCollabStageSnapshot } from "../../../../shared/group-collab-status";
 import { isCoordinatorModeActive } from "../../../../shared/group-coordinator";
 import { GroupMenuItems, GroupRenameInput } from "../../components/SidebarGroups";
 import { cn } from "../../lib/cn";
 import { ICON, ICON_STROKE } from "../../lib/uiDensity";
-import { useWidthTier, type WidthTier, type WidthTierBreakpoints } from "../../lib/useWidthTier";
+import {
+  TOP_BAR_BREAKPOINTS,
+  useWidthTier,
+  type WidthTier,
+  type WidthTierBreakpoints,
+} from "../../lib/useWidthTier";
 import { AgentPresenceDot } from "../agents/AgentPresenceDot";
 import type { GroupDialogModel } from "./CreateGroupDialog";
 import { GroupAgentsPopover } from "./GroupAgentsPopover";
@@ -71,7 +76,7 @@ export function GroupStageChip({
  * - `sm` (< 520px): search becomes an icon button that expands over the title;
  *   Activity moves into the "Group actions" overflow menu; at most 2 avatars.
  */
-export const GROUP_HEADER_BREAKPOINTS: WidthTierBreakpoints = { md: 520, lg: 760 };
+export const GROUP_HEADER_BREAKPOINTS: WidthTierBreakpoints = TOP_BAR_BREAKPOINTS;
 const MAX_AVATARS: Record<WidthTier, number | undefined> = { sm: 2, md: 3, lg: undefined };
 
 /** The Activity panel toggle (rendered by the header so it can collapse by width). */
@@ -132,6 +137,14 @@ export function GroupRoomHeader({
   const chrome = variant === "chrome";
   const [headerRef, tier] = useWidthTier<HTMLDivElement>(GROUP_HEADER_BREAKPOINTS);
   const [searchExpanded, setSearchExpanded] = useState(false);
+  // sm: Escape closes the search and puts focus back on its toggle.
+  const searchToggleRef = useRef<HTMLButtonElement>(null);
+  const refocusToggle = useRef(false);
+  useEffect(() => {
+    if (!refocusToggle.current) return;
+    refocusToggle.current = false;
+    searchToggleRef.current?.focus();
+  });
   const compact = tier !== "lg";
   // sm: the search field is an icon until opened (or while it holds a query).
   const searchCollapsed = tier === "sm" && !searchExpanded && !searchQuery;
@@ -226,6 +239,7 @@ export function GroupRoomHeader({
             )}
             data-testid="group-conversation-search-toggle"
             onClick={() => setSearchExpanded(true)}
+            ref={searchToggleRef}
             title={t("header.search")}
             type="button"
           >
@@ -251,7 +265,10 @@ export function GroupRoomHeader({
               }}
               onChange={(event) => onSearchChange(event.currentTarget.value)}
               onKeyDown={(event) => {
+                // sm: Escape clears and closes (title back); blur closes only when empty.
                 if (event.key !== "Escape" || tier !== "sm") return;
+                event.preventDefault();
+                refocusToggle.current = true;
                 onSearchChange("");
                 setSearchExpanded(false);
               }}
@@ -282,6 +299,7 @@ export function GroupRoomHeader({
             group={group}
             memberStates={memberStates}
             {...(MAX_AVATARS[tier] !== undefined ? { maxVisible: MAX_AVATARS[tier] } : {})}
+            onSelectHidden={() => onManageMembers()}
             {...(defaultModelId !== undefined ? { defaultModelId } : {})}
             {...(models !== undefined ? { models } : {})}
             {...(onAgentsChanged ? { onAgentsChanged } : {})}
