@@ -589,6 +589,26 @@ Deno.test({
       } finally {
         await admin`update public.credit_packs set active = true where access_plan = 'starter'`;
       }
+      // Packs off (private.billing_settings.mercadopago_enabled = false): every unlock_pack null.
+      await admin`update private.billing_settings set mercadopago_enabled = false where id`;
+      try {
+        const off = await (
+          await h(
+            new Request("http://localhost/model-router/v1/models", {
+              headers: { authorization: "Bearer user.jwt.token" },
+            }),
+          )
+        ).json();
+        const locked = (off.data as { allowed: boolean; unlock_pack?: unknown }[]).filter(
+          (m) => !m.allowed,
+        );
+        assert(locked.length >= 2);
+        for (const m of locked) assertEquals(m.unlock_pack, null);
+        assertEquals(await db.getMercadoPagoEnabled(), false);
+      } finally {
+        await admin`update private.billing_settings set mercadopago_enabled = true where id`;
+      }
+      assertEquals(await db.getMercadoPagoEnabled(), true);
     } finally {
       await admin.end();
     }

@@ -70,6 +70,11 @@ export interface RouterDb {
   getPlanDefaultModel(plan: string): Promise<string | null>;
   /** L3b: active credit packs with their access plan's allowed_models (for unlock_pack). */
   listUnlockPacks(): Promise<UnlockPack[]>;
+  /**
+   * L3b: private.billing_settings.mercadopago_enabled (packs on sale), read like the SQL
+   * functions do (`coalesce(..., false)`: a missing row means off).
+   */
+  getMercadoPagoEnabled(): Promise<boolean>;
   /** Wallet balance (spendable credits); null when the user has no wallet. */
   getBalance(userId: string): Promise<number | null>;
   /** private.router_reserve; throws ReserveError for 402 / 429. */
@@ -158,6 +163,15 @@ export function createPostgresRouterDb(dbUrl: string): RouterDb {
           accessPlan: row.access_plan as string,
           allowedModels: (row.allowed_models as string[] | null) ?? null,
         }));
+      }),
+
+    getMercadoPagoEnabled: () =>
+      asServiceRole(async (tx) => {
+        const rows = await tx`
+          select coalesce(
+            (select bs.mercadopago_enabled from private.billing_settings bs where bs.id),
+            false) as enabled`;
+        return rows[0]?.enabled === true;
       }),
 
     getBalance: (userId) =>

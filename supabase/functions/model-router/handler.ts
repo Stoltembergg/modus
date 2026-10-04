@@ -30,7 +30,8 @@ import {
  *   POST /v1/chat/completions   GET /v1/models
  * GET /v1/models: { plan, default_model (L3a), data: [{ id, name, owned_by, allowed,
  *   context_window, max_tokens, unlock_pack? }] }; unlock_pack (L3b) only on locked models:
- *   { id, credits } of the smallest active credit pack whose access plan allows it, or null.
+ *   { id, credits } of the smallest active credit pack whose access plan allows it, or null
+ *   (always null while private.billing_settings.mercadopago_enabled is false).
  * Order for a completion:
  *   1. JWT (401)                       2. server config: CREDIT_MARKUP (503
  *      pricing_not_configured), MODUS_ROUTER_MAX_DURATION_MS (503 router_not_configured),
@@ -244,10 +245,12 @@ export function createRouterHandler(deps: RouterDeps): (req: Request) => Promise
     // L3a: the plan default (what a request without `model` runs on); null = none.
     const defaultModel = await deps.db.getPlanDefaultModel(plan.plan);
     const allowed = (id: string) => plan.allowedModels === null || plan.allowedModels.includes(id);
-    // L3b: packs are read only when some model is locked (Pro and up skip the query).
-    const packs = deps.catalog.every((model) => allowed(model.id))
-      ? []
-      : await deps.db.listUnlockPacks();
+    // L3b: packs are read only when some model is locked (Pro and up skip the query) and
+    // packs are on sale (private.billing_settings.mercadopago_enabled); off → every
+    // unlock_pack is null and the pack query is skipped.
+    const anyLocked = !deps.catalog.every((model) => allowed(model.id));
+    const packs =
+      anyLocked && (await deps.db.getMercadoPagoEnabled()) ? await deps.db.listUnlockPacks() : [];
     return json(200, {
       object: "list",
       plan: plan.plan,

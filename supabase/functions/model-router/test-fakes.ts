@@ -100,6 +100,14 @@ export class FakeDb implements RouterDb {
     { packId: "credits_25k", credits: 25000, sortOrder: 3, accessPlan: "pro", allowedModels: null },
   ];
   unlockPackCalls = 0;
+  /** L3b: private.billing_settings.mercadopago_enabled. */
+  mercadoPagoEnabled = true;
+  mercadoPagoCalls = 0;
+
+  getMercadoPagoEnabled(): Promise<boolean> {
+    this.mercadoPagoCalls += 1;
+    return Promise.resolve(this.mercadoPagoEnabled);
+  }
 
   listUnlockPacks(): Promise<UnlockPack[]> {
     this.unlockPackCalls += 1;

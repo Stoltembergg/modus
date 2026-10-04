@@ -1701,3 +1701,39 @@ Deno.test("L3b: GET /v1/models adds unlock_pack only to locked models; Pro skips
   assert((pro.data as object[]).every((m) => !("unlock_pack" in m)));
   assertEquals(db.unlockPackCalls, 2, "no pack query when nothing is locked");
 });
+
+Deno.test("L3b: unlock_pack follows billing_settings.mercadopago_enabled (off → null, no pack query)", async () => {
+  const db = new FakeDb();
+  db.unlockPacks = [
+    {
+      packId: "credits_5k",
+      credits: 5000,
+      sortOrder: 1,
+      accessPlan: "starter",
+      allowedModels: [PAID.id],
+    },
+  ];
+  const h = handler(db, "http://x");
+  const req = () =>
+    new Request("http://localhost/model-router/v1/models", {
+      headers: { authorization: "Bearer user.jwt.token" },
+    });
+  const paid = async () =>
+    ((await (await h(req())).json()).data as { id: string; unlock_pack?: unknown }[]).find(
+      (m) => m.id === PAID.id,
+    );
+  // Flag on: populated.
+  assertEquals((await paid())?.unlock_pack, { id: "credits_5k", credits: 5000 });
+  assertEquals(db.unlockPackCalls, 1);
+  // Flag off: null on every locked model, and the pack query is skipped.
+  db.mercadoPagoEnabled = false;
+  const off = await paid();
+  assert(off && "unlock_pack" in off);
+  assertEquals(off?.unlock_pack, null);
+  assertEquals(db.unlockPackCalls, 1, "no pack query while packs are off");
+  assertEquals(db.mercadoPagoCalls, 2);
+  // Nothing locked (Pro): neither the flag nor the packs are read.
+  db.plan = { plan: "pro", allowedModels: null };
+  await h(req());
+  assertEquals(db.mercadoPagoCalls, 2);
+});
