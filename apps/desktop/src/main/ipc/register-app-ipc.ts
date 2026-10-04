@@ -36,6 +36,7 @@ import {
   deleteCustomProvider,
   disconnectProvider,
   getCustomProviderConfig,
+  getDefaultModelId,
   getModelSettings,
   getProviderAuthState,
   getProviderDetail,
@@ -74,6 +75,7 @@ import {
   updateSubagent,
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
+import { userTurnPromptInput } from "../agent/user-turn-model";
 import { AGENT_PROFILE_TIMEOUT_MS, generateAgentProfile } from "../agents/agent-profile-generator";
 import {
   deleteAgentWithSessions,
@@ -518,20 +520,12 @@ export function registerAppIpc({
     } catch (error) {
       throw toGroupIpcError(error);
     }
-    await getAgentRuntime().prompt(getSenderWindow(event), {
-      sessionId: parsed.sessionId,
-      message: parsed.message,
-      context: parsed.context ?? [],
-      ...(parsed.delivery !== undefined ? { delivery: parsed.delivery } : {}),
-      ...(parsed.userMessageId !== undefined ? { userMessageId: parsed.userMessageId } : {}),
-      ...(parsed.attachments !== undefined ? { attachments: parsed.attachments } : {}),
-      ...(parsed.skills !== undefined ? { skills: parsed.skills } : {}),
-      ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
-      ...(parsed.model !== undefined ? { model: parsed.model } : {}),
-      ...(parsed.thinkingLevel !== undefined ? { thinkingLevel: parsed.thinkingLevel } : {}),
-      ...(parsed.thinkingVariant !== undefined ? { thinkingVariant: parsed.thinkingVariant } : {}),
-      ...(parsed.planId !== undefined ? { planId: parsed.planId } : {}),
-    });
+    // L2: the current Settings default model, never the renderer's or the session's
+    // stored one; no renderer thinking either (the default model's own config applies).
+    await getAgentRuntime().prompt(
+      getSenderWindow(event),
+      userTurnPromptInput(parsed, getDefaultModelId()),
+    );
   });
 
   // L2: branch is session state. Name only from the renderer; cwd from the session record.

@@ -24,7 +24,8 @@ export function createSessionBranchDeps(options: {
     getSavedBranch: getAgentSessionBranch,
     saveBranch: setAgentSessionBranch,
     listBranches,
-    checkout: (cwd, name) => checkoutBranch(cwd, name, false),
+    // The session picker is the ONLY switcher that requires a clean tree.
+    checkout: (cwd, name) => checkoutBranch(cwd, name, false, { requireClean: true }),
     emit: options.emit,
   };
 }
