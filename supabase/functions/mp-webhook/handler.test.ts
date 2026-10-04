@@ -8,12 +8,13 @@ import {
   type MpPreapproval,
 } from "../_shared/mp.ts";
 import { hmacSha256Hex, mpManifest } from "../_shared/mp-signature.ts";
+import { mpExpect } from "../_shared/test-helpers.ts";
 import { createMpWebhookHandler, MAX_MP_BODY_BYTES, type MpWebhookDeps } from "./handler.ts";
 
 const SECRET = "unit-test-webhook-secret";
 const TOKEN = "APP_USR-must-never-be-logged";
 const NOW = 1_790_000_000_000;
-const EXPECT: MpExpectations = { liveMode: false, collectorId: "777" };
+const EXPECT = mpExpect(false);
 
 const PRE: MpPreapproval = {
   id: "pre1",
@@ -50,6 +51,7 @@ function setup(
     dbFailOnce: boolean;
     code: string;
     purchaseCode: string;
+    expect: MpExpectations;
   }> = {},
 ) {
   const calls: Call[] = [];
@@ -107,7 +109,7 @@ function setup(
     api,
     db,
     secret: SECRET,
-    expect: EXPECT,
+    expect: overrides.expect ?? EXPECT,
     now: () => NOW,
   });
   return { handler, calls, names: () => calls.map((c) => c.name) };
@@ -378,4 +380,17 @@ Deno.test("L5a subscription topics never go through the purchase processor", asy
     await notification({ topic: "subscription_preapproval", dataId: "pre1", requestId: "req-2" }),
   );
   assertEquals(names().includes("processMpPurchasePayment"), false);
+});
+
+Deno.test("MP_LIVE_MODE=true: the live expectations reach both payment RPCs", async () => {
+  const live = mpExpect(true);
+  assertEquals(live, { liveMode: true, collectorId: "777" });
+  const { handler, calls } = setup({ expect: live, payment: { ...PAY, live_mode: true } });
+  const res = await handler(await notification({}));
+  assertEquals(res.status, 200);
+  const purchase = calls.find((c) => c.name === "processMpPurchasePayment");
+  const payment = calls.find((c) => c.name === "processMpPayment");
+  assert(purchase && payment);
+  assertEquals(purchase.args[1], live);
+  assertEquals(payment.args[2], live);
 });

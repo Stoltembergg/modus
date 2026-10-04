@@ -1,7 +1,7 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { MpLinkResult, MpPurchase } from "../_shared/db.ts";
 import { type CreatePreferenceInput, MpApiError, type MpPreference } from "../_shared/mp.ts";
-import { recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
+import { mpExpect, recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
 import {
   CREDIT_PACK_IDS,
   createMpBuyCreditsHandler,
@@ -9,7 +9,7 @@ import {
   mpNotificationUrl,
 } from "./handler.ts";
 
-const EXPECT = { liveMode: false as const, collectorId: "777" };
+const EXPECT = mpExpect(false);
 const NOTIFY = "https://proj.supabase.co/functions/v1/mp-webhook?source_news=webhooks";
 const PURCHASE: MpPurchase = {
   code: "created",

@@ -1,10 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import type { MpCheckout, MpLinkResult } from "../_shared/db.ts";
 import { type CreatePreapprovalInput, MpApiError, type MpPreapproval } from "../_shared/mp.ts";
-import { recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
+import { mpExpect, recorder, request, URLS, USER } from "../_shared/test-helpers.ts";
 import { createMpCheckoutHandler, type MpCheckoutDeps } from "./handler.ts";
 
-const EXPECT = { liveMode: false as const, collectorId: "777" };
+const EXPECT = mpExpect(false);
 const CHECKOUT: MpCheckout = {
   code: "created",
   checkoutId: "0b9b3b52-4c55-4c47-9d2a-7a0c8a3e5f10",
