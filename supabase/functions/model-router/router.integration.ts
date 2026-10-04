@@ -6,7 +6,7 @@
 import { assert, assertEquals, assertGreater, assertLessOrEqual } from "jsr:@std/assert@1";
 import postgres from "npm:postgres@3.4.9";
 import { MODEL_CATALOG } from "../_shared/model-catalog.ts";
-import { createPostgresRouterDb } from "../_shared/router-db.ts";
+import { createPostgresRouterDb, PLAN_STATUSES } from "../_shared/router-db.ts";
 import { createRouterHandler } from "./handler.ts";
 import { creditsFor, estimateTokens, parseCreditMarkup } from "./pricing.ts";
 import { completionRequest, fakeUpstream, routerConfig, sse } from "./test-fakes.ts";
@@ -299,6 +299,83 @@ Deno.test({
       assertEquals(over, 0, "never charged above the reservation");
     } finally {
       release?.();
+      await up.close();
+      await admin.end();
+    }
+  },
+});
+
+Deno.test({
+  name: "model-router against a real Postgres: a paused subscription gets only the Free plan's models",
+  ignore: !dbUrl,
+  sanitizeOps: false,
+  sanitizeResources: false,
+  fn: async () => {
+    const admin = postgres(dbUrl ?? "", { max: 1, prepare: false });
+    const up = fakeUpstream(async (seen) => {
+      await Promise.resolve();
+      const head = { id: "x", object: "chat.completion.chunk", created: 1, model: seen.body.model };
+      return new Response(
+        sse([
+          { ...head, choices: [{ index: 0, delta: { role: "assistant", content: "ok" } }] },
+          { ...head, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+          {
+            ...head,
+            choices: [],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          },
+        ]),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const db = createPostgresRouterDb(dbUrl ?? "");
+    const PAID = "deepseek/deepseek-v4-pro";
+    try {
+      assertEquals(PLAN_STATUSES.includes("paused"), false, "paused never unlocks the paid plan");
+      const [{ id: userId }] =
+        await admin`select tests.create_user('router-paused@example.com', true) as id`;
+      const h = createRouterHandler({
+        db,
+        getUser: () => Promise.resolve({ id: userId as string, email: null }),
+        config: routerConfig(up.baseUrl),
+        // A paid-only model next to the two Free ones (Starter allows every model).
+        catalog: [...MODEL_CATALOG, { ...MODEL_CATALOG[0], id: PAID, upstreamId: "pro" }],
+        log: () => {},
+      });
+      const call = async (model: string, key: string) => {
+        const res = await h(completionRequest({ model, messages: MESSAGES }, { key }));
+        const body = await res.json();
+        return [res.status, res.status === 200 ? body.model : body.error];
+      };
+      await admin`insert into public.subscriptions
+                    (user_id, provider, provider_subscription_id, plan, status)
+                  values (${userId}, 'mercadopago', 'PRERP1', 'starter', 'active')`;
+      assertEquals(await db.getPlan(userId), { plan: "starter", allowedModels: null });
+      assertEquals(await call(PAID, "p-active"), [200, PAID]);
+
+      // Mercado Pago pause: Free plan's models only, the paid one is 403 before reserving.
+      await admin`update public.subscriptions set status = 'paused'
+                   where provider_subscription_id = 'PRERP1'`;
+      assertEquals(await db.getPlan(userId), {
+        plan: "free",
+        allowedModels: [FLASH, "zai/glm-5.3-flash"],
+      });
+      const [{ balance: before }] =
+        await admin`select balance from public.credit_wallets where user_id = ${userId}`;
+      assertEquals(await call(PAID, "p-paused"), [403, "model_not_in_plan"]);
+      const [none] = await admin`select 1 from public.credit_reservations
+                                  where user_id = ${userId} and request_id = 'p-paused'`;
+      assertEquals(none, undefined, "403: nothing reserved");
+      const [{ balance: after }] =
+        await admin`select balance from public.credit_wallets where user_id = ${userId}`;
+      assertEquals(Number(after), Number(before), "credits untouched by the 403");
+      assertEquals(await call(FLASH, "p-free"), [200, FLASH], "Free models still work on credits");
+
+      // Resumed: the paid plan is back.
+      await admin`update public.subscriptions set status = 'active'
+                   where provider_subscription_id = 'PRERP1'`;
+      assertEquals(await call(PAID, "p-resumed"), [200, PAID]);
+    } finally {
       await up.close();
       await admin.end();
     }

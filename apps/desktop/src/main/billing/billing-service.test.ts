@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { BillingState, BillingSubscription } from "../../shared/billing";
 import { AuthBackendError } from "../auth/auth-backend";
@@ -13,7 +15,12 @@ import {
   snapshot,
   USER_ID,
 } from "./billing.test-helpers";
-import { isStripeHostedUrl, mapBillingRows, mapCatalogRows } from "./billing-backend";
+import {
+  isStripeHostedUrl,
+  LIVE_SUBSCRIPTION_STATUSES,
+  mapBillingRows,
+  mapCatalogRows,
+} from "./billing-backend";
 import { createBillingService } from "./billing-service";
 
 function setup(signedIn = true) {
@@ -280,6 +287,16 @@ describe("billing service", () => {
       await vi.waitFor(() => expect(service.getState().subscription).toBeNull());
     });
 
+    it("paused: counts as live (no checkout on top of it) and can be cancelled", async () => {
+      const { service, backend } = await ready({ ...MP_SUB, status: "paused" });
+      expect((await service.startCheckout("starter")).error).toMatch(/already have/);
+      expect(backend.createBillingSession).not.toHaveBeenCalled();
+      backend.fetchBilling.mockResolvedValue(snapshot({ subscription: null }));
+      const state = await service.cancelSubscription();
+      expect(backend.cancelSubscription).toHaveBeenCalledTimes(1);
+      expect(state.subscription).toBeNull();
+    });
+
     it("incomplete: cancel and try again, then checkout is possible", async () => {
       const { service, backend, openExternal } = await ready({ ...MP_SUB, status: "incomplete" });
       expect((await service.startCheckout("starter")).error).toMatch(/already have/);
@@ -483,5 +500,35 @@ describe("billing catalog mapping", () => {
       wallet: null,
     });
     expect(none.subscription?.cancelRequestedAt).toBeNull();
+  });
+});
+
+describe("live subscription set (paused included)", () => {
+  const repo = fileURLToPath(new URL("../../../../../", import.meta.url));
+  const read = (path: string) => readFileSync(`${repo}${path}`, "utf8");
+  const quoted = (text: string) => [...text.matchAll(/["']([a-z_]+)["']/g)].map((m) => m[1]);
+
+  it("is active, trialing, past_due, unpaid, incomplete, paused", () => {
+    expect([...LIVE_SUBSCRIPTION_STATUSES].sort()).toEqual(
+      ["active", "incomplete", "past_due", "paused", "trialing", "unpaid"].sort(),
+    );
+  });
+
+  it("matches the Edge Functions, mp_cancel_targets and the DB unique index (minus incomplete)", () => {
+    const db = read("supabase/functions/_shared/db.ts");
+    const edge = db.match(/export const LIVE_SUBSCRIPTION_STATUSES = \[([^\]]*)\]/);
+    expect(quoted(edge?.[1] ?? "").sort()).toEqual([...LIVE_SUBSCRIPTION_STATUSES].sort());
+
+    const l1e = read("supabase/migrations/20261003230000_l1e_mp_cancel.sql");
+    const targets = l1e.match(/su\.status in \(([^)]*)\)/);
+    expect(quoted(targets?.[1] ?? "").sort()).toEqual([...LIVE_SUBSCRIPTION_STATUSES].sort());
+
+    const index = read("supabase/migrations/20261004000000_paused_live.sql");
+    const predicate = index.match(
+      /create unique index subscriptions_one_live_per_user[^;]*status in \(([^)]*)\)/,
+    );
+    expect(quoted(predicate?.[1] ?? "").sort()).toEqual(
+      LIVE_SUBSCRIPTION_STATUSES.filter((status) => status !== "incomplete").sort(),
+    );
   });
 });

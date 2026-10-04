@@ -128,7 +128,12 @@ export function BillingSectionView({
     mpSubscription && (state.cancelling || Boolean(state.subscription?.cancelRequestedAt));
   const paymentPending = mpSubscription && state.subscription?.status === "incomplete";
   const planName = current?.name ?? state.currentPlan;
-  const statusLabel = paymentPending ? "payment pending" : (state.subscription?.status ?? "");
+  const paused = state.subscription?.status === "paused";
+  const statusLabel = paymentPending
+    ? "payment pending"
+    : paused
+      ? "Subscription paused"
+      : (state.subscription?.status ?? "");
 
   return (
     <SettingsSection
@@ -149,7 +154,7 @@ export function BillingSectionView({
           control={
             <div className="flex items-center gap-2">
               <ReadOnlyPill>
-                {loading ? "Loading…" : (current?.name ?? state.currentPlan)}
+                {loading ? "Loading…" : paused ? `${planName} (paused)` : planName}
               </ReadOnlyPill>
               <button
                 aria-label="Refresh plan"
@@ -171,7 +176,7 @@ export function BillingSectionView({
                       ? renews
                         ? ` · ends ${renews}`
                         : " · ends at period end"
-                      : renews
+                      : renews && !paused
                         ? ` · renews ${renews}`
                         : ""
                 }`
@@ -245,11 +250,19 @@ export function BillingSectionView({
             />
           ) : (
             <>
-              <SettingsRow
-                control={null}
-                description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
-                title="Billing"
-              />
+              {paused ? (
+                <SettingsRow
+                  control={null}
+                  description="Mercado Pago paused this subscription: no charges, and only the Free plan's models until it resumes. Your credits stay. Cancel it to subscribe again later."
+                  title="Subscription paused"
+                />
+              ) : (
+                <SettingsRow
+                  control={null}
+                  description="Your subscription is billed by Mercado Pago. Payments and receipts are in your Mercado Pago account."
+                  title="Billing"
+                />
+              )}
               <SettingsRow
                 control={
                   <button

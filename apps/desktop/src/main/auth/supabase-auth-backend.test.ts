@@ -48,6 +48,19 @@ describe("Supabase auth backend", () => {
       return { backend, calls };
     }
 
+    it("fetchBilling reads every live status, paused included", async () => {
+      const { backend, calls } = withFetch(() => Response.json([]));
+      try {
+        const snapshot = await backend.fetchBilling("11111111-1111-4111-8111-111111111111");
+        expect(snapshot.subscription).toBeNull();
+        const subs = calls.find((c) => c.url.includes("/rest/v1/subscriptions"));
+        const status = new URL(subs?.url ?? "http://x").searchParams.get("status");
+        expect(status).toBe("in.(active,trialing,past_due,unpaid,incomplete,paused)");
+      } finally {
+        backend.dispose();
+      }
+    });
+
     it("POSTs an empty object to mp-cancel and maps the known codes", async () => {
       for (const code of ["no_subscription", "canceled", "cancel_requested"]) {
         const { backend, calls } = withFetch(() => Response.json({ code }));
