@@ -1,4 +1,3 @@
-import { IconLayoutSidebarRight } from "@tabler/icons-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
@@ -17,8 +16,6 @@ import {
   messageExecutionId,
   shortExecutionLabel,
 } from "../../../../shared/group-execution-link";
-import { cn } from "../../lib/cn";
-import { ICON, ICON_STROKE } from "../../lib/uiDensity";
 import { memberAvatar } from "../agents/agentAvatarModel";
 import {
   CreateGroupDialog,
@@ -276,25 +273,13 @@ function GroupRoomContent({
       }}
       projectName={workspace?.displayName}
       running={running}
-      tasksButton={
-        <button
-          aria-expanded={activityOpen}
-          aria-label={activityLabel}
-          className={cn(
-            "flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 text-fg-faint text-xs transition-colors hover:bg-hover hover:text-fg-muted",
-            activityOpen && "bg-hover text-fg-muted",
-          )}
-          onClick={() => setActivityOpen((open) => !open)}
-          title={activityOpen ? t("room.hideActivity") : t("room.showActivity")}
-          type="button"
-        >
-          <IconLayoutSidebarRight size={ICON.sm} stroke={ICON_STROKE.sm} />
-          {t("activity.title")}
-          <span className="tabular-nums" data-testid="group-task-count">
-            {openCount}
-          </span>
-        </button>
-      }
+      activity={{
+        count: openCount,
+        label: activityLabel,
+        onToggle: () => setActivityOpen((open) => !open),
+        open: activityOpen,
+        title: activityOpen ? t("room.hideActivity") : t("room.showActivity"),
+      }}
       variant={chromeHost ? "chrome" : "standalone"}
     />
   );

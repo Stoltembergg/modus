@@ -1,3 +1,4 @@
+import { Menu } from "@base-ui/react/menu";
 import { useEffect, useMemo, useState } from "react";
 import type {
   AgentGroupWithMembers,
@@ -99,6 +100,8 @@ export function GroupAgentsPopover({
   models = [],
   defaultModelId,
   onAgentsChanged,
+  maxVisible,
+  onSelectHidden,
 }: {
   avatars: ReadonlyMap<string, WorkingMemberAvatar>;
   group: AgentGroupWithMembers;
@@ -106,8 +109,17 @@ export function GroupAgentsPopover({
   models?: readonly GroupDialogModel[];
   defaultModelId?: string | undefined;
   onAgentsChanged?(): void;
+  /** L3c: narrow headers show this many avatars, then a "+N" chip (names in its tooltip). */
+  maxVisible?: number | undefined;
+  /** L3c: picking a member in the "+N" menu (the header opens Manage members). */
+  onSelectHidden?: ((sessionId: string) => void) | undefined;
 }) {
   const t = useGroupText();
+  const visible =
+    maxVisible !== undefined && group.members.length > maxVisible
+      ? group.members.slice(0, Math.max(1, maxVisible - 1))
+      : group.members;
+  const hidden = group.members.slice(visible.length);
   const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
@@ -132,7 +144,7 @@ export function GroupAgentsPopover({
         className="m-0 flex shrink-0 items-center border-0 p-0 -space-x-2"
         data-testid="group-agent-presence"
       >
-        {group.members.map((member) => {
+        {visible.map((member) => {
           const avatar = avatars.get(member.sessionId) ?? {
             agentId: member.agentId,
             ...memberAvatar(member),
@@ -196,6 +208,61 @@ export function GroupAgentsPopover({
             </button>
           );
         })}
+        {hidden.length > 0 ? (
+          <Menu.Root>
+            <Menu.Trigger
+              aria-label={t("header.moreAgents", {
+                count: hidden.length,
+                names: hidden.map((member) => member.name).join(", "),
+              })}
+              className="relative z-0 flex size-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-2 focus-visible:ring-focus-ring data-popup-open:[&>span]:bg-hover"
+              data-testid="group-agent-overflow"
+              title={hidden.map((member) => member.name).join(", ")}
+            >
+              <span className="flex size-6 items-center justify-center rounded-full border border-hairline bg-chip text-2xs text-fg-muted tabular-nums transition-colors hover:bg-hover">
+                +{hidden.length}
+              </span>
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Positioner align="end" side="bottom" sideOffset={4}>
+                <Menu.Popup
+                  className="origin-(--transform-origin) min-w-[184px] popup-chrome popup-motion p-1"
+                  data-testid="group-agent-overflow-menu"
+                >
+                  {hidden.map((member) => {
+                    const avatar = avatars.get(member.sessionId) ?? {
+                      agentId: member.agentId,
+                      ...memberAvatar(member),
+                      archived: member.archived === true,
+                    };
+                    const state = memberActivityState(memberStates, group.id, member.sessionId);
+                    const presence: AgentPresenceState = avatar.archived ? "archived" : state;
+                    return (
+                      <Menu.Item
+                        className="flex cursor-default items-center gap-2.5 rounded-md px-2.5 py-1.5 text-fg text-sm outline-none select-none data-highlighted:bg-hover"
+                        key={member.sessionId}
+                        onClick={() => onSelectHidden?.(member.sessionId)}
+                      >
+                        <AgentAvatar
+                          color={avatar.color}
+                          face={avatar.face}
+                          seed={avatar.agentId}
+                          shape={avatar.shape}
+                          size={16}
+                          state={agentAvatarState(state, avatar.archived)}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{member.name}</span>
+                        <span className="text-2xs text-fg-faint">
+                          {AGENT_PRESENCE_LABEL[presence]}
+                        </span>
+                      </Menu.Item>
+                    );
+                  })}
+                </Menu.Popup>
+              </Menu.Positioner>
+            </Menu.Portal>
+          </Menu.Root>
+        ) : null}
       </fieldset>
     </div>
   );

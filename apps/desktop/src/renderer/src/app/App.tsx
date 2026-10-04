@@ -1,32 +1,14 @@
 import { Menu } from "@base-ui/react/menu";
-import { Popover } from "@base-ui/react/popover";
 import {
-  IconBrandVisualStudio,
   IconCheck,
   IconChevronDown,
-  IconCircles,
-  IconDeviceLaptop,
   IconFolder,
   IconFolderPlus,
   IconGitBranch,
   IconLayoutSidebar,
-  IconLayoutSidebarRight,
-  IconListDetails,
-  IconSettings,
-  IconSourceCode,
-  IconVersions,
 } from "@tabler/icons-react";
 import { AnimatePresence, domMax, LazyMotion, m, useReducedMotion } from "motion/react";
-import {
-  lazy,
-  type ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { SecurityState } from "../../../preload/types";
 import type {
   AgentEvent,
@@ -75,6 +57,7 @@ import {
 } from "../features/agent/agentEventHub";
 import type { ChatComposerDraft, ChatComposerDraftUpdate } from "../features/agent/ChatPane";
 import { addContextItemToDraft } from "../features/agent/ChatPane";
+import { HeaderActions } from "../features/agent/SessionHeaderActions";
 import { SessionTitlePopover } from "../features/agent/SessionTitlePopover";
 import { AgentDialog } from "../features/agents/AgentDialog";
 import {
@@ -110,6 +93,7 @@ import { UpdateToast } from "../features/update/UpdateToast";
 import { cn } from "../lib/cn";
 import { setBuyCreditsHandler } from "../lib/modusModels";
 import { useGitBranch } from "../lib/useGitBranch";
+import { TOP_BAR_BREAKPOINTS, useWidthTier } from "../lib/useWidthTier";
 import { beginInitialAppHydration, type InitialAppHydration } from "./initial-hydration";
 import { reportRendererStartup } from "./startup-report";
 
@@ -173,6 +157,8 @@ export function App() {
   /** The group whose room fills the main panel (instead of a chat). */
   const [activeGroupId, setActiveGroupId] = useState<string | undefined>();
   const [groupChromeHost, setGroupChromeHost] = useState<HTMLElement | null>(null);
+  // L3c: the 1:1 top bar collapses by its own width (same cut-offs as the group header).
+  const [topBarRef, topBarTier] = useWidthTier<HTMLElement>(TOP_BAR_BREAKPOINTS);
   const activeGroup = activeGroupId
     ? agentGroups.find((group) => group.id === activeGroupId)
     : undefined;
@@ -1379,6 +1365,8 @@ export function App() {
                         transition={{ layout: SIDEBAR_TRANSITION }}
                       >
                         <TopBar
+                          data-width-tier={topBarTier}
+                          ref={topBarRef}
                           className={cn(
                             "toolbar-row relative z-10 flex shrink-0 items-center pr-3 pl-1",
                             (isMac || windowChrome === "windows-overlay") && "app-drag",
@@ -1423,6 +1411,7 @@ export function App() {
                                 modelId={visibleSession.model ?? model}
                                 models={models}
                                 session={visibleSession}
+                                tier={topBarTier}
                                 workspace={
                                   workspaceById.get(visibleSession.workspaceId) ?? activeWorkspace
                                 }
@@ -1444,6 +1433,7 @@ export function App() {
                                   inspectorOpen={responsiveInspectorOpen}
                                   onOpenSettings={() => openSettings()}
                                   onToggleInspector={() => setInspectorOpen((open) => !open)}
+                                  tier={topBarTier}
                                 />
                               </div>
                             )}
@@ -1895,145 +1885,6 @@ function WorkspaceMenu({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.Root>
-  );
-}
-
-function HeaderActions({
-  activeWorkspace,
-  branch,
-  environmentStats,
-  inspectorOpen,
-  onOpenSettings,
-  onToggleInspector,
-}: {
-  activeWorkspace: WorkspaceInfo | null;
-  branch: string | undefined;
-  environmentStats: { added: number; removed: number };
-  inspectorOpen: boolean;
-  onOpenSettings(): void;
-  onToggleInspector(): void;
-}) {
-  return (
-    <div className="app-no-drag flex h-8 items-center gap-1">
-      <EnvironmentPopover
-        activeWorkspace={activeWorkspace}
-        branch={branch}
-        environmentStats={environmentStats}
-        onOpenSettings={onOpenSettings}
-      />
-      <ToolbarButton
-        active={inspectorOpen}
-        label={inspectorOpen ? "Hide right sidebar" : "Show right sidebar"}
-        onClick={onToggleInspector}
-      >
-        <IconLayoutSidebarRight size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />
-      </ToolbarButton>
-    </div>
-  );
-}
-
-function EnvironmentPopover({
-  activeWorkspace,
-  branch,
-  environmentStats,
-  onOpenSettings,
-}: {
-  activeWorkspace: WorkspaceInfo | null;
-  branch: string | undefined;
-  environmentStats: { added: number; removed: number };
-  onOpenSettings(): void;
-}) {
-  const [open, setOpen] = useState(false);
-
-  return (
-    <Popover.Root onOpenChange={setOpen} open={open}>
-      <Popover.Trigger
-        aria-label="Environment"
-        className={cn(
-          "toolbar-icon-button flex items-center justify-center rounded-md transition-colors hover:bg-hover",
-          open && "bg-active",
-        )}
-        data-active={open}
-      >
-        <IconListDetails size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />
-      </Popover.Trigger>
-      <AnimatePresence>
-        {open ? (
-          <Popover.Portal keepMounted>
-            <Popover.Positioner align="end" side="bottom" sideOffset={10}>
-              <Popover.Popup render={<m.div />}>
-                <m.div
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  className="popup-chrome w-[375px] p-5 outline-none"
-                  exit={{ opacity: 0, scale: 0.98, y: -6 }}
-                  initial={{ opacity: 0, scale: 0.98, y: -6 }}
-                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <div className="mb-4 flex items-center justify-between">
-                    <h2 className="text-sm font-normal text-fg-subtle">Environment</h2>
-                    <button
-                      aria-label="Environment settings"
-                      className="toolbar-icon-button flex items-center justify-center rounded-md transition-colors hover:bg-hover"
-                      onClick={() => {
-                        setOpen(false);
-                        onOpenSettings();
-                      }}
-                      type="button"
-                    >
-                      <IconSettings size={TOOLBAR_ICON.size} stroke={TOOLBAR_ICON.stroke} />
-                    </button>
-                  </div>
-                  <div className="space-y-3 text-sm text-fg">
-                    <EnvironmentRow icon={<IconSourceCode size={16} stroke={1.7} />}>
-                      <span>Changes</span>
-                      <span className="ml-auto font-mono text-success">
-                        +{environmentStats.added}
-                      </span>
-                      <span className="font-mono text-danger">-{environmentStats.removed}</span>
-                    </EnvironmentRow>
-                    <EnvironmentRow icon={<IconDeviceLaptop size={16} stroke={1.7} />}>
-                      <span>{activeWorkspace ? "Local" : "No workspace"}</span>
-                      <IconChevronDown className="text-fg-faint" size={12} stroke={2} />
-                    </EnvironmentRow>
-                    <EnvironmentRow icon={<IconGitBranch size={16} stroke={1.7} />}>
-                      <span>{branch ?? "No branch"}</span>
-                    </EnvironmentRow>
-                    <EnvironmentRow icon={<IconVersions size={16} stroke={1.7} />}>
-                      <span>Commit or push</span>
-                    </EnvironmentRow>
-                  </div>
-
-                  <div className="my-5 h-px bg-hairline-soft" />
-
-                  <section>
-                    <h2 className="mb-3 text-sm font-normal text-fg-subtle">Sources</h2>
-                    <div className="flex items-center gap-3 text-fg-subtle">
-                      <IconCircles size={18} stroke={1.6} />
-                      <span className="flex size-5 items-center justify-center rounded bg-[#2f5dff] text-white">
-                        <IconBrandVisualStudio size={15} stroke={1.7} />
-                      </span>
-                      <IconCircles size={18} stroke={1.6} />
-                    </div>
-                  </section>
-                </m.div>
-              </Popover.Popup>
-            </Popover.Positioner>
-          </Popover.Portal>
-        ) : null}
-      </AnimatePresence>
-    </Popover.Root>
-  );
-}
-
-function EnvironmentRow({ children, icon }: { children: ReactNode; icon: ReactNode }) {
-  return (
-    <button
-      className="flex h-8 w-full items-center gap-3 rounded-md px-1 text-left transition-colors hover:bg-hover"
-      type="button"
-    >
-      <span className="flex size-5 items-center justify-center text-fg">{icon}</span>
-      {children}
-    </button>
   );
 }
 

@@ -11,6 +11,7 @@ import { TOOLBAR_ICON } from "../../components/ui/ToolbarButton";
 import { cn } from "../../lib/cn";
 import { ContextUsageRing, contextUsagePercent, formatUsagePercent } from "../../lib/contextUsage";
 import { lookupModel, modelIdentityLabel } from "../../lib/modelIdentity";
+import type { WidthTier } from "../../lib/useWidthTier";
 
 type SessionTitlePopoverProps = {
   session: AgentSessionInfo;
@@ -19,6 +20,8 @@ type SessionTitlePopoverProps = {
   modelId: string;
   models: ModelInfo[];
   contextUsage: ContextUsageInfo | undefined;
+  /** L3c: the top bar's width tier (`TOP_BAR_BREAKPOINTS`). */
+  tier?: WidthTier;
 };
 
 /**
@@ -33,6 +36,7 @@ export function SessionTitlePopover({
   modelId,
   models,
   contextUsage,
+  tier = "lg",
 }: SessionTitlePopoverProps) {
   const [open, setOpen] = useState(false);
   const path = session.cwd || workspace?.rootPath || "";
@@ -48,16 +52,26 @@ export function SessionTitlePopover({
       <Popover.Trigger
         aria-label={session.title}
         className={cn(
-          "app-no-drag flex max-w-44 min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-normal text-fg-muted transition-colors hover:bg-hover hover:text-fg-muted",
+          "app-no-drag flex min-w-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-normal text-fg-muted transition-colors hover:bg-hover hover:text-fg-muted",
+          // L3c: shrinks (min-w-0) with the bar; the full title is in the tooltip.
+          "max-w-44",
           open && "bg-active",
         )}
+        data-testid="session-title-trigger"
+        data-width-tier={tier}
+        // The project folds into the tooltip below lg (as in the group header).
+        title={tier === "lg" || !project ? session.title : `${session.title} · ${project}`}
       >
-        <span className="min-w-0 flex-1 truncate-fade">{session.title}</span>
-        <IconMessage
-          className="shrink-0 text-icon-muted"
-          size={TOOLBAR_ICON.size}
-          stroke={TOOLBAR_ICON.stroke}
-        />
+        <span className="min-w-0 flex-1 truncate-fade" data-testid="session-title-text">
+          {session.title}
+        </span>
+        {tier === "sm" ? null : (
+          <IconMessage
+            className="shrink-0 text-icon-muted"
+            size={TOOLBAR_ICON.size}
+            stroke={TOOLBAR_ICON.stroke}
+          />
+        )}
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Positioner align="start" side="bottom" sideOffset={6}>
