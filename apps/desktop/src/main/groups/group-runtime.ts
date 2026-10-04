@@ -22,6 +22,11 @@ import {
   planSupervisedCodeFlow,
   projectSupervisedDelegations,
 } from "../../shared/group-supervised-flow";
+import {
+  memberWakeTargets,
+  partitionArchivedWakeTargets,
+  resolveUserWakeRule,
+} from "../../shared/group-wake-rules";
 import type {
   GroupDecisionSnapshot,
   GroupProactivityMode,
@@ -32,11 +37,6 @@ import type {
   ResolveGroupSuggestionInput,
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
-import {
-  memberWakeTargets,
-  partitionArchivedWakeTargets,
-  resolveUserWakeRule,
-} from "../../shared/group-wake-rules";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import { profileForMode } from "../agent/plan-prompt";

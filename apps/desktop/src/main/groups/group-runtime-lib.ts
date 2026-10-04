@@ -13,15 +13,10 @@ import {
   GROUP_COLLAB_NO_NEXT_OWNER,
   GROUP_COLLAB_WAKE_PROTOCOL,
 } from "../../shared/group-collab-status";
-import { isCoordinatorModeActive } from "../../shared/group-coordinator";
-import {
-  composeSupervisedFlowSection,
-  planSupervisedCodeFlow,
-} from "../../shared/group-supervised-flow";
 import type { SupervisedDelegation } from "../../shared/group-supervised-flow";
+import { parseGroupMentions as parseSharedGroupMentions } from "../../shared/group-wake-rules";
 import type { GroupTaskGateResult } from "../../shared/group-work-state";
 import type { ToolProfileName } from "../../shared/tools";
-import { parseGroupMentions as parseSharedGroupMentions } from "../../shared/group-wake-rules";
 import type {
   PromptAgentInput,
   PromptTurnOutcome,

@@ -3,7 +3,7 @@ import {
   GROUP_ERROR_CODES,
   type GroupErrorCode,
 } from "../../../../shared/group-errors";
-import { groupText, type GroupTextKey } from "../../../../shared/group-room-locale";
+import { type GroupTextKey, groupText } from "../../../../shared/group-room-locale";
 import { GROUP_ROOM_TEXT_EN } from "../../../../shared/group-room-text";
 
 /** English text for new task errors that do not have room catalog entries yet. */
