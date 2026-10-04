@@ -24,7 +24,7 @@ const config: Configuration = {
   // modus://auth/callback and modus://billing/return (main/deep-link). Info.plist on macOS,
   // MimeType x-scheme-handler on Linux; Windows registers at runtime (setAsDefaultProtocolClient).
   protocols: [{ name: "Modus", schemes: ["modus"] }],
-  electronVersion: "42.3.0",
+  electronVersion: "44.5.1",
   npmRebuild: false,
   nodeGypRebuild: false,
   buildDependenciesFromSource: false,
@@ -77,13 +77,13 @@ const config: Configuration = {
    * app-update.yml in the app. Builds always run with `--publish never`; the release
    * workflow uploads the files itself into a draft it created beforehand.
    *
-   * electron-builder is pinned to 26.8.1 (apps/desktop/package.json). Stay below v28:
+   * electron-builder is pinned to 26.15.3 (apps/desktop/package.json). Stay below v28:
    * from v28 the NSIS updater fails closed on unsigned builds, and the Windows build
    * is not Authenticode-signed yet. See docs/releasing.md.
    *
-   * electron-updater (runtime dependency) is pinned to 6.8.3: the release published
-   * together with electron-builder 26.8.x, sharing builder-util-runtime 9.5.1. Upgrade
-   * the two in step. 6.8.3's NsisUpdater.verifySignature skips verification when
+   * electron-updater (runtime dependency) is pinned to 6.8.9. Keep it aligned with the
+   * electron-builder 26.15.x line; both depend on builder-util-runtime. 6.8.9's
+   * NsisUpdater.verifySignature skips verification when
    * app-update.yml has no publisherName, which is the case for unsigned builds.
    */
   publish: {
@@ -119,6 +119,8 @@ const config: Configuration = {
     artifactName: "${productName}-${version}-win-${arch}-setup.${ext}",
   },
   linux: {
+    // The scoped npm package name produces an invalid Linux executable name by default.
+    executableName: "modus",
     category: "Development",
     icon: "resources/icon.png",
     target: ["AppImage", "deb"],
