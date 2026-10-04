@@ -88,6 +88,17 @@ const api: ModusApi = {
         draft,
         expectedVersion,
       }),
+    getProactivityMode: (groupId) => ipcRenderer.invoke("group:get-proactivity-mode", { groupId }),
+    setProactivityMode: (groupId, mode) =>
+      ipcRenderer.invoke("group:set-proactivity-mode", { groupId, mode }),
+    listSuggestions: (groupId) => ipcRenderer.invoke("group:list-suggestions", { groupId }),
+    resolveSuggestion: (actionId, decision, expectedVersion, targetSessionId) =>
+      ipcRenderer.invoke("group:resolve-suggestion", {
+        actionId,
+        decision,
+        expectedVersion,
+        ...(targetSessionId ? { targetSessionId } : {}),
+      }),
     listDecisions: (groupId) => ipcRenderer.invoke("group:list-decisions", { groupId }),
     deleteDecision: (decisionId) => ipcRenderer.invoke("group:delete-decision", { decisionId }),
     stop: (groupId) => ipcRenderer.invoke("group:stop", { groupId }),

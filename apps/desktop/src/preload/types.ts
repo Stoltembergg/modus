@@ -53,8 +53,11 @@ import type {
   GroupMemberStates,
   GroupMessage,
   GroupMessageCursor,
+  GroupProactivityMode,
   GroupProjectContextSnapshot,
   GroupRuntimeEvent,
+  GroupSuggestion,
+  GroupSuggestionResolution,
   GroupTask,
   GroupTaskDetails,
   GroupTaskTransitionEvent,
@@ -251,6 +254,18 @@ export type ModusApi = {
       draft: GroupTaskUserDraft,
       expectedVersion: number,
     ): Promise<GroupTask>;
+    /** Persisted, per-group proactivity preference (`suggest` by default). */
+    getProactivityMode(groupId: string): Promise<GroupProactivityMode>;
+    setProactivityMode(groupId: string, mode: GroupProactivityMode): Promise<GroupProactivityMode>;
+    /** Current safe user-facing suggestions; no conversation or QA output is included. */
+    listSuggestions(groupId: string): Promise<GroupSuggestion[]>;
+    /** Accept or discard exactly one suggestion using its displayed version. */
+    resolveSuggestion(
+      actionId: string,
+      decision: "accept" | "discard",
+      expectedVersion: number,
+      targetSessionId?: string,
+    ): Promise<GroupSuggestionResolution>;
     /** "Cancel task": the only path to `cancelled` (a done task is refused). */
     cancelTask(taskId: string): Promise<GroupTask>;
     /** The group's decisions (newest first) for the side panel's "Decisions". */

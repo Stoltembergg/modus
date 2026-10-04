@@ -44,7 +44,7 @@ import { useGroupTasks } from "./GroupTaskPanel";
 import type { WorkingMemberAvatar } from "./GroupWorkingStatus";
 import type { MentionMember } from "./groupMentions";
 import { replyPreview } from "./groupThreads";
-import { memberLabels } from "./memberLabels";
+import { memberLabels, memberLabelText } from "./memberLabels";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import { useGroupMessages } from "./useGroupMessages";
 import { type GroupMemberStatesById, isGroupRunning } from "./useWorkingGroups";
@@ -337,6 +337,12 @@ function GroupRoomContent({
           onTaskUpdated={replace}
           {...(onOpenSession ? { onOpenSession } : {})}
           onSetMode={onSetMode}
+          proactivityMembers={group.members
+            .filter((member) => !member.archived)
+            .map((member) => ({
+              sessionId: member.sessionId,
+              label: memberLabelText(labels.get(member.sessionId) ?? { title: member.name }),
+            }))}
           projectContext={projectContext}
           stage={stage}
           tasks={tasks}

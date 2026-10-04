@@ -914,3 +914,213 @@ describe("task transition delivery", () => {
     }
   });
 });
+
+async function suggestedAssignment(windowAvailable = false) {
+  const fixture = squad();
+  const env = runtime(windowAvailable);
+  const root = env.groups.postUserMessage({ groupId: fixture.group.id, body: "private request" });
+  const task = createGroupTask({
+    groupId: fixture.group.id,
+    title: "Parser",
+    executionId: root.id,
+  });
+  assignGroupTask(fixture.group.id, task.id, fixture.lead, fixture.owner);
+  await vi.waitFor(() =>
+    expect(
+      listGroupActions(fixture.group.id).some((action) => action.deliveryState === "suggested"),
+    ).toBe(true),
+  );
+  const suggestion = must(env.groups.listSuggestions(fixture.group.id)[0]);
+  return { ...fixture, env, root, task, suggestion };
+}
+
+describe("user-resolved proactive suggestions", () => {
+  it("lists the current task, typed origin, destination and safe reason", async () => {
+    const { lead, owner, env, suggestion } = await suggestedAssignment();
+    expect(suggestion).toMatchObject({
+      task: { title: "Parser" },
+      source: { kind: "task_assigned" },
+      reasonCode: "actionable-task-event",
+      proposedTargetSessionId: owner,
+      candidateSessionIds: [lead, owner],
+      startNewExecution: false,
+    });
+    expect(JSON.stringify(suggestion)).not.toContain("private request");
+    env.groups.dispose();
+  });
+
+  it("discards once and keeps the terminal result after runtime restart", async () => {
+    const { group, env, suggestion } = await suggestedAssignment();
+    const resolved = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "discard",
+      expectedVersion: suggestion.version,
+    });
+    env.groups.dispose();
+    const reopened = runtime(false, true);
+
+    expect(resolved).toMatchObject({ deliveryState: "discarded", version: suggestion.version + 1 });
+    expect(listGroupActions(group.id)).toMatchObject([
+      { id: suggestion.actionId, deliveryState: "discarded" },
+    ]);
+    expect(reopened.groups.listSuggestions(group.id)).toEqual([]);
+    reopened.groups.dispose();
+  });
+
+  it("rechecks task and target before accepting a stale suggestion", async () => {
+    const { group, owner, env, task, suggestion } = await suggestedAssignment();
+    const current = (await import("./group-task-store")).getGroupTask(task.id);
+    reportGroupTaskProgress({
+      groupId: group.id,
+      taskId: task.id,
+      actorSessionId: owner,
+      expectedVersion: must(current.stateVersion),
+      operationId: crypto.randomUUID(),
+      blockedReason: "Waiting for updated requirements.",
+    });
+
+    await expect(
+      env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: owner,
+      }),
+    ).rejects.toThrow(/stale|changed|blocked/i);
+    expect(listGroupActions(group.id)).toMatchObject([
+      { id: suggestion.actionId, deliveryState: "invalidated" },
+    ]);
+    expect(
+      listGroupMessages(group.id).filter((message) =>
+        message.body.startsWith("Suggestion accepted:"),
+      ),
+    ).toHaveLength(0);
+    env.groups.dispose();
+  });
+
+  it("double accept creates one persisted message and one target wake", async () => {
+    const { group, owner, env, suggestion, db } = await suggestedAssignment();
+    const input = {
+      actionId: suggestion.actionId,
+      decision: "accept" as const,
+      expectedVersion: suggestion.version,
+      targetSessionId: owner,
+    };
+    const results = await Promise.allSettled([
+      env.groups.resolveGroupSuggestion(input),
+      env.groups.resolveGroupSuggestion(input),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const action = must(listGroupActions(group.id).find((item) => item.id === suggestion.actionId));
+    expect(action).toMatchObject({
+      deliveryState: "dispatched",
+      resolutionTargetSessionId: owner,
+      version: suggestion.version + 1,
+    });
+    expect(
+      listGroupMessages(group.id).filter((message) => message.id === action.wakeMessageId),
+    ).toHaveLength(1);
+    expect(
+      db.prepare("select count(*) as n from group_jobs where id = ?").get(must(action.jobId)),
+    ).toMatchObject({
+      n: 1,
+    });
+    expect(
+      listGroupMessages(group.id).filter((message) =>
+        message.body.startsWith("Suggestion accepted:"),
+      ),
+    ).toHaveLength(1);
+    env.groups.dispose();
+  });
+
+  it("accept after chain end requires and opens a new explicit execution", async () => {
+    const { group, owner, env, root, suggestion, db } = await suggestedAssignment(true);
+    must(env.calls[0]).resolve({ outcome: "ok" });
+    await flush();
+    expect(env.groups.chainSnapshot(root.id).retired).toBe(true);
+    expect(must(env.groups.listSuggestions(group.id)[0]).startNewExecution).toBe(true);
+
+    const action = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: owner,
+    });
+    const message = listGroupMessages(group.id).find((item) => item.id === action.wakeMessageId);
+    await vi.waitFor(() =>
+      expect(env.calls.some((call) => call.input.sessionId === owner)).toBe(true),
+    );
+
+    expect(action).toMatchObject({
+      deliveryState: "dispatched",
+      sourceEventId: suggestion.source.eventId,
+      executionId: root.id,
+    });
+    expect(message?.authorKind).toBe("user");
+    expect(message?.chainId).toBeDefined();
+    expect(message?.chainId).not.toBe(root.id);
+    expect(
+      db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
+    ).toMatchObject({
+      n: 2,
+    });
+    env.groups.dispose();
+  });
+
+  it("Stop fences an accept that has not finished source validation", async () => {
+    const { group, owner, env, suggestion } = await suggestedAssignment();
+    const release = holdSourceLookup();
+    const accepted = env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: owner,
+    });
+    await flush();
+    env.groups.stopGroup(group.id);
+    release();
+
+    await expect(accepted).rejects.toThrow(/stop|stale|changed/i);
+    expect(listGroupActions(group.id)).toMatchObject([
+      { id: suggestion.actionId, deliveryState: "suggested" },
+    ]);
+    expect(
+      listGroupMessages(group.id).filter((message) =>
+        message.body.startsWith("Suggestion accepted:"),
+      ),
+    ).toHaveLength(0);
+    env.groups.dispose();
+  });
+
+  it("switching to suggest cancels queued automatic wakes and preserves explicit jobs", async () => {
+    const { group, lead, owner, db } = squad();
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "work" });
+    const task = createGroupTask({ groupId: group.id, title: "Parser", executionId: root.id });
+    assignGroupTask(group.id, task.id, lead, owner);
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).some((action) => action.deliveryState === "dispatched"),
+      ).toBe(true),
+    );
+    const action = must(listGroupActions(group.id)[0]);
+
+    env.groups.setProactivityMode(group.id, "suggest");
+
+    expect(getGroupProactivityMode(group.id)).toBe("suggest");
+    expect(listGroupActions(group.id)).toMatchObject([{ deliveryState: "invalidated" }]);
+    expect(
+      db.prepare("select status from group_jobs where id = ?").get(must(action.jobId)),
+    ).toMatchObject({
+      status: "cancelled",
+    });
+    expect(
+      db
+        .prepare("select status from group_jobs where group_id = ? and session_id = ?")
+        .get(group.id, lead),
+    ).toMatchObject({ status: "pending" });
+    env.groups.dispose();
+  });
+});

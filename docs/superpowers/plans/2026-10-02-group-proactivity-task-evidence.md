@@ -219,11 +219,11 @@ Revisão independente: round 1 solicitou quatro correções; a round 2 aprovou o
 
 **Interfaces:** consome Tarefas 5–7. Produz `setProactivityMode(groupId, mode)`, `listSuggestions(groupId)`, `resolveSuggestion(actionId, decision: "accept" | "discard", expectedVersion)`; evento `group.suggestion-changed`. Aceitar usa o mesmo caminho validado/durável da Tarefa 7.
 
-- [ ] Adicionar testes `default_is_suggest`, `opt_in_is_per_group`, `accept_stale_suggestion_rechecks_task`, `double_accept_creates_one_wake`, `accept_after_chain_end_requires_explicit_new_execution`, `discard_survives_reopen`, `stop_during_accept_prevents_dispatch`. Assertar motivo/origem visíveis e rollback do toggle quando IPC falhar.
-- [ ] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/renderer/src/features/groups/GroupProactivityControls.test.tsx apps/desktop/src/main/ipc/group-work-ipc.test.ts`; esperar falhas novas.
-- [ ] Implementar controle explícito e cards com próxima ação, destino e motivo. Editar sugestão significa enviar delegação explícita com tarefa/target validados; não editar reasonCode/QA/operationId pelo renderer. Aceitar após fim da chain exige ação explícita rotulada para iniciar nova execução, via o caminho existente de execução do usuário; preservar referência ao evento antigo, sem ressuscitar a chain encerrada. Reabertura carrega modo e sugestões persistidos; mudança para suggest cancela ações automáticas ainda não iniciadas, preservando jobs explícitos.
-- [ ] Rodar os testes citados e `GroupActivityPanel.test.tsx`; esperar aprovação. Fase B fica utilizável.
-- [ ] Commit: `feat(groups): expose proactivity mode and suggestions`.
+- [x] Adicionar testes `default_is_suggest`, `opt_in_is_per_group`, `accept_stale_suggestion_rechecks_task`, `double_accept_creates_one_wake`, `accept_after_chain_end_requires_explicit_new_execution`, `discard_survives_reopen`, `stop_during_accept_prevents_dispatch`. Assertar motivo/origem visíveis e rollback do toggle quando IPC falhar.
+- [x] Rodar `npm exec --workspace @modus/desktop -- vitest run --root ../.. apps/desktop/src/renderer/src/features/groups/GroupProactivityControls.test.tsx apps/desktop/src/main/ipc/group-work-ipc.test.ts`; esperar falhas novas.
+- [x] Implementar controle explícito e cards com próxima ação, destino e motivo. Editar sugestão significa enviar delegação explícita com tarefa/target validados; não editar reasonCode/QA/operationId pelo renderer. Aceitar após fim da chain exige ação explícita rotulada para iniciar nova execução, via o caminho existente de execução do usuário; preservar referência ao evento antigo, sem ressuscitar a chain encerrada. Reabertura carrega modo e sugestões persistidos; mudança para suggest cancela ações automáticas ainda não iniciadas, preservando jobs explícitos.
+- [x] Rodar os testes citados e `GroupActivityPanel.test.tsx`; esperar aprovação. Fase B fica utilizável.
+- [x] Commit: `feat(groups): expose proactivity mode and suggestions`.
 
 ## Tarefa 9: Metadados explícitos de capacidades
 

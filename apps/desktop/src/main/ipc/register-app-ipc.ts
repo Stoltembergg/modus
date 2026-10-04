@@ -1450,6 +1450,10 @@ export function registerAppIpc({
       return listGroupTaskTransitions(taskId);
     },
     updateGroupTaskDraft,
+    getGroupProactivityMode: (groupId) => getGroupRuntime().getProactivityMode(groupId),
+    setGroupProactivityMode: (groupId, mode) => getGroupRuntime().setProactivityMode(groupId, mode),
+    listGroupSuggestions: (groupId) => getGroupRuntime().listSuggestions(groupId),
+    resolveGroupSuggestion: (input) => getGroupRuntime().resolveGroupSuggestion(input),
   });
   setGroupTaskChangedSink((change) =>
     emitGroupRuntimeEvent({ type: "group.task-changed", ...change }),

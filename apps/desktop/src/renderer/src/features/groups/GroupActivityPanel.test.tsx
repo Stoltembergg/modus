@@ -51,6 +51,10 @@ beforeEach(() => {
   Object.assign(window, {
     modus: {
       group: {
+        getProactivityMode: vi.fn(async () => "suggest"),
+        setProactivityMode: vi.fn(async (_groupId: string, mode: string) => mode),
+        listSuggestions: vi.fn(async () => []),
+        resolveSuggestion: vi.fn(async () => undefined),
         listDecisions: vi.fn(async () => []),
         deleteDecision: vi.fn(),
         cancelTask: vi.fn(),

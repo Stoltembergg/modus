@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GroupSuggestion } from "../../shared/group-work-state";
 import { IPC_CHANNELS } from "./channels";
 import type { GroupWorkIpcService } from "./group-work-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
@@ -37,6 +38,17 @@ function setup(overrides: Partial<GroupWorkIpcService> = {}) {
     }),
     listGroupTaskTransitions: vi.fn(() => [transition] as never),
     updateGroupTaskDraft: vi.fn(() => ({ id: "t-1", groupId: "g-1", stateVersion: 5 }) as never),
+    getGroupProactivityMode: vi.fn(() => "suggest" as const),
+    setGroupProactivityMode: vi.fn((_groupId, mode) => mode),
+    listGroupSuggestions: vi.fn(() => [suggestion] as never),
+    resolveGroupSuggestion: vi.fn(async (input) => ({
+      actionId: suggestion.actionId,
+      groupId: "g-1",
+      taskId: "t-1",
+      sourceEventId: "e-1",
+      deliveryState: input.decision === "accept" ? ("dispatched" as const) : ("discarded" as const),
+      version: suggestion.version + 1,
+    })),
     ...overrides,
   };
   const handlers = new Map<string, Handler>();
@@ -64,6 +76,19 @@ const draft = {
   reviewerSessionId: "s-reviewer",
 };
 
+const suggestion: GroupSuggestion = {
+  actionId: "a-1",
+  version: 3,
+  state: "suggested",
+  task: { id: "t-1", title: "Parser", stateVersion: 4 },
+  source: { eventId: "e-1", kind: "task_assigned", sequence: 17, executionId: "x-1" },
+  reasonCode: "actionable-task-event",
+  reason: "This task is ready for the assigned owner.",
+  proposedTargetSessionId: "s-owner",
+  candidateSessionIds: ["s-owner", "s-reviewer"],
+  startNewExecution: false,
+};
+
 async function register(setupResult = setup()) {
   const { registerGroupWorkIpcHandlers } = await import("./group-work-ipc");
   registerGroupWorkIpcHandlers(
@@ -85,6 +110,10 @@ describe("group work IPC", () => {
         IPC_CHANNELS.groupGetWorkState,
         IPC_CHANNELS.groupListTaskTransitions,
         IPC_CHANNELS.groupUpdateTask,
+        IPC_CHANNELS.groupGetProactivityMode,
+        IPC_CHANNELS.groupSetProactivityMode,
+        IPC_CHANNELS.groupListSuggestions,
+        IPC_CHANNELS.groupResolveSuggestion,
       ].sort(),
     );
   });
@@ -96,6 +125,10 @@ describe("group work IPC", () => {
       result.service.getGroupTaskDetails,
       result.service.listGroupTaskTransitions,
       result.service.updateGroupTaskDraft,
+      result.service.getGroupProactivityMode,
+      result.service.setGroupProactivityMode,
+      result.service.listGroupSuggestions,
+      result.service.resolveGroupSuggestion,
     ];
     for (const handler of result.handlers.values()) {
       expect(() => handler(untrusted, undefined)).toThrow("Blocked IPC call");
@@ -212,6 +245,84 @@ describe("group work IPC", () => {
       }),
     ).toMatchObject({ stateVersion: 5 });
     expect(service.updateGroupTaskDraft).toHaveBeenCalledWith("t-1", draft, 4);
+  });
+
+  it("uses strict trusted mode and suggestion payloads and returns safe persisted data", async () => {
+    const { handlers, service } = await register();
+    expect(handlers.get(IPC_CHANNELS.groupGetProactivityMode)?.(trusted, { groupId: "g-1" })).toBe(
+      "suggest",
+    );
+    expect(
+      handlers.get(IPC_CHANNELS.groupSetProactivityMode)?.(trusted, {
+        groupId: "g-1",
+        mode: "opt_in_auto",
+      }),
+    ).toBe("opt_in_auto");
+    expect(handlers.get(IPC_CHANNELS.groupListSuggestions)?.(trusted, { groupId: "g-1" })).toEqual([
+      suggestion,
+    ]);
+    expect(service.setGroupProactivityMode).toHaveBeenCalledWith("g-1", "opt_in_auto");
+    expect(service.listGroupSuggestions).toHaveBeenCalledWith("g-1");
+
+    const resolve = handlers.get(IPC_CHANNELS.groupResolveSuggestion);
+    await expect(
+      resolve?.(trusted, {
+        actionId: "a-1",
+        decision: "accept",
+        expectedVersion: 3,
+        targetSessionId: "s-owner",
+      }),
+    ).resolves.toMatchObject({ actionId: "a-1", deliveryState: "dispatched" });
+    for (const input of [
+      { groupId: "g-1", extra: true },
+      { groupId: "g-1", mode: "suggest", sourceEventId: "forged" },
+      { actionId: "a-1", decision: "accept", expectedVersion: 3, reasonCode: "passed" },
+      { actionId: "a-1", decision: "accept", expectedVersion: 3, operationId: "renderer-id" },
+      { actionId: "a-1", decision: "accept", expectedVersion: 3, qaOutcome: "passed" },
+    ]) {
+      expect(() => resolve?.(trusted, input)).toThrow(/Invalid IPC payload/);
+    }
+    expect(service.resolveGroupSuggestion).toHaveBeenCalledWith({
+      actionId: "a-1",
+      decision: "accept",
+      expectedVersion: 3,
+      targetSessionId: "s-owner",
+    });
+  });
+
+  it("asserts trusted sender before proactivity services and preserves typed stale errors", async () => {
+    const result = await register();
+    const handlers = [
+      IPC_CHANNELS.groupGetProactivityMode,
+      IPC_CHANNELS.groupSetProactivityMode,
+      IPC_CHANNELS.groupListSuggestions,
+      IPC_CHANNELS.groupResolveSuggestion,
+    ].map((channel) => result.handlers.get(channel));
+    for (const handler of handlers) {
+      expect(() => handler?.(untrusted, {})).toThrow("Blocked IPC call");
+    }
+    expect(result.service.getGroupProactivityMode).not.toHaveBeenCalled();
+    expect(result.service.setGroupProactivityMode).not.toHaveBeenCalled();
+    expect(result.service.listGroupSuggestions).not.toHaveBeenCalled();
+    expect(result.service.resolveGroupSuggestion).not.toHaveBeenCalled();
+
+    const stale = await register(
+      setup({
+        resolveGroupSuggestion: vi.fn(async () => {
+          throw Object.assign(new Error("Suggestion changed."), {
+            name: "GroupStoreError",
+            code: "stale-task",
+          });
+        }),
+      }),
+    );
+    await expect(
+      stale.handlers.get(IPC_CHANNELS.groupResolveSuggestion)?.(trusted, {
+        actionId: "a-1",
+        decision: "discard",
+        expectedVersion: 3,
+      }),
+    ).rejects.toThrow("[group-error:stale-task] Suggestion changed.");
   });
 
   it("cancel_is_user_only", async () => {

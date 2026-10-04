@@ -1,10 +1,14 @@
 import { z } from "zod";
 import type { GroupTask } from "../../shared/contracts";
 import type {
+  GroupProactivityMode,
+  GroupSuggestion,
+  GroupSuggestionResolution,
   GroupTaskDetails,
   GroupTaskTransitionEvent,
   GroupTaskUserDraft,
   GroupWorkState,
+  ResolveGroupSuggestionInput,
 } from "../../shared/group-work-state";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
@@ -54,6 +58,18 @@ const updateTaskSchema = z
     expectedVersion: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
   })
   .strict();
+const proactivityModeSchema = z.enum(["suggest", "opt_in_auto"]);
+const setProactivityModeSchema = z
+  .object({ groupId: nonEmpty, mode: proactivityModeSchema })
+  .strict();
+const resolveSuggestionSchema = z
+  .object({
+    actionId: nonEmpty,
+    decision: z.enum(["accept", "discard"]),
+    expectedVersion: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER),
+    targetSessionId: nonEmpty.optional(),
+  })
+  .strict();
 
 export type GroupWorkIpcService = {
   getGroupWorkState(groupId: string, executionId?: string): GroupWorkState;
@@ -64,6 +80,10 @@ export type GroupWorkIpcService = {
     draft: GroupTaskUserDraft,
     expectedVersion: number,
   ): GroupTask;
+  getGroupProactivityMode(groupId: string): GroupProactivityMode;
+  setGroupProactivityMode(groupId: string, mode: GroupProactivityMode): GroupProactivityMode;
+  listGroupSuggestions(groupId: string): GroupSuggestion[];
+  resolveGroupSuggestion(input: ResolveGroupSuggestionInput): Promise<GroupSuggestionResolution>;
 };
 
 type HandlerRegistration = {
@@ -128,5 +148,45 @@ export function registerGroupWorkIpcHandlers(
       parsed.draft as GroupTaskUserDraft,
       parsed.expectedVersion,
     );
+  });
+
+  handle(IPC_CHANNELS.groupGetProactivityMode, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      groupWorkStateSchema.pick({ groupId: true }),
+      input,
+      IPC_CHANNELS.groupGetProactivityMode,
+    );
+    return service.getGroupProactivityMode(parsed.groupId);
+  });
+
+  handle(IPC_CHANNELS.groupSetProactivityMode, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      setProactivityModeSchema,
+      input,
+      IPC_CHANNELS.groupSetProactivityMode,
+    );
+    return service.setGroupProactivityMode(parsed.groupId, parsed.mode);
+  });
+
+  handle(IPC_CHANNELS.groupListSuggestions, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      groupWorkStateSchema.pick({ groupId: true }),
+      input,
+      IPC_CHANNELS.groupListSuggestions,
+    );
+    return service.listGroupSuggestions(parsed.groupId);
+  });
+
+  handle(IPC_CHANNELS.groupResolveSuggestion, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      resolveSuggestionSchema,
+      input,
+      IPC_CHANNELS.groupResolveSuggestion,
+    );
+    return service.resolveGroupSuggestion(parsed as ResolveGroupSuggestionInput);
   });
 }

@@ -93,6 +93,10 @@ let updateState: UpdateState;
 let tasks: GroupTask[];
 let decisions: GroupDecision[];
 const group = {
+  getProactivityMode: vi.fn(async () => "suggest" as const),
+  setProactivityMode: vi.fn(async (_groupId: string, mode: "suggest" | "opt_in_auto") => mode),
+  listSuggestions: vi.fn(async () => []),
+  resolveSuggestion: vi.fn(async () => undefined),
   listMessages: vi.fn(async (_input: unknown) => pages.shift() ?? []),
   postMessage: vi.fn(async (input: { groupId: string; body: string }) =>
     message("posted", { body: input.body }),
@@ -364,11 +368,9 @@ describe("GroupRoom", () => {
     expect(within(userRow as HTMLElement).getByTestId("group-user-avatar")).toBeTruthy();
     expect(within(userRow as HTMLElement).getByTestId("mention-chip").textContent).toBe("@Planner");
     expect(within(memberRow as HTMLElement).getByText("Planner")).toBeTruthy();
-    // The author's avatar (A3): still in a list, the member's face and color,
-    // now small inside the `name · time` header (C4).
+    // The author's avatar (A3): still in a list, the member's face and color.
     const authorAvatar = within(memberRow as HTMLElement).getByTestId("agent-avatar");
-    expect(authorAvatar.dataset.size).toBe("16");
-    expect(authorAvatar.closest('[data-testid="group-message-header"]')).toBeTruthy();
+    expect(authorAvatar.dataset.size).toBe("20");
     expect(authorAvatar.dataset.animated).toBe("false");
     // Same markdown renderer as the chat, mention as a chip (title + short id when repeated).
     await within(memberRow as HTMLElement).findByText("bold", {}, { timeout: 15_000 });
@@ -719,7 +721,7 @@ describe("GroupRoom", () => {
     expect(screen.queryByTestId("group-update-banner")).toBeNull();
   });
 
-  it("task panel: closed by default with a counter, checklist + task check, cancelled hidden", async () => {
+  it("task panel: closed by default with a counter, checklist + Spring Check, cancelled hidden", async () => {
     const user = userEvent.setup();
     const task = (id: string, status: GroupTask["status"], extra: Partial<GroupTask> = {}) => ({
       id,
@@ -757,9 +759,7 @@ describe("GroupRoom", () => {
     expect(within(review).getByTestId("task-status-badge").textContent).toBe("In review");
     expect(review.textContent).toContain("Planner");
     const done = rows.find((row) => row.textContent?.includes("Task 4")) as HTMLElement;
-    const check = within(done).getByRole("img", { name: "Done" });
-    expect(check.dataset.state).toBe("checked");
-    expect(check.querySelector("input")).toBeNull();
+    expect(within(done).getByTestId("spring-check").querySelector("input")?.checked).toBe(true);
     // Done and cancelled tasks have no cancel action.
     for (const id of ["4", "5"]) {
       const row = rows.find((item) => item.textContent?.includes(`Task ${id}`)) as HTMLElement;
@@ -839,10 +839,10 @@ describe("GroupRoom decisions", () => {
       expect(within(panel).getByTestId("decision-count").textContent).toBe("4"),
     );
     expect(group.listDecisions).toHaveBeenCalledWith("g-1");
-    // Coordination precedes Decisions; Decisions precedes the checklist.
+    // Proactivity is first in Activity; coordination precedes Decisions and the checklist.
+    expect(panel.firstElementChild).toBe(within(panel).getByTestId("group-proactivity-controls"));
     const coordination = within(panel).getByTestId("group-activity-coordination");
     const section = within(panel).getByTestId("decision-section");
-    expect(panel.firstElementChild).toBe(coordination);
     expect(
       coordination.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -1012,19 +1012,22 @@ describe("GroupRoom blocked groups", () => {
   it.each([
     ["no workspace", undefined],
     ["the Chats inbox", "modus-inbox-chats"],
-  ])("a group with %s shows 'Choose a folder to continue this group' instead of the composer", async (_label, workspaceId) => {
-    const user = userEvent.setup();
-    const { workspaceId: _drop, ...rest } = GROUP;
-    const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
-    const onChooseFolder = vi.fn();
-    renderRoom(states(), roomGroup, undefined, onChooseFolder);
-    const banner = await screen.findByTestId("group-blocked-banner");
-    expect(banner.textContent).toContain("Choose a folder to continue this group");
-    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
-    await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
-    expect(onChooseFolder).toHaveBeenCalledTimes(1);
-    expect(group.postMessage).not.toHaveBeenCalled();
-  });
+  ])(
+    "a group with %s shows 'Choose a folder to continue this group' instead of the composer",
+    async (_label, workspaceId) => {
+      const user = userEvent.setup();
+      const { workspaceId: _drop, ...rest } = GROUP;
+      const roomGroup: AgentGroupWithMembers = { ...rest, ...(workspaceId ? { workspaceId } : {}) };
+      const onChooseFolder = vi.fn();
+      renderRoom(states(), roomGroup, undefined, onChooseFolder);
+      const banner = await screen.findByTestId("group-blocked-banner");
+      expect(banner.textContent).toContain("Choose a folder to continue this group");
+      expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+      await user.click(within(banner).getByRole("button", { name: "Choose folder" }));
+      expect(onChooseFolder).toHaveBeenCalledTimes(1);
+      expect(group.postMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("a group left with one agent shows 'Add a member to continue' and opens Manage members", async () => {
     const user = userEvent.setup();

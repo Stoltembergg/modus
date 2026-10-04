@@ -14,6 +14,7 @@ import {
 import { cn } from "../../lib/cn";
 import { formatTokenCount } from "../../lib/tokenUsage";
 import { GroupDecisionsSection } from "./GroupDecisions";
+import { GroupProactivityControls } from "./GroupProactivityControls";
 import { GroupProjectContextChip } from "./GroupProjectContextChip";
 import { GroupStageChip } from "./GroupRoomHeader";
 import { activeTaskCount, GroupTaskPanel } from "./GroupTaskPanel";
@@ -39,6 +40,7 @@ export function GroupActivityPanel({
   onTaskUpdated,
   onOpenSession,
   onSetMode,
+  proactivityMembers = [],
 }: {
   groupId: string;
   tasks: readonly GroupTask[];
@@ -55,6 +57,7 @@ export function GroupActivityPanel({
   onTaskUpdated?(task: GroupTask): void;
   onOpenSession?(sessionId: string, runId?: string): void;
   onSetMode?: ((mode: AgentGroupMode) => void) | undefined;
+  proactivityMembers?: readonly { sessionId: string; label: string }[];
 }) {
   const details = collectRoomMessageDetails(messages).slice(-12);
   const executionTokens = estimateTokensByExecution(messages);
@@ -73,6 +76,7 @@ export function GroupActivityPanel({
       testId="group-activity-panel"
       top={
         <>
+          <GroupProactivityControls groupId={groupId} memberOptions={proactivityMembers} />
           <ActivityLiveSection labels={labels} rows={workingRows} />
           <ActivityCoordinationSection
             coordinating={coordinating}

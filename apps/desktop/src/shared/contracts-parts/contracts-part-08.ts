@@ -1,5 +1,6 @@
 /** Gap 4 contracts split part 8 — Agent Groups DTOs from #62 */
 import type {
+  GroupProactivityMode,
   GroupTaskCriterion,
   GroupTaskEvidenceRef,
   GroupTaskKind,
@@ -404,6 +405,13 @@ export type GroupProjectContextSnapshot = {
  */
 export type GroupRuntimeEvent =
   | { type: "group.message"; groupId: string; message: GroupMessage }
+  | {
+      type: "group.suggestion-changed";
+      groupId: string;
+      actionId: string;
+      version: number;
+    }
+  | { type: "group.proactivity-mode-changed"; groupId: string; mode: GroupProactivityMode }
   | {
       type: "group.task-changed";
       groupId: string;

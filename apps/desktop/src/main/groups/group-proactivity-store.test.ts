@@ -17,6 +17,7 @@ const {
   listPendingGroupActions,
   getGroupAction,
   markGroupActionDispatched,
+  resolveSuggestedGroupAction,
   invalidateGroupAction,
 } = await import("./group-proactivity-store");
 
@@ -154,6 +155,30 @@ describe("group proactivity outbox", () => {
     expect(listPendingGroupActions(b.group.id)).toEqual([pending]);
     expect(invalidateGroupAction(pending.id).deliveryState).toBe("invalidated");
     expect(listPendingGroupActions()).not.toContainEqual(pending);
+  });
+
+  it("resolves suggestions with a single expected-version transition", () => {
+    const { group, task, sourceEventId } = fixture();
+    const action = persistGroupProactivityDecision(decision(task.id, sourceEventId, "suggest"));
+    const discarded = resolveSuggestedGroupAction({
+      id: action.id,
+      expectedVersion: action.version,
+      decision: "discard",
+    });
+
+    expect(discarded).toMatchObject({
+      groupId: group.id,
+      id: action.id,
+      deliveryState: "discarded",
+      version: action.version + 1,
+    });
+    expect(() =>
+      resolveSuggestedGroupAction({
+        id: action.id,
+        expectedVersion: action.version,
+        decision: "discard",
+      }),
+    ).toThrow(/changed|resolved/i);
   });
 
   it("reopens mode, pending state and source identity on a second SQLite connection", () => {

@@ -716,6 +716,8 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       delivery_state text not null check (delivery_state in ('suggested','pending','dispatched','discarded','invalidated')),
       wake_message_id text references group_messages(id) on delete set null,
       job_id text references group_jobs(id) on delete set null,
+      resolution_target_session_id text,
+      resolved_execution_id text,
       version integer not null default 1,
       created_at text not null,
       updated_at text not null
@@ -729,6 +731,8 @@ function migrateGroupTaskState(db: DatabaseSync): void {
     "proactivity_mode",
     "text not null default 'suggest' check (proactivity_mode in ('suggest','opt_in_auto'))",
   );
+  addColumn(db, "group_proactivity_actions", "resolution_target_session_id", "text");
+  addColumn(db, "group_proactivity_actions", "resolved_execution_id", "text");
 }
 
 /**

@@ -252,3 +252,46 @@ export type GroupProactivityDecision = {
   reasonCode: string;
   idempotencyKey: string;
 };
+
+/** User-facing projection of a persisted proactive suggestion; contains no transcript or QA output. */
+export type GroupSuggestion = {
+  actionId: string;
+  version: number;
+  state: "suggested";
+  task: { id: string; title: string; stateVersion: number };
+  source: {
+    eventId: string;
+    kind: GroupTaskTrigger["kind"];
+    sequence: number;
+    executionId?: string;
+  };
+  reasonCode: string;
+  reason: string;
+  proposedTargetSessionId?: string;
+  candidateSessionIds: string[];
+  /** The origin chain has ended, so accepting opens a new user-authorized execution. */
+  startNewExecution: boolean;
+};
+
+export type ResolveGroupSuggestionInput = {
+  actionId: string;
+  decision: "accept" | "discard";
+  expectedVersion: number;
+  /** Optional explicit reassignment, checked against current Group membership in main. */
+  targetSessionId?: string;
+};
+
+export type GroupSuggestionResolution = {
+  actionId: string;
+  groupId: string;
+  taskId: string;
+  sourceEventId: string;
+  /** Immutable origin execution; accepting after it ends does not revive it. */
+  executionId?: string;
+  deliveryState: "dispatched" | "discarded";
+  version: number;
+  resolvedExecutionId?: string;
+  resolutionTargetSessionId?: string;
+  wakeMessageId?: string;
+  jobId?: string;
+};

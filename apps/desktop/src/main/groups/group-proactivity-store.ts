@@ -14,6 +14,8 @@ export type GroupActionRecord = {
   deliveryState: "suggested" | "pending" | "dispatched" | "discarded" | "invalidated";
   wakeMessageId?: string;
   jobId?: string;
+  resolutionTargetSessionId?: string;
+  resolvedExecutionId?: string;
   version: number;
 };
 
@@ -29,6 +31,8 @@ type ActionRow = {
   delivery_state: GroupActionRecord["deliveryState"];
   wake_message_id: string | null;
   job_id: string | null;
+  resolution_target_session_id: string | null;
+  resolved_execution_id: string | null;
   version: number;
 };
 
@@ -44,6 +48,10 @@ function toAction(row: ActionRow): GroupActionRecord {
     deliveryState: row.delivery_state,
     ...(row.wake_message_id ? { wakeMessageId: row.wake_message_id } : {}),
     ...(row.job_id ? { jobId: row.job_id } : {}),
+    ...(row.resolution_target_session_id
+      ? { resolutionTargetSessionId: row.resolution_target_session_id }
+      : {}),
+    ...(row.resolved_execution_id ? { resolvedExecutionId: row.resolved_execution_id } : {}),
     version: row.version,
   };
 }
@@ -221,6 +229,67 @@ export function markGroupActionDispatched(
   )
     throw new GroupStoreError("invalid-transition", "Action cannot be dispatched.");
   return action;
+}
+
+/** Resolve one suggestion with optimistic concurrency inside the caller's durable transaction. */
+export function resolveSuggestedGroupAction(input: {
+  id: string;
+  expectedVersion: number;
+  decision: "accept" | "discard";
+  wakeMessageId?: string;
+  jobId?: string;
+  targetSessionId?: string;
+  resolvedExecutionId?: string;
+}): GroupActionRecord {
+  if (
+    !input.id ||
+    !Number.isSafeInteger(input.expectedVersion) ||
+    input.expectedVersion < 1 ||
+    (input.decision === "accept" &&
+      (!input.wakeMessageId ||
+        !input.jobId ||
+        !input.targetSessionId ||
+        !input.resolvedExecutionId)) ||
+    (input.decision === "discard" &&
+      (input.wakeMessageId || input.jobId || input.targetSessionId || input.resolvedExecutionId))
+  )
+    throw new GroupStoreError("invalid-value", "Malformed suggestion resolution.");
+
+  const state = input.decision === "accept" ? "dispatched" : "discarded";
+  const changed = getDatabase()
+    .prepare(`update group_proactivity_actions set delivery_state = ?, wake_message_id = ?, job_id = ?,
+      resolution_target_session_id = ?, resolved_execution_id = ?, version = version + 1, updated_at = ?
+      where id = ? and delivery_state = 'suggested' and version = ?`)
+    .run(
+      state,
+      input.wakeMessageId ?? null,
+      input.jobId ?? null,
+      input.targetSessionId ?? null,
+      input.resolvedExecutionId ?? null,
+      new Date().toISOString(),
+      input.id,
+      input.expectedVersion,
+    );
+  if (!changed.changes)
+    throw new GroupStoreError(
+      "stale-task",
+      "Suggestion changed or was already resolved. Refresh the suggestion before acting.",
+    );
+  return requireAction(input.id);
+}
+
+export function invalidateSuggestedGroupAction(
+  id: string,
+  expectedVersion: number,
+): GroupActionRecord {
+  const changed = getDatabase()
+    .prepare(`update group_proactivity_actions set delivery_state = 'invalidated',
+      version = version + 1, updated_at = ?
+      where id = ? and delivery_state = 'suggested' and version = ?`)
+    .run(new Date().toISOString(), id, expectedVersion);
+  if (!changed.changes)
+    throw new GroupStoreError("stale-task", "Suggestion changed before it could be invalidated.");
+  return requireAction(id);
 }
 
 export function invalidateGroupAction(id: string): GroupActionRecord {

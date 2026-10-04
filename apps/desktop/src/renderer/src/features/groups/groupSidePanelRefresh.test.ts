@@ -75,6 +75,24 @@ describe("shouldRefreshGroupSidePanel", () => {
     ).toBe(false);
   });
 
+  it("refreshes suggestions and mode after versioned proactivity events", () => {
+    expect(
+      shouldRefreshGroupSidePanel("g-1", {
+        type: "group.suggestion-changed",
+        groupId: "g-1",
+        actionId: "a-1",
+        version: 2,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRefreshGroupSidePanel("g-1", {
+        type: "group.proactivity-mode-changed",
+        groupId: "g-1",
+        mode: "suggest",
+      }),
+    ).toBe(true);
+  });
+
   it("refreshes only status messages, not ordinary chat messages", () => {
     expect(
       shouldRefreshGroupSidePanel("g-1", {

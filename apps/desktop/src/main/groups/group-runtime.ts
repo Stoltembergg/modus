@@ -6,6 +6,7 @@ import type {
   GroupMemberStates,
   GroupMessage,
   GroupRuntimeEvent,
+  GroupTask,
   PostGroupMessageInput,
   ResumeGroupExecutionInput,
 } from "../../shared/contracts";
@@ -18,8 +19,12 @@ import { isCoordinatorModeActive } from "../../shared/group-coordinator";
 import { bindSessionExecution, unbindSessionExecution } from "../../shared/group-execution-link";
 import type {
   GroupDecisionSnapshot,
+  GroupProactivityMode,
+  GroupSuggestion,
+  GroupSuggestionResolution,
   GroupTaskTransitionEvent,
   GroupTaskTrigger,
+  ResolveGroupSuggestionInput,
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getAgentSession } from "../agent/agent-store";
@@ -43,9 +48,13 @@ import {
   getGroupProactivityMode,
   invalidateDispatchedGroupAction,
   invalidateGroupAction,
+  invalidateSuggestedGroupAction,
+  listGroupActions,
   listPendingGroupActions,
   markGroupActionDispatched,
   persistGroupProactivityDecision,
+  resolveSuggestedGroupAction,
+  setGroupProactivityMode,
 } from "./group-proactivity-store";
 import {
   type ChainState,
@@ -141,6 +150,8 @@ export class GroupRuntime {
   private readonly retiredChains = new Map<string, ChainState>();
   private readonly processingChains = new Map<string, number>();
   private readonly validatingWakes = new Set<string>();
+  /** Stop fences suggestion acceptances paused outside SQLite for source checks. */
+  private readonly stopEpochByGroup = new Map<string, number>();
   /** Per-session FIFO of pending wakes. */
   private readonly queues = new Map<string, Wake[]>();
   /** Group turns holding one of the concurrency slots. */
@@ -187,6 +198,238 @@ export class GroupRuntime {
     this.supersedeWaiting(input.groupId);
     this.pump();
     return message;
+  }
+
+  getProactivityMode(groupId: string): GroupProactivityMode {
+    return getGroupProactivityMode(groupId);
+  }
+
+  /** Rebuild the user-facing view from persisted task and transition identities. */
+  listSuggestions(groupId: string): GroupSuggestion[] {
+    const group = getAgentGroup(groupId);
+    if (!group) throw new GroupStoreError("group-not-found", `Agent group not found: ${groupId}`);
+    const members = listAgentGroupMembers(groupId).filter((member) => !member.archived);
+    const candidates = members
+      .filter((member) => {
+        const session = getAgentSession(member.sessionId);
+        return session && !session.archivedAt;
+      })
+      .map((member) => member.sessionId);
+    return listGroupActions(groupId)
+      .filter((action) => action.deliveryState === "suggested")
+      .slice(-100)
+      .flatMap((action): GroupSuggestion[] => {
+        const trigger = this.transitionForAction(action);
+        if (!trigger) return [];
+        const task = getGroupTask(action.taskId);
+        const desiredTarget =
+          trigger.kind === "review_requested" ||
+          (trigger.kind === "task_qa_updated" &&
+            task.status === "in_review" &&
+            task.verificationPolicy?.requireReview)
+            ? task.reviewerSessionId
+            : task.ownerSessionId;
+        const proposedTargetSessionId =
+          (desiredTarget && candidates.includes(desiredTarget) ? desiredTarget : undefined) ??
+          (group.leadSessionId && candidates.includes(group.leadSessionId)
+            ? group.leadSessionId
+            : undefined);
+        const sourceChain = action.executionId
+          ? (this.chains.get(action.executionId) ?? readGroupChain(action.executionId))
+          : undefined;
+        const reason = this.suggestionReason(action.decision.reasonCode, trigger.kind);
+        return [
+          {
+            actionId: action.id,
+            version: action.version,
+            state: "suggested",
+            task: {
+              id: task.id,
+              title: task.title,
+              stateVersion: task.stateVersion ?? trigger.taskVersion,
+            },
+            source: {
+              eventId: trigger.sourceEventId,
+              kind: trigger.kind,
+              sequence: trigger.sequence,
+              ...(trigger.executionId ? { executionId: trigger.executionId } : {}),
+            },
+            reasonCode: action.decision.reasonCode,
+            reason,
+            ...(proposedTargetSessionId ? { proposedTargetSessionId } : {}),
+            candidateSessionIds: candidates,
+            startNewExecution: Boolean(!sourceChain || sourceChain.ended || sourceChain.retired),
+          },
+        ];
+      });
+  }
+
+  /** Persist a per-group preference and revoke only automatic work not yet started. */
+  setProactivityMode(groupId: string, mode: GroupProactivityMode): GroupProactivityMode {
+    this.durableDispatch(() => {
+      setGroupProactivityMode(groupId, mode);
+      if (mode === "suggest") {
+        for (const action of listGroupActions(groupId)) {
+          if (action.deliveryState === "pending") {
+            const invalidated = invalidateGroupAction(action.id);
+            this.emitSuggestionChanged(invalidated);
+            continue;
+          }
+          if (
+            action.deliveryState !== "dispatched" ||
+            action.decision.kind === "suggest" ||
+            !action.jobId
+          )
+            continue;
+          const queued = this.queues.get(action.decision.targetSessionId ?? "");
+          const index = queued?.findIndex((wake) => wake.id === action.jobId) ?? -1;
+          if (index < 0) continue;
+          const wake = queued?.[index];
+          if (!wake || getGroupJob(wake.id ?? "")?.status !== "pending") continue;
+          queued?.splice(index, 1);
+          if (queued?.length === 0) this.queues.delete(wake.sessionId);
+          updateGroupJob(wake, "cancelled");
+          const invalidated = invalidateDispatchedGroupAction(action.id);
+          this.transcript.setState(wake, "cancelled");
+          this.emitSuggestionChanged(invalidated);
+        }
+      }
+      this.emitEvent({ type: "group.proactivity-mode-changed", groupId, mode });
+    }, true);
+    this.pump();
+    return mode;
+  }
+
+  /** Resolve one stored suggestion; acceptance is one explicit, idempotent Group Runtime dispatch. */
+  async resolveGroupSuggestion(
+    input: ResolveGroupSuggestionInput,
+  ): Promise<GroupSuggestionResolution> {
+    const action = getGroupAction(input.actionId);
+    if (!action) throw new GroupStoreError("invalid-value", "Unknown suggestion.");
+    if (input.decision === "discard") {
+      if (input.targetSessionId)
+        throw new GroupStoreError("invalid-value", "Discard cannot include a target.");
+      const resolved = this.durableDispatch(() => {
+        const discarded = resolveSuggestedGroupAction({
+          id: action.id,
+          expectedVersion: input.expectedVersion,
+          decision: "discard",
+        });
+        this.emitSuggestionChanged(discarded);
+        return this.suggestionResolution(discarded);
+      }, true);
+      return resolved;
+    }
+
+    const stopEpoch = this.stopEpochByGroup.get(action.groupId) ?? 0;
+    const initialTrigger = this.transitionForAction(action);
+    if (!initialTrigger) return this.invalidateStaleSuggestion(action);
+    const details = await getGroupTaskDetails(action.groupId, action.taskId);
+    this.assertAcceptanceNotFenced(action.groupId, stopEpoch);
+    const currentAction = getGroupAction(action.id);
+    if (
+      currentAction?.deliveryState !== "suggested" ||
+      currentAction.version !== input.expectedVersion
+    )
+      throw new GroupStoreError("stale-task", "Suggestion changed while it was being accepted.");
+    const trigger = this.transitionForAction(currentAction);
+    const task = getGroupTask(currentAction.taskId);
+    const group = getAgentGroup(currentAction.groupId);
+    if (
+      !trigger ||
+      !group ||
+      task.groupId !== currentAction.groupId ||
+      task.executionId !== currentAction.executionId ||
+      task.stateVersion !== currentAction.taskVersion
+    )
+      return this.invalidateStaleSuggestion(currentAction);
+    this.validateSuggestionTask(trigger, task, details);
+
+    const memberRows = listAgentGroupMembers(group.id);
+    const targetSessionId = input.targetSessionId ?? this.proposedTarget(trigger, task, group);
+    const member = memberRows.find((candidate) => candidate.sessionId === targetSessionId);
+    const targetSession = targetSessionId ? getAgentSession(targetSessionId) : undefined;
+    if (
+      !targetSessionId ||
+      !member ||
+      member.archived ||
+      !targetSession ||
+      targetSession.archivedAt
+    )
+      throw new GroupStoreError(
+        "not-a-member",
+        "The selected target is not an active group member.",
+      );
+    if (
+      this.running.has(targetSessionId) ||
+      this.gated.has(targetSessionId) ||
+      this.cancelling.has(targetSessionId) ||
+      (this.queues.get(targetSessionId)?.length ?? 0) > 0 ||
+      this.runtime.isSessionStreaming(targetSessionId)
+    )
+      throw new GroupStoreError("invalid-transition", "The selected group member is unavailable.");
+
+    const resolved = this.durableDispatch(() => {
+      this.assertAcceptanceNotFenced(action.groupId, stopEpoch);
+      const latestAction = getGroupAction(action.id);
+      const latestTrigger = latestAction ? this.transitionForAction(latestAction) : undefined;
+      const latestTask = getGroupTask(action.taskId);
+      const latestGroup = getAgentGroup(action.groupId);
+      if (
+        latestAction?.deliveryState !== "suggested" ||
+        latestAction.version !== input.expectedVersion
+      )
+        throw new GroupStoreError("stale-task", "Suggestion was resolved by another action.");
+      if (
+        !latestTrigger ||
+        !latestGroup ||
+        latestTask.groupId !== action.groupId ||
+        latestTask.executionId !== action.executionId ||
+        latestTask.stateVersion !== action.taskVersion
+      )
+        throw new GroupStoreError("stale-task", "Task changed before the suggestion could start.");
+      this.validateSuggestionTask(latestTrigger, latestTask, details);
+      const latestMember = listAgentGroupMembers(action.groupId).find(
+        (candidate) => candidate.sessionId === targetSessionId,
+      );
+      if (!latestMember || latestMember.archived || !getAgentSession(targetSessionId))
+        throw new GroupStoreError("not-a-member", "The selected target left the group.");
+
+      const existing = action.executionId ? this.chains.get(action.executionId) : undefined;
+      const joinsExisting = Boolean(
+        existing && existing.groupId === action.groupId && !existing.ended && !existing.retired,
+      );
+      const message = appendGroupMessage({
+        createdAt: this.stamp(),
+        groupId: action.groupId,
+        authorKind: "user",
+        body: `Suggestion accepted: continue task ${task.title} (${task.id}). Recheck its persisted state before acting.`,
+        mentions: [targetSessionId],
+        ...(joinsExisting && existing ? { chainId: existing.chainId } : { startsChain: true }),
+      });
+      this.emitMessage(message);
+      const resolvedExecutionId = message.chainId ?? message.id;
+      const chain = joinsExisting && existing ? existing : this.openChain(group.id, message.id);
+      this.route(chain, message, [targetSessionId], false, true);
+      const wake = this.queues
+        .get(targetSessionId)
+        ?.find((item) => item.triggerMessageId === message.id);
+      if (!wake?.id)
+        throw new GroupStoreError("invalid-transition", "The accepted task could not be queued.");
+      const dispatched = resolveSuggestedGroupAction({
+        id: action.id,
+        expectedVersion: input.expectedVersion,
+        decision: "accept",
+        wakeMessageId: message.id,
+        jobId: wake.id,
+        targetSessionId,
+        resolvedExecutionId,
+      });
+      this.emitSuggestionChanged(dispatched);
+      return this.suggestionResolution(dispatched);
+    }, true);
+    this.pump();
+    return resolved;
   }
 
   /**
@@ -923,6 +1166,7 @@ export class GroupRuntime {
    * nothing.
    */
   stopGroup(groupId: string): void {
+    this.stopEpochByGroup.set(groupId, (this.stopEpochByGroup.get(groupId) ?? 0) + 1);
     const queued = [...this.queues.values()].flat().filter((wake) => wake.groupId === groupId);
     const running = [...this.running.values()].filter((wake) => wake.groupId === groupId);
     const waiting = [...this.gated.values()].filter((wake) => wake.groupId === groupId);
@@ -1589,6 +1833,133 @@ export class GroupRuntime {
       : undefined;
   }
 
+  private suggestionReason(reasonCode: string, kind: GroupTaskTrigger["kind"]): string {
+    const known: Record<string, string> = {
+      "actionable-task-event":
+        kind === "review_requested" || kind === "task_qa_updated"
+          ? "The task is ready for its assigned reviewer."
+          : "The assigned task is ready for its next step.",
+      "dependency-incomplete": "A prerequisite task must be completed first.",
+      "task-blocked": "The task is blocked and needs an update before work continues.",
+      "review-unavailable": "The assigned reviewer is not ready for this review transition.",
+      "qa-missing": "Required checks are missing or have not passed yet.",
+      "execution-unavailable": "The previous execution ended; accepting starts a new one.",
+      "target-unassigned": "Choose an active group member to receive this task.",
+      "member-unavailable": "The suggested member is unavailable; choose another active member.",
+      "budget-exhausted": "The previous execution reached its wake budget.",
+      "owner-ready": "The task owner is ready for the next step.",
+      "review-ready": "The task is ready for review.",
+    };
+    return known[reasonCode] ?? "Review the task state and choose whether to send the next step.";
+  }
+
+  private proposedTarget(
+    trigger: GroupTaskTrigger,
+    task: GroupTask,
+    group: AgentGroupInfo,
+  ): string | undefined {
+    const reviewer =
+      trigger.kind === "review_requested" ||
+      (trigger.kind === "task_qa_updated" &&
+        task.status === "in_review" &&
+        task.verificationPolicy?.requireReview);
+    const preferred = reviewer ? task.reviewerSessionId : task.ownerSessionId;
+    const members = listAgentGroupMembers(group.id).filter((member) => !member.archived);
+    if (preferred && members.some((member) => member.sessionId === preferred)) return preferred;
+    if (group.leadSessionId && members.some((member) => member.sessionId === group.leadSessionId))
+      return group.leadSessionId;
+    return undefined;
+  }
+
+  private validateSuggestionTask(
+    trigger: GroupTaskTrigger,
+    task: GroupTask,
+    details: Awaited<ReturnType<typeof getGroupTaskDetails>>,
+  ): void {
+    if (task.status === "done" || task.status === "cancelled" || task.status === "blocked")
+      throw new GroupStoreError("invalid-transition", "The task is not ready to continue.");
+    const tasks = new Map(listGroupTasks(task.groupId).map((item) => [item.id, item]));
+    if ((task.dependencyIds ?? []).some((id) => tasks.get(id)?.status !== "done"))
+      throw new GroupStoreError("invalid-dependency", "Complete prerequisite tasks first.");
+
+    if (trigger.kind === "task_assigned" || trigger.kind === "task_unblocked") {
+      if (task.status !== "in_progress")
+        throw new GroupStoreError("stale-task", "The task no longer has an active owner stage.");
+      return;
+    }
+    if (trigger.kind === "review_changes_requested") {
+      if (task.status !== "in_progress" || details.review.status !== "changes_requested")
+        throw new GroupStoreError("stale-task", "The review change request is no longer current.");
+      return;
+    }
+    if (trigger.kind === "task_qa_updated" && task.status !== "in_review") return;
+    if (task.status !== "in_review" || details.review.status !== "pending")
+      throw new GroupStoreError("stale-task", "The task is no longer waiting for review.");
+    const requiredCriteria = details.criteria.filter(
+      (criterion) => criterion.requiredCheckKinds.length > 0,
+    );
+    if (
+      requiredCriteria.some((criterion) => criterion.status !== "passed") ||
+      (requiredCriteria.length > 0 && details.source.availability !== "available")
+    )
+      throw new GroupStoreError(
+        "verification-required",
+        "Required checks must pass before review.",
+      );
+  }
+
+  private assertAcceptanceNotFenced(groupId: string, stopEpoch: number): void {
+    if (this.disposed)
+      throw new GroupStoreError(
+        "invalid-transition",
+        "Runtime stopped before the suggestion could start.",
+      );
+    if ((this.stopEpochByGroup.get(groupId) ?? 0) !== stopEpoch)
+      throw new GroupStoreError(
+        "invalid-transition",
+        "Stop was requested before the suggestion could start.",
+      );
+  }
+
+  private invalidateStaleSuggestion(action: GroupActionRecord): never {
+    const current = getGroupAction(action.id);
+    if (current?.deliveryState === "suggested" && current.version === action.version) {
+      const invalidated = this.durableDispatch(
+        () => invalidateSuggestedGroupAction(action.id, action.version),
+        true,
+      );
+      this.emitSuggestionChanged(invalidated);
+    }
+    throw new GroupStoreError("stale-task", "Task or source changed; reload this suggestion.");
+  }
+
+  private suggestionResolution(action: GroupActionRecord): GroupSuggestionResolution {
+    return {
+      actionId: action.id,
+      groupId: action.groupId,
+      taskId: action.taskId,
+      sourceEventId: action.sourceEventId,
+      ...(action.executionId ? { executionId: action.executionId } : {}),
+      deliveryState: action.deliveryState === "discarded" ? "discarded" : "dispatched",
+      version: action.version,
+      ...(action.resolvedExecutionId ? { resolvedExecutionId: action.resolvedExecutionId } : {}),
+      ...(action.resolutionTargetSessionId
+        ? { resolutionTargetSessionId: action.resolutionTargetSessionId }
+        : {}),
+      ...(action.wakeMessageId ? { wakeMessageId: action.wakeMessageId } : {}),
+      ...(action.jobId ? { jobId: action.jobId } : {}),
+    };
+  }
+
+  private emitSuggestionChanged(action: GroupActionRecord): void {
+    this.emitEvent({
+      type: "group.suggestion-changed",
+      groupId: action.groupId,
+      actionId: action.id,
+      version: action.version,
+    });
+  }
+
   private cancelStaleAutomaticWake(wake: Wake, actionId: string): void {
     if (this.disposed || this.queues.get(wake.sessionId)?.[0]?.id !== wake.id) return;
     this.durableDispatch(() => {
@@ -1706,9 +2077,17 @@ export class GroupRuntime {
       if (!next) break;
       const action = next.id ? getGroupActionByJobId(next.id) : undefined;
       if (action && next.id) {
-        this.validatingWakes.add(next.id);
-        void this.validateAutomaticWake(next, action);
-        continue;
+        const explicitAcceptance =
+          action.decision.kind === "suggest" &&
+          action.deliveryState === "dispatched" &&
+          action.wakeMessageId === next.triggerMessageId &&
+          action.resolutionTargetSessionId === next.sessionId &&
+          action.resolvedExecutionId === next.chainId;
+        if (!explicitAcceptance) {
+          this.validatingWakes.add(next.id);
+          void this.validateAutomaticWake(next, action);
+          continue;
+        }
       }
       this.queues.get(next.sessionId)?.shift();
       if (this.queues.get(next.sessionId)?.length === 0) this.queues.delete(next.sessionId);
