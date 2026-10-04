@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -1108,6 +1108,466 @@ describe("agent-event-store", () => {
       );
     }
   });
+  it("preserves the first package snapshot when tool lifecycle events are replayed", async () => {
+    const manifestPath = join(userData, "package.json");
+    await writeFile(manifestPath, JSON.stringify({ scripts: { test: "node unsafe.js" } }));
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    const start = {
+      type: "tool.started" as const,
+      sessionId,
+      runId: run.id,
+      toolCallId: "replayed-package-check",
+      toolName: "terminal_run",
+      args: { command: "npm test" },
+    };
+    const end = {
+      type: "tool.ended" as const,
+      sessionId,
+      runId: run.id,
+      toolCallId: start.toolCallId,
+      toolName: start.toolName,
+      isError: false,
+      exitCode: 0,
+    };
+    const qa = () =>
+      summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events: getRunToolEvidence(sessionId, run.id),
+      });
+    try {
+      const startRowId = recordAgentEvent(start);
+      await writeFile(manifestPath, JSON.stringify({ scripts: { test: "vitest run" } }));
+      const endRowId = recordAgentEvent(end);
+      expect(qa().status).toBe("missing");
+      const replayStartRowId = recordAgentEvent(start);
+      const replayEndRowId = recordAgentEvent(end);
+      expect(qa().status).toBe("missing");
+      expect(qa().evidence.every((ref) => ref.status !== "passed")).toBe(true);
+      expect(replayStartRowId).toBe(startRowId);
+      expect(replayEndRowId).toBe(endRowId);
+      const keyedStartRowId = recordAgentEvent(start, { idempotencyKey: "replayed-start-key" });
+      const keyedEndRowId = recordAgentEvent(end, { idempotencyKey: "replayed-end-key" });
+      expect(recordAgentEvent(start, { idempotencyKey: "replayed-start-key" })).toBe(
+        keyedStartRowId,
+      );
+      expect(recordAgentEvent(end, { idempotencyKey: "replayed-end-key" })).toBe(keyedEndRowId);
+      expect(qa().status).toBe("missing");
+      expect(getRunToolEvidence(sessionId, run.id)).toHaveLength(2);
+      expect(getRunToolEvidence(sessionId, run.id, endRowId)).toEqual([]);
+      expect(() =>
+        recordAgentEvent(
+          { ...start, toolCallId: "different-call" },
+          { idempotencyKey: "replayed-start-key" },
+        ),
+      ).toThrow(/idempotency key.*different event/i);
+      expect(() =>
+        recordAgentEvent(
+          { ...start, args: { command: "vitest run" } },
+          { idempotencyKey: "different-start-key" },
+        ),
+      ).toThrow(/tool event identity.*different event/i);
+      expect(() => recordAgentEvent({ ...start, args: { command: "vitest run" } })).toThrow(
+        /tool event identity.*different event/i,
+      );
+      // A new execution has a new call ID and can collect fresh trusted evidence.
+      recordAgentEvent({ ...start, toolCallId: "fresh-package-check" });
+      recordAgentEvent({ ...end, toolCallId: "fresh-package-check" });
+      expect(qa().status).toBe("passed");
+    } finally {
+      await writeFile(
+        manifestPath,
+        JSON.stringify({
+          scripts: { test: "vitest run", typecheck: "tsc --noEmit" },
+          workspaces: ["apps/*"],
+        }),
+      );
+    }
+  });
+
+  it("rejects a conflicting end that would turn a failed call into a pass", () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      runId: run.id,
+      toolCallId: "failed-call",
+      toolName: "terminal_run",
+      args: { command: "vitest run" },
+    });
+    const end = {
+      type: "tool.ended" as const,
+      sessionId,
+      runId: run.id,
+      toolCallId: "failed-call",
+      toolName: "terminal_run",
+      isError: true,
+      exitCode: 1,
+    };
+    const rowId = recordAgentEvent(end);
+    expect(recordAgentEvent(end)).toBe(rowId);
+    expect(() => recordAgentEvent({ ...end, isError: false, exitCode: 0 })).toThrow(
+      /tool event identity.*different event/i,
+    );
+    expect(
+      summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events: getRunToolEvidence(sessionId, run.id),
+      }).status,
+    ).toBe("failed");
+  });
+
+  it.for([
+    "cwd",
+    "workspace",
+  ])("rejects QA after its %s directory is swapped and restored", async (scope) => {
+    const sandbox = await mkdtemp(join(userData, "directory-qa-"));
+    const cwd = join(sandbox, "repo");
+    const workspaceRoot = join(cwd, "apps", "desktop");
+    const savedDirectory = join(sandbox, "saved-directory");
+    const swappedDirectory = scope === "cwd" ? cwd : workspaceRoot;
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run" },
+        workspaces: ["apps/*"],
+      }),
+    );
+    await writeFile(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({
+        name: "@modus/desktop",
+        scripts: { typecheck: "tsc --noEmit" },
+      }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    const command = scope === "cwd" ? "npm test" : "npm --workspace @modus/desktop run typecheck";
+    const checkName = scope === "cwd" ? "tests" : "typecheck";
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "swapped-directory",
+        toolName: "terminal_run",
+        args: { command },
+      });
+      await rename(swappedDirectory, savedDirectory);
+      await mkdir(swappedDirectory);
+      await writeFile(
+        join(swappedDirectory, "package.json"),
+        JSON.stringify({
+          name: "@modus/desktop",
+          scripts: { test: "node unsafe.js", typecheck: "node unsafe.js" },
+        }),
+      );
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+      await rm(swappedDirectory, { recursive: true });
+      await rename(savedDirectory, swappedDirectory);
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "swapped-directory",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      });
+      const events = getRunToolEvidence(sessionId, run.id);
+      expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
+        checkConfigStable: false,
+      });
+      expect(
+        summarizeRunQA({
+          sessionId,
+          runId: run.id,
+          changedPaths: [],
+          requiredChecks: [checkName],
+          events,
+        }).status,
+      ).toBe("missing");
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects QA after a symlink above cwd is swapped and restored", async (context) => {
+    const sandbox = await mkdtemp(join(userData, "ancestor-link-qa-"));
+    const safeDirectory = join(sandbox, "safe");
+    const unsafeDirectory = join(sandbox, "unsafe");
+    const link = join(sandbox, "current");
+    const savedLink = join(sandbox, "saved-link");
+    await mkdir(join(safeDirectory, "repo"), { recursive: true });
+    await mkdir(join(unsafeDirectory, "repo"), { recursive: true });
+    await writeFile(
+      join(safeDirectory, "repo", "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run" },
+      }),
+    );
+    await writeFile(
+      join(unsafeDirectory, "repo", "package.json"),
+      JSON.stringify({
+        scripts: { test: "node unsafe.js" },
+      }),
+    );
+    try {
+      try {
+        await symlink(safeDirectory, link, "dir");
+      } catch (error) {
+        if (
+          ["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        )
+          context.skip("This filesystem or user cannot create directory symlinks.");
+        throw error;
+      }
+      const cwd = join(link, "repo");
+      const sessionId = `session-${crypto.randomUUID()}`;
+      insertSession(sessionId);
+      getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+      const run = createAgentRun({ sessionId, prompt: "private prompt" });
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "ancestor-link",
+        toolName: "terminal_run",
+        args: { command: "npm test" },
+      });
+      await rename(link, savedLink);
+      await symlink(unsafeDirectory, link, "dir");
+      expect(recognizeCheckInvocation("terminal_run", "npm test", cwd)).toBeUndefined();
+      await rm(link);
+      await rename(savedLink, link);
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "ancestor-link",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      });
+      const events = getRunToolEvidence(sessionId, run.id);
+      expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
+        checkConfigStable: false,
+      });
+      expect(
+        summarizeRunQA({
+          sessionId,
+          runId: run.id,
+          changedPaths: [],
+          requiredChecks: ["tests"],
+          events,
+        }).status,
+      ).toBe("missing");
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.for(["cwd", "workspace"])("handles artifact creation in %s conservatively", async (scope) => {
+    const cwd = await mkdtemp(join(userData, "artifact-qa-"));
+    const workspaceRoot = join(cwd, "apps", "desktop");
+    await mkdir(workspaceRoot, { recursive: true });
+    await writeFile(join(cwd, "package.json"), JSON.stringify({ workspaces: ["apps/*"] }));
+    await writeFile(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({
+        name: "@modus/desktop",
+        scripts: { typecheck: "tsc --noEmit" },
+      }),
+    );
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+    const run = createAgentRun({ sessionId, prompt: "private prompt" });
+    try {
+      recordAgentEvent({
+        type: "tool.started",
+        sessionId,
+        runId: run.id,
+        toolCallId: "artifact-check",
+        toolName: "terminal_run",
+        args: { command: "npm --workspace @modus/desktop run typecheck" },
+      });
+      await mkdir(join(scope === "cwd" ? cwd : workspaceRoot, "dist"));
+      recordAgentEvent({
+        type: "tool.ended",
+        sessionId,
+        runId: run.id,
+        toolCallId: "artifact-check",
+        toolName: "terminal_run",
+        isError: false,
+        exitCode: 0,
+      });
+      const events = getRunToolEvidence(sessionId, run.id);
+      expect(events.find((event) => event.type === "tool.ended")).toMatchObject({
+        checkConfigStable: scope === "workspace",
+      });
+      expect(
+        summarizeRunQA({
+          sessionId,
+          runId: run.id,
+          changedPaths: [],
+          requiredChecks: ["typecheck"],
+          events,
+        }).status,
+      ).toBe(scope === "workspace" ? "passed" : "missing");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it.for([
+    { manifestScope: "root", command: "npm test", checkName: "tests" },
+    {
+      manifestScope: "root",
+      command: "npm --workspace @modus/desktop run typecheck",
+      checkName: "typecheck",
+    },
+    {
+      manifestScope: "workspace",
+      command: "npm --workspace @modus/desktop run typecheck",
+      checkName: "typecheck",
+    },
+  ])("rejects restored $manifestScope manifest symlinks for $command", async ({
+    manifestScope,
+    command,
+    checkName,
+  }, context) => {
+    const cwd = await mkdtemp(join(userData, "symlink-qa-"));
+    const workspaceRoot = join(cwd, "apps", "desktop");
+    await mkdir(workspaceRoot, { recursive: true });
+    const rootManifest = JSON.stringify({
+      scripts: { test: "vitest run" },
+      workspaces: ["apps/*"],
+    });
+    const workspaceManifest = JSON.stringify({
+      name: "@modus/desktop",
+      scripts: { typecheck: "tsc --noEmit" },
+    });
+    await writeFile(join(cwd, "package.json"), rootManifest);
+    await writeFile(join(workspaceRoot, "package.json"), workspaceManifest);
+    const manifestPath = join(manifestScope === "root" ? cwd : workspaceRoot, "package.json");
+    const safeTarget = join(cwd, "safe-manifest.json");
+    const unsafeTarget = join(cwd, "unsafe-manifest.json");
+    const savedLink = join(cwd, "original-manifest-link");
+    await writeFile(safeTarget, manifestScope === "root" ? rootManifest : workspaceManifest);
+    await writeFile(unsafeTarget, JSON.stringify({ scripts: { test: "node unsafe.js" } }));
+    await rm(manifestPath);
+    try {
+      try {
+        await symlink(safeTarget, manifestPath, "file");
+      } catch (error) {
+        if (
+          ["EPERM", "EACCES", "ENOSYS", "ENOTSUP", "EOPNOTSUPP"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        ) {
+          context.skip("This filesystem or user cannot create file symlinks.");
+        }
+        throw error;
+      }
+      const sessionId = `session-${crypto.randomUUID()}`;
+      insertSession(sessionId);
+      getDatabase().prepare("update agent_sessions set cwd = ? where id = ?").run(cwd, sessionId);
+      const run = createAgentRun({ sessionId, prompt: "private prompt" });
+      const recordStart = (toolCallId: string) =>
+        recordAgentEvent({
+          type: "tool.started",
+          sessionId,
+          runId: run.id,
+          toolCallId,
+          toolName: "terminal_run",
+          args: { command },
+        } as never);
+      const recordEnd = (toolCallId: string) =>
+        recordAgentEvent({
+          type: "tool.ended",
+          sessionId,
+          runId: run.id,
+          toolCallId,
+          toolName: "terminal_run",
+          isError: false,
+          exitCode: 0,
+        } as never);
+
+      // An unchanged symlink remains a valid package check.
+      recordStart("stable-symlink-check");
+      recordEnd("stable-symlink-check");
+      expect(
+        summarizeRunQA({
+          sessionId,
+          runId: run.id,
+          changedPaths: [],
+          requiredChecks: [checkName],
+          events: getRunToolEvidence(sessionId, run.id),
+        }).status,
+      ).toBe("passed");
+
+      recordStart("restored-symlink-check");
+      await rename(manifestPath, savedLink);
+      await symlink(unsafeTarget, manifestPath, "file");
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+      if (manifestScope === "root" && command === "npm test") {
+        await writeFile(
+          join(cwd, "unsafe.cjs"),
+          `const fs = require("node:fs");
+console.log("unsafe-script-ran");
+fs.unlinkSync("package.json");
+fs.renameSync("original-manifest-link", "package.json");
+`,
+        );
+        await writeFile(unsafeTarget, JSON.stringify({ scripts: { test: "node unsafe.cjs" } }));
+        const output = execFileSync("npm", ["test", "--ignore-scripts=false"], {
+          cwd,
+          timeout: 10_000,
+          stdio: "pipe",
+          encoding: "utf8",
+          env: { ...process.env, npm_config_update_notifier: "false", npm_config_audit: "false" },
+        });
+        expect(output).toContain("unsafe-script-ran");
+      } else {
+        await rm(manifestPath);
+        await rename(savedLink, manifestPath);
+      }
+      recordEnd("restored-symlink-check");
+
+      const events = getRunToolEvidence(sessionId, run.id);
+      const ended = events.find(
+        (event) => event.type === "tool.ended" && event.toolCallId === "restored-symlink-check",
+      );
+      expect(ended?.type === "tool.ended" ? ended.checkConfigStable : undefined).toBe(false);
+      const qa = summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: [checkName],
+        events,
+      });
+      expect(qa.status).toBe("missing");
+      expect(qa.evidence.every((ref) => ref.status !== "passed")).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed for legacy package starts while retaining direct check recognition", async () => {
     await writeFile(
       join(userData, "package.json"),
@@ -1618,3 +2078,5 @@ describe("agent-event-store", () => {
     );
   });
 });
+
+import { execFileSync } from "node:child_process";

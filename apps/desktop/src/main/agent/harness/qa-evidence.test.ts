@@ -1,11 +1,69 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
 
 const sessionId = "session-safe-1";
 const runId = "run-safe-1";
+const manifestReadHook = vi.hoisted(() => ({ afterRead: undefined as (() => void) | undefined }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
+      const content = actual.readFileSync(...args);
+      manifestReadHook.afterRead?.();
+      return content;
+    },
+  };
+});
+
+describe("manifest read consistency", () => {
+  it.for([
+    "root",
+    "workspace",
+  ])("rejects a %s manifest changed after its bytes are read", async (scope) => {
+    const cwd = await mkdtemp(join(tmpdir(), "modus-read-consistency-"));
+    const workspaceRoot = join(cwd, "apps", "desktop");
+    mkdirSync(workspaceRoot, { recursive: true });
+    writeFileSync(
+      join(cwd, "package.json"),
+      JSON.stringify({
+        scripts: { test: "vitest run" },
+        workspaces: ["apps/*"],
+      }),
+    );
+    writeFileSync(
+      join(workspaceRoot, "package.json"),
+      JSON.stringify({
+        name: "@modus/desktop",
+        scripts: { typecheck: "tsc --noEmit" },
+      }),
+    );
+    let reads = 0;
+    manifestReadHook.afterRead = () => {
+      reads += 1;
+      if (reads !== (scope === "root" ? 1 : 2)) return;
+      manifestReadHook.afterRead = undefined;
+      writeFileSync(
+        join(scope === "root" ? cwd : workspaceRoot, "package.json"),
+        JSON.stringify({
+          name: "@modus/desktop",
+          scripts: { test: "node unsafe.js", typecheck: "node unsafe.js" },
+        }),
+      );
+    };
+    try {
+      const command =
+        scope === "root" ? "npm test" : "npm --workspace @modus/desktop run typecheck";
+      expect(recognizeCheckInvocation("terminal_run", command, cwd)).toBeUndefined();
+    } finally {
+      manifestReadHook.afterRead = undefined;
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+});
 
 function pair(overrides: Partial<Extract<RunQAEvent, { type: "tool.ended" }>> = {}): RunQAEvent[] {
   const started: RunQAEvent = {
@@ -443,3 +501,5 @@ describe("summarizeRunQA", () => {
     });
   });
 });
+
+import { mkdirSync, writeFileSync } from "node:fs";

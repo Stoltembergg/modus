@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readlinkSync,
+  statSync,
+} from "node:fs";
+import { dirname, join, parse, resolve, sep } from "node:path";
 import type { HarnessTaskCheckKind } from "../../../shared/contracts";
 
 export type VerificationEvidenceStatus =
@@ -125,30 +133,88 @@ export function resolvePackageCheckScript(
   packageName: string | undefined,
   scriptName: string,
 ): { body: string; configDigest: string; workspaceRoot?: string } | undefined {
+  // Observe links in directory components too, including links in a link's target.
+  const resolutionLinks = (path: string): unknown[] => {
+    let resolved = parse(resolve(path)).root;
+    let remaining = resolve(path).slice(resolved.length).split(sep).filter(Boolean);
+    const links: unknown[] = [];
+    while (remaining.length > 0) {
+      const component = remaining.shift();
+      if (!component) continue;
+      const candidate = join(resolved, component);
+      const entry = lstatSync(candidate, { bigint: true });
+      if (entry.isSymbolicLink()) {
+        if (links.length >= 40) throw new Error("Too many links in manifest resolution.");
+        const destination = readlinkSync(candidate);
+        links.push({
+          entry: [entry.dev, entry.ino, entry.size, entry.mtimeNs, entry.ctimeNs].map(String),
+          destination,
+        });
+        const target = resolve(dirname(candidate), destination);
+        resolved = parse(target).root;
+        remaining = [...target.slice(resolved.length).split(sep).filter(Boolean), ...remaining];
+      } else {
+        resolved = candidate;
+      }
+    }
+    return links;
+  };
   const manifestIdentity = (path: string): string | undefined => {
     try {
-      const stat = statSync(path, { bigint: true });
-      return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(":");
+      const entry = lstatSync(path, { bigint: true });
+      const target = statSync(path, { bigint: true });
+      const identity = (stat: typeof entry) =>
+        [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
+      return JSON.stringify({
+        entry: identity(entry),
+        target: identity(target),
+        link: entry.isSymbolicLink() ? readlinkSync(path) : null,
+        resolutionLinks: resolutionLinks(path),
+      });
     } catch {
       return undefined;
     }
   };
-  const readManifest = (path: string): Record<string, unknown> | undefined => {
+  const readManifest = (
+    path: string,
+  ): { value: Record<string, unknown>; identity: string } | undefined => {
+    let fd: number | undefined;
     try {
-      const text = readFileSync(path, "utf8");
+      const before = manifestIdentity(path);
+      if (!before) return undefined;
+      fd = openSync(path, "r");
+      const fileIdentity = () => {
+        const stat = fstatSync(fd as number, { bigint: true });
+        return [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String);
+      };
+      const opened = JSON.stringify(fileIdentity());
+      if (opened !== JSON.stringify(JSON.parse(before).target)) return undefined;
+      const text = readFileSync(fd, "utf8");
       if (Buffer.byteLength(text, "utf8") > 256 * 1024) return undefined;
+      if (opened !== JSON.stringify(fileIdentity()) || before !== manifestIdentity(path)) {
+        return undefined;
+      }
       const value = JSON.parse(text) as Record<string, unknown>;
-      return value && typeof value === "object" ? value : undefined;
+      return value && typeof value === "object" && !Array.isArray(value)
+        ? { value, identity: before }
+        : undefined;
     } catch {
       return undefined;
+    } finally {
+      if (fd !== undefined) closeSync(fd);
     }
   };
   const rootManifestPath = join(cwd, "package.json");
-  const root = readManifest(rootManifestPath);
-  const rootIdentity = manifestIdentity(rootManifestPath);
-  if (!root || !rootIdentity) return undefined;
+  // Cwd ctime deliberately rejects changes to top-level items as well as rename/restore.
+  const cwdIdentity = manifestIdentity(cwd);
+  const rootSnapshot = readManifest(rootManifestPath);
+  if (!rootSnapshot || !cwdIdentity) return undefined;
+  const root = rootSnapshot.value;
+  const rootIdentity = rootSnapshot.identity;
   let manifest = root;
   let manifestPath = rootManifestPath;
+  let checkManifestIdentity = rootIdentity;
+  let workspaceContainerIdentity: string | null | undefined = null;
   let workspaceRoot: string | undefined;
   if (packageName) {
     workspaceRoot = RECOGNIZED_WORKSPACE_ROOTS[packageName];
@@ -166,12 +232,25 @@ export function resolvePackageCheckScript(
     ) {
       return undefined;
     }
+    // Observe the container, leaving package-root ctime free to change for out/dist.
+    workspaceContainerIdentity = manifestIdentity(join(cwd, dirname(workspaceRoot)));
+    if (!workspaceContainerIdentity) return undefined;
     manifestPath = join(cwd, workspaceRoot, "package.json");
-    manifest = readManifest(manifestPath) ?? {};
+    const workspaceSnapshot = readManifest(manifestPath);
+    if (!workspaceSnapshot) return undefined;
+    manifest = workspaceSnapshot.value;
+    checkManifestIdentity = workspaceSnapshot.identity;
     if (manifest.name !== packageName) return undefined;
   }
-  const checkManifestIdentity = manifestIdentity(manifestPath);
-  if (!checkManifestIdentity) return undefined;
+  // Reject mixed snapshots if any relevant resolution changed during these reads.
+  if (
+    rootIdentity !== manifestIdentity(rootManifestPath) ||
+    checkManifestIdentity !== manifestIdentity(manifestPath) ||
+    cwdIdentity !== manifestIdentity(cwd) ||
+    (workspaceRoot &&
+      workspaceContainerIdentity !== manifestIdentity(join(cwd, dirname(workspaceRoot))))
+  )
+    return undefined;
   const scripts = manifest.scripts;
   const packageScripts =
     scripts && typeof scripts === "object" && !Array.isArray(scripts)
@@ -196,7 +275,9 @@ export function resolvePackageCheckScript(
         preHook: typeof preHook === "string" ? preHook : null,
         postHook: typeof postHook === "string" ? postHook : null,
         rootIdentity,
+        cwdIdentity,
         checkManifestIdentity,
+        workspaceContainerIdentity,
       }),
     )
     .digest("hex");

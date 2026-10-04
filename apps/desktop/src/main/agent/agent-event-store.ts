@@ -210,7 +210,7 @@ function packageCheckConfigIsStableAtEnd(
        where session_id = ? and type = 'tool.started'
          and json_extract(payload_json, '$.runId') = ?
          and json_extract(payload_json, '$.toolCallId') = ?
-       order by rowid desc limit 1`,
+       order by rowid asc limit 1`,
     )
     .get(event.sessionId, event.runId, event.toolCallId) as { payload_json: string } | undefined;
   if (!row) return undefined;
@@ -319,6 +319,35 @@ function readQACheckSnapshot(
   return snapshot ? { state: "valid", snapshot } : { state: "invalid" };
 }
 
+/** One tool call has one authoritative start and end, regardless of delivery keys. */
+function existingToolLifecycleEvent(
+  event: AgentEvent,
+  db: ReturnType<typeof getDatabase>,
+): { rowid: number; payload_json: string } | undefined {
+  if ((event.type !== "tool.started" && event.type !== "tool.ended") || !event.runId) {
+    return undefined;
+  }
+  const row = db
+    .prepare(
+      `select rowid, payload_json from agent_events
+     where session_id = ? and type = ?
+       and json_extract(payload_json, '$.runId') = ?
+       and json_extract(payload_json, '$.toolCallId') = ?
+     order by rowid asc limit 1`,
+    )
+    .get(event.sessionId, event.type, event.runId, event.toolCallId) as
+    | { rowid: number; payload_json: string }
+    | undefined;
+  if (
+    row &&
+    JSON.stringify(eventWithoutQACheckSnapshot(JSON.parse(row.payload_json))) !==
+      JSON.stringify(eventWithoutQACheckSnapshot(event))
+  ) {
+    throw new Error("Tool event identity was reused for a different event.");
+  }
+  return row;
+}
+
 export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?: string }): number {
   if (options?.idempotencyKey !== undefined) {
     if (!options.idempotencyKey.trim()) {
@@ -348,7 +377,9 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
       }
       return Number(existingBeforeInsert.rowid);
     }
-    const payload = serializeAgentEvent(event, db);
+    // Bind a new delivery key to the original payload; never recompute QA on replay.
+    const originalToolEvent = existingToolLifecycleEvent(event, db);
+    const payload = originalToolEvent?.payload_json ?? serializeAgentEvent(event, db);
     db.prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)
        values (?, ?, ?, ?, ?)
@@ -374,6 +405,8 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
   }
 
   const db = getDatabase();
+  const originalToolEvent = existingToolLifecycleEvent(event, db);
+  if (originalToolEvent) return Number(originalToolEvent.rowid);
   const insertResult = db
     .prepare(
       `insert into agent_events (id, session_id, type, payload_json, created_at)
@@ -778,11 +811,18 @@ export function getRunToolEvidence(
   if (afterRowId !== undefined && (!Number.isSafeInteger(afterRowId) || afterRowId <= 0)) return [];
   const rows = getDatabase()
     .prepare(
-      `select id, payload_json from agent_events
-       where session_id = ? and type in ('tool.started', 'tool.ended')
-         and json_extract(payload_json, '$.runId') = ?
-         and (? is null or rowid > ?)
-       order by rowid desc
+      `select e.id, e.payload_json from agent_events e
+       where e.session_id = ? and e.type in ('tool.started', 'tool.ended')
+         and json_extract(e.payload_json, '$.runId') = ?
+         and (? is null or e.rowid > ?)
+         and not exists (
+           select 1 from agent_events original
+           where original.session_id = e.session_id and original.type = e.type
+             and original.rowid < e.rowid
+             and json_extract(original.payload_json, '$.runId') = json_extract(e.payload_json, '$.runId')
+             and json_extract(original.payload_json, '$.toolCallId') = json_extract(e.payload_json, '$.toolCallId')
+         )
+       order by e.rowid desc
        limit ?`,
     )
     .all(sessionId, runId, afterRowId ?? null, afterRowId ?? null, MAX_RUN_TOOL_EVENTS)
