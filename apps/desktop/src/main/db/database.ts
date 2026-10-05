@@ -663,6 +663,8 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       "evidence_refs_json",
       "review_json",
       "state_version",
+      "ready_since",
+      "ready_generation",
     ];
     const defaults: Record<string, string> = {
       kind: "'legacy'",
@@ -676,6 +678,8 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       evidence_refs_json: "'[]'",
       review_json: "null",
       state_version: "1",
+      ready_since: "null",
+      ready_generation: "0",
     };
     db.exec("begin");
     try {
@@ -702,7 +706,9 @@ function migrateGroupTaskState(db: DatabaseSync): void {
         verification_policy_json text not null default '{"mode":"none","requireReview":false}' check (json_valid(verification_policy_json) and json_type(verification_policy_json) = 'object'),
         evidence_refs_json text not null default '[]' check (json_valid(evidence_refs_json) and json_type(evidence_refs_json) = 'array'),
         review_json text,
-        state_version integer not null default 1 check (state_version >= 1)
+        state_version integer not null default 1 check (state_version >= 1),
+        ready_since text,
+        ready_generation integer not null default 0
       )`);
       db.exec(`insert into group_tasks_replacement (${columns.join(", ")})
         select ${columns.map((column) => (oldColumns.includes(column) ? column : (defaults[column] ?? "null"))).join(", ")}
@@ -719,6 +725,9 @@ function migrateGroupTaskState(db: DatabaseSync): void {
       throw error;
     }
   }
+  // Existing backlog begins aging when the runtime first discovers readiness.
+  addColumn(db, "group_tasks", "ready_since", "text");
+  addColumn(db, "group_tasks", "ready_generation", "integer not null default 0");
   db.exec(`
     create table if not exists group_task_events (
       id text primary key,

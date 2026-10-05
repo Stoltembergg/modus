@@ -31,6 +31,11 @@ const {
   getGroupTaskRunBinding,
   listGroupTaskTransitions,
   onGroupTaskTransition,
+  recordGroupTaskReadyEvent,
+  getGroupTaskReadyState,
+  scanGroupTaskReadyEvents,
+  onGroupTaskChanged,
+  updateGroupTask,
 } = await import("./group-task-store");
 
 it("publishes committed task transitions with sequence only to active main-process subscribers", async () => {
@@ -167,6 +172,8 @@ describe("group task migration", () => {
         priority: "normal",
         criteria_version: 1,
         state_version: 1,
+        ready_since: null,
+        ready_generation: 0,
       });
       expect(JSON.parse(row.dependency_ids_json as string)).toEqual([]);
       expect(JSON.parse(row.criteria_json as string)).toEqual([]);
@@ -646,5 +653,275 @@ describe("versioned task state", () => {
     expect(listGroupTasks(group.id)[0]?.criteria).toEqual([]);
     db.prepare("update group_tasks set verification_policy_json = '{}' where id = ?").run(task.id);
     expect(() => listGroupTasks(group.id)).toThrow();
+  });
+});
+
+describe("durable task readiness", () => {
+  const readyRow = (taskId: string) =>
+    getDatabase().prepare("select ready_since from group_tasks where id = ?").get(taskId) as {
+      ready_since: string | null;
+    };
+
+  it("records one same-status event and replays an operation without changing task state", async () => {
+    const { group, db } = fixture();
+    const task = createGroupTask({ groupId: group.id, title: "Ready" });
+    const ready = getGroupTaskReadyState(task.id);
+    if (!ready) throw new Error("Created task is not ready.");
+    const input = {
+      groupId: group.id,
+      taskId: task.id,
+      expectedVersion: 1,
+      readinessFingerprint: ready.readinessFingerprint,
+      operationId: `ready-test:${task.id}`,
+    };
+    const seen: string[] = [];
+    const unsubscribe = onGroupTaskTransition((event) => seen.push(event.id));
+    try {
+      const before = db.prepare("select * from group_tasks where id = ?").get(task.id);
+      const first = recordGroupTaskReadyEvent(input);
+      expect(first).toMatchObject({
+        action: "task_ready",
+        taskVersion: 1,
+        fromStatus: "open",
+        toStatus: "open",
+      });
+      expect(recordGroupTaskReadyEvent(input)).toEqual(first);
+      expect(db.prepare("select * from group_tasks where id = ?").get(task.id)).toEqual(before);
+      expect(listGroupTaskTransitions(task.id)).toEqual([first]);
+      const stored = db
+        .prepare("select result_json from group_task_events where id = ?")
+        .get(first.id) as { result_json: string };
+      expect(JSON.parse(stored.result_json)).toMatchObject({
+        readinessFingerprint: ready.readinessFingerprint,
+        readySince: ready.readySince,
+        taskVersion: 1,
+      });
+      await Promise.resolve();
+      expect(seen).toEqual([first.id]);
+      expect(() =>
+        recordGroupTaskReadyEvent({
+          ...input,
+          operationId: `${input.operationId}:stale`,
+          expectedVersion: 9,
+        }),
+      ).toThrow(/version/);
+      expect(() =>
+        recordGroupTaskReadyEvent({ ...input, readinessFingerprint: "changed" }),
+      ).toThrow(/different|conflict/);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("rejects owned, blocked and dependency-incomplete tasks without source events", () => {
+    const { group, task } = fixture();
+    const blocked = createGroupTask({ groupId: group.id, title: "Blocked", status: "blocked" });
+    const dependent = createGroupTask({
+      groupId: group.id,
+      title: "Dependent",
+      kind: "docs",
+      priority: "normal",
+      dependencyIds: [task.id],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    for (const item of [task, blocked, dependent]) {
+      expect(() =>
+        recordGroupTaskReadyEvent({
+          groupId: group.id,
+          taskId: item.id,
+          expectedVersion: 1,
+          readinessFingerprint: "not-ready",
+          operationId: crypto.randomUUID(),
+        }),
+      ).toThrow(/ready/);
+      expect(listGroupTaskTransitions(item.id)).toEqual([]);
+    }
+  });
+
+  it("preserves ready age through edits and resets it on blocked or dependency re-entry", () => {
+    const { group } = fixture();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+      const dependency = createGroupTask({
+        groupId: group.id,
+        title: "Prerequisite",
+        status: "done",
+      });
+      const task = createGroupTask({
+        groupId: group.id,
+        title: "Ready",
+        kind: "docs",
+        priority: "normal",
+        dependencyIds: [dependency.id],
+        criteria: [],
+        verificationPolicy: { mode: "none", requireReview: false },
+      });
+      scanGroupTaskReadyEvents(group.id);
+      const originalAge = readyRow(task.id).ready_since;
+      expect(originalAge).toBe("2026-10-01T00:00:00.000Z");
+      vi.setSystemTime(new Date("2026-10-02T00:00:00Z"));
+      updateGroupTask(task.id, { branch: "docs/edit" });
+      scanGroupTaskReadyEvents(group.id);
+      expect(readyRow(task.id).ready_since).toBe(originalAge);
+      updateGroupTask(task.id, { status: "blocked" });
+      expect(readyRow(task.id).ready_since).toBeNull();
+      vi.setSystemTime(new Date("2026-10-03T00:00:00Z"));
+      updateGroupTask(task.id, { status: "open" });
+      scanGroupTaskReadyEvents(group.id);
+      expect(readyRow(task.id).ready_since).toBe("2026-10-03T00:00:00.000Z");
+      updateGroupTask(dependency.id, { status: "open" });
+      expect(readyRow(task.id).ready_since).toBeNull();
+      vi.setSystemTime(new Date("2026-10-04T00:00:00Z"));
+      updateGroupTask(dependency.id, { status: "done" });
+      scanGroupTaskReadyEvents(group.id);
+      expect(readyRow(task.id).ready_since).toBe("2026-10-04T00:00:00.000Z");
+      expect(
+        listGroupTaskTransitions(task.id).filter((event) => event.action === "task_ready"),
+      ).toHaveLength(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ages a legacy backlog from discovery and deduplicates repeated scans", () => {
+    const { group, db } = fixture();
+    const task = createGroupTask({ groupId: group.id, title: "Legacy backlog" });
+    db.prepare("update group_tasks set created_at = ?, ready_since = null where id = ?").run(
+      "2020-01-01T00:00:00.000Z",
+      task.id,
+    );
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+      const first = scanGroupTaskReadyEvents(group.id);
+      expect(first).toHaveLength(1);
+      expect(readyRow(task.id).ready_since).toBe("2026-10-05T12:00:00.000Z");
+      expect(scanGroupTaskReadyEvents(group.id)).toEqual(first);
+      expect(listGroupTaskTransitions(task.id)).toEqual(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves unrelated legacy backlog untouched until an explicit scan", () => {
+    const { group, db } = fixture();
+    const legacy = createGroupTask({ groupId: group.id, title: "Old backlog" });
+    db.prepare("update group_tasks set ready_since = null where id = ?").run(legacy.id);
+    const changed = createGroupTask({ groupId: group.id, title: "Changed task" });
+    updateGroupTask(changed.id, { branch: "docs/new" });
+    expect(readyRow(legacy.id).ready_since).toBeNull();
+    scanGroupTaskReadyEvents(group.id);
+    expect(readyRow(legacy.id).ready_since).not.toBeNull();
+  });
+
+  it("does not age an eligible legacy task on its own harmless edit before discovery", () => {
+    const { group, db } = fixture();
+    const task = createGroupTask({ groupId: group.id, title: "Legacy ready" });
+    db.prepare("update group_tasks set ready_since = null, ready_generation = 0 where id = ?").run(
+      task.id,
+    );
+    updateGroupTask(task.id, { branch: "docs/harmless" });
+    expect(readyRow(task.id).ready_since).toBeNull();
+    updateGroupTask(task.id, { status: "blocked" });
+    expect(readyRow(task.id).ready_since).toBeNull();
+    updateGroupTask(task.id, { status: "open" });
+    expect(readyRow(task.id).ready_since).not.toBeNull();
+  });
+
+  it("does not age an eligible legacy dependent on a harmless prerequisite edit", () => {
+    const { group, db } = fixture();
+    const prerequisite = createGroupTask({ groupId: group.id, title: "Done", status: "done" });
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Legacy dependent",
+      kind: "docs",
+      priority: "normal",
+      dependencyIds: [prerequisite.id],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    db.prepare("update group_tasks set ready_since = null, ready_generation = 0 where id = ?").run(
+      task.id,
+    );
+    updateGroupTask(prerequisite.id, { branch: "docs/harmless" });
+    expect(readyRow(task.id).ready_since).toBeNull();
+    updateGroupTask(prerequisite.id, { status: "open" });
+    expect(readyRow(task.id).ready_since).toBeNull();
+    updateGroupTask(prerequisite.id, { status: "done" });
+    expect(readyRow(task.id).ready_since).not.toBeNull();
+  });
+
+  it("looks up only dependency IDs when checking one task's readiness", () => {
+    const { group, db } = fixture();
+    const prerequisite = createGroupTask({ groupId: group.id, title: "Done", status: "done" });
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Dependent",
+      kind: "docs",
+      priority: "normal",
+      dependencyIds: [prerequisite.id],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    const prepare = vi.spyOn(db, "prepare");
+    try {
+      expect(getGroupTaskReadyState(task.id)).toBeDefined();
+      const sql = prepare.mock.calls.map(([statement]) => statement).join("\n");
+      expect(sql).not.toMatch(/select id, status from group_tasks where group_id = \?/i);
+      expect(sql).toMatch(/select status from group_tasks where id = \?/i);
+    } finally {
+      prepare.mockRestore();
+    }
+  });
+
+  it("gives a reentered ready interval a new fingerprint in the same millisecond", () => {
+    const { group } = fixture();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-10-05T12:00:00Z"));
+      const task = createGroupTask({ groupId: group.id, title: "Rapid reentry" });
+      const first = getGroupTaskReadyState(task.id);
+      expect(first).toBeDefined();
+      const firstEvent = scanGroupTaskReadyEvents(group.id).find(
+        (event) => event.taskId === task.id,
+      );
+      updateGroupTask(task.id, { status: "blocked" });
+      updateGroupTask(task.id, { status: "open" });
+      const second = getGroupTaskReadyState(task.id);
+      expect(second?.readySince).toBe(first?.readySince);
+      expect(second?.readinessFingerprint).not.toBe(first?.readinessFingerprint);
+      const secondEvent = scanGroupTaskReadyEvents(group.id).find(
+        (event) => event.taskId === task.id,
+      );
+      expect(secondEvent?.id).not.toBe(firstEvent?.id);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes task creation after commit to subscribers alongside the renderer sink", async () => {
+    const { group, db } = fixture();
+    await Promise.resolve();
+    const seen: string[] = [];
+    const rendered: string[] = [];
+    const unsubscribe = onGroupTaskChanged((change) => seen.push(change.taskId));
+    setGroupTaskChangedSink((change) => rendered.push(change.taskId));
+    try {
+      db.exec("savepoint readiness_creation");
+      createGroupTask({ groupId: group.id, title: "Rolled back" });
+      db.exec("rollback to readiness_creation; release readiness_creation");
+      await Promise.resolve();
+      expect(seen).toEqual([]);
+      const task = createGroupTask({ groupId: group.id, title: "Committed" });
+      expect(seen).toEqual([]);
+      await Promise.resolve();
+      expect(seen).toEqual([task.id]);
+      expect(rendered).toEqual([task.id]);
+    } finally {
+      unsubscribe();
+      setGroupTaskChangedSink(undefined);
+    }
   });
 });

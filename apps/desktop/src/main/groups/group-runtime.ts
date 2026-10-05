@@ -116,12 +116,15 @@ import { getGroupTaskDetails } from "./group-task-details";
 import { findGroupTaskForWake } from "./group-task-evidence";
 import {
   getGroupTask,
+  getGroupTaskReadyState,
   getGroupTaskRunBinding,
   groupTaskOperationFingerprint,
   isGroupTaskRunAssignmentCurrent,
   markGroupTaskExplicitDispatch,
+  onGroupTaskChanged,
   onGroupTaskTransition,
   reassignGroupTaskForSuggestion,
+  scanGroupTaskReadyEvents,
 } from "./group-task-store";
 import { GroupTurnTranscript } from "./group-turn-transcript";
 import { getGroupWorkState } from "./group-work-state";
@@ -209,11 +212,21 @@ export class GroupRuntime {
     if (this.runtime.onEvent)
       this.unsubscribers.push(this.runtime.onEvent((event) => this.handleAgentEvent(event)));
     this.unsubscribers.push(onGroupTaskTransition((event) => this.handleTaskTransition(event)));
+    this.unsubscribers.push(
+      onGroupTaskChanged((change) => {
+        if (!this.disposed) scanGroupTaskReadyEvents(change.groupId, change.taskId);
+      }),
+    );
     if (options.recoverPending) {
       this.recoverJobs();
       this.recoverUnprocessedTransitions();
       void this.recoverPendingActions();
     }
+    // Discovery is explicit: migration itself never inserts source events.
+    for (const row of getDatabase().prepare("select id from agent_groups").all() as Array<{
+      id: string;
+    }>)
+      scanGroupTaskReadyEvents(row.id);
   }
 
   /** A user message into the room: new execution by default; Complementar joins one. */
@@ -739,7 +752,16 @@ export class GroupRuntime {
 
   /** Consume only an exact committed task event; public room text is never a trigger. */
   handleTaskTransition(event: GroupTaskTransitionEvent): void {
-    if (this.disposed || !event.executionId) return;
+    if (this.disposed) return;
+    if (event.action === "task_ready") {
+      const trigger = this.persistedTrigger(event);
+      if (trigger)
+        void this.processTaskTrigger(trigger).catch((error) =>
+          console.warn("[modus] ready task decision failed:", error),
+        );
+      return;
+    }
+    if (!event.executionId) return;
     const chain = this.chains.get(event.executionId);
     if (!chain || chain.ended || chain.retired || chain.groupId !== event.groupId) return;
     const trigger = this.persistedTrigger(event);
@@ -760,7 +782,8 @@ export class GroupRuntime {
   private persistedTrigger(event: GroupTaskTransitionEvent): GroupTaskTrigger | undefined {
     const row = getDatabase()
       .prepare(`select rowid as sequence, group_id, task_id, task_version,
-      execution_id, action, from_status, to_status, operation_id from group_task_events where id = ?`)
+      execution_id, action, from_status, to_status, operation_id, result_json
+      from group_task_events where id = ?`)
       .get(event.id) as
       | {
           sequence: number;
@@ -772,6 +795,7 @@ export class GroupRuntime {
           from_status: GroupTaskTrigger["fromStatus"];
           to_status: GroupTaskTrigger["toStatus"];
           operation_id: string | null;
+          result_json: string | null;
         }
       | undefined;
     if (
@@ -779,14 +803,31 @@ export class GroupRuntime {
       row.group_id !== event.groupId ||
       row.task_id !== event.taskId ||
       row.task_version !== event.taskVersion ||
-      row.execution_id !== event.executionId ||
+      (row.execution_id ?? undefined) !== event.executionId ||
       row.action !== event.action ||
       row.from_status !== event.fromStatus ||
       row.to_status !== event.toStatus
     )
       return undefined;
     let kind: GroupTaskTrigger["kind"] | undefined;
-    if (
+    let readiness: { readinessFingerprint: string; readySince: string } | undefined;
+    if (row.action === "task_ready" && row.from_status === "open" && row.to_status === "open") {
+      try {
+        const result = JSON.parse(row.result_json ?? "null") as Record<string, unknown> | null;
+        if (
+          typeof result?.readinessFingerprint !== "string" ||
+          typeof result.readySince !== "string"
+        )
+          return undefined;
+        readiness = {
+          readinessFingerprint: result.readinessFingerprint,
+          readySince: result.readySince,
+        };
+        kind = "task_ready";
+      } catch {
+        return undefined;
+      }
+    } else if (
       ["assign", "claim", "group_assign_task", "group_claim_task", "group_handoff"].includes(
         row.action,
       ) &&
@@ -862,6 +903,7 @@ export class GroupRuntime {
       taskVersion: row.task_version,
       ...(row.execution_id ? { executionId: row.execution_id } : {}),
       sourceEventId: event.id,
+      ...(readiness ?? {}),
       sequence: row.sequence,
       fromStatus: row.from_status,
       toStatus: row.to_status,
@@ -985,6 +1027,47 @@ export class GroupRuntime {
 
   private async processTaskTrigger(trigger: GroupTaskTrigger): Promise<void> {
     if (getGroupActionBySource(trigger.groupId, trigger.sourceEventId)) return;
+    if (trigger.kind === "task_ready") {
+      const ready = getGroupTaskReadyState(trigger.taskId);
+      if (
+        !ready ||
+        ready.taskVersion !== trigger.taskVersion ||
+        ready.readinessFingerprint !== trigger.readinessFingerprint ||
+        ready.readySince !== trigger.readySince ||
+        this.disposed
+      )
+        return;
+      const decision = {
+        kind: "suggest" as const,
+        taskId: trigger.taskId,
+        sourceEventId: trigger.sourceEventId,
+        reasonCode: "target-unassigned",
+        idempotencyKey: JSON.stringify([
+          trigger.groupId,
+          trigger.sourceEventId,
+          trigger.taskVersion,
+          trigger.readinessFingerprint,
+          "suggest",
+        ]),
+      };
+      const action = persistGroupProactivityDecision(decision);
+      const sourceChain = trigger.executionId
+        ? (this.chains.get(trigger.executionId) ?? readGroupChain(trigger.executionId))
+        : undefined;
+      const sourceLive = Boolean(
+        sourceChain &&
+          sourceChain.groupId === trigger.groupId &&
+          !sourceChain.ended &&
+          !sourceChain.retired,
+      );
+      if (!sourceLive)
+        getDatabase()
+          .prepare(`update group_proactivity_actions set requires_new_execution = 1
+          where id = ? and requires_new_execution = 0`)
+          .run(action.id);
+      this.emitSuggestionChanged(getGroupAction(action.id) ?? action);
+      return;
+    }
     const snapshot = await this.decisionSnapshot(trigger);
     if (!snapshot) return;
     const decision = decideGroupNextAction(snapshot);
@@ -1130,35 +1213,42 @@ export class GroupRuntime {
         e.execution_id, e.from_status, e.to_status, e.created_at
         from group_task_events e left join group_proactivity_actions a
           on a.group_id = e.group_id and a.source_event_id = e.id
-        where e.execution_id is not null and a.id is null order by e.rowid`)
+        where (e.execution_id is not null or e.action = 'task_ready')
+          and a.id is null order by e.rowid`)
       .all() as Array<{
       id: string;
       group_id: string;
       task_id: string;
       task_version: number;
       action: string;
-      execution_id: string;
+      execution_id: string | null;
       from_status: GroupTaskTransitionEvent["fromStatus"];
       to_status: GroupTaskTransitionEvent["toStatus"];
       created_at: string;
     }>;
     for (const row of rows) {
       if (this.disposed) return;
-      const chain = this.chains.get(row.execution_id) ?? readGroupChain(row.execution_id);
-      if (!chain || chain.ended || chain.retired || chain.groupId !== row.group_id) continue;
+      const chain = row.execution_id
+        ? (this.chains.get(row.execution_id) ?? readGroupChain(row.execution_id))
+        : undefined;
+      if (
+        row.action !== "task_ready" &&
+        (!chain || chain.ended || chain.retired || chain.groupId !== row.group_id)
+      )
+        continue;
       const event: GroupTaskTransitionEvent = {
         id: row.id,
         groupId: row.group_id,
         taskId: row.task_id,
         taskVersion: row.task_version,
         action: row.action,
-        executionId: row.execution_id,
+        ...(row.execution_id ? { executionId: row.execution_id } : {}),
         fromStatus: row.from_status,
         toStatus: row.to_status,
         createdAt: row.created_at,
       };
       if (!this.persistedTrigger(event)) continue;
-      this.chains.set(chain.chainId, chain);
+      if (chain && !chain.ended && !chain.retired) this.chains.set(chain.chainId, chain);
       this.handleTaskTransition(event);
     }
   }
@@ -2272,6 +2362,19 @@ export class GroupRuntime {
     const tasks = new Map(listGroupTasks(task.groupId).map((item) => [item.id, item]));
     if ((task.dependencyIds ?? []).some((id) => tasks.get(id)?.status !== "done"))
       throw new GroupStoreError("invalid-dependency", "Complete prerequisite tasks first.");
+
+    if (trigger.kind === "task_ready") {
+      const ready = getGroupTaskReadyState(task.id);
+      if (
+        task.status !== "open" ||
+        task.ownerSessionId ||
+        !ready ||
+        ready.readinessFingerprint !== trigger.readinessFingerprint ||
+        ready.readySince !== trigger.readySince
+      )
+        throw new GroupStoreError("stale-task", "Task readiness changed.");
+      return;
+    }
 
     if (trigger.kind === "task_assigned" || trigger.kind === "task_unblocked") {
       if (task.status !== "in_progress")

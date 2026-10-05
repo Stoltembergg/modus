@@ -420,6 +420,7 @@ export type GroupDecisionSnapshot = {
 
 export type GroupTaskTrigger = {
   kind:
+    | "task_ready"
     | "task_assigned"
     | "task_unblocked"
     | "review_requested"
@@ -430,6 +431,8 @@ export type GroupTaskTrigger = {
   taskVersion: number;
   executionId?: string;
   sourceEventId: string;
+  readinessFingerprint?: string;
+  readySince?: string;
   /** Stable monotonic order assigned by the persisted event source. */
   sequence: number;
   /** Status transition for review events, validated against the current task. */

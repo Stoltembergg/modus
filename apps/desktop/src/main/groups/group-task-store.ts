@@ -266,12 +266,14 @@ let toolOperationActive = false;
 let groupTaskChangedSink:
   | ((change: { groupId: string; taskId: string; stateVersion: number }) => void)
   | undefined;
+type TaskChange = { groupId: string; taskId: string; stateVersion: number };
+const taskChangedListeners = new Set<(change: TaskChange) => void>();
 const pendingTaskChanges = new Map<
   string,
   {
     groupId: string;
     expectedVersion: number;
-    sink: (change: { groupId: string; taskId: string; stateVersion: number }) => void;
+    sink: ((change: TaskChange) => void) | undefined;
   }
 >();
 const taskTransitionListeners = new Set<
@@ -314,17 +316,25 @@ export function setGroupTaskChangedSink(
   groupTaskChangedSink = sink;
 }
 
+export function onGroupTaskChanged(listener: (change: TaskChange) => void): () => void {
+  taskChangedListeners.add(listener);
+  return () => taskChangedListeners.delete(listener);
+}
+
 /** Publish only after the synchronous transaction has had a chance to commit. */
-function notifyGroupTaskChanged(task: Pick<GroupTask, "groupId" | "id" | "stateVersion">): void {
-  const sink = groupTaskChangedSink;
-  if (!sink) return;
+function notifyGroupTaskChanged(
+  task: Pick<GroupTask, "groupId" | "id" | "stateVersion">,
+  previousTask?: GroupTask,
+): void {
+  refreshGroupReadySince(task.groupId, task.id, previousTask, !previousTask);
   const expectedVersion = task.stateVersion ?? 1;
   const pending = pendingTaskChanges.get(task.id);
   if (pending && pending.groupId === task.groupId) {
     pending.expectedVersion = Math.max(pending.expectedVersion, expectedVersion);
+    if (groupTaskChangedSink) pending.sink = groupTaskChangedSink;
     return;
   }
-  const notification = { groupId: task.groupId, expectedVersion, sink };
+  const notification = { groupId: task.groupId, expectedVersion, sink: groupTaskChangedSink };
   pendingTaskChanges.set(task.id, notification);
   queueMicrotask(() => {
     if (pendingTaskChanges.get(task.id) !== notification) return;
@@ -336,11 +346,24 @@ function notifyGroupTaskChanged(task: Pick<GroupTask, "groupId" | "id" | "stateV
         (current.stateVersion ?? 1) < notification.expectedVersion
       )
         return;
-      notification.sink({
+      const change = {
         groupId: current.groupId,
         taskId: current.id,
         stateVersion: current.stateVersion ?? 1,
-      });
+      };
+      try {
+        notification.sink?.(change);
+      } catch (error) {
+        console.warn("[modus] group task change sink failed:", error);
+      }
+      for (const listener of [...taskChangedListeners]) {
+        if (!taskChangedListeners.has(listener)) continue;
+        try {
+          listener(change);
+        } catch (error) {
+          console.warn("[modus] group task change listener failed:", error);
+        }
+      }
     } catch {
       // The task may have been rolled back or deleted before the notification runs.
     }
@@ -809,7 +832,7 @@ export function recordGroupTaskLegacyTransition(
   db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(task.id);
   const next = requireGroupTask(task.groupId, task.id);
   recordEvent(db, task, action, next, actorSessionId, operationId, input);
-  notifyGroupTaskChanged(next);
+  notifyGroupTaskChanged(next, task);
 }
 
 export function reportGroupTaskProgress(input: GroupTaskProgressInput): GroupTask {
@@ -860,7 +883,7 @@ export function reportGroupTaskProgress(input: GroupTaskProgressInput): GroupTas
     );
     const next = requireGroupTask(input.groupId, task.id);
     recordEvent(db, task, "progress", next, input.actorSessionId, input.operationId, input);
-    notifyGroupTaskChanged(next);
+    notifyGroupTaskChanged(next, task);
     return next;
   });
 }
@@ -938,7 +961,7 @@ export function recordGroupTaskEvidence(input: GroupTaskEvidenceInput): GroupTas
     ).run(JSON.stringify(input.evidenceRefs), new Date().toISOString(), task.id);
     const next = requireGroupTask(input.groupId, task.id);
     recordEvent(db, task, "evidence", next, input.actorSessionId, input.operationId, input);
-    notifyGroupTaskChanged(next);
+    notifyGroupTaskChanged(next, task);
     return next;
   });
 }
@@ -1099,6 +1122,226 @@ function toTransition(row: EventRow): GroupTaskTransitionEvent {
     toStatus: row.to_status,
     createdAt: row.created_at,
   };
+}
+
+type ReadyState = { readinessFingerprint: string; readySince: string; taskVersion: number };
+
+/** Read statuses once, then reconcile only the changed task and its dependents. */
+function refreshGroupReadySince(
+  groupId: string,
+  changedTaskId?: string,
+  previousTask?: GroupTask,
+  created = false,
+): Map<string, ReadyState> {
+  const db = getDatabase();
+  const rows = db
+    .prepare(`select id, status, owner_session_id, dependency_ids_json, ready_since,
+    ready_generation, state_version
+    from group_tasks where group_id = ?`)
+    .all(groupId) as Array<{
+    id: string;
+    status: GroupTaskStatus;
+    owner_session_id: string | null;
+    dependency_ids_json: string;
+    ready_since: string | null;
+    ready_generation: number;
+    state_version: number;
+  }>;
+  const statuses = new Map(rows.map((row) => [row.id, row.status]));
+  const now = new Date().toISOString();
+  const readyStates = new Map<string, ReadyState>();
+  for (const row of rows) {
+    const dependencies = parseStored(row.dependency_ids_json, "dependencies", strings);
+    if (changedTaskId && row.id !== changedTaskId && !dependencies.includes(changedTaskId))
+      continue;
+    const ready =
+      row.status === "open" &&
+      row.owner_session_id === null &&
+      dependencies.every((id) => statuses.get(id) === "done");
+    if (ready) {
+      const priorStatus = row.id === changedTaskId ? previousTask?.status : row.status;
+      const priorOwner =
+        row.id === changedTaskId ? (previousTask?.ownerSessionId ?? null) : row.owner_session_id;
+      const priorDependencies =
+        row.id === changedTaskId ? (previousTask?.dependencyIds ?? []) : dependencies;
+      const previouslyReady =
+        previousTask !== undefined &&
+        priorStatus === "open" &&
+        priorOwner === null &&
+        priorDependencies.every(
+          (id) => (id === changedTaskId ? previousTask.status : statuses.get(id)) === "done",
+        );
+      const newlyReady =
+        !changedTaskId ||
+        (created && row.id === changedTaskId) ||
+        (previousTask !== undefined && !previouslyReady);
+      if (row.ready_since === null && !newlyReady) continue;
+      const readySince = row.ready_since ?? now;
+      const generation = row.ready_since === null ? row.ready_generation + 1 : row.ready_generation;
+      if (row.ready_since === null)
+        db.prepare(`update group_tasks set ready_since = ?, ready_generation = ? where id = ?`).run(
+          readySince,
+          generation,
+          row.id,
+        );
+      readyStates.set(row.id, {
+        readinessFingerprint: JSON.stringify([row.id, generation]),
+        readySince,
+        taskVersion: row.state_version,
+      });
+    } else if (row.ready_since !== null) {
+      db.prepare("update group_tasks set ready_since = null where id = ?").run(row.id);
+    }
+  }
+  return readyStates;
+}
+
+export function getGroupTaskReadyState(taskId: string): ReadyState | undefined {
+  const db = getDatabase();
+  const row = db
+    .prepare(`select id, group_id, status, owner_session_id, dependency_ids_json,
+    state_version, ready_since, ready_generation from group_tasks where id = ?`)
+    .get(taskId) as
+    | {
+        id: string;
+        group_id: string;
+        status: GroupTaskStatus;
+        owner_session_id: string | null;
+        dependency_ids_json: string;
+        state_version: number;
+        ready_since: string | null;
+        ready_generation: number;
+      }
+    | undefined;
+  if (row?.status !== "open" || row.owner_session_id !== null || !row.ready_since) return undefined;
+  const dependencies = parseStored(row.dependency_ids_json, "dependencies", strings);
+  if (dependencies.length) {
+    const lookup = db.prepare("select status from group_tasks where id = ? and group_id = ?");
+    if (
+      !dependencies.every(
+        (id) =>
+          (lookup.get(id, row.group_id) as { status: GroupTaskStatus } | undefined)?.status ===
+          "done",
+      )
+    )
+      return undefined;
+  }
+  return {
+    readinessFingerprint: JSON.stringify([row.id, row.ready_generation]),
+    readySince: row.ready_since,
+    taskVersion: row.state_version,
+  };
+}
+
+type RecordReadyInput = {
+  groupId: string;
+  taskId: string;
+  expectedVersion: number;
+  readinessFingerprint: string;
+  operationId: string;
+};
+
+function persistGroupTaskReadyEvent(
+  input: RecordReadyInput,
+  knownReady?: ReadyState,
+): GroupTaskTransitionEvent {
+  const db = getDatabase();
+  return transaction(db, () => {
+    requireOperationId(input.operationId);
+    const prior = db
+      .prepare("select id, action, result_json from group_task_events where operation_id = ?")
+      .get(input.operationId) as
+      | { id: string; action: string; result_json: string | null }
+      | undefined;
+    if (prior) {
+      const saved = JSON.parse(prior.result_json ?? "null") as { input?: unknown } | null;
+      if (
+        prior.action !== "task_ready" ||
+        JSON.stringify(canonical(saved?.input)) !== JSON.stringify(canonical(input))
+      )
+        throw new GroupStoreError(
+          "invalid-value",
+          "Operation ID was used for a different ready event.",
+        );
+      const row = db
+        .prepare(`select id, group_id, task_id, task_version, action,
+        actor_session_id, source_event_id, execution_id, from_status, to_status, created_at
+        from group_task_events where id = ?`)
+        .get(prior.id) as EventRow;
+      return toTransition(row);
+    }
+    rejectRunOperationCollision(db, input.operationId);
+    const task = requireTaskInGroup(input.taskId, input.groupId);
+    requireVersion(task, input.expectedVersion);
+    const ready = knownReady ?? getGroupTaskReadyState(input.taskId);
+    if (!ready) throw new GroupStoreError("invalid-transition", "Task is not ready.");
+    if (ready.readinessFingerprint !== input.readinessFingerprint)
+      throw new GroupStoreError("stale-task", "Task readiness fingerprint changed.");
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    db.prepare(`insert into group_task_events
+      (id, group_id, task_id, task_version, action, actor_session_id, execution_id,
+       from_status, to_status, operation_id, result_json, created_at)
+      values (?, ?, ?, ?, 'task_ready', null, ?, ?, ?, ?, ?, ?)`).run(
+      id,
+      input.groupId,
+      input.taskId,
+      input.expectedVersion,
+      task.executionId ?? null,
+      task.status,
+      task.status,
+      input.operationId,
+      JSON.stringify({
+        input: canonical(input),
+        readinessFingerprint: ready.readinessFingerprint,
+        readySince: ready.readySince,
+        taskVersion: ready.taskVersion,
+      }),
+      createdAt,
+    );
+    notifyTaskTransitionAfterCommit(id);
+    return {
+      id,
+      groupId: input.groupId,
+      taskId: input.taskId,
+      taskVersion: input.expectedVersion,
+      action: "task_ready",
+      ...(task.executionId ? { executionId: task.executionId } : {}),
+      fromStatus: task.status,
+      toStatus: task.status,
+      createdAt,
+    };
+  });
+}
+
+export function recordGroupTaskReadyEvent(input: RecordReadyInput): GroupTaskTransitionEvent {
+  return persistGroupTaskReadyEvent(input);
+}
+
+export function scanGroupTaskReadyEvents(
+  groupId: string,
+  changedTaskId?: string,
+): GroupTaskTransitionEvent[] {
+  const db = getDatabase();
+  return transaction(db, () => {
+    const readyStates = refreshGroupReadySince(groupId, changedTaskId);
+    const events: GroupTaskTransitionEvent[] = [];
+    for (const [id, ready] of readyStates) {
+      events.push(
+        persistGroupTaskReadyEvent(
+          {
+            groupId,
+            taskId: id,
+            expectedVersion: ready.taskVersion,
+            readinessFingerprint: ready.readinessFingerprint,
+            operationId: `task-ready:${JSON.stringify([id, ready.taskVersion, ready.readinessFingerprint])}`,
+          },
+          ready,
+        ),
+      );
+    }
+    return events;
+  });
 }
 
 /* ── Tasks ─────────────────────────────────────────────────────────────── */
