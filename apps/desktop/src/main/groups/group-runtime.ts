@@ -114,6 +114,7 @@ import {
 } from "./group-store";
 import { getGroupTaskDetails } from "./group-task-details";
 import { findGroupTaskForWake } from "./group-task-evidence";
+import { selectReadyGroupTasks } from "./group-task-scheduler";
 import {
   getGroupTask,
   getGroupTaskReadyState,
@@ -128,6 +129,8 @@ import {
 } from "./group-task-store";
 import { GroupTurnTranscript } from "./group-turn-transcript";
 import { getGroupWorkState } from "./group-work-state";
+
+const GROUP_SUGGESTION_LIMIT = 100;
 
 export {
   agentDescription,
@@ -249,41 +252,108 @@ export class GroupRuntime {
     const group = getAgentGroup(groupId);
     if (!group) throw new GroupStoreError("group-not-found", `Agent group not found: ${groupId}`);
     this.refreshSuggestionConfirmations(groupId);
-    return listGroupActions(groupId)
-      .filter((action) => action.deliveryState === "suggested")
-      .slice(-100)
-      .flatMap((action): GroupSuggestion[] => {
-        const trigger = this.transitionForAction(action);
-        if (!trigger) return [];
-        const task = getGroupTask(action.taskId);
-        const role = this.suggestionRole(trigger, task);
-        const candidates = this.suggestionTargets(groupId, task, role);
-        const proposedTargetSessionId = this.proposedTarget(trigger, task, group);
-        const reason = this.suggestionReason(action.decision.reasonCode, trigger.kind);
-        return [
-          {
-            actionId: action.id,
-            version: action.version,
-            state: "suggested",
-            task: {
-              id: task.id,
-              title: task.title,
-              stateVersion: task.stateVersion ?? trigger.taskVersion,
-            },
-            source: {
-              eventId: trigger.sourceEventId,
-              kind: trigger.kind,
-              sequence: trigger.sequence,
-              ...(trigger.executionId ? { executionId: trigger.executionId } : {}),
-            },
-            reasonCode: action.decision.reasonCode,
-            reason,
-            ...(proposedTargetSessionId ? { proposedTargetSessionId } : {}),
-            candidateSessionIds: candidates,
-            startNewExecution: action.requiresNewExecution,
-          },
-        ];
+    const allActions = listGroupActions(groupId).filter(
+      (action) => action.deliveryState === "suggested",
+    );
+    const triggerByActionId = new Map<string, GroupTaskTrigger | undefined>();
+    const readiness: Record<string, { fingerprint: string; readySince: number }> = {};
+    const readyActionByIdentity = new Map<string, GroupActionRecord>();
+    const currentReadinessByTask = new Map<string, ReturnType<typeof getGroupTaskReadyState>>();
+    const staleReadyActionIds = new Set<string>();
+    for (const action of allActions) {
+      const trigger = this.transitionForAction(action);
+      triggerByActionId.set(action.id, trigger);
+      if (trigger?.kind !== "task_ready" || !trigger.readinessFingerprint || !trigger.readySince)
+        continue;
+      if (!currentReadinessByTask.has(trigger.taskId))
+        currentReadinessByTask.set(trigger.taskId, getGroupTaskReadyState(trigger.taskId));
+      const currentReady = currentReadinessByTask.get(trigger.taskId);
+      if (
+        action.taskId !== trigger.taskId ||
+        action.taskVersion !== trigger.taskVersion ||
+        !currentReady ||
+        currentReady.taskVersion !== trigger.taskVersion ||
+        currentReady.readinessFingerprint !== trigger.readinessFingerprint ||
+        currentReady.readySince !== trigger.readySince
+      ) {
+        staleReadyActionIds.add(action.id);
+        continue;
+      }
+      const readySince = Date.parse(trigger.readySince);
+      if (!Number.isFinite(readySince)) {
+        staleReadyActionIds.add(action.id);
+        continue;
+      }
+      readiness[trigger.taskId] = {
+        fingerprint: trigger.readinessFingerprint,
+        readySince,
+      };
+      readyActionByIdentity.set(
+        JSON.stringify([trigger.taskId, trigger.readinessFingerprint, readySince]),
+        action,
+      );
+    }
+    const actions = allActions.filter(
+      (action) =>
+        triggerByActionId.get(action.id) !== undefined && !staleReadyActionIds.has(action.id),
+    );
+    let orderedActions = actions.slice(-GROUP_SUGGESTION_LIMIT);
+    if (Object.keys(readiness).length > 0) {
+      const workState = getGroupWorkState(groupId);
+      const schedule = selectReadyGroupTasks({
+        tasks: listGroupTasks(groupId),
+        workState,
+        readiness,
+        now: Date.now(),
+        pendingTaskJobsByMember: {},
+        queueCapacity: 3,
       });
+      const priorityReadyActions = schedule.flatMap((candidate) => {
+        const action = readyActionByIdentity.get(
+          JSON.stringify([candidate.taskId, candidate.readinessFingerprint, candidate.readySince]),
+        );
+        return action ? [action] : [];
+      });
+      const displayedReadyActions = priorityReadyActions.slice(0, GROUP_SUGGESTION_LIMIT);
+      const scheduledActionIds = new Set(priorityReadyActions.map((action) => action.id));
+      const remainingSlots = GROUP_SUGGESTION_LIMIT - displayedReadyActions.length;
+      const otherSuggestions = actions.filter((action) => !scheduledActionIds.has(action.id));
+      const recentOtherSuggestions =
+        remainingSlots === 0 ? [] : otherSuggestions.slice(-remainingSlots);
+      orderedActions = [...displayedReadyActions, ...recentOtherSuggestions];
+    }
+    return orderedActions.flatMap((action): GroupSuggestion[] => {
+      const trigger = triggerByActionId.get(action.id);
+      if (!trigger) return [];
+      const task = getGroupTask(action.taskId);
+      const role = this.suggestionRole(trigger, task);
+      const candidates = this.suggestionTargets(groupId, task, role);
+      const proposedTargetSessionId = this.proposedTarget(trigger, task, group);
+      const reason = this.suggestionReason(action.decision.reasonCode, trigger.kind);
+      return [
+        {
+          actionId: action.id,
+          version: action.version,
+          state: "suggested",
+          task: {
+            id: task.id,
+            title: task.title,
+            stateVersion: task.stateVersion ?? trigger.taskVersion,
+          },
+          source: {
+            eventId: trigger.sourceEventId,
+            kind: trigger.kind,
+            sequence: trigger.sequence,
+            ...(trigger.executionId ? { executionId: trigger.executionId } : {}),
+          },
+          reasonCode: action.decision.reasonCode,
+          reason,
+          ...(proposedTargetSessionId ? { proposedTargetSessionId } : {}),
+          candidateSessionIds: candidates,
+          startNewExecution: action.requiresNewExecution,
+        },
+      ];
+    });
   }
 
   /** Persist a per-group preference and revoke only automatic work not yet started. */
