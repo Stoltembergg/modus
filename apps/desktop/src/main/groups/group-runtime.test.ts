@@ -249,6 +249,10 @@ describe("turn outcomes (fake runtime contract)", () => {
       groupId: group.id,
       executionId: user.id,
       role: "owner",
+      kind: "legacy",
+      stage: "plan",
+      requiredCheckKinds: [],
+      coordinator: false,
     });
   });
   it("ok with text posts the reply as the member, in the same chain", async () => {

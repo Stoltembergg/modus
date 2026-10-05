@@ -41,7 +41,7 @@ import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import { profileForMode } from "../agent/plan-prompt";
-import type { PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
+import type { PromptAgentInput, PromptTurnResult, TurnSettledEvent } from "../agent/runtime";
 import { getDatabase } from "../db/database";
 import {
   type GroupRoutingResult,
@@ -2519,12 +2519,25 @@ export class GroupRuntime {
       const contextItems = (trigger?.contextItems ??
         []) as import("../../shared/contracts").ContextItem[];
       const model = modelIdOf(wake.groupId, wake.sessionId);
-      const groupTask =
+      const taskAssociation =
         wake.purpose === "control"
           ? undefined
           : findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
-      if (groupTask) {
-        const task = getGroupTask(groupTask.taskId);
+      let groupTask: PromptAgentInput["groupTask"];
+      if (taskAssociation) {
+        const task = getGroupTask(taskAssociation.taskId);
+        const group = getAgentGroup(wake.groupId);
+        groupTask = {
+          ...taskAssociation,
+          kind: task.kind ?? "legacy",
+          stage: task.stage ?? "plan",
+          requiredCheckKinds: [
+            ...new Set((task.criteria ?? []).flatMap((criterion) => criterion.requiredCheckKinds)),
+          ],
+          coordinator: Boolean(
+            group && isCoordinatorModeActive(group) && group.leadSessionId === wake.sessionId,
+          ),
+        };
         if (task.kind && task.kind !== "legacy") {
           const routing = this.capabilityRoute(wake.groupId, task, wake.sessionId, wake);
           if (routing.kind !== "selected")

@@ -106,6 +106,20 @@ function taskIdFrom(text: string): string {
 }
 
 describe("group member tools", () => {
+  it("keeps task transition tools mutating despite safe server-authorized execution", () => {
+    registerGroupTools();
+    for (const name of [
+      "group_report_progress",
+      "group_review_task",
+      "group_assign_task",
+      "group_handoff",
+    ]) {
+      expect(toolRegistry.getEntry(name)?.permission).toEqual({ danger: "safe" });
+      expect(toolRegistry.isReadOnlySafe(name)).toBe(false);
+    }
+    expect(toolRegistry.isReadOnlySafe("group_get_work_state")).toBe(true);
+  });
+
   it("run the task flow through the store and route review / changes wakes", async () => {
     const { group, alpha, beta } = squad();
     setGroupTaskWakeSink((wake) => {
