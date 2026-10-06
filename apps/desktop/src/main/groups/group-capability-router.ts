@@ -1,4 +1,5 @@
 import type { AgentGroupMember, GroupTask } from "../../shared/contracts";
+import { groupTaskToolRequirements } from "../../shared/group-task-tool-policy";
 import type { GroupTaskStage, GroupWorkState } from "../../shared/group-work-state";
 import type { ToolProfileName } from "../../shared/tools";
 import { type ToolOverrides, type ToolRegistry, toolRegistry } from "../agent/tools/registry";
@@ -19,6 +20,12 @@ export type GroupRoutingReason =
   | "execution-unavailable"
   | "budget-exhausted";
 
+export type GroupMemberDispatchSnapshot = {
+  availability: "available" | "busy-but-queueable" | "hard-unavailable";
+  pendingTaskJobCount: number;
+  capacity: number;
+};
+
 export type GroupRoutingInput = {
   task?: GroupTask;
   workState: GroupWorkState;
@@ -26,11 +33,13 @@ export type GroupRoutingInput = {
   explicitMentionSessionId?: string;
   memberAvailability: Record<string, "available" | "unavailable">;
   currentLoad: Record<string, number>;
+  /** When provided, this snapshot is authoritative, including omitted members. */
+  memberDispatch?: Record<string, GroupMemberDispatchSnapshot>;
   toolConfigurations: Record<
     string,
     { profile: ToolProfileName; overrides?: ToolOverrides; activeToolNames?: readonly string[] }
   >;
-  toolRegistry?: Pick<ToolRegistry, "resolveActiveTools">;
+  toolRegistry?: Pick<ToolRegistry, "resolveActiveTools" | "capabilitiesFor">;
 };
 
 export type GroupRoutingResult = {
@@ -51,12 +60,20 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
   const { task, workState } = input;
   const registry = input.toolRegistry ?? toolRegistry;
   const stage = task ? groupTaskRoutingStage(task) : undefined;
-  const unavailable = (member: AgentGroupMember): GroupRoutingReason | undefined =>
-    member.archived
-      ? "member-archived"
-      : input.memberAvailability[member.sessionId] !== "available"
+  const unavailable = (member: AgentGroupMember): GroupRoutingReason | undefined => {
+    if (member.archived) return "member-archived";
+    if (input.memberDispatch) {
+      const dispatch = input.memberDispatch[member.sessionId];
+      return !dispatch ||
+        dispatch.availability === "hard-unavailable" ||
+        !(dispatch.pendingTaskJobCount < dispatch.capacity)
         ? "member-unavailable"
         : undefined;
+    }
+    return input.memberAvailability[member.sessionId] !== "available"
+      ? "member-unavailable"
+      : undefined;
+  };
   const compatible = (member: AgentGroupMember): GroupRoutingReason | undefined => {
     if (!task || task.kind === "legacy" || !task.kind) return undefined;
     if (!member.capabilityIds?.length || !member.supportedTaskKinds?.length)
@@ -79,18 +96,17 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
     const tools =
       configuration.activeToolNames ??
       registry.resolveActiveTools(configuration.profile, configuration.overrides);
-    if (
-      stage === "implement" &&
-      (task.kind === "code" || task.kind === "docs") &&
-      (!tools.includes("read") || (!tools.includes("edit") && !tools.includes("write")))
-    )
-      return "tools-inactive";
-    if (stage === "review" && !tools.includes("read")) return "tools-inactive";
-    if (
-      stage === "verify" &&
-      (task.criteria ?? []).some((c) => c.requiredCheckKinds.length > 0) &&
-      !tools.includes("bash")
-    )
+    const requirements = groupTaskToolRequirements({
+      kind: task.kind,
+      stage: stage ?? groupTaskRoutingStage(task),
+      requiredCheckKinds: (task.criteria ?? []).flatMap(
+        (criterion) => criterion.requiredCheckKinds,
+      ),
+      role: stage === "review" ? "reviewer" : "owner",
+      coordinator: member.sessionId === input.leadSessionId,
+    });
+    const activeCapabilities = new Set(tools.flatMap((name) => registry.capabilitiesFor(name)));
+    if (requirements.requiredCapabilities.some((capability) => !activeCapabilities.has(capability)))
       return "tools-inactive";
     if (
       stage === "review" &&
@@ -102,6 +118,25 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
   };
   const eligible = workState.members.filter((m) => !unavailable(m));
   const candidates = eligible.filter((m) => !compatible(m));
+  if (task?.kind && task.kind !== "legacy") {
+    const priority = { low: 0, normal: 1, high: 2 };
+    const assignedPriority = (id: string) =>
+      Math.max(
+        -1,
+        ...workState.tasks
+          .filter((t) => t.ownerSessionId === id && t.status !== "done" && t.status !== "cancelled")
+          .map((t) => priority[t.priority ?? "normal"]),
+      );
+    candidates.sort(
+      (a, b) =>
+        Number(b.sessionId === task.ownerSessionId) - Number(a.sessionId === task.ownerSessionId) ||
+        assignedPriority(b.sessionId) - assignedPriority(a.sessionId) ||
+        (input.memberDispatch?.[a.sessionId]?.pendingTaskJobCount ?? 0) -
+          (input.memberDispatch?.[b.sessionId]?.pendingTaskJobCount ?? 0) ||
+        (input.currentLoad[a.sessionId] ?? 0) - (input.currentLoad[b.sessionId] ?? 0) ||
+        a.sessionId.localeCompare(b.sessionId),
+    );
+  }
   const result = (
     kind: GroupRoutingResult["kind"],
     reasonCode: GroupRoutingReason,
@@ -110,7 +145,7 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
     kind,
     reasonCode,
     ...(targetSessionId ? { targetSessionId } : {}),
-    candidateSessionIds: candidates.map((m) => m.sessionId).sort(),
+    candidateSessionIds: candidates.map((m) => m.sessionId),
     eligibleSessionIds: eligible.map((m) => m.sessionId).sort(),
   });
   const explicit = input.explicitMentionSessionId;
@@ -142,21 +177,6 @@ export function routeGroupTask(input: GroupRoutingInput): GroupRoutingResult {
   if (blocked) return result("needs_user", blocked, explicit);
   if (explicit) return result("selected", "explicit-mention", explicit);
   if (task?.kind && task.kind !== "legacy" && candidates.length) {
-    const priority = { low: 0, normal: 1, high: 2 };
-    const assignedPriority = (id: string) =>
-      Math.max(
-        -1,
-        ...workState.tasks
-          .filter((t) => t.ownerSessionId === id && t.status !== "done" && t.status !== "cancelled")
-          .map((t) => priority[t.priority ?? "normal"]),
-      );
-    candidates.sort(
-      (a, b) =>
-        Number(b.sessionId === task.ownerSessionId) - Number(a.sessionId === task.ownerSessionId) ||
-        assignedPriority(b.sessionId) - assignedPriority(a.sessionId) ||
-        (input.currentLoad[a.sessionId] ?? 0) - (input.currentLoad[b.sessionId] ?? 0) ||
-        a.sessionId.localeCompare(b.sessionId),
-    );
     return result("selected", "capability-match", candidates[0]?.sessionId);
   }
   const lead = eligible.find((m) => m.sessionId === input.leadSessionId);
