@@ -41,6 +41,8 @@ const {
   reportGroupTaskProgress,
   bindGroupTaskRun,
   recordGroupTaskEvidence,
+  updateGroupTask,
+  scanGroupTaskReadyEvents,
 } = await import("./group-task-store");
 const { recordAgentEvent } = await import("../agent/agent-event-store");
 const { getGroupSourceFingerprint } = await import("../git/git-service");
@@ -447,7 +449,7 @@ describe("task transition delivery", () => {
       createdAt: "",
     });
     await flush();
-    expect(listGroupActions(group.id)).toEqual([]);
+    expect(listGroupActions(group.id).filter((action) => action.sourceEventId === id)).toEqual([]);
   });
 
   it.each([
@@ -783,9 +785,9 @@ describe("task transition delivery", () => {
     }
     const recovered = runtime(false, true);
     await flush();
-    expect(listGroupActions(group.id)).toMatchObject([
-      { id: action.id, deliveryState: "invalidated" },
-    ]);
+    expect(listGroupActions(group.id).find((item) => item.id === action.id)).toMatchObject({
+      deliveryState: "invalidated",
+    });
     expect(listGroupMessages(group.id).filter((message) => message.kind === "status")).toHaveLength(
       0,
     );
@@ -1393,5 +1395,122 @@ describe("user-resolved proactive suggestions", () => {
         .get(group.id, lead),
     ).toMatchObject({ status: "pending" });
     env.groups.dispose();
+  });
+});
+
+describe("ready-task source discovery", () => {
+  it("keeps a live source suggestion on its existing execution", async () => {
+    const { group } = squad();
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Active ask" });
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Live backlog",
+      executionId: root.id,
+    });
+    await flush();
+    const suggestion = env.groups
+      .listSuggestions(group.id)
+      .find((item) => item.task.id === task.id);
+    expect(suggestion).toMatchObject({ source: { kind: "task_ready" }, startNewExecution: false });
+    expect(env.calls).toEqual([]);
+  });
+  it("discovers creation and dependency completion once without automatically dispatching", async () => {
+    const { group, db } = squad();
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    await flush();
+    const dependency = createGroupTask({
+      groupId: group.id,
+      title: "Dependency",
+      status: "blocked",
+    });
+    const task = createGroupTask({ groupId: group.id, title: "Ready on creation" });
+    const dependent = createGroupTask({
+      groupId: group.id,
+      title: "Waiting",
+      kind: "docs",
+      priority: "normal",
+      dependencyIds: [dependency.id],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    await flush();
+    expect(
+      listGroupTaskTransitions(task.id).filter((event) => event.action === "task_ready"),
+    ).toHaveLength(1);
+    expect(listGroupTaskTransitions(dependent.id)).toEqual([]);
+    updateGroupTask(dependency.id, { status: "done" });
+    await flush();
+    expect(
+      listGroupTaskTransitions(dependent.id).filter((event) => event.action === "task_ready"),
+    ).toHaveLength(1);
+    expect(listGroupActions(group.id)).toMatchObject([
+      { deliveryState: "suggested" },
+      { deliveryState: "suggested" },
+    ]);
+    expect(env.groups.listSuggestions(group.id)).toHaveLength(2);
+    expect(
+      env.groups
+        .listSuggestions(group.id)
+        .every((item) => item.source.kind === "task_ready" && item.startNewExecution),
+    ).toBe(true);
+    expect(env.calls).toEqual([]);
+    expect(
+      db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
+    ).toEqual({ n: 0 });
+    env.groups.dispose();
+    const recovered = runtime(false, true);
+    await flush();
+    expect(recovered.groups.listSuggestions(group.id)).toHaveLength(2);
+    expect(
+      listGroupTaskTransitions(task.id).filter((event) => event.action === "task_ready"),
+    ).toHaveLength(1);
+  });
+
+  it("recovers ready inbox rows without a live execution and never revives an ended chain", async () => {
+    const { group, db } = squad();
+    const first = runtime(false);
+    const root = first.groups.postUserMessage({ groupId: group.id, body: "Earlier ask" });
+    const chain = must(readGroupChain(root.id));
+    chain.ended = "stopped";
+    persistGroupChain(chain);
+    first.groups.dispose();
+    const detached = createGroupTask({ groupId: group.id, title: "Detached backlog" });
+    const ended = createGroupTask({
+      groupId: group.id,
+      title: "Ended backlog",
+      executionId: root.id,
+    });
+    scanGroupTaskReadyEvents(group.id);
+    const sourceIds = [detached, ended].map(
+      (task) =>
+        must(listGroupTaskTransitions(task.id).find((event) => event.action === "task_ready")).id,
+    );
+    expect(listGroupActions(group.id)).toEqual([]);
+    const jobsBefore = db
+      .prepare("select count(*) as n from group_jobs where group_id = ?")
+      .get(group.id);
+    const recovered = runtime(false, true);
+    await flush();
+    expect(recovered.groups.listSuggestions(group.id)).toHaveLength(2);
+    expect(recovered.groups.listSuggestions(group.id).every((item) => item.startNewExecution)).toBe(
+      true,
+    );
+    expect(
+      listGroupActions(group.id)
+        .map((action) => action.sourceEventId)
+        .sort(),
+    ).toEqual(sourceIds.sort());
+    expect(readGroupChain(root.id)?.ended).toBe("stopped");
+    expect(recovered.calls).toEqual([]);
+    expect(
+      db.prepare("select count(*) as n from group_jobs where group_id = ?").get(group.id),
+    ).toEqual(jobsBefore);
+    recovered.groups.dispose();
+    runtime(false, true);
+    await flush();
+    expect(listGroupActions(group.id)).toHaveLength(2);
   });
 });
