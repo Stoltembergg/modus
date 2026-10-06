@@ -38,6 +38,7 @@ const {
 } = await import("./group-proactivity-store");
 const {
   listGroupTaskTransitions,
+  getGroupTaskReadyState,
   reportGroupTaskProgress,
   bindGroupTaskRun,
   recordGroupTaskEvidence,
@@ -1399,6 +1400,109 @@ describe("user-resolved proactive suggestions", () => {
 });
 
 describe("ready-task source discovery", () => {
+  it("orders the full ready backlog before applying the 100-suggestion presentation limit", async () => {
+    const { group, db } = squad();
+    const env = runtime(false);
+    const readyTask = (title: string, priority: "low" | "high") =>
+      createGroupTask({
+        groupId: group.id,
+        title,
+        kind: "code",
+        priority,
+        dependencyIds: [],
+        criteria: [],
+        verificationPolicy: { mode: "none", requireReview: false },
+      });
+    const oldestHighPriorityTask = readyTask("oldest high priority", "high");
+    for (let index = 0; index < 100; index += 1) readyTask(`low priority ${index}`, "low");
+    await flush();
+    db.prepare("update group_proactivity_actions set created_at = ? where task_id = ?").run(
+      "2000-01-01T00:00:00.000Z",
+      oldestHighPriorityTask.id,
+    );
+
+    const suggestions = env.groups.listSuggestions(group.id);
+
+    expect(suggestions).toHaveLength(100);
+    expect(suggestions[0]?.task.id).toBe(oldestHighPriorityTask.id);
+    env.groups.dispose();
+    db.prepare("delete from group_tasks where group_id = ?").run(group.id);
+  });
+
+  it("ignores a ready suggestion whose version and readiness identity are obsolete", async () => {
+    const { group, db } = squad();
+    const env = runtime(false);
+    createGroupTask({
+      groupId: group.id,
+      title: "Lower priority ready task",
+      kind: "code",
+      priority: "low",
+      dependencyIds: [],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    await flush();
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Readiness re-entry",
+      kind: "code",
+      priority: "high",
+      dependencyIds: [],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    await flush();
+    const oldAction = must(listGroupActions(group.id).find((action) => action.taskId === task.id));
+    const oldTransition = must(
+      listGroupTaskTransitions(task.id).find((event) => event.action === "task_ready"),
+    );
+    const oldPayloadRow = must(
+      db.prepare("select result_json from group_task_events where id = ?").get(oldTransition.id) as
+        | { result_json: string }
+        | undefined,
+    );
+    const oldReadyIdentity = JSON.parse(oldPayloadRow.result_json) as {
+      readinessFingerprint: string;
+      readySince: string;
+    };
+    oldReadyIdentity.readySince = "2000-01-01T00:00:00.000Z";
+    db.prepare("update group_task_events set result_json = ? where id = ?").run(
+      JSON.stringify(oldReadyIdentity),
+      oldTransition.id,
+    );
+
+    updateGroupTask(task.id, { status: "blocked" });
+    await flush();
+    updateGroupTask(task.id, { status: "open" });
+    await flush();
+
+    const currentEvent = must(
+      listGroupTaskTransitions(task.id)
+        .filter((event) => event.action === "task_ready")
+        .at(-1),
+    );
+    const currentReadyState = must(getGroupTaskReadyState(task.id));
+    const currentAction = must(
+      listGroupActions(group.id).find((action) => action.sourceEventId === currentEvent.id),
+    );
+    expect(currentReadyState).toMatchObject({ taskVersion: currentEvent.taskVersion });
+    expect(currentReadyState.taskVersion).not.toBe(oldAction.taskVersion);
+    expect(currentReadyState.readinessFingerprint).not.toBe(oldReadyIdentity.readinessFingerprint);
+    expect(currentReadyState.readySince).not.toBe(oldReadyIdentity.readySince);
+
+    db.prepare("update group_proactivity_actions set created_at = ? where id = ?").run(
+      "9999-01-01T00:00:00.000Z",
+      oldAction.id,
+    );
+
+    const currentSuggestion = env.groups
+      .listSuggestions(group.id)
+      .find((suggestion) => suggestion.task.id === task.id);
+
+    expect(currentSuggestion?.source.eventId).toBe(currentEvent.id);
+    expect(currentSuggestion?.actionId).toBe(currentAction.id);
+  });
+
   it("keeps a live source suggestion on its existing execution", async () => {
     const { group } = squad();
     setGroupProactivityMode(group.id, "opt_in_auto");
