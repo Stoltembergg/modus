@@ -1456,7 +1456,11 @@ const READ_ONLY_TOOLS = new Set<GroupToolName>([
 
 let registered = false;
 
-/** Registers the member tools (idempotent); sessions outside a group never activate them. */
+/**
+ * Registers all member tools (idempotent). Per-turn activation selects Group
+ * tools by name, independently of their mutation capabilities. Safe permission
+ * declarations retain server-side authorization and read-only restrictions.
+ */
 export function registerGroupTools(): void {
   if (registered) return;
   registered = true;

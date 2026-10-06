@@ -1609,6 +1609,161 @@ describe("PiSdkRuntime", () => {
     );
   });
 
+  it("scopes Group task tools by owner, reviewer, coordinator and current stage", async () => {
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const member = `task-tools-${crypto.randomUUID()}`;
+    const partner = `task-partner-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(member, workspaceId, join(userData, "missing.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(`insert into agent_sessions
+      (id, workspace_id, title, cwd, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)`)
+      .run(partner, workspaceId, "Partner", cwd, "idle", now, now);
+    const group = createAgentGroupWithMembers({
+      name: "Task squad",
+      workspaceId,
+      members: [{ sessionId: member }, { sessionId: partner }],
+    });
+    new PiSdkRuntime();
+    const info = {
+      id: member,
+      workspaceId,
+      title: "Task",
+      cwd,
+      status: "idle" as const,
+      createdAt: "",
+      updatedAt: "",
+    };
+    const task = {
+      taskId: "task",
+      groupId: group.id,
+      executionId: "execution",
+      kind: "code" as const,
+      stage: "implement" as const,
+      requiredCheckKinds: [],
+      role: "owner" as const,
+      coordinator: false,
+    };
+    const groupTools = (names: string[]) =>
+      names.filter((name) => name.startsWith("group_")).sort();
+    const common = ["group_get_work_state", "group_list_tasks", "group_report_progress"];
+    const owner = [...common, "group_claim_task", "group_release_task", "group_request_review"];
+    const baseline = activeToolNamesForSession(info, "chat");
+    const implementation = activeToolNamesForSession(info, "chat", task);
+    expect(groupTools(implementation)).toEqual(owner.sort());
+    expect(implementation).toEqual(expect.arrayContaining(["read", "edit", "write"]));
+    expect(implementation).not.toContain("bash");
+    for (const name of implementation.filter((name) => !name.startsWith("group_"))) {
+      expect(
+        toolRegistry
+          .capabilitiesFor(name)
+          .some((capability) => capability === "read" || capability === "write"),
+      ).toBe(true);
+    }
+    const reviewer = activeToolNamesForSession(info, "chat", { ...task, role: "reviewer" });
+    expect(groupTools(reviewer)).toEqual([...common, "group_review_task"].sort());
+    expect(reviewer).toContain("read");
+    expect(reviewer).not.toContain("write");
+    expect(reviewer).not.toContain("bash");
+    const coordinator = activeToolNamesForSession(info, "chat", { ...task, coordinator: true });
+    expect(groupTools(coordinator)).toEqual(
+      [...owner, "group_assign_task", "group_handoff"].sort(),
+    );
+    const verify = activeToolNamesForSession(info, "chat", {
+      ...task,
+      stage: "verify",
+      requiredCheckKinds: ["tests"],
+    });
+    expect(verify).toContain("bash");
+    expect(verify).not.toContain("write");
+    expect(groupTools(verify)).toEqual(owner.sort());
+    const unchecked = activeToolNamesForSession(info, "chat", { ...task, stage: "verify" });
+    expect(unchecked).not.toContain("bash");
+    const research = activeToolNamesForSession(info, "chat", { ...task, kind: "research" });
+    expect(research).toContain("web_search");
+    expect(research).not.toContain("write");
+    expect(activeToolNamesForSession(info, "chat")).toEqual(baseline);
+    expect(activeToolNamesForSession(info, "chat", { ...task, kind: "legacy" })).toEqual(baseline);
+    expect(
+      groupTools(activeToolNamesForSession({ ...info, id: "non-member" }, "chat", task)),
+    ).toEqual([]);
+    const child = activeToolNamesForSession(
+      { ...info, parentSessionId: "missing-parent", subagentReadOnly: true },
+      "chat",
+      task,
+    );
+    expect(child).toContain("read");
+    expect(child).not.toContain("write");
+    expect(child).not.toContain("task");
+    expect(child).not.toContain("wait");
+    expect(groupTools(child)).toEqual(["group_get_work_state", "group_list_tasks"]);
+    const plan = activeToolNamesForSession(info, "plan", task);
+    expect(plan).not.toContain("write");
+    expect(plan).not.toContain("group_report_progress");
+  });
+
+  it("applies task context on each prompt and restores tools on the next non-Group turn", async () => {
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const sessionId = `task-turn-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const partner = `turn-partner-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(`insert into agent_sessions
+      (id, workspace_id, title, cwd, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?)`)
+      .run(partner, workspaceId, "Partner", cwd, "idle", now, now);
+    const group = createAgentGroupWithMembers({
+      name: "Task turns",
+      workspaceId,
+      members: [{ sessionId }, { sessionId: partner }],
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "completed" },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const groupTask = {
+      taskId: "missing-task",
+      groupId: group.id,
+      executionId: "execution",
+      role: "owner" as const,
+      kind: "code" as const,
+      stage: "implement" as const,
+      requiredCheckKinds: [],
+      coordinator: false,
+    };
+    // Evidence binding independently rejects this seed; offering tools uses turn context.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await runtime.prompt(window, { sessionId, message: "Implement", context: [], groupTask });
+      const activeTools = session.setActiveToolsByName as ReturnType<typeof vi.fn>;
+      expect(activeTools.mock.calls.at(-1)?.[0]).toContain("write");
+      expect(activeTools.mock.calls.at(-1)?.[0]).not.toContain("bash");
+      expect(activeTools.mock.calls.at(-1)?.[0]).not.toContain("group_review_task");
+      await runtime.prompt(window, {
+        sessionId,
+        message: "Review",
+        context: [],
+        groupTask: { ...groupTask, role: "reviewer" },
+      });
+      expect(activeTools.mock.calls.at(-1)?.[0]).toContain("group_review_task");
+      expect(activeTools.mock.calls.at(-1)?.[0]).not.toContain("write");
+      await runtime.prompt(window, { sessionId, message: "Continue", context: [] });
+      expect(activeTools.mock.calls.at(-1)?.[0]).toEqual(toolRegistry.resolveActiveTools("chat"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
     const registeredName = "mcp_docs_search";
     mocks.allowlistedMcpToolNames = [registeredName];

@@ -32,6 +32,7 @@ import type {
   QuestionResponse,
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
+import { groupTaskToolRequirements } from "../../shared/group-task-tool-policy";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
 import { agentChatPersonaPrompt, requireAgentChatWritable } from "../agents/agents-store";
@@ -704,8 +705,21 @@ function groupIdFor(sessionId: string): { groupId?: string } {
 export function activeToolNamesForSession(
   info: AgentSessionInfo,
   profile: ToolProfileName,
+  groupTask?: PromptAgentInput["groupTask"],
 ): string[] {
   let active = toolRegistry.resolveActiveTools(profile);
+  if (groupTask && groupTask.kind !== "legacy") {
+    const requirements = groupTaskToolRequirements(groupTask);
+    // Task capabilities scope ordinary tools; Group mutations are selected by
+    // name and still rely on server-side authorization when they execute.
+    active = active.filter((name) =>
+      isGroupToolName(name)
+        ? requirements.groupToolNames.includes(name)
+        : toolRegistry
+            .capabilitiesFor(name)
+            .some((capability) => requirements.requiredCapabilities.includes(capability)),
+    );
+  }
   const configCwd = info.parentSessionId
     ? (getAgentSession(info.parentSessionId)?.cwd ?? info.cwd)
     : info.cwd;
@@ -2499,7 +2513,7 @@ export class PiSdkRuntime implements AgentRuntime {
       // plan artifacts; build = full chat tools). setActiveToolsByName also rebuilds
       // the system prompt for the new set, and takes effect on this turn.
       runtimeSession.session.setActiveToolsByName(
-        activeToolNamesForSession(runtimeSession.info, profile),
+        activeToolNamesForSession(runtimeSession.info, profile, input.groupTask),
       );
 
       // Per-turn model + thinking: the composer's current selection travels with

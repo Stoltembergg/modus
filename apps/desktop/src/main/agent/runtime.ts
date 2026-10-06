@@ -6,6 +6,7 @@ import type {
   AgentSessionInfo,
   CodeGraphDiscoveryRef,
   ContextItem,
+  HarnessTaskCheckKind,
   ModelInfo,
   ProjectMemoryCategory,
   PromptDelivery,
@@ -13,6 +14,7 @@ import type {
   SkillSelection,
   ThinkingLevel,
 } from "../../shared/contracts";
+import type { GroupTaskKind, GroupTaskStage } from "../../shared/group-work-state";
 import type { HyperPlanDraftOwnerEpoch } from "./harness/hyperplan-draft-store";
 
 export type CreateAgentRuntimeInput = {
@@ -52,7 +54,16 @@ export type PromptAgentInput = {
   /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */
   planId?: string;
   /** Exact group task association selected before this wake starts. */
-  groupTask?: { taskId: string; groupId: string; executionId: string; role: "owner" | "reviewer" };
+  groupTask?: {
+    taskId: string;
+    groupId: string;
+    executionId: string;
+    role: "owner" | "reviewer";
+    kind: GroupTaskKind;
+    stage: GroupTaskStage;
+    requiredCheckKinds: readonly HarnessTaskCheckKind[];
+    coordinator: boolean;
+  };
 };
 
 export type HyperPlanBuildStart = {
