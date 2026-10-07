@@ -34,6 +34,7 @@ import type {
   GroupSuggestion,
   GroupSuggestionResolution,
   GroupTaskQueueItem,
+  GroupTaskReportDetail,
   GroupTaskTransitionEvent,
   GroupTaskTrigger,
   ResolveGroupSuggestionInput,
@@ -123,6 +124,7 @@ import {
   getGroupTask,
   getGroupTaskReadyState,
   getGroupTaskRunBinding,
+  getLatestGroupTaskReport,
   groupTaskOperationFingerprint,
   isGroupTaskRunAssignmentCurrent,
   markGroupTaskExplicitDispatch,
@@ -3242,37 +3244,68 @@ export class GroupRuntime {
                 role: linkedTaskRole,
               }
             : findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
-      let groupTask: PromptAgentInput["groupTask"];
-      if (taskAssociation) {
-        const task = getGroupTask(taskAssociation.taskId);
-        const group = getAgentGroup(wake.groupId);
-        groupTask = {
-          ...taskAssociation,
-          kind: task.kind ?? "legacy",
-          stage: task.stage ?? "plan",
-          requiredCheckKinds: [
-            ...new Set((task.criteria ?? []).flatMap((criterion) => criterion.requiredCheckKinds)),
-          ],
-          coordinator: Boolean(
-            group && isCoordinatorModeActive(group) && group.leadSessionId === wake.sessionId,
-          ),
-        };
-        if (task.kind && task.kind !== "legacy") {
-          const routing = this.capabilityRoute(wake.groupId, task, wake.sessionId, wake, true);
-          if (routing.kind !== "selected")
-            throw new Error(`Task routing unavailable: ${routing.reasonCode}`);
+      const promptUserMessageId = wake.promptUserMessageId;
+      const prompt = (report?: GroupTaskReportDetail) => {
+        // Build offered-tool metadata and revalidate routing from the same current task snapshot.
+        let groupTask: PromptAgentInput["groupTask"];
+        if (taskAssociation) {
+          const task = getGroupTask(taskAssociation.taskId);
+          const group = getAgentGroup(wake.groupId);
+          groupTask = {
+            ...taskAssociation,
+            kind: task.kind ?? "legacy",
+            stage: task.stage ?? "plan",
+            requiredCheckKinds: [
+              ...new Set(
+                (task.criteria ?? []).flatMap((criterion) => criterion.requiredCheckKinds),
+              ),
+            ],
+            coordinator: Boolean(
+              group && isCoordinatorModeActive(group) && group.leadSessionId === wake.sessionId,
+            ),
+          };
+          if (task.kind && task.kind !== "legacy") {
+            const routing = this.capabilityRoute(wake.groupId, task, wake.sessionId, wake, true);
+            if (routing.kind !== "selected")
+              throw new Error(`Task routing unavailable: ${routing.reasonCode}`);
+          }
         }
-      }
-      turn = this.runtime.prompt(window, {
-        sessionId: wake.sessionId,
-        message: this.freshPrompt(wake),
-        context: contextItems,
-        delivery: "normal",
-        userMessageId: wake.promptUserMessageId,
-        ...(groupTask ? { groupTask } : {}),
-        ...(model ? { model } : {}),
-        ...(attachments && attachments.length > 0 ? { attachments } : {}),
-      });
+        return this.runtime.prompt(window, {
+          sessionId: wake.sessionId,
+          message: this.freshPrompt(wake, report),
+          context: contextItems,
+          delivery: "normal",
+          userMessageId: promptUserMessageId,
+          ...(groupTask ? { groupTask } : {}),
+          ...(model ? { model } : {}),
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        });
+      };
+      // Source freshness is asynchronous. Recheck cancellation and task identity before model invocation.
+      turn =
+        taskAssociation && getLatestGroupTaskReport(taskAssociation.taskId)
+          ? getGroupTaskDetails(wake.groupId, taskAssociation.taskId).then((details) => {
+              if (this.disposed || wake.cancelled || this.running.get(wake.sessionId) !== wake)
+                return { outcome: "aborted" as const };
+              const task = getGroupTask(taskAssociation.taskId);
+              if (
+                task.groupId !== wake.groupId ||
+                task.executionId !== wake.chainId ||
+                (taskAssociation.role === "owner"
+                  ? task.ownerSessionId
+                  : task.reviewerSessionId) !== wake.sessionId ||
+                task.status === "done" ||
+                task.status === "cancelled"
+              )
+                return { outcome: "aborted" as const };
+              const report =
+                details.report?.freshness === "current" &&
+                (details.task.stateVersion ?? 1) === (task.stateVersion ?? 1)
+                  ? details.report
+                  : undefined;
+              return prompt(report);
+            })
+          : prompt();
     } catch (error) {
       turn = Promise.reject(error);
     }
@@ -3288,7 +3321,7 @@ export class GroupRuntime {
   }
 
   /** The wake prompt rebuilt at start (current roster); the queued one on failure. */
-  private freshPrompt(wake: Wake): string {
+  private freshPrompt(wake: Wake, report?: GroupTaskReportDetail): string {
     const group = getAgentGroup(wake.groupId);
     const trigger = getGroupMessage(wake.triggerMessageId);
     if (!group || !trigger) throw new Error("The group or task no longer exists.");
@@ -3304,6 +3337,13 @@ export class GroupRuntime {
       members,
       sessionId: wake.sessionId,
       trigger,
+      ...(report?.freshness === "current"
+        ? {
+            currentTaskId: report.report.taskId,
+            currentTaskReport: report.report,
+            reportQaEvidence: report.qaEvidence,
+          }
+        : {}),
       ...(wake.purpose === "control"
         ? {}
         : { supervisedFlow: this.typedFlowFor(group.id, wake.sessionId, wake.chainId) }),

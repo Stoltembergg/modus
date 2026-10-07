@@ -24,6 +24,7 @@ import type {
 } from "../../shared/group-work-state";
 import { isGroupIntegrationPreview, isGroupIntegrationRecord } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
+import { getActiveAgentRun } from "../agent/agent-run-store";
 import { getDatabase } from "../db/database";
 import { getGroupSourceFingerprint } from "../git/git-service";
 import type { GroupTaskWake } from "./group-runtime-lib";
@@ -1270,6 +1271,15 @@ function currentTaskReportBinding(
   return { ...binding, taskIntentFingerprint: binding.taskIntentFingerprint };
 }
 
+/** Trusted callers can compare the canonical report binding with their active run before writing. */
+export function getCurrentGroupTaskReportBinding(
+  groupId: string,
+  taskId: string,
+  actorSessionId: string,
+): GroupTaskRunBinding {
+  return currentTaskReportBinding(requireGroupTask(groupId, taskId), actorSessionId);
+}
+
 function replayTaskReport(
   db: DatabaseSync,
   input: GroupTaskReportInput,
@@ -1289,17 +1299,42 @@ function replayTaskReport(
   return parseTaskReport(row.report_json);
 }
 
-/** Git is resolved in main; the synchronous write rechecks both the version and exact run. */
+/** Main-owned execution context, never part of model parameters or the operation payload. */
+export type GroupTaskReportRunContext = { runId: string; signal?: AbortSignal };
+
+function assertTaskReportRunCurrent(
+  actorSessionId: string,
+  context: GroupTaskReportRunContext | undefined,
+): void {
+  if (!context) return;
+  if (context.signal?.aborted)
+    throw new GroupStoreError(
+      "stale-evidence",
+      "Task report was cancelled before it could be recorded.",
+    );
+  const active = getActiveAgentRun(actorSessionId);
+  if (active?.id !== context.runId || active.status !== "running")
+    throw new GroupStoreError(
+      "stale-evidence",
+      "Report requires the same active task-owner run binding.",
+    );
+}
+
+/** Git is resolved in main; the synchronous write rechecks the version, run and cancellation. */
 export async function recordGroupTaskReport(
   rawInput: GroupTaskReportInput,
+  runContext?: GroupTaskReportRunContext,
 ): Promise<GroupTaskReport> {
   const input = normalizeTaskReportInput(rawInput);
+  assertTaskReportRunCurrent(input.actorSessionId, runContext);
   const db = getDatabase();
   const replay = replayTaskReport(db, input);
   if (replay) return replay;
   const task = requireGroupTask(input.groupId, input.taskId);
   requireVersion(task, input.expectedVersion);
   const binding = currentTaskReportBinding(task, input.actorSessionId);
+  if (runContext && binding.runId !== runContext.runId)
+    throw new GroupStoreError("stale-evidence", "Report run binding differs from the active run.");
   const sourcePath = getGroupTaskSourcePath(task);
   let sourceFingerprint = "";
   try {
@@ -1313,6 +1348,7 @@ export async function recordGroupTaskReport(
       "Task source is unavailable or changed after the run was bound.",
     );
   return transaction(db, () => {
+    assertTaskReportRunCurrent(input.actorSessionId, runContext);
     const replay = replayTaskReport(db, input);
     if (replay) return replay;
     rejectRunOperationCollision(db, input.operationId);
@@ -1352,6 +1388,8 @@ export async function recordGroupTaskReport(
       })),
       createdAt: new Date().toISOString(),
     };
+    // No await separates the trusted run/cancellation fence from the insert.
+    assertTaskReportRunCurrent(input.actorSessionId, runContext);
     db.prepare(
       "insert into group_task_reports (id,task_id,operation_id,input_json,report_json,created_at) values (?,?,?,?,?,?)",
     ).run(

@@ -6,10 +6,12 @@ import { parseGroupCollabStatusLine } from "../../../shared/group-collab-status"
 
 let userData: string;
 
+const reportSource = vi.hoisted(() => ({ pendingRead: undefined as Promise<string> | undefined }));
+
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 vi.mock("../../git/git-service", async (original) => ({
   ...(await original<typeof import("../../git/git-service")>()),
-  getGroupSourceFingerprint: vi.fn(async () => "current-source"),
+  getGroupSourceFingerprint: vi.fn(async () => reportSource.pendingRead ?? "current-source"),
 }));
 
 const { getDatabase } = await import("../../db/database");
@@ -33,6 +35,7 @@ const {
   registerGroupTools,
   runGroupTool,
   runGroupVerifiedTool,
+  runGroupReportTool,
   setGroupTaskWakeSink,
 } = await import("./group-tools");
 const taskStore = await import("../../groups/group-task-store");
@@ -91,6 +94,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  reportSource.pendingRead = undefined;
   wakes.length = 0;
   setGroupTaskWakeSink(undefined);
 });
@@ -110,6 +114,7 @@ describe("group member tools", () => {
     registerGroupTools();
     for (const name of [
       "group_report_progress",
+      "group_report_result",
       "group_review_task",
       "group_assign_task",
       "group_handoff",
@@ -1435,4 +1440,230 @@ it("keeps successful sink delivery without a runtime receipt suppressed on retry
   ).toBeUndefined();
   expect(invoke()).toBe(first);
   expect(delivered).toHaveLength(1);
+});
+
+describe("group_report_result", () => {
+  async function reportFixture() {
+    const { group, alpha, beta, loner } = squad();
+    const { createGroupTask } = await import("../../groups/group-store");
+    const { createAgentRun } = await import("../agent-run-store");
+    const executionId = appendGroupMessage({
+      groupId: group.id,
+      authorKind: "user",
+      body: "Parser",
+    }).id;
+    const task = createGroupTask({
+      groupId: group.id,
+      title: "Parser",
+      status: "in_progress",
+      ownerSessionId: alpha,
+      kind: "code",
+      priority: "normal",
+      dependencyIds: [],
+      criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+      verificationPolicy: { mode: "required", requireReview: false },
+    });
+    const run = createAgentRun({ sessionId: alpha, prompt: "Implement parser" });
+    taskStore.bindGroupTaskRun({
+      groupId: group.id,
+      taskId: task.id,
+      taskVersion: 1,
+      criteriaVersion: 1,
+      sessionId: alpha,
+      runId: run.id,
+      executionId,
+      role: "owner",
+      sourceFingerprint: "current-source",
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+    });
+    const params = {
+      taskId: task.id,
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+      summary: "Parser fixed.",
+      changedPaths: ["src/parser.ts"],
+    };
+    return { group, alpha, beta, loner, task, run, params };
+  }
+
+  it("records the owner's active main-process run and never grants required QA", async () => {
+    const { group, alpha, task, run, params } = await reportFixture();
+    const text = await runGroupReportTool(
+      { sessionId: alpha, groupId: group.id, runId: "spoofed" },
+      {
+        ...params,
+        sessionId: "spoofed",
+        runId: "spoofed",
+        qaEvidenceRefs: [{ status: "passed" }],
+      } as never,
+    );
+    expect(text).toBe(`Recorded unverified handoff for task ${task.id}.`);
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toMatchObject({
+      sessionId: alpha,
+      runId: run.id,
+      summary: params.summary,
+      qaEvidenceRefs: [],
+    });
+    const result = await runGroupVerifiedTool(
+      "group_agree",
+      { sessionId: alpha, groupId: group.id },
+      { taskId: task.id, expectedVersion: 1, operationId: crypto.randomUUID(), note: "Done" },
+    );
+    expect(result).toContain("verification-required");
+    expect(taskStore.getGroupTask(task.id).status).toBe("in_progress");
+    expect(await runGroupReportTool({ sessionId: alpha, groupId: group.id }, params)).toBe(text);
+  });
+
+  it("rejects non-owners and non-members without persisting a report", async () => {
+    const { group, beta, loner, task, params } = await reportFixture();
+    expect(await runGroupReportTool({ sessionId: beta, groupId: group.id }, params)).toMatch(
+      /owner|run/i,
+    );
+    expect(await runGroupReportTool({ sessionId: loner, groupId: group.id }, params)).toContain(
+      "not-a-member",
+    );
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toBeUndefined();
+  });
+
+  it("rejects an active run that is not the bound task run", async () => {
+    const { group, alpha, task, params } = await reportFixture();
+    const { createAgentRun } = await import("../agent-run-store");
+    createAgentRun({ sessionId: alpha, prompt: "Unrelated later run" });
+    expect(await runGroupReportTool({ sessionId: alpha, groupId: group.id }, params)).toMatch(
+      /run|binding/i,
+    );
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toBeUndefined();
+  });
+
+  it("rejects a newer task binding that differs from the actual active run", async () => {
+    const { group, alpha, task, run, params } = await reportFixture();
+    const binding = taskStore.getGroupTaskRunBinding(alpha, run.id);
+    if (!binding) throw new Error("Fixture missing owner binding");
+    taskStore.bindGroupTaskRun({
+      ...binding,
+      runId: crypto.randomUUID(),
+      expectedVersion: 1,
+      operationId: crypto.randomUUID(),
+    });
+    expect(await runGroupReportTool({ sessionId: alpha, groupId: group.id }, params)).toMatch(
+      /active.*run|run.*binding/i,
+    );
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toBeUndefined();
+  });
+
+  it("rejects a former owner's replay after ownership moves", async () => {
+    const { group, alpha, beta, task, params } = await reportFixture();
+    expect(await runGroupReportTool({ sessionId: alpha, groupId: group.id }, params)).toContain(
+      "Recorded",
+    );
+    taskStore.handoffGroupTask({
+      groupId: group.id,
+      actorSessionId: alpha,
+      targetSessionId: beta,
+      taskId: task.id,
+      description: "",
+    });
+    expect(await runGroupReportTool({ sessionId: alpha, groupId: group.id }, params)).toContain(
+      "not-owner",
+    );
+  });
+
+  it("executes through the registered async tool using trusted session context", async () => {
+    const { group, alpha, task, run, params } = await reportFixture();
+    registerGroupTools();
+    const definition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === "group_report_result");
+    const execute = definition?.execute as unknown as (
+      id: string,
+      params: unknown,
+      signal: undefined,
+      update: undefined,
+      ctx: { cwd: string },
+    ) => Promise<{ content: Array<{ text: string }> }>;
+    setAgentToolContext({
+      workspaceId: group.workspaceId ?? "",
+      cwd: "/tmp",
+      sessionId: alpha,
+      groupId: group.id,
+    });
+    const { changedPaths: _paths, ...withoutPaths } = params;
+    const result = await execute("report-call", withoutPaths, undefined, undefined, {
+      cwd: "/tmp",
+    });
+    expect(result.content[0]?.text).toBe(`Recorded unverified handoff for task ${task.id}.`);
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toMatchObject({
+      runId: run.id,
+      changedPaths: [],
+    });
+  });
+
+  it("does not persist after registered tool cancellation during source lookup", async () => {
+    const { group, alpha, task, params } = await reportFixture();
+    registerGroupTools();
+    const definition = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === "group_report_result");
+    const execute = definition?.execute as unknown as (
+      id: string,
+      params: unknown,
+      signal: AbortSignal,
+      update: undefined,
+      ctx: { cwd: string },
+    ) => Promise<{ content: Array<{ text: string }> }>;
+    setAgentToolContext({
+      workspaceId: group.workspaceId ?? "",
+      cwd: "/tmp",
+      sessionId: alpha,
+      groupId: group.id,
+    });
+    let finishRead!: (value: string) => void;
+    reportSource.pendingRead = new Promise((resolve) => {
+      finishRead = resolve;
+    });
+    const controller = new AbortController();
+    const result = execute("report-stop-call", params, controller.signal, undefined, {
+      cwd: "/tmp",
+    });
+    controller.abort();
+    finishRead("current-source");
+    expect((await result).content[0]?.text).toMatch(/cancel|abort/i);
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toBeUndefined();
+  });
+
+  it("does not persist if the active run stops while source lookup is pending", async () => {
+    const { group, alpha, task, run, params } = await reportFixture();
+    const { updateAgentRunStatus } = await import("../agent-run-store");
+    let finishRead!: (value: string) => void;
+    reportSource.pendingRead = new Promise((resolve) => {
+      finishRead = resolve;
+    });
+    const result = runGroupReportTool({ sessionId: alpha, groupId: group.id }, params);
+    updateAgentRunStatus(run.id, "cancelled");
+    finishRead("current-source");
+    expect(await result).toMatch(/active.*run|run.*binding/i);
+    expect(taskStore.getLatestGroupTaskReport(task.id)).toBeUndefined();
+  });
+
+  it("registers an async mutating tool with identity-free bounded parameters", () => {
+    registerGroupTools();
+    const entry = toolRegistry.getEntry("group_report_result");
+    expect(entry).toBeDefined();
+    expect(toolRegistry.isReadOnlySafe("group_report_result")).toBe(false);
+    const schema = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((tool) => tool.name === "group_report_result")?.parameters as {
+      properties: Record<string, unknown>;
+      additionalProperties: boolean;
+    };
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "changedPaths",
+      "expectedVersion",
+      "operationId",
+      "summary",
+      "taskId",
+    ]);
+    expect(schema.additionalProperties).toBe(false);
+  });
 });

@@ -463,5 +463,6 @@ export const GROUP_MEMBER_TOOL_NAMES = [
   "group_block",
   "group_handoff",
   "group_report_progress",
+  "group_report_result",
   "group_get_work_state",
 ] as const;

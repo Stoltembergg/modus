@@ -55,6 +55,16 @@ describe("groupTaskToolRequirements", () => {
       expect(coordinator).toContain(tool);
     }
   });
+  it("offers result reporting only to task owners across task stages", () => {
+    for (const stage of ["plan", "implement", "verify", "review", "deliver"] as const) {
+      expect(groupTaskToolRequirements({ ...base, stage }).groupToolNames).toContain(
+        "group_report_result",
+      );
+      expect(
+        groupTaskToolRequirements({ ...base, stage, role: "reviewer" }).groupToolNames,
+      ).not.toContain("group_report_result");
+    }
+  });
   it("does not infer requirements for legacy metadata", () => {
     expect(groupTaskToolRequirements({ ...base, kind: "legacy" })).toEqual({
       requiredCapabilities: [],

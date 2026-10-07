@@ -18,6 +18,7 @@ import { evaluateGroupTaskGate } from "../../../shared/group-task-policy";
 import type {
   GroupTaskDraft,
   GroupTaskProgressInput,
+  GroupTaskReportToolInput,
   GroupTaskReview,
 } from "../../../shared/group-work-state";
 import { GROUP_MEMBER_TOOL_NAMES, type ToolProfileName } from "../../../shared/tools";
@@ -58,11 +59,13 @@ import {
   commitVerifiedGroupTask,
   type GroupTaskOperationInput,
   type GroupTaskOperationResult,
+  getCurrentGroupTaskReportBinding,
   getGroupTask,
   handoffGroupTask,
   hasGroupTaskDispatchReceipt,
   hasGroupTaskExplicitDispatch,
   markGroupTaskExplicitDispatch,
+  recordGroupTaskReport,
   replayGroupTaskOperation,
   reportGroupTaskProgress,
 } from "../../groups/group-task-store";
@@ -101,6 +104,7 @@ export const GROUP_AGREE_TOOL = "group_agree";
 export const GROUP_BLOCK_TOOL = "group_block";
 export const GROUP_HANDOFF_TOOL = "group_handoff";
 
+export const GROUP_REPORT_RESULT_TOOL = "group_report_result";
 export const GROUP_REPORT_PROGRESS_TOOL = "group_report_progress";
 export const GROUP_GET_WORK_STATE_TOOL = "group_get_work_state";
 export const GROUP_TOOL_NAMES = GROUP_MEMBER_TOOL_NAMES;
@@ -109,7 +113,10 @@ export type GroupToolName = (typeof GROUP_TOOL_NAMES)[number];
 /** The tools runGroupTool runs synchronously (group_start_worktree runs git: startMemberWorktree). */
 export type SyncGroupToolName = Exclude<
   GroupToolName,
-  typeof GROUP_START_WORKTREE_TOOL | typeof GROUP_REVIEW_TASK_TOOL | typeof GROUP_AGREE_TOOL
+  | typeof GROUP_START_WORKTREE_TOOL
+  | typeof GROUP_REVIEW_TASK_TOOL
+  | typeof GROUP_AGREE_TOOL
+  | typeof GROUP_REPORT_RESULT_TOOL
 >;
 
 /** Page size cap for group_read_messages. */
@@ -195,6 +202,7 @@ export type GroupToolParams = {
     taskTitle?: string;
     taskId?: string;
   };
+  group_report_result: GroupTaskReportToolInput;
   group_report_progress: Omit<GroupTaskProgressInput, "groupId" | "actorSessionId">;
   group_get_work_state: { executionId?: string };
 };
@@ -775,6 +783,53 @@ export function runGroupTool<N extends SyncGroupToolName>(
   }
 }
 
+/** Saved handoffs are informational; all identities and source/QA checks stay in main. */
+export async function runGroupReportTool(
+  caller: GroupToolCaller,
+  params: GroupToolParams["group_report_result"],
+  signal?: AbortSignal,
+): Promise<string> {
+  try {
+    const groupId = requireCallerGroup(caller);
+    const task = getGroupTask(params.taskId);
+    if (task.groupId !== groupId)
+      throw new GroupStoreError("task-not-found", "Task not found in this group.");
+    if (task.ownerSessionId !== caller.sessionId)
+      throw new GroupStoreError("not-owner", "Only the current task owner can report a handoff.");
+    const active = getActiveAgentRun(caller.sessionId);
+    const binding = active
+      ? getCurrentGroupTaskReportBinding(groupId, params.taskId, caller.sessionId)
+      : undefined;
+    if (
+      active?.status !== "running" ||
+      !binding ||
+      binding.runId !== active.id ||
+      binding.taskId !== params.taskId ||
+      binding.groupId !== groupId ||
+      binding.role !== "owner"
+    )
+      throw new GroupStoreError(
+        "stale-evidence",
+        "Report requires your exact active task-owner run binding.",
+      );
+    const report = await recordGroupTaskReport(
+      {
+        groupId,
+        actorSessionId: caller.sessionId,
+        taskId: params.taskId,
+        expectedVersion: params.expectedVersion,
+        operationId: params.operationId,
+        summary: params.summary,
+        changedPaths: params.changedPaths ?? [],
+      },
+      { runId: active.id, ...(signal ? { signal } : {}) },
+    );
+    return `Recorded unverified handoff for task ${report.taskId}.`;
+  } catch (error) {
+    return errorText(error);
+  }
+}
+
 /** Git verification completes before opening the synchronous Task Store operation. */
 export async function runGroupVerifiedTool<N extends "group_review_task" | "group_agree">(
   name: N,
@@ -1158,6 +1213,23 @@ const schemas = {
     { executionId: Type.Optional(Type.String()) },
     { additionalProperties: false },
   ),
+  group_report_result: Type.Object(
+    {
+      taskId: idParam,
+      expectedVersion: Type.Integer({ minimum: 1 }),
+      operationId: Type.String({ minLength: 1 }),
+      summary: Type.String({
+        minLength: 1,
+        maxLength: 2000,
+        description:
+          "Concise unverified implementation handoff (max 2000 UTF-8 bytes). No transcript or QA claims.",
+      }),
+      changedPaths: Type.Optional(
+        Type.Array(Type.String({ minLength: 1, maxLength: 512 }), { maxItems: 100 }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
   group_report_progress: Type.Object(
     {
       taskId: idParam,
@@ -1311,6 +1383,13 @@ const DESCRIPTIONS: Record<GroupToolName, { label: string; description: string; 
         "Read bounded authoritative task versions, stages, blockers, dependencies, QA summaries and execution budgets. Reports omitted items; Git freshness is checked during approval.",
       snippet: "group_get_work_state(executionId?) — read task versions and pending work.",
     },
+    group_report_result: {
+      label: "Record task handoff",
+      description:
+        "Save a concise implementation handoff for the task you own in your active run. Main derives author, run, source and QA identities. This unverified note does not satisfy QA or complete the task. Write before requesting review or handing off.",
+      snippet:
+        "group_report_result(taskId, expectedVersion, operationId, summary, changedPaths?) — save an unverified handoff.",
+    },
     group_report_progress: {
       label: "Report group task progress",
       description:
@@ -1441,6 +1520,8 @@ function defineGroupTool(name: GroupToolName): ToolDefinition {
         const result = await startMemberWorktree(caller);
         return toResult(result.text, result.endTurn);
       }
+      if (name === GROUP_REPORT_RESULT_TOOL)
+        return toResult(await runGroupReportTool(caller, params as never, _s));
       if (name === GROUP_REVIEW_TASK_TOOL || name === GROUP_AGREE_TOOL)
         return toResult(await runGroupVerifiedTool(name, caller, params as never));
       return toResult(runGroupTool(name, caller, params as never));

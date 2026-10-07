@@ -182,6 +182,7 @@ export function GroupTaskDetails({
   useEffect(() => {
     let disposed = false;
     let lastAppliedVersion = 0;
+    let detailsRequest = 0;
     let integrationRequest = 0;
     highestEventVersion.current = 0;
     highestIntegrationRecordId.current = undefined;
@@ -211,6 +212,7 @@ export function GroupTaskDetails({
     }
 
     async function load(minimumVersion = 0): Promise<void> {
+      const currentDetailsRequest = ++detailsRequest;
       const currentIntegrationRequest = ++integrationRequest;
       try {
         const [next, history, integration] = await Promise.all([
@@ -218,14 +220,14 @@ export function GroupTaskDetails({
           window.modus.group.listTaskTransitions(taskId),
           window.modus.group.getIntegrationState(taskId),
         ]);
-        if (disposed) return;
+        if (disposed || currentDetailsRequest !== detailsRequest) return;
         if (currentIntegrationRequest === integrationRequest) {
           acceptIntegrationState(integration);
         }
         const version = next.task.stateVersion ?? 1;
         const currentVersion = displayedDetails.current?.task.stateVersion ?? 0;
         if (version < minimumVersion || version < highestEventVersion.current) return;
-        if (displayedDetails.current && version <= Math.max(lastAppliedVersion, currentVersion))
+        if (displayedDetails.current && version < Math.max(lastAppliedVersion, currentVersion))
           return;
         lastAppliedVersion = version;
         displayedDetails.current = next;
@@ -268,7 +270,7 @@ export function GroupTaskDetails({
         event.type !== "group.task-changed" ||
         event.groupId !== groupId ||
         event.taskId !== taskId ||
-        event.stateVersion <= highestEventVersion.current
+        event.stateVersion < highestEventVersion.current
       ) {
         return;
       }
@@ -328,6 +330,13 @@ export function GroupTaskDetails({
   }
 
   const { task } = details;
+  const handoffEvidence =
+    details.report?.qaEvidence.map((evidence, index) => ({
+      evidence,
+      identity:
+        details.report?.report.qaEvidenceRefs[index]?.evidenceId ??
+        `${evidence.criterionId}:${evidence.checkName}:${evidence.sessionId}:${evidence.runId}`,
+    })) ?? [];
   const hasStoredMerge =
     integrationState.record?.status === "applied" || integrationState.record?.status === "conflict";
   const canReviewIntegration = task.status === "done" || hasStoredMerge;
@@ -394,6 +403,66 @@ export function GroupTaskDetails({
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {details.report ? (
+          <div
+            className="mt-3 rounded border border-hairline p-2"
+            data-testid="task-handoff-report"
+          >
+            <div className="flex justify-between gap-2">
+              <h5 className="font-medium text-fg-muted">{t("taskDetails.handoff")}</h5>
+              <span className="text-2xs text-fg-faint">
+                {details.report.freshness === "current"
+                  ? t("taskDetails.handoffCurrent")
+                  : t("taskDetails.outcome.stale")}
+              </span>
+            </div>
+            <p className="mt-1 text-2xs text-fg-faint">{t("taskDetails.handoffNote")}</p>
+            <p className="mt-1 whitespace-pre-wrap break-words">{details.report.report.summary}</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-fg-faint">
+              <span>{displayName(details.report.report.sessionId, labels, t)}</span>
+              <button
+                className="text-accent hover:underline"
+                onClick={() =>
+                  onOpenSession?.(
+                    details.report?.report.sessionId ?? "",
+                    details.report?.report.runId,
+                  )
+                }
+                type="button"
+              >
+                {t("taskDetails.openHandoffSession")}
+              </button>
+            </div>
+            {details.report.staleReason ? (
+              <p className="mt-1 text-warning">{details.report.staleReason}</p>
+            ) : null}
+            {details.report.report.changedPaths.length ? (
+              <div className="mt-2">
+                <h6 className="text-2xs text-fg-muted">{t("taskDetails.changedPaths")}</h6>
+                <ul className="mt-1 text-2xs text-fg-faint">
+                  {details.report.report.changedPaths.map((path) => (
+                    <li className="break-all font-mono" key={path}>
+                      {path}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {details.report.qaEvidence.length ? (
+              <div className="mt-2">
+                <h6 className="text-2xs text-fg-muted">{t("taskDetails.savedQaRefs")}</h6>
+                <ul className="mt-1 text-2xs text-fg-faint">
+                  {handoffEvidence.map(({ evidence, identity }) => (
+                    <li key={identity}>
+                      {evidence.checkName ?? t("taskDetails.reviewEvidence")}:{" "}
+                      {outcomeLabel(evidence.status, t)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div className="mt-3">
