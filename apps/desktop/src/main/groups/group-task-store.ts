@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { GroupDecision, GroupTask, GroupTaskStatus } from "../../shared/contracts";
 import { isCoordinatorModeActive } from "../../shared/group-coordinator";
@@ -14,6 +14,8 @@ import type {
   GroupTaskEvidenceRef,
   GroupTaskGateInput,
   GroupTaskProgressInput,
+  GroupTaskReport,
+  GroupTaskReportInput,
   GroupTaskReview,
   GroupTaskRunBinding,
   GroupTaskTransitionEvent,
@@ -23,9 +25,10 @@ import type {
 import { isGroupIntegrationPreview, isGroupIntegrationRecord } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
 import { getDatabase } from "../db/database";
+import { getGroupSourceFingerprint } from "../git/git-service";
 import type { GroupTaskWake } from "./group-runtime-lib";
 import { GroupStoreError, getAgentGroup } from "./group-store";
-import { resolveGroupTaskEvidence } from "./group-task-evidence";
+import { getGroupTaskSourcePath, resolveGroupTaskEvidence } from "./group-task-evidence";
 
 const TASK_STATUSES: readonly GroupTaskStatus[] = [
   "open",
@@ -222,7 +225,7 @@ function toTask(row: TaskRow): GroupTask {
 }
 
 const RUN_COLUMNS = `group_id, task_id, task_version, criteria_version, session_id,
-  run_id, execution_id, role, source_fingerprint`;
+  run_id, execution_id, role, source_fingerprint, task_intent_fingerprint`;
 type RunRow = {
   group_id: string;
   task_id: string;
@@ -233,6 +236,7 @@ type RunRow = {
   execution_id: string;
   role: "owner" | "reviewer";
   source_fingerprint: string;
+  task_intent_fingerprint: string | null;
 };
 type EventRow = {
   id: string;
@@ -977,6 +981,7 @@ function toRun(row: RunRow): GroupTaskRunBinding {
     executionId: row.execution_id,
     role: row.role,
     sourceFingerprint: row.source_fingerprint,
+    ...(row.task_intent_fingerprint ? { taskIntentFingerprint: row.task_intent_fingerprint } : {}),
   };
 }
 
@@ -1084,7 +1089,7 @@ export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
     }
     requireExecutionInGroup(input.groupId, input.executionId);
     db.prepare(`insert into group_task_runs (${RUN_COLUMNS}, operation_id)
-      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       input.groupId,
       input.taskId,
       input.taskVersion,
@@ -1094,9 +1099,281 @@ export function bindGroupTaskRun(input: BindGroupTaskRunInput): void {
       input.executionId,
       input.role,
       input.sourceFingerprint,
+      getGroupTaskIntentFingerprint(task),
       input.operationId,
     );
   });
+}
+
+/** Canonical task intent excludes assignment, progress, evidence and lifecycle status. */
+export function getGroupTaskIntentFingerprint(task: GroupTask): string {
+  const intent = {
+    title: task.title.trim(),
+    description: task.description?.trim() ?? "",
+    kind: task.kind ?? "legacy",
+    priority: task.priority ?? "normal",
+    dependencyIds: [...new Set(task.dependencyIds ?? [])].sort(),
+    verificationPolicy: {
+      mode: task.verificationPolicy?.mode ?? "none",
+      requireReview: task.verificationPolicy?.requireReview ?? false,
+    },
+    criteria: (task.criteria ?? [])
+      .map((criterion) => ({
+        id: criterion.id,
+        description: criterion.description.trim(),
+        requiredCheckKinds: [...new Set(criterion.requiredCheckKinds)].sort(),
+      }))
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+  };
+  return createHash("sha256").update(JSON.stringify(intent)).digest("hex");
+}
+
+function validReportChangedPath(path: unknown): path is string {
+  return (
+    typeof path === "string" &&
+    path.length > 0 &&
+    Buffer.byteLength(path, "utf8") <= 512 &&
+    !path.includes("\0") &&
+    !/^[\\/]/.test(path) &&
+    !/^[a-z]:/i.test(path) &&
+    !path.split(/[\\/]/).some((segment) => segment === ".." || segment === "." || segment === "")
+  );
+}
+
+function validTaskReport(value: unknown): value is GroupTaskReport {
+  const row = object(value);
+  const fields = new Set([
+    "id",
+    "taskId",
+    "taskVersion",
+    "criteriaVersion",
+    "taskIntentFingerprint",
+    "sessionId",
+    "runId",
+    "sourceFingerprint",
+    "summary",
+    "changedPaths",
+    "qaEvidenceRefs",
+    "createdAt",
+  ]);
+  const identityFields = new Set([
+    "criterionId",
+    "checkName",
+    "criteriaVersion",
+    "sessionId",
+    "runId",
+    "eventRowId",
+    "evidenceId",
+    "sourceFingerprint",
+  ]);
+  return Boolean(
+    row &&
+      Object.keys(row).every((key) => fields.has(key)) &&
+      ["id", "taskId", "sessionId", "runId", "sourceFingerprint"].every(
+        (key) => typeof row[key] === "string" && row[key].length > 0,
+      ) &&
+      Number.isSafeInteger(row.taskVersion) &&
+      (row.taskVersion as number) >= 1 &&
+      Number.isSafeInteger(row.criteriaVersion) &&
+      (row.criteriaVersion as number) >= 1 &&
+      typeof row.taskIntentFingerprint === "string" &&
+      /^[a-f0-9]{64}$/.test(row.taskIntentFingerprint) &&
+      typeof row.summary === "string" &&
+      row.summary.trim().length > 0 &&
+      Buffer.byteLength(row.summary, "utf8") <= 2_000 &&
+      Array.isArray(row.changedPaths) &&
+      row.changedPaths.length <= 100 &&
+      row.changedPaths.every(validReportChangedPath) &&
+      new Set(row.changedPaths).size === row.changedPaths.length &&
+      evidence(row.qaEvidenceRefs) &&
+      row.qaEvidenceRefs.every((ref) => Object.keys(ref).every((key) => identityFields.has(key))) &&
+      typeof row.createdAt === "string" &&
+      Number.isFinite(Date.parse(row.createdAt)),
+  );
+}
+
+function parseTaskReport(json: string): GroupTaskReport {
+  return parseStored(json, "report", validTaskReport);
+}
+
+function normalizeTaskReportInput(input: GroupTaskReportInput): GroupTaskReportInput {
+  const allowed = new Set([
+    "groupId",
+    "taskId",
+    "actorSessionId",
+    "expectedVersion",
+    "operationId",
+    "summary",
+    "changedPaths",
+  ]);
+  if (!object(input) || Object.keys(input).some((key) => !allowed.has(key)))
+    throw new GroupStoreError(
+      "invalid-value",
+      "Report fields cannot include caller-supplied identities or QA.",
+    );
+  requireOperationId(input.operationId);
+  if (
+    typeof input.summary !== "string" ||
+    !input.summary.trim() ||
+    Buffer.byteLength(input.summary, "utf8") > 2_000
+  )
+    throw new GroupStoreError(
+      "invalid-value",
+      "Report summary must contain 1 to 2,000 UTF-8 bytes.",
+    );
+  if (!Array.isArray(input.changedPaths))
+    throw new GroupStoreError("invalid-value", "Report changed paths must be an array.");
+  if (!input.changedPaths.every(validReportChangedPath))
+    throw new GroupStoreError(
+      "invalid-value",
+      "Report changed paths must be bounded relative paths without traversal.",
+    );
+  const changedPaths = [...new Set(input.changedPaths)].sort();
+  if (changedPaths.length > 100)
+    throw new GroupStoreError(
+      "invalid-value",
+      "Report changed paths may contain at most 100 unique paths.",
+    );
+  return { ...input, summary: input.summary.trim(), changedPaths };
+}
+
+function currentTaskReportBinding(
+  task: GroupTask,
+  actorSessionId: string,
+): GroupTaskRunBinding & { taskIntentFingerprint: string } {
+  requireActor(task, actorSessionId, "owner");
+  const row = getDatabase()
+    .prepare(`select ${RUN_COLUMNS} from group_task_runs
+    where task_id = ? and session_id = ? order by rowid desc limit 1`)
+    .get(task.id, actorSessionId) as RunRow | undefined;
+  const binding = row ? toRun(row) : undefined;
+  if (
+    binding?.role !== "owner" ||
+    binding.groupId !== task.groupId ||
+    !isGroupTaskRunAssignmentCurrent(binding) ||
+    (task.executionId !== undefined && task.executionId !== binding.executionId)
+  )
+    throw new GroupStoreError(
+      "stale-evidence",
+      "Report requires the exact current task-owner run binding.",
+    );
+  if (
+    !binding.taskIntentFingerprint ||
+    binding.taskIntentFingerprint !== getGroupTaskIntentFingerprint(task)
+  )
+    throw new GroupStoreError(
+      "stale-evidence",
+      "Task intent changed or the run has no captured task intent.",
+    );
+  if (binding.criteriaVersion !== task.criteriaVersion)
+    throw new GroupStoreError("stale-evidence", "Task criteria changed after the run was bound.");
+  return { ...binding, taskIntentFingerprint: binding.taskIntentFingerprint };
+}
+
+function replayTaskReport(
+  db: DatabaseSync,
+  input: GroupTaskReportInput,
+): GroupTaskReport | undefined {
+  const row = db
+    .prepare("select input_json, report_json from group_task_reports where operation_id = ?")
+    .get(input.operationId) as { input_json: string; report_json: string } | undefined;
+  if (!row) return undefined;
+  if (
+    groupTaskOperationFingerprint(JSON.parse(row.input_json)) !==
+    groupTaskOperationFingerprint(input)
+  )
+    throw new GroupStoreError(
+      "invalid-value",
+      "Report operationId was used for a different report.",
+    );
+  return parseTaskReport(row.report_json);
+}
+
+/** Git is resolved in main; the synchronous write rechecks both the version and exact run. */
+export async function recordGroupTaskReport(
+  rawInput: GroupTaskReportInput,
+): Promise<GroupTaskReport> {
+  const input = normalizeTaskReportInput(rawInput);
+  const db = getDatabase();
+  const replay = replayTaskReport(db, input);
+  if (replay) return replay;
+  const task = requireGroupTask(input.groupId, input.taskId);
+  requireVersion(task, input.expectedVersion);
+  const binding = currentTaskReportBinding(task, input.actorSessionId);
+  const sourcePath = getGroupTaskSourcePath(task);
+  let sourceFingerprint = "";
+  try {
+    if (sourcePath) sourceFingerprint = await getGroupSourceFingerprint(sourcePath);
+  } catch {
+    /* Fail closed below. */
+  }
+  if (!sourceFingerprint || sourceFingerprint !== binding.sourceFingerprint)
+    throw new GroupStoreError(
+      "stale-evidence",
+      "Task source is unavailable or changed after the run was bound.",
+    );
+  return transaction(db, () => {
+    const replay = replayTaskReport(db, input);
+    if (replay) return replay;
+    rejectRunOperationCollision(db, input.operationId);
+    rejectEventOperationCollision(db, input.operationId);
+    const current = requireGroupTask(input.groupId, input.taskId);
+    requireVersion(current, input.expectedVersion);
+    const currentBinding = currentTaskReportBinding(current, input.actorSessionId);
+    if (
+      !sameBinding(binding, currentBinding) ||
+      binding.taskIntentFingerprint !== currentBinding.taskIntentFingerprint ||
+      getGroupTaskSourcePath(current) !== sourcePath
+    )
+      throw new GroupStoreError(
+        "stale-evidence",
+        "The task run binding changed while source was loading.",
+      );
+    const report: GroupTaskReport = {
+      id: randomUUID(),
+      taskId: current.id,
+      taskVersion: binding.taskVersion,
+      criteriaVersion: binding.criteriaVersion,
+      taskIntentFingerprint: binding.taskIntentFingerprint,
+      sessionId: binding.sessionId,
+      runId: binding.runId,
+      sourceFingerprint,
+      summary: input.summary,
+      changedPaths: input.changedPaths,
+      qaEvidenceRefs: (current.evidenceRefs ?? []).map((ref) => ({
+        criterionId: ref.criterionId,
+        ...(ref.checkName ? { checkName: ref.checkName } : {}),
+        criteriaVersion: ref.criteriaVersion,
+        sessionId: ref.sessionId,
+        runId: ref.runId,
+        eventRowId: ref.eventRowId,
+        evidenceId: ref.evidenceId,
+        sourceFingerprint: ref.sourceFingerprint,
+      })),
+      createdAt: new Date().toISOString(),
+    };
+    db.prepare(
+      "insert into group_task_reports (id,task_id,operation_id,input_json,report_json,created_at) values (?,?,?,?,?,?)",
+    ).run(
+      report.id,
+      report.taskId,
+      input.operationId,
+      JSON.stringify(input),
+      JSON.stringify(report),
+      report.createdAt,
+    );
+    notifyGroupTaskChanged(current);
+    return report;
+  });
+}
+
+export function getLatestGroupTaskReport(taskId: string): GroupTaskReport | undefined {
+  const row = getDatabase()
+    .prepare(
+      "select report_json from group_task_reports where task_id = ? order by rowid desc limit 1",
+    )
+    .get(taskId) as { report_json: string } | undefined;
+  return row ? parseTaskReport(row.report_json) : undefined;
 }
 
 export function listGroupTaskTransitions(taskId: string): GroupTaskTransitionEvent[] {

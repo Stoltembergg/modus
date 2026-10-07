@@ -127,6 +127,42 @@ export type GroupTaskCriterionDetail = {
   omittedEvidenceCount: number;
 };
 
+/** An unverified implementation handoff. QA references carry identity only. */
+export type GroupTaskReport = {
+  id: string;
+  taskId: string;
+  taskVersion: number;
+  criteriaVersion: number;
+  taskIntentFingerprint: string;
+  sessionId: string;
+  runId: string;
+  sourceFingerprint: string;
+  summary: string;
+  changedPaths: string[];
+  qaEvidenceRefs: GroupTaskEvidenceRef[];
+  createdAt: string;
+};
+
+/** Author identity comes from trusted main-process tool context, never model arguments. */
+export type GroupTaskReportInput = {
+  groupId: string;
+  taskId: string;
+  actorSessionId: string;
+  expectedVersion: number;
+  operationId: string;
+  summary: string;
+  changedPaths: string[];
+};
+
+export type GroupTaskReportDetail = {
+  kind: "unverified_handoff";
+  report: GroupTaskReport;
+  freshness: "current" | "stale";
+  staleReason?: string;
+  /** Freshness of each saved QA identity is independent from the handoff. */
+  qaEvidence: GroupTaskEvidenceDetail[];
+};
+
 export type GroupTaskDetails = {
   task: GroupTask;
   dependencies: Array<Pick<GroupTask, "id" | "title" | "status">>;
@@ -140,6 +176,7 @@ export type GroupTaskDetails = {
     reviewerSessionId?: string;
   };
   gate: GroupTaskGateResult;
+  report?: GroupTaskReportDetail;
 };
 
 export type GroupTaskProgressInput = {
@@ -172,6 +209,8 @@ export type GroupTaskRunBinding = {
   executionId: string;
   role: "owner" | "reviewer";
   sourceFingerprint: string;
+  /** Absent for bindings created before durable handoff reports. */
+  taskIntentFingerprint?: string;
 };
 
 export type GroupIntegrationStatus =
@@ -367,7 +406,7 @@ export function isGroupIntegrationRecord(value: unknown): value is GroupIntegrat
   );
 }
 
-export type BindGroupTaskRunInput = GroupTaskRunBinding & {
+export type BindGroupTaskRunInput = Omit<GroupTaskRunBinding, "taskIntentFingerprint"> & {
   expectedVersion: number;
   operationId: string;
 };

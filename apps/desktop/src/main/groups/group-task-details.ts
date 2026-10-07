@@ -12,7 +12,9 @@ import { GroupStoreError } from "./group-store";
 import { getGroupTaskSourcePath, resolveGroupTaskEvidence } from "./group-task-evidence";
 import {
   getGroupTask,
+  getGroupTaskIntentFingerprint,
   getGroupTaskRunBinding,
+  getLatestGroupTaskReport,
   isGroupTaskRunAssignmentCurrent,
   listGroupTasks,
 } from "./group-task-store";
@@ -199,8 +201,33 @@ async function resolveGroupTaskDetails(
             ? "changes_requested"
             : "pending";
 
+  const report = getLatestGroupTaskReport(task.id);
+  const staleReason = !report
+    ? undefined
+    : !sourceFingerprint || source.availability !== "available"
+      ? "Current task source could not be checked."
+      : report.criteriaVersion !== task.criteriaVersion
+        ? "Task criteria changed after this handoff."
+        : report.taskIntentFingerprint !== getGroupTaskIntentFingerprint(task)
+          ? "Task intent changed after this handoff."
+          : report.sourceFingerprint !== sourceFingerprint
+            ? "Task source changed after this handoff."
+            : undefined;
   return {
     task,
+    ...(report
+      ? {
+          report: {
+            kind: "unverified_handoff" as const,
+            report,
+            freshness: staleReason ? ("stale" as const) : ("current" as const),
+            ...(staleReason ? { staleReason } : {}),
+            qaEvidence: report.qaEvidenceRefs.map((ref) =>
+              evidenceStatus(task, ref, sourceFingerprint, source.availability),
+            ),
+          },
+        }
+      : {}),
     dependencies,
     dependencyOptions,
     omittedDependencyOptionCount: Math.max(
