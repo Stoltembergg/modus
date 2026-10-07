@@ -567,6 +567,13 @@ export function migrateDatabase(db: DatabaseSync): void {
     "purpose",
     "text not null default 'task' check (purpose in ('task','control'))",
   );
+  addColumn(db, "group_jobs", "task_id", "text references group_tasks(id) on delete set null");
+  addColumn(db, "group_jobs", "task_version", "integer");
+  addColumn(db, "group_jobs", "first_started_at", "text");
+  db.exec(`
+    create index if not exists idx_group_jobs_group_task_queue
+      on group_jobs(group_id, session_id, status, seq) where task_id is not null;
+  `);
   // Ask-spanning execution link (goal item 4): tasks/decisions share message chainId.
   addColumn(db, "group_tasks", "execution_id", "text");
   addColumn(db, "group_decisions", "execution_id", "text");

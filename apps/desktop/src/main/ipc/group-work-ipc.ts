@@ -5,11 +5,13 @@ import type {
   GroupSuggestion,
   GroupSuggestionResolution,
   GroupTaskDetails,
+  GroupTaskQueueItem,
   GroupTaskTransitionEvent,
   GroupTaskUserDraft,
   GroupWorkState,
   ResolveGroupSuggestionInput,
 } from "../../shared/group-work-state";
+import { getGroupTaskQueueSnapshot } from "../groups/group-job-store";
 import { IPC_CHANNELS } from "./channels";
 import { toGroupIpcError } from "./group-ipc";
 import { parseIpcInput } from "./schemas";
@@ -22,6 +24,7 @@ const groupWorkStateSchema = z
     executionId: nonEmpty.optional(),
   })
   .strict();
+const taskQueueSnapshotSchema = z.object({ groupId: nonEmpty }).strict();
 const taskDetailsSchema = z.object({ groupId: nonEmpty, taskId: nonEmpty }).strict();
 const taskTransitionsSchema = z.object({ taskId: nonEmpty }).strict();
 const draftSchema = z
@@ -72,6 +75,7 @@ const resolveSuggestionSchema = z
   .strict();
 
 export type GroupWorkIpcService = {
+  getGroupTaskQueueSnapshot?(groupId: string): GroupTaskQueueItem[];
   getGroupWorkState(groupId: string, executionId?: string): GroupWorkState;
   getGroupTaskDetails(groupId: string, taskId: string): Promise<GroupTaskDetails>;
   listGroupTaskTransitions(taskId: string): GroupTaskTransitionEvent[];
@@ -85,6 +89,8 @@ export type GroupWorkIpcService = {
   listGroupSuggestions(groupId: string): GroupSuggestion[];
   resolveGroupSuggestion(input: ResolveGroupSuggestionInput): Promise<GroupSuggestionResolution>;
 };
+
+const GROUP_TASK_QUEUE_SNAPSHOT_CHANNEL = "group:get-task-queue-snapshot";
 
 type HandlerRegistration = {
   handle(channel: string, listener: (event: TrustedSenderEvent, input?: unknown) => unknown): void;
@@ -122,6 +128,15 @@ export function registerGroupWorkIpcHandlers(
     assertTrustedSender(event);
     const parsed = parseIpcInput(groupWorkStateSchema, input, IPC_CHANNELS.groupGetWorkState);
     return service.getGroupWorkState(parsed.groupId, parsed.executionId);
+  });
+
+  handle(GROUP_TASK_QUEUE_SNAPSHOT_CHANNEL, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(taskQueueSnapshotSchema, input, GROUP_TASK_QUEUE_SNAPSHOT_CHANNEL);
+    return (
+      service.getGroupTaskQueueSnapshot?.(parsed.groupId) ??
+      getGroupTaskQueueSnapshot(parsed.groupId)
+    );
   });
 
   handle(IPC_CHANNELS.groupGetTaskDetails, (event, input) => {

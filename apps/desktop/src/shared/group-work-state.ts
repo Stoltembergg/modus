@@ -491,3 +491,16 @@ export type GroupSuggestionResolution = {
   wakeMessageId?: string;
   jobId?: string;
 };
+
+/** Read-only projection of the existing durable Group job FIFO and ready backlog. */
+export type GroupTaskQueueItem = {
+  taskId: string;
+  taskTitle: string;
+  state: "running" | "queued" | "backlog";
+  sessionId?: string;
+  memberName?: string;
+  jobId?: string;
+  /** One-based position among task jobs for this member; the running job is first. */
+  position?: number;
+  backlogReason?: "awaiting-capacity" | "needs-suggestion" | "routing-unavailable";
+};

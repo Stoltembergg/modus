@@ -111,6 +111,8 @@ const api: ModusApi = {
         groupId,
         ...(executionId ? { executionId } : {}),
       }),
+    getTaskQueueSnapshot: (groupId) =>
+      ipcRenderer.invoke("group:get-task-queue-snapshot", { groupId }),
     getTaskDetails: (groupId, taskId) =>
       ipcRenderer.invoke("group:get-task-details", {
         groupId,

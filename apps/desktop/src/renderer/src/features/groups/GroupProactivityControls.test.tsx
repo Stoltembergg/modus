@@ -100,17 +100,36 @@ describe("GroupProactivityControls", () => {
     const before = api.listSuggestions.mock.calls.length;
     for (const listener of subscribers) {
       listener({
+        type: "group.task-changed",
+        groupId: "group-1",
+        taskId: "task-1",
+        stateVersion: 6,
+      });
+    }
+    await waitFor(() => expect(api.listSuggestions.mock.calls.length).toBeGreaterThan(before));
+
+    const beforeSuggestion = api.listSuggestions.mock.calls.length;
+    for (const listener of subscribers) {
+      listener({
         type: "group.suggestion-changed",
         groupId: "group-1",
         actionId: "action-1",
         version: 3,
       });
     }
-    await waitFor(() => expect(api.listSuggestions.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() =>
+      expect(api.listSuggestions.mock.calls.length).toBeGreaterThan(beforeSuggestion),
+    );
   });
 
-  it("labels an accepted suggestion as a new execution when its source chain ended", async () => {
-    api.listSuggestions.mockResolvedValue([{ ...suggestion, startNewExecution: true }]);
+  it("labels a ready-task suggestion as a new execution when it has no live origin", async () => {
+    api.listSuggestions.mockResolvedValue([
+      {
+        ...suggestion,
+        source: { ...suggestion.source, kind: "task_ready" },
+        startNewExecution: true,
+      },
+    ]);
     render(<GroupProactivityControls groupId="group-1" memberOptions={[]} />);
     expect(await screen.findByRole("button", { name: "Start new execution" })).toBeTruthy();
   });

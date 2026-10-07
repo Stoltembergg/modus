@@ -48,7 +48,7 @@ const {
 const { recordAgentEvent } = await import("../agent/agent-event-store");
 const { getGroupSourceFingerprint } = await import("../git/git-service");
 const { getGroupTaskDetails } = await import("./group-task-details");
-const { readGroupChain, persistGroupChain } = await import("./group-job-store");
+const { getGroupJob, readGroupChain, persistGroupChain } = await import("./group-job-store");
 const { GroupRuntime } = await import("./group-runtime");
 
 const instances: InstanceType<typeof GroupRuntime>[] = [];
@@ -97,10 +97,57 @@ function squad(sourceDir?: string) {
   return { group, lead, owner, db };
 }
 
+function configureTaskCapability(
+  db: ReturnType<typeof getDatabase>,
+  groupId: string,
+  sessionId: string,
+): void {
+  const member = db
+    .prepare("select agent_id from agent_group_members where group_id = ? and session_id = ?")
+    .get(groupId, sessionId) as { agent_id: string } | undefined;
+  if (!member) throw new Error("Missing task-capable group member.");
+  db.prepare(
+    "update agents set capability_ids_json = ?, supported_task_kinds_json = ? where id = ?",
+  ).run(JSON.stringify(["implement"]), JSON.stringify(["code"]), member.agent_id);
+}
+
+function configureReviewCapability(
+  db: ReturnType<typeof getDatabase>,
+  groupId: string,
+  sessionId: string,
+): void {
+  const member = db
+    .prepare("select agent_id from agent_group_members where group_id = ? and session_id = ?")
+    .get(groupId, sessionId) as { agent_id: string } | undefined;
+  if (!member) throw new Error("Missing review-capable group member.");
+  db.prepare(
+    "update agents set capability_ids_json = ?, supported_task_kinds_json = ? where id = ?",
+  ).run(JSON.stringify(["review"]), JSON.stringify(["code"]), member.agent_id);
+}
+
+function readyCodeTask(
+  groupId: string,
+  title: string,
+  executionId?: string,
+  priority: "low" | "normal" | "high" = "normal",
+) {
+  return createGroupTask({
+    groupId,
+    title,
+    ...(executionId ? { executionId } : {}),
+    kind: "code",
+    priority,
+    dependencyIds: [],
+    criteria: [],
+    verificationPolicy: { mode: "none", requireReview: false },
+  });
+}
+
 function runtime(
   windowAvailable = true,
   recoverPending = false,
   onEmit?: (event: GroupRuntimeEvent, groups: InstanceType<typeof GroupRuntime>) => void,
+  limits?: ConstructorParameters<typeof GroupRuntime>[0]["limits"],
 ) {
   let available = windowAvailable;
   const events: GroupRuntimeEvent[] = [];
@@ -132,6 +179,7 @@ function runtime(
       },
     },
     recoverPending,
+    ...(limits ? { limits } : {}),
   });
   instances.push(groups);
   return {
@@ -389,6 +437,155 @@ describe("task transition delivery", () => {
     });
     await flush();
     expect(listGroupActions(group.id)).toHaveLength(1);
+  });
+
+  it.each([
+    "task_assigned",
+    "task_unblocked",
+    "review_requested",
+  ] as const)("persists and validates task linkage for accepted %s work", async (kind) => {
+    const sourceDir = mkdtempSync(join(tmpdir(), "modus-task-dispatch-review-"));
+    execFileSync("git", ["init", "-q"], { cwd: sourceDir });
+    writeFileSync(join(sourceDir, "source.txt"), "ready\n");
+    execFileSync("git", ["add", "source.txt"], { cwd: sourceDir });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=Modus Test",
+        "-c",
+        "user.email=modus@example.test",
+        "commit",
+        "-m",
+        "fixture",
+      ],
+      { cwd: sourceDir },
+    );
+    const { group, lead, owner, db } = squad(sourceDir);
+    if (kind === "review_requested") configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    try {
+      const root = env.groups.postUserMessage({
+        groupId: group.id,
+        body: "Continue the task",
+        mentions: [kind === "review_requested" ? owner : lead],
+      });
+      const task =
+        kind === "task_assigned"
+          ? createGroupTask({ groupId: group.id, title: kind, executionId: root.id })
+          : kind === "task_unblocked"
+            ? createGroupTask({
+                groupId: group.id,
+                title: kind,
+                executionId: root.id,
+                ownerSessionId: owner,
+                status: "blocked",
+              })
+            : createGroupTask({
+                groupId: group.id,
+                title: kind,
+                executionId: root.id,
+                ownerSessionId: owner,
+                reviewerSessionId: lead,
+                status: "in_progress",
+                kind: "legacy",
+                priority: "normal",
+                dependencyIds: [],
+                criteria: [],
+                verificationPolicy: { mode: "none", requireReview: true },
+              });
+      if (kind === "task_assigned") assignGroupTask(group.id, task.id, lead, owner);
+      else if (kind === "task_unblocked")
+        reportGroupTaskProgress({
+          groupId: group.id,
+          taskId: task.id,
+          actorSessionId: owner,
+          expectedVersion: must(task.stateVersion),
+          operationId: crypto.randomUUID(),
+          blockedReason: null,
+        });
+      else requestGroupTaskReview(group.id, task.id, owner, lead);
+
+      await vi.waitFor(() =>
+        expect(env.groups.listSuggestions(group.id).some((row) => row.source.kind === kind)).toBe(
+          true,
+        ),
+      );
+      const suggestion = must(
+        env.groups.listSuggestions(group.id).find((row) => row.source.kind === kind),
+      );
+      const targetSessionId = kind === "review_requested" ? lead : owner;
+      const accepted = await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId,
+      });
+      const job = must(getGroupJob(must(accepted.jobId)));
+      const currentTask = (await import("./group-task-store")).getGroupTask(task.id);
+
+      expect(job.wake).toMatchObject({ taskId: task.id, taskVersion: currentTask.stateVersion });
+      expect(env.groups.getTaskQueueSnapshot(group.id)).toContainEqual(
+        expect.objectContaining({ taskId: task.id, jobId: accepted.jobId, state: "queued" }),
+      );
+
+      env.setWindowAvailable(true);
+      env.groups.kick();
+      await vi.waitFor(() =>
+        expect(
+          env.calls.some(
+            (call) =>
+              call.input.sessionId === targetSessionId && call.input.groupTask?.taskId === task.id,
+          ),
+        ).toBe(true),
+      );
+      expect(
+        db.prepare("select status from group_jobs where id = ?").get(must(accepted.jobId)),
+      ).toMatchObject({ status: "running" });
+    } finally {
+      env.groups.dispose();
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies task queue capacity to accepted non-ready task events", async () => {
+    const { group, lead, owner, db } = squad();
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Assign the batch" });
+    const tasks = Array.from({ length: 4 }, (_, index) =>
+      createGroupTask({ groupId: group.id, title: `Assigned ${index + 1}`, executionId: root.id }),
+    );
+    for (const task of tasks) assignGroupTask(group.id, task.id, lead, owner);
+    await vi.waitFor(() => expect(env.groups.listSuggestions(group.id)).toHaveLength(4));
+    const suggestions = env.groups.listSuggestions(group.id);
+
+    for (const task of tasks.slice(0, 3)) {
+      const suggestion = must(suggestions.find((row) => row.task.id === task.id));
+      const accepted = await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: owner,
+      });
+      expect(getGroupJob(must(accepted.jobId))?.wake.taskId).toBe(task.id);
+    }
+    const fourth = must(suggestions.find((row) => row.task.id === tasks[3]?.id));
+    await expect(
+      env.groups.resolveGroupSuggestion({
+        actionId: fourth.actionId,
+        decision: "accept",
+        expectedVersion: fourth.version,
+        targetSessionId: owner,
+      }),
+    ).rejects.toThrow(/capacity|queue/i);
+    expect(
+      db
+        .prepare(
+          "select count(*) as n from group_jobs where session_id = ? and task_id is not null and status = 'pending'",
+        )
+        .get(owner),
+    ).toMatchObject({ n: 3 });
+    env.groups.dispose();
   });
 
   it("processes a committed assignment before its otherwise idle chain retires", async () => {
@@ -1265,6 +1462,7 @@ describe("user-resolved proactive suggestions", () => {
         groupId: group.id,
         sessionId: reviewerTwo,
       });
+      configureReviewCapability(db, group.id, reviewerTwo);
       const root = env.groups.postUserMessage({
         groupId: group.id,
         body: "private review request",
@@ -1616,5 +1814,651 @@ describe("ready-task source discovery", () => {
     runtime(false, true);
     await flush();
     expect(listGroupActions(group.id)).toHaveLength(2);
+  });
+});
+
+describe("ready-task suggestion dispatch", () => {
+  it("requires explicit acceptance for an idle ready task, even with auto mode enabled", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const task = readyCodeTask(group.id, "Idle ready task");
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+
+    expect(suggestion).toMatchObject({ startNewExecution: true, source: { kind: "task_ready" } });
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(task.id),
+    ).toEqual({ n: 0 });
+    expect(env.calls).toEqual([]);
+
+    const accepted = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: lead,
+    });
+    expect(accepted.resolvedExecutionId).toBeDefined();
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(task.id),
+    ).toEqual({ n: 1 });
+    expect(
+      db
+        .prepare("select count(*) as n from group_jobs where task_id = ? and status = 'pending'")
+        .get(task.id),
+    ).toEqual({ n: 1 });
+    env.groups.dispose();
+  });
+
+  it("persists and recovers the task id and version on its queued job", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const task = readyCodeTask(group.id, "Recoverable ready task");
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+    const accepted = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: lead,
+    });
+    const jobId = must(accepted.jobId);
+    const storedTask = (await import("./group-task-store")).getGroupTask(task.id);
+    env.groups.dispose();
+
+    const recovered = runtime(false, true);
+    expect(getGroupJob(jobId)).toMatchObject({
+      status: "pending",
+      wake: { taskId: task.id, taskVersion: storedTask.stateVersion },
+    });
+    expect(recovered.groups.getTaskQueueSnapshot(group.id)).toContainEqual(
+      expect.objectContaining({ taskId: task.id, state: "queued", jobId }),
+    );
+    recovered.groups.dispose();
+  });
+
+  it("creates one task-linked job when a ready suggestion is accepted concurrently", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const task = readyCodeTask(group.id, "Idempotent ready task");
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+    const input = {
+      actionId: suggestion.actionId,
+      decision: "accept" as const,
+      expectedVersion: suggestion.version,
+      targetSessionId: lead,
+    };
+
+    const results = await Promise.allSettled([
+      env.groups.resolveGroupSuggestion(input),
+      env.groups.resolveGroupSuggestion(input),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(task.id),
+    ).toEqual({
+      n: 1,
+    });
+    expect(
+      listGroupMessages(group.id).filter((message) =>
+        message.body.startsWith("Suggestion accepted: continue task Idempotent ready task"),
+      ),
+    ).toHaveLength(1);
+    env.groups.dispose();
+  });
+
+  it("does not auto-accept a visible ready suggestion after switching to auto mode", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Live task request" });
+    const task = readyCodeTask(group.id, "Already suggested task", root.id);
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+
+    expect(suggestion.startNewExecution).toBe(false);
+    env.groups.setProactivityMode(group.id, "opt_in_auto");
+    await flush();
+
+    expect(
+      listGroupActions(group.id).find((action) => action.id === suggestion.actionId),
+    ).toMatchObject({
+      deliveryState: "suggested",
+    });
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(task.id),
+    ).toEqual({ n: 0 });
+    expect(env.calls).toEqual([]);
+    env.groups.dispose();
+  });
+
+  it("auto-dispatches a reliably routed ready task only inside a live opted-in execution", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Active code request" });
+    const task = readyCodeTask(group.id, "Typed auto-dispatch", root.id);
+
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).some(
+          (action) => action.taskId === task.id && action.deliveryState === "dispatched",
+        ),
+      ).toBe(true),
+    );
+    const action = must(listGroupActions(group.id).find((row) => row.taskId === task.id));
+    const job = db
+      .prepare("select id, task_id, task_version, status from group_jobs where task_id = ?")
+      .get(task.id);
+
+    expect(action).toMatchObject({ deliveryState: "dispatched", executionId: root.id });
+    expect(job).toMatchObject({
+      id: action.jobId,
+      task_id: task.id,
+      task_version: (await import("./group-task-store")).getGroupTask(task.id).stateVersion,
+      status: "pending",
+    });
+    expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(false);
+    expect(env.calls).toEqual([]);
+    env.groups.dispose();
+  });
+
+  it("starts an automatic ready-task job after persisting its queue-head binding", async () => {
+    const { group, lead, owner, db } = squad();
+    configureTaskCapability(db, group.id, owner);
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({
+      groupId: group.id,
+      body: "Implement this",
+      mentions: [lead],
+    });
+    const task = readyCodeTask(group.id, "Automatic task at queue head", root.id);
+
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).some(
+          (action) => action.taskId === task.id && action.deliveryState === "dispatched",
+        ),
+      ).toBe(true),
+    );
+    const action = must(listGroupActions(group.id).find((row) => row.taskId === task.id));
+    expect(action).toMatchObject({
+      deliveryState: "dispatched",
+      resolutionTargetSessionId: owner,
+      resolvedExecutionId: root.id,
+    });
+
+    env.setWindowAvailable(true);
+    env.groups.kick();
+    await vi.waitFor(() =>
+      expect(
+        env.calls.some(
+          (call) => call.input.sessionId === owner && call.input.groupTask?.taskId === task.id,
+        ),
+      ).toBe(true),
+    );
+    expect(getGroupJob(must(action.jobId))?.status).toBe("running");
+    env.groups.dispose();
+  });
+
+  it("accepts while the member is busy and appends one task-linked job to its FIFO", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    env.groups.postUserMessage({ groupId: group.id, body: "Existing turn", mentions: [lead] });
+    const task = readyCodeTask(group.id, "Ready backlog task");
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+
+    const accepted = await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: lead,
+    });
+    const jobs = db
+      .prepare(
+        "select id, seq, task_id, status from group_jobs where group_id = ? and session_id = ? order by seq",
+      )
+      .all(group.id, lead) as Array<{
+      id: string;
+      seq: number;
+      task_id: string | null;
+      status: string;
+    }>;
+
+    expect(accepted.deliveryState).toBe("dispatched");
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]?.task_id).toBeNull();
+    expect(jobs[1]).toMatchObject({ task_id: task.id, status: "pending" });
+    expect(jobs[1]?.seq).toBeGreaterThan(jobs[0]?.seq ?? 0);
+    env.groups.dispose();
+  });
+
+  it("enforces three pending task jobs per member while leaving the fourth suggestion intact", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const tasks = Array.from({ length: 4 }, (_, index) =>
+      readyCodeTask(group.id, `Backlog task ${index + 1}`),
+    );
+    await vi.waitFor(() => expect(env.groups.listSuggestions(group.id)).toHaveLength(4));
+    const suggestions = env.groups.listSuggestions(group.id);
+
+    for (const task of tasks.slice(0, 3)) {
+      const suggestion = must(suggestions.find((row) => row.task.id === task.id));
+      await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: lead,
+      });
+    }
+
+    const fourth = must(suggestions.find((row) => row.task.id === tasks[3]?.id));
+    await expect(
+      env.groups.resolveGroupSuggestion({
+        actionId: fourth.actionId,
+        decision: "accept",
+        expectedVersion: fourth.version,
+        targetSessionId: lead,
+      }),
+    ).rejects.toThrow(/capacity|queue/i);
+    expect(
+      db
+        .prepare(
+          "select count(*) as n from group_jobs where group_id = ? and session_id = ? and task_id is not null and status = 'pending'",
+        )
+        .get(group.id, lead),
+    ).toMatchObject({ n: 3 });
+    expect(
+      listGroupActions(group.id).find((action) => action.id === fourth.actionId),
+    ).toMatchObject({
+      deliveryState: "suggested",
+    });
+    env.groups.dispose();
+  });
+
+  it("cancels a stale task job at the queue head before starting the member model", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const task = readyCodeTask(group.id, "Stale queued task");
+    await vi.waitFor(() =>
+      expect(env.groups.listSuggestions(group.id).some((row) => row.task.id === task.id)).toBe(
+        true,
+      ),
+    );
+    const suggestion = must(
+      env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+    );
+    await env.groups.resolveGroupSuggestion({
+      actionId: suggestion.actionId,
+      decision: "accept",
+      expectedVersion: suggestion.version,
+      targetSessionId: lead,
+    });
+    const job = db.prepare("select id from group_jobs where task_id = ?").get(task.id) as
+      | { id: string }
+      | undefined;
+    const jobId = must(job).id;
+    db.prepare("update group_tasks set state_version = state_version + 1 where id = ?").run(
+      task.id,
+    );
+
+    env.setWindowAvailable(true);
+    env.groups.kick();
+    await vi.waitFor(() =>
+      expect(db.prepare("select status from group_jobs where id = ?").get(jobId)).toMatchObject({
+        status: "cancelled",
+      }),
+    );
+    expect(env.calls.some((call) => call.input.sessionId === lead)).toBe(false);
+    env.groups.dispose();
+  });
+
+  it("refills a capacity-blocked auto backlog when a task job starts", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false, false, undefined, { maxWakesPerMember: 10 });
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Live task queue" });
+    const initialTasks = Array.from({ length: 3 }, (_, index) =>
+      readyCodeTask(group.id, `Accepted task ${index + 1}`, root.id),
+    );
+    await vi.waitFor(() => expect(env.groups.listSuggestions(group.id)).toHaveLength(3));
+    env.groups.setProactivityMode(group.id, "opt_in_auto");
+    for (const task of initialTasks) {
+      const suggestion = must(
+        env.groups.listSuggestions(group.id).find((row) => row.task.id === task.id),
+      );
+      await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: lead,
+      });
+    }
+    const blockedLowPriority = readyCodeTask(group.id, "Refill low priority", root.id, "low");
+    const blockedHighPriority = readyCodeTask(group.id, "Refill high priority", root.id, "high");
+    await flush();
+    expect(
+      listGroupTaskTransitions(blockedLowPriority.id).some(
+        (event) => event.action === "task_ready",
+      ),
+    ).toBe(true);
+    expect(
+      listGroupTaskTransitions(blockedHighPriority.id).some(
+        (event) => event.action === "task_ready",
+      ),
+    ).toBe(true);
+    expect(
+      listGroupActions(group.id).some(
+        (action) =>
+          action.taskId === blockedLowPriority.id || action.taskId === blockedHighPriority.id,
+      ),
+    ).toBe(false);
+    expect(
+      db
+        .prepare(
+          "select count(*) as n from group_jobs where group_id = ? and session_id = ? and task_id is not null and status = 'pending'",
+        )
+        .get(group.id, lead),
+    ).toMatchObject({ n: 3 });
+    const queueSnapshot = env.groups.getTaskQueueSnapshot(group.id);
+    expect(queueSnapshot.filter((item) => item.state !== "backlog")).toMatchObject([
+      { taskId: initialTasks[0]?.id, state: "queued", position: 1, memberName: "Lead" },
+      { taskId: initialTasks[1]?.id, state: "queued", position: 2, memberName: "Lead" },
+      { taskId: initialTasks[2]?.id, state: "queued", position: 3, memberName: "Lead" },
+    ]);
+    expect(queueSnapshot).toContainEqual(
+      expect.objectContaining({
+        taskId: blockedLowPriority.id,
+        state: "backlog",
+        backlogReason: "awaiting-capacity",
+      }),
+    );
+    expect(queueSnapshot).toContainEqual(
+      expect.objectContaining({
+        taskId: blockedHighPriority.id,
+        state: "backlog",
+        backlogReason: "awaiting-capacity",
+      }),
+    );
+    expect(JSON.stringify(queueSnapshot)).not.toContain("prompt");
+
+    env.setWindowAvailable(true);
+    env.groups.kick();
+    await vi.waitFor(() => expect(env.calls).toHaveLength(1));
+    must(env.calls[0]).resolve({ outcome: "ok" });
+    await vi.waitFor(() => expect(env.calls).toHaveLength(2));
+    expect(
+      db
+        .prepare("select status, first_started_at from group_jobs where task_id = ?")
+        .get(must(initialTasks[0]).id),
+    ).toMatchObject({ status: "running", first_started_at: expect.any(String) });
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).some(
+          (action) =>
+            action.taskId === blockedHighPriority.id && action.deliveryState === "dispatched",
+        ),
+      ).toBe(true),
+    );
+    const refillActions = listGroupActions(group.id)
+      .filter(
+        (action) =>
+          action.taskId === blockedLowPriority.id || action.taskId === blockedHighPriority.id,
+      )
+      .map(({ taskId, deliveryState }) => ({ taskId, deliveryState }));
+    expect(refillActions).toEqual([
+      { taskId: blockedHighPriority.id, deliveryState: "dispatched" },
+    ]);
+    expect(
+      db.prepare("select id, status from group_jobs where task_id = ?").get(blockedHighPriority.id),
+    ).toMatchObject({ status: "pending" });
+    expect(
+      listGroupActions(group.id).some((action) => action.taskId === blockedLowPriority.id),
+    ).toBe(false);
+    env.groups.dispose();
+  });
+
+  it("does not auto-refill a ready task after the completing task exhausts the chain budget", async () => {
+    const { group, lead, owner, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false, false, undefined, {
+      maxAgentMessages: 2,
+      maxWakesPerMember: 10,
+    });
+    const root = env.groups.postUserMessage({
+      groupId: group.id,
+      body: "Start task queue",
+      mentions: [owner],
+    });
+    const initialTasks = Array.from({ length: 3 }, (_, index) =>
+      readyCodeTask(group.id, `Budget task ${index + 1}`, root.id),
+    );
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).filter(
+          (action) =>
+            action.deliveryState === "dispatched" &&
+            initialTasks.some((task) => task.id === action.taskId),
+        ),
+      ).toHaveLength(3),
+    );
+
+    env.setWindowAvailable(true);
+    env.groups.kick();
+    await vi.waitFor(() =>
+      expect(env.calls.some((call) => call.input.sessionId === owner)).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(
+        env.calls.some((call) =>
+          initialTasks.some((task) => call.input.groupTask?.taskId === task.id),
+        ),
+      ).toBe(true),
+    );
+    const refillTask = readyCodeTask(group.id, "Fill the newly opened queue slot", root.id, "high");
+    await vi.waitFor(() =>
+      expect(
+        listGroupActions(group.id).some(
+          (action) => action.taskId === refillTask.id && action.deliveryState === "dispatched",
+        ),
+      ).toBe(true),
+    );
+    const backlogTask = readyCodeTask(group.id, "Must wait after budget", root.id);
+    await flush();
+    expect(listGroupActions(group.id).some((action) => action.taskId === backlogTask.id)).toBe(
+      false,
+    );
+
+    must(env.calls.find((call) => call.input.sessionId === owner)).resolve({
+      outcome: "ok",
+      finalText: "The request is underway.",
+    });
+    await vi.waitFor(() => expect(env.groups.chainSnapshot(root.id).agentMessages).toBe(1));
+    const runtimeInternals = env.groups as unknown as {
+      reconsiderReadyTaskEvents: (groupId: string) => void;
+      queues: Map<string, Array<{ id?: string; taskId?: string }>>;
+    };
+    const originalReconsider = runtimeInternals.reconsiderReadyTaskEvents.bind(env.groups);
+    const reconsideredChainStates: Array<{
+      agentMessages: number;
+      ended?: string;
+    }> = [];
+    vi.spyOn(runtimeInternals, "reconsiderReadyTaskEvents").mockImplementation((groupId) => {
+      const queue = runtimeInternals.queues.get(lead);
+      const refillWake = queue?.find((wake) => wake.taskId === refillTask.id);
+      if (refillWake?.id && queue) {
+        db.prepare("update group_jobs set status = 'cancelled' where id = ?").run(refillWake.id);
+        queue.splice(queue.indexOf(refillWake), 1);
+      }
+      const chain = env.groups.chainSnapshot(root.id);
+      reconsideredChainStates.push({
+        agentMessages: chain.agentMessages,
+        ...(chain.ended ? { ended: chain.ended } : {}),
+      });
+      originalReconsider(groupId);
+    });
+    const firstTaskCall = must(
+      env.calls.find((call) => call.input.groupTask?.taskId === initialTasks[0]?.id),
+    );
+    firstTaskCall.resolve({ outcome: "ok", finalText: "One task completed." });
+
+    await vi.waitFor(() =>
+      expect(env.groups.chainSnapshot(root.id).ended).toBe("max-agent-messages"),
+    );
+    expect(reconsideredChainStates[0]).toMatchObject({
+      agentMessages: 2,
+      ended: "max-agent-messages",
+    });
+    await vi.waitFor(() =>
+      expect(
+        env.groups.listSuggestions(group.id).some((item) => item.task.id === backlogTask.id),
+      ).toBe(true),
+    );
+    expect(
+      listGroupActions(group.id).find((action) => action.taskId === backlogTask.id),
+    ).toMatchObject({ deliveryState: "suggested", requiresNewExecution: true });
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(backlogTask.id),
+    ).toMatchObject({ n: 0 });
+    env.groups.dispose();
+  });
+
+  it("keeps a ready task visible as a suggestion after automatic materialization rolls back", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    setGroupProactivityMode(group.id, "opt_in_auto");
+    const env = runtime(false, false, undefined, { maxWakesPerMember: 1 });
+    const root = env.groups.postUserMessage({
+      groupId: group.id,
+      body: "Use the existing wake budget",
+    });
+    const task = readyCodeTask(group.id, "Still ready after dispatch failure", root.id);
+
+    await vi.waitFor(() =>
+      expect(listGroupActions(group.id).some((action) => action.taskId === task.id)).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(
+        env.groups.listSuggestions(group.id).some((suggestion) => suggestion.task.id === task.id),
+      ).toBe(true),
+    );
+    expect(getGroupTaskReadyState(task.id)).toBeDefined();
+    expect(listGroupActions(group.id).find((action) => action.taskId === task.id)).toMatchObject({
+      deliveryState: "suggested",
+      requiresNewExecution: true,
+    });
+    expect(
+      db.prepare("select count(*) as n from group_jobs where task_id = ?").get(task.id),
+    ).toMatchObject({ n: 0 });
+    env.groups.dispose();
+  });
+
+  it("reconsiders readiness generation rather than suppressing by task version", async () => {
+    const { group, lead, db } = squad();
+    configureTaskCapability(db, group.id, lead);
+    const env = runtime(false);
+    const root = env.groups.postUserMessage({ groupId: group.id, body: "Queue this readiness" });
+    const dependency = createGroupTask({
+      groupId: group.id,
+      title: "Prerequisite",
+      status: "done",
+    });
+    const dependent = createGroupTask({
+      groupId: group.id,
+      title: "Readiness with stable version",
+      executionId: root.id,
+      kind: "code",
+      priority: "high",
+      dependencyIds: [dependency.id],
+      criteria: [],
+      verificationPolicy: { mode: "none", requireReview: false },
+    });
+    await vi.waitFor(() =>
+      expect(
+        env.groups.listSuggestions(group.id).some((item) => item.task.id === dependent.id),
+      ).toBe(true),
+    );
+    const firstReadyState = must(getGroupTaskReadyState(dependent.id));
+    const blockers = Array.from({ length: 3 }, (_, index) =>
+      readyCodeTask(group.id, `Capacity blocker ${index + 1}`),
+    );
+    await vi.waitFor(() => expect(env.groups.listSuggestions(group.id)).toHaveLength(4));
+    for (const task of blockers) {
+      const suggestion = must(
+        env.groups.listSuggestions(group.id).find((item) => item.task.id === task.id),
+      );
+      await env.groups.resolveGroupSuggestion({
+        actionId: suggestion.actionId,
+        decision: "accept",
+        expectedVersion: suggestion.version,
+        targetSessionId: lead,
+      });
+    }
+    const dependentVersion = must(
+      (await import("./group-task-store")).getGroupTask(dependent.id).stateVersion,
+    );
+    env.groups.setProactivityMode(group.id, "opt_in_auto");
+    updateGroupTask(dependency.id, { status: "in_progress" });
+    await flush();
+    expect(getGroupTaskReadyState(dependent.id)).toBeUndefined();
+    updateGroupTask(dependency.id, { status: "done" });
+    await vi.waitFor(() => {
+      const current = getGroupTaskReadyState(dependent.id);
+      expect(current).toBeDefined();
+      expect(current?.readinessFingerprint).not.toBe(firstReadyState.readinessFingerprint);
+    });
+    await flush();
+
+    expect(must(getGroupTaskReadyState(dependent.id)).taskVersion).toBe(dependentVersion);
+    expect(env.groups.getTaskQueueSnapshot(group.id)).toContainEqual(
+      expect.objectContaining({
+        taskId: dependent.id,
+        state: "backlog",
+        backlogReason: "awaiting-capacity",
+      }),
+    );
+    env.groups.dispose();
   });
 });
