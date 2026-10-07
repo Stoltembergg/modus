@@ -1,6 +1,6 @@
 # Contenção da carga de plugins externos
 
-**Status:** proposta para revisão do usuário.
+**Status:** aprovado pelo usuário; plano de implementação preparado para revisão.
 **Escopo:** primeira tranche da remediação dos P0 A01–A04 da auditoria pós-Fase 19.
 
 ## Objetivo
