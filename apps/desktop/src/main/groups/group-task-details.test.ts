@@ -3,6 +3,8 @@ import type { GroupTask, GroupTaskEvidenceRef } from "../../shared/contracts";
 
 const mocks = vi.hoisted(() => ({
   task: undefined as unknown,
+  report: undefined as unknown,
+  assignmentCurrent: true,
   qa: undefined as unknown,
   fingerprint: "current-fingerprint",
   sourcePath: "/tmp",
@@ -53,7 +55,19 @@ vi.mock("./group-task-store", () => ({
     role: "owner",
     sourceFingerprint: "current-fingerprint",
   })),
-  isGroupTaskRunAssignmentCurrent: vi.fn(() => true),
+  getLatestGroupTaskReport: vi.fn(() => mocks.report),
+  getGroupTaskIntentFingerprint: vi.fn((task: GroupTask) =>
+    JSON.stringify([
+      task.title,
+      task.description,
+      task.kind,
+      task.priority,
+      task.dependencyIds,
+      task.criteria,
+      task.verificationPolicy,
+    ]),
+  ),
+  isGroupTaskRunAssignmentCurrent: vi.fn(() => mocks.assignmentCurrent),
   listGroupTasks: vi.fn(() => [mocks.task]),
 }));
 vi.mock("./group-store", () => ({
@@ -96,6 +110,8 @@ beforeEach(() => {
   mocks.onFingerprint = null;
   mocks.sourcePath = "/tmp";
   mocks.task = baseTask();
+  mocks.report = undefined;
+  mocks.assignmentCurrent = true;
   mocks.qa = {
     type: "harness.qa",
     sessionId: "s-owner",
@@ -187,5 +203,104 @@ describe("group task detail resolver", () => {
     });
     expect(detail.criteria[0]?.status).toBe("missing");
     expect(detail.gate.satisfied).toBe(false);
+  });
+});
+
+function reportFixture() {
+  const task = baseTask();
+  return {
+    id: "report-1",
+    taskId: task.id,
+    taskVersion: 1,
+    criteriaVersion: 1,
+    taskIntentFingerprint: JSON.stringify([
+      task.title,
+      undefined,
+      undefined,
+      undefined,
+      task.dependencyIds,
+      task.criteria,
+      task.verificationPolicy,
+    ]),
+    sessionId: "s-owner",
+    runId: "run-1",
+    sourceFingerprint: "current-fingerprint",
+    summary: "Implemented the parser.",
+    changedPaths: ["src/parser.ts"],
+    qaEvidenceRefs: task.evidenceRefs,
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+}
+
+describe("task handoff detail freshness", () => {
+  it("omits the report for legacy tasks", async () => {
+    const { getGroupTaskDetails } = await import("./group-task-details");
+    expect((await getGroupTaskDetails("g-1", "t-1")).report).toBeUndefined();
+  });
+
+  it("presents a current unverified handoff with QA resolved separately", async () => {
+    const { getGroupTaskDetails } = await import("./group-task-details");
+    mocks.report = reportFixture();
+    const detail = await getGroupTaskDetails("g-1", "t-1");
+    expect(detail.report).toMatchObject({
+      report: reportFixture(),
+      freshness: "current",
+      kind: "unverified_handoff",
+      qaEvidence: [{ sessionId: "s-owner", runId: "run-1", status: "passed" }],
+    });
+    expect(JSON.stringify(detail.report)).not.toContain("secret raw output");
+  });
+
+  it("preserves handoff freshness across owner/stage changes while QA goes stale", async () => {
+    const { getGroupTaskDetails } = await import("./group-task-details");
+    mocks.report = reportFixture();
+    mocks.task = {
+      ...baseTask(),
+      ownerSessionId: "s-new",
+      status: "in_review",
+      stage: "review",
+      stateVersion: 5,
+    };
+    mocks.assignmentCurrent = false;
+    const detail = await getGroupTaskDetails("g-1", "t-1");
+    expect(detail.report).toMatchObject({
+      freshness: "current",
+      qaEvidence: [{ status: "stale" }],
+    });
+  });
+
+  it("marks unavailable/changed source and changed criteria/intent stale", async () => {
+    const { getGroupTaskDetails } = await import("./group-task-details");
+    mocks.report = reportFixture();
+    mocks.fingerprint = "different-source";
+    expect((await getGroupTaskDetails("g-1", "t-1")).report).toMatchObject({
+      freshness: "stale",
+      staleReason: expect.stringMatching(/source/i),
+    });
+    mocks.fingerprint = "";
+    expect((await getGroupTaskDetails("g-1", "t-1")).report?.freshness).toBe("stale");
+    mocks.fingerprint = "current-fingerprint";
+    mocks.task = { ...baseTask(), criteriaVersion: 2 };
+    expect((await getGroupTaskDetails("g-1", "t-1")).report).toMatchObject({
+      freshness: "stale",
+      staleReason: expect.stringMatching(/criteria/i),
+    });
+    mocks.task = { ...baseTask(), title: "New request" };
+    expect((await getGroupTaskDetails("g-1", "t-1")).report).toMatchObject({
+      freshness: "stale",
+      staleReason: expect.stringMatching(/intent/i),
+    });
+  });
+
+  it("resolves QA references from the saved snapshot after task evidence is cleared", async () => {
+    const { getGroupTaskDetails } = await import("./group-task-details");
+    mocks.report = reportFixture();
+    mocks.task = { ...baseTask(), evidenceRefs: [] };
+    mocks.qa = undefined;
+    const detail = await getGroupTaskDetails("g-1", "t-1");
+    expect(detail.report).toMatchObject({
+      freshness: "current",
+      qaEvidence: [{ status: "missing" }],
+    });
   });
 });

@@ -800,6 +800,18 @@ function migrateGroupTaskState(db: DatabaseSync): void {
     create index if not exists idx_group_proactivity_pending on group_proactivity_actions(delivery_state, group_id);
     create unique index if not exists idx_group_proactivity_source on group_proactivity_actions(group_id, source_event_id);
   `);
+  addColumn(db, "group_task_runs", "task_intent_fingerprint", "text");
+  db.exec(`
+    create table if not exists group_task_reports (
+      id text primary key,
+      task_id text not null references group_tasks(id) on delete cascade,
+      operation_id text not null unique,
+      input_json text not null check (json_valid(input_json) and json_type(input_json) = 'object'),
+      report_json text not null check (json_valid(report_json) and json_type(report_json) = 'object'),
+      created_at text not null
+    );
+    create index if not exists idx_group_task_reports_latest on group_task_reports(task_id, created_at desc);
+  `);
   addColumn(
     db,
     "agent_groups",

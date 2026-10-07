@@ -29,6 +29,7 @@ const {
   recordGroupTaskEvidence,
   bindGroupTaskRun,
   getGroupTaskRunBinding,
+  getGroupTaskIntentFingerprint,
   listGroupTaskTransitions,
   onGroupTaskTransition,
   recordGroupTaskReadyEvent,
@@ -483,6 +484,7 @@ describe("versioned task state", () => {
       executionId,
       role: "owner",
       sourceFingerprint: "sha",
+      taskIntentFingerprint: getGroupTaskIntentFingerprint(task),
     });
     expect(() =>
       bindGroupTaskRun({ ...input, taskVersion: 2, operationId: crypto.randomUUID() }),
