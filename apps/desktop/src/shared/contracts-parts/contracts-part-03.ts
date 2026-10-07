@@ -27,6 +27,26 @@ import type { MessageContextChip } from "./contracts-part-05";
 import type { AgentReviewResult, PlanRef } from "./contracts-part-06";
 import type { SkillSelection } from "./contracts-part-07";
 
+export type AgentFailureCode =
+  | "empty_assistant_output"
+  | "provider_auth"
+  | "provider_rate_limited"
+  | "provider_unavailable"
+  | "model_configuration"
+  | "tool_failure"
+  | "unknown";
+export type AgentFailurePhase = "request" | "provider" | "tool" | "finalize";
+
+/** Optional for persisted events written by earlier app versions. */
+export type AgentFailureMetadata = {
+  failureCode?: AgentFailureCode;
+  failurePhase?: AgentFailurePhase;
+  retryable?: boolean;
+  safeToRetry?: boolean;
+  retryAfterMs?: number;
+  hadToolCalls?: boolean;
+};
+
 /** Durable SQLite event position, used to merge history with live IPC safely. */
 export type AgentEvent = AgentEventPayload & { eventCursor?: number };
 
@@ -67,6 +87,12 @@ type AgentEventPayload =
     }
   | {
       type: "run.failed";
+      failureCode?: AgentFailureCode;
+      failurePhase?: AgentFailurePhase;
+      retryable?: boolean;
+      safeToRetry?: boolean;
+      retryAfterMs?: number;
+      hadToolCalls?: boolean;
       sessionId: string;
       runId: string;
       message: string;

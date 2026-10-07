@@ -12,6 +12,7 @@ import type {
   GroupTaskStage,
   GroupTaskVerificationPolicy,
 } from "../group-work-state";
+import type { AgentFailureCode } from "./contracts-part-03";
 /* ── Agent Groups (rooms of normal agent sessions) ─────────────────────── */
 
 export type AgentGroupMode = "free" | "coordinator";
@@ -278,6 +279,7 @@ export type GroupMessage = {
   /** Monotonic revision timestamp for idempotent snapshot/live upserts. */
   updatedAt?: string;
   error?: string;
+  failureCode?: AgentFailureCode;
 };
 
 /** Message pagination cursor: the (createdAt, id) total order of group messages. */

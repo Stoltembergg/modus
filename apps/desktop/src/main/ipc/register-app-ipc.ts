@@ -14,6 +14,10 @@ import {
 } from "electron";
 import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
 import { listAgentEvents, recordAgentEvent } from "../agent/agent-event-store";
+import {
+  agentFailureDiagnostic,
+  agentFailureFromMetadata,
+} from "../agent/agent-failure-classification";
 import { listAgentRuns } from "../agent/agent-run-store";
 import {
   getAgentSession,
@@ -552,13 +556,20 @@ export function registerAppIpc({
     // L3b: a Modus session runs on the Modus turn model (Settings pick if allowed, else the
     // plan default); an own-provider session keeps its stored model. Never the renderer's
     // model or thinking (the model's own config applies).
-    await getAgentRuntime().prompt(
-      getSenderWindow(event),
-      userTurnPromptInput(
-        parsed,
-        resolveTurnModel(getAgentSession(parsed.sessionId)?.model, turnModelDeps),
-      ),
+    const promptInput = userTurnPromptInput(
+      parsed,
+      resolveTurnModel(getAgentSession(parsed.sessionId)?.model, turnModelDeps),
     );
+    try {
+      await getAgentRuntime().prompt(getSenderWindow(event), promptInput);
+    } catch (error) {
+      // Electron serializes rejected errors to the renderer. Preserve the original only in main.
+      const failure = agentFailureFromMetadata(error, {
+        hadToolCalls: false,
+        failurePhase: "request",
+      });
+      throw new Error(agentFailureDiagnostic(failure.failureCode));
+    }
   });
 
   // L2: branch is session state. Name only from the renderer; cwd from the session record.

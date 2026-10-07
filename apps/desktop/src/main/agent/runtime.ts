@@ -1,6 +1,7 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
   AgentEvent,
+  AgentFailureMetadata,
   AgentMode,
   AgentRunInfo,
   AgentSessionInfo,
@@ -96,7 +97,11 @@ export type HyperPlanBuildStartInput = {
  * A prompt that throws never produces a result; callers treat it as `failed`.
  */
 export type PromptTurnOutcome = "ok" | "failed" | "aborted" | "blocked";
-export type PromptTurnResult = { finalText?: string; outcome: PromptTurnOutcome; error?: string };
+export type PromptTurnResult = AgentFailureMetadata & {
+  finalText?: string;
+  outcome: PromptTurnOutcome;
+  error?: string;
+};
 
 /** A turn settled on a session, whoever started it (see `onTurnSettled`). */
 export type TurnSettledEvent = {

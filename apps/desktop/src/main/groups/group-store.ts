@@ -5,6 +5,7 @@ import type {
   AgentAvatarColor,
   AgentAvatarFace,
   AgentAvatarShape,
+  AgentFailureCode,
   AgentGroupInfo,
   AgentGroupMember,
   AgentGroupMode,
@@ -132,6 +133,7 @@ type MessageRow = {
   status: GroupMessageStatus | null;
   updated_at: string | null;
   error: string | null;
+  failure_code: AgentFailureCode | null;
 };
 
 type DecisionRow = {
@@ -153,7 +155,7 @@ const MEMBER_SELECT = `select m.group_id, m.session_id, m.role, m.agent_id, m.jo
   from agent_group_members m join agents a on a.id = m.agent_id`;
 const MESSAGE_COLUMNS = `id, group_id, author_kind, author_session_id, reply_to_message_id,
   to_session_id, chain_id, kind, body, mentions_json, attachments_json, context_items_json, created_at,
-  turn_id, run_id, sdk_message_id, sequence, status, updated_at, error`;
+  turn_id, run_id, sdk_message_id, sequence, status, updated_at, error, failure_code`;
 const DECISION_COLUMNS =
   "id, group_id, text, author_session_id, source_message_id, execution_id, created_at";
 
@@ -276,6 +278,7 @@ function toMessage(row: MessageRow): GroupMessage {
     ...(row.status !== null ? { status: row.status } : {}),
     ...(row.updated_at !== null ? { updatedAt: row.updated_at } : {}),
     ...(row.error !== null ? { error: row.error } : {}),
+    ...(row.failure_code !== null ? { failureCode: row.failure_code } : {}),
   };
 }
 
@@ -1390,6 +1393,7 @@ export function appendGroupMessage(input: {
   sdkMessageId?: string;
   status?: GroupMessageStatus;
   error?: string;
+  failureCode?: AgentFailureCode;
 }): GroupMessage {
   const db = getDatabase();
   requireGroupRow(input.groupId);
@@ -1466,7 +1470,7 @@ export function appendGroupMessage(input: {
     .get(input.groupId) as { sequence: number };
   db.prepare(
     `insert into group_messages (${MESSAGE_COLUMNS})
-     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
     input.groupId,
@@ -1488,6 +1492,7 @@ export function appendGroupMessage(input: {
     input.status ?? null,
     createdAt,
     input.error ?? null,
+    input.failureCode ?? null,
   );
   const row = db
     .prepare(`select ${MESSAGE_COLUMNS} from group_messages where id = ?`)
@@ -1504,6 +1509,7 @@ export function updateGroupMessage(
     sdkMessageId?: string;
     status?: GroupMessageStatus;
     error?: string | null;
+    failureCode?: AgentFailureCode | null;
   },
 ): GroupMessage | undefined {
   const current = getGroupMessage(messageId);
@@ -1513,13 +1519,14 @@ export function updateGroupMessage(
   ).toISOString();
   getDatabase()
     .prepare(`update group_messages set body = ?, run_id = ?, sdk_message_id = ?,
-    status = ?, error = ?, updated_at = ? where id = ?`)
+    status = ?, error = ?, failure_code = ?, updated_at = ? where id = ?`)
     .run(
       patch.body ?? current.body,
       patch.runId ?? current.runId ?? null,
       patch.sdkMessageId ?? current.sdkMessageId ?? null,
       patch.status ?? current.status ?? null,
       patch.error === undefined ? (current.error ?? null) : patch.error,
+      patch.failureCode === undefined ? (current.failureCode ?? null) : patch.failureCode,
       revision,
       messageId,
     );

@@ -15,6 +15,7 @@ import type {
   AdaptiveDecisionMode,
   AdaptiveFailureAttempt,
   AgentEvent,
+  AgentFailureMetadata,
   AgentResponseModel,
   AgentRunInfo,
   AgentRunTokenUsage,
@@ -90,6 +91,7 @@ import {
   listAgentEvents,
   recordAgentEvent,
 } from "./agent-event-store";
+import { agentFailureDiagnostic, agentFailureFromMetadata } from "./agent-failure-classification";
 import {
   createAgentRun,
   getActiveAgentRun,
@@ -278,6 +280,8 @@ const CONTINUE_AFTER_COMPACTION =
 type RunOutputTracker = {
   runId: string;
   hasVisibleOutput: boolean;
+  hadToolCalls?: boolean;
+  hasAssistantOutput?: boolean;
   startedAt: number;
   tokenUsage: AgentRunTokenUsage;
   hasReportedUsage: boolean;
@@ -892,7 +896,11 @@ export class PiSdkRuntime implements AgentRuntime {
     error: unknown;
     preserveStartedDeliveryForRetry?: boolean;
   }): void {
-    const message = input.error instanceof Error ? input.error.message : String(input.error);
+    const failure = agentFailureFromMetadata(input.error, {
+      hadToolCalls: input.outputTracker?.hadToolCalls ?? false,
+      failurePhase: "request",
+    });
+    const message = agentFailureDiagnostic(failure.failureCode);
     let preserveStartedRun = false;
     try {
       if (
@@ -927,6 +935,7 @@ export class PiSdkRuntime implements AgentRuntime {
             sessionId: input.sessionId,
             runId: input.runId,
             message,
+            ...failure,
           };
       try {
         this.emitToWindow(input.window)(terminal, {
@@ -1098,7 +1107,7 @@ export class PiSdkRuntime implements AgentRuntime {
       .catch((error: unknown) => {
         if (!settled) rejectStarted(error);
         else console.error("[modus] HyperPlan build turn failed:", error);
-        this.notifyTurnSettled(input.sessionId, "plan-build", probe, true);
+        this.notifyTurnSettled(input.sessionId, "plan-build", probe);
       });
     return started;
   }
@@ -1572,6 +1581,28 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
   ): (event: AgentEvent, options?: { idempotencyKey?: string }) => void {
     return (event, options) => {
+      // Sanitize before both persistence and IPC; raw SDK diagnostics can contain credentials.
+      if (event.type === "run.failed") {
+        const tracker = this.runOutputTrackers.get(event.sessionId);
+        const failure: AgentFailureMetadata = event.failureCode
+          ? {}
+          : agentFailureFromMetadata(event, {
+              hadToolCalls: tracker?.hadToolCalls ?? false,
+              failurePhase: "request",
+            });
+        event = {
+          ...event,
+          ...failure,
+          message: agentFailureDiagnostic(event.failureCode ?? failure.failureCode ?? "unknown"),
+        };
+      } else if (event.type === "session.status" && event.status.type === "retry") {
+        event = {
+          ...event,
+          status: { ...event.status, message: "The provider request failed. Retrying." },
+        };
+      } else if (event.type === "runtime.error") {
+        event = { ...event, message: agentFailureDiagnostic("unknown") };
+      }
       const rowId = recordAgentEvent(event, options);
       if (event.type === "harness.qa") {
         const binding = getGroupTaskRunBinding(event.sessionId, event.runId);
@@ -1679,6 +1710,8 @@ export class PiSdkRuntime implements AgentRuntime {
       return;
     }
 
+    if (event.type === "message.delta" && event.delta.trim()) tracker.hasAssistantOutput = true;
+    if (event.type === "tool.started") tracker.hadToolCalls = true;
     if ((event.type === "message.delta" || event.type === "thinking.delta") && event.delta.trim()) {
       if (!tracker.hasVisibleOutput) {
         console.info(`[modus-timing] first visible output +${Date.now() - tracker.startedAt}ms`);
@@ -2246,11 +2279,11 @@ export class PiSdkRuntime implements AgentRuntime {
     try {
       await this.executePrompt(window, input, undefined, probe);
     } catch (error) {
-      this.notifyTurnSettled(input.sessionId, "prompt", probe, true);
+      this.notifyTurnSettled(input.sessionId, "prompt", probe);
       throw error;
     }
     const result = this.promptTurnResult(input.sessionId, probe);
-    this.notifyTurnSettled(input.sessionId, "prompt", probe, false, result);
+    this.notifyTurnSettled(input.sessionId, "prompt", probe, result);
     return result;
   }
 
@@ -2311,8 +2344,27 @@ export class PiSdkRuntime implements AgentRuntime {
         return { outcome: "aborted" };
       case "running":
         return { outcome: "ok" };
-      default:
-        return { outcome: "failed" };
+      default: {
+        const terminal = listAgentEvents(sessionId).findLast(
+          ({ event }) => event.type === "run.failed" && event.runId === probe.runId,
+        )?.event;
+        if (terminal?.type !== "run.failed")
+          return {
+            outcome: "failed",
+            failureCode: "unknown",
+            retryable: false,
+            safeToRetry: false,
+          };
+        const {
+          type: _type,
+          sessionId: _sessionId,
+          runId: _runId,
+          message,
+          eventCursor: _cursor,
+          ...failure
+        } = terminal;
+        return { outcome: "failed", error: message, ...failure };
+      }
     }
   }
 
@@ -2321,13 +2373,10 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     origin: TurnSettledEvent["origin"],
     probe: PromptProbe,
-    threw = false,
     known?: PromptTurnResult,
   ): void {
     if (!probe.runId || this.turnSettledListeners.size === 0) return;
-    const result: PromptTurnResult = threw
-      ? { outcome: "failed" }
-      : (known ?? this.promptTurnResult(sessionId, probe));
+    const result: PromptTurnResult = known ?? this.promptTurnResult(sessionId, probe);
     for (const listener of this.turnSettledListeners) {
       try {
         listener({ sessionId, origin, result });
@@ -2808,7 +2857,11 @@ export class PiSdkRuntime implements AgentRuntime {
             startedEmitThrew && outputTracker.runStartedRowId !== undefined,
         });
       } else {
-        const message = error instanceof Error ? error.message : String(error);
+        const failure = agentFailureFromMetadata(error, {
+          hadToolCalls: outputTracker?.hadToolCalls ?? false,
+          failurePhase: "request",
+        });
+        const message = agentFailureDiagnostic(failure.failureCode);
         const started = runStartedEmitted || outputTracker?.runStartedRowId !== undefined;
         const cancelled =
           this.cancellingRuns.has(run.id) || getAgentRun(run.id)?.status === "cancelled";
@@ -2841,7 +2894,13 @@ export class PiSdkRuntime implements AgentRuntime {
               emitForStart(
                 cancelled
                   ? { type: "run.cancelled", sessionId: input.sessionId, runId: run.id }
-                  : { type: "run.failed", sessionId: input.sessionId, runId: run.id, message },
+                  : {
+                      type: "run.failed",
+                      sessionId: input.sessionId,
+                      runId: run.id,
+                      message,
+                      ...failure,
+                    },
               );
             } catch {
               // Continue to runtime.error and idle even if terminal delivery fails.
@@ -3112,10 +3171,10 @@ export class PiSdkRuntime implements AgentRuntime {
           continue;
         }
         const settledRun = getAgentRun(run.id);
-        const turnError = lastAssistantTurnError(runtimeSession.session);
+        const turnError = lastAssistantTurnFailure(runtimeSession.session);
         if (
           settledRun?.status === "running" &&
-          outputTracker.hasVisibleOutput &&
+          outputTracker.hasAssistantOutput &&
           !turnError &&
           !this.cancellingRuns.has(run.id) &&
           !continuationStarted &&
@@ -3235,8 +3294,13 @@ export class PiSdkRuntime implements AgentRuntime {
         // failed after exhausting any auto-retries. This is the SINGLE place a
         // model error becomes a fatal `run.failed` (red), so transient retries
         // never paint red and the final error is never doubled.
-        const turnError = lastAssistantTurnError(runtimeSession.session);
-        if (turnError) {
+        const turnFailure = lastAssistantTurnFailure(runtimeSession.session);
+        if (turnFailure) {
+          const failure = agentFailureFromMetadata(turnFailure, {
+            hadToolCalls: outputTracker.hadToolCalls ?? false,
+            failurePhase: "provider",
+          });
+          const turnError = agentFailureDiagnostic(failure.failureCode);
           await captureTurnEnd();
           this.emitHarnessQA(
             runtimeSession,
@@ -3257,12 +3321,13 @@ export class PiSdkRuntime implements AgentRuntime {
             sessionId: input.sessionId,
             runId: run.id,
             message: turnError,
+            ...failure,
             ...this.runResponseMetadata(outputTracker),
           });
           if (buildPlan) {
             this.transitionPlanBuild(runtimeSession, buildPlan.id, "not_built");
           }
-        } else if (outputTracker.hasVisibleOutput) {
+        } else if (outputTracker.hasAssistantOutput) {
           // Per-turn change summary (Codex-style "N files changed" card):
           // diff the checkout against the pre-run snapshot. Never blocks or
           // fails the run; sessions without a checkpoint just omit it.
@@ -3317,8 +3382,12 @@ export class PiSdkRuntime implements AgentRuntime {
             this.transitionPlanBuild(runtimeSession, buildPlan.id, "built");
           }
         } else {
-          const message =
-            "The selected model finished without returning any assistant output. Check the custom provider URL, model id, API type, and reasoning compatibility settings.";
+          const failure = agentFailureFromMetadata(lastAssistantMessage(runtimeSession.session), {
+            hadToolCalls: outputTracker.hadToolCalls ?? false,
+            failurePhase: "finalize",
+            finishReason: "empty_assistant_output",
+          });
+          const message = agentFailureDiagnostic(failure.failureCode);
           await captureTurnEnd();
           this.emitHarnessQA(
             runtimeSession,
@@ -3339,6 +3408,7 @@ export class PiSdkRuntime implements AgentRuntime {
             sessionId: input.sessionId,
             runId: run.id,
             message,
+            ...failure,
             ...this.runResponseMetadata(outputTracker),
           });
           emitForStart({ type: "runtime.error", sessionId: input.sessionId, message });
@@ -3418,11 +3488,12 @@ export class PiSdkRuntime implements AgentRuntime {
         settledChangedPaths,
         settledChangedScopeKnown,
       );
-      updateAgentRunStatus(
-        run.id,
-        "failed",
-        error instanceof Error ? error.message : String(error),
-      );
+      const failure = agentFailureFromMetadata(error, {
+        hadToolCalls: outputTracker.hadToolCalls ?? false,
+        failurePhase: "provider",
+      });
+      const message = agentFailureDiagnostic(failure.failureCode);
+      updateAgentRunStatus(run.id, "failed", message);
       finalizeProjectMemoryRunBestEffort({
         sessionId: input.sessionId,
         runId: run.id,
@@ -3433,13 +3504,14 @@ export class PiSdkRuntime implements AgentRuntime {
         type: "run.failed",
         sessionId: input.sessionId,
         runId: run.id,
-        message: error instanceof Error ? error.message : String(error),
+        message,
+        ...failure,
         ...this.runResponseMetadata(outputTracker),
       });
       emitForStart({
         type: "runtime.error",
         sessionId: input.sessionId,
-        message: error instanceof Error ? error.message : String(error),
+        message,
       });
       throw error;
     } finally {
@@ -4265,33 +4337,15 @@ function buildTurnImages(
   }));
 }
 
-/**
- * The authoritative end-of-turn error, read from pi's own message log: the last
- * assistant message's `stopReason`. Returns its error text when the turn ended
- * in an unrecovered error (after auto-retries are exhausted or for a
- * non-retryable error), and `undefined` when the latest assistant message ended
- * cleanly. This is pi's recorded fact, not a guess — so it is the single source
- * for surfacing a fatal turn failure.
- */
-function lastAssistantTurnError(session: AgentSession): string | undefined {
-  const messages = session.state.messages as ReadonlyArray<{
-    role?: unknown;
-    stopReason?: unknown;
-    errorMessage?: unknown;
-  }>;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "assistant") {
-      continue;
-    }
-    if (message.stopReason !== "error") {
-      return undefined;
-    }
-    return typeof message.errorMessage === "string" && message.errorMessage.trim()
-      ? message.errorMessage
-      : "The model returned an error without additional details.";
-  }
-  return undefined;
+/** SDK facts only; errorMessage remains private and never selects a category. */
+function lastAssistantMessage(session: AgentSession): Record<string, unknown> | undefined {
+  const messages = session.state.messages as unknown as ReadonlyArray<Record<string, unknown>>;
+  return messages.findLast((message) => message.role === "assistant");
+}
+
+function lastAssistantTurnFailure(session: AgentSession): Record<string, unknown> | undefined {
+  const message = lastAssistantMessage(session);
+  return message?.stopReason === "error" ? message : undefined;
 }
 
 function createContextUsageEvent(sessionId: string, session: AgentSession): AgentEvent | undefined {
