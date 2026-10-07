@@ -33,6 +33,7 @@ import type {
   GroupProactivityMode,
   GroupSuggestion,
   GroupSuggestionResolution,
+  GroupTaskQueueItem,
   GroupTaskTransitionEvent,
   GroupTaskTrigger,
   ResolveGroupSuggestionInput,
@@ -50,14 +51,16 @@ import {
 } from "./group-capability-router";
 import {
   getGroupJob,
+  getGroupTaskQueueSnapshot,
   listRecoverableGroupJobs,
   persistGroupChain,
   persistGroupJob,
   readGroupChain,
   updateGroupJob,
 } from "./group-job-store";
-import { decideGroupNextAction } from "./group-proactivity-policy";
+import { decideGroupNextAction, decideGroupReadyTaskAction } from "./group-proactivity-policy";
 import {
+  deferPendingGroupActionAsSuggestion,
   type GroupActionRecord,
   getGroupAction,
   getGroupActionByJobId,
@@ -114,6 +117,7 @@ import {
 } from "./group-store";
 import { getGroupTaskDetails } from "./group-task-details";
 import { findGroupTaskForWake } from "./group-task-evidence";
+import type { GroupTaskScheduleCandidate } from "./group-task-scheduler";
 import { selectReadyGroupTasks } from "./group-task-scheduler";
 import {
   getGroupTask,
@@ -131,6 +135,7 @@ import { GroupTurnTranscript } from "./group-turn-transcript";
 import { getGroupWorkState } from "./group-work-state";
 
 const GROUP_SUGGESTION_LIMIT = 100;
+const GROUP_TASK_QUEUE_CAPACITY = 3;
 
 export {
   agentDescription,
@@ -247,6 +252,10 @@ export class GroupRuntime {
     return getGroupProactivityMode(groupId);
   }
 
+  getTaskQueueSnapshot(groupId: string): GroupTaskQueueItem[] {
+    return getGroupTaskQueueSnapshot(groupId);
+  }
+
   /** Rebuild the user-facing view from persisted task and transition identities. */
   listSuggestions(groupId: string): GroupSuggestion[] {
     const group = getAgentGroup(groupId);
@@ -297,18 +306,13 @@ export class GroupRuntime {
       (action) =>
         triggerByActionId.get(action.id) !== undefined && !staleReadyActionIds.has(action.id),
     );
+    const readySchedule = Object.keys(readiness).length > 0 ? this.readyTaskSchedule(groupId) : [];
+    const readyCandidatesByTask = new Map(
+      readySchedule.map((candidate) => [candidate.taskId, candidate]),
+    );
     let orderedActions = actions.slice(-GROUP_SUGGESTION_LIMIT);
-    if (Object.keys(readiness).length > 0) {
-      const workState = getGroupWorkState(groupId);
-      const schedule = selectReadyGroupTasks({
-        tasks: listGroupTasks(groupId),
-        workState,
-        readiness,
-        now: Date.now(),
-        pendingTaskJobsByMember: {},
-        queueCapacity: 3,
-      });
-      const priorityReadyActions = schedule.flatMap((candidate) => {
+    if (readySchedule.length > 0) {
+      const priorityReadyActions = readySchedule.flatMap((candidate) => {
         const action = readyActionByIdentity.get(
           JSON.stringify([candidate.taskId, candidate.readinessFingerprint, candidate.readySince]),
         );
@@ -327,8 +331,16 @@ export class GroupRuntime {
       if (!trigger) return [];
       const task = getGroupTask(action.taskId);
       const role = this.suggestionRole(trigger, task);
-      const candidates = this.suggestionTargets(groupId, task, role);
-      const proposedTargetSessionId = this.proposedTarget(trigger, task, group);
+      const readyCandidate =
+        trigger.kind === "task_ready" ? readyCandidatesByTask.get(task.id) : undefined;
+      const candidates =
+        trigger.kind === "task_ready"
+          ? this.readySuggestionTargets(groupId, task, readyCandidate)
+          : this.suggestionTargets(groupId, task, role);
+      const proposedTargetSessionId =
+        trigger.kind === "task_ready"
+          ? (readyCandidate?.targets[0] ?? readyCandidate?.suggestedTargetSessionId)
+          : this.proposedTarget(trigger, task, group);
       const reason = this.suggestionReason(action.decision.reasonCode, trigger.kind);
       return [
         {
@@ -441,7 +453,14 @@ export class GroupRuntime {
     this.validateSuggestionTask(trigger, task, details);
 
     const role = this.suggestionRole(trigger, task);
-    const eligibleTargets = this.suggestionTargets(group.id, task, role);
+    const eligibleTargets =
+      trigger.kind === "task_ready"
+        ? this.readySuggestionTargets(
+            group.id,
+            task,
+            this.readyTaskSchedule(group.id).find((candidate) => candidate.taskId === task.id),
+          )
+        : this.suggestionTargets(group.id, task, role);
     const targetSessionId = input.targetSessionId ?? this.proposedTarget(trigger, task, group);
     const memberRows = listAgentGroupMembers(group.id);
     const member = memberRows.find((candidate) => candidate.sessionId === targetSessionId);
@@ -457,6 +476,11 @@ export class GroupRuntime {
         "not-a-member",
         "The selected target is not an active group member.",
       );
+    if (this.pendingTaskJobCount(group.id, targetSessionId) >= GROUP_TASK_QUEUE_CAPACITY)
+      throw new GroupStoreError(
+        "invalid-transition",
+        "The selected member's task queue is at capacity.",
+      );
     if (!eligibleTargets.includes(targetSessionId)) {
       throw new GroupStoreError(
         role === "reviewer" && task.ownerSessionId === targetSessionId
@@ -467,13 +491,7 @@ export class GroupRuntime {
           : "The selected member cannot receive this owner assignment.",
       );
     }
-    if (
-      this.running.has(targetSessionId) ||
-      this.gated.has(targetSessionId) ||
-      this.cancelling.has(targetSessionId) ||
-      (this.queues.get(targetSessionId)?.length ?? 0) > 0 ||
-      this.runtime.isSessionStreaming(targetSessionId)
-    )
+    if (this.cancelling.has(targetSessionId))
       throw new GroupStoreError("invalid-transition", "The selected group member is unavailable.");
 
     const resolved = this.durableDispatch(() => {
@@ -497,7 +515,21 @@ export class GroupRuntime {
         throw new GroupStoreError("stale-task", "Task changed before the suggestion could start.");
       this.validateSuggestionTask(latestTrigger, latestTask, details);
       const latestRole = this.suggestionRole(latestTrigger, latestTask);
-      const latestEligibleTargets = this.suggestionTargets(action.groupId, latestTask, latestRole);
+      const latestEligibleTargets =
+        latestTrigger.kind === "task_ready"
+          ? this.readySuggestionTargets(
+              action.groupId,
+              latestTask,
+              this.readyTaskSchedule(action.groupId).find(
+                (candidate) => candidate.taskId === latestTask.id,
+              ),
+            )
+          : this.suggestionTargets(action.groupId, latestTask, latestRole);
+      if (this.pendingTaskJobCount(action.groupId, targetSessionId) >= GROUP_TASK_QUEUE_CAPACITY)
+        throw new GroupStoreError(
+          "invalid-transition",
+          "The selected member's task queue is at capacity.",
+        );
       if (!latestEligibleTargets.includes(targetSessionId)) {
         throw new GroupStoreError(
           latestRole === "reviewer" && latestTask.ownerSessionId === targetSessionId
@@ -542,7 +574,7 @@ export class GroupRuntime {
         role: latestRole,
         executionId: resolvedExecutionId,
       });
-      this.route(chain, message, [targetSessionId], false, true);
+      this.route(chain, message, [targetSessionId], false, true, latestTask.id);
       const wake = this.queues
         .get(targetSessionId)
         ?.find((item) => item.triggerMessageId === message.id);
@@ -1040,6 +1072,7 @@ export class GroupRuntime {
         member.archived ||
         !session ||
         session.archivedAt ||
+        this.pendingTaskJobCount(trigger.groupId, member.sessionId) >= GROUP_TASK_QUEUE_CAPACITY ||
         (!reservedTarget && this.running.has(member.sessionId)) ||
         (!reservedTarget && this.gated.has(member.sessionId)) ||
         (this.queues.get(member.sessionId)?.some((wake) => wake.id !== reservedWake?.id) ??
@@ -1107,35 +1140,52 @@ export class GroupRuntime {
         this.disposed
       )
         return;
-      const decision = {
-        kind: "suggest" as const,
-        taskId: trigger.taskId,
-        sourceEventId: trigger.sourceEventId,
-        reasonCode: "target-unassigned",
-        idempotencyKey: JSON.stringify([
-          trigger.groupId,
-          trigger.sourceEventId,
-          trigger.taskVersion,
-          trigger.readinessFingerprint,
-          "suggest",
-        ]),
-      };
-      const action = persistGroupProactivityDecision(decision);
-      const sourceChain = trigger.executionId
-        ? (this.chains.get(trigger.executionId) ?? readGroupChain(trigger.executionId))
-        : undefined;
+      const sourceChain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
       const sourceLive = Boolean(
         sourceChain &&
           sourceChain.groupId === trigger.groupId &&
           !sourceChain.ended &&
           !sourceChain.retired,
       );
-      if (!sourceLive)
-        getDatabase()
-          .prepare(`update group_proactivity_actions set requires_new_execution = 1
-          where id = ? and requires_new_execution = 0`)
-          .run(action.id);
+      const mayAutoDispatch =
+        sourceLive && getGroupProactivityMode(trigger.groupId) === "opt_in_auto";
+      const queuedCandidate = mayAutoDispatch
+        ? this.readyTaskSchedule(trigger.groupId).find(
+            (candidate) => candidate.taskId === trigger.taskId,
+          )
+        : undefined;
+      const reliableCandidate = mayAutoDispatch
+        ? this.readyTaskSchedule(trigger.groupId, Number.MAX_SAFE_INTEGER).find(
+            (candidate) => candidate.taskId === trigger.taskId,
+          )
+        : undefined;
+      const reliableRoute = reliableCandidate?.selection === "automatic-eligible";
+      const candidateSessionIds = mayAutoDispatch
+        ? this.readySuggestionTargets(
+            trigger.groupId,
+            getGroupTask(trigger.taskId),
+            queuedCandidate,
+          )
+        : [];
+      const capacityAvailable = !reliableRoute || (queuedCandidate?.targets.length ?? 0) > 0;
+      const decision = decideGroupReadyTaskAction({
+        trigger,
+        mode: getGroupProactivityMode(trigger.groupId),
+        sourceExecutionLive: sourceLive,
+        stopRequested: Boolean(sourceChain?.ended === "stopped"),
+        waitingForUser:
+          Boolean(trigger.executionId && this.awaitingUser.get(trigger.executionId)) ||
+          [...this.gated.values()].some((wake) => wake.chainId === trigger.executionId),
+        reliableRoute,
+        candidateSessionIds,
+        capacityAvailable,
+      });
+      if (!decision) return;
+      const action = persistGroupProactivityDecision(decision, {
+        requiresNewExecution: !sourceLive,
+      });
       this.emitSuggestionChanged(getGroupAction(action.id) ?? action);
+      if (action.deliveryState === "pending") this.materializeReadyTaskAction(action, trigger);
       return;
     }
     const snapshot = await this.decisionSnapshot(trigger);
@@ -1156,6 +1206,229 @@ export class GroupRuntime {
   private isTriggerChainLive(trigger: GroupTaskTrigger): boolean {
     const chain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
     return Boolean(chain && chain.groupId === trigger.groupId && !chain.ended && !chain.retired);
+  }
+
+  private pendingTaskJobsByMember(groupId: string, excludedJobId?: string): Record<string, number> {
+    const rows = getDatabase()
+      .prepare(`select session_id, count(*) as count from group_jobs
+        where group_id = ? and task_id is not null and status = 'pending'
+          and (? is null or id <> ?)
+        group by session_id`)
+      .all(groupId, excludedJobId ?? null, excludedJobId ?? null) as Array<{
+      session_id: string;
+      count: number;
+    }>;
+    return Object.fromEntries(rows.map((row) => [row.session_id, row.count]));
+  }
+
+  private pendingTaskJobCount(groupId: string, sessionId: string, excludedJobId?: string): number {
+    return this.pendingTaskJobsByMember(groupId, excludedJobId)[sessionId] ?? 0;
+  }
+
+  private readyTaskSchedule(
+    groupId: string,
+    queueCapacity = GROUP_TASK_QUEUE_CAPACITY,
+  ): GroupTaskScheduleCandidate[] {
+    const tasks = listGroupTasks(groupId);
+    const readiness = Object.fromEntries(
+      tasks.flatMap((task) => {
+        const ready = getGroupTaskReadyState(task.id);
+        const readySince = ready ? Date.parse(ready.readySince) : Number.NaN;
+        return ready && Number.isFinite(readySince)
+          ? [[task.id, { fingerprint: ready.readinessFingerprint, readySince }]]
+          : [];
+      }),
+    );
+    const workState = getGroupWorkState(groupId);
+    workState.tasks = tasks;
+    workState.members = listAgentGroupMembers(groupId);
+    return selectReadyGroupTasks({
+      tasks,
+      workState,
+      readiness,
+      now: Date.now(),
+      pendingTaskJobsByMember: this.pendingTaskJobsByMember(groupId),
+      queueCapacity,
+    });
+  }
+
+  private readySuggestionTargets(
+    groupId: string,
+    _task: GroupTask,
+    candidate: GroupTaskScheduleCandidate | undefined,
+  ): string[] {
+    if (!candidate) return [];
+    const members = new Map(
+      listAgentGroupMembers(groupId).map((member) => [member.sessionId, member]),
+    );
+    const eligibleNow = (sessionId: string) => {
+      const member = members.get(sessionId);
+      const session = getAgentSession(sessionId);
+      return Boolean(
+        member &&
+          !member.archived &&
+          session &&
+          !session.archivedAt &&
+          !this.cancelling.has(sessionId) &&
+          this.pendingTaskJobCount(groupId, sessionId) < GROUP_TASK_QUEUE_CAPACITY,
+      );
+    };
+    const typedTargets = candidate.targets.filter(eligibleNow);
+    if (typedTargets.length > 0) return typedTargets;
+    return candidate.suggestedTargetSessionId && eligibleNow(candidate.suggestedTargetSessionId)
+      ? [candidate.suggestedTargetSessionId]
+      : [];
+  }
+
+  private materializeReadyTaskAction(action: GroupActionRecord, trigger: GroupTaskTrigger): void {
+    if (action.deliveryState !== "pending" || this.disposed) return;
+    const targetSessionId = action.decision.targetSessionId;
+    const chain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
+    const ready = getGroupTaskReadyState(action.taskId);
+    const taskIsStillReady = Boolean(
+      ready &&
+        ready.readinessFingerprint === trigger.readinessFingerprint &&
+        ready.readySince === trigger.readySince &&
+        ready.taskVersion === action.taskVersion,
+    );
+    const current = this.readyTaskSchedule(action.groupId).find(
+      (candidate) => candidate.taskId === action.taskId,
+    );
+    const currentTargets = this.readySuggestionTargets(
+      action.groupId,
+      getGroupTask(action.taskId),
+      current,
+    );
+    if (!taskIsStillReady) {
+      const invalidated = invalidateGroupAction(action.id);
+      this.emitSuggestionChanged(invalidated);
+      return;
+    }
+    if (
+      !targetSessionId ||
+      !chain ||
+      chain.ended ||
+      chain.retired ||
+      getGroupProactivityMode(action.groupId) !== "opt_in_auto" ||
+      !currentTargets.includes(targetSessionId) ||
+      current?.selection !== "automatic-eligible" ||
+      this.pendingTaskJobCount(action.groupId, targetSessionId) >= GROUP_TASK_QUEUE_CAPACITY
+    ) {
+      this.deferReadyTaskAction(
+        action,
+        trigger,
+        getGroupProactivityMode(action.groupId) !== "opt_in_auto"
+          ? "actionable-task-event"
+          : (current?.reason ?? "member-unavailable"),
+      );
+      return;
+    }
+    try {
+      this.durableDispatch(() => {
+        const latest = getGroupTask(action.taskId);
+        const ready = getGroupTaskReadyState(action.taskId);
+        const latestChain = this.chains.get(chain.chainId);
+        const latestCandidate = this.readyTaskSchedule(action.groupId).find(
+          (candidate) => candidate.taskId === action.taskId,
+        );
+        if (
+          !latestChain ||
+          latestChain.ended ||
+          latestChain.retired ||
+          getGroupProactivityMode(action.groupId) !== "opt_in_auto" ||
+          latest.stateVersion !== action.taskVersion ||
+          !ready ||
+          ready.readinessFingerprint !== trigger.readinessFingerprint ||
+          ready.readySince !== trigger.readySince ||
+          !latestCandidate ||
+          latestCandidate.selection !== "automatic-eligible" ||
+          !this.readySuggestionTargets(action.groupId, latest, latestCandidate).includes(
+            targetSessionId,
+          ) ||
+          this.pendingTaskJobCount(action.groupId, targetSessionId) >= GROUP_TASK_QUEUE_CAPACITY
+        )
+          throw new Error("Ready task or queue capacity changed before dispatch.");
+        const message = appendGroupMessage({
+          createdAt: this.stamp(),
+          groupId: action.groupId,
+          authorKind: "system",
+          kind: "status",
+          body: `Ready task: ${latest.title}`,
+          mentions: [targetSessionId],
+          chainId: chain.chainId,
+        });
+        this.emitMessage(message);
+        reassignGroupTaskForSuggestion({
+          groupId: action.groupId,
+          taskId: action.taskId,
+          expectedVersion: latest.stateVersion ?? 1,
+          operationId: `task-ready:${action.sourceEventId}`,
+          targetSessionId,
+          role: "owner",
+          executionId: chain.chainId,
+        });
+        this.route(chain, message, [targetSessionId], false, true, action.taskId);
+        const wake = this.queues
+          .get(targetSessionId)
+          ?.find((item) => item.triggerMessageId === message.id);
+        if (!wake?.id) throw new Error("Ready task wake could not be queued.");
+        markGroupActionDispatched(action.id, message.id, wake.id, {
+          targetSessionId,
+          resolvedExecutionId: chain.chainId,
+        });
+        this.emitSuggestionChanged(getGroupAction(action.id) ?? action);
+      }, true);
+      this.pump();
+    } catch {
+      this.deferReadyTaskAction(action, trigger, "member-unavailable");
+    }
+  }
+
+  private deferReadyTaskAction(
+    action: GroupActionRecord,
+    trigger: GroupTaskTrigger,
+    fallbackReasonCode: string,
+  ): void {
+    if (getGroupAction(action.id)?.deliveryState !== "pending") return;
+    const task = getGroupTask(action.taskId);
+    const ready = getGroupTaskReadyState(action.taskId);
+    if (
+      task.groupId !== action.groupId ||
+      task.stateVersion !== action.taskVersion ||
+      !ready ||
+      ready.taskVersion !== action.taskVersion ||
+      ready.readinessFingerprint !== trigger.readinessFingerprint ||
+      ready.readySince !== trigger.readySince
+    ) {
+      const invalidated = invalidateGroupAction(action.id);
+      this.emitSuggestionChanged(invalidated);
+      return;
+    }
+    const chain = trigger.executionId ? this.chains.get(trigger.executionId) : undefined;
+    const targetSessionId = action.decision.targetSessionId;
+    const budgetExhausted = Boolean(
+      chain &&
+        (chain.agentMessages >= this.limits.maxAgentMessages ||
+          (targetSessionId !== undefined &&
+            (chain.wakesByMember.get(targetSessionId) ?? 0) >= this.limits.maxWakesPerMember) ||
+          chain.inputTokens >= this.limits.maxEstimatedInputTokens),
+    );
+    const requiresNewExecution =
+      !chain || chain.ended !== undefined || chain.retired || budgetExhausted;
+    const reasonCode = budgetExhausted
+      ? "budget-exhausted"
+      : !chain || chain.ended !== undefined || chain.retired
+        ? "execution-unavailable"
+        : fallbackReasonCode;
+    const suggestion = deferPendingGroupActionAsSuggestion(action.id, {
+      reasonCode,
+      requiresNewExecution,
+    });
+    try {
+      this.emitSuggestionChanged(suggestion);
+    } catch (error) {
+      console.warn("[modus] deferred group suggestion could not be emitted:", error);
+    }
   }
 
   private invalidatePendingAction(id: string): void {
@@ -1213,7 +1486,10 @@ export class GroupRuntime {
         this.route(fresh, message, [target], false, true, action.taskId);
         const wake = this.queues.get(target)?.find((item) => item.triggerMessageId === message.id);
         if (!wake?.id) throw new Error("Proactive wake exceeded chain limits.");
-        markGroupActionDispatched(action.id, message.id, wake.id);
+        markGroupActionDispatched(action.id, message.id, wake.id, {
+          targetSessionId: target,
+          resolvedExecutionId: chain.chainId,
+        });
       }, true);
       this.pump();
     } catch {
@@ -1296,6 +1572,7 @@ export class GroupRuntime {
       to_status: GroupTaskTransitionEvent["toStatus"];
       created_at: string;
     }>;
+    const readyTriggersByGroup = new Map<string, GroupTaskTrigger[]>();
     for (const row of rows) {
       if (this.disposed) return;
       const chain = row.execution_id
@@ -1317,10 +1594,78 @@ export class GroupRuntime {
         toStatus: row.to_status,
         createdAt: row.created_at,
       };
-      if (!this.persistedTrigger(event)) continue;
+      const trigger = this.persistedTrigger(event);
+      if (!trigger) continue;
       if (chain && !chain.ended && !chain.retired) this.chains.set(chain.chainId, chain);
+      if (trigger.kind === "task_ready") {
+        const pending = readyTriggersByGroup.get(row.group_id) ?? [];
+        pending.push(trigger);
+        readyTriggersByGroup.set(row.group_id, pending);
+        continue;
+      }
       this.handleTaskTransition(event);
     }
+    for (const [groupId, triggers] of readyTriggersByGroup)
+      this.dispatchReadyTaskTriggers(groupId, triggers, "ready task recovery failed");
+  }
+
+  /** Materialize a batch in scheduler order so refill cannot let old row order win. */
+  private dispatchReadyTaskTriggers(
+    groupId: string,
+    triggers: readonly GroupTaskTrigger[],
+    warning: string,
+  ): void {
+    const rank = new Map(
+      this.readyTaskSchedule(groupId).map((candidate, index) => [candidate.taskId, index]),
+    );
+    const ordered = [...triggers].sort(
+      (a, b) =>
+        (rank.get(a.taskId) ?? Number.MAX_SAFE_INTEGER) -
+          (rank.get(b.taskId) ?? Number.MAX_SAFE_INTEGER) || a.sequence - b.sequence,
+    );
+    for (const trigger of ordered)
+      void this.processTaskTrigger(trigger).catch((error) =>
+        console.warn(`[modus] ${warning}:`, error),
+      );
+  }
+
+  /** Revisit durable task-ready inbox rows when a member task slot changes. */
+  private reconsiderReadyTaskEvents(groupId: string): void {
+    if (this.disposed) return;
+    const rows = getDatabase()
+      .prepare(`select e.id, e.group_id, e.task_id, e.task_version, e.action,
+        e.execution_id, e.from_status, e.to_status, e.created_at
+        from group_task_events e left join group_proactivity_actions a
+          on a.group_id = e.group_id and a.source_event_id = e.id
+        where e.group_id = ? and e.action = 'task_ready' and a.id is null
+        order by e.rowid`)
+      .all(groupId) as Array<{
+      id: string;
+      group_id: string;
+      task_id: string;
+      task_version: number;
+      action: string;
+      execution_id: string | null;
+      from_status: GroupTaskTransitionEvent["fromStatus"];
+      to_status: GroupTaskTransitionEvent["toStatus"];
+      created_at: string;
+    }>;
+    const triggers: GroupTaskTrigger[] = [];
+    for (const row of rows) {
+      const trigger = this.persistedTrigger({
+        id: row.id,
+        groupId: row.group_id,
+        taskId: row.task_id,
+        taskVersion: row.task_version,
+        action: row.action,
+        ...(row.execution_id ? { executionId: row.execution_id } : {}),
+        fromStatus: row.from_status,
+        toStatus: row.to_status,
+        createdAt: row.created_at,
+      });
+      if (trigger) triggers.push(trigger);
+    }
+    this.dispatchReadyTaskTriggers(groupId, triggers, "ready task refill failed");
   }
 
   private saveTaskWake(input: GroupTaskWake): GroupTaskWakeResult | undefined {
@@ -1667,6 +2012,10 @@ export class GroupRuntime {
         this.transcript.setState(wake, "cancelled");
         continue;
       }
+      if (chain.retired) {
+        chain.retired = false;
+        persistGroupChain(chain);
+      }
       this.chains.set(chain.chainId, chain);
       const queue = this.queues.get(wake.sessionId) ?? [];
       queue.push(wake);
@@ -1919,6 +2268,54 @@ export class GroupRuntime {
       ...(explicitMentionSessionId ? { explicitMentionSessionId } : {}),
       memberAvailability,
       currentLoad,
+      ...(task
+        ? {
+            memberDispatch: Object.fromEntries(
+              workState.members.map((member) => {
+                const id = member.sessionId;
+                const session = getAgentSession(id);
+                const supersededGate =
+                  explicitMentionSessionId === id && this.cancelling.get(id)?.gated;
+                const hardUnavailable =
+                  member.archived ||
+                  !session ||
+                  Boolean(session.archivedAt) ||
+                  (this.cancelling.has(id) && !supersededGate);
+                const busy =
+                  Boolean(
+                    this.running.has(id) || this.gated.has(id) || (currentLoad[id] ?? 0) > 0,
+                  ) ||
+                  (this.running.get(id) !== reservedWake && this.runtime.isSessionStreaming(id));
+                const reservedTaskWake =
+                  allowQueuedTarget &&
+                  explicitMentionSessionId === id &&
+                  reservedWake?.sessionId === id &&
+                  reservedWake.taskId === task?.id;
+                const pendingTaskJobCount = this.pendingTaskJobCount(groupId, id, reservedWake?.id);
+                const queueable =
+                  allowQueuedTarget &&
+                  explicitMentionSessionId === id &&
+                  (reservedTaskWake || pendingTaskJobCount < GROUP_TASK_QUEUE_CAPACITY);
+                return [
+                  id,
+                  {
+                    availability: hardUnavailable
+                      ? "hard-unavailable"
+                      : busy && queueable
+                        ? "busy-but-queueable"
+                        : busy
+                          ? "hard-unavailable"
+                          : "available",
+                    pendingTaskJobCount: reservedTaskWake
+                      ? Math.min(pendingTaskJobCount, GROUP_TASK_QUEUE_CAPACITY - 1)
+                      : pendingTaskJobCount,
+                    capacity: GROUP_TASK_QUEUE_CAPACITY,
+                  },
+                ] as const;
+              }),
+            ),
+          }
+        : {}),
       toolConfigurations,
     });
   }
@@ -2180,6 +2577,12 @@ export class GroupRuntime {
         triggerMessageId: message.id,
         prompt,
         ...(purpose ? { purpose } : {}),
+        ...(taskId
+          ? {
+              taskId,
+              taskVersion: getGroupTask(taskId).stateVersion ?? 1,
+            }
+          : {}),
         compose: () => {
           const current = getAgentGroup(group.id);
           return current ? compose(current, membersOf(current.id)) : undefined;
@@ -2539,6 +2942,129 @@ export class GroupRuntime {
     this.settleIdle();
   }
 
+  private cancelStaleTaskWake(wake: Wake, action?: GroupActionRecord): void {
+    if (this.disposed || this.queues.get(wake.sessionId)?.[0]?.id !== wake.id) return;
+    this.durableDispatch(() => {
+      const queue = this.queues.get(wake.sessionId);
+      if (!queue || queue[0]?.id !== wake.id) return;
+      queue.shift();
+      if (queue.length === 0) this.queues.delete(wake.sessionId);
+      updateGroupJob(wake, "cancelled");
+      this.transcript.setState(wake, "cancelled", "The task changed before its turn started.");
+      if (action?.deliveryState === "dispatched") {
+        this.emitSuggestionChanged(invalidateDispatchedGroupAction(action.id));
+      }
+    }, true);
+    this.emitActivity(wake.groupId);
+    this.reconsiderReadyTaskEvents(wake.groupId);
+    this.retireIdleChains();
+    this.settleIdle();
+  }
+
+  /** A task-linked wake is checked against its persisted owner and version at FIFO head. */
+  private async validateQueuedTaskWake(wake: Wake): Promise<void> {
+    const jobId = wake.id;
+    const fail = () =>
+      this.cancelStaleTaskWake(wake, jobId ? getGroupActionByJobId(jobId) : undefined);
+    try {
+      if (!jobId || !wake.taskId || this.queues.get(wake.sessionId)?.[0]?.id !== jobId) {
+        fail();
+        return;
+      }
+      const persisted = getGroupJob(jobId);
+      const task = getGroupTask(wake.taskId);
+      const chain = this.chains.get(wake.chainId) ?? readGroupChain(wake.chainId);
+      const action = getGroupActionByJobId(jobId);
+      const source = action ? this.transitionForAction(action) : undefined;
+      const member = listAgentGroupMembers(wake.groupId).find(
+        (candidate) => candidate.sessionId === wake.sessionId,
+      );
+      const session = getAgentSession(wake.sessionId);
+      const tasks = listGroupTasks(wake.groupId);
+      const activeAssignment =
+        task.status === "in_review"
+          ? task.reviewerSessionId === wake.sessionId
+          : task.ownerSessionId === wake.sessionId &&
+            (task.status === "open" || task.status === "in_progress");
+      const dependenciesReady = (task.dependencyIds ?? []).every(
+        (id) => tasks.find((candidate) => candidate.id === id)?.status === "done",
+      );
+      const actionBindingValid =
+        !action ||
+        (action.deliveryState === "dispatched" &&
+          action.jobId === jobId &&
+          action.wakeMessageId === wake.triggerMessageId &&
+          action.resolvedExecutionId === wake.chainId &&
+          action.resolutionTargetSessionId === wake.sessionId &&
+          action.groupId === wake.groupId &&
+          action.taskId === task.id &&
+          source?.groupId === wake.groupId &&
+          source?.taskId === task.id &&
+          (source.kind === "task_ready" || source.taskVersion === action.taskVersion));
+      const automaticActionStillOptedIn =
+        !action ||
+        action.decision.kind === "suggest" ||
+        getGroupProactivityMode(wake.groupId) === "opt_in_auto";
+      const chainLive = Boolean(
+        chain &&
+          chain.groupId === wake.groupId &&
+          !chain.ended &&
+          !chain.retired &&
+          chain.agentMessages < this.limits.maxAgentMessages &&
+          (chain.wakesByMember.get(wake.sessionId) ?? 0) <= this.limits.maxWakesPerMember,
+      );
+      const routing =
+        task.groupId === wake.groupId && activeAssignment
+          ? this.capabilityRoute(wake.groupId, task, wake.sessionId, wake, true)
+          : undefined;
+      const valid =
+        persisted?.status === "pending" &&
+        persisted.wake.taskId === task.id &&
+        this.pendingTaskJobCount(wake.groupId, wake.sessionId, jobId) < GROUP_TASK_QUEUE_CAPACITY &&
+        wake.taskVersion !== undefined &&
+        (task.stateVersion ?? 1) === wake.taskVersion &&
+        task.executionId === wake.chainId &&
+        task.status !== "blocked" &&
+        task.status !== "done" &&
+        task.status !== "cancelled" &&
+        dependenciesReady &&
+        member !== undefined &&
+        !member.archived &&
+        session !== undefined &&
+        !session.archivedAt &&
+        chainLive &&
+        actionBindingValid &&
+        automaticActionStillOptedIn &&
+        routing?.kind !== "needs_user" &&
+        routing?.targetSessionId === wake.sessionId;
+      if (!valid || this.disposed || this.queues.get(wake.sessionId)?.[0]?.id !== jobId) {
+        fail();
+        return;
+      }
+      const window = this.host.getWindow();
+      if (
+        !window ||
+        this.host.isUpdatePending() ||
+        this.running.has(wake.sessionId) ||
+        this.gated.has(wake.sessionId) ||
+        this.cancelling.has(wake.sessionId) ||
+        this.runtime.isSessionStreaming(wake.sessionId)
+      ) {
+        this.scheduleRetry();
+        return;
+      }
+      this.queues.get(wake.sessionId)?.shift();
+      if (this.queues.get(wake.sessionId)?.length === 0) this.queues.delete(wake.sessionId);
+      this.start(window, wake);
+    } catch (error) {
+      console.warn("[modus] queued task validation failed:", error);
+      fail();
+    } finally {
+      if (jobId) this.validatingWakes.delete(jobId);
+      this.pump();
+    }
+  }
+
   private async validateAutomaticWake(wake: Wake, action: GroupActionRecord): Promise<void> {
     const jobId = wake.id;
     try {
@@ -2640,13 +3166,18 @@ export class GroupRuntime {
       });
       if (!next) break;
       const action = next.id ? getGroupActionByJobId(next.id) : undefined;
+      const explicitAcceptance =
+        action?.decision.kind === "suggest" &&
+        action.deliveryState === "dispatched" &&
+        action.wakeMessageId === next.triggerMessageId &&
+        action.resolutionTargetSessionId === next.sessionId &&
+        action.resolvedExecutionId === next.chainId;
+      if (next.taskId && next.id) {
+        this.validatingWakes.add(next.id);
+        void this.validateQueuedTaskWake(next);
+        continue;
+      }
       if (action && next.id) {
-        const explicitAcceptance =
-          action.decision.kind === "suggest" &&
-          action.deliveryState === "dispatched" &&
-          action.wakeMessageId === next.triggerMessageId &&
-          action.resolutionTargetSessionId === next.sessionId &&
-          action.resolvedExecutionId === next.chainId;
         if (!explicitAcceptance) {
           this.validatingWakes.add(next.id);
           void this.validateAutomaticWake(next, action);
@@ -2682,6 +3213,7 @@ export class GroupRuntime {
     this.lastServedGroupId = wake.groupId;
     wake.startedAt = wake.lastProgressAt = Date.now();
     updateGroupJob(wake, "running");
+    this.reconsiderReadyTaskEvents(wake.groupId);
     this.transcript.setState(wake, "running");
     this.armWatchdog(wake);
     this.emitActivity(wake.groupId);
@@ -2692,10 +3224,24 @@ export class GroupRuntime {
       const contextItems = (trigger?.contextItems ??
         []) as import("../../shared/contracts").ContextItem[];
       const model = modelIdOf(wake.groupId, wake.sessionId);
+      const linkedTask = wake.taskId ? getGroupTask(wake.taskId) : undefined;
+      const linkedTaskRole: "owner" | "reviewer" | undefined =
+        linkedTask?.ownerSessionId === wake.sessionId
+          ? "owner"
+          : linkedTask?.reviewerSessionId === wake.sessionId
+            ? "reviewer"
+            : undefined;
       const taskAssociation =
         wake.purpose === "control"
           ? undefined
-          : findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
+          : wake.taskId && linkedTask && linkedTaskRole
+            ? {
+                taskId: linkedTask.id,
+                groupId: wake.groupId,
+                executionId: wake.chainId,
+                role: linkedTaskRole,
+              }
+            : findGroupTaskForWake(wake.groupId, wake.sessionId, wake.chainId);
       let groupTask: PromptAgentInput["groupTask"];
       if (taskAssociation) {
         const task = getGroupTask(taskAssociation.taskId);
@@ -2712,7 +3258,7 @@ export class GroupRuntime {
           ),
         };
         if (task.kind && task.kind !== "legacy") {
-          const routing = this.capabilityRoute(wake.groupId, task, wake.sessionId, wake);
+          const routing = this.capabilityRoute(wake.groupId, task, wake.sessionId, wake, true);
           if (routing.kind !== "selected")
             throw new Error(`Task routing unavailable: ${routing.reasonCode}`);
         }
@@ -2808,6 +3354,7 @@ export class GroupRuntime {
         "This agent left the group before its turn finished.",
       );
       updateGroupJob(wake, "interrupted");
+      this.reconsiderReadyTaskEvents(wake.groupId);
       this.emitActivity(wake.groupId);
       this.pump();
       this.retireIdleChains();
@@ -2843,6 +3390,7 @@ export class GroupRuntime {
         console.warn("[modus] group turn post failed:", error);
       }
     }
+    this.reconsiderReadyTaskEvents(wake.groupId);
     this.emitActivity(wake.groupId);
     this.pump();
     this.retireIdleChains();
@@ -2896,7 +3444,8 @@ export class GroupRuntime {
   private applyWorktreeRewake(chain: ChainState, wake: Wake, branch: string): void {
     this.postMemberStatus(chain, wake, GROUP_STATUS_TEXT.worktreeReady(branch));
     const trigger = getGroupMessage(wake.triggerMessageId);
-    if (trigger) this.route(chain, trigger, [wake.sessionId], true);
+    if (trigger)
+      this.route(chain, trigger, [wake.sessionId], true, false, wake.taskId, wake.purpose);
   }
 
   private applyGatedTurnResult(_chain: ChainState, wake: Wake, result: PromptTurnResult): void {

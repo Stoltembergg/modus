@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GroupSuggestion } from "../../shared/group-work-state";
+import type { GroupSuggestion, GroupTaskQueueItem } from "../../shared/group-work-state";
 import { IPC_CHANNELS } from "./channels";
 import type { GroupWorkIpcService } from "./group-work-ipc";
 import type { TrustedSenderEvent } from "./trusted-sender";
@@ -30,6 +30,17 @@ function setup(overrides: Partial<GroupWorkIpcService> = {}) {
     createdAt: "2026-01-01T00:00:00.000Z",
   };
   const service: GroupWorkIpcService = {
+    getGroupTaskQueueSnapshot: vi.fn((_groupId: string): GroupTaskQueueItem[] => [
+      {
+        taskId: "t-1",
+        taskTitle: "Parser",
+        state: "queued",
+        sessionId: "s-owner",
+        memberName: "Builder",
+        jobId: "job-1",
+        position: 2,
+      },
+    ]),
     getGroupWorkState: vi.fn(() => workState as never),
     getGroupTaskDetails: vi.fn(async (groupId, taskId) => {
       if (groupId !== "g-1" || taskId !== "t-1")
@@ -108,6 +119,7 @@ describe("group work IPC", () => {
       [
         IPC_CHANNELS.groupGetTaskDetails,
         IPC_CHANNELS.groupGetWorkState,
+        "group:get-task-queue-snapshot",
         IPC_CHANNELS.groupListTaskTransitions,
         IPC_CHANNELS.groupUpdateTask,
         IPC_CHANNELS.groupGetProactivityMode,
@@ -121,6 +133,7 @@ describe("group work IPC", () => {
   it("asserts the trusted sender before touching every service method", async () => {
     const result = await register();
     const methods = [
+      result.service.getGroupTaskQueueSnapshot,
       result.service.getGroupWorkState,
       result.service.getGroupTaskDetails,
       result.service.listGroupTaskTransitions,
@@ -183,6 +196,27 @@ describe("group work IPC", () => {
       handlers.get(IPC_CHANNELS.groupListTaskTransitions)?.(trusted, { taskId: "t-1" }),
     ).toEqual([expect.objectContaining({ taskVersion: 4 })]);
     expect(service.updateGroupTaskDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns only the task queue projection through a strict group-scoped payload", async () => {
+    const { handlers, service } = await register();
+    const handler = handlers.get("group:get-task-queue-snapshot");
+    expect(handler?.(trusted, { groupId: "g-1" })).toEqual([
+      {
+        taskId: "t-1",
+        taskTitle: "Parser",
+        state: "queued",
+        sessionId: "s-owner",
+        memberName: "Builder",
+        jobId: "job-1",
+        position: 2,
+      },
+    ]);
+    expect(service.getGroupTaskQueueSnapshot).toHaveBeenCalledWith("g-1");
+    expect(() => handler?.(trusted, { groupId: "g-1", prompt: "must not be accepted" })).toThrow(
+      /Invalid IPC payload/,
+    );
+    expect(service.getGroupTaskQueueSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("converts rejected detail resolver errors and leaves unknown errors intact", async () => {

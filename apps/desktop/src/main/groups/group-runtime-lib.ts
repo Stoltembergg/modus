@@ -211,6 +211,10 @@ export type Wake = {
   gated?: boolean;
   /** Control wakes deliver a request about a task without running that task. */
   purpose?: "task" | "control";
+  /** Existing GroupTask bound to this FIFO item; never interpreted as prompt text. */
+  taskId?: string;
+  /** Task state version captured when this job was queued. */
+  taskVersion?: number;
   /** group_start_worktree moved the member's cwd during this turn: re-wake it there. */
   worktreeBranch?: string;
 };

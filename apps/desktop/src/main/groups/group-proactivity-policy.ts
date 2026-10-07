@@ -2,6 +2,7 @@ import type { GroupTask } from "../../shared/contracts-parts/contracts-part-08";
 import type {
   GroupDecisionSnapshot,
   GroupProactivityDecision,
+  GroupProactivityMode,
   GroupTaskTrigger,
 } from "../../shared/group-work-state";
 
@@ -16,6 +17,77 @@ const triggerKinds = new Set<GroupTaskTrigger["kind"]>([
 const priorityRank = { high: 0, normal: 1, low: 2 } as const;
 
 type Candidate = { task: GroupTask; trigger: GroupTaskTrigger };
+
+export type GroupReadyTaskActionInput = {
+  trigger: GroupTaskTrigger;
+  mode: GroupProactivityMode;
+  sourceExecutionLive: boolean;
+  stopRequested: boolean;
+  waitingForUser: boolean;
+  reliableRoute: boolean;
+  candidateSessionIds: readonly string[];
+  capacityAvailable: boolean;
+};
+
+/** Task-ready sources can outlive their chain, so they have a separate policy path. */
+export function decideGroupReadyTaskAction(
+  input: GroupReadyTaskActionInput,
+): GroupProactivityDecision | null {
+  const { trigger } = input;
+  if (
+    trigger.kind !== "task_ready" ||
+    !trigger.sourceEventId ||
+    !trigger.readinessFingerprint ||
+    !trigger.readySince
+  )
+    return null;
+
+  const targetSessionId = input.candidateSessionIds[0];
+  const queueBlocked =
+    input.mode === "opt_in_auto" &&
+    input.sourceExecutionLive &&
+    input.reliableRoute &&
+    (!input.capacityAvailable || !targetSessionId);
+  if (queueBlocked) return null;
+
+  const canDispatch = Boolean(
+    input.mode === "opt_in_auto" &&
+      input.sourceExecutionLive &&
+      !input.stopRequested &&
+      !input.waitingForUser &&
+      input.reliableRoute &&
+      input.capacityAvailable &&
+      targetSessionId,
+  );
+  const kind: GroupProactivityDecision["kind"] = canDispatch ? "wake_owner" : "suggest";
+  const reasonCode = canDispatch
+    ? "ready-task-capability-match"
+    : !input.sourceExecutionLive
+      ? "execution-unavailable"
+      : input.stopRequested || input.waitingForUser
+        ? "execution-unavailable"
+        : !input.reliableRoute
+          ? "capability-incompatible"
+          : "target-unassigned";
+  const resolvedTarget = canDispatch ? targetSessionId : undefined;
+  return {
+    kind,
+    taskId: trigger.taskId,
+    ...(resolvedTarget ? { targetSessionId: resolvedTarget } : {}),
+    sourceEventId: trigger.sourceEventId,
+    reasonCode,
+    idempotencyKey: JSON.stringify([
+      trigger.groupId,
+      trigger.executionId ?? "",
+      trigger.sourceEventId,
+      trigger.taskVersion,
+      kind,
+      trigger.kind,
+      resolvedTarget ?? "",
+      trigger.readinessFingerprint,
+    ]),
+  };
+}
 
 function targetFor(candidate: Candidate): {
   kind: "wake_owner" | "wake_reviewer";

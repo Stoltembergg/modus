@@ -184,6 +184,7 @@ function sourceOf(decision: GroupProactivityDecision): {
 
 export function persistGroupProactivityDecision(
   decision: GroupProactivityDecision,
+  options: { requiresNewExecution?: boolean } = {},
 ): GroupActionRecord {
   if (
     !decision ||
@@ -222,8 +223,8 @@ export function persistGroupProactivityDecision(
   const now = new Date().toISOString();
   const id = randomUUID();
   db.prepare(`insert into group_proactivity_actions
-    (id,idempotency_key,group_id,task_id,task_version,execution_id,source_event_id,decision_json,delivery_state,created_at,updated_at)
-    values (?,?,?,?,?,?,?,?,?,?,?)`).run(
+    (id,idempotency_key,group_id,task_id,task_version,execution_id,source_event_id,decision_json,delivery_state,requires_new_execution,created_at,updated_at)
+    values (?,?,?,?,?,?,?,?,?,?,?,?)`).run(
     id,
     decision.idempotencyKey,
     source.groupId,
@@ -233,6 +234,7 @@ export function persistGroupProactivityDecision(
     decision.sourceEventId,
     JSON.stringify(decision),
     decision.kind === "suggest" ? "suggested" : "pending",
+    options.requiresNewExecution ? 1 : 0,
     now,
     now,
   );
@@ -243,11 +245,21 @@ export function markGroupActionDispatched(
   id: string,
   wakeMessageId: string,
   jobId: string,
+  binding?: { targetSessionId: string; resolvedExecutionId: string },
 ): GroupActionRecord {
   const db = getDatabase();
   db.prepare(
-    "update group_proactivity_actions set delivery_state = 'dispatched', wake_message_id = ?, job_id = ?, version = version + 1, updated_at = ? where id = ? and delivery_state = 'pending'",
-  ).run(wakeMessageId, jobId, new Date().toISOString(), id);
+    `update group_proactivity_actions set delivery_state = 'dispatched', wake_message_id = ?, job_id = ?,
+      resolution_target_session_id = ?, resolved_execution_id = ?, version = version + 1, updated_at = ?
+      where id = ? and delivery_state = 'pending'`,
+  ).run(
+    wakeMessageId,
+    jobId,
+    binding?.targetSessionId ?? null,
+    binding?.resolvedExecutionId ?? null,
+    new Date().toISOString(),
+    id,
+  );
   const action = getGroupAction(id);
   if (
     action?.deliveryState !== "dispatched" ||
@@ -328,6 +340,39 @@ export function invalidateGroupAction(id: string): GroupActionRecord {
   const action = getGroupAction(id);
   if (!action) throw new GroupStoreError("invalid-value", "Unknown action.");
   return action;
+}
+
+/** Preserve a still-ready task action as a user-visible suggestion after dispatch rollback. */
+export function deferPendingGroupActionAsSuggestion(
+  id: string,
+  input: { reasonCode: string; requiresNewExecution: boolean },
+): GroupActionRecord {
+  if (!input.reasonCode)
+    throw new GroupStoreError("invalid-value", "A deferred suggestion needs a reason.");
+  const action = getGroupAction(id);
+  if (action?.deliveryState !== "pending")
+    throw new GroupStoreError("invalid-transition", "Only a pending action can be deferred.");
+  const suggestedDecision: GroupProactivityDecision = {
+    kind: "suggest",
+    taskId: action.decision.taskId,
+    sourceEventId: action.decision.sourceEventId,
+    reasonCode: input.reasonCode,
+    idempotencyKey: action.decision.idempotencyKey,
+  };
+  const changed = getDatabase()
+    .prepare(`update group_proactivity_actions set delivery_state = 'suggested', decision_json = ?,
+      wake_message_id = null, job_id = null, resolution_target_session_id = null,
+      resolved_execution_id = null, requires_new_execution = ?, version = version + 1, updated_at = ?
+      where id = ? and delivery_state = 'pending'`)
+    .run(
+      JSON.stringify(suggestedDecision),
+      input.requiresNewExecution ? 1 : 0,
+      new Date().toISOString(),
+      id,
+    );
+  if (!changed.changes)
+    throw new GroupStoreError("stale-task", "Action changed before it could be deferred.");
+  return requireAction(id);
 }
 
 /** A committed automatic job may lose authority while waiting for a start gate. */

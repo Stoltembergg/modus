@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { GroupDecisionSnapshot, GroupTaskTrigger } from "../../shared/group-work-state";
-import { decideGroupNextAction } from "./group-proactivity-policy";
+import { decideGroupNextAction, decideGroupReadyTaskAction } from "./group-proactivity-policy";
 
 const member = (sessionId: string, archived = false) => ({
   groupId: "g",
@@ -423,5 +423,64 @@ describe("decideGroupNextAction", () => {
         }),
       )?.sourceEventId,
     ).toBe("earlier");
+  });
+});
+
+describe("decideGroupReadyTaskAction", () => {
+  const readyInput = (overrides: Record<string, unknown> = {}) => ({
+    trigger: trigger("task_ready", {
+      executionId: "execution",
+      readinessFingerprint: "ready:t:1",
+      readySince: "2026-10-05T00:00:00.000Z",
+    }),
+    mode: "suggest" as const,
+    sourceExecutionLive: true,
+    stopRequested: false,
+    waitingForUser: false,
+    reliableRoute: true,
+    candidateSessionIds: ["owner"],
+    capacityAvailable: true,
+    ...overrides,
+  });
+
+  it("keeps ready tasks as explicit suggestions by default", () => {
+    expect(decideGroupReadyTaskAction(readyInput())).toMatchObject({
+      kind: "suggest",
+      taskId: "t",
+      sourceEventId: "event",
+    });
+  });
+
+  it("dispatches only a reliably routed ready task from an opted-in live execution", () => {
+    expect(decideGroupReadyTaskAction(readyInput({ mode: "opt_in_auto" }))).toMatchObject({
+      kind: "wake_owner",
+      targetSessionId: "owner",
+    });
+  });
+
+  it("keeps idle, ended, or unconfigured work in suggestions", () => {
+    expect(
+      decideGroupReadyTaskAction(readyInput({ mode: "opt_in_auto", sourceExecutionLive: false })),
+    ).toMatchObject({ kind: "suggest" });
+    expect(
+      decideGroupReadyTaskAction(readyInput({ mode: "opt_in_auto", reliableRoute: false })),
+    ).toMatchObject({ kind: "suggest" });
+  });
+
+  it("leaves an opted-in live event unconsumed while every compatible queue is full", () => {
+    expect(
+      decideGroupReadyTaskAction(
+        readyInput({ mode: "opt_in_auto", candidateSessionIds: [], capacityAvailable: false }),
+      ),
+    ).toBeNull();
+  });
+
+  it("does not auto-dispatch across Stop or a waiting-for-user fence", () => {
+    expect(
+      decideGroupReadyTaskAction(readyInput({ mode: "opt_in_auto", stopRequested: true })),
+    ).toMatchObject({ kind: "suggest" });
+    expect(
+      decideGroupReadyTaskAction(readyInput({ mode: "opt_in_auto", waitingForUser: true })),
+    ).toMatchObject({ kind: "suggest" });
   });
 });

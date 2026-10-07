@@ -66,6 +66,7 @@ import type {
   GroupSuggestionResolution,
   GroupTask,
   GroupTaskDetails,
+  GroupTaskQueueItem,
   GroupTaskTransitionEvent,
   GroupTaskUserDraft,
   GroupWorkState,
@@ -262,6 +263,8 @@ export type ModusApi = {
     listTasks(groupId: string): Promise<GroupTask[]>;
     /** Bounded task state for agent context; renderer details use getTaskDetails. */
     getWorkState(groupId: string, executionId?: string): Promise<GroupWorkState>;
+    /** Read-only FIFO of dispatched tasks and ready backlog, without prompt text. */
+    getTaskQueueSnapshot(groupId: string): Promise<GroupTaskQueueItem[]>;
     /** Bounded user-facing criteria, current evidence outcomes and dependency details. */
     getTaskDetails(groupId: string, taskId: string): Promise<GroupTaskDetails>;
     /** Chronological task history (the main process caps the result). */
