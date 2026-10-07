@@ -1648,7 +1648,13 @@ describe("PiSdkRuntime", () => {
     const groupTools = (names: string[]) =>
       names.filter((name) => name.startsWith("group_")).sort();
     const common = ["group_get_work_state", "group_list_tasks", "group_report_progress"];
-    const owner = [...common, "group_claim_task", "group_release_task", "group_request_review"];
+    const owner = [
+      ...common,
+      "group_claim_task",
+      "group_release_task",
+      "group_request_review",
+      "group_report_result",
+    ];
     const baseline = activeToolNamesForSession(info, "chat");
     const implementation = activeToolNamesForSession(info, "chat", task);
     expect(groupTools(implementation)).toEqual(owner.sort());

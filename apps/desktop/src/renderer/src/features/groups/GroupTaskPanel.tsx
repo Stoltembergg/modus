@@ -144,6 +144,7 @@ export function GroupTaskPanel({
             </ul>
             {selectedTaskId ? (
               <GroupTaskDetails
+                key={`${groupId}:${selectedTaskId}`}
                 groupId={groupId}
                 labels={labels}
                 onClose={() => setSelectedTaskId(undefined)}

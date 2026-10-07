@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeGroupErrorMessage } from "../../../../shared/group-errors";
@@ -451,5 +451,96 @@ describe("GroupTaskDetails", () => {
       }),
     );
     expect(getDetails).toHaveBeenCalledWith("group-2", "task-2");
+  });
+});
+
+describe("task handoff report", () => {
+  function report(summary = "Parser handles quoted values.", freshness = "current") {
+    return {
+      kind: "unverified_handoff",
+      freshness,
+      staleReason: freshness === "stale" ? "Task source changed after this handoff." : undefined,
+      report: {
+        id: "report-1",
+        taskId: "task-1",
+        sessionId: "session-owner",
+        runId: "handoff-run",
+        summary,
+        changedPaths: ["src/parser.ts"],
+        qaEvidenceRefs: [],
+        createdAt: "2026-10-05T00:00:00.000Z",
+      },
+      qaEvidence: [
+        { status: "missing", checkName: "tests", sessionId: "session-owner", runId: "qa-run" },
+      ],
+    };
+  }
+  it("shows an unverified handoff separate from QA with author/run identity", async () => {
+    const open = vi.fn();
+    getDetails.mockResolvedValue(detail({ report: report() }));
+    render(
+      <GroupTaskDetails
+        groupId="group-1"
+        taskId="task-1"
+        labels={new Map([["session-owner", owner]])}
+        onClose={vi.fn()}
+        onOpenSession={open}
+      />,
+    );
+    const section = await screen.findByTestId("task-handoff-report");
+    expect(within(section).getByText("Unverified handoff")).toBeTruthy();
+    expect(within(section).getByText("Parser handles quoted values.")).toBeTruthy();
+    expect(within(section).getByText("src/parser.ts")).toBeTruthy();
+    expect(within(section).getByText(/Builder/)).toBeTruthy();
+    expect(within(section).queryByText("Criteria and QA")).toBeNull();
+    expect(screen.getByText("Criteria and QA")).toBeTruthy();
+    await userEvent.click(within(section).getByRole("button", { name: "Open handoff session" }));
+    expect(open).toHaveBeenCalledWith("session-owner", "handoff-run");
+  });
+  it("labels an outdated handoff without presenting it as current evidence", async () => {
+    getDetails.mockResolvedValue(detail({ report: report("Old summary", "stale") }));
+    render(
+      <GroupTaskDetails groupId="group-1" taskId="task-1" labels={new Map()} onClose={vi.fn()} />,
+    );
+    const section = await screen.findByTestId("task-handoff-report");
+    expect(within(section).getByText("Out of date")).toBeTruthy();
+    expect(within(section).getByText("Task source changed after this handoff.")).toBeTruthy();
+  });
+  it("refreshes reports at the same task version and prevents an older request replacing them", async () => {
+    getDetails.mockResolvedValue(detail({ report: report("Initial handoff") }));
+    render(
+      <GroupTaskDetails groupId="group-1" taskId="task-1" labels={new Map()} onClose={vi.fn()} />,
+    );
+    expect(await screen.findByText("Initial handoff")).toBeTruthy();
+    let resolveOld!: (value: ReturnType<typeof detail>) => void;
+    getDetails.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveOld = resolve;
+        }),
+    );
+    act(() =>
+      listeners[0]?.({
+        type: "group.task-changed",
+        groupId: "group-1",
+        taskId: "task-1",
+        stateVersion: 3,
+      }),
+    );
+    await waitFor(() => expect(getDetails).toHaveBeenCalledTimes(2));
+    getDetails.mockResolvedValue(detail({ report: report("Newest handoff") }));
+    act(() =>
+      listeners[0]?.({
+        type: "group.task-changed",
+        groupId: "group-1",
+        taskId: "task-1",
+        stateVersion: 3,
+      }),
+    );
+    expect(await screen.findByText("Newest handoff")).toBeTruthy();
+    resolveOld(detail({ report: report("Old response") }));
+    await act(async () => Promise.resolve());
+    expect(screen.queryByText("Old response")).toBeNull();
+    expect(screen.getByText("Newest handoff")).toBeTruthy();
   });
 });

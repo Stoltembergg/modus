@@ -154,6 +154,12 @@ export type GroupTaskReportInput = {
   changedPaths: string[];
 };
 
+/** Identity-free model parameters; trusted main derives the author, run and QA references. */
+export type GroupTaskReportToolInput = Omit<
+  GroupTaskReportInput,
+  "groupId" | "actorSessionId" | "changedPaths"
+> & { changedPaths?: string[] };
+
 export type GroupTaskReportDetail = {
   kind: "unverified_handoff";
   report: GroupTaskReport;

@@ -29,6 +29,7 @@ export function groupTaskToolRequirements(input: {
         ? (IMPLEMENT_CAPABILITIES[input.kind] ?? [])
         : [];
   const groupToolNames = ["group_get_work_state", "group_list_tasks", "group_report_progress"];
+  if (input.role === "owner") groupToolNames.push("group_report_result");
   if (review) groupToolNames.push("group_review_task");
   else groupToolNames.push("group_claim_task", "group_release_task", "group_request_review");
   if (input.coordinator) groupToolNames.push("group_assign_task", "group_handoff");
