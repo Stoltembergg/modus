@@ -40,6 +40,10 @@ import type {
   ResolveGroupSuggestionInput,
 } from "../../shared/group-work-state";
 import { getHarnessQAEventByRowId } from "../agent/agent-event-store";
+import {
+  agentFailureDiagnostic,
+  agentFailureFromMetadata,
+} from "../agent/agent-failure-classification";
 import { getAgentSession } from "../agent/agent-store";
 import { isHyperPlanSessionReserved } from "../agent/harness/hyperplan-draft-store";
 import { profileForMode } from "../agent/plan-prompt";
@@ -665,6 +669,8 @@ export class GroupRuntime {
     // Rebuild wake without prior run/error/progress fields (exactOptionalPropertyTypes).
     const {
       error: _error,
+      failureCode: _failureCode,
+      failure: _failure,
       runId: _runId,
       promptUserMessageId: _promptUserMessageId,
       lastEventCursor: _lastEventCursor,
@@ -687,8 +693,9 @@ export class GroupRuntime {
       cancelled: false,
       gated: false,
     };
-    updateGroupJob(wake, "pending");
-    this.transcript.setState(wake, "queued");
+    // Only an explicit new attempt clears the durable previous failure category.
+    updateGroupJob(wake, "pending", undefined, null);
+    this.transcript.setState(wake, "queued", undefined, null);
     const queue = this.queues.get(wake.sessionId) ?? [];
     queue.push(wake);
     this.queues.set(wake.sessionId, queue);
@@ -2094,7 +2101,25 @@ export class GroupRuntime {
       if (wake.lastEventCursor !== undefined && event.eventCursor <= wake.lastEventCursor) return;
       wake.lastEventCursor = event.eventCursor;
     }
-    if (event.type === "run.failed") wake.error = event.message;
+    if (event.type === "run.failed") {
+      wake.error = agentFailureDiagnostic(event.failureCode ?? "unknown");
+      wake.failure = {
+        ...(event.failureCode !== undefined ? { failureCode: event.failureCode } : {}),
+        ...(event.failurePhase !== undefined ? { failurePhase: event.failurePhase } : {}),
+        ...(event.retryable !== undefined ? { retryable: event.retryable } : {}),
+        ...(event.safeToRetry !== undefined ? { safeToRetry: event.safeToRetry } : {}),
+        ...(event.hadToolCalls !== undefined ? { hadToolCalls: event.hadToolCalls } : {}),
+        ...(event.retryAfterMs !== undefined ? { retryAfterMs: event.retryAfterMs } : {}),
+      };
+      if (event.failureCode !== undefined) wake.failureCode = event.failureCode;
+      updateGroupJob(wake, wake.gated ? "awaiting_user" : "running", wake.error, event.failureCode);
+      this.transcript.setState(
+        wake,
+        wake.gated ? "awaiting_user" : "running",
+        wake.error,
+        event.failureCode,
+      );
+    }
     if (event.type === "question.requested") {
       if (!wake.questionRequestIds) wake.questionRequestIds = new Set();
       wake.questionRequestIds.add(event.request.id);
@@ -3310,12 +3335,16 @@ export class GroupRuntime {
       turn = Promise.reject(error);
     }
     turn
-      .catch(
-        (error): PromptTurnResult => ({
+      .catch((error): PromptTurnResult => {
+        const failure = wake.failure?.failureCode
+          ? wake.failure
+          : agentFailureFromMetadata(error, { hadToolCalls: false, failurePhase: "request" });
+        return {
           outcome: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        }),
-      )
+          ...failure,
+          error: agentFailureDiagnostic(failure.failureCode ?? "unknown"),
+        };
+      })
       .then((result) => this.finishTurn(wake, result))
       .catch((error) => console.warn("[modus] group turn settle failed:", error));
   }
@@ -3369,8 +3398,18 @@ export class GroupRuntime {
   }
 
   private finishTurn(wake: Wake, result: PromptTurnResult): void {
-    if (result.outcome !== "ok" && wake.error && !result.error)
-      result = { ...result, error: wake.error };
+    if (result.outcome === "failed") {
+      const failure = wake.failure?.failureCode
+        ? wake.failure
+        : result.failureCode
+          ? result
+          : agentFailureFromMetadata(undefined, { hadToolCalls: false, failurePhase: "request" });
+      result = {
+        ...result,
+        ...failure,
+        error: agentFailureDiagnostic(failure.failureCode ?? "unknown"),
+      };
+    }
     this.clearWatchdog(wake);
     this.unbindWakeExecution(wake);
     if (this.cancelling.get(wake.sessionId) === wake) this.cancelling.delete(wake.sessionId);
@@ -3413,6 +3452,7 @@ export class GroupRuntime {
             ? "cancelled"
             : "failed",
       result.error,
+      result.failureCode,
     );
     if (chain) {
       chain.agentMessages += output.filter((m) => m.body.trim()).length;

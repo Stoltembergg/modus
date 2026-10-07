@@ -4870,7 +4870,12 @@ describe("PiSdkRuntime", () => {
       sessionId,
       userMessageId: "local-user-empty",
     });
-    expect(result).toEqual({ outcome: "failed" });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCode: "empty_assistant_output",
+      retryable: false,
+      safeToRetry: false,
+    });
 
     const run = getDatabase()
       .prepare(
@@ -6316,7 +6321,7 @@ describe("PiSdkRuntime", () => {
     ).map((row) => row.type);
 
     expect(run.status).toBe("failed");
-    expect(run.error).toContain("Provider is overloaded");
+    expect(run.error).toBe("The agent turn failed. Try again or check the provider settings.");
     expect(types).toContain("run.failed");
     expect(types).not.toContain("run.completed");
     const memories = projectMemory.getProjectMemorySnapshot(workspaceId).memories;
@@ -7210,5 +7215,222 @@ describe("L2: run branch snapshot + context line", () => {
     ).rejects.toThrow('A branch "deleted-branch" não existe mais');
     expect(prompt).not.toHaveBeenCalled();
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+});
+
+describe("structured provider failure propagation", () => {
+  it.each([
+    [{ status: 401 }, "provider_auth", false],
+    [{ status: 429, retryAfterMs: 1000 }, "provider_rate_limited", true],
+    [{ status: 503 }, "provider_unavailable", true],
+    [{ error: { code: "unsupported_reasoning" } }, "model_configuration", false],
+    [{}, "unknown", false],
+  ])("returns and persists safe structured metadata %j", async (metadata, failureCode, safeToRetry) => {
+    const sessionId = `failure-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        state: {
+          messages: [
+            {
+              role: "assistant",
+              stopReason: "error",
+              errorMessage:
+                "401 429 overloaded https://user:SECRET@provider.test?api_key=SECRET Authorization: Bearer SECRET",
+              ...metadata,
+            },
+          ],
+        },
+      }),
+    }));
+    const window = createWindowStub();
+    const result = await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "failure-user",
+    });
+    expect(result).toMatchObject({ outcome: "failed", failureCode, safeToRetry });
+    const failure = listAgentEvents(sessionId).find(
+      ({ event }) => event.type === "run.failed",
+    )?.event;
+    expect(failure).toMatchObject({ failureCode, safeToRetry, hadToolCalls: false });
+    expect(JSON.stringify(listAgentEvents(sessionId))).not.toContain("SECRET");
+    expect(JSON.stringify(vi.mocked(window.webContents.send).mock.calls)).not.toContain("SECRET");
+    expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+  it("does not treat tool execution as final assistant output", async () => {
+    const sessionId = `failure-tools-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: () =>
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "failure-tool",
+            toolName: "read",
+            args: { path: "file" },
+          }),
+      }),
+    }));
+    const result = await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "tools-user",
+    });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCode: "empty_assistant_output",
+      hadToolCalls: true,
+      safeToRetry: false,
+    });
+  });
+  it("preserves classification when a structured provider error rejects the prompt", async () => {
+    const sessionId = `failure-thrown-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const error = Object.assign(new Error("Authorization: Bearer SECRET"), { status: 503 });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: () => {
+          throw error;
+        },
+      }),
+    }));
+    const runtime = new PiSdkRuntime();
+    const settled: unknown[] = [];
+    runtime.onTurnSettled((event) => settled.push(event.result));
+    await expect(
+      runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "go",
+        sessionId,
+        userMessageId: "thrown-user",
+      }),
+    ).rejects.toBe(error);
+    expect(settled).toEqual([
+      expect.objectContaining({
+        outcome: "failed",
+        failureCode: "provider_unavailable",
+        safeToRetry: true,
+      }),
+    ]);
+    expect(JSON.stringify(listAgentEvents(sessionId))).not.toContain("SECRET");
+  });
+});
+
+describe("provider retry diagnostics", () => {
+  it("never exposes a credential-bearing SDK retry message", async () => {
+    const sessionId = `retry-safe-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: () =>
+          mocks.emitPiEvent({
+            type: "auto_retry_start",
+            attempt: 1,
+            maxAttempts: 2,
+            delayMs: 1000,
+            errorMessage: "Authorization: Bearer SECRET",
+          }),
+      }),
+    }));
+    const window = createWindowStub();
+    await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "retry-user",
+    });
+    expect(JSON.stringify(vi.mocked(window.webContents.send).mock.calls)).not.toContain("SECRET");
+    expect(JSON.stringify(listAgentEvents(sessionId))).not.toContain("SECRET");
+  });
+});
+
+describe("Task 8 correction diagnostic regressions", () => {
+  it.each([false, true])("thinking alone cannot complete a turn (tools=%s)", async (hadTools) => {
+    const sessionId = `thinking-only-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: () => {
+          if (hadTools)
+            mocks.emitPiEvent({
+              type: "tool_execution_start",
+              toolCallId: "thinking-tool",
+              toolName: "read",
+              args: { path: "file" },
+            });
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "thinking_delta", delta: "Internal reasoning only." },
+          });
+        },
+      }),
+    }));
+    const result = await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "thinking-user",
+    });
+    expect(result).toMatchObject({
+      outcome: "failed",
+      failureCode: "empty_assistant_output",
+      failurePhase: "finalize",
+      hadToolCalls: hadTools,
+      retryable: false,
+      safeToRetry: false,
+    });
+    expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.completed")).toBe(
+      false,
+    );
+    expect(
+      listAgentEvents(sessionId).find(({ event }) => event.type === "run.failed")?.event,
+    ).toMatchObject({
+      failureCode: "empty_assistant_output",
+      failurePhase: "finalize",
+      safeToRetry: false,
+    });
+  });
+  it("sanitizes compaction errors before persistence and renderer delivery", async () => {
+    const sessionId = `compaction-safe-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: () =>
+          mocks.emitPiEvent({
+            type: "compaction_end",
+            reason: "overflow",
+            aborted: false,
+            willRetry: false,
+            errorMessage: "Authorization: Bearer SECRET https://user:SECRET@provider.test",
+          }),
+      }),
+    }));
+    const window = createWindowStub();
+    await new PiSdkRuntime().prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "go",
+      sessionId,
+      userMessageId: "compaction-user",
+    });
+    const compaction = listAgentEvents(sessionId).find(
+      ({ event }) => event.type === "compaction.ended",
+    )?.event;
+    expect(compaction).toMatchObject({
+      failed: true,
+      summary: "Context compaction failed. Try again.",
+    });
+    expect(JSON.stringify(listAgentEvents(sessionId))).not.toContain("SECRET");
+    expect(JSON.stringify(vi.mocked(window.webContents.send).mock.calls)).not.toContain("SECRET");
   });
 });

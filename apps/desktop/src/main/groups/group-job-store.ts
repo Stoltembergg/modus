@@ -1,3 +1,4 @@
+import type { AgentFailureCode } from "../../shared/contracts";
 import type { GroupTaskQueueItem } from "../../shared/group-work-state";
 import { getDatabase } from "../db/database";
 import { listGroupActions } from "./group-proactivity-store";
@@ -30,6 +31,7 @@ type JobRow = {
   first_started_at: string | null;
   status: GroupJobStatus;
   error: string | null;
+  failure_code: AgentFailureCode | null;
 };
 
 export function persistGroupChain(chain: ChainState): void {
@@ -80,15 +82,31 @@ export function persistGroupJob(wake: Wake): void {
     );
 }
 
-export function updateGroupJob(wake: Wake, status: GroupJobStatus, error?: string): void {
+/** Omitted failureCode preserves history; explicit null is used only for a new attempt. */
+export function updateGroupJob(
+  wake: Wake,
+  status: GroupJobStatus,
+  error?: string,
+  failureCode?: AgentFailureCode | null,
+): void {
   if (!wake.id) return;
   const now = new Date().toISOString();
   getDatabase()
     .prepare(`update group_jobs set status = ?, error = ?,
+      failure_code = case when ? then ? else failure_code end,
       first_started_at = case when task_id is not null and ? = 'running'
         then coalesce(first_started_at, ?) else first_started_at end,
       updated_at = ? where id = ?`)
-    .run(status, error ?? null, status, now, now, wake.id);
+    .run(
+      status,
+      error ?? null,
+      failureCode !== undefined ? 1 : 0,
+      failureCode ?? null,
+      status,
+      now,
+      now,
+      wake.id,
+    );
 }
 
 function wakeFromRow(row: JobRow): Wake {
@@ -102,6 +120,7 @@ function wakeFromRow(row: JobRow): Wake {
     seq: row.seq,
     prompt: row.prompt,
     purpose: row.purpose,
+    ...(row.failure_code !== null ? { failureCode: row.failure_code } : {}),
     ...(row.task_id ? { taskId: row.task_id } : {}),
     ...(row.task_version !== null ? { taskVersion: row.task_version } : {}),
   };
@@ -110,12 +129,19 @@ function wakeFromRow(row: JobRow): Wake {
 /** Look up a durable group job by its execution id (turn id). */
 export function getGroupJob(
   jobId: string,
-): { wake: Wake; status: GroupJobStatus; error: string | null } | undefined {
+):
+  | { wake: Wake; status: GroupJobStatus; error: string | null; failureCode?: AgentFailureCode }
+  | undefined {
   const row = getDatabase().prepare("select * from group_jobs where id = ?").get(jobId) as
     | JobRow
     | undefined;
   if (!row) return undefined;
-  return { status: row.status, error: row.error, wake: wakeFromRow(row) };
+  return {
+    status: row.status,
+    error: row.error,
+    wake: wakeFromRow(row),
+    ...(row.failure_code !== null ? { failureCode: row.failure_code } : {}),
+  };
 }
 
 export function listRecoverableGroupJobs(): Array<{ wake: Wake; status: GroupJobStatus }> {

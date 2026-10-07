@@ -528,6 +528,7 @@ export function migrateDatabase(db: DatabaseSync): void {
     ["status", "text"],
     ["updated_at", "text"],
     ["error", "text"],
+    ["failure_code", "text"],
   ] as const)
     addColumn(db, "group_messages", column, type);
   db.exec(`
@@ -570,6 +571,7 @@ export function migrateDatabase(db: DatabaseSync): void {
   addColumn(db, "group_jobs", "task_id", "text references group_tasks(id) on delete set null");
   addColumn(db, "group_jobs", "task_version", "integer");
   addColumn(db, "group_jobs", "first_started_at", "text");
+  addColumn(db, "group_jobs", "failure_code", "text");
   db.exec(`
     create index if not exists idx_group_jobs_group_task_queue
       on group_jobs(group_id, session_id, status, seq) where task_id is not null;

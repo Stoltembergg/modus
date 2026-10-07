@@ -2240,3 +2240,34 @@ fs.renameSync("original-manifest-link", "package.json");
     );
   });
 });
+
+describe("durable run failure metadata", () => {
+  it("preserves structured failure facts through a fresh event-store import", async () => {
+    const sessionId = `failure-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "Private prompt" });
+    const event = {
+      type: "run.failed",
+      sessionId,
+      runId: run.id,
+      message: "Provider unavailable. Try again.",
+      failureCode: "provider_unavailable",
+      failurePhase: "provider",
+      retryable: true,
+      safeToRetry: false,
+      hadToolCalls: true,
+      retryAfterMs: 1000,
+    } as const;
+    recordAgentEvent(event);
+    vi.resetModules();
+    const restarted = await import("./agent-event-store");
+    expect(
+      restarted.listAgentEvents(sessionId).find(({ event: item }) => item.type === "run.failed")
+        ?.event,
+    ).toMatchObject(event);
+    const payload = getDatabase()
+      .prepare("select payload_json from agent_events where session_id = ? and type = 'run.failed'")
+      .get(sessionId) as { payload_json: string };
+    expect(JSON.parse(payload.payload_json)).toEqual(event);
+  });
+});

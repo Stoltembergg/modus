@@ -290,7 +290,7 @@ export function normalizePiEvent(
     case "compaction_end": {
       const failed = Boolean(event.errorMessage);
       const summary = event.errorMessage
-        ? event.errorMessage
+        ? "Context compaction failed. Try again."
         : compactionSummaryPreview(event.result?.summary);
       return [
         {

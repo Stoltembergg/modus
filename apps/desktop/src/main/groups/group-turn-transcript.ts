@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { AgentEvent, GroupMessage, GroupMessageStatus } from "../../shared/contracts";
+import type {
+  AgentEvent,
+  AgentFailureCode,
+  GroupMessage,
+  GroupMessageStatus,
+} from "../../shared/contracts";
 import type { PromptTurnResult } from "../agent/runtime";
 import type { Wake } from "./group-runtime-lib";
 import {
@@ -84,7 +89,12 @@ export class GroupTurnTranscript {
     }
   }
 
-  setState(wake: Wake, status: GroupMessageStatus, error?: string): void {
+  setState(
+    wake: Wake,
+    status: GroupMessageStatus,
+    error?: string,
+    failureCode?: AgentFailureCode | null,
+  ): void {
     this.flush();
     if (!wake.id) return;
     const messages = listGroupTurnMessages(wake.id);
@@ -103,7 +113,11 @@ export class GroupTurnTranscript {
           : status === "failed" || status === "interrupted"
             ? {}
             : { error: null };
-      this.patch(message.id, { status, ...errorPatch });
+      this.patch(message.id, {
+        status,
+        ...errorPatch,
+        ...(failureCode !== undefined ? { failureCode } : {}),
+      });
     }
     if (["completed", "failed", "cancelled", "interrupted"].includes(status)) {
       for (const message of messages) {
@@ -147,7 +161,7 @@ export class GroupTurnTranscript {
           : result.outcome === "aborted"
             ? "cancelled"
             : "failed";
-    this.setState(wake, status, result.error);
+    this.setState(wake, status, result.error, result.failureCode);
     for (const message of messages) {
       if (result.outcome !== "blocked") {
         this.text.delete(message.id);

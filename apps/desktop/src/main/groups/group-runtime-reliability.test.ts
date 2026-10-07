@@ -782,3 +782,190 @@ it("tool retry republishes a committed dispatch after live event failure", () =>
     setGroupTaskWakeSink(undefined);
   }
 });
+
+function requiredValue<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Expected a fixture value.");
+  return value;
+}
+
+describe("durable categorized failures", () => {
+  it.each([
+    false,
+    true,
+  ])("persists failed job/card metadata across reconstruction (event fallback=%s)", async (fallback) => {
+    const { group, a } = squad();
+    const env = setup();
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha run" });
+    const card = requiredValue(listGroupMessages(group.id).find((m) => m.authorKind === "agent"));
+    const failure = {
+      failureCode: "provider_unavailable",
+      failurePhase: "provider",
+      retryable: true,
+      safeToRetry: false,
+      hadToolCalls: true,
+      retryAfterMs: 1000,
+    } as const;
+    env.emit({ type: "run.started", sessionId: a, runId: "failed-run", delivery: "normal" });
+    env.emit({
+      type: "run.failed",
+      sessionId: a,
+      runId: "failed-run",
+      message: "Provider unavailable. Try again.",
+      ...failure,
+    });
+    requiredValue(env.calls[0]).resolve(
+      fallback
+        ? { outcome: "failed" }
+        : { outcome: "failed", error: "Provider unavailable. Try again.", ...failure },
+    );
+    await flush();
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)).toMatchObject({
+      status: "failed",
+      failureCode: "provider_unavailable",
+    });
+    const { getGroupJob } = await import("./group-job-store");
+    expect(getGroupJob(requiredValue(card.turnId))?.failureCode).toBe("provider_unavailable");
+    expect(
+      getDatabase()
+        .prepare("select failure_code from group_jobs where id = ?")
+        .get(requiredValue(card.turnId)),
+    ).toMatchObject({ failure_code: "provider_unavailable" });
+    expect(
+      getDatabase().prepare("select failure_code from group_messages where id = ?").get(card.id),
+    ).toMatchObject({ failure_code: "provider_unavailable" });
+    env.groups.dispose();
+    const recovered = new GroupRuntime({
+      runtime: env.runtime,
+      host: env.host,
+      recoverPending: true,
+    });
+    instances.push(recovered);
+    recovered.kick();
+    expect(env.calls).toHaveLength(1);
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)?.failureCode).toBe(
+      "provider_unavailable",
+    );
+    expect(getGroupJob(requiredValue(card.turnId))?.failureCode).toBe("provider_unavailable");
+  });
+  it("leaves legacy messages and pending jobs valid when failure columns migrate", async () => {
+    const { group } = squad();
+    const env = setup(true);
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha legacy queued" });
+    const card = requiredValue(listGroupMessages(group.id).find((m) => m.authorKind === "agent"));
+    const db = getDatabase();
+    db.exec(
+      "alter table group_jobs drop column failure_code; alter table group_messages drop column failure_code",
+    );
+    const { migrateDatabase } = await import("../db/database");
+    migrateDatabase(db);
+    migrateDatabase(db);
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)).toMatchObject({
+      status: "queued",
+    });
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)?.failureCode).toBeUndefined();
+    env.groups.dispose();
+    const recovered = new GroupRuntime({
+      runtime: env.runtime,
+      host: { ...env.host, isUpdatePending: () => false },
+      recoverPending: true,
+    });
+    instances.push(recovered);
+    recovered.kick();
+    expect(env.calls).toHaveLength(1);
+  });
+});
+
+describe("failure diagnostic boundaries", () => {
+  it("omits credentials from result diagnostics when the SDK supplied only prose", async () => {
+    const { group } = squad();
+    const env = setup();
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha run" });
+    requiredValue(env.calls[0]).resolve({
+      outcome: "failed",
+      error: "401 Authorization: Bearer SECRET https://user:SECRET@provider.test",
+    });
+    await flush();
+    const card = requiredValue(listGroupMessages(group.id).find((m) => m.authorKind === "agent"));
+    expect(card).toMatchObject({ status: "failed", failureCode: "unknown" });
+    expect(JSON.stringify(card)).not.toContain("SECRET");
+  });
+  it("retains the category if restart happens after run.failed and before prompt settles", () => {
+    const { group, a } = squad();
+    const env = setup();
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha run" });
+    const card = requiredValue(listGroupMessages(group.id).find((m) => m.authorKind === "agent"));
+    env.emit({
+      type: "run.started",
+      sessionId: a,
+      runId: "interrupted-failure",
+      delivery: "normal",
+    });
+    env.emit({
+      type: "run.failed",
+      sessionId: a,
+      runId: "interrupted-failure",
+      message: "SECRET",
+      failureCode: "provider_auth",
+      retryable: false,
+      safeToRetry: false,
+    });
+    expect(JSON.stringify(listGroupMessages(group.id))).not.toContain("SECRET");
+    env.groups.dispose();
+    const recovered = new GroupRuntime({
+      runtime: env.runtime,
+      host: env.host,
+      recoverPending: true,
+    });
+    instances.push(recovered);
+    recovered.kick();
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)).toMatchObject({
+      status: "interrupted",
+      failureCode: "provider_auth",
+    });
+    expect(
+      getDatabase()
+        .prepare("select failure_code from group_jobs where id = ?")
+        .get(requiredValue(card.turnId)),
+    ).toMatchObject({ failure_code: "provider_auth" });
+    expect(JSON.stringify(listGroupMessages(group.id))).not.toContain("SECRET");
+  });
+});
+
+describe("Task 8 cancellation failure metadata", () => {
+  it.each([
+    "card",
+    "job",
+  ])("Stop preserves the categorized failure on the %s until an explicit resumed attempt", async (target) => {
+    const { group, a } = squad();
+    const env = setup();
+    env.groups.postUserMessage({ groupId: group.id, body: "@Alpha run" });
+    const card = requiredValue(listGroupMessages(group.id).find((m) => m.authorKind === "agent"));
+    const turnId = requiredValue(card.turnId);
+    env.emit({ type: "run.started", sessionId: a, runId: "stop-failure", delivery: "normal" });
+    env.emit({
+      type: "run.failed",
+      sessionId: a,
+      runId: "stop-failure",
+      message: "Provider unavailable.",
+      failureCode: "provider_unavailable",
+      safeToRetry: false,
+      hadToolCalls: true,
+    });
+    env.groups.stopGroup(group.id);
+    const { getGroupJob } = await import("./group-job-store");
+    const persisted =
+      target === "card"
+        ? listGroupMessages(group.id).find((m) => m.id === card.id)
+        : getGroupJob(turnId);
+    expect(persisted).toMatchObject({ status: "cancelled", failureCode: "provider_unavailable" });
+    await flush();
+    env.state.windowAvailable = false;
+    env.groups.resumeExecution({ groupId: group.id, executionId: turnId });
+    expect(getGroupJob(turnId)).toMatchObject({ status: "pending" });
+    expect(getGroupJob(turnId)?.failureCode).toBeUndefined();
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)).toMatchObject({
+      status: "queued",
+    });
+    expect(listGroupMessages(group.id).find((m) => m.id === card.id)?.failureCode).toBeUndefined();
+  });
+});

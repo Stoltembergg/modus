@@ -1222,4 +1222,25 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     ).rejects.toThrow("No model is configured");
     expect(prompt).not.toHaveBeenCalled();
   });
+  it.each([
+    [503, "The provider is unavailable. Try again shortly."],
+    [undefined, "The agent turn failed. Try again or check the provider settings."],
+  ])("sanitizes prompt rejection at the renderer boundary (status=%s)", async (status, message) => {
+    const original = Object.assign(
+      new Error("401 Authorization: Bearer SECRET https://user:SECRET@provider.test"),
+      { status },
+    );
+    prompt.mockRejectedValueOnce(original);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+    if (!handler) throw new Error("Expected registered prompt handler.");
+    const rejection = await Promise.resolve(
+      handler(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
+    ).catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection).not.toBe(original);
+    expect(rejection).toMatchObject({ message });
+    expect(String(rejection)).not.toContain("SECRET");
+    expect(rejection).not.toHaveProperty("cause");
+    expect(original.message).toContain("SECRET");
+  });
 });

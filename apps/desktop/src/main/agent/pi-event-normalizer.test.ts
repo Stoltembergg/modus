@@ -241,7 +241,7 @@ describe("normalizePiEvent", () => {
         aborted: false,
         willRetry: false,
         failed: true,
-        summary: "Auto-compaction failed: boom",
+        summary: "Context compaction failed. Try again.",
       },
     ]);
   });
@@ -425,5 +425,32 @@ describe("normalizePiEvent", () => {
         }),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("failed compaction diagnostics", () => {
+  it("omits credentials from the public failed compaction summary", () => {
+    const events = normalizePiEvent(
+      "session-1",
+      event({
+        type: "compaction_end",
+        reason: "overflow",
+        aborted: false,
+        willRetry: false,
+        errorMessage: "Authorization: Bearer SECRET https://user:SECRET@provider.test",
+      }),
+    );
+    expect(events).toEqual([
+      {
+        type: "compaction.ended",
+        sessionId: "session-1",
+        reason: "overflow",
+        aborted: false,
+        willRetry: false,
+        failed: true,
+        summary: "Context compaction failed. Try again.",
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("SECRET");
   });
 });

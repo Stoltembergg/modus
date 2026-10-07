@@ -1,6 +1,8 @@
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import type {
   AgentEvent,
+  AgentFailureCode,
+  AgentFailureMetadata,
   AgentGroupInfo,
   GroupChainEndReason,
   GroupDecision,
@@ -198,6 +200,8 @@ export type Wake = {
   lastProgressAt?: number;
   lastEventCursor?: number;
   error?: string;
+  failureCode?: AgentFailureCode;
+  failure?: AgentFailureMetadata;
   watchdog?: ReturnType<typeof setTimeout> | undefined;
   seq: number;
   groupId: string;
