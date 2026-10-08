@@ -2543,7 +2543,9 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
 
-    const storedModelId = previousSession ? modelToId(previousSession.session.model) : info.model;
+    const storedModelId = previousSession?.session.model
+      ? modelToId(previousSession.session.model)
+      : info.model;
     const selectedModel =
       requestedModelId !== undefined
         ? requireUsableSelectedModel(requestedModelId)
@@ -2882,7 +2884,12 @@ export class PiSdkRuntime implements AgentRuntime {
       // with stale model/thinking (mid-session switch, edit-and-resend, resume).
       // A direct runtime caller may omit `model`; in that case retain the session's exact
       // identity. IPC callers provide their authoritative selection explicitly.
-      const turnModelId = input.model ?? modelToId(runtimeSession.session.model);
+      const turnModelId =
+        input.model ??
+        (runtimeSession.session.model ? modelToId(runtimeSession.session.model) : undefined);
+      if (turnModelId === undefined) {
+        throw new Error("No model is selected for this session.");
+      }
       await this.applyModelSelection(
         runtimeSession,
         turnModelId,
@@ -4603,7 +4610,9 @@ export class PiSdkRuntime implements AgentRuntime {
     if (candidates.length === 0) throw new Error("No models are available to select.");
     const cachedSession = this.sessions.get(sessionId);
     const currentId = cachedSession
-      ? modelToId(cachedSession.session.model)
+      ? cachedSession.session.model
+        ? modelToId(cachedSession.session.model)
+        : undefined
       : getAgentSession(sessionId)?.model;
     const currentIndex = candidates.findIndex((model) => model.id === currentId);
     const offset = direction === "backward" ? -1 : 1;
