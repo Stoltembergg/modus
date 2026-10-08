@@ -36,6 +36,41 @@ jobs:
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check
 
+      - name: Temporary A16 lint diagnostics
+        if: failure()
+        run: >
+          npx biome check --max-diagnostics=1000
+          apps/desktop/src/main/agent/harness/hyperplan.test.ts
+          apps/desktop/src/main/agent/harness/hyperplan.ts
+          apps/desktop/src/main/agent/model-service.modus.test.ts
+          apps/desktop/src/main/agent/model-service.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.ts
+          apps/desktop/src/main/agent/review-service.ts
+          apps/desktop/src/main/agent/subagents-config.ts
+          apps/desktop/src/main/agent/user-turn-model.test.ts
+          apps/desktop/src/main/agent/user-turn-model.ts
+          apps/desktop/src/main/agents/agents-store.ts
+          apps/desktop/src/main/groups/group-runtime-lib.ts
+          apps/desktop/src/main/groups/group-runtime.test.ts
+          apps/desktop/src/main/ipc/agent-model-rule.ts
+          apps/desktop/src/main/ipc/register-app-ipc.test.ts
+          apps/desktop/src/main/ipc/register-app-ipc.ts
+          apps/desktop/src/main/ipc/schemas-part-02.ts
+          apps/desktop/src/main/ipc/schemas-part-04.ts
+          apps/desktop/src/main/ipc/schemas.ts
+          apps/desktop/src/renderer/src/app/App.tsx
+          apps/desktop/src/renderer/src/features/agent/ChatPane.tsx
+          apps/desktop/src/renderer/src/features/agent/turnModelForPane.test.ts
+          apps/desktop/src/renderer/src/features/agents/AgentDialog.test.tsx
+          apps/desktop/src/renderer/src/features/agents/AgentDialog.tsx
+          apps/desktop/src/renderer/src/features/agents/agentDialogModel.ts
+          apps/desktop/src/renderer/src/features/composer/Composer.tsx
+          apps/desktop/src/renderer/src/features/groups/CreateGroupDialog.tsx
+          apps/desktop/src/renderer/src/features/groups/NewGroupModal.tsx
+          apps/desktop/src/renderer/src/features/groups/newGroupModel.ts
+          apps/desktop/src/renderer/src/features/settings/sections/subagents.tsx
+
       - name: Test
         # Keep adversarial and runaway security scenarios behind manual authorization.
         run: >
