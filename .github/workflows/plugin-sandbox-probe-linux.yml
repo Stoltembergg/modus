@@ -2,21 +2,15 @@ name: plugin-sandbox-probe-linux
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "crates/plugin-sandbox-probe/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/plugin-sandbox-probe-linux.yml"
-  pull_request:
-    paths:
-      - "crates/plugin-sandbox-probe/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/plugin-sandbox-probe-linux.yml"
+    inputs:
+      authorization:
+        description: "Explicitly authorize the Linux probe by entering RUN_LINUX_PROBE."
+        required: true
+        type: string
 
 jobs:
   linux-feasibility:
+    if: github.event_name == 'workflow_dispatch' && inputs.authorization == 'RUN_LINUX_PROBE'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

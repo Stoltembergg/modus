@@ -2,21 +2,15 @@ name: Plugin sandbox feasibility probe (Windows)
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "crates/plugin-sandbox-probe/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/plugin-sandbox-probe-windows.yml"
-  pull_request:
-    paths:
-      - "crates/plugin-sandbox-probe/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".github/workflows/plugin-sandbox-probe-windows.yml"
+    inputs:
+      authorization:
+        description: "Explicitly authorize Windows workers and scenarios by entering RUN_WINDOWS_PROBE."
+        required: true
+        type: string
 
 jobs:
   windows-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.authorization == 'RUN_WINDOWS_PROBE'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
