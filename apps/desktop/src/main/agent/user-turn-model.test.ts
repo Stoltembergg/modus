@@ -148,6 +148,20 @@ describe("explicit turn model identity", () => {
     expect(defaultModelId).not.toHaveBeenCalled();
   });
 
+  it("rejects an unavailable session model instead of trying the linked agent or default", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveAgentTurnModel(
+        "openai/gpt-5",
+        "byok/removed-model",
+        true,
+        deps({ defaultModelId, isUsable: (id) => id === "openai/gpt-5" }),
+      ),
+    ).toThrow("Selected model is unavailable: byok/removed-model");
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
   it("requests the current Settings default when neither a linked agent nor session has a model", () => {
     expect(resolveAgentTurnModel(undefined, undefined, true, deps())).toBeNull();
   });

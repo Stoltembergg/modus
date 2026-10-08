@@ -44,14 +44,14 @@ export function resolveExplicitTurnModel(
   return resolveTurnModel(candidate, deps);
 }
 
-/** Resolve the linked agent or session's choice before explicitly requesting the App default. */
+/** Resolve the session's saved choice, then the linked agent's choice, before the App default. */
 export function resolveAgentTurnModel(
   agentModelId: string | null | undefined,
   sessionModelId: string | null | undefined,
   isAgentSession: boolean,
   deps: TurnModelDeps,
 ): string | null | undefined {
-  const persistedModelId = agentModelId || sessionModelId;
+  const persistedModelId = sessionModelId || agentModelId;
   const explicitModelId = resolveExplicitTurnModel(persistedModelId, deps);
   return explicitModelId ?? (isAgentSession ? null : undefined);
 }
