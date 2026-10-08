@@ -12,12 +12,7 @@ import { z } from "zod";
 import type { AgentReviewDepth, AgentReviewIssue, AgentReviewResult } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { readDiff } from "../git/git-service";
-import {
-  findModel,
-  getDefaultModel,
-  getModelRegistry,
-  isUsableModelId,
-} from "./model-service";
+import { findModel, getDefaultModel, getModelRegistry, isUsableModelId } from "./model-service";
 import { toolRegistry } from "./tools/registry";
 
 const reviewIssueSchema = z.object({

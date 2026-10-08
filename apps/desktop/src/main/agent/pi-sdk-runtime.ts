@@ -34,11 +34,7 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
-import {
-  agentChatPersonaPrompt,
-  getAgent,
-  requireAgentChatWritable,
-} from "../agents/agents-store";
+import { agentChatPersonaPrompt, getAgent, requireAgentChatWritable } from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -2133,9 +2129,7 @@ export class PiSdkRuntime implements AgentRuntime {
         // dispose() aborts the SDK agent and can reset its live thinking state. Snapshot the
         // selected identity and thinking configuration before awaiting that disposal.
         previousSelection = {
-          ...(existing.session.model
-            ? { modelId: modelToId(existing.session.model) }
-            : {}),
+          ...(existing.session.model ? { modelId: modelToId(existing.session.model) } : {}),
           thinkingLevel: existing.session.thinkingLevel,
           ...(existing.session.agent.thinkingBudgets?.high !== undefined
             ? { thinkingBudget: existing.session.agent.thinkingBudgets.high }
@@ -2623,7 +2617,7 @@ export class PiSdkRuntime implements AgentRuntime {
       ? (previousSelection.modelId ?? info.model ?? branchModelId)
       : previousSession?.session.model
         ? modelToId(previousSession.session.model)
-        : (info.model || branchModelId);
+        : info.model || branchModelId;
     const selectedModel =
       requestedModelId === null
         ? getDefaultModel()

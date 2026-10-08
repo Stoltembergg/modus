@@ -531,11 +531,7 @@ export function registerAppIpc({
 
   ipcMain.handle(IPC_CHANNELS.agentEnsure, async (event, sessionId: string) => {
     assertTrustedSender(event);
-    const parsedSessionId = parseIpcInput(
-      sessionIdSchema,
-      sessionId,
-      IPC_CHANNELS.agentEnsure,
-    );
+    const parsedSessionId = parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentEnsure);
     const session = getAgentSession(parsedSessionId);
     const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
     const requestedModelId = session

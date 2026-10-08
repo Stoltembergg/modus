@@ -1286,11 +1286,7 @@ describe("agent:prompt preserves the session model", () => {
 
     await handler(trustedEvent as never, "session-1" as never);
 
-    expect(ensure).toHaveBeenCalledWith(
-      mocks.senderWindow,
-      "session-1",
-      "byok/session-selection",
-    );
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", "byok/session-selection");
   });
 
   it("uses the linked agent model to restore a session with no saved selection", async () => {

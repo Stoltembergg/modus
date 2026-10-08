@@ -130,12 +130,7 @@ describe("explicit turn model identity", () => {
   it("preserves a session model when its linked agent has no separate model", () => {
     const selected = "byok/session-model";
     expect(
-      resolveAgentTurnModel(
-        undefined,
-        selected,
-        true,
-        deps({ isUsable: (id) => id === selected }),
-      ),
+      resolveAgentTurnModel(undefined, selected, true, deps({ isUsable: (id) => id === selected })),
     ).toBe(selected);
   });
 
@@ -153,12 +148,9 @@ describe("explicit turn model identity", () => {
     expect(defaultModelId).not.toHaveBeenCalled();
   });
 
-  it(
-    "requests the current Settings default when neither a linked agent nor session has a model",
-    () => {
-      expect(resolveAgentTurnModel(undefined, undefined, true, deps())).toBeNull();
-    },
-  );
+  it("requests the current Settings default when neither a linked agent nor session has a model", () => {
+    expect(resolveAgentTurnModel(undefined, undefined, true, deps())).toBeNull();
+  });
 
   it("leaves an unlinked legacy session unset for PI branch restoration", () => {
     expect(resolveAgentTurnModel(undefined, undefined, false, deps())).toBeUndefined();
