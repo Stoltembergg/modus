@@ -1223,11 +1223,28 @@ describe("agent:prompt preserves the session model", () => {
     expect(input.model).toBe("openai/gpt-5");
   });
 
-  it("uses the linked agent's current model instead of a stale session model", async () => {
+  it("preserves the model selected for a linked session over its agent setting", async () => {
+    const sessionModel = "byok/session-selection";
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       agentId: "agent-1",
-      model: "openai/stale-model",
+      model: sessionModel,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input.model).toBe(sessionModel);
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("uses the linked agent model when the session has no saved selection", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
     });
     mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
@@ -1255,11 +1272,32 @@ describe("agent:prompt preserves the session model", () => {
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 
-  it("passes a linked agent's current model into session restoration", async () => {
+  it("restores a saved session model when it differs from the linked agent", async () => {
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       agentId: "agent-1",
-      model: "openai/stale-model",
+      model: "byok/session-selection",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(
+      mocks.senderWindow,
+      "session-1",
+      "byok/session-selection",
+    );
+  });
+
+  it("uses the linked agent model to restore a session with no saved selection", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
     });
     mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
     const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
@@ -1293,7 +1331,7 @@ describe("agent:prompt preserves the session model", () => {
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       agentId: "agent-1",
-      model: "openai/stale-model",
+      model: null,
     });
     mocks.getAgent.mockReturnValue({ modelId: "byok/removed-model" });
     mocks.isUsableModelId.mockReturnValue(false);
@@ -1397,11 +1435,11 @@ describe("reviewStart preserves the session model", () => {
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 
-  it("prefers the linked agent model over a stale session model", async () => {
+  it("preserves a linked session's selected model for review over its agent setting", async () => {
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       agentId: "agent-1",
-      model: "openai/stale-model",
+      model: "byok/session-selection",
     });
     mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
     const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
@@ -1416,7 +1454,7 @@ describe("reviewStart preserves the session model", () => {
     );
 
     expect(mocks.startAgentReview).toHaveBeenCalledWith(
-      expect.objectContaining({ modelId: "byok/agent-model" }),
+      expect.objectContaining({ modelId: "byok/session-selection" }),
     );
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });

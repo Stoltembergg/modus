@@ -114,13 +114,13 @@ describe("explicit turn model identity", () => {
     ).toBe(selected);
   });
 
-  it("uses an agent's current explicit model instead of a stale session model", () => {
+  it("preserves a model explicitly selected for a linked session over its agent setting", () => {
     const selected = "byok/selected-model";
 
     expect(
       resolveAgentTurnModel(
+        "byok/agent-model",
         selected,
-        "openai/stale-model",
         true,
         deps({ isUsable: (id) => id === selected }),
       ),
@@ -145,7 +145,7 @@ describe("explicit turn model identity", () => {
     expect(() =>
       resolveAgentTurnModel(
         "byok/removed-model",
-        "openai/gpt-5",
+        undefined,
         true,
         deps({ defaultModelId, isUsable: (id) => id === "openai/gpt-5" }),
       ),
