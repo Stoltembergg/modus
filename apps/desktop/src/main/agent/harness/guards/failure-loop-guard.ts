@@ -52,8 +52,7 @@ export function detectFailureLoop(input: {
     (a) => a.status === "failed" || a.status === "discarded",
   );
 
-  const hypothesis =
-    input.hypothesisAnalysis ?? detectRepeatHypothesis(failedAttempts, config);
+  const hypothesis = input.hypothesisAnalysis ?? detectRepeatHypothesis(failedAttempts, config);
 
   // 1. Hard Circuit Breaker: Maximum consecutive failure attempts reached
   if (failedAttempts.length >= config.maxFailureAttempts) {
@@ -69,9 +68,12 @@ export function detectFailureLoop(input: {
   }
 
   // 2. Severe Identical Tool Repeat: Same tool with identical args executed >= threshold
-  const identicalTool = input.repeatTools.find((p) => p.identical && p.count >= config.toolRepeatThreshold);
+  const identicalTool = input.repeatTools.find(
+    (p) => p.identical && p.count >= config.toolRepeatThreshold,
+  );
   if (identicalTool) {
-    const isBash = identicalTool.toolName.startsWith("bash") || identicalTool.toolName.includes("terminal");
+    const isBash =
+      identicalTool.toolName.startsWith("bash") || identicalTool.toolName.includes("terminal");
     const isSearch =
       identicalTool.toolName.includes("grep") ||
       identicalTool.toolName.includes("search") ||
@@ -132,15 +134,14 @@ export function detectFailureLoop(input: {
       action: "change_strategy",
       suggestion:
         "Low hypothesis diversity: agent is repeating previously failed strategies. Switch to an alternative hypothesis or architecture review.",
-      reasonCodes: [
-        "hypothesis_loop_detected",
-        ...hypothesis.reasons,
-      ],
+      reasonCodes: ["hypothesis_loop_detected", ...hypothesis.reasons],
     };
   }
 
   // 4. High-frequency non-identical tool churn with multiple failures
-  const churnTool = input.repeatTools.find((p) => !p.identical && p.count >= config.toolRepeatThreshold + 2);
+  const churnTool = input.repeatTools.find(
+    (p) => !p.identical && p.count >= config.toolRepeatThreshold + 2,
+  );
   if (churnTool && failedAttempts.length >= 2) {
     return {
       action: "change_strategy",

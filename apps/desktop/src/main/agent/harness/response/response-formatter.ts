@@ -1,14 +1,7 @@
 import type { Deliverable } from "./deliverables";
 import { formatDeliverables } from "./deliverables";
-import type {
-  ResponseEnforcementMode,
-  ResponsePolicy,
-} from "./response-policy";
-import {
-  extractSections,
-  isCriticalParagraph,
-  splitParagraphs,
-} from "./response-sections";
+import type { ResponseEnforcementMode, ResponsePolicy } from "./response-policy";
+import { extractSections, isCriticalParagraph, splitParagraphs } from "./response-sections";
 
 export type EnforceResult = {
   response: string;
@@ -68,10 +61,7 @@ export function enforceResponsePolicy(
 
   // Strict mode: truncate surplus paragraphs, BUT ALWAYS PRESERVE CRITICAL PARAGRAPHS (RISCO 4)
   const criticalParagraphs = paragraphs.filter(isCriticalParagraph);
-  const nonCriticalQuota = Math.max(
-    0,
-    policy.maxParagraphs - criticalParagraphs.length,
-  );
+  const nonCriticalQuota = Math.max(0, policy.maxParagraphs - criticalParagraphs.length);
 
   // Walk in original order and count kept non-critical paragraphs. A Set-based
   // filter kept *every* occurrence of a kept string, so a paragraph repeated N
@@ -192,7 +182,10 @@ export class ResponseFormatter {
     return formatResponse(input);
   }
 
-  formatDeliverables(deliverables: Deliverable[], level?: ResponsePolicy["level"]): string | undefined {
+  formatDeliverables(
+    deliverables: Deliverable[],
+    level?: ResponsePolicy["level"],
+  ): string | undefined {
     return formatDeliverables(deliverables, level);
   }
 }

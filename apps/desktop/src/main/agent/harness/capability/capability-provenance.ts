@@ -7,7 +7,7 @@ import type {
   CapabilityExecutionTrace,
   CapabilityProvenance,
   CapabilityProvider,
-} from './capability-types';
+} from "./capability-types";
 
 interface ProviderStats {
   usageCount: number;

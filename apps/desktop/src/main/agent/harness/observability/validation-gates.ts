@@ -39,7 +39,7 @@ export class ValidationGates {
       maxFalsePositivePercent?: number;
       maxMemoryGrowthPercent?: number;
       baselineTotalTokens?: number;
-    } = {}
+    } = {},
   ): ValidationGatesReport {
     const minTokenEconomy = options.minTokenEconomyPercent ?? 30;
     const maxAvgHookLatency = options.maxAvgHookLatencyMs ?? 5;
@@ -89,7 +89,8 @@ export class ValidationGates {
     const avgHookLatency = metrics.performance.averageHookDurationMs;
     const memoryGrowth = metrics.performance.memoryGrowthPercent;
 
-    const performancePassed = avgHookLatency <= maxAvgHookLatency && memoryGrowth <= maxMemoryGrowth;
+    const performancePassed =
+      avgHookLatency <= maxAvgHookLatency && memoryGrowth <= maxMemoryGrowth;
     gates.push({
       gateName: "Performance Gate",
       passed: performancePassed,

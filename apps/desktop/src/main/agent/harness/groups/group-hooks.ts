@@ -21,18 +21,12 @@ function passThroughTurnStart(input: TurnStartInput): TurnStartOutput {
  * placing them onto context.state without interfering with turn execution.
  * Fail-open design.
  */
-export const defaultTurnStartGroupMailboxHook: HarnessHook<
-  TurnStartInput,
-  TurnStartOutput
-> = {
+export const defaultTurnStartGroupMailboxHook: HarnessHook<TurnStartInput, TurnStartOutput> = {
   name: "harness_group_mailbox_turn_start",
   phase: "turn_start",
   priority: 28, // Runs after repeat guard (25), before turn executes
   isCritical: false,
-  execute: async (
-    input: TurnStartInput,
-    context: HarnessContext,
-  ): Promise<TurnStartOutput> => {
+  execute: async (input: TurnStartInput, context: HarnessContext): Promise<TurnStartOutput> => {
     if (!isFeatureFlagEnabled("MODUS_GROUPS_MAILBOX")) {
       return passThroughTurnStart(input);
     }
@@ -43,10 +37,7 @@ export const defaultTurnStartGroupMailboxHook: HarnessHook<
       const pendingMessages = mailbox.receive(sessionId);
 
       context.state.set("harness.group_mailbox_pending", pendingMessages);
-      context.state.set(
-        "harness.group_mailbox_pending_count",
-        pendingMessages.length,
-      );
+      context.state.set("harness.group_mailbox_pending_count", pendingMessages.length);
 
       if (pendingMessages.length > 0) {
         // Log awareness in state for prompt composition or telemetry
@@ -65,18 +56,12 @@ export const defaultTurnStartGroupMailboxHook: HarnessHook<
  * Turn Settle hook for Group Mailbox.
  * Purges expired messages per retention policies (7 days acked / 30 days unacked).
  */
-export const defaultTurnSettleGroupMailboxHook: HarnessHook<
-  TurnSettleInput,
-  TurnSettleOutput
-> = {
+export const defaultTurnSettleGroupMailboxHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
   name: "harness_group_mailbox_turn_settle",
   phase: "turn_settle",
   priority: 35,
   isCritical: false,
-  execute: async (
-    input: TurnSettleInput,
-    _context: HarnessContext,
-  ): Promise<TurnSettleOutput> => {
+  execute: async (input: TurnSettleInput, _context: HarnessContext): Promise<TurnSettleOutput> => {
     if (isFeatureFlagEnabled("MODUS_GROUPS_MAILBOX")) {
       try {
         GroupMailbox.getInstance().purgeExpired();

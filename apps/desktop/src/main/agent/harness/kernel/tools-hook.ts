@@ -19,7 +19,7 @@ export const toolsRegisterHook: HarnessHook<ToolsRegisterInput, ToolsRegisterOut
   isCritical: false,
   execute: async (
     input: ToolsRegisterInput,
-    context: HarnessContext
+    context: HarnessContext,
   ): Promise<ToolsRegisterOutput> => {
     const rawTools: string[] = input.availableTools ?? input.requestedTools ?? [];
     const permissions: string[] = input.permissions ?? [];

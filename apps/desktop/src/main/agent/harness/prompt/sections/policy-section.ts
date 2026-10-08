@@ -24,9 +24,9 @@ export class PolicySectionProvider implements PromptSectionProvider {
     const policy = (context.state.get("responsePolicy") as string) ?? "standard";
 
     if (isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")) {
-      const level = (policy in RESPONSE_POLICY_PROMPTS
-        ? policy
-        : DEFAULT_RESPONSE_LEVEL) as ResponseLevel;
+      const level = (
+        policy in RESPONSE_POLICY_PROMPTS ? policy : DEFAULT_RESPONSE_LEVEL
+      ) as ResponseLevel;
       return RESPONSE_POLICY_PROMPTS[level];
     }
 

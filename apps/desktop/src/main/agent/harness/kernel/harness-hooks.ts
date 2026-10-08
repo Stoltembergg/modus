@@ -1,7 +1,4 @@
-import type {
-  ContextItem,
-  HarnessTaskClassification,
-} from "../../../../shared/contracts";
+import type { ContextItem, HarnessTaskClassification } from "../../../../shared/contracts";
 import type { IntentGateResult } from "../intent-gate";
 
 export type HarnessPhase =
@@ -56,17 +53,19 @@ export type TurnStartOutput = {
 export type ContextResolveInput = {
   sessionId?: string | undefined;
   runId?: string | undefined;
-  candidates?: Array<{
-    id: string;
-    type?: string | undefined;
-    path?: string | undefined;
-    score?: number | undefined;
-    tokens?: number | undefined;
-    tokenCost?: number | undefined;
-    trust?: string | undefined;
-    label?: string | undefined;
-    uncertaintyReduction?: number | undefined;
-  }> | undefined;
+  candidates?:
+    | Array<{
+        id: string;
+        type?: string | undefined;
+        path?: string | undefined;
+        score?: number | undefined;
+        tokens?: number | undefined;
+        tokenCost?: number | undefined;
+        trust?: string | undefined;
+        label?: string | undefined;
+        uncertaintyReduction?: number | undefined;
+      }>
+    | undefined;
   tokenBudget?: number | undefined;
   paths?: string[] | undefined;
   symbols?: string[] | undefined;
@@ -79,11 +78,13 @@ export type ContextResolveOutput = {
     score: number;
     tokens: number;
   }>;
-  candidates?: Array<{
-    id: string;
-    score: number;
-    tokens: number;
-  }> | undefined;
+  candidates?:
+    | Array<{
+        id: string;
+        score: number;
+        tokens: number;
+      }>
+    | undefined;
   totalTokens: number;
   prunedCount: number;
 };
@@ -91,12 +92,14 @@ export type ContextResolveOutput = {
 /* Phase 3: prompt_build */
 export type PromptBuildInput = {
   basePrompt: string;
-  systemSections?: Array<{
-    id: string;
-    priority?: number | undefined;
-    content: string;
-    volatile?: boolean | undefined;
-  }> | undefined;
+  systemSections?:
+    | Array<{
+        id: string;
+        priority?: number | undefined;
+        content: string;
+        volatile?: boolean | undefined;
+      }>
+    | undefined;
 };
 
 export type PromptBuildOutput = {

@@ -3,9 +3,9 @@
  * Safe Mode Manager: staged system initialization by trust level ('core', 'official', 'verified').
  */
 
-import type { TrustLevel } from '../capability/capability-types';
-import type { PluginLifecycleService } from './plugin-lifecycle-service';
-import type { SafeModeLevel } from './plugin-rollback-types';
+import type { TrustLevel } from "../capability/capability-types";
+import type { PluginLifecycleService } from "./plugin-lifecycle-service";
+import type { SafeModeLevel } from "./plugin-rollback-types";
 
 export class PluginSafeModeManager {
   private service: PluginLifecycleService;
@@ -23,14 +23,14 @@ export class PluginSafeModeManager {
    */
   public getTrustLevelsForMode(level: SafeModeLevel): TrustLevel[] {
     switch (level) {
-      case 'core':
-        return ['core'];
-      case 'official':
-        return ['core', 'official'];
-      case 'verified':
-        return ['core', 'official', 'verified'];
+      case "core":
+        return ["core"];
+      case "official":
+        return ["core", "official"];
+      case "verified":
+        return ["core", "official", "verified"];
       default:
-        return ['core'];
+        return ["core"];
     }
   }
 
@@ -39,12 +39,12 @@ export class PluginSafeModeManager {
    * Disables any currently enabled plugins that do not satisfy the trust threshold.
    */
   public async enter(
-    level: SafeModeLevel = 'core',
+    level: SafeModeLevel = "core",
   ): Promise<{ level: SafeModeLevel; enabledPlugins: string[]; disabledPlugins: string[] }> {
     const allowedTrusts = this.getTrustLevelsForMode(level);
     const allPlugins = await this.service.list();
 
-    const currentlyEnabled = allPlugins.filter((p) => p.state === 'enabled');
+    const currentlyEnabled = allPlugins.filter((p) => p.state === "enabled");
 
     // Only record previous enabled baseline if not already in safe mode
     if (!this.active) {
@@ -89,7 +89,7 @@ export class PluginSafeModeManager {
 
     for (const pluginId of this.previouslyEnabledPlugins) {
       const plugin = this.service.getStore().getPlugin(pluginId);
-      if (plugin && plugin.state !== 'enabled') {
+      if (plugin && plugin.state !== "enabled") {
         try {
           await this.service.enable(pluginId);
           restoredPlugins.push(pluginId);

@@ -108,6 +108,8 @@ import {
   updateAgentSessionWorktree,
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
+import { CapabilityRegistry } from "./harness/capability/capability-registry";
+import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
 import {
   listAvoidedStrategyCodesFromBlacklist,
   upsertFailureBlacklistEntry,
@@ -118,14 +120,15 @@ import {
   createFailureLedger,
   isDuplicateFailedAttempt,
 } from "./harness/failure-intelligence";
+import { isFeatureFlagEnabled } from "./harness/feature-flags";
 import {
   isHyperPlanSessionReserved,
   ownsHyperPlanStartReservation,
   releaseHyperPlanRunReservation,
 } from "./harness/hyperplan-draft-store";
-import { isFeatureFlagEnabled } from "./harness/feature-flags";
-import { CapabilityRegistry } from "./harness/capability/capability-registry";
-import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
+import { evaluateIntentGate } from "./harness/intent-gate";
+import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
+import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
 import {
   AutoRollbackManager,
   bootstrapModusPlugins,
@@ -142,9 +145,6 @@ import {
   PluginVersionManager,
   SecurityAuditLogger,
 } from "./harness/plugin";
-import { evaluateIntentGate } from "./harness/intent-gate";
-import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
-import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
 import {
   estimateProjectImpactWithStore,
   upsertProjectModelChangedPaths,
@@ -161,6 +161,14 @@ import {
   planSafeDispatch,
   type SafeDispatchPlan,
 } from "./harness/safe-dispatch";
+import { ModusNativeSubagentProvider } from "./harness/subagents/modus-native-provider";
+import type {
+  SubagentSpawnInput,
+  SubagentSpawnResult,
+  SubagentStatus,
+  SubagentWaitResult,
+} from "./harness/subagents/subagent-provider";
+import { SubagentProviderRegistry } from "./harness/subagents/subagent-provider-registry";
 import { classifyHarnessTask } from "./harness/task-classifier";
 import {
   createHarnessTaskState,
@@ -209,9 +217,6 @@ import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
 import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
-import { SubagentProviderRegistry } from "./harness/subagents/subagent-provider-registry";
-import { ModusNativeSubagentProvider } from "./harness/subagents/modus-native-provider";
-import type { SubagentStatus, SubagentSpawnInput, SubagentSpawnResult, SubagentWaitResult } from "./harness/subagents/subagent-provider";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
@@ -861,9 +866,11 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGINS")) {
-      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader).then(() => {}).catch((err) => {
-        console.error("[modus] Failed to bootstrap plugins:", err);
-      });
+      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader)
+        .then(() => {})
+        .catch((err) => {
+          console.error("[modus] Failed to bootstrap plugins:", err);
+        });
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGIN_TRACING")) {
@@ -903,7 +910,10 @@ export class PiSdkRuntime implements AgentRuntime {
         const userData = app.getPath("userData");
         this.pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
       } catch (err) {
-        console.warn("[modus] plugin state falling back to in-memory store (persistence disabled):", err instanceof Error ? err.message : String(err));
+        console.warn(
+          "[modus] plugin state falling back to in-memory store (persistence disabled):",
+          err instanceof Error ? err.message : String(err),
+        );
         this.pluginStateStore = new PluginStateStore(":memory:");
       }
     }
@@ -979,7 +989,10 @@ export class PiSdkRuntime implements AgentRuntime {
             };
           }
         },
-        waitSubagent: async (subagentId: string, timeoutMs?: number): Promise<SubagentWaitResult> => {
+        waitSubagent: async (
+          subagentId: string,
+          timeoutMs?: number,
+        ): Promise<SubagentWaitResult> => {
           const childSession = getAgentSession(subagentId);
           const parentId = childSession?.parentSessionId;
           if (!parentId) {
@@ -995,7 +1008,7 @@ export class PiSdkRuntime implements AgentRuntime {
             timeoutMs: timeoutMs ?? 30000,
           });
           const child = waitResult.subagents.find((item) => item.id === subagentId);
-                    return {
+          return {
             subagentId,
             success: child?.status === "completed",
             ...(child?.output ? { output: child.output } : {}),
@@ -1017,9 +1030,20 @@ export class PiSdkRuntime implements AgentRuntime {
           const task = this.backgroundChildTasks.get(subagentId);
           const childRun = listAgentRuns(subagentId).at(-1);
           let state: SubagentStatus["state"] = "running";
-          if (task?.status === "completed" || session.status === "completed" || childRun?.status === "completed") state = "completed";
-          else if (task?.status === "error" || session.status === "error" || childRun?.status === "failed") state = "failed";
-          else if (session.status === "cancelled" || childRun?.status === "cancelled") state = "aborted";
+          if (
+            task?.status === "completed" ||
+            session.status === "completed" ||
+            childRun?.status === "completed"
+          )
+            state = "completed";
+          else if (
+            task?.status === "error" ||
+            session.status === "error" ||
+            childRun?.status === "failed"
+          )
+            state = "failed";
+          else if (session.status === "cancelled" || childRun?.status === "cancelled")
+            state = "aborted";
           return {
             subagentId,
             state,

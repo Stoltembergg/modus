@@ -12,7 +12,8 @@ export const RETRIEVE_SPILL_TOOL_NAME = "retrieve_spilled_tool_result";
 
 const retrieveSpillParams = Type.Object({
   spill_id: Type.String({
-    description: "The spill identifier (e.g. 'spill-abc123xyz') returned when a previous tool output was truncated.",
+    description:
+      "The spill identifier (e.g. 'spill-abc123xyz') returned when a previous tool output was truncated.",
   }),
   offset_line: Type.Optional(
     Type.Number({
@@ -49,7 +50,12 @@ export const retrieveSpillTool: ToolDefinition<typeof retrieveSpillParams> = def
 
     if (!result.success || result.content === undefined) {
       return {
-        content: [{ type: "text", text: result.error ?? `Error: Spilled result with id '${params.spill_id}' not found.` }],
+        content: [
+          {
+            type: "text",
+            text: result.error ?? `Error: Spilled result with id '${params.spill_id}' not found.`,
+          },
+        ],
         details: { success: false, spillId: params.spill_id },
       };
     }

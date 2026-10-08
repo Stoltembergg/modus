@@ -5,12 +5,7 @@ import {
   validateFeatureFlags,
 } from "../feature-flags";
 import { contextResolveHook } from "./context-hook";
-import type {
-  HarnessContext,
-  HarnessHook,
-  TurnStartInput,
-  TurnStartOutput,
-} from "./harness-hooks";
+import type { HarnessContext, HarnessHook, TurnStartInput, TurnStartOutput } from "./harness-hooks";
 import { HarnessKernel } from "./harness-kernel";
 import { modelSelectHook } from "./model-hook";
 import { promptBuildHook } from "./prompt-hook";
@@ -108,11 +103,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     kernel.registerHook(hookB);
     kernel.registerHook(hookA);
 
-    const result = await kernel.executeHooks(
-      "context_resolve",
-      { val: "start" },
-      mockContext
-    );
+    const result = await kernel.executeHooks("context_resolve", { val: "start" }, mockContext);
 
     expect(executionOrder).toEqual(["A", "B"]);
     expect(result.val).toBe("start->A->B");
@@ -131,15 +122,11 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
 
     kernel.registerHook(hookWithGhostDep);
 
-    const result = await kernel.executeHooks(
-      "prompt_build",
-      { ok: false },
-      mockContext
-    );
+    const result = await kernel.executeHooks("prompt_build", { ok: false }, mockContext);
 
     expect(result.ok).toBe(true);
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("depends on missing hook: non_existent_hook")
+      expect.stringContaining("depends on missing hook: non_existent_hook"),
     );
 
     warnSpy.mockRestore();
@@ -170,9 +157,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     // Resolving hooks should not crash with infinite recursion
     const ordered = kernel.getHooksForPhase("model_select");
     expect(ordered.length).toBeLessThanOrEqual(2);
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Skipping hook")
-    );
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("Skipping hook"));
 
     errorSpy.mockRestore();
   });
@@ -200,15 +185,11 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     kernel.registerHook(nonCriticalFailingHook);
     kernel.registerHook(subsequentHook);
 
-    const result = await kernel.executeHooks(
-      "tools_register",
-      { text: "initial" },
-      mockContext
-    );
+    const result = await kernel.executeHooks("tools_register", { text: "initial" }, mockContext);
 
     expect(result.text).toBe("initial_processed");
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Non-critical hook failing_hook failed")
+      expect.stringContaining("Non-critical hook failing_hook failed"),
     );
 
     // Critical hook failure MUST throw
@@ -225,7 +206,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     kernel.registerHook(criticalFailingHook);
 
     await expect(
-      kernel.executeHooks("tools_register", { text: "initial" }, mockContext)
+      kernel.executeHooks("tools_register", { text: "initial" }, mockContext),
     ).rejects.toThrow("Critical harness hook critical_failing_hook failed");
 
     warnSpy.mockRestore();
@@ -243,11 +224,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
 
     kernel.registerHook(dummyHook);
 
-    const result = await kernel.executeHooks(
-      "turn_start",
-      { ran: false },
-      mockContext
-    );
+    const result = await kernel.executeHooks("turn_start", { ran: false }, mockContext);
 
     expect(result.ran).toBe(false);
   });
@@ -283,11 +260,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
 
     const tStart = performance.now();
     for (let i = 0; i < 50; i++) {
-      await kernel.executeHooks(
-        "verification_check",
-        { check: i },
-        mockContext
-      );
+      await kernel.executeHooks("verification_check", { check: i }, mockContext);
     }
     const totalTimeMs = performance.now() - tStart;
     const avgPerTurnMs = totalTimeMs / 50;
@@ -313,7 +286,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
         context: [],
         mode: "build",
       } satisfies TurnStartInput,
-      mockContext
+      mockContext,
     );
     expect(turnStartResult.proceed).toBe(true);
     expect(turnStartResult.classification?.taskType).toBe("implementation");
@@ -331,7 +304,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
         symbols: [],
         userQuery: "Refactor database",
       },
-      mockContext
+      mockContext,
     );
     expect(contextResult.candidates.length).toBe(1);
 
@@ -346,7 +319,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
           { id: "sec-active", content: "Active file: db.ts", volatile: true },
         ],
       },
-      mockContext
+      mockContext,
     );
     expect(promptResult.finalSystemPrompt).toContain("Follow SOLID principles.");
     expect(promptResult.finalSystemPrompt).toContain("Active file: db.ts");
@@ -355,7 +328,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     const modelResult = await kernel.executeHooks(
       "model_select",
       { requestedModel: "claude-3-5-sonnet" },
-      mockContext
+      mockContext,
     );
     expect(modelResult.effectiveModel).toBe("claude-3-5-sonnet");
 
@@ -363,7 +336,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     const toolsResult = await kernel.executeHooks(
       "tools_register",
       { availableTools: ["bash", "read", "write"] },
-      mockContext
+      mockContext,
     );
     expect(toolsResult.enabledTools).toEqual(["bash", "read", "write"]);
     expect(toolsResult.spillPolicies?.bash.spillThresholdBytes).toBe(20 * 1024);
@@ -376,7 +349,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
         runId: mockContext.runId,
         toolExecutions: [{ toolName: "bash", isError: false, output: "Tests passed" }],
       },
-      mockContext
+      mockContext,
     );
     expect(verifyResult.allPassed).toBe(true);
 
@@ -389,7 +362,7 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
         assistantResponse: "All tasks completed successfully.",
         toolResults: [],
       },
-      mockContext
+      mockContext,
     );
     expect(settleResult.settled).toBe(true);
     expect(settleResult.taskComplete).toBe(true);

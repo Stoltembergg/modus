@@ -123,7 +123,7 @@ export class PromptRegistry {
         }
       } catch (err: any) {
         console.warn(
-          `[modus] PromptSectionProvider '${provider.getSectionId()}' failed during refresh: ${err?.message || err}. Continuing.`
+          `[modus] PromptSectionProvider '${provider.getSectionId()}' failed during refresh: ${err?.message || err}. Continuing.`,
         );
       }
     }
@@ -197,7 +197,7 @@ export class PromptRegistry {
    */
   async assemblePrompt(
     sessionId: string,
-    options?: { full?: boolean; context?: HarnessContext }
+    options?: { full?: boolean; context?: HarnessContext },
   ): Promise<PromptAssemblyResult> {
     const start = performance.now();
 
@@ -219,9 +219,7 @@ export class PromptRegistry {
     const cacheablePrefix = staticSections.map((s) => s.content.trim()).join("\n\n");
     const dynamicSuffix = volatileSections.map((s) => s.content.trim()).join("\n\n");
 
-    const prompt = dynamicSuffix
-      ? `${cacheablePrefix}\n\n${dynamicSuffix}`
-      : cacheablePrefix;
+    const prompt = dynamicSuffix ? `${cacheablePrefix}\n\n${dynamicSuffix}` : cacheablePrefix;
 
     const changed = this.getChangedSections(sessionId);
     const changedSectionIds = changed.map((s) => s.id);
@@ -254,7 +252,7 @@ export class PromptRegistry {
     const durationMs = performance.now() - start;
     if (durationMs > 100) {
       console.warn(
-        `[modus] PromptRegistry.assemblePrompt took ${durationMs.toFixed(2)}ms (SLO: 100ms)`
+        `[modus] PromptRegistry.assemblePrompt took ${durationMs.toFixed(2)}ms (SLO: 100ms)`,
       );
     }
 

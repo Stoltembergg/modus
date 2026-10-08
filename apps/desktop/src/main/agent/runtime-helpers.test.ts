@@ -22,7 +22,9 @@ describe("runtime-qa-helper", () => {
   it("respects negated clauses", () => {
     expect(requestsCheck("don't run tests", /\b(?:tests?|vitest|jest)\b/i)).toBe(false);
     expect(requestsCheck("run tests, but do not run typecheck", /\btype[ -]?check\b/i)).toBe(false);
-    expect(requestsCheck("run tests, but do not run typecheck", /\b(?:tests?|vitest|jest)\b/i)).toBe(true);
+    expect(
+      requestsCheck("run tests, but do not run typecheck", /\b(?:tests?|vitest|jest)\b/i),
+    ).toBe(true);
   });
 
   it("derives required checks for run correctly", () => {

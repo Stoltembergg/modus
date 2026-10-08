@@ -46,7 +46,7 @@ describe("Fase 1.1: Runtime Integration & Dual-Path Validation", () => {
       const output = await kernel.executeHooks<TurnStartInput, TurnStartOutput>(
         "turn_start",
         input,
-        ctx
+        ctx,
       );
       const elapsed = performance.now() - start;
 
@@ -87,7 +87,7 @@ describe("Fase 1.1: Runtime Integration & Dual-Path Validation", () => {
       const output = await kernel.executeHooks<TurnStartInput, TurnStartOutput>(
         "turn_start",
         input,
-        ctx
+        ctx,
       );
 
       expect(output.proceed).toBe(true);
@@ -103,7 +103,7 @@ describe("Fase 1.1: Runtime Integration & Dual-Path Validation", () => {
 
       // Verify structured logging [modus-harness]
       expect(consoleInfoSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[modus-harness] Phase: turn_start")
+        expect.stringContaining("[modus-harness] Phase: turn_start"),
       );
 
       consoleInfoSpy.mockRestore();
@@ -142,7 +142,7 @@ describe("Fase 1.1: Runtime Integration & Dual-Path Validation", () => {
       const output = await kernel.executeHooks<TurnStartInput, TurnStartOutput>(
         "turn_start",
         { sessionId: "test-abort", userPrompt: "delete everything", mode: "build" },
-        ctx
+        ctx,
       );
 
       expect(output.proceed).toBe(false);

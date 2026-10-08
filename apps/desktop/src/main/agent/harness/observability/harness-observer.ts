@@ -121,7 +121,12 @@ export class HarnessObserver {
     return this.telemetryOptIn;
   }
 
-  private emitEvent(type: TelemetryEventType, data: Record<string, any>, sessionId?: string, runId?: string): void {
+  private emitEvent(
+    type: TelemetryEventType,
+    data: Record<string, any>,
+    sessionId?: string,
+    runId?: string,
+  ): void {
     if (!this.telemetryOptIn) return;
 
     const event: TelemetryEvent = {
@@ -165,7 +170,7 @@ export class HarnessObserver {
     durationMs: number,
     success: boolean,
     error?: string,
-    sessionId?: string
+    sessionId?: string,
   ): void {
     this.hookDurationsMs.push(durationMs);
     if (this.hookDurationsMs.length > 5000) {
@@ -177,11 +182,20 @@ export class HarnessObserver {
       session.hookExecutions++;
     }
 
-    this.emitEvent("harness.hook.executed", { phase, hookName, durationMs, success, error }, sessionId);
+    this.emitEvent(
+      "harness.hook.executed",
+      { phase, hookName, durationMs, success, error },
+      sessionId,
+    );
   }
 
   // --- Tool Result Spill Tracking ---
-  recordToolResultSpill(toolName: string, bytes: number, spillId?: string, sessionId?: string): void {
+  recordToolResultSpill(
+    toolName: string,
+    bytes: number,
+    spillId?: string,
+    sessionId?: string,
+  ): void {
     this.spilledResults++;
     this.spilledBytes += bytes;
 
@@ -229,7 +243,12 @@ export class HarnessObserver {
   }
 
   // --- Prompt Sections Tracking ---
-  recordPromptSections(sent: string[], skipped: string[], tokensSaved: number, sessionId?: string): void {
+  recordPromptSections(
+    sent: string[],
+    skipped: string[],
+    tokensSaved: number,
+    sessionId?: string,
+  ): void {
     this.promptTotalSectionsSent += sent.length;
     this.promptSkippedSections += skipped.length;
     this.promptTokensSaved += tokensSaved;
@@ -239,11 +258,20 @@ export class HarnessObserver {
       session.tokensSaved += tokensSaved;
     }
 
-    this.emitEvent("harness.prompt.compiled", { sentCount: sent.length, skippedCount: skipped.length, tokensSaved }, sessionId);
+    this.emitEvent(
+      "harness.prompt.compiled",
+      { sentCount: sent.length, skippedCount: skipped.length, tokensSaved },
+      sessionId,
+    );
   }
 
   // --- Repeat Guards Tracking ---
-  recordRepeatGuardTrigger(toolName: string, guardType: string, isFalsePositive: boolean = false, sessionId?: string): void {
+  recordRepeatGuardTrigger(
+    toolName: string,
+    guardType: string,
+    isFalsePositive: boolean = false,
+    sessionId?: string,
+  ): void {
     this.guardBlockedLoops++;
     if (guardType === "circuit_breaker") {
       this.guardCircuitBreakerTrips++;
@@ -266,7 +294,7 @@ export class HarnessObserver {
     formatted: boolean,
     charsSaved: number,
     criticalOmitted: number = 0,
-    sessionId?: string
+    sessionId?: string,
   ): void {
     if (violation) this.responseViolationsDetected++;
     if (formatted) this.responseFormattedCount++;
@@ -280,7 +308,11 @@ export class HarnessObserver {
       session.tokensSaved += Math.floor(charsSaved / 4);
     }
 
-    this.emitEvent("harness.response.formatted", { violation, formatted, charsSaved, criticalOmitted }, sessionId);
+    this.emitEvent(
+      "harness.response.formatted",
+      { violation, formatted, charsSaved, criticalOmitted },
+      sessionId,
+    );
   }
 
   /**
@@ -293,7 +325,7 @@ export class HarnessObserver {
    */
   mirrorResponsePolicyMetrics(
     totals: { violationsDetected: number; totalFormatted: number; charactersSaved: number },
-    sessionId?: string
+    sessionId?: string,
   ): void {
     const fresh = {
       violationsDetected: Math.max(0, totals.violationsDetected),
@@ -303,15 +335,15 @@ export class HarnessObserver {
     const added = {
       violationsDetected: Math.max(
         0,
-        fresh.violationsDetected - this.lastMirroredResponseTotals.violationsDetected
+        fresh.violationsDetected - this.lastMirroredResponseTotals.violationsDetected,
       ),
       totalFormatted: Math.max(
         0,
-        fresh.totalFormatted - this.lastMirroredResponseTotals.totalFormatted
+        fresh.totalFormatted - this.lastMirroredResponseTotals.totalFormatted,
       ),
       charactersSaved: Math.max(
         0,
-        fresh.charactersSaved - this.lastMirroredResponseTotals.charactersSaved
+        fresh.charactersSaved - this.lastMirroredResponseTotals.charactersSaved,
       ),
     };
     this.lastMirroredResponseTotals = fresh;
@@ -344,7 +376,7 @@ export class HarnessObserver {
         criticalOmitted: 0,
         mirrored: true,
       },
-      sessionId
+      sessionId,
     );
   }
 
@@ -355,11 +387,11 @@ export class HarnessObserver {
       capability: string;
       version: string;
       durationMs?: number | undefined;
-      status: 'success' | 'error' | 'timeout';
+      status: "success" | "error" | "timeout";
       error?: string | undefined;
       metadata?: Record<string, unknown> | undefined;
     },
-    sessionId?: string
+    sessionId?: string,
   ): void {
     this.pluginExecutions++;
     this.activePlugins.add(trace.pluginId);
@@ -370,12 +402,12 @@ export class HarnessObserver {
       this.pluginDurationsMs.shift();
     }
 
-    const isFailure = trace.status !== 'success';
+    const isFailure = trace.status !== "success";
     if (isFailure) {
       this.pluginFailures++;
     }
 
-    const eventType = isFailure ? 'harness.plugin.failed' : 'harness.plugin.executed';
+    const eventType = isFailure ? "harness.plugin.failed" : "harness.plugin.executed";
     this.emitEvent(
       eventType,
       {
@@ -387,7 +419,7 @@ export class HarnessObserver {
         error: trace.error,
         metadata: trace.metadata,
       },
-      sessionId
+      sessionId,
     );
   }
 
@@ -422,7 +454,8 @@ export class HarnessObserver {
 
     const toolResults: ToolResultsMetrics = {
       spilledResults: this.spilledResults,
-      retrievalLatency: this.retrievalCount > 0 ? this.totalRetrievalLatencyMs / this.retrievalCount : 0,
+      retrievalLatency:
+        this.retrievalCount > 0 ? this.totalRetrievalLatencyMs / this.retrievalCount : 0,
       spilledBytes: this.spilledBytes,
     };
 
@@ -456,7 +489,8 @@ export class HarnessObserver {
     // Performance calculations
     const totalHookExecutions = this.hookDurationsMs.length;
     const totalHookDuration = this.hookDurationsMs.reduce((acc, v) => acc + v, 0);
-    const averageHookDurationMs = totalHookExecutions > 0 ? totalHookDuration / totalHookExecutions : 0;
+    const averageHookDurationMs =
+      totalHookExecutions > 0 ? totalHookDuration / totalHookExecutions : 0;
 
     const sortedDurations = [...this.hookDurationsMs].sort((a, b) => a - b);
     const p95Index = Math.floor(sortedDurations.length * 0.95);
@@ -465,7 +499,9 @@ export class HarnessObserver {
     const currentMemory = process.memoryUsage().heapUsed;
     const memoryGrowth =
       this.initialMemoryUsageBytes > 0
-        ? Math.round(((currentMemory - this.initialMemoryUsageBytes) / this.initialMemoryUsageBytes) * 100)
+        ? Math.round(
+            ((currentMemory - this.initialMemoryUsageBytes) / this.initialMemoryUsageBytes) * 100,
+          )
         : 0;
 
     const performance: PerformanceMetrics = {

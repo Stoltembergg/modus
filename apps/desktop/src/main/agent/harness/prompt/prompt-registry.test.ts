@@ -235,7 +235,7 @@ describe("Fase 2: PromptRegistry & Modular Prompt Assembly", () => {
             { id: "custom_sec", priority: 150, content: "Custom Section Content", volatile: false },
           ],
         },
-        mockContext
+        mockContext,
       );
 
       expect(output.finalSystemPrompt).toContain("Custom System Directive");

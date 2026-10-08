@@ -94,7 +94,7 @@ export const compactionTelemetry = new CompactionTelemetry();
  * Evaluates session token load and intelligently coordinates pruning and compaction.
  */
 export function coordinateCompaction(
-  input: CompactionCoordinationInput
+  input: CompactionCoordinationInput,
 ): CompactionCoordinationResult {
   const policy = input.customPolicy ?? getCompactionPolicy(input.modelId);
   const metrics = calculateCompactionMetrics(policy, input.currentTokens);

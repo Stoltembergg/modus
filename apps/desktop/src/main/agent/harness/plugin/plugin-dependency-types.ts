@@ -13,7 +13,7 @@ export interface DependencyNode {
   dependents: string[]; // Plugins that depend directly on this plugin
 }
 
-export type BlastRadiusSeverity = 'none' | 'low' | 'medium' | 'high' | 'critical';
+export type BlastRadiusSeverity = "none" | "low" | "medium" | "high" | "critical";
 
 export interface TransitiveDependent {
   pluginId: string;
@@ -32,8 +32,8 @@ export interface BlastRadius {
 
 export class CircularDependencyError extends Error {
   constructor(public readonly cycle: string[]) {
-    super(`Circular dependency detected: ${cycle.join(' -> ')}`);
-    this.name = 'CircularDependencyError';
+    super(`Circular dependency detected: ${cycle.join(" -> ")}`);
+    this.name = "CircularDependencyError";
   }
 }
 

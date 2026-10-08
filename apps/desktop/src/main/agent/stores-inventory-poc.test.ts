@@ -51,7 +51,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "ws-1",
       "/test/ws",
       "Test Workspace",
-      new Date().toISOString()
+      new Date().toISOString(),
     );
     db.prepare(`insert into agent_sessions values (?, ?, ?, ?, ?, ?, ?)`).run(
       "session-bench",
@@ -60,7 +60,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "/test/ws",
       "idle",
       new Date().toISOString(),
-      new Date().toISOString()
+      new Date().toISOString(),
     );
   });
 
@@ -87,14 +87,14 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       const eventId = randomUUID();
       db.prepare(
         `insert into agent_events (id, session_id, type, payload_json, created_at)
-         values (?, ?, ?, ?, ?)`
+         values (?, ?, ?, ?, ?)`,
       ).run(eventId, "session-bench", event.type, payload, new Date().toISOString());
       const insertMs = performance.now() - startInsert;
 
       const startFetch = performance.now();
-      const row = db
-        .prepare(`select payload_json from agent_events where id = ?`)
-        .get(eventId) as { payload_json: string };
+      const row = db.prepare(`select payload_json from agent_events where id = ?`).get(eventId) as {
+        payload_json: string;
+      };
       const fetchMs = performance.now() - startFetch;
 
       const startParse = performance.now();
@@ -123,7 +123,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "/test/ws",
       "idle",
       new Date().toISOString(),
-      new Date().toISOString()
+      new Date().toISOString(),
     );
     db.prepare(`insert into agent_sessions values (?, ?, ?, ?, ?, ?, ?)`).run(
       sessionSpilled,
@@ -132,7 +132,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "/test/ws",
       "idle",
       new Date().toISOString(),
-      new Date().toISOString()
+      new Date().toISOString(),
     );
 
     const eventCount = 100;
@@ -149,7 +149,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
         isError: false,
       });
       db.prepare(
-        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`
+        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`,
       ).run(randomUUID(), sessionUnspilled, "tool.ended", payload, new Date().toISOString());
     }
 
@@ -164,7 +164,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
         isError: false,
       });
       db.prepare(
-        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`
+        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`,
       ).run(randomUUID(), sessionSpilled, "tool.ended", payload, new Date().toISOString());
     }
 
@@ -172,7 +172,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
     const t0 = performance.now();
     const unspilledRows = db
       .prepare(
-        `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc, rowid asc`
+        `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc, rowid asc`,
       )
       .all(sessionUnspilled) as Array<{ id: string; payload_json: string }>;
     let unspilledTotalBytes = 0;
@@ -186,7 +186,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
     const t1 = performance.now();
     const spilledRows = db
       .prepare(
-        `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc, rowid asc`
+        `select id, payload_json, created_at, rowid as event_cursor from agent_events where session_id = ? order by created_at asc, rowid asc`,
       )
       .all(sessionSpilled) as Array<{ id: string; payload_json: string }>;
     let spilledTotalBytes = 0;
@@ -214,11 +214,11 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "/test/ws",
       "idle",
       new Date().toISOString(),
-      new Date().toISOString()
+      new Date().toISOString(),
     );
 
     const insertStmt = db.prepare(
-      `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`
+      `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`,
     );
 
     // Bulk insert 5,000 events in a transaction
@@ -231,7 +231,13 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
         messageId: `msg-${Math.floor(i / 50)}`,
         delta: "token ",
       });
-      insertStmt.run(randomUUID(), sessionVolume, "message.delta", payload, new Date().toISOString());
+      insertStmt.run(
+        randomUUID(),
+        sessionVolume,
+        "message.delta",
+        payload,
+        new Date().toISOString(),
+      );
     }
     db.exec("commit");
     const bulkInsertMs = performance.now() - tStart;
@@ -243,7 +249,7 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
         `select id, payload_json, created_at, rowid as event_cursor
          from agent_events
          where session_id = ?
-         order by created_at asc, rowid asc`
+         order by created_at asc, rowid asc`,
       )
       .all(sessionVolume);
     const queryMs = performance.now() - tQuery;
@@ -262,25 +268,25 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
       "/test/ws",
       "idle",
       new Date().toISOString(),
-      new Date().toISOString()
+      new Date().toISOString(),
     );
 
     for (let i = 0; i < 10; i++) {
       db.prepare(
-        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`
+        `insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)`,
       ).run(
         randomUUID(),
         sessionDel,
         "message.delta",
         JSON.stringify({ text: "hi" }),
-        new Date().toISOString()
+        new Date().toISOString(),
       );
     }
 
     const countBefore = (
-      db
-        .prepare(`select count(*) as c from agent_events where session_id = ?`)
-        .get(sessionDel) as { c: number }
+      db.prepare(`select count(*) as c from agent_events where session_id = ?`).get(sessionDel) as {
+        c: number;
+      }
     ).c;
     expect(countBefore).toBe(10);
 
@@ -289,9 +295,9 @@ describe("Sprint 0.2: Persistent Stores Capacity & Performance Benchmark", () =>
     db.prepare(`delete from agent_sessions where id = ?`).run(sessionDel);
 
     const countAfter = (
-      db
-        .prepare(`select count(*) as c from agent_events where session_id = ?`)
-        .get(sessionDel) as { c: number }
+      db.prepare(`select count(*) as c from agent_events where session_id = ?`).get(sessionDel) as {
+        c: number;
+      }
     ).c;
     expect(countAfter).toBe(0);
   });

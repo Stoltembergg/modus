@@ -262,7 +262,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
           offsetLine: 5,
           limitLines: 3,
         },
-        storage
+        storage,
       );
 
       expect(res.success).toBe(true);
@@ -273,7 +273,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       // Non-existent spillId
       const missingRes = handleRetrieveSpilledToolResult(
         { spillId: "spill-non-existent" },
-        storage
+        storage,
       );
       expect(missingRes.success).toBe(false);
       expect(missingRes.error).toContain("not found");
@@ -303,7 +303,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
         {
           requestedTools: ["bash", "read", "browser_events"],
         },
-        ctx
+        ctx,
       );
 
       // retrieve_spilled_tool_result must be auto-injected

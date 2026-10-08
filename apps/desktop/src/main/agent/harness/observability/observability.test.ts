@@ -1,18 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  resetFeatureFlagOverrides,
-  setFeatureFlagOverrides,
-} from "../feature-flags";
+import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import type { HarnessContext } from "../kernel/harness-hooks";
 import { ResponsePolicyRegistry } from "../response/response-registry";
 import { BaselineComparator } from "./baseline-comparator";
 import { HarnessObserver } from "./harness-observer";
 import { MetricsExporter } from "./metrics-exporter";
 import { defaultObservabilityTurnSettleHook } from "./observability-hooks";
-import {
-  RollbackCoordinator,
-  ValidationGates,
-} from "./validation-gates";
+import { RollbackCoordinator, ValidationGates } from "./validation-gates";
 
 describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gates", () => {
   beforeEach(() => {
@@ -179,7 +173,9 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       expect(result.overallVerdict).toBe("GO");
       expect(result.phaseDecisions).toHaveLength(6);
-      expect(result.phaseDecisions.every((d) => d.verdict === "GO" || d.verdict === "WARN")).toBe(true);
+      expect(result.phaseDecisions.every((d) => d.verdict === "GO" || d.verdict === "WARN")).toBe(
+        true,
+      );
       expect(result.estimatedTokenEconomyPercent).toBeGreaterThanOrEqual(30);
     });
 
@@ -205,8 +201,8 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const jsonStr = MetricsExporter.exportJSON(observer.snapshot());
       expect(() => JSON.parse(jsonStr)).not.toThrow();
-      expect(jsonStr).toContain("\"promptSections\"");
-      expect(jsonStr).toContain("\"tokensSaved\": 120");
+      expect(jsonStr).toContain('"promptSections"');
+      expect(jsonStr).toContain('"tokensSaved": 120');
     });
 
     it("exports session and summary data to valid CSV", () => {
@@ -216,7 +212,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const sessionCsv = MetricsExporter.exportSessionsCSV(observer.getAllSessions());
       expect(sessionCsv).toContain("sessionId,turnCount,totalDurationMs");
-      expect(sessionCsv).toContain("\"sess-1\",1,500");
+      expect(sessionCsv).toContain('"sess-1",1,500');
 
       const summaryCsv = MetricsExporter.exportSummaryCSV(observer.snapshot());
       expect(summaryCsv).toContain("Category,Metric,Value");
@@ -304,7 +300,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const out = await defaultObservabilityTurnSettleHook.execute(
         { runId: "run-1", completed: true, hasActiveTodos: false, turnTokens: 100 },
-        mockContext
+        mockContext,
       );
 
       expect(out.settled).toBe(true);
@@ -319,7 +315,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const out = await defaultObservabilityTurnSettleHook.execute(
         { runId: "run-1", completed: true, hasActiveTodos: false, turnTokens: 100 },
-        mockContext
+        mockContext,
       );
 
       expect(out.settled).toBe(true);
@@ -350,7 +346,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const out = await defaultObservabilityTurnSettleHook.execute(
         { runId: "run-1", completed: true, hasActiveTodos: false, turnTokens: 100 },
-        corruptedContext
+        corruptedContext,
       );
 
       expect(out.settled).toBe(true);
@@ -380,8 +376,18 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       });
 
       const registry = ResponsePolicyRegistry.getInstance();
-      registry.recordEvaluation({ violated: true, formatted: true, charsBefore: 1000, charsAfter: 800 });
-      registry.recordEvaluation({ violated: false, formatted: false, charsBefore: 500, charsAfter: 500 });
+      registry.recordEvaluation({
+        violated: true,
+        formatted: true,
+        charsBefore: 1000,
+        charsAfter: 800,
+      });
+      registry.recordEvaluation({
+        violated: false,
+        formatted: false,
+        charsBefore: 500,
+        charsAfter: 500,
+      });
 
       const context: HarnessContext = {
         sessionId: "s-mirror",

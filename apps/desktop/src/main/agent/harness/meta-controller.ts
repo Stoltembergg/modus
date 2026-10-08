@@ -256,8 +256,7 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       avoided.includes("same_edit_retry") ||
       avoided.includes("blind_retry") ||
       (isFeatureFlagEnabled("MODUS_REPEAT_GUARDS") &&
-        (loopAction !== undefined ||
-          (avoided.length > 0 && snapshot.failureAttempts.length >= 2)));
+        (loopAction !== undefined || (avoided.length > 0 && snapshot.failureAttempts.length >= 2)));
 
     // Gap 5: when a failed strategy is avoided but Oracle has not been consulted,
     // prefer Gap 1 spawn / advisory suggest_oracle over locking avoid_retry.

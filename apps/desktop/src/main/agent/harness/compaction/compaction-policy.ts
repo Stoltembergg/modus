@@ -44,7 +44,7 @@ export const DEFAULT_COMPACTION_POLICIES: Record<string, CompactionPolicy> = {
     contextWindow: 200_000,
     outputReserve: 8_000,
     headroom: 15_000,
-    thresholdRatio: 0.80,
+    thresholdRatio: 0.8,
     targetRatioAfterPrune: 0.65,
     preserveCategories: [
       "qa_check",
@@ -61,20 +61,15 @@ export const DEFAULT_COMPACTION_POLICIES: Record<string, CompactionPolicy> = {
     outputReserve: 8_000,
     headroom: 15_000,
     thresholdRatio: 0.78,
-    targetRatioAfterPrune: 0.60,
-    preserveCategories: [
-      "qa_check",
-      "harness_decision",
-      "plan_acceptance",
-      "checkpoint",
-    ],
+    targetRatioAfterPrune: 0.6,
+    preserveCategories: ["qa_check", "harness_decision", "plan_acceptance", "checkpoint"],
   },
   "gpt-4o": {
     modelId: "gpt-4o",
     contextWindow: 128_000,
     outputReserve: 8_000,
     headroom: 12_000,
-    thresholdRatio: 0.80,
+    thresholdRatio: 0.8,
     targetRatioAfterPrune: 0.65,
     preserveCategories: [
       "qa_check",
@@ -90,13 +85,8 @@ export const DEFAULT_COMPACTION_POLICIES: Record<string, CompactionPolicy> = {
     outputReserve: 8_000,
     headroom: 8_000,
     thresholdRatio: 0.75,
-    targetRatioAfterPrune: 0.60,
-    preserveCategories: [
-      "qa_check",
-      "harness_decision",
-      "plan_acceptance",
-      "checkpoint",
-    ],
+    targetRatioAfterPrune: 0.6,
+    preserveCategories: ["qa_check", "harness_decision", "plan_acceptance", "checkpoint"],
   },
 };
 
@@ -105,7 +95,7 @@ export const FALLBACK_COMPACTION_POLICY: CompactionPolicy = {
   contextWindow: 128_000,
   outputReserve: 8_000,
   headroom: 12_000,
-  thresholdRatio: 0.80,
+  thresholdRatio: 0.8,
   targetRatioAfterPrune: 0.65,
   preserveCategories: [
     "qa_check",
@@ -161,7 +151,7 @@ export function getCompactionPolicy(modelId?: string, contextWindow?: number): C
  */
 export function calculateCompactionMetrics(
   policy: CompactionPolicy,
-  currentTokens: number
+  currentTokens: number,
 ): {
   effectiveCapacity: number;
   triggerThresholdTokens: number;

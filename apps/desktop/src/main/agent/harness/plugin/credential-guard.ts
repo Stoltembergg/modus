@@ -4,7 +4,7 @@
  * Intercepts and denies access to private keys, environment files, tokens, and credentials.
  */
 
-import path from 'path';
+import path from "path";
 
 export class CredentialGuard {
   private static readonly SENSITIVE_PATH_PATTERNS = [
@@ -26,43 +26,43 @@ export class CredentialGuard {
   ];
 
   private static readonly SENSITIVE_ENV_KEYWORDS = [
-    'KEY',
-    'TOKEN',
-    'SECRET',
-    'PASSWORD',
-    'AUTH',
-    'PRIVATE',
-    'CREDENTIAL',
-    'SALT',
-    'SIGNATURE',
-    'API_KEY',
-    'BEARER',
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "AUTH",
+    "PRIVATE",
+    "CREDENTIAL",
+    "SALT",
+    "SIGNATURE",
+    "API_KEY",
+    "BEARER",
   ];
 
   private static readonly SENSITIVE_ENV_PREFIXES = [
-    'AWS_',
-    'GITHUB_',
-    'GH_',
-    'OPENAI_',
-    'ANTHROPIC_',
-    'GOOGLE_',
-    'AZURE_',
-    'SSH_',
-    'SSL_',
-    'MODUS_SECRET_',
+    "AWS_",
+    "GITHUB_",
+    "GH_",
+    "OPENAI_",
+    "ANTHROPIC_",
+    "GOOGLE_",
+    "AZURE_",
+    "SSH_",
+    "SSL_",
+    "MODUS_SECRET_",
   ];
 
   /**
    * Determines whether a filesystem path points to sensitive credentials or secrets.
    */
   public static isSensitivePath(targetPath: string): boolean {
-    const normalized = targetPath.replace(/\\/g, '/');
+    const normalized = targetPath.replace(/\\/g, "/");
     // Windows strips trailing dots/spaces per path segment when opening
     // files, so match on the effective name: ".env " and ".env." open .env.
     const effective = normalized
-      .split('/')
-      .map((segment) => segment.replace(/[. ]+$/, ''))
-      .join('/');
+      .split("/")
+      .map((segment) => segment.replace(/[. ]+$/, ""))
+      .join("/");
     const baseName = path.basename(effective);
 
     // Direct filename checks
@@ -126,7 +126,7 @@ export class CredentialGuard {
    * Masks secrets for safe logging.
    */
   public static maskSecret(value: string): string {
-    if (!value || value.length <= 6) return '******';
+    if (!value || value.length <= 6) return "******";
     return `${value.slice(0, 3)}...${value.slice(-3)}`;
   }
 }

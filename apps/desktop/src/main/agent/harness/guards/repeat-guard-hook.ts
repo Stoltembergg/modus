@@ -29,18 +29,12 @@ function passThroughTurnStart(input: TurnStartInput): TurnStartOutput {
  * Turn Start hook that assesses repeat tool loops and circuit breaker status.
  * Fail-open design: logs warnings and never overrides an upstream gate abort.
  */
-export const defaultTurnStartRepeatGuardHook: HarnessHook<
-  TurnStartInput,
-  TurnStartOutput
-> = {
+export const defaultTurnStartRepeatGuardHook: HarnessHook<TurnStartInput, TurnStartOutput> = {
   name: "harness_repeat_guard_turn_start",
   phase: "turn_start",
   priority: 25, // Runs after classification/intent gate
   isCritical: false,
-  execute: async (
-    input: TurnStartInput,
-    context: HarnessContext,
-  ): Promise<TurnStartOutput> => {
+  execute: async (input: TurnStartInput, context: HarnessContext): Promise<TurnStartOutput> => {
     if (!isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
       return passThroughTurnStart(input);
     }

@@ -5,14 +5,14 @@
  * providing tamper-evident audit trails for all broker security decisions.
  */
 
-import { createHash, randomUUID } from 'crypto';
-import type { SecurityAuditEntry } from './plugin-isolation-types';
+import { createHash, randomUUID } from "crypto";
+import type { SecurityAuditEntry } from "./plugin-isolation-types";
 
-export const GENESIS_HASH = '0'.repeat(64);
+export const GENESIS_HASH = "0".repeat(64);
 
 export interface SecurityAuditFilter {
   pluginId?: string | undefined;
-  decision?: 'allow' | 'deny' | undefined;
+  decision?: "allow" | "deny" | undefined;
   action?: string | undefined;
   limit?: number | undefined;
 }
@@ -39,17 +39,17 @@ export class SecurityAuditLogger {
     pluginId: string;
     action: string;
     resource: string;
-    decision: 'allow' | 'deny';
+    decision: "allow" | "deny";
     reason?: string | undefined;
     timestamp?: number | undefined;
   }): SecurityAuditEntry {
     const timestamp = params.timestamp ?? Date.now();
     const id = randomUUID();
     const previousHash = this.latestHash;
-    const reason = params.reason ?? '';
+    const reason = params.reason ?? "";
 
     const payload = `${previousHash}|${timestamp}|${params.pluginId}|${params.action}|${params.resource}|${params.decision}|${reason}`;
-    const hash = createHash('sha256').update(payload).digest('hex');
+    const hash = createHash("sha256").update(payload).digest("hex");
 
     const entry: SecurityAuditEntry = {
       id,
@@ -105,8 +105,8 @@ export class SecurityAuditLogger {
         };
       }
 
-      const payload = `${entry.previousHash}|${entry.timestamp}|${entry.pluginId}|${entry.action}|${entry.resource}|${entry.decision}|${entry.reason ?? ''}`;
-      const expectedHash = createHash('sha256').update(payload).digest('hex');
+      const payload = `${entry.previousHash}|${entry.timestamp}|${entry.pluginId}|${entry.action}|${entry.resource}|${entry.decision}|${entry.reason ?? ""}`;
+      const expectedHash = createHash("sha256").update(payload).digest("hex");
 
       if (entry.hash !== expectedHash) {
         return {

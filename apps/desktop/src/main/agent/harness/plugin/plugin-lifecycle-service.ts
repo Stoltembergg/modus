@@ -3,13 +3,12 @@
  * Service for transactional plugin lifecycle operations (install, enable, disable, upgrade, downgrade, uninstall, status, safe mode, recovery).
  */
 
-import type { CapabilityRegistry } from '../capability/capability-registry';
-import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from '../capability/capability-registration-authority';
-import { AutoRollbackManager } from './auto-rollback';
-import { DependencyGraph } from './dependency-graph';
-import type { PluginLoader } from './plugin-loader';
-import { PluginRecoveryManager } from './plugin-recovery';
-import { PluginSafeModeManager } from './safe-mode';
+import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
+import type { CapabilityRegistry } from "../capability/capability-registry";
+import { AutoRollbackManager } from "./auto-rollback";
+import { DependencyGraph } from "./dependency-graph";
+import type { PluginLoader } from "./plugin-loader";
+import { PluginRecoveryManager } from "./plugin-recovery";
 import type {
   PersistentPluginState,
   PluginCapabilityRecord,
@@ -17,14 +16,11 @@ import type {
   PluginRecord,
   PluginStateStore,
   PluginVersionRecord,
-} from './plugin-state-store';
-import {
-  PluginLifecycleError,
-  type PluginManifest,
-  type PluginStatus,
-} from './plugin-types';
-import { PluginVersionManager } from './version-manager';
-import { WasmCapabilityHost } from './wasm/wasm-capability-host';
+} from "./plugin-state-store";
+import { PluginLifecycleError, type PluginManifest, type PluginStatus } from "./plugin-types";
+import { PluginSafeModeManager } from "./safe-mode";
+import { PluginVersionManager } from "./version-manager";
+import { WasmCapabilityHost } from "./wasm/wasm-capability-host";
 
 export interface PluginStatusReport {
   id: string;
@@ -52,15 +48,10 @@ export class PluginLifecycleService {
   private autoRollbackManager?: AutoRollbackManager | undefined;
   private wasmHost?: WasmCapabilityHost | undefined;
 
-  constructor(
-    store: PluginStateStore,
-    loader: PluginLoader,
-    registry: CapabilityRegistry,
-  ) {
+  constructor(store: PluginStateStore, loader: PluginLoader, registry: CapabilityRegistry) {
     this.store = store;
     this.loader = loader;
     this.registry = registry;
-
   }
 
   public getStore(): PluginStateStore {
@@ -107,10 +98,7 @@ export class PluginLifecycleService {
 
   public getAutoRollbackManager(): AutoRollbackManager {
     if (!this.autoRollbackManager) {
-      this.autoRollbackManager = new AutoRollbackManager(
-        this,
-        this.getVersionManager(),
-      );
+      this.autoRollbackManager = new AutoRollbackManager(this, this.getVersionManager());
     }
     return this.autoRollbackManager;
   }
@@ -158,7 +146,7 @@ export class PluginLifecycleService {
       const record: PluginRecord = {
         id: manifest.id,
         version: manifest.version,
-        state: 'installed',
+        state: "installed",
         trust_level: hostEntry.trustLevel,
         installed_at: existing ? existing.installed_at : now,
         last_enabled: existing ? existing.last_enabled : null,
@@ -180,7 +168,7 @@ export class PluginLifecycleService {
       this.store.savePermissions(manifest.id, manifest.permissions);
 
       // 3. Record audit event
-      this.store.recordEvent(manifest.id, 'installed', {
+      this.store.recordEvent(manifest.id, "installed", {
         version: manifest.version,
         trustLevel: manifest.trustLevel,
       });
@@ -200,7 +188,9 @@ export class PluginLifecycleService {
 
     const manifest = this.resolveManifest(pluginId, pluginRecord.version);
     if (!manifest) {
-      throw new PluginLifecycleError(`Manifest not found for plugin '${pluginId}' version ${pluginRecord.version}`);
+      throw new PluginLifecycleError(
+        `Manifest not found for plugin '${pluginId}' version ${pluginRecord.version}`,
+      );
     }
 
     this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
@@ -219,9 +209,9 @@ export class PluginLifecycleService {
       await this.loader.enableFromHostLifecycle(manifest);
       const now = new Date().toISOString();
       this.store.transaction(() => {
-        this.store.updatePluginState(pluginId, 'enabled');
+        this.store.updatePluginState(pluginId, "enabled");
         this.store.updatePluginLastEnabled(pluginId, now);
-        this.store.recordEvent(pluginId, 'enabled', { version: pluginRecord.version });
+        this.store.recordEvent(pluginId, "enabled", { version: pluginRecord.version });
       });
       this.releaseQuarantineAfterDurableEnable(pluginId, pluginRecord.version);
     } catch (error) {
@@ -244,8 +234,8 @@ export class PluginLifecycleService {
     }
 
     this.store.transaction(() => {
-      this.store.updatePluginState(pluginId, 'disabled');
-      this.store.recordEvent(pluginId, 'disabled', { version: pluginRecord.version });
+      this.store.updatePluginState(pluginId, "disabled");
+      this.store.recordEvent(pluginId, "disabled", { version: pluginRecord.version });
     });
   }
 
@@ -257,14 +247,16 @@ export class PluginLifecycleService {
     this.loader.validateManifest(newManifest);
     const existing = this.store.getPlugin(newManifest.id);
     if (!existing) {
-      throw new PluginLifecycleError(`Cannot upgrade plugin '${newManifest.id}': plugin is not installed`);
+      throw new PluginLifecycleError(
+        `Cannot upgrade plugin '${newManifest.id}': plugin is not installed`,
+      );
     }
 
     const oldVersion = existing.version;
     this.registerManifest(newManifest);
 
     const now = new Date().toISOString();
-    const wasEnabled = existing.state === 'enabled';
+    const wasEnabled = existing.state === "enabled";
 
     // Hot-reload FIRST: a failure here leaves durable state untouched, so the
     // next syncOnStartup restores the old version instead of diverging from it.
@@ -299,7 +291,7 @@ export class PluginLifecycleService {
         );
         this.store.savePermissions(newManifest.id, newManifest.permissions);
 
-        this.store.recordEvent(newManifest.id, 'upgraded', {
+        this.store.recordEvent(newManifest.id, "upgraded", {
           fromVersion: oldVersion,
           toVersion: newManifest.version,
         });
@@ -323,7 +315,10 @@ export class PluginLifecycleService {
   private async restoreLoaderVersion(pluginId: string, version: string): Promise<void> {
     this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
     const previous = this.resolveManifest(pluginId, version);
-    if (!previous) throw new PluginLifecycleError(`Cannot restore ${pluginId}@${version}: catalog manifest unavailable`);
+    if (!previous)
+      throw new PluginLifecycleError(
+        `Cannot restore ${pluginId}@${version}: catalog manifest unavailable`,
+      );
     const loaded = this.loader.getPlugin(pluginId);
     if (loaded) await this.loader.unload(pluginId);
     await this.loader.load(previous);
@@ -335,13 +330,25 @@ export class PluginLifecycleService {
     const record = this.store.getPlugin(pluginId);
     const manifest = this.loader.resolveHostManifest(pluginId, version);
     const loaded = this.loader.getPlugin(pluginId);
-    if (!record || record.version !== version || record.state !== 'enabled' || !manifest ||
-      loaded?.manifest !== manifest || loaded.status !== 'enabled') {
-      throw new PluginLifecycleError(`Cannot recover quarantine for ${pluginId}@${version}: durable state or exact loaded manifest mismatch`);
+    if (
+      !record ||
+      record.version !== version ||
+      record.state !== "enabled" ||
+      !manifest ||
+      loaded?.manifest !== manifest ||
+      loaded.status !== "enabled"
+    ) {
+      throw new PluginLifecycleError(
+        `Cannot recover quarantine for ${pluginId}@${version}: durable state or exact loaded manifest mismatch`,
+      );
     }
     this.registry.clearProviderQuarantine(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
     for (const provision of manifest.provides) {
-      try { this.registry.activateProvider(provision.capability, pluginId); } catch { /* non-replaceable provider */ }
+      try {
+        this.registry.activateProvider(provision.capability, pluginId);
+      } catch {
+        /* non-replaceable provider */
+      }
     }
   }
 
@@ -351,7 +358,9 @@ export class PluginLifecycleService {
   public async downgrade(pluginId: string, targetVersion: string): Promise<void> {
     const existing = this.store.getPlugin(pluginId);
     if (!existing) {
-      throw new PluginLifecycleError(`Cannot downgrade plugin '${pluginId}': plugin is not installed`);
+      throw new PluginLifecycleError(
+        `Cannot downgrade plugin '${pluginId}': plugin is not installed`,
+      );
     }
 
     const targetManifest = this.resolveManifest(pluginId, targetVersion);
@@ -364,7 +373,7 @@ export class PluginLifecycleService {
     this.loader.validateManifest(targetManifest);
 
     const oldVersion = existing.version;
-    const wasEnabled = existing.state === 'enabled';
+    const wasEnabled = existing.state === "enabled";
 
     // Hot-reload FIRST so a failure leaves durable state untouched.
     if (wasEnabled) {
@@ -396,7 +405,7 @@ export class PluginLifecycleService {
         );
         this.store.savePermissions(pluginId, targetManifest.permissions);
 
-        this.store.recordEvent(pluginId, 'downgraded', {
+        this.store.recordEvent(pluginId, "downgraded", {
           fromVersion: oldVersion,
           toVersion: targetVersion,
         });
@@ -425,7 +434,7 @@ export class PluginLifecycleService {
       const blast = this.dependencyGraph.calculateBlastRadius(pluginId);
       if (blast.directDependents.length > 0) {
         throw new PluginLifecycleError(
-          `Cannot uninstall plugin '${pluginId}': it is required by ${blast.directDependents.join(', ')}. Use --force to override.`,
+          `Cannot uninstall plugin '${pluginId}': it is required by ${blast.directDependents.join(", ")}. Use --force to override.`,
         );
       }
     }
@@ -490,19 +499,21 @@ export class PluginLifecycleService {
     const restored: string[] = [];
 
     for (const record of records) {
-      if (record.state === 'enabled') {
+      if (record.state === "enabled") {
         this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
         const manifest = this.resolveManifest(record.id, record.version);
         if (!manifest) {
-          console.warn(`[modus] Startup sync: cannot find manifest for enabled plugin '${record.id}'`);
+          console.warn(
+            `[modus] Startup sync: cannot find manifest for enabled plugin '${record.id}'`,
+          );
           this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
           const loadedPlugin = this.loader.getPlugin(record.id);
           if (loadedPlugin && loadedPlugin.manifest.version !== record.version) {
             await this.loader.unload(record.id).catch(() => undefined);
           }
           this.store.transaction(() => {
-            this.store.updatePluginState(record.id, 'error');
-            this.store.recordEvent(record.id, 'sync_error', {
+            this.store.updatePluginState(record.id, "error");
+            this.store.recordEvent(record.id, "sync_error", {
               error: `Plugin "${record.id}@${record.version}" is not available in the host catalog`,
             });
           });
@@ -533,8 +544,8 @@ export class PluginLifecycleService {
           console.error(`[modus] Startup sync: failed to enable plugin '${record.id}':`, err);
           this.registry.quarantineProvider(record.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
           this.store.transaction(() => {
-            this.store.updatePluginState(record.id, 'error');
-            this.store.recordEvent(record.id, 'sync_error', {
+            this.store.updatePluginState(record.id, "error");
+            this.store.recordEvent(record.id, "sync_error", {
               error: err instanceof Error ? err.message : String(err),
             });
           });

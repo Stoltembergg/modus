@@ -3,8 +3,8 @@
  * Core capability managing context window assembly, selective filtering, and project context.
  */
 
-import type { CapabilityImplementation } from '../../capability/capability-types';
-import type { PluginManifest } from '../plugin-types';
+import type { CapabilityImplementation } from "../../capability/capability-types";
+import type { PluginManifest } from "../plugin-types";
 
 export interface ContextItem {
   key: string;
@@ -22,8 +22,8 @@ const contextResolveImpl: CapabilityImplementation<
     const defaultBudget = ctx.tokenBudget ?? 8000;
     const items: ContextItem[] = [
       {
-        key: 'project-summary',
-        source: 'workspace',
+        key: "project-summary",
+        source: "workspace",
         content: `Resolved context for: ${ctx.query}`,
         tokenCount: 150,
         priority: 1,
@@ -59,32 +59,32 @@ const contextFilterImpl: CapabilityImplementation<
 };
 
 export const contextEnginePluginManifest: PluginManifest = {
-  id: '@modus/context-engine',
-  name: 'Modus Context Engine',
-  version: '1.0.0',
-  author: 'Modus Core Team',
-  description: 'Core capability for selective context building and token budgeting',
-  trustLevel: 'core',
+  id: "@modus/context-engine",
+  name: "Modus Context Engine",
+  version: "1.0.0",
+  author: "Modus Core Team",
+  description: "Core capability for selective context building and token budgeting",
+  trustLevel: "core",
 
   provides: [
     {
-      capability: 'context.resolve',
-      apiVersion: '1.0',
+      capability: "context.resolve",
+      apiVersion: "1.0",
       implementation: contextResolveImpl,
     },
     {
-      capability: 'context.filter',
-      apiVersion: '1.0',
+      capability: "context.filter",
+      apiVersion: "1.0",
       implementation: contextFilterImpl,
     },
   ],
 
   requires: {
-    modus: '>=0.8.0',
+    modus: ">=0.8.0",
     capabilities: [
       {
-        capability: 'memory.retrieve',
-        version: '^1.0',
+        capability: "memory.retrieve",
+        version: "^1.0",
       },
     ],
   },
@@ -94,7 +94,7 @@ export const contextEnginePluginManifest: PluginManifest = {
       memory: { read: true },
     },
     reason: {
-      memory: 'Read project memory digests for contextual planning',
+      memory: "Read project memory digests for contextual planning",
     },
   },
 };

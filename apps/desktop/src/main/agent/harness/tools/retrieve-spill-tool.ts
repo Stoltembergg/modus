@@ -11,7 +11,7 @@ export interface RetrieveSpillArgs {
  */
 export function handleRetrieveSpilledToolResult(
   args: RetrieveSpillArgs,
-  storage: ToolResultStorage = ToolResultStorage.getInstance()
+  storage: ToolResultStorage = ToolResultStorage.getInstance(),
 ): {
   success: boolean;
   content?: string | undefined;

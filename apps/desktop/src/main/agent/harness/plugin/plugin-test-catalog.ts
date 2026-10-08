@@ -1,11 +1,11 @@
-import type { HostPluginEntry, HostPluginTrust, PluginManifestCatalog } from './plugin-catalog';
-import type { PluginManifest } from './plugin-types';
+import type { HostPluginEntry, HostPluginTrust, PluginManifestCatalog } from "./plugin-catalog";
+import type { PluginManifest } from "./plugin-types";
 
 /** Test-only catalog for explicitly authorized synthetic manifests. */
 export class TestPluginCatalog implements PluginManifestCatalog {
   private readonly entries = new Map<string, HostPluginEntry>();
 
-  public add(manifest: PluginManifest, trustLevel: HostPluginTrust = 'core'): void {
+  public add(manifest: PluginManifest, trustLevel: HostPluginTrust = "core"): void {
     const key = `${manifest.id}@${manifest.version}`;
     const existing = this.entries.get(key);
     if (existing) {

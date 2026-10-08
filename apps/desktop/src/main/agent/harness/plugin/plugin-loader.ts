@@ -3,20 +3,13 @@
  * Plugin Loader & Lifecycle Manager.
  */
 
-import type { CapabilityRegistry } from '../capability/capability-registry';
-import type { Capability, CapabilityProvider, TrustLevel } from '../capability/capability-types';
-import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from '../capability/capability-registration-authority';
-import { BUILT_IN_PLUGIN_CATALOG } from './plugin-catalog';
-import type { HostPluginEntry, PluginManifestCatalog } from './plugin-catalog';
-import type {
-  LoadedPlugin,
-  PluginManifest,
-} from './plugin-types';
-import {
-  PluginDependencyError,
-  PluginLifecycleError,
-  PluginValidationError,
-} from './plugin-types';
+import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
+import type { CapabilityRegistry } from "../capability/capability-registry";
+import type { Capability, CapabilityProvider, TrustLevel } from "../capability/capability-types";
+import type { HostPluginEntry, PluginManifestCatalog } from "./plugin-catalog";
+import { BUILT_IN_PLUGIN_CATALOG } from "./plugin-catalog";
+import type { LoadedPlugin, PluginManifest } from "./plugin-types";
+import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
 
 /**
  * Major-match compatibility, mirroring CapabilityRegistry's provider rule.
@@ -80,7 +73,9 @@ export class PluginLoader {
   public authorizeManifest(manifest: PluginManifest): HostPluginEntry {
     const entry = this.catalog.authorize(manifest);
     if (!entry) {
-      throw new PluginValidationError(`Plugin manifest "${manifest.id}@${manifest.version}" is not authorized by the host catalog`);
+      throw new PluginValidationError(
+        `Plugin manifest "${manifest.id}@${manifest.version}" is not authorized by the host catalog`,
+      );
     }
     return entry;
   }
@@ -98,10 +93,10 @@ export class PluginLoader {
   }
 
   public validateManifest(manifest: PluginManifest): void {
-    if (!manifest.id || typeof manifest.id !== 'string') {
+    if (!manifest.id || typeof manifest.id !== "string") {
       throw new PluginValidationError('Plugin manifest must contain a valid string "id"');
     }
-    if (!manifest.version || typeof manifest.version !== 'string') {
+    if (!manifest.version || typeof manifest.version !== "string") {
       throw new PluginValidationError(`Plugin "${manifest.id}" must specify a valid "version"`);
     }
     if (!manifest.provides || !Array.isArray(manifest.provides) || manifest.provides.length === 0) {
@@ -110,7 +105,7 @@ export class PluginLoader {
       );
     }
 
-    const validTrustLevels: TrustLevel[] = ['core', 'official', 'verified', 'community', 'local'];
+    const validTrustLevels: TrustLevel[] = ["core", "official", "verified", "community", "local"];
     if (!validTrustLevels.includes(manifest.trustLevel)) {
       throw new PluginValidationError(
         `Plugin "${manifest.id}" specifies invalid trustLevel "${manifest.trustLevel}"`,
@@ -153,7 +148,7 @@ export class PluginLoader {
     if (manifest.requires.plugins) {
       for (const reqPluginId of manifest.requires.plugins) {
         const loaded = this.plugins.get(reqPluginId);
-        if (!loaded || (loaded.status !== 'loaded' && loaded.status !== 'enabled')) {
+        if (!loaded || (loaded.status !== "loaded" && loaded.status !== "enabled")) {
           throw new PluginDependencyError(
             `Plugin "${manifest.id}" requires missing or inactive plugin "${reqPluginId}"`,
           );
@@ -171,7 +166,9 @@ export class PluginLoader {
     this.validateManifest(manifest);
 
     if (this.plugins.has(pluginId)) {
-      throw new PluginLifecycleError(`Plugin "${pluginId}" is already loaded; unload it before loading again`);
+      throw new PluginLifecycleError(
+        `Plugin "${pluginId}" is already loaded; unload it before loading again`,
+      );
     }
     if (this.loadingPluginIds.has(pluginId)) {
       throw new PluginLifecycleError(`Plugin "${pluginId}" is already loading`);
@@ -182,101 +179,115 @@ export class PluginLoader {
     const implementations: Record<string, any> = {};
     const registeredCapabilities: string[] = [];
     const createdCapabilities: string[] = [];
-    const previousProviders = new Map<string, { provider: CapabilityProvider; wasActive: boolean }>();
+    const previousProviders = new Map<
+      string,
+      { provider: CapabilityProvider; wasActive: boolean }
+    >();
     this.loadingPluginIds.add(pluginId);
 
     // 3. Register as provider in CapabilityRegistry for each capability
     try {
-    for (const provision of manifest.provides) {
-      let capability = this.registry.getCapability(provision.capability);
-      if (!capability) {
-        if (hostTrustLevel === 'core' || hostTrustLevel === 'official') {
-          const newCap: Capability = {
-            id: provision.capability,
-            apiVersion: provision.apiVersion,
-            replaceable: true,
-            dependencies: [],
-            metadata: {
-              description: `Provided by ${pluginId}`,
-              tags: [provision.capability.split('.')[0] ?? 'plugin'],
-            },
-          };
-          this.registry.registerCapability(newCap);
-          createdCapabilities.push(provision.capability);
-          capability = newCap;
-        } else {
-          throw new PluginDependencyError(
-            `Capability "${provision.capability}" is not registered in CapabilityRegistry. Register capability before loading plugin.`,
+      for (const provision of manifest.provides) {
+        let capability = this.registry.getCapability(provision.capability);
+        if (!capability) {
+          if (hostTrustLevel === "core" || hostTrustLevel === "official") {
+            const newCap: Capability = {
+              id: provision.capability,
+              apiVersion: provision.apiVersion,
+              replaceable: true,
+              dependencies: [],
+              metadata: {
+                description: `Provided by ${pluginId}`,
+                tags: [provision.capability.split(".")[0] ?? "plugin"],
+              },
+            };
+            this.registry.registerCapability(newCap);
+            createdCapabilities.push(provision.capability);
+            capability = newCap;
+          } else {
+            throw new PluginDependencyError(
+              `Capability "${provision.capability}" is not registered in CapabilityRegistry. Register capability before loading plugin.`,
+            );
+          }
+        }
+
+        implementations[provision.capability] = provision.implementation;
+
+        const provider: CapabilityProvider = {
+          providerId: pluginId,
+          providerVersion: manifest.version,
+          capabilityId: provision.capability,
+          capabilityApiVersion: provision.apiVersion,
+          trustLevel: hostTrustLevel,
+          permissions: manifest.permissions.required,
+          implementation: provision.implementation!,
+          registeredAt: new Date(),
+          metadata: {
+            author: manifest.author,
+            description: manifest.description,
+          },
+        };
+
+        const previous = !previousProviders.has(provision.capability)
+          ? this.registry.getProviderRegistration(
+              provision.capability,
+              pluginId,
+              HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+            )
+          : undefined;
+        const wasActive = previous
+          ? this.registry.getActiveProvider(provision.capability)?.providerId === pluginId
+          : false;
+        this.registry.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+        if (previous)
+          previousProviders.set(provision.capability, { provider: previous, wasActive });
+        registeredCapabilities.push(provision.capability);
+
+        // If active provider is core or not set, bind it
+        const active = this.registry.getActiveProvider(provision.capability);
+        if (!active || active.providerId === "@modus/core" || hostTrustLevel === "core") {
+          try {
+            this.registry.activateProvider(provision.capability, pluginId);
+          } catch {
+            // Ignore if cannot activate immediately
+          }
+        }
+      }
+
+      // 4. Run lifecycle hook: onLoad
+      if (manifest.lifecycle?.onLoad) {
+        try {
+          await manifest.lifecycle.onLoad();
+        } catch (err) {
+          throw new PluginLifecycleError(
+            `Plugin "${pluginId}" onLoad lifecycle hook failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
       }
 
-      implementations[provision.capability] = provision.implementation;
-
-      const provider: CapabilityProvider = {
-        providerId: pluginId,
-        providerVersion: manifest.version,
-        capabilityId: provision.capability,
-        capabilityApiVersion: provision.apiVersion,
-        trustLevel: hostTrustLevel,
-        permissions: manifest.permissions.required,
-        implementation: provision.implementation!,
-        registeredAt: new Date(),
-        metadata: {
-          author: manifest.author,
-          description: manifest.description,
-        },
-      };
-
-      const previous = !previousProviders.has(provision.capability)
-        ? this.registry.getProviderRegistration(provision.capability, pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY)
-        : undefined;
-      const wasActive = previous
-        ? this.registry.getActiveProvider(provision.capability)?.providerId === pluginId
-        : false;
-      this.registry.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
-      if (previous) previousProviders.set(provision.capability, { provider: previous, wasActive });
-      registeredCapabilities.push(provision.capability);
-
-      // If active provider is core or not set, bind it
-      const active = this.registry.getActiveProvider(provision.capability);
-      if (!active || active.providerId === '@modus/core' || hostTrustLevel === 'core') {
-        try {
-          this.registry.activateProvider(provision.capability, pluginId);
-        } catch {
-          // Ignore if cannot activate immediately
-        }
-      }
-    }
-
-    // 4. Run lifecycle hook: onLoad
-    if (manifest.lifecycle?.onLoad) {
-      try {
-        await manifest.lifecycle.onLoad();
-      } catch (err) {
+      if (manifest.id !== pluginId) {
         throw new PluginLifecycleError(
-          `Plugin "${pluginId}" onLoad lifecycle hook failed: ${err instanceof Error ? err.message : String(err)}`,
+          `Plugin "${pluginId}" manifest identity changed during load`,
         );
       }
-    }
 
-    if (manifest.id !== pluginId) {
-      throw new PluginLifecycleError(`Plugin "${pluginId}" manifest identity changed during load`);
-    }
+      const loadedPlugin: LoadedPlugin = {
+        manifest,
+        status: "loaded",
+        loadedAt: new Date(),
+        implementations,
+      };
 
-    const loadedPlugin: LoadedPlugin = {
-      manifest,
-      status: 'loaded',
-      loadedAt: new Date(),
-      implementations,
-    };
-
-    this.plugins.set(pluginId, loadedPlugin);
-    return loadedPlugin;
+      this.plugins.set(pluginId, loadedPlugin);
+      return loadedPlugin;
     } catch (error) {
       for (const capabilityId of registeredCapabilities) {
         try {
-          this.registry.forceUnregisterProvider(capabilityId, pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+          this.registry.forceUnregisterProvider(
+            capabilityId,
+            pluginId,
+            HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+          );
         } catch {
           // Continue rollback so one provider cannot prevent cleanup of the rest.
         }
@@ -285,7 +296,11 @@ export class PluginLoader {
         try {
           this.registry.registerProvider(previous.provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
           if (previous.wasActive && !this.registry.isProviderQuarantined(pluginId)) {
-            try { this.registry.activateProvider(capabilityId, pluginId); } catch { /* non-replaceable or unavailable */ }
+            try {
+              this.registry.activateProvider(capabilityId, pluginId);
+            } catch {
+              /* non-replaceable or unavailable */
+            }
           }
         } catch {
           // Preserve the load failure and continue restoring remaining providers.
@@ -293,7 +308,10 @@ export class PluginLoader {
       }
       for (const capabilityId of createdCapabilities) {
         try {
-          this.registry.removeCapabilityIfUnprovided(capabilityId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+          this.registry.removeCapabilityIfUnprovided(
+            capabilityId,
+            HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+          );
         } catch {
           // Preserve the load failure and attempt removal of every created capability.
         }
@@ -311,10 +329,12 @@ export class PluginLoader {
     }
 
     if (this.registry.isProviderQuarantined(pluginId)) {
-      throw new PluginLifecycleError(`Plugin "${pluginId}" is quarantined and requires host lifecycle recovery`);
+      throw new PluginLifecycleError(
+        `Plugin "${pluginId}" is quarantined and requires host lifecycle recovery`,
+      );
     }
 
-    this.reserveLifecycle(pluginId, 'enabling');
+    this.reserveLifecycle(pluginId, "enabling");
     try {
       await this.enablePlugin(plugin);
       this.activatePluginProviders(plugin);
@@ -327,15 +347,19 @@ export class PluginLoader {
   public async enableFromHostLifecycle(manifest: PluginManifest): Promise<void> {
     const hostEntry = this.authorizeManifest(manifest);
     if (hostEntry.manifest !== manifest) {
-      throw new PluginValidationError(`Plugin manifest "${manifest.id}@${manifest.version}" is not the exact host catalog entry`);
+      throw new PluginValidationError(
+        `Plugin manifest "${manifest.id}@${manifest.version}" is not the exact host catalog entry`,
+      );
     }
     const pluginId = hostEntry.manifest.id;
     const plugin = this.plugins.get(pluginId);
     if (!plugin || plugin.manifest !== manifest) {
-      throw new PluginLifecycleError(`Plugin "${pluginId}@${manifest.version}" is not loaded from the exact host manifest`);
+      throw new PluginLifecycleError(
+        `Plugin "${pluginId}@${manifest.version}" is not loaded from the exact host manifest`,
+      );
     }
 
-    this.reserveLifecycle(pluginId, 'enabling');
+    this.reserveLifecycle(pluginId, "enabling");
     try {
       await this.enablePlugin(plugin);
     } finally {
@@ -346,19 +370,19 @@ export class PluginLoader {
   private async enablePlugin(plugin: LoadedPlugin): Promise<void> {
     const pluginId = plugin.manifest.id;
 
-    if (plugin.status === 'enabled' && !this.registry.isProviderQuarantined(pluginId)) return;
+    if (plugin.status === "enabled" && !this.registry.isProviderQuarantined(pluginId)) return;
 
     if (plugin.manifest.lifecycle?.onEnable) {
       try {
         await plugin.manifest.lifecycle.onEnable();
       } catch (err) {
-        plugin.status = 'error';
+        plugin.status = "error";
         plugin.error = err instanceof Error ? err.message : String(err);
         throw new PluginLifecycleError(`Failed to enable plugin "${pluginId}": ${plugin.error}`);
       }
     }
 
-    plugin.status = 'enabled';
+    plugin.status = "enabled";
   }
 
   private activatePluginProviders(plugin: LoadedPlugin): void {
@@ -377,7 +401,7 @@ export class PluginLoader {
       throw new PluginLifecycleError(`Plugin "${pluginId}" is not loaded`);
     }
 
-    this.reserveLifecycle(pluginId, 'disabling');
+    this.reserveLifecycle(pluginId, "disabling");
     try {
       await this.disablePlugin(pluginId, plugin);
     } finally {
@@ -386,13 +410,15 @@ export class PluginLoader {
   }
 
   private async disablePlugin(pluginId: string, plugin: LoadedPlugin): Promise<void> {
-    if (plugin.status === 'disabled') return;
+    if (plugin.status === "disabled") return;
 
     if (plugin.manifest.lifecycle?.onDisable) {
       try {
         await plugin.manifest.lifecycle.onDisable();
       } catch (err) {
-        throw new PluginLifecycleError(`Failed to disable plugin "${pluginId}": ${err instanceof Error ? err.message : String(err)}`);
+        throw new PluginLifecycleError(
+          `Failed to disable plugin "${pluginId}": ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
 
@@ -402,20 +428,20 @@ export class PluginLoader {
       this.registry.deactivateProvider(provision.capability, pluginId);
     }
 
-    plugin.status = 'disabled';
+    plugin.status = "disabled";
   }
 
   public async unload(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId);
     if (!plugin) return;
 
-    this.reserveLifecycle(pluginId, 'unloading');
+    this.reserveLifecycle(pluginId, "unloading");
     try {
       // Quarantine before invoking plugin cleanup. A failing hook must never
       // leave the old implementation available for dispatch.
       this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
 
-      if (plugin.status === 'enabled') {
+      if (plugin.status === "enabled") {
         await this.disablePlugin(pluginId, plugin);
       }
 
@@ -430,11 +456,13 @@ export class PluginLoader {
         try {
           await plugin.manifest.lifecycle.onUnload();
         } catch (err) {
-          throw new PluginLifecycleError(`Plugin "${pluginId}" onUnload hook failed: ${err instanceof Error ? err.message : String(err)}`);
+          throw new PluginLifecycleError(
+            `Plugin "${pluginId}" onUnload hook failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
         }
       }
 
-      plugin.status = 'unloaded';
+      plugin.status = "unloaded";
       this.plugins.delete(pluginId);
     } finally {
       this.releaseLifecycle(pluginId);
@@ -450,8 +478,14 @@ export class PluginLoader {
   }
 
   public clear(): void {
-    if (this.plugins.size > 0 || this.loadingPluginIds.size > 0 || this.lifecycleOperations.size > 0) {
-      throw new PluginLifecycleError('Cannot clear plugin loader state while plugins are loaded or lifecycle work is in flight');
+    if (
+      this.plugins.size > 0 ||
+      this.loadingPluginIds.size > 0 ||
+      this.lifecycleOperations.size > 0
+    ) {
+      throw new PluginLifecycleError(
+        "Cannot clear plugin loader state while plugins are loaded or lifecycle work is in flight",
+      );
     }
     this.plugins.clear();
   }

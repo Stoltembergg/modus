@@ -25,9 +25,8 @@ export class SkillsSectionProvider implements PromptSectionProvider {
       "todo",
     ];
 
-    return [
-      "Available Capabilities & Tools:",
-      ...activeTools.map((tool) => `- ${tool}`),
-    ].join("\n");
+    return ["Available Capabilities & Tools:", ...activeTools.map((tool) => `- ${tool}`)].join(
+      "\n",
+    );
   }
 }

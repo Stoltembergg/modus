@@ -3,21 +3,21 @@
  * Core Capability Registry with multi-provider support, version decoupling, and provenance tracking.
  */
 
-import { randomUUID } from 'crypto';
-import type { PluginInstrumentation } from '../plugin/plugin-instrumentation';
-import { ProvenanceTracker } from './capability-provenance';
-import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from './capability-registration-authority';
+import { randomUUID } from "crypto";
+import type { PluginInstrumentation } from "../plugin/plugin-instrumentation";
+import { ProvenanceTracker } from "./capability-provenance";
+import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "./capability-registration-authority";
 import type {
   Capability,
   CapabilityProvenance,
   CapabilityProvider,
   DiscoveredCapability,
-} from './capability-types';
+} from "./capability-types";
 import {
   CapabilityConflictError,
   IncompatibleApiVersionError,
   NoProviderError,
-} from './capability-types';
+} from "./capability-types";
 
 export class CapabilityRegistry {
   private capabilities = new Map<string, Capability>();
@@ -25,7 +25,10 @@ export class CapabilityRegistry {
   private activeProviders = new Map<string, string>();
   private quarantinedProviderIds = new Set<string>();
   private implementationSources = new WeakMap<CapabilityProvider, object>();
-  private implementationExecutors = new WeakMap<CapabilityProvider, CapabilityProvider['implementation']['execute']>();
+  private implementationExecutors = new WeakMap<
+    CapabilityProvider,
+    CapabilityProvider["implementation"]["execute"]
+  >();
   private tracker = new ProvenanceTracker();
   private instrumentation?: PluginInstrumentation | undefined;
 
@@ -33,12 +36,16 @@ export class CapabilityRegistry {
     return {
       ...capability,
       dependencies: [...capability.dependencies],
-      metadata: { ...capability.metadata, ...(capability.metadata.tags ? { tags: [...capability.metadata.tags] } : {}) },
+      metadata: {
+        ...capability.metadata,
+        ...(capability.metadata.tags ? { tags: [...capability.metadata.tags] } : {}),
+      },
     };
   }
 
   private cloneProvider(provider: CapabilityProvider): CapabilityProvider {
-    const sourceImplementation = this.implementationSources.get(provider) ?? provider.implementation;
+    const sourceImplementation =
+      this.implementationSources.get(provider) ?? provider.implementation;
     // Capture once at registration, and invoke unbound: providers must use closures
     // for state, never rely on the source object's receiver or later property changes.
     const execute = this.implementationExecutors.get(provider) ?? provider.implementation.execute;
@@ -62,7 +69,7 @@ export class CapabilityRegistry {
     if (Array.isArray(value)) {
       return Object.freeze(value.map((item) => this.immutableSnapshot(item))) as T;
     }
-    if (value && typeof value === 'object') {
+    if (value && typeof value === "object") {
       const snapshot = Object.fromEntries(
         Object.entries(value).map(([key, item]) => [key, this.immutableSnapshot(item)]),
       );
@@ -71,7 +78,10 @@ export class CapabilityRegistry {
     return value;
   }
 
-  private providerSnapshot(provider: CapabilityProvider, preserveSourceImplementation = false): CapabilityProvider {
+  private providerSnapshot(
+    provider: CapabilityProvider,
+    preserveSourceImplementation = false,
+  ): CapabilityProvider {
     const { implementation, ...data } = provider;
     const sourceImplementation = this.implementationSources.get(provider);
     const execute = this.implementationExecutors.get(provider);
@@ -108,7 +118,7 @@ export class CapabilityRegistry {
   /** Host-only rollback for a capability created by an unsuccessful registration transaction. */
   public removeCapabilityIfUnprovided(capabilityId: string, authority?: symbol): boolean {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
-      throw new CapabilityConflictError('Capability rollback is reserved for the host.');
+      throw new CapabilityConflictError("Capability rollback is reserved for the host.");
     }
     if ((this.providers.get(capabilityId) ?? []).length > 0) return false;
     this.capabilities.delete(capabilityId);
@@ -122,7 +132,9 @@ export class CapabilityRegistry {
   }
 
   public listCapabilities(): Capability[] {
-    return Object.freeze(Array.from(this.capabilities.values(), (capability) => this.immutableSnapshot(capability))) as unknown as Capability[];
+    return Object.freeze(
+      Array.from(this.capabilities.values(), (capability) => this.immutableSnapshot(capability)),
+    ) as unknown as Capability[];
   }
 
   // ---------------------------------------------------------------------------
@@ -151,7 +163,11 @@ export class CapabilityRegistry {
     }
 
     const list = this.providers.get(provider.capabilityId) ?? [];
-    if (!capability.replaceable && list.length > 0 && !list.some((p) => p.providerId === provider.providerId)) {
+    if (
+      !capability.replaceable &&
+      list.length > 0 &&
+      !list.some((p) => p.providerId === provider.providerId)
+    ) {
       throw new CapabilityConflictError(
         `Capability "${provider.capabilityId}" is marked non-replaceable. Additional providers cannot be registered.`,
       );
@@ -159,7 +175,10 @@ export class CapabilityRegistry {
 
     const existingIndex = list.findIndex((p) => p.providerId === provider.providerId);
     if (existingIndex >= 0) {
-      if (!capability.replaceable && this.implementationSources.get(list[existingIndex]!) !== provider.implementation) {
+      if (
+        !capability.replaceable &&
+        this.implementationSources.get(list[existingIndex]!) !== provider.implementation
+      ) {
         throw new CapabilityConflictError(
           `Capability "${provider.capabilityId}" is marked non-replaceable. Provider "${provider.providerId}" cannot be replaced.`,
         );
@@ -187,30 +206,46 @@ export class CapabilityRegistry {
   }
 
   public listProviders(capabilityId: string): CapabilityProvider[] {
-    return Object.freeze((this.providers.get(capabilityId) ?? []).filter((provider) => !this.quarantinedProviderIds.has(provider.providerId)).map((provider) => this.providerSnapshot(provider))) as unknown as CapabilityProvider[];
+    return Object.freeze(
+      (this.providers.get(capabilityId) ?? [])
+        .filter((provider) => !this.quarantinedProviderIds.has(provider.providerId))
+        .map((provider) => this.providerSnapshot(provider)),
+    ) as unknown as CapabilityProvider[];
   }
 
-  public getProviderRegistration(capabilityId: string, providerId: string, authority?: symbol): CapabilityProvider | undefined {
+  public getProviderRegistration(
+    capabilityId: string,
+    providerId: string,
+    authority?: symbol,
+  ): CapabilityProvider | undefined {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
-      throw new CapabilityConflictError('Provider registration inspection is reserved for the host.');
+      throw new CapabilityConflictError(
+        "Provider registration inspection is reserved for the host.",
+      );
     }
-    const provider = (this.providers.get(capabilityId) ?? []).find((item) => item.providerId === providerId);
+    const provider = (this.providers.get(capabilityId) ?? []).find(
+      (item) => item.providerId === providerId,
+    );
     return provider ? this.providerSnapshot(provider, true) : undefined;
   }
 
   public quarantineProvider(providerId: string, authority?: symbol): void {
-    if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) throw new CapabilityConflictError('Provider quarantine is reserved for the host.');
+    if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY)
+      throw new CapabilityConflictError("Provider quarantine is reserved for the host.");
     this.quarantinedProviderIds.add(providerId);
     for (const [capabilityId, activeId] of this.activeProviders) {
       if (activeId !== providerId) continue;
-      const fallback = (this.providers.get(capabilityId) ?? []).find((provider) => !this.quarantinedProviderIds.has(provider.providerId));
+      const fallback = (this.providers.get(capabilityId) ?? []).find(
+        (provider) => !this.quarantinedProviderIds.has(provider.providerId),
+      );
       if (fallback) this.activeProviders.set(capabilityId, fallback.providerId);
       else this.activeProviders.delete(capabilityId);
     }
   }
 
   public clearProviderQuarantine(providerId: string, authority?: symbol): void {
-    if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) throw new CapabilityConflictError('Provider quarantine recovery is reserved for the host.');
+    if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY)
+      throw new CapabilityConflictError("Provider quarantine recovery is reserved for the host.");
     this.quarantinedProviderIds.delete(providerId);
   }
 
@@ -256,9 +291,13 @@ export class CapabilityRegistry {
   }
 
   /** Host-only force removal used to roll back partial provider registrations. */
-  public forceUnregisterProvider(capabilityId: string, providerId: string, authority?: symbol): boolean {
+  public forceUnregisterProvider(
+    capabilityId: string,
+    providerId: string,
+    authority?: symbol,
+  ): boolean {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
-      throw new CapabilityConflictError('Forced provider removal is reserved for the host.');
+      throw new CapabilityConflictError("Forced provider removal is reserved for the host.");
     }
     const list = this.providers.get(capabilityId) ?? [];
     const index = list.findIndex((provider) => provider.providerId === providerId);
@@ -267,7 +306,9 @@ export class CapabilityRegistry {
     if (list.length === 0) this.providers.delete(capabilityId);
     else this.providers.set(capabilityId, list);
     if (this.activeProviders.get(capabilityId) === providerId) {
-      const fallback = list.find((provider) => !this.quarantinedProviderIds.has(provider.providerId));
+      const fallback = list.find(
+        (provider) => !this.quarantinedProviderIds.has(provider.providerId),
+      );
       if (fallback) this.activeProviders.set(capabilityId, fallback.providerId);
       else this.activeProviders.delete(capabilityId);
     }
@@ -308,7 +349,8 @@ export class CapabilityRegistry {
     }
 
     const list = this.providers.get(capabilityId) ?? [];
-    if (this.quarantinedProviderIds.has(providerId)) throw new CapabilityConflictError(`Provider "${providerId}" is quarantined.`);
+    if (this.quarantinedProviderIds.has(providerId))
+      throw new CapabilityConflictError(`Provider "${providerId}" is quarantined.`);
     const target = list.find((p) => p.providerId === providerId);
     if (!target) {
       throw new NoProviderError(
@@ -334,7 +376,8 @@ export class CapabilityRegistry {
     }
 
     const list = this.providers.get(capabilityId) ?? [];
-    if (this.quarantinedProviderIds.has(targetProviderId)) throw new CapabilityConflictError(`Provider "${targetProviderId}" is quarantined.`);
+    if (this.quarantinedProviderIds.has(targetProviderId))
+      throw new CapabilityConflictError(`Provider "${targetProviderId}" is quarantined.`);
     const target = list.find((p) => p.providerId === targetProviderId);
     if (!target) {
       throw new NoProviderError(
@@ -370,9 +413,15 @@ export class CapabilityRegistry {
   ): Promise<TResult> {
     const capability = this.capabilities.get(capabilityId);
     const activeId = this.activeProviders.get(capabilityId);
-    const activeProvider = (this.providers.get(capabilityId) ?? []).find((provider) => provider.providerId === activeId);
+    const activeProvider = (this.providers.get(capabilityId) ?? []).find(
+      (provider) => provider.providerId === activeId,
+    );
 
-    if (!capability || !activeProvider || this.quarantinedProviderIds.has(activeProvider.providerId)) {
+    if (
+      !capability ||
+      !activeProvider ||
+      this.quarantinedProviderIds.has(activeProvider.providerId)
+    ) {
       throw new NoProviderError(capabilityId);
     }
 
@@ -390,12 +439,7 @@ export class CapabilityRegistry {
       try {
         const result = await activeProvider.implementation.execute(context);
         const durationMs = Date.now() - startTime;
-        this.tracker.recordSuccess(
-          traceId,
-          capabilityId,
-          activeProvider.providerId,
-          durationMs,
-        );
+        this.tracker.recordSuccess(traceId, capabilityId, activeProvider.providerId, durationMs);
         return result as TResult;
       } catch (error) {
         const durationMs = Date.now() - startTime;
@@ -411,14 +455,9 @@ export class CapabilityRegistry {
     };
 
     if (this.instrumentation) {
-      return await this.instrumentation.trace(
-        activeProvider.providerId,
-        capabilityId,
-        runner,
-        {
-          version: activeProvider.providerVersion,
-        },
-      );
+      return await this.instrumentation.trace(activeProvider.providerId, capabilityId, runner, {
+        version: activeProvider.providerVersion,
+      });
     }
 
     return await runner();
@@ -445,12 +484,7 @@ export class CapabilityRegistry {
       const active = this.getActiveProvider(id);
       if (active) {
         results.push(
-          this.tracker.getProvenance(
-            id,
-            capability.apiVersion,
-            active,
-            this.listProviders(id),
-          ),
+          this.tracker.getProvenance(id, capability.apiVersion, active, this.listProviders(id)),
         );
       }
     }

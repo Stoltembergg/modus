@@ -1,28 +1,20 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PiSdkRuntime } from '../../pi-sdk-runtime';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import {
   resetFeatureFlagOverrides,
   setFeatureFlagOverrides,
   validateFeatureFlags,
-} from '../feature-flags';
-import { CredentialGuard } from './credential-guard';
-import {
-  FilesystemBroker,
-  GitBroker,
-  NetworkBroker,
-  ShellBroker,
-} from './permission-brokers';
-import { PluginIsolationHost } from './plugin-isolation-host';
-import {
-  type ExtendedPluginPermissions,
-  PermissionDeniedError,
-} from './plugin-isolation-types';
-import { SecurityAuditLogger } from './security-audit-logger';
+} from "../feature-flags";
+import { CredentialGuard } from "./credential-guard";
+import { FilesystemBroker, GitBroker, NetworkBroker, ShellBroker } from "./permission-brokers";
+import { PluginIsolationHost } from "./plugin-isolation-host";
+import { type ExtendedPluginPermissions, PermissionDeniedError } from "./plugin-isolation-types";
+import { SecurityAuditLogger } from "./security-audit-logger";
 
-describe('Fase 13 — Plugin Isolation & Security', () => {
+describe("Fase 13 — Plugin Isolation & Security", () => {
   beforeEach(() => {
     resetFeatureFlagOverrides();
     SecurityAuditLogger.resetInstance();
@@ -33,26 +25,26 @@ describe('Fase 13 — Plugin Isolation & Security', () => {
     SecurityAuditLogger.resetInstance();
   });
 
-  describe('13.1 — Cryptographic Security Audit Logger', () => {
-    it('creates chained SHA-256 entries linking to previous hashes', () => {
+  describe("13.1 — Cryptographic Security Audit Logger", () => {
+    it("creates chained SHA-256 entries linking to previous hashes", () => {
       const logger = SecurityAuditLogger.getInstance();
 
       const e1 = logger.log({
-        pluginId: '@modus/test',
-        action: 'filesystem.read',
-        resource: 'config.json',
-        decision: 'allow',
+        pluginId: "@modus/test",
+        action: "filesystem.read",
+        resource: "config.json",
+        decision: "allow",
       });
 
       const e2 = logger.log({
-        pluginId: '@modus/test',
-        action: 'network.connect',
-        resource: 'https://api.modus.local',
-        decision: 'deny',
-        reason: 'Untrusted domain',
+        pluginId: "@modus/test",
+        action: "network.connect",
+        resource: "https://api.modus.local",
+        decision: "deny",
+        reason: "Untrusted domain",
       });
 
-      expect(e1.previousHash).toBe('0'.repeat(64));
+      expect(e1.previousHash).toBe("0".repeat(64));
       expect(e1.hash).toHaveLength(64);
       expect(e2.previousHash).toBe(e1.hash);
       expect(e2.hash).toHaveLength(64);
@@ -61,211 +53,211 @@ describe('Fase 13 — Plugin Isolation & Security', () => {
       expect(verification.valid).toBe(true);
     });
 
-    it('detects tampering when an audit entry hash or payload is modified', () => {
+    it("detects tampering when an audit entry hash or payload is modified", () => {
       const logger = SecurityAuditLogger.getInstance();
 
       logger.log({
-        pluginId: '@modus/plugin-a',
-        action: 'shell.execute',
-        resource: 'ls',
-        decision: 'allow',
+        pluginId: "@modus/plugin-a",
+        action: "shell.execute",
+        resource: "ls",
+        decision: "allow",
       });
 
       logger.log({
-        pluginId: '@modus/plugin-b',
-        action: 'git.push',
-        resource: 'origin main',
-        decision: 'deny',
+        pluginId: "@modus/plugin-b",
+        action: "git.push",
+        resource: "origin main",
+        decision: "deny",
       });
 
       // Tamper with an entry in memory to simulate malicious modification
       const entries = logger.getEntries();
       const firstEntry = entries[0]!;
-      firstEntry.resource = 'cat /etc/shadow';
+      firstEntry.resource = "cat /etc/shadow";
 
       // Chain verification must fail
       const verification = logger.verifyChain();
       expect(verification.valid).toBe(false);
-      expect(verification.reason).toContain('Tampering detected');
+      expect(verification.reason).toContain("Tampering detected");
     });
 
-    it('filters audit entries by action, decision, or pluginId', () => {
+    it("filters audit entries by action, decision, or pluginId", () => {
       const logger = SecurityAuditLogger.getInstance();
 
-      logger.log({ pluginId: 'p1', action: 'filesystem.read', resource: 'a', decision: 'allow' });
-      logger.log({ pluginId: 'p1', action: 'filesystem.write', resource: 'b', decision: 'deny' });
-      logger.log({ pluginId: 'p2', action: 'network.connect', resource: 'c', decision: 'allow' });
+      logger.log({ pluginId: "p1", action: "filesystem.read", resource: "a", decision: "allow" });
+      logger.log({ pluginId: "p1", action: "filesystem.write", resource: "b", decision: "deny" });
+      logger.log({ pluginId: "p2", action: "network.connect", resource: "c", decision: "allow" });
 
-      expect(logger.getEntries({ pluginId: 'p1' }).length).toBe(2);
-      expect(logger.getEntries({ decision: 'deny' }).length).toBe(1);
-      expect(logger.getEntries({ action: 'network.connect' }).length).toBe(1);
+      expect(logger.getEntries({ pluginId: "p1" }).length).toBe(2);
+      expect(logger.getEntries({ decision: "deny" }).length).toBe(1);
+      expect(logger.getEntries({ action: "network.connect" }).length).toBe(1);
     });
   });
 
-  describe('13.2 — Credential Guard', () => {
-    it('identifies sensitive credential files and private keys', () => {
-      expect(CredentialGuard.isSensitivePath('.env')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('.env.production')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('id_rsa')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('id_ed25519')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('keys/server.key')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('certs/cert.pem')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('.aws/credentials')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('.ssh/authorized_keys')).toBe(true);
+  describe("13.2 — Credential Guard", () => {
+    it("identifies sensitive credential files and private keys", () => {
+      expect(CredentialGuard.isSensitivePath(".env")).toBe(true);
+      expect(CredentialGuard.isSensitivePath(".env.production")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("id_rsa")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("id_ed25519")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("keys/server.key")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("certs/cert.pem")).toBe(true);
+      expect(CredentialGuard.isSensitivePath(".aws/credentials")).toBe(true);
+      expect(CredentialGuard.isSensitivePath(".ssh/authorized_keys")).toBe(true);
 
-      expect(CredentialGuard.isSensitivePath('src/main.ts')).toBe(false);
-      expect(CredentialGuard.isSensitivePath('readme.md')).toBe(false);
+      expect(CredentialGuard.isSensitivePath("src/main.ts")).toBe(false);
+      expect(CredentialGuard.isSensitivePath("readme.md")).toBe(false);
     });
 
-    it('identifies sensitive environment variable names', () => {
-      expect(CredentialGuard.isSensitiveEnvKey('OPENAI_API_KEY')).toBe(true);
-      expect(CredentialGuard.isSensitiveEnvKey('ANTHROPIC_KEY')).toBe(true);
-      expect(CredentialGuard.isSensitiveEnvKey('AWS_ACCESS_KEY_ID')).toBe(true);
-      expect(CredentialGuard.isSensitiveEnvKey('GITHUB_TOKEN')).toBe(true);
-      expect(CredentialGuard.isSensitiveEnvKey('DB_PASSWORD')).toBe(true);
-      expect(CredentialGuard.isSensitiveEnvKey('JWT_SECRET')).toBe(true);
+    it("identifies sensitive environment variable names", () => {
+      expect(CredentialGuard.isSensitiveEnvKey("OPENAI_API_KEY")).toBe(true);
+      expect(CredentialGuard.isSensitiveEnvKey("ANTHROPIC_KEY")).toBe(true);
+      expect(CredentialGuard.isSensitiveEnvKey("AWS_ACCESS_KEY_ID")).toBe(true);
+      expect(CredentialGuard.isSensitiveEnvKey("GITHUB_TOKEN")).toBe(true);
+      expect(CredentialGuard.isSensitiveEnvKey("DB_PASSWORD")).toBe(true);
+      expect(CredentialGuard.isSensitiveEnvKey("JWT_SECRET")).toBe(true);
 
-      expect(CredentialGuard.isSensitiveEnvKey('NODE_ENV')).toBe(false);
-      expect(CredentialGuard.isSensitiveEnvKey('PORT')).toBe(false);
+      expect(CredentialGuard.isSensitiveEnvKey("NODE_ENV")).toBe(false);
+      expect(CredentialGuard.isSensitiveEnvKey("PORT")).toBe(false);
     });
 
-    it('filters environment dictionaries, stripping all sensitive variables unless whitelisted', () => {
+    it("filters environment dictionaries, stripping all sensitive variables unless whitelisted", () => {
       const rawEnv = {
-        NODE_ENV: 'production',
-        PORT: '3000',
-        OPENAI_API_KEY: 'sk-secret-1234',
-        GITHUB_TOKEN: 'ghp_secret_token',
-        ALLOWED_CUSTOM_KEY: 'secret-but-explicitly-allowed',
+        NODE_ENV: "production",
+        PORT: "3000",
+        OPENAI_API_KEY: "sk-secret-1234",
+        GITHUB_TOKEN: "ghp_secret_token",
+        ALLOWED_CUSTOM_KEY: "secret-but-explicitly-allowed",
       };
 
-      const sanitized = CredentialGuard.filterEnv(rawEnv, ['ALLOWED_CUSTOM_KEY']);
-      expect(sanitized['NODE_ENV']).toBe('production');
-      expect(sanitized['PORT']).toBe('3000');
-      expect(sanitized['ALLOWED_CUSTOM_KEY']).toBe('secret-but-explicitly-allowed');
-      expect(sanitized['OPENAI_API_KEY']).toBeUndefined();
-      expect(sanitized['GITHUB_TOKEN']).toBeUndefined();
+      const sanitized = CredentialGuard.filterEnv(rawEnv, ["ALLOWED_CUSTOM_KEY"]);
+      expect(sanitized["NODE_ENV"]).toBe("production");
+      expect(sanitized["PORT"]).toBe("3000");
+      expect(sanitized["ALLOWED_CUSTOM_KEY"]).toBe("secret-but-explicitly-allowed");
+      expect(sanitized["OPENAI_API_KEY"]).toBeUndefined();
+      expect(sanitized["GITHUB_TOKEN"]).toBeUndefined();
     });
 
-    it('masks secret values properly', () => {
-      expect(CredentialGuard.maskSecret('sk-proj-1234567890')).toBe('sk-...890');
-      expect(CredentialGuard.maskSecret('short')).toBe('******');
+    it("masks secret values properly", () => {
+      expect(CredentialGuard.maskSecret("sk-proj-1234567890")).toBe("sk-...890");
+      expect(CredentialGuard.maskSecret("short")).toBe("******");
     });
   });
 
-  describe('13.3 — Permission Brokers', () => {
-    describe('FilesystemBroker', () => {
-      it('blocks access to sensitive credentials even if in declared read scope', () => {
+  describe("13.3 — Permission Brokers", () => {
+    describe("FilesystemBroker", () => {
+      it("blocks access to sensitive credentials even if in declared read scope", () => {
         const broker = new FilesystemBroker();
         const perms: ExtendedPluginPermissions = {
-          filesystem: { read: ['.'] },
+          filesystem: { read: ["."] },
         };
 
-        expect(broker.canRead('.env', perms, 'community-plugin')).toBe(false);
-        expect(broker.canRead('.ssh/id_rsa', perms, 'community-plugin')).toBe(false);
+        expect(broker.canRead(".env", perms, "community-plugin")).toBe(false);
+        expect(broker.canRead(".ssh/id_rsa", perms, "community-plugin")).toBe(false);
       });
 
-      it('permits reading within declared read scopes and blocks out-of-scope files', () => {
+      it("permits reading within declared read scopes and blocks out-of-scope files", () => {
         const broker = new FilesystemBroker();
         const perms: ExtendedPluginPermissions = {
           filesystem: {
-            read: ['src', 'public'],
-            write: ['temp'],
+            read: ["src", "public"],
+            write: ["temp"],
           },
         };
 
-        expect(broker.canRead('src/index.ts', perms, 'plugin-a')).toBe(true);
-        expect(broker.canRead('public/logo.png', perms, 'plugin-a')).toBe(true);
-        expect(broker.canRead('secrets/config.json', perms, 'plugin-a')).toBe(false);
+        expect(broker.canRead("src/index.ts", perms, "plugin-a")).toBe(true);
+        expect(broker.canRead("public/logo.png", perms, "plugin-a")).toBe(true);
+        expect(broker.canRead("secrets/config.json", perms, "plugin-a")).toBe(false);
 
-        expect(broker.canWrite('temp/output.txt', perms, 'plugin-a')).toBe(true);
-        expect(broker.canWrite('src/index.ts', perms, 'plugin-a')).toBe(false);
+        expect(broker.canWrite("temp/output.txt", perms, "plugin-a")).toBe(true);
+        expect(broker.canWrite("src/index.ts", perms, "plugin-a")).toBe(false);
       });
 
-      it('throws PermissionDeniedError when readFile or writeFile violates permissions', async () => {
+      it("throws PermissionDeniedError when readFile or writeFile violates permissions", async () => {
         const broker = new FilesystemBroker();
         const perms: ExtendedPluginPermissions = {
-          filesystem: { read: ['allowed'] },
+          filesystem: { read: ["allowed"] },
         };
 
-        await expect(broker.readFile('forbidden/file.txt', perms, 'p1')).rejects.toThrow(
+        await expect(broker.readFile("forbidden/file.txt", perms, "p1")).rejects.toThrow(
           PermissionDeniedError,
         );
-        await expect(broker.writeFile('forbidden/file.txt', 'data', perms, 'p1')).rejects.toThrow(
+        await expect(broker.writeFile("forbidden/file.txt", "data", perms, "p1")).rejects.toThrow(
           PermissionDeniedError,
         );
       });
     });
 
-    describe('NetworkBroker', () => {
-      it('blocks cloud metadata IPs unconditionally', () => {
+    describe("NetworkBroker", () => {
+      it("blocks cloud metadata IPs unconditionally", () => {
         const broker = new NetworkBroker();
         const perms: ExtendedPluginPermissions = {
-          network: { domains: ['*'] },
+          network: { domains: ["*"] },
         };
 
-        expect(broker.canConnect('http://169.254.169.254/latest/meta-data', perms)).toBe(false);
-        expect(broker.canConnect('http://metadata.google.internal/computeMetadata/v1', perms)).toBe(
+        expect(broker.canConnect("http://169.254.169.254/latest/meta-data", perms)).toBe(false);
+        expect(broker.canConnect("http://metadata.google.internal/computeMetadata/v1", perms)).toBe(
           false,
         );
       });
 
-      it('blocks localhost unless allowLocalhost is enabled', () => {
+      it("blocks localhost unless allowLocalhost is enabled", () => {
         const broker = new NetworkBroker();
         const permsNoLocalhost: ExtendedPluginPermissions = {
-          network: { domains: ['localhost', '127.0.0.1'] },
+          network: { domains: ["localhost", "127.0.0.1"] },
         };
         const permsWithLocalhost: ExtendedPluginPermissions = {
-          network: { domains: ['localhost', '127.0.0.1'], allowLocalhost: true },
+          network: { domains: ["localhost", "127.0.0.1"], allowLocalhost: true },
         };
 
-        expect(broker.canConnect('http://localhost:8080/api', permsNoLocalhost)).toBe(false);
-        expect(broker.canConnect('http://127.0.0.1:3000', permsNoLocalhost)).toBe(false);
-        expect(broker.canConnect('http://localhost:8080/api', permsWithLocalhost)).toBe(true);
+        expect(broker.canConnect("http://localhost:8080/api", permsNoLocalhost)).toBe(false);
+        expect(broker.canConnect("http://127.0.0.1:3000", permsNoLocalhost)).toBe(false);
+        expect(broker.canConnect("http://localhost:8080/api", permsWithLocalhost)).toBe(true);
       });
 
-      it('validates destination domain against domain whitelist and wildcards', () => {
+      it("validates destination domain against domain whitelist and wildcards", () => {
         const broker = new NetworkBroker();
         const perms: ExtendedPluginPermissions = {
-          network: { domains: ['api.modus.org', '*.service.io'] },
+          network: { domains: ["api.modus.org", "*.service.io"] },
         };
 
-        expect(broker.canConnect('https://api.modus.org/v1', perms)).toBe(true);
-        expect(broker.canConnect('https://sub.service.io/data', perms)).toBe(true);
-        expect(broker.canConnect('https://evil.attacker.com', perms)).toBe(false);
+        expect(broker.canConnect("https://api.modus.org/v1", perms)).toBe(true);
+        expect(broker.canConnect("https://sub.service.io/data", perms)).toBe(true);
+        expect(broker.canConnect("https://evil.attacker.com", perms)).toBe(false);
       });
     });
 
-    describe('ShellBroker', () => {
-      it('blocks dangerous system destruction commands', () => {
+    describe("ShellBroker", () => {
+      it("blocks dangerous system destruction commands", () => {
         const broker = new ShellBroker();
         const perms: ExtendedPluginPermissions = {
-          shell: { allow: ['rm', 'shutdown', 'format'] },
+          shell: { allow: ["rm", "shutdown", "format"] },
         };
 
-        expect(broker.canExecute('rm -rf /', perms)).toBe(false);
-        expect(broker.canExecute('shutdown /s', perms)).toBe(false);
-        expect(broker.canExecute('format c:', perms)).toBe(false);
+        expect(broker.canExecute("rm -rf /", perms)).toBe(false);
+        expect(broker.canExecute("shutdown /s", perms)).toBe(false);
+        expect(broker.canExecute("format c:", perms)).toBe(false);
       });
 
-      it('enforces command allow and deny lists', () => {
+      it("enforces command allow and deny lists", () => {
         const broker = new ShellBroker();
         const perms: ExtendedPluginPermissions = {
           shell: {
-            allow: ['git', 'npm'],
-            deny: ['npm publish', 'git push'],
+            allow: ["git", "npm"],
+            deny: ["npm publish", "git push"],
           },
         };
 
-        expect(broker.canExecute('git status', perms)).toBe(true);
-        expect(broker.canExecute('npm test', perms)).toBe(true);
-        expect(broker.canExecute('git push origin main', perms)).toBe(false);
-        expect(broker.canExecute('npm publish', perms)).toBe(false);
-        expect(broker.canExecute('curl http://malicious.com', perms)).toBe(false);
+        expect(broker.canExecute("git status", perms)).toBe(true);
+        expect(broker.canExecute("npm test", perms)).toBe(true);
+        expect(broker.canExecute("git push origin main", perms)).toBe(false);
+        expect(broker.canExecute("npm publish", perms)).toBe(false);
+        expect(broker.canExecute("curl http://malicious.com", perms)).toBe(false);
       });
     });
 
-    describe('GitBroker', () => {
-      it('prohibits git push without explicit allowPush permission', () => {
+    describe("GitBroker", () => {
+      it("prohibits git push without explicit allowPush permission", () => {
         const broker = new GitBroker();
         const permsNoPush: ExtendedPluginPermissions = {
           git: { allowPush: false },
@@ -274,103 +266,103 @@ describe('Fase 13 — Plugin Isolation & Security', () => {
           git: { allowPush: true },
         };
 
-        expect(broker.canPerform('push', permsNoPush, 'p1')).toBe(false);
-        expect(broker.canPerform('status', permsNoPush, 'p1')).toBe(true);
-        expect(broker.canPerform('push', permsWithPush, 'p1')).toBe(true);
+        expect(broker.canPerform("push", permsNoPush, "p1")).toBe(false);
+        expect(broker.canPerform("status", permsNoPush, "p1")).toBe(true);
+        expect(broker.canPerform("push", permsWithPush, "p1")).toBe(true);
       });
     });
   });
 
-  describe('13.4 — Plugin Isolation Host & Sandboxed Execution', () => {
-    it('classifies trust levels into direct vs sandboxed execution modes', () => {
+  describe("13.4 — Plugin Isolation Host & Sandboxed Execution", () => {
+    it("classifies trust levels into direct vs sandboxed execution modes", () => {
       const host = new PluginIsolationHost();
-      expect(host.determineIsolationMode('core')).toBe('direct');
-      expect(host.determineIsolationMode('official')).toBe('direct');
-      expect(host.determineIsolationMode('community')).toBe('sandboxed');
-      expect(host.determineIsolationMode('local')).toBe('sandboxed');
+      expect(host.determineIsolationMode("core")).toBe("direct");
+      expect(host.determineIsolationMode("official")).toBe("direct");
+      expect(host.determineIsolationMode("community")).toBe("sandboxed");
+      expect(host.determineIsolationMode("local")).toBe("sandboxed");
     });
 
-    it('executes community capability inside sandboxed boundary with brokers', async () => {
+    it("executes community capability inside sandboxed boundary with brokers", async () => {
       const host = new PluginIsolationHost();
 
       const response = await host.executeIsolated({
-        pluginId: '@community/text-helper',
-        capability: 'text.reverse',
-        trustLevel: 'community',
-        context: { text: 'hello' },
+        pluginId: "@community/text-helper",
+        capability: "text.reverse",
+        trustLevel: "community",
+        context: { text: "hello" },
         implementation: (ctx) => {
-          return { reversed: (ctx as { text: string }).text.split('').reverse().join('') };
+          return { reversed: (ctx as { text: string }).text.split("").reverse().join("") };
         },
       });
 
       expect(response.success).toBe(true);
-      expect(response.result).toEqual({ reversed: 'olleh' });
+      expect(response.result).toEqual({ reversed: "olleh" });
       expect(response.latencyMs).toBeGreaterThanOrEqual(0);
       expect(response.latencyMs).toBeLessThan(100);
     });
 
-    it('isolates community plugin crashes without taking down the Modus host process', async () => {
+    it("isolates community plugin crashes without taking down the Modus host process", async () => {
       const host = new PluginIsolationHost();
 
       const response = await host.executeIsolated({
-        pluginId: '@community/flaky',
-        capability: 'data.process',
-        trustLevel: 'community',
+        pluginId: "@community/flaky",
+        capability: "data.process",
+        trustLevel: "community",
         context: {},
         implementation: () => {
-          throw new Error('Fatal internal segmentation fault in plugin');
+          throw new Error("Fatal internal segmentation fault in plugin");
         },
       });
 
       // Modus host did not throw/crash; response captured cleanly
       expect(response.success).toBe(false);
-      expect(response.error).toContain('Fatal internal segmentation fault in plugin');
+      expect(response.error).toContain("Fatal internal segmentation fault in plugin");
 
       // Audit logger recorded the failure
-      const auditEntries = host.getAuditLogger().getEntries({ pluginId: '@community/flaky' });
+      const auditEntries = host.getAuditLogger().getEntries({ pluginId: "@community/flaky" });
       expect(auditEntries.length).toBe(1);
-      expect(auditEntries[0]?.decision).toBe('deny');
+      expect(auditEntries[0]?.decision).toBe("deny");
     });
 
-    it('enforces timeout for hanging or infinite-looping community plugins', async () => {
+    it("enforces timeout for hanging or infinite-looping community plugins", async () => {
       const host = new PluginIsolationHost();
 
       const response = await host.executeIsolated({
-        pluginId: '@community/hang-forever',
-        capability: 'calc.infinite',
-        trustLevel: 'community',
+        pluginId: "@community/hang-forever",
+        capability: "calc.infinite",
+        trustLevel: "community",
         timeoutMs: 20,
         context: {},
         implementation: async () => {
           await new Promise((resolve) => setTimeout(resolve, 100));
-          return 'should-not-reach';
+          return "should-not-reach";
         },
       });
 
       expect(response.success).toBe(false);
-      expect(response.error).toContain('timed out after 20ms');
+      expect(response.error).toContain("timed out after 20ms");
     });
   });
 
-  describe('13.5 — PiSdkRuntime Integration & Feature Flags', () => {
-    it('validates feature flag dependencies for MODUS_PLUGIN_ISOLATION', () => {
+  describe("13.5 — PiSdkRuntime Integration & Feature Flags", () => {
+    it("validates feature flag dependencies for MODUS_PLUGIN_ISOLATION", () => {
       const errors = validateFeatureFlags({
         MODUS_USE_KERNEL: true,
         MODUS_PLUGIN_ISOLATION: true,
         MODUS_PLUGINS: false,
       });
-      expect(errors).toContain('MODUS_PLUGIN_ISOLATION requires MODUS_PLUGINS to be enabled');
+      expect(errors).toContain("MODUS_PLUGIN_ISOLATION requires MODUS_PLUGINS to be enabled");
 
       const kernelErrors = validateFeatureFlags({
         MODUS_USE_KERNEL: false,
         MODUS_PLUGIN_ISOLATION: true,
       });
       expect(kernelErrors).toContain(
-        'MODUS_PLUGIN_ISOLATION requires MODUS_USE_KERNEL to be enabled',
+        "MODUS_PLUGIN_ISOLATION requires MODUS_USE_KERNEL to be enabled",
       );
     });
 
-    it('initializes PluginIsolationHost and SecurityAuditLogger in PiSdkRuntime when flag enabled', () => {
+    it("initializes PluginIsolationHost and SecurityAuditLogger in PiSdkRuntime when flag enabled", () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
@@ -384,58 +376,58 @@ describe('Fase 13 — Plugin Isolation & Security', () => {
     });
   });
 
-  describe('13.6 — Fase 13 review regressions: adversarial bypass hardening', () => {
-    it('detects credential files with Windows trailing dots/spaces and name variants', () => {
+  describe("13.6 — Fase 13 review regressions: adversarial bypass hardening", () => {
+    it("detects credential files with Windows trailing dots/spaces and name variants", () => {
       // Windows strips trailing dots/spaces: ".env " opens the same file as ".env".
-      expect(CredentialGuard.isSensitivePath('.env ')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('.env.')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('C:\\secrets\\.ssh\\id_rsa ')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('tokens.json')).toBe(true);
-      expect(CredentialGuard.isSensitivePath('credential')).toBe(true);
+      expect(CredentialGuard.isSensitivePath(".env ")).toBe(true);
+      expect(CredentialGuard.isSensitivePath(".env.")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("C:\\secrets\\.ssh\\id_rsa ")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("tokens.json")).toBe(true);
+      expect(CredentialGuard.isSensitivePath("credential")).toBe(true);
       // Non-sensitive names stay allowed.
-      expect(CredentialGuard.isSensitivePath('src/main.ts')).toBe(false);
+      expect(CredentialGuard.isSensitivePath("src/main.ts")).toBe(false);
     });
 
-    it('denies symlink escapes planted inside the declared scope', () => {
-      const root = mkdtempSync(join(tmpdir(), 'modus-fsprobe-'));
+    it("denies symlink escapes planted inside the declared scope", () => {
+      const root = mkdtempSync(join(tmpdir(), "modus-fsprobe-"));
       try {
-        const outside = join(root, 'outside');
-        const scope = join(root, 'scope');
+        const outside = join(root, "outside");
+        const scope = join(root, "scope");
         mkdirSync(outside, { recursive: true });
         mkdirSync(scope, { recursive: true });
-        writeFileSync(join(outside, 'secret.txt'), 'x');
-        symlinkSync(outside, join(scope, 'linkdir'), 'junction');
+        writeFileSync(join(outside, "secret.txt"), "x");
+        symlinkSync(outside, join(scope, "linkdir"), "junction");
         const broker = new FilesystemBroker(undefined as any, scope);
-        const perms: ExtendedPluginPermissions = { filesystem: { read: ['.'] } };
-        expect(broker.canRead('linkdir/secret.txt', perms, 'p1')).toBe(false);
+        const perms: ExtendedPluginPermissions = { filesystem: { read: ["."] } };
+        expect(broker.canRead("linkdir/secret.txt", perms, "p1")).toBe(false);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
     });
 
-    it('blocks obfuscated loopback IPs even with an open domain whitelist', () => {
+    it("blocks obfuscated loopback IPs even with an open domain whitelist", () => {
       const broker = new NetworkBroker();
-      const perms: ExtendedPluginPermissions = { network: { domains: ['*'] } };
-      expect(broker.canConnect('http://0x7f.0.0.1/', perms)).toBe(false);
-      expect(broker.canConnect('http://2130706433/', perms)).toBe(false);
-      expect(broker.canConnect('http://localhost./', perms)).toBe(false);
+      const perms: ExtendedPluginPermissions = { network: { domains: ["*"] } };
+      expect(broker.canConnect("http://0x7f.0.0.1/", perms)).toBe(false);
+      expect(broker.canConnect("http://2130706433/", perms)).toBe(false);
+      expect(broker.canConnect("http://localhost./", perms)).toBe(false);
     });
 
-    it('requires token boundary on allow-list prefixes and rejects empty entries', () => {
+    it("requires token boundary on allow-list prefixes and rejects empty entries", () => {
       const broker = new ShellBroker();
-      expect(broker.canExecute('github-evil --steal', { shell: { allow: ['git'] } })).toBe(false);
-      expect(broker.canExecute('anything at all', { shell: { allow: [''] } })).toBe(false);
+      expect(broker.canExecute("github-evil --steal", { shell: { allow: ["git"] } })).toBe(false);
+      expect(broker.canExecute("anything at all", { shell: { allow: [""] } })).toBe(false);
       // Legit prefix uses keep working.
-      expect(broker.canExecute('git status', { shell: { allow: ['git'] } })).toBe(true);
+      expect(broker.canExecute("git status", { shell: { allow: ["git"] } })).toBe(true);
     });
 
-    it('catches home-wipe spellings through an allowed rm', () => {
+    it("catches home-wipe spellings through an allowed rm", () => {
       const broker = new ShellBroker();
-      const perms: ExtendedPluginPermissions = { shell: { allow: ['rm'] } };
-      expect(broker.canExecute('rm -rf $HOME', perms)).toBe(false);
-      expect(broker.canExecute('rm -rf ~', perms)).toBe(false);
+      const perms: ExtendedPluginPermissions = { shell: { allow: ["rm"] } };
+      expect(broker.canExecute("rm -rf $HOME", perms)).toBe(false);
+      expect(broker.canExecute("rm -rf ~", perms)).toBe(false);
       // Scoped legitimate use (relative path, no absolute root) still allow-listed.
-      expect(broker.canExecute('rm -rf tmp/cache', perms)).toBe(true);
+      expect(broker.canExecute("rm -rf tmp/cache", perms)).toBe(true);
     });
   });
 });

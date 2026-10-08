@@ -81,7 +81,7 @@ describe("Fase 2.1: PromptRegistry Polish Sprint", () => {
     expect(result.prompt).not.toContain("faulty_service");
 
     expect(consoleWarnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("PromptSectionProvider 'faulty_service' failed during refresh")
+      expect.stringContaining("PromptSectionProvider 'faulty_service' failed during refresh"),
     );
 
     consoleWarnSpy.mockRestore();

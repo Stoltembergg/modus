@@ -27,10 +27,7 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
   name: "response-policy-prompt-build",
   phase: "prompt_build",
   priority: 45, // After core persona/context, before model select
-  execute: async (
-    input: PromptBuildInput,
-    context: HarnessContext,
-  ): Promise<PromptBuildOutput> => {
+  execute: async (input: PromptBuildInput, context: HarnessContext): Promise<PromptBuildOutput> => {
     const existingSections = (input.systemSections ?? []).map((s) => ({
       id: s.id,
       content: s.content,
@@ -53,8 +50,7 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
       const stateLevel = context.state.get("responsePolicy") as ResponseLevel | undefined;
       const effectiveLevel = stateLevel ?? policy.level ?? DEFAULT_RESPONSE_LEVEL;
       const policyPrompt =
-        RESPONSE_POLICY_PROMPTS[effectiveLevel] ??
-        RESPONSE_POLICY_PROMPTS[DEFAULT_RESPONSE_LEVEL];
+        RESPONSE_POLICY_PROMPTS[effectiveLevel] ?? RESPONSE_POLICY_PROMPTS[DEFAULT_RESPONSE_LEVEL];
 
       context.state.set("harness.response_policy_prompt", policyPrompt);
       context.state.set("harness.response_policy", policy);
@@ -76,10 +72,7 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
         activePromptSections: activeSections,
       };
     } catch (error) {
-      console.warn(
-        "[modus-response] failed to inject response policy prompt (fail-open):",
-        error,
-      );
+      console.warn("[modus-response] failed to inject response policy prompt (fail-open):", error);
       return {
         finalSystemPrompt: input.basePrompt,
         activePromptSections: existingSections,
@@ -92,17 +85,11 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
  * Hook for `turn_settle` phase: inspects the final assistant output, evaluates policy
  * compliance, records metrics, and formats responses when strict mode is active.
  */
-export const defaultTurnSettleResponsePolicyHook: HarnessHook<
-  TurnSettleInput,
-  TurnSettleOutput
-> = {
+export const defaultTurnSettleResponsePolicyHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
   name: "response-policy-turn-settle",
   phase: "turn_settle",
   priority: 40,
-  execute: async (
-    input: TurnSettleInput,
-    context: HarnessContext,
-  ): Promise<TurnSettleOutput> => {
+  execute: async (input: TurnSettleInput, context: HarnessContext): Promise<TurnSettleOutput> => {
     // Fail-open pass-through if feature flag is disabled
     if (!isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")) {
       return { settled: true, triggerContinuation: false };
@@ -115,9 +102,7 @@ export const defaultTurnSettleResponsePolicyHook: HarnessHook<
           typeof resolveResponsePolicy
         >) ?? registry.getSessionPolicy(context.sessionId);
 
-      const rawResponse = context.state.get("harness.assistant_response") as
-        | string
-        | undefined;
+      const rawResponse = context.state.get("harness.assistant_response") as string | undefined;
 
       if (rawResponse && rawResponse.trim().length > 0) {
         const deliverables = context.state.get("harness.deliverables");

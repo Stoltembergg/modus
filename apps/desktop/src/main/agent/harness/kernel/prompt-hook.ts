@@ -17,10 +17,7 @@ export const promptBuildHook: HarnessHook<PromptBuildInput, PromptBuildOutput> =
   phase: "prompt_build",
   priority: 10,
   isCritical: true,
-  execute: async (
-    input: PromptBuildInput,
-    context: HarnessContext
-  ): Promise<PromptBuildOutput> => {
+  execute: async (input: PromptBuildInput, context: HarnessContext): Promise<PromptBuildOutput> => {
     const flags = getFeatureFlags();
 
     if (flags.MODUS_PROMPT_REGISTRY) {

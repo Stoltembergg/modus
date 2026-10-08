@@ -5,14 +5,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { isFeatureFlagEnabled } from "../harness/feature-flags";
-import {
-  GroupMailbox,
-  type GroupMessage,
-} from "../harness/groups/group-mailbox";
-import {
-  detectConflict,
-  GroupRevisionRegistry,
-} from "../harness/groups/group-revision";
+import { GroupMailbox, type GroupMessage } from "../harness/groups/group-mailbox";
+import { detectConflict, GroupRevisionRegistry } from "../harness/groups/group-revision";
 import { toolRegistry } from "./registry";
 import { resolveAgentToolContext } from "./tool-context";
 
@@ -79,7 +73,6 @@ function noSessionResult(details: unknown): {
     details,
   };
 }
-
 
 export function handleGroupMailboxSend(
   args: GroupMailboxSendArgs,
@@ -212,54 +205,49 @@ export function handleGroupRevisionCheck(
 const sendParams = Type.Object({
   to: Type.String({ description: "Recipient agent ID or '*' for broadcast." }),
   content: Type.String({ description: "Message content body to send." }),
-  revision: Type.Optional(
-    Type.Number({ description: "Current workspace revision number." }),
-  ),
-  group_id: Type.Optional(
-    Type.String({ description: "Optional group ID override." }),
-  ),
+  revision: Type.Optional(Type.Number({ description: "Current workspace revision number." })),
+  group_id: Type.Optional(Type.String({ description: "Optional group ID override." })),
 });
 
-export const groupMailboxSendTool: ToolDefinition<typeof sendParams> =
-  defineTool({
-    name: GROUP_MAILBOX_SEND_TOOL,
-    label: "Send Group Mailbox Message",
-    description:
-      "Send a message to another agent in the group mailbox, or '*' to broadcast to all members.",
-    parameters: sendParams,
-    execute: async (_callId, params, _sig, _onUp, ctx) => {
-      const identity = resolveSenderIdentity(ctx);
-      if (!identity) {
-        return noSessionResult({ success: false });
-      }
-      const result = handleGroupMailboxSend(
-        {
-          to: params.to,
-          content: params.content,
-          revision: params.revision,
-          groupId: params.group_id ?? identity.groupId,
-        },
-        identity.fromAgent,
-        identity.groupId,
-      );
+export const groupMailboxSendTool: ToolDefinition<typeof sendParams> = defineTool({
+  name: GROUP_MAILBOX_SEND_TOOL,
+  label: "Send Group Mailbox Message",
+  description:
+    "Send a message to another agent in the group mailbox, or '*' to broadcast to all members.",
+  parameters: sendParams,
+  execute: async (_callId, params, _sig, _onUp, ctx) => {
+    const identity = resolveSenderIdentity(ctx);
+    if (!identity) {
+      return noSessionResult({ success: false });
+    }
+    const result = handleGroupMailboxSend(
+      {
+        to: params.to,
+        content: params.content,
+        revision: params.revision,
+        groupId: params.group_id ?? identity.groupId,
+      },
+      identity.fromAgent,
+      identity.groupId,
+    );
 
-      if (!result.success) {
-        return {
-          content: [{ type: "text", text: `Error sending message: ${result.error}` }],
-          details: result,
-        };
-      }
+    if (!result.success) {
       return {
-        content: [
-          {
-            type: "text",
-            text: `Message sent successfully. ID: ${result.messageId}`,
-          },
-        ],
+        content: [{ type: "text", text: `Error sending message: ${result.error}` }],
         details: result,
       };
-    },
-  });
+    }
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Message sent successfully. ID: ${result.messageId}`,
+        },
+      ],
+      details: result,
+    };
+  },
+});
 
 const receiveParams = Type.Object({
   limit: Type.Optional(
@@ -269,46 +257,36 @@ const receiveParams = Type.Object({
   ),
 });
 
-export const groupMailboxReceiveTool: ToolDefinition<typeof receiveParams> =
-  defineTool({
-    name: GROUP_MAILBOX_RECEIVE_TOOL,
-    label: "Receive Group Mailbox Messages",
-    description:
-      "Receive unread messages delivered to this agent in the group mailbox.",
-    parameters: receiveParams,
-    execute: async (_callId, params, _sig, _onUp, ctx) => {
-      const identity = resolveSenderIdentity(ctx);
-      if (!identity) {
-        return noSessionResult({ success: false });
-      }
-      const result = handleGroupMailboxReceive(
-        { limit: params.limit },
-        identity.fromAgent,
-      );
+export const groupMailboxReceiveTool: ToolDefinition<typeof receiveParams> = defineTool({
+  name: GROUP_MAILBOX_RECEIVE_TOOL,
+  label: "Receive Group Mailbox Messages",
+  description: "Receive unread messages delivered to this agent in the group mailbox.",
+  parameters: receiveParams,
+  execute: async (_callId, params, _sig, _onUp, ctx) => {
+    const identity = resolveSenderIdentity(ctx);
+    if (!identity) {
+      return noSessionResult({ success: false });
+    }
+    const result = handleGroupMailboxReceive({ limit: params.limit }, identity.fromAgent);
 
-      if (!result.success) {
-        return {
-          content: [
-            { type: "text", text: `Error receiving messages: ${result.error}` },
-          ],
-          details: result,
-        };
-      }
-
-      const msgs = result.messages ?? [];
-      const summary = `Received ${msgs.length} unread message(s):\n${msgs
-        .map(
-          (m) =>
-            `- [From ${m.from} at ${m.sentAt} (ID: ${m.id})]: ${m.content}`,
-        )
-        .join("\n")}`;
-
+    if (!result.success) {
       return {
-        content: [{ type: "text", text: msgs.length > 0 ? summary : "No unread messages." }],
+        content: [{ type: "text", text: `Error receiving messages: ${result.error}` }],
         details: result,
       };
-    },
-  });
+    }
+
+    const msgs = result.messages ?? [];
+    const summary = `Received ${msgs.length} unread message(s):\n${msgs
+      .map((m) => `- [From ${m.from} at ${m.sentAt} (ID: ${m.id})]: ${m.content}`)
+      .join("\n")}`;
+
+    return {
+      content: [{ type: "text", text: msgs.length > 0 ? summary : "No unread messages." }],
+      details: result,
+    };
+  },
+});
 
 const ackParams = Type.Object({
   message_ids: Type.Array(Type.String(), {
@@ -316,93 +294,85 @@ const ackParams = Type.Object({
   }),
 });
 
-export const groupMailboxAckTool: ToolDefinition<typeof ackParams> =
-  defineTool({
-    name: GROUP_MAILBOX_ACK_TOOL,
-    label: "Acknowledge Group Mailbox Messages",
-    description: "Acknowledge receipt of messages to remove them from unread inbox.",
-    parameters: ackParams,
-    execute: async (_callId, params, _sig, _onUp, ctx) => {
-      const identity = resolveSenderIdentity(ctx);
-      if (!identity) {
-        return noSessionResult({ success: false });
-      }
-      const result = handleGroupMailboxAck(
-        { messageIds: params.message_ids },
-        identity.fromAgent,
-      );
+export const groupMailboxAckTool: ToolDefinition<typeof ackParams> = defineTool({
+  name: GROUP_MAILBOX_ACK_TOOL,
+  label: "Acknowledge Group Mailbox Messages",
+  description: "Acknowledge receipt of messages to remove them from unread inbox.",
+  parameters: ackParams,
+  execute: async (_callId, params, _sig, _onUp, ctx) => {
+    const identity = resolveSenderIdentity(ctx);
+    if (!identity) {
+      return noSessionResult({ success: false });
+    }
+    const result = handleGroupMailboxAck({ messageIds: params.message_ids }, identity.fromAgent);
 
-      if (!result.success) {
-        return {
-          content: [{ type: "text", text: `Error acking messages: ${result.error}` }],
-          details: result,
-        };
-      }
-
+    if (!result.success) {
       return {
-        content: [
-          {
-            type: "text",
-            text: `Acknowledged ${result.ackedCount} message(s).`,
-          },
-        ],
+        content: [{ type: "text", text: `Error acking messages: ${result.error}` }],
         details: result,
       };
-    },
-  });
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Acknowledged ${result.ackedCount} message(s).`,
+        },
+      ],
+      details: result,
+    };
+  },
+});
 
 const checkParams = Type.Object({
   files: Type.Record(Type.String(), Type.String(), {
     description: "Map of file relative paths to their content hashes.",
   }),
-  base_revision: Type.Optional(
-    Type.Number({ description: "Base revision number checked out." }),
-  ),
+  base_revision: Type.Optional(Type.Number({ description: "Base revision number checked out." })),
   group_id: Type.Optional(Type.String({ description: "Group ID." })),
 });
 
-export const groupRevisionCheckTool: ToolDefinition<typeof checkParams> =
-  defineTool({
-    name: GROUP_REVISION_CHECK_TOOL,
-    label: "Check Group Revision Conflicts",
-    description:
-      "Check proposed file changes against the latest group revision to detect optimistic concurrency conflicts.",
-    parameters: checkParams,
-    execute: async (_callId, params, _sig, _onUp, ctx) => {
-      const groupId =
-        params.group_id ?? resolveSenderIdentity(ctx)?.groupId ?? "default";
-      const result = handleGroupRevisionCheck(
-        {
-          files: params.files,
-          baseRevision: params.base_revision,
-          groupId,
-        },
+export const groupRevisionCheckTool: ToolDefinition<typeof checkParams> = defineTool({
+  name: GROUP_REVISION_CHECK_TOOL,
+  label: "Check Group Revision Conflicts",
+  description:
+    "Check proposed file changes against the latest group revision to detect optimistic concurrency conflicts.",
+  parameters: checkParams,
+  execute: async (_callId, params, _sig, _onUp, ctx) => {
+    const groupId = params.group_id ?? resolveSenderIdentity(ctx)?.groupId ?? "default";
+    const result = handleGroupRevisionCheck(
+      {
+        files: params.files,
+        baseRevision: params.base_revision,
         groupId,
-      );
+      },
+      groupId,
+    );
 
-      if (result.conflict) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Conflict detected with revision ${result.currentRevision}! Conflicting files: ${result.conflicts.join(", ")}`,
-            },
-          ],
-          details: result,
-        };
-      }
-
+    if (result.conflict) {
       return {
         content: [
           {
             type: "text",
-            text: `No conflicts detected. Safe to merge (current revision: ${result.currentRevision ?? "initial"}).`,
+            text: `Conflict detected with revision ${result.currentRevision}! Conflicting files: ${result.conflicts.join(", ")}`,
           },
         ],
         details: result,
       };
-    },
-  });
+    }
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `No conflicts detected. Safe to merge (current revision: ${result.currentRevision ?? "initial"}).`,
+        },
+      ],
+      details: result,
+    };
+  },
+});
 
 let registered = false;
 

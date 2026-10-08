@@ -1,16 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-  HarnessTaskCheckKind,
-  PlanEvidenceRef,
-  PlanRef,
-} from "../../shared/contracts";
+import type { HarnessTaskCheckKind, PlanEvidenceRef, PlanRef } from "../../shared/contracts";
 import { getGroupTask } from "../groups/group-task-store";
 import { hashContent, isPlanCriterionLinkedToTodos } from "../plan/plan-store";
-import {
-  getLatestCheckpointRestoreRowId,
-  getRunToolEvidence,
-} from "./agent-event-store";
+import { getLatestCheckpointRestoreRowId, getRunToolEvidence } from "./agent-event-store";
 import {
   type RunQAEvent,
   recognizeCheckInvocation,
@@ -64,7 +57,10 @@ export function requestsCheck(text: string, target: RegExp): boolean {
   return false;
 }
 
-export function requiredChecksForRun(input: PromptAgentInput, plan?: PlanRef): HarnessTaskCheckKind[] {
+export function requiredChecksForRun(
+  input: PromptAgentInput,
+  plan?: PlanRef,
+): HarnessTaskCheckKind[] {
   if ((input.mode ?? "build") !== "build") return [];
   const text = input.message;
   const checks: HarnessTaskCheckKind[] = [];

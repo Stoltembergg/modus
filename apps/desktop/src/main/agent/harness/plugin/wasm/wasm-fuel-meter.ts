@@ -3,7 +3,7 @@
  * Instruction and compute metering to prevent infinite loops and runaway compute in WASM plugins.
  */
 
-import { WasmFuelExhaustedError, type WasmFuelConfig } from './wasm-types';
+import { type WasmFuelConfig, WasmFuelExhaustedError } from "./wasm-types";
 
 export class WasmFuelMeter {
   private readonly initialFuel: bigint;
@@ -33,7 +33,7 @@ export class WasmFuelMeter {
   }
 
   public consume(units: bigint | number): void {
-    const amount = typeof units === 'bigint' ? units : BigInt(Math.max(0, Math.floor(units)));
+    const amount = typeof units === "bigint" ? units : BigInt(Math.max(0, Math.floor(units)));
     if (amount <= 0n) return;
 
     if (this.fuelRemaining < amount) {

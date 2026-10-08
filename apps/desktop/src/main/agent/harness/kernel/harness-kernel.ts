@@ -65,7 +65,7 @@ export class HarnessKernel {
   async executePhase<TInput = any, TOutput = any>(
     phase: HarnessPhase,
     initialInput: TInput,
-    context: HarnessContext
+    context: HarnessContext,
   ): Promise<TOutput> {
     const flags = getFeatureFlags();
     if (!flags.MODUS_USE_KERNEL) {
@@ -94,7 +94,7 @@ export class HarnessKernel {
         } else {
           // Graceful fallback: log and continue with previous data
           console.warn(
-            `Non-critical hook ${hook.name} failed in phase ${phase}: ${errorMsg}. Continuing.`
+            `Non-critical hook ${hook.name} failed in phase ${phase}: ${errorMsg}. Continuing.`,
           );
         }
       } finally {
@@ -111,7 +111,7 @@ export class HarnessKernel {
   async executeHooks<TInput = any, TOutput = any>(
     phase: HarnessPhase,
     initialInput: TInput,
-    context: HarnessContext
+    context: HarnessContext,
   ): Promise<TOutput> {
     return this.executePhase<TInput, TOutput>(phase, initialInput, context);
   }
@@ -119,7 +119,10 @@ export class HarnessKernel {
   /**
    * Topologically sorts hooks based on priority and dependsOn relations.
    */
-  private resolveHookOrder(hooks: HarnessHook<any, any>[], phase?: HarnessPhase): HarnessHook<any, any>[] {
+  private resolveHookOrder(
+    hooks: HarnessHook<any, any>[],
+    phase?: HarnessPhase,
+  ): HarnessHook<any, any>[] {
     if (hooks.length === 0) return hooks;
 
     // Build map for quick lookup
@@ -137,7 +140,7 @@ export class HarnessKernel {
       if (visited.has(hook.name)) return;
       if (visiting.has(hook.name)) {
         console.error(
-          `Circular dependency detected in phase "${phase ?? hook.phase}". Skipping hook "${hook.name}"`
+          `Circular dependency detected in phase "${phase ?? hook.phase}". Skipping hook "${hook.name}"`,
         );
         return;
       }
@@ -151,7 +154,7 @@ export class HarnessKernel {
             visit(depHook);
           } else {
             console.warn(
-              `Hook "${hook.name}" in phase "${phase ?? hook.phase}" depends on missing hook: ${depName}. Skipping dependency.`
+              `Hook "${hook.name}" in phase "${phase ?? hook.phase}" depends on missing hook: ${depName}. Skipping dependency.`,
             );
           }
         }
@@ -200,7 +203,7 @@ export class HarnessKernel {
     phase: HarnessPhase,
     startTime: number,
     success: boolean,
-    error?: string
+    error?: string,
   ): void {
     const durationMs = performance.now() - startTime;
     this.executionHistory.push({

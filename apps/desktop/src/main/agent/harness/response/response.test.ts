@@ -1,17 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  resetFeatureFlagOverrides,
-  setFeatureFlagOverrides,
-} from "../feature-flags";
+import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import type { HarnessContext } from "../kernel/harness-hooks";
-import {
-  type Deliverable,
-  formatDeliverables,
-} from "./deliverables";
-import {
-  enforceResponsePolicy,
-  formatResponse,
-} from "./response-formatter";
+import { type Deliverable, formatDeliverables } from "./deliverables";
+import { enforceResponsePolicy, formatResponse } from "./response-formatter";
 import {
   defaultPromptBuildResponsePolicyHook,
   defaultTurnSettleResponsePolicyHook,
@@ -25,11 +16,7 @@ import {
   resolveResponsePolicy,
 } from "./response-policy";
 import { ResponsePolicyRegistry } from "./response-registry";
-import {
-  extractSections,
-  isCriticalParagraph,
-  splitParagraphs,
-} from "./response-sections";
+import { extractSections, isCriticalParagraph, splitParagraphs } from "./response-sections";
 
 describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
   beforeEach(() => {
@@ -68,7 +55,10 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
     });
 
     it("applies policy overrides correctly", () => {
-      const custom = resolveResponsePolicy("compact", { maxParagraphs: 3, enforcementMode: "strict" });
+      const custom = resolveResponsePolicy("compact", {
+        maxParagraphs: 3,
+        enforcementMode: "strict",
+      });
       expect(custom.level).toBe("compact");
       expect(custom.maxParagraphs).toBe(3);
       expect(custom.enforcementMode).toBe("strict");
@@ -162,7 +152,9 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       expect(result.response).toContain("Paragraph 1");
       expect(result.response).toContain("Paragraph 2");
       expect(result.response).not.toContain("Paragraph 3");
-      expect(result.response).toContain("[Response formatted by response policy (2 non-critical paragraphs truncated)]");
+      expect(result.response).toContain(
+        "[Response formatted by response policy (2 non-critical paragraphs truncated)]",
+      );
     });
   });
 
@@ -331,7 +323,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
         mockContext,
       );
 
-      expect(out.finalSystemPrompt).toContain("<response_policy level=\"standard\">");
+      expect(out.finalSystemPrompt).toContain('<response_policy level="standard">');
       expect(out.activePromptSections.some((s) => s.id === "response_policy")).toBe(true);
       expect(mockContext.state.get("harness.response_policy_prompt")).toBeDefined();
     });
@@ -425,9 +417,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       );
 
       expect(context.state.get("harness.formatted_response")).toBeDefined();
-      expect(
-        ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated,
-      ).toBe(1);
+      expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(1);
     });
 
     it("renders the compact deliverables one-liner inside the response", () => {
@@ -455,9 +445,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
         policy,
       );
 
-      expect(result.formattedParagraphCount).toBeLessThanOrEqual(
-        policy.maxParagraphs,
-      );
+      expect(result.formattedParagraphCount).toBeLessThanOrEqual(policy.maxParagraphs);
     });
   });
 });

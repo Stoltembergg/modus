@@ -7,7 +7,7 @@ import type {
   CapabilityImplementation,
   PluginPermissions,
   TrustLevel,
-} from '../capability/capability-types';
+} from "../capability/capability-types";
 
 export interface CapabilityRequirement {
   capability: string; // e.g., "memory.retrieve"
@@ -52,7 +52,7 @@ export interface PluginManifest {
   lifecycle?: PluginLifecycleHooks | undefined;
 }
 
-export type PluginStatus = 'unloaded' | 'loaded' | 'enabled' | 'disabled' | 'error';
+export type PluginStatus = "unloaded" | "loaded" | "enabled" | "disabled" | "error";
 
 export interface LoadedPlugin {
   manifest: PluginManifest;
@@ -65,20 +65,20 @@ export interface LoadedPlugin {
 export class PluginValidationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'PluginValidationError';
+    this.name = "PluginValidationError";
   }
 }
 
 export class PluginDependencyError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'PluginDependencyError';
+    this.name = "PluginDependencyError";
   }
 }
 
 export class PluginLifecycleError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'PluginLifecycleError';
+    this.name = "PluginLifecycleError";
   }
 }

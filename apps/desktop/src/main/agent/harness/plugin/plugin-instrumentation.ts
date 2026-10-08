@@ -3,9 +3,9 @@
  * Instrumentation wrapper for plugin execution with telemetry, timeouts, and metrics collection.
  */
 
-import { randomUUID } from 'node:crypto';
-import { HarnessObserver } from '../observability/harness-observer';
-import type { PluginTrace, PluginTraceMetadata, PluginTraceStatus } from './plugin-tracing-types';
+import { randomUUID } from "node:crypto";
+import { HarnessObserver } from "../observability/harness-observer";
+import type { PluginTrace, PluginTraceMetadata, PluginTraceStatus } from "./plugin-tracing-types";
 
 export interface PluginTraceOptions {
   version?: string | undefined;
@@ -51,7 +51,7 @@ export class PluginInstrumentation {
     options?: PluginTraceOptions,
   ): Promise<T> {
     const traceId = randomUUID();
-    const version = options?.version ?? this.versionResolver?.(pluginId) ?? 'unknown';
+    const version = options?.version ?? this.versionResolver?.(pluginId) ?? "unknown";
     const startTime = Date.now();
 
     const trace: PluginTrace = {
@@ -60,7 +60,7 @@ export class PluginInstrumentation {
       capability,
       version,
       startTime,
-      status: 'success',
+      status: "success",
       metadata: options?.metadata ?? {},
     };
 
@@ -88,7 +88,7 @@ export class PluginInstrumentation {
 
       trace.endTime = Date.now();
       trace.durationMs = trace.endTime - trace.startTime;
-      trace.status = 'success';
+      trace.status = "success";
 
       this.recordTrace(trace, options?.sessionId);
       return result;
@@ -100,7 +100,7 @@ export class PluginInstrumentation {
 
       trace.endTime = Date.now();
       trace.durationMs = trace.endTime - trace.startTime;
-      trace.status = (isTimeout ? 'timeout' : 'error') as PluginTraceStatus;
+      trace.status = (isTimeout ? "timeout" : "error") as PluginTraceStatus;
       trace.error = err?.message ?? String(error);
 
       this.recordTrace(trace, options?.sessionId);

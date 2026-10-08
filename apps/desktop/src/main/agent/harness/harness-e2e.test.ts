@@ -81,7 +81,11 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
   it("10.1 E2E Full Turn Lifecycle: executes all 7 pipeline phases and records telemetry", async () => {
     const executedPhases: string[] = [];
 
-    const createTrackingHook = (name: string, phase: any, priority = 50): HarnessHook<any, any> => ({
+    const createTrackingHook = (
+      name: string,
+      phase: any,
+      priority = 50,
+    ): HarnessHook<any, any> => ({
       name,
       phase,
       priority,
@@ -118,7 +122,11 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
     // 4. Model Select
     await kernel.executePhase("model_select", { selectedModel: "deepseek-coder-v2" }, context);
     // 5. Tools Register
-    await kernel.executePhase("tools_register", { tools: ["bash", "read_file", "write_file"] }, context);
+    await kernel.executePhase(
+      "tools_register",
+      { tools: ["bash", "read_file", "write_file"] },
+      context,
+    );
     // 6. Verification Check
     await kernel.executePhase("verification_check", { checksPassed: true }, context);
     // 7. Turn Settle
@@ -168,7 +176,8 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
   });
 
   it("10.3 E2E Tool Result Spill & Retrieval: spills large output and provides transparent retrieval", async () => {
-    const largeBashOutput = "Test run starting...\n" + "A".repeat(30 * 1024) + "\nTests complete: 15 passed.";
+    const largeBashOutput =
+      "Test run starting...\n" + "A".repeat(30 * 1024) + "\nTests complete: 15 passed.";
     const interceptResult = interceptToolResult({
       sessionId: "session-tool-e2e",
       runId: "run-tool-e2e",
@@ -224,8 +233,8 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
       contextWindow: 10_000,
       outputReserve: 1_000,
       headroom: 1_000,
-      thresholdRatio: 0.80, // trigger at 7,200 tokens
-      targetRatioAfterPrune: 0.50, // target 4,500 tokens
+      thresholdRatio: 0.8, // trigger at 7,200 tokens
+      targetRatioAfterPrune: 0.5, // target 4,500 tokens
       preserveCategories: ["qa_check" as const],
     };
 
@@ -347,12 +356,14 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
 
     // Executing phase with non-critical hook throwing should resolve gracefully
     const phasePayload = { prompt: "Base prompt" };
-    await expect(
-      kernel.executePhase("prompt_build", phasePayload, context)
-    ).resolves.not.toThrow();
+    await expect(kernel.executePhase("prompt_build", phasePayload, context)).resolves.not.toThrow();
 
     // Verification check continues uninterrupted
-    const verifRes = await kernel.executePhase("verification_check", { status: "pending" }, context);
+    const verifRes = await kernel.executePhase(
+      "verification_check",
+      { status: "pending" },
+      context,
+    );
     expect(verifRes).toEqual({ status: "pending" });
   });
 });

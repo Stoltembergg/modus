@@ -1,12 +1,7 @@
 import type { TaskClassificationInput } from "../../../../shared/contracts";
 import { evaluateIntentGate } from "../intent-gate";
 import { classifyHarnessTask } from "../task-classifier";
-import type {
-  HarnessContext,
-  HarnessHook,
-  TurnStartInput,
-  TurnStartOutput,
-} from "./harness-hooks";
+import type { HarnessContext, HarnessHook, TurnStartInput, TurnStartOutput } from "./harness-hooks";
 
 /**
  * Standard Turn Start Hook:
@@ -20,10 +15,7 @@ export const turnStartIntentHook: HarnessHook<TurnStartInput, TurnStartOutput> =
   phase: "turn_start",
   priority: 10,
   isCritical: true,
-  execute: async (
-    input: TurnStartInput,
-    context: HarnessContext
-  ): Promise<TurnStartOutput> => {
+  execute: async (input: TurnStartInput, context: HarnessContext): Promise<TurnStartOutput> => {
     const messageText = input.message ?? input.userPrompt ?? "";
     const contextPaths = (input.context || [])
       .map((c: any) => c.path || c.uri || "")

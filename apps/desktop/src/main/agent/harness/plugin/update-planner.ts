@@ -5,8 +5,8 @@
  * grouping independent upgrades into parallel execution phases.
  */
 
-import type { DependencyGraph } from './dependency-graph';
-import type { PluginUpdate, UpdatePlan } from './plugin-dependency-types';
+import type { DependencyGraph } from "./dependency-graph";
+import type { PluginUpdate, UpdatePlan } from "./plugin-dependency-types";
 
 export class UpdatePlanner {
   /**

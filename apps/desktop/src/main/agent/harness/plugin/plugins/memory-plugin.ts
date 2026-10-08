@@ -3,8 +3,8 @@
  * Stateful capability providing persistent storage, retrieval, and compaction of project memories.
  */
 
-import type { CapabilityImplementation } from '../../capability/capability-types';
-import type { PluginManifest } from '../plugin-types';
+import type { CapabilityImplementation } from "../../capability/capability-types";
+import type { PluginManifest } from "../plugin-types";
 
 export interface MemoryRecord {
   id: string;
@@ -17,7 +17,7 @@ export interface MemoryRecord {
 export class MemoryStore {
   private records = new Map<string, MemoryRecord>();
 
-  public store(record: Omit<MemoryRecord, 'timestamp'>): MemoryRecord {
+  public store(record: Omit<MemoryRecord, "timestamp">): MemoryRecord {
     const fullRecord: MemoryRecord = {
       ...record,
       timestamp: Date.now(),
@@ -97,43 +97,44 @@ const memoryCompactImpl: CapabilityImplementation<
 };
 
 export const memoryPluginManifest: PluginManifest = {
-  id: '@modus/memory',
-  name: 'Modus Memory Service',
-  version: '1.0.0',
-  author: 'Modus Core Team',
-  description: 'Stateful capability providing memory persistence, semantic retrieval, and compaction',
-  trustLevel: 'core',
+  id: "@modus/memory",
+  name: "Modus Memory Service",
+  version: "1.0.0",
+  author: "Modus Core Team",
+  description:
+    "Stateful capability providing memory persistence, semantic retrieval, and compaction",
+  trustLevel: "core",
 
   provides: [
     {
-      capability: 'memory.retrieve',
-      apiVersion: '1.0',
+      capability: "memory.retrieve",
+      apiVersion: "1.0",
       implementation: memoryRetrieveImpl,
     },
     {
-      capability: 'memory.store',
-      apiVersion: '1.0',
+      capability: "memory.store",
+      apiVersion: "1.0",
       implementation: memoryStoreImpl,
     },
     {
-      capability: 'memory.compact',
-      apiVersion: '1.0',
+      capability: "memory.compact",
+      apiVersion: "1.0",
       implementation: memoryCompactImpl,
     },
   ],
 
   requires: {
-    modus: '>=0.8.0',
+    modus: ">=0.8.0",
   },
 
   permissions: {
     required: {
-      filesystem: { read: ['*'], write: ['*'] },
+      filesystem: { read: ["*"], write: ["*"] },
       memory: { read: true, write: true },
     },
     reason: {
-      filesystem: 'Access project memory persistence store on disk',
-      memory: 'Cache active working memories across turns',
+      filesystem: "Access project memory persistence store on disk",
+      memory: "Cache active working memories across turns",
     },
   },
 

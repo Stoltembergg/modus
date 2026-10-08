@@ -38,9 +38,7 @@ export function computeMessageDedupeHash(
   content: string,
   groupId: string = "",
 ): string {
-  return createHash("sha256")
-    .update(`${groupId}:${from}:${to}:${content.trim()}`)
-    .digest("hex");
+  return createHash("sha256").update(`${groupId}:${from}:${to}:${content.trim()}`).digest("hex");
 }
 
 export class GroupMailbox {
@@ -212,8 +210,7 @@ export class GroupMailbox {
     // Idempotent duplicate check
     if (this.isDuplicate({ ...messageInput, groupId: messageInput.groupId }, sentAt)) {
       const existing =
-        this.dedupeIndex.get(dedupeHash) ??
-        this.findInDatabaseByDedupeHash(dedupeHash);
+        this.dedupeIndex.get(dedupeHash) ?? this.findInDatabaseByDedupeHash(dedupeHash);
       if (existing) {
         return existing.id;
       }
@@ -343,9 +340,7 @@ export class GroupMailbox {
       .map((id) => this.messages.get(id))
       .filter((m): m is GroupMessage => m !== undefined && m.from !== agentId);
 
-    return [...direct, ...broadcast].sort(
-      (a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt),
-    );
+    return [...direct, ...broadcast].sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt));
   }
 
   /**
@@ -498,9 +493,7 @@ export class GroupMailbox {
     }
   }
 
-  private findRecipientInDatabase(
-    messageId: string,
-  ): { to_agent: string } | undefined {
+  private findRecipientInDatabase(messageId: string): { to_agent: string } | undefined {
     try {
       const db = this.getDb();
       if (!db) return undefined;
@@ -517,9 +510,7 @@ export class GroupMailbox {
       const db = this.getDb();
       if (!db) return false;
       const result = db
-        .prepare(
-          `update harness_group_messages set acked_at = ? where id = ? and acked_at is null`,
-        )
+        .prepare(`update harness_group_messages set acked_at = ? where id = ? and acked_at is null`)
         .run(ackTime, messageId);
       return Number(result.changes) > 0;
     } catch {
@@ -531,12 +522,8 @@ export class GroupMailbox {
     try {
       const db = this.getDb();
       if (!db) return 0;
-      const ackExpiryIso = new Date(
-        nowMs - this.config.ackRetentionMs,
-      ).toISOString();
-      const unackExpiryIso = new Date(
-        nowMs - this.config.unackRetentionMs,
-      ).toISOString();
+      const ackExpiryIso = new Date(nowMs - this.config.ackRetentionMs).toISOString();
+      const unackExpiryIso = new Date(nowMs - this.config.unackRetentionMs).toISOString();
 
       const result = db
         .prepare(

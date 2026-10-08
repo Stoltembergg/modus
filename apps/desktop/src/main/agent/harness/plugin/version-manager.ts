@@ -3,10 +3,10 @@
  * Plugin Version Manager for deterministic backups, version preservation and rollback operations.
  */
 
-import type { PluginLifecycleService } from './plugin-lifecycle-service';
-import type { PluginBackup } from './plugin-rollback-types';
-import type { PluginStateStore } from './plugin-state-store';
-import { PluginLifecycleError } from './plugin-types';
+import type { PluginLifecycleService } from "./plugin-lifecycle-service";
+import type { PluginBackup } from "./plugin-rollback-types";
+import type { PluginStateStore } from "./plugin-state-store";
+import { PluginLifecycleError } from "./plugin-types";
 
 export class PluginVersionManager {
   private service: PluginLifecycleService;
@@ -30,7 +30,9 @@ export class PluginVersionManager {
     const targetVersion = version ?? pluginRecord?.version;
 
     if (!targetVersion) {
-      throw new PluginLifecycleError(`Cannot preserve version for '${pluginId}': no version specified or installed`);
+      throw new PluginLifecycleError(
+        `Cannot preserve version for '${pluginId}': no version specified or installed`,
+      );
     }
 
     const manifest = this.service.resolveManifest(pluginId, targetVersion);
@@ -89,7 +91,9 @@ export class PluginVersionManager {
    */
   public async rollback(pluginId: string, targetVersion: string): Promise<void> {
     if (!this.service.resolveManifest(pluginId, targetVersion)) {
-      throw new PluginLifecycleError(`Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`);
+      throw new PluginLifecycleError(
+        `Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`,
+      );
     }
     const backup = await this.loadBackup(pluginId, targetVersion);
     if (!backup) {
@@ -100,7 +104,9 @@ export class PluginVersionManager {
 
     // Execute transactional downgrade
     if (!this.service.resolveManifest(pluginId, targetVersion)) {
-      throw new PluginLifecycleError(`Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`);
+      throw new PluginLifecycleError(
+        `Cannot rollback untrusted or unavailable version ${pluginId}@${targetVersion}`,
+      );
     }
     await this.service.downgrade(pluginId, targetVersion);
   }

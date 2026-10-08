@@ -72,9 +72,7 @@ export function advanceRevision(
   base: GroupRevision,
   incoming: GroupRevision,
   newRevisionNumber?: number,
-):
-  | { success: true; revision: GroupRevision }
-  | { success: false; conflicts: string[] } {
+): { success: true; revision: GroupRevision } | { success: false; conflicts: string[] } {
   const conflicts = detectConflict(base, incoming);
   if (conflicts.length > 0) {
     return { success: false, conflicts };
@@ -85,8 +83,7 @@ export function advanceRevision(
     ...incoming.files,
   };
 
-  const nextRevNumber =
-    newRevisionNumber ?? Math.max(base.revision, incoming.revision) + 1;
+  const nextRevNumber = newRevisionNumber ?? Math.max(base.revision, incoming.revision) + 1;
 
   const revision: GroupRevision = {
     groupId: base.groupId,
@@ -154,9 +151,7 @@ export class GroupRevisionRegistry {
   public commitRevision(
     expectedBase: GroupRevision,
     incoming: GroupRevision,
-  ):
-    | { success: true; revision: GroupRevision }
-    | { success: false; conflicts: string[] } {
+  ): { success: true; revision: GroupRevision } | { success: false; conflicts: string[] } {
     const current = this.groupRevisions.get(expectedBase.groupId);
 
     // Optimistic concurrency gate: the caller's base must still describe the

@@ -8,12 +8,7 @@ export type GroupTaskDependencies = {
  * Normalizes a scope path by removing redundant slashes and trailing separators.
  */
 export function normalizeScope(scope: string): string {
-  return scope
-    .trim()
-    .replace(/\\/g, "/")
-    .replace(/\/+/g, "/")
-    .replace(/\/+$/, "")
-    .toLowerCase();
+  return scope.trim().replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 /**
@@ -37,10 +32,7 @@ export function scopesOverlap(scopeA: string, scopeB: string): boolean {
 /**
  * Determines if a task can proceed based on whether all its dependencies are satisfied.
  */
-export function canProceed(
-  task: GroupTaskDependencies,
-  completedTasks: Set<string>,
-): boolean {
+export function canProceed(task: GroupTaskDependencies, completedTasks: Set<string>): boolean {
   if (!task.blockedBy || task.blockedBy.length === 0) {
     return true;
   }
@@ -87,17 +79,13 @@ export function findEligibleTasks(
     }
 
     // 2. Conflict with running tasks
-    const conflictsWithRunning = runningTasks.some((running) =>
-      detectWriteConflict(task, running),
-    );
+    const conflictsWithRunning = runningTasks.some((running) => detectWriteConflict(task, running));
     if (conflictsWithRunning) {
       continue;
     }
 
     // 3. Conflict with tasks already scheduled in this batch
-    const conflictsWithBatch = eligible.some((scheduled) =>
-      detectWriteConflict(task, scheduled),
-    );
+    const conflictsWithBatch = eligible.some((scheduled) => detectWriteConflict(task, scheduled));
     if (conflictsWithBatch) {
       continue;
     }
@@ -112,9 +100,7 @@ export function findEligibleTasks(
  * Detects any dependency cycles among the given tasks.
  * Returns an array of cycles, each cycle being a list of taskIds forming the loop.
  */
-export function detectDependencyCycles(
-  tasks: GroupTaskDependencies[],
-): string[][] {
+export function detectDependencyCycles(tasks: GroupTaskDependencies[]): string[][] {
   const taskMap = new Map<string, GroupTaskDependencies>();
   for (const t of tasks) {
     taskMap.set(t.taskId, t);

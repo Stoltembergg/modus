@@ -26,7 +26,8 @@ export function fingerprintToolArgs(args: unknown): string {
     return "empty";
   }
   try {
-    const serialized = typeof args === "string" ? args : JSON.stringify(args, Object.keys(args as object).sort());
+    const serialized =
+      typeof args === "string" ? args : JSON.stringify(args, Object.keys(args as object).sort());
     return createHash("sha256").update(serialized, "utf8").digest("hex").slice(0, 16);
   } catch {
     return createHash("sha256").update(String(args), "utf8").digest("hex").slice(0, 16);
@@ -137,7 +138,13 @@ export class ToolInvocationTracker {
     return ToolInvocationTracker.instance;
   }
 
-  record(sessionId: string, toolName: string, args: unknown, error?: boolean, timestamp: number = Date.now()): void {
+  record(
+    sessionId: string,
+    toolName: string,
+    args: unknown,
+    error?: boolean,
+    timestamp: number = Date.now(),
+  ): void {
     const list = this.sessionInvocations.get(sessionId) ?? [];
     const maxTracked = getRepeatGuardConfig().maxTrackedInvocations;
 

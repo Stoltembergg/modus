@@ -22,41 +22,42 @@ export type EvidencePreservationRule = {
   includeDetails?: boolean | undefined;
 };
 
-export const DEFAULT_EVIDENCE_RULES: Record<CompactionEvidenceCategory, EvidencePreservationRule> = {
-  qa_check: {
-    category: "qa_check",
-    preserveAll: true,
-    includeDetails: true,
-  },
-  harness_decision: {
-    category: "harness_decision",
-    preserveAll: false,
-    maxCount: 10,
-    includeDetails: true,
-  },
-  plan_acceptance: {
-    category: "plan_acceptance",
-    preserveAll: true,
-    includeDetails: true,
-  },
-  checkpoint: {
-    category: "checkpoint",
-    preserveAll: false,
-    maxCount: 5,
-    includeDetails: false,
-  },
-  failure_attempt: {
-    category: "failure_attempt",
-    preserveAll: false,
-    maxCount: 15,
-    includeDetails: true,
-  },
-  user_confirmation: {
-    category: "user_confirmation",
-    preserveAll: true,
-    includeDetails: true,
-  },
-};
+export const DEFAULT_EVIDENCE_RULES: Record<CompactionEvidenceCategory, EvidencePreservationRule> =
+  {
+    qa_check: {
+      category: "qa_check",
+      preserveAll: true,
+      includeDetails: true,
+    },
+    harness_decision: {
+      category: "harness_decision",
+      preserveAll: false,
+      maxCount: 10,
+      includeDetails: true,
+    },
+    plan_acceptance: {
+      category: "plan_acceptance",
+      preserveAll: true,
+      includeDetails: true,
+    },
+    checkpoint: {
+      category: "checkpoint",
+      preserveAll: false,
+      maxCount: 5,
+      includeDetails: false,
+    },
+    failure_attempt: {
+      category: "failure_attempt",
+      preserveAll: false,
+      maxCount: 15,
+      includeDetails: true,
+    },
+    user_confirmation: {
+      category: "user_confirmation",
+      preserveAll: true,
+      includeDetails: true,
+    },
+  };
 
 /**
  * Extracts and filters evidence items from a collection according to active preservation rules.
@@ -64,11 +65,11 @@ export const DEFAULT_EVIDENCE_RULES: Record<CompactionEvidenceCategory, Evidence
 export function filterPreservedEvidence(
   items: PreservedEvidence[],
   allowedCategories?: CompactionEvidenceCategory[],
-  customRules?: Partial<Record<CompactionEvidenceCategory, EvidencePreservationRule>>
+  customRules?: Partial<Record<CompactionEvidenceCategory, EvidencePreservationRule>>,
 ): PreservedEvidence[] {
   const rules = { ...DEFAULT_EVIDENCE_RULES, ...(customRules ?? {}) };
   const categoriesToInclude = new Set<CompactionEvidenceCategory>(
-    allowedCategories ?? (Object.keys(rules) as CompactionEvidenceCategory[])
+    allowedCategories ?? (Object.keys(rules) as CompactionEvidenceCategory[]),
   );
 
   const grouped = new Map<CompactionEvidenceCategory, PreservedEvidence[]>();

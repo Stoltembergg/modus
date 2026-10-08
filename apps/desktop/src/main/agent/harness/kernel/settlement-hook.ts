@@ -14,10 +14,7 @@ export const turnSettleHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
   phase: "turn_settle",
   priority: 10,
   isCritical: false,
-  execute: async (
-    input: TurnSettleInput,
-    context: HarnessContext
-  ): Promise<TurnSettleOutput> => {
+  execute: async (input: TurnSettleInput, context: HarnessContext): Promise<TurnSettleOutput> => {
     // Check if task continuation is flagged in context or input
     const hasUnfinishedWork =
       context.state.get("has_unfinished_work") === true || input.hasActiveTodos;
@@ -26,9 +23,7 @@ export const turnSettleHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
       settled: true,
       triggerContinuation: hasUnfinishedWork,
       shouldContinue: hasUnfinishedWork,
-      continuationPrompt: hasUnfinishedWork
-        ? "Continue executing pending task items."
-        : undefined,
+      continuationPrompt: hasUnfinishedWork ? "Continue executing pending task items." : undefined,
       taskComplete: !hasUnfinishedWork,
     };
   },

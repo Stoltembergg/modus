@@ -3,11 +3,8 @@
  * Manages an instantiated WebAssembly module, its linear memory, fuel meter, and typed calls.
  */
 
-import {
-  WasmMemoryOutOfBoundsError,
-  type WasmExecutionMetrics,
-} from './wasm-types';
-import type { WasmFuelMeter } from './wasm-fuel-meter';
+import type { WasmFuelMeter } from "./wasm-fuel-meter";
+import { type WasmExecutionMetrics, WasmMemoryOutOfBoundsError } from "./wasm-types";
 
 export class WasmPluginInstance {
   public readonly instance: WebAssembly.Instance;
@@ -52,10 +49,10 @@ export class WasmPluginInstance {
 
   public invoke(functionName: string, ...args: (number | bigint)[]): unknown {
     const fn = this.instance.exports[functionName];
-    if (typeof fn !== 'function') {
+    if (typeof fn !== "function") {
       throw new Error(
         `Function "${functionName}" is not exported by WASM module${
-          this.pluginId ? ` in plugin "${this.pluginId}"` : ''
+          this.pluginId ? ` in plugin "${this.pluginId}"` : ""
         }`,
       );
     }
@@ -68,15 +65,11 @@ export class WasmPluginInstance {
 
   public writeBytes(offset: number, bytes: Uint8Array): void {
     if (!this.memory) {
-      throw new Error('No linear memory available for this WASM instance');
+      throw new Error("No linear memory available for this WASM instance");
     }
     const totalBytes = this.memory.buffer.byteLength;
     if (offset + bytes.length > totalBytes) {
-      throw new WasmMemoryOutOfBoundsError(
-        offset + bytes.length,
-        totalBytes,
-        this.pluginId,
-      );
+      throw new WasmMemoryOutOfBoundsError(offset + bytes.length, totalBytes, this.pluginId);
     }
     const memView = new Uint8Array(this.memory.buffer);
     memView.set(bytes, offset);
@@ -84,15 +77,11 @@ export class WasmPluginInstance {
 
   public readBytes(offset: number, length: number): Uint8Array {
     if (!this.memory) {
-      throw new Error('No linear memory available for this WASM instance');
+      throw new Error("No linear memory available for this WASM instance");
     }
     const totalBytes = this.memory.buffer.byteLength;
     if (offset + length > totalBytes) {
-      throw new WasmMemoryOutOfBoundsError(
-        offset + length,
-        totalBytes,
-        this.pluginId,
-      );
+      throw new WasmMemoryOutOfBoundsError(offset + length, totalBytes, this.pluginId);
     }
     return new Uint8Array(this.memory.buffer.slice(offset, offset + length));
   }
@@ -108,30 +97,27 @@ export class WasmPluginInstance {
     return this.textDecoder.decode(bytes);
   }
 
-  public invokeJson<TIn = unknown, TOut = unknown>(
-    functionName: string,
-    input: TIn,
-  ): TOut {
+  public invokeJson<TIn = unknown, TOut = unknown>(functionName: string, input: TIn): TOut {
     const allocFn = this.instance.exports.alloc;
     const deallocFn = this.instance.exports.dealloc;
 
     const jsonString = JSON.stringify(input);
     const bytes = this.textEncoder.encode(jsonString);
 
-    if (typeof allocFn === 'function' && typeof deallocFn === 'function') {
+    if (typeof allocFn === "function" && typeof deallocFn === "function") {
       const inputPtr = Number(allocFn(bytes.length));
       this.writeBytes(inputPtr, bytes);
 
       try {
         const packedRes = this.invoke(functionName, inputPtr, bytes.length);
 
-        if (typeof packedRes === 'bigint') {
+        if (typeof packedRes === "bigint") {
           const resPtr = Number(packedRes >> 32n);
           const resLen = Number(packedRes & 0xffffffffn);
           const resultStr = this.readString(resPtr, resLen);
           deallocFn(resPtr, resLen);
           return JSON.parse(resultStr) as TOut;
-        } else if (typeof packedRes === 'number') {
+        } else if (typeof packedRes === "number") {
           // If 32-bit pointer, read 4 bytes length header prefix
           const lenBytes = this.readBytes(packedRes, 4);
           const resLen = new DataView(lenBytes.buffer, lenBytes.byteOffset, 4).getUint32(0, true);

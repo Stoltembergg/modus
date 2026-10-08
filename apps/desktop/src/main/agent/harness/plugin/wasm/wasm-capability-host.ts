@@ -4,18 +4,18 @@
  * Delivers sub-millisecond execution (< 0.2ms), instruction fuel metering, and memory isolation.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash } from "node:crypto";
+import type { PluginRpcResponse } from "../plugin-isolation-types";
+import { WasiSandbox } from "./wasi-sandbox";
+import { WasmFuelMeter } from "./wasm-fuel-meter";
+import { WasmPluginInstance } from "./wasm-instance";
 import {
   WasmCompilationError,
-  WasmExecutionTimeoutError,
   type WasmExecutionResult,
+  WasmExecutionTimeoutError,
   type WasmInstanceOptions,
   type WasmModuleInspection,
-} from './wasm-types';
-import { WasmFuelMeter } from './wasm-fuel-meter';
-import { WasmPluginInstance } from './wasm-instance';
-import { WasiSandbox } from './wasi-sandbox';
-import type { PluginRpcResponse } from '../plugin-isolation-types';
+} from "./wasm-types";
 
 export class WasmCapabilityHost {
   private readonly moduleCache = new Map<string, WebAssembly.Module>();
@@ -23,8 +23,11 @@ export class WasmCapabilityHost {
   /**
    * Compiles and caches a WebAssembly module.
    */
-  public async compileModule(wasmBytes: Uint8Array, cacheKey?: string): Promise<WebAssembly.Module> {
-    const hash = createHash('sha256').update(wasmBytes).digest('hex');
+  public async compileModule(
+    wasmBytes: Uint8Array,
+    cacheKey?: string,
+  ): Promise<WebAssembly.Module> {
+    const hash = createHash("sha256").update(wasmBytes).digest("hex");
     const key = cacheKey ? `${cacheKey}:${hash}` : hash;
     const cached = this.moduleCache.get(key);
     if (cached) {
@@ -36,10 +39,7 @@ export class WasmCapabilityHost {
       this.moduleCache.set(key, module);
       return module;
     } catch (err) {
-      throw new WasmCompilationError(
-        err instanceof Error ? err.message : String(err),
-        cacheKey,
-      );
+      throw new WasmCompilationError(err instanceof Error ? err.message : String(err), cacheKey);
     }
   }
 
@@ -55,9 +55,9 @@ export class WasmCapabilityHost {
     let wasiDetected = false;
 
     for (const exp of exports) {
-      if (exp.kind === 'function') {
+      if (exp.kind === "function") {
         exportedFunctions.push(exp.name);
-      } else if (exp.kind === 'global') {
+      } else if (exp.kind === "global") {
         exportedGlobals.push(exp.name);
       }
     }
@@ -69,7 +69,10 @@ export class WasmCapabilityHost {
         name: imp.name,
         kind: imp.kind,
       });
-      if (imp.module.startsWith('wasi_snapshot_preview1') || imp.module.startsWith('wasi_unstable')) {
+      if (
+        imp.module.startsWith("wasi_snapshot_preview1") ||
+        imp.module.startsWith("wasi_unstable")
+      ) {
         wasiDetected = true;
       }
     }

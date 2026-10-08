@@ -81,7 +81,7 @@ export interface ToolSpillEvaluation {
 export function evaluateToolSpill(
   toolName: string,
   output: string,
-  customPolicy?: Partial<ToolResultPolicy>
+  customPolicy?: Partial<ToolResultPolicy>,
 ): ToolSpillEvaluation {
   const toolOverride = TOOL_SPECIFIC_POLICIES[toolName] || {};
   const policy: ToolResultPolicy = {

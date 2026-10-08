@@ -1,15 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AdaptiveFailureAttempt } from "../../../../shared/contracts";
-import {
-  resetFeatureFlagOverrides,
-  setFeatureFlagOverrides,
-} from "../feature-flags";
+import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import type { HarnessContext } from "../kernel/harness-hooks";
 import { decideNext } from "../meta-controller";
-import {
-  CircuitBreakerRegistry,
-  detectFailureLoop,
-} from "./failure-loop-guard";
+import { CircuitBreakerRegistry, detectFailureLoop } from "./failure-loop-guard";
 import {
   getRepeatGuardConfig,
   resetRepeatGuardConfig,
@@ -437,7 +431,12 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
       };
 
       const failedAttempts: AdaptiveFailureAttempt[] = Array.from({ length: 5 }, (_, i) =>
-        makeAttempt({ id: `att-${i}`, sessionId: "sess-trip", runId: "run-trip", strategyCode: "retry" }),
+        makeAttempt({
+          id: `att-${i}`,
+          sessionId: "sess-trip",
+          runId: "run-trip",
+          strategyCode: "retry",
+        }),
       );
       context.state.set("harness.failure_attempts", failedAttempts);
 

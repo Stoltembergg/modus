@@ -15,7 +15,8 @@ export class MemorySectionProvider implements PromptSectionProvider {
   }
 
   buildContent(context: HarnessContext): string {
-    const memoryHints = (context.state.get("memoryHints") as Array<{ text: string; scope?: string }>) ?? [];
+    const memoryHints =
+      (context.state.get("memoryHints") as Array<{ text: string; scope?: string }>) ?? [];
     if (memoryHints.length === 0) {
       return "";
     }

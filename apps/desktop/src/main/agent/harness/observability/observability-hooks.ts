@@ -55,7 +55,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
           totalFormatted: responseMetrics.totalFormatted,
           charactersSaved: responseMetrics.charactersSaved,
         },
-        sessionId
+        sessionId,
       );
 
       // Record any prompt tokens saved from the current turn
@@ -75,7 +75,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
       return defaultOutput;
     } catch (err) {
       console.warn(
-        `[Harness:Observability] Failed to harvest metrics in turn_settle: ${err instanceof Error ? err.message : String(err)}. Failing open.`
+        `[Harness:Observability] Failed to harvest metrics in turn_settle: ${err instanceof Error ? err.message : String(err)}. Failing open.`,
       );
       return defaultOutput;
     }

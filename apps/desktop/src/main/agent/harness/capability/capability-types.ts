@@ -4,29 +4,39 @@
  * execution traces, and provenance records.
  */
 
-export type TrustLevel = 'core' | 'official' | 'verified' | 'community' | 'local';
+export type TrustLevel = "core" | "official" | "verified" | "community" | "local";
 
 export interface PluginPermissions {
-  filesystem?: {
-    read?: string[];
-    write?: string[];
-  } | undefined;
-  memory?: {
-    read?: boolean;
-    write?: boolean;
-  } | undefined;
-  network?: {
-    domains?: string[];
-    ports?: number[];
-  } | undefined;
-  tools?: {
-    allow?: string[];
-    deny?: string[];
-  } | undefined;
-  resources?: {
-    maxMemoryMb?: number;
-    timeoutMs?: number;
-  } | undefined;
+  filesystem?:
+    | {
+        read?: string[];
+        write?: string[];
+      }
+    | undefined;
+  memory?:
+    | {
+        read?: boolean;
+        write?: boolean;
+      }
+    | undefined;
+  network?:
+    | {
+        domains?: string[];
+        ports?: number[];
+      }
+    | undefined;
+  tools?:
+    | {
+        allow?: string[];
+        deny?: string[];
+      }
+    | undefined;
+  resources?:
+    | {
+        maxMemoryMb?: number;
+        timeoutMs?: number;
+      }
+    | undefined;
 }
 
 export interface Capability<TContext = unknown, TResult = unknown> {
@@ -37,7 +47,7 @@ export interface Capability<TContext = unknown, TResult = unknown> {
   metadata: {
     description?: string | undefined;
     category?: string | undefined;
-    stability?: 'experimental' | 'beta' | 'stable' | 'deprecated' | undefined;
+    stability?: "experimental" | "beta" | "stable" | "deprecated" | undefined;
     tags?: string[] | undefined;
   };
 }
@@ -60,10 +70,12 @@ export interface CapabilityProvider<TContext = unknown, TResult = unknown> {
     author?: string | undefined;
     description?: string | undefined;
     homepage?: string | undefined;
-    performance?: {
-      avgLatency?: number | undefined;
-      maxLatency?: number | undefined;
-    } | undefined;
+    performance?:
+      | {
+          avgLatency?: number | undefined;
+          maxLatency?: number | undefined;
+        }
+      | undefined;
   };
 }
 
@@ -103,11 +115,13 @@ export interface DiscoveredCapability {
   id: string;
   apiVersion: string;
   replaceable: boolean;
-  activeProvider?: {
-    id: string;
-    version: string;
-    trustLevel: TrustLevel;
-  } | undefined;
+  activeProvider?:
+    | {
+        id: string;
+        version: string;
+        trustLevel: TrustLevel;
+      }
+    | undefined;
   alternativeProviders: Array<{
     id: string;
     version: string;
@@ -118,14 +132,14 @@ export interface DiscoveredCapability {
 export class NoProviderError extends Error {
   constructor(public readonly capabilityId: string) {
     super(`No active provider registered for capability "${capabilityId}"`);
-    this.name = 'NoProviderError';
+    this.name = "NoProviderError";
   }
 }
 
 export class CapabilityConflictError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'CapabilityConflictError';
+    this.name = "CapabilityConflictError";
   }
 }
 
@@ -138,6 +152,6 @@ export class IncompatibleApiVersionError extends Error {
     super(
       `Provider for capability "${capabilityId}" specifies API version "${providedVersion}" which is incompatible with capability version "${expectedVersion}"`,
     );
-    this.name = 'IncompatibleApiVersionError';
+    this.name = "IncompatibleApiVersionError";
   }
 }

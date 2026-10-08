@@ -24,7 +24,8 @@ function toMessageLikes(messages: AgentMessage[]): MessageLike[] {
       msg.toolName ??
       msg.tool ??
       (Array.isArray(content)
-        ? content.find((c: any) => c.toolName || c.type === "tool_use" || c.type === "toolCall")?.toolName
+        ? content.find((c: any) => c.toolName || c.type === "tool_use" || c.type === "toolCall")
+            ?.toolName
         : undefined);
 
     return {

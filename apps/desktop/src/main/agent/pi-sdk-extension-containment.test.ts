@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   DefaultResourceLoader,
-  SettingsManager,
   type ExtensionFactory,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 

@@ -1,8 +1,5 @@
 import type { ContextUncertaintyCandidate } from "../../../../shared/contracts";
-import {
-  scoreContextCandidates,
-  selectUncertaintyReducingIds,
-} from "../context-engine";
+import { scoreContextCandidates, selectUncertaintyReducingIds } from "../context-engine";
 import type {
   ContextResolveInput,
   ContextResolveOutput,
@@ -22,12 +19,10 @@ export const contextResolveHook: HarnessHook<ContextResolveInput, ContextResolve
   isCritical: false,
   execute: async (
     input: ContextResolveInput,
-    context: HarnessContext
+    context: HarnessContext,
   ): Promise<ContextResolveOutput> => {
     const rawCandidates =
-      input.candidates ??
-      (context.state.get("raw_context_candidates") as any[]) ??
-      [];
+      input.candidates ?? (context.state.get("raw_context_candidates") as any[]) ?? [];
 
     // Map into ContextUncertaintyCandidate shape for scoring engine
     const candidates: ContextUncertaintyCandidate[] = rawCandidates.map((c, index) => {
@@ -58,11 +53,7 @@ export const contextResolveHook: HarnessHook<ContextResolveInput, ContextResolve
       tokenBudget,
     });
 
-    const selectedIds = selectUncertaintyReducingIds(
-      scored,
-      tokenBudget,
-      candidateTokens
-    );
+    const selectedIds = selectUncertaintyReducingIds(scored, tokenBudget, candidateTokens);
 
     const selectedSet = new Set(selectedIds);
     const selected = scored.filter((c) => selectedSet.has(c.id));

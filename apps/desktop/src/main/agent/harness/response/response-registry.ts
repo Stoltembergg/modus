@@ -39,10 +39,7 @@ export class ResponsePolicyRegistry {
     }
   }
 
-  public setSessionPolicy(
-    sessionId: string,
-    policy: Partial<ResponsePolicy>,
-  ): void {
+  public setSessionPolicy(sessionId: string, policy: Partial<ResponsePolicy>): void {
     this.sessionOverrides.set(sessionId, policy);
   }
 

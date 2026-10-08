@@ -10,17 +10,14 @@ import type {
  * Inspects tool executions for failed commands, lint errors, or broken tests,
  * enforcing the Verifier-First pattern.
  */
-export const verificationCheckHook: HarnessHook<
-  VerificationCheckInput,
-  VerificationCheckOutput
-> = {
+export const verificationCheckHook: HarnessHook<VerificationCheckInput, VerificationCheckOutput> = {
   name: "verification_check_qa",
   phase: "verification_check",
   priority: 10,
   isCritical: false,
   execute: async (
     input: VerificationCheckInput,
-    context: HarnessContext
+    context: HarnessContext,
   ): Promise<VerificationCheckOutput> => {
     const executions = input.toolExecutions ?? [];
     const violations: string[] = [];

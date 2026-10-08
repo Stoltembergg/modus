@@ -6,22 +6,17 @@
  * Extended in Fase 19 with WebAssembly/WASI sub-millisecond execution (< 0.2ms).
  */
 
-import { randomUUID } from 'crypto';
-import type { TrustLevel } from '../capability/capability-types';
-import {
-  FilesystemBroker,
-  GitBroker,
-  NetworkBroker,
-  ShellBroker,
-} from './permission-brokers';
+import { randomUUID } from "crypto";
+import type { TrustLevel } from "../capability/capability-types";
+import { FilesystemBroker, GitBroker, NetworkBroker, ShellBroker } from "./permission-brokers";
 import type {
   ExtendedPluginPermissions,
   IsolationMode,
   PluginRpcRequest,
   PluginRpcResponse,
-} from './plugin-isolation-types';
-import { SecurityAuditLogger } from './security-audit-logger';
-import { WasmCapabilityHost } from './wasm/wasm-capability-host';
+} from "./plugin-isolation-types";
+import { SecurityAuditLogger } from "./security-audit-logger";
+import { WasmCapabilityHost } from "./wasm/wasm-capability-host";
 
 export interface PluginIsolationOptions {
   timeoutMs?: number;
@@ -65,10 +60,10 @@ export class PluginIsolationHost {
    * Core and official plugins execute directly. Community and local plugins must be sandboxed.
    */
   public determineIsolationMode(trustLevel: TrustLevel): IsolationMode {
-    if (trustLevel === 'core' || trustLevel === 'official') {
-      return 'direct';
+    if (trustLevel === "core" || trustLevel === "official") {
+      return "direct";
     }
-    return 'sandboxed';
+    return "sandboxed";
   }
 
   /**
@@ -82,12 +77,15 @@ export class PluginIsolationHost {
     trustLevel: TrustLevel;
     permissions?: ExtendedPluginPermissions;
     context: TContext;
-    implementation: (ctx: TContext, brokers: {
-      fs: FilesystemBroker;
-      net: NetworkBroker;
-      shell: ShellBroker;
-      git: GitBroker;
-    }) => Promise<TResult> | TResult;
+    implementation: (
+      ctx: TContext,
+      brokers: {
+        fs: FilesystemBroker;
+        net: NetworkBroker;
+        shell: ShellBroker;
+        git: GitBroker;
+      },
+    ) => Promise<TResult> | TResult;
     timeoutMs?: number;
   }): Promise<PluginRpcResponse<TResult>> {
     const rpcId = randomUUID();
@@ -103,7 +101,7 @@ export class PluginIsolationHost {
     };
 
     // Direct mode for trusted plugins
-    if (mode === 'direct') {
+    if (mode === "direct") {
       try {
         const result = await params.implementation(params.context, brokerBundle);
         const latencyMs = Date.now() - startTime;
@@ -135,7 +133,11 @@ export class PluginIsolationHost {
       let timeoutTimer: NodeJS.Timeout | undefined;
       const timeoutPromise = new Promise<never>((_, reject) => {
         timeoutTimer = setTimeout(() => {
-          reject(new Error(`Isolated plugin "${params.pluginId}" execution timed out after ${timeoutMs}ms`));
+          reject(
+            new Error(
+              `Isolated plugin "${params.pluginId}" execution timed out after ${timeoutMs}ms`,
+            ),
+          );
         }, timeoutMs);
       });
 
@@ -158,7 +160,7 @@ export class PluginIsolationHost {
         pluginId: params.pluginId,
         action: `capability.execute.${params.capability}`,
         resource: params.capability,
-        decision: 'deny',
+        decision: "deny",
         reason: `Isolated execution failed: ${errorMessage}`,
       });
 
@@ -184,7 +186,9 @@ export class PluginIsolationHost {
   }): Promise<PluginRpcResponse<TOut>> {
     const wasmPerms = params.permissions?.wasm;
     const initialFuel = wasmPerms?.maxFuel ?? 1_000_000n;
-    const maxMemoryPages = wasmPerms?.maxMemoryMb ? Math.ceil((wasmPerms.maxMemoryMb * 1024 * 1024) / 65536) : 32;
+    const maxMemoryPages = wasmPerms?.maxMemoryMb
+      ? Math.ceil((wasmPerms.maxMemoryMb * 1024 * 1024) / 65536)
+      : 32;
 
     const res = await this.wasmHost.executeWasm<unknown, TOut>(
       params.wasmBytes,
@@ -203,7 +207,7 @@ export class PluginIsolationHost {
       pluginId: params.pluginId,
       action: `wasm.execute.${params.functionName}`,
       resource: params.functionName,
-      decision: res.success ? 'allow' : 'deny',
+      decision: res.success ? "allow" : "deny",
       ...(res.error ? { reason: res.error } : {}),
     });
 
@@ -222,12 +226,15 @@ export class PluginIsolationHost {
   public async handleRpcRequest<TContext = unknown, TResult = unknown>(
     request: PluginRpcRequest,
     trustLevel: TrustLevel,
-    handler: (ctx: TContext, brokers: {
-      fs: FilesystemBroker;
-      net: NetworkBroker;
-      shell: ShellBroker;
-      git: GitBroker;
-    }) => Promise<TResult> | TResult,
+    handler: (
+      ctx: TContext,
+      brokers: {
+        fs: FilesystemBroker;
+        net: NetworkBroker;
+        shell: ShellBroker;
+        git: GitBroker;
+      },
+    ) => Promise<TResult> | TResult,
   ): Promise<PluginRpcResponse<TResult>> {
     return this.executeIsolated<TContext, TResult>({
       pluginId: request.pluginId,

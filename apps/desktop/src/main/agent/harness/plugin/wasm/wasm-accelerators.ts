@@ -33,7 +33,10 @@ export interface AstTokenStats {
  * Provides optimized math for semantic search and embedding retrieval.
  */
 export class FastVectorDistance {
-  public static compute(vecA: Float32Array | number[], vecB: Float32Array | number[]): VectorDistanceResult {
+  public static compute(
+    vecA: Float32Array | number[],
+    vecB: Float32Array | number[],
+  ): VectorDistanceResult {
     const start = performance.now();
     const len = Math.min(vecA.length, vecB.length);
 
@@ -75,22 +78,22 @@ export class FastContextCompactor {
     const originalBytes = text.length;
 
     // Fast regex-free linear scanner for maximum speed
-    const lines = text.split('\n');
+    const lines = text.split("\n");
     const filtered: string[] = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i]!.trimEnd();
       if (!line) {
         // Collapse consecutive blank lines
-        if (filtered.length > 0 && filtered[filtered.length - 1] !== '') {
-          filtered.push('');
+        if (filtered.length > 0 && filtered[filtered.length - 1] !== "") {
+          filtered.push("");
         }
       } else {
         filtered.push(line);
       }
     }
 
-    const compactedText = filtered.join('\n');
+    const compactedText = filtered.join("\n");
     const compactedBytes = compactedText.length;
     const reductionPercentage =
       originalBytes > 0
@@ -113,8 +116,24 @@ export class FastContextCompactor {
  */
 export class FastAstTokenizer {
   private static readonly KEYWORDS = new Set([
-    'function', 'class', 'const', 'let', 'var', 'if', 'else', 'for', 'while',
-    'return', 'import', 'export', 'from', 'default', 'async', 'await', 'try', 'catch',
+    "function",
+    "class",
+    "const",
+    "let",
+    "var",
+    "if",
+    "else",
+    "for",
+    "while",
+    "return",
+    "import",
+    "export",
+    "from",
+    "default",
+    "async",
+    "await",
+    "try",
+    "catch",
   ]);
 
   public static tokenize(source: string): AstTokenStats {
@@ -125,15 +144,14 @@ export class FastAstTokenizer {
     let literalsCount = 0;
     let totalTokens = 0;
 
-    const regex = /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|\d+(?:\.\d+)?|"[^"]*"|'[^']*'|[+\-*/%=<>!&|^~?:;,.(){}\[\]]/g;
-    let match: RegExpExecArray | null;
-
-    while ((match = regex.exec(source)) !== null) {
+    const regex =
+      /\b[a-zA-Z_$][a-zA-Z0-9_$]*\b|\d+(?:\.\d+)?|"[^"]*"|'[^']*'|[+\-*/%=<>!&|^~?:;,.(){}\[\]]/g;
+    for (const match of source.matchAll(regex)) {
       totalTokens++;
       const tok = match[0];
       const firstChar = tok[0]!;
 
-      if ((firstChar >= '0' && firstChar <= '9') || firstChar === '"' || firstChar === "'") {
+      if ((firstChar >= "0" && firstChar <= "9") || firstChar === '"' || firstChar === "'") {
         literalsCount++;
       } else if (this.KEYWORDS.has(tok)) {
         keywordsCount++;

@@ -3,19 +3,21 @@
  * Auto Rollback Manager: monitors post-upgrade plugin health and executes automatic rollback upon failure.
  */
 
-import type { PluginHealthMonitor } from './plugin-health-monitor';
-import type { PluginLifecycleService } from './plugin-lifecycle-service';
-import { UpdateFailedError } from './plugin-rollback-types';
-import type { PluginManifest } from './plugin-types';
-import type { PluginVersionManager } from './version-manager';
+import type { PluginHealthMonitor } from "./plugin-health-monitor";
+import type { PluginLifecycleService } from "./plugin-lifecycle-service";
+import { UpdateFailedError } from "./plugin-rollback-types";
+import type { PluginManifest } from "./plugin-types";
+import type { PluginVersionManager } from "./version-manager";
 
 export interface WatchUpdateOptions {
   threshold?: number; // error rate threshold (default 0.5 = 50%)
-  healthCheck?: () => Promise<{ healthy: boolean; errorRate?: number; message?: string }> | {
-    healthy: boolean;
-    errorRate?: number;
-    message?: string;
-  };
+  healthCheck?: () =>
+    | Promise<{ healthy: boolean; errorRate?: number; message?: string }>
+    | {
+        healthy: boolean;
+        errorRate?: number;
+        message?: string;
+      };
 }
 
 export class AutoRollbackManager {
@@ -67,7 +69,7 @@ export class AutoRollbackManager {
 
     // 3. Post-upgrade Health Verification
     let isFailing = false;
-    let failureReason = '';
+    let failureReason = "";
     let observedErrorRate = 0;
 
     if (options?.healthCheck) {
@@ -75,12 +77,14 @@ export class AutoRollbackManager {
       if (!checkResult.healthy) {
         isFailing = true;
         observedErrorRate = checkResult.errorRate ?? 1.0;
-        failureReason = checkResult.message ?? `Post-upgrade health check reported failure (errorRate: ${observedErrorRate})`;
+        failureReason =
+          checkResult.message ??
+          `Post-upgrade health check reported failure (errorRate: ${observedErrorRate})`;
       }
     } else if (this.healthMonitor) {
       const health = this.healthMonitor.getHealth(pluginId);
       observedErrorRate = health.errorRate;
-      if (health.status === 'failing' || health.errorRate > threshold) {
+      if (health.status === "failing" || health.errorRate > threshold) {
         isFailing = true;
         failureReason = `Observed error rate ${(health.errorRate * 100).toFixed(1)}% exceeds threshold ${(threshold * 100).toFixed(1)}%`;
       }

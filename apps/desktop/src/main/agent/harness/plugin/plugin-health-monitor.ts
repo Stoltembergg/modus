@@ -3,8 +3,8 @@
  * Health monitoring system for plugins based on execution traces, error rates, and P95 latencies.
  */
 
-import type { PluginInstrumentation } from './plugin-instrumentation';
-import type { PluginHealth, PluginHealthStatus } from './plugin-tracing-types';
+import type { PluginInstrumentation } from "./plugin-instrumentation";
+import type { PluginHealth, PluginHealthStatus } from "./plugin-tracing-types";
 
 export class PluginHealthMonitor {
   private instrumentation: PluginInstrumentation;
@@ -23,7 +23,7 @@ export class PluginHealthMonitor {
     if (totalCalls === 0) {
       return {
         pluginId,
-        status: 'healthy',
+        status: "healthy",
         totalCalls: 0,
         errorCount: 0,
         errorRate: 0,
@@ -33,7 +33,7 @@ export class PluginHealthMonitor {
       };
     }
 
-    const failedTraces = traces.filter((t) => t.status === 'error' || t.status === 'timeout');
+    const failedTraces = traces.filter((t) => t.status === "error" || t.status === "timeout");
     const errorCount = failedTraces.length;
     const errorRate = errorCount / totalCalls;
 
@@ -71,12 +71,12 @@ export class PluginHealthMonitor {
    */
   public determineStatus(errorRate: number, p95LatencyMs: number): PluginHealthStatus {
     if (errorRate > 0.1 || p95LatencyMs > 5000) {
-      return 'failing';
+      return "failing";
     }
     if (errorRate > 0.05 || p95LatencyMs > 2000) {
-      return 'degraded';
+      return "degraded";
     }
-    return 'healthy';
+    return "healthy";
   }
 
   /**
@@ -95,6 +95,6 @@ export class PluginHealthMonitor {
 
   public isDegraded(pluginId: string): boolean {
     const health = this.getHealth(pluginId);
-    return health.status === 'degraded' || health.status === 'failing';
+    return health.status === "degraded" || health.status === "failing";
   }
 }

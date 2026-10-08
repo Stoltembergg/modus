@@ -8,10 +8,7 @@ import {
   handleGroupRevisionCheck,
 } from "../../tools/group-mailbox-tools";
 import { setAgentToolContext } from "../../tools/tool-context";
-import {
-  resetFeatureFlagOverrides,
-  setFeatureFlagOverrides,
-} from "../feature-flags";
+import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import type { HarnessContext } from "../kernel/harness-hooks";
 import {
   canProceed,
@@ -27,11 +24,7 @@ import {
   defaultTurnSettleGroupMailboxHook,
   defaultTurnStartGroupMailboxHook,
 } from "./group-hooks";
-import {
-  computeMessageDedupeHash,
-  DEFAULT_MAILBOX_CONFIG,
-  GroupMailbox,
-} from "./group-mailbox";
+import { computeMessageDedupeHash, DEFAULT_MAILBOX_CONFIG, GroupMailbox } from "./group-mailbox";
 import {
   advanceRevision,
   computeFileHash,
@@ -222,10 +215,7 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
       expect(purged).toBe(2);
 
       const remaining = mailbox.getMessages("B");
-      expect(remaining.map((m) => m.content)).toEqual([
-        "unacked recent",
-        "acked recent",
-      ]);
+      expect(remaining.map((m) => m.content)).toEqual(["unacked recent", "acked recent"]);
     });
   });
 
@@ -537,10 +527,7 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
       expect(recvRes.count).toBe(1);
       expect(recvRes.messages?.[0]?.content).toBe("Review PR #4");
 
-      const ackRes = handleGroupMailboxAck(
-        { messageIds: [sendRes.messageId!] },
-        "agent2",
-      );
+      const ackRes = handleGroupMailboxAck({ messageIds: [sendRes.messageId!] }, "agent2");
       expect(ackRes.success).toBe(true);
       expect(ackRes.ackedCount).toBe(1);
 
@@ -638,11 +625,8 @@ describe("Phase 6: Groups Mailbox & Optimistic Revision", () => {
 
     it("rejects an ack from an agent that is not the recipient", () => {
       const mailbox = GroupMailbox.getInstance();
-      const id = handleGroupMailboxSend(
-        { to: "agent-2", content: "private" },
-        "agent-1",
-        "g",
-      ).messageId!;
+      const id = handleGroupMailboxSend({ to: "agent-2", content: "private" }, "agent-1", "g")
+        .messageId!;
       expect(id).toBeDefined();
 
       expect(mailbox.ack(id, "agent-3")).toBe(false);

@@ -1,11 +1,6 @@
 import type { ResponseLevel } from "./response-policy";
 
-export type DeliverableType =
-  | "file_changed"
-  | "diff"
-  | "tool_result"
-  | "evidence"
-  | "decision";
+export type DeliverableType = "file_changed" | "diff" | "tool_result" | "evidence" | "decision";
 
 export type Deliverable = {
   type: DeliverableType;

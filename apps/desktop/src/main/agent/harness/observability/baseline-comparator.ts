@@ -51,7 +51,8 @@ export class BaselineComparator {
     // Target: Go > 30%, No-Go < 10%
     const totalBaselineTokens = this.baseline.averageTokensPerTurn * turns;
     const promptSavingTokens = metrics.promptSections.tokensSaved;
-    const promptSavingPercent = totalBaselineTokens > 0 ? (promptSavingTokens / totalBaselineTokens) * 100 : 0;
+    const promptSavingPercent =
+      totalBaselineTokens > 0 ? (promptSavingTokens / totalBaselineTokens) * 100 : 0;
 
     let p2Verdict: "GO" | "NO-GO" | "WARN" = "GO";
     if (promptSavingPercent < 10 && promptSavingTokens > 0) p2Verdict = "NO-GO";
@@ -63,7 +64,10 @@ export class BaselineComparator {
       verdict: p2Verdict,
       target: "> 30% saving",
       achieved: `${promptSavingPercent.toFixed(1)}% (${promptSavingTokens} tokens)`,
-      notes: p2Verdict === "GO" ? "Optimal prompt cache prefix and modular sections" : "Token economy below target",
+      notes:
+        p2Verdict === "GO"
+          ? "Optimal prompt cache prefix and modular sections"
+          : "Token economy below target",
     });
 
     // --- Phase 3: Tool Result Spill Overhead ---
@@ -87,7 +91,8 @@ export class BaselineComparator {
     const compactionReduction = metrics.compaction.frequencyReductionPercent;
     let p4Verdict: "GO" | "NO-GO" | "WARN" = "GO";
     if (compactionReduction < 10 && metrics.compaction.compactionEvents > 0) p4Verdict = "NO-GO";
-    else if (compactionReduction < 20 && metrics.compaction.compactionEvents > 0) p4Verdict = "WARN";
+    else if (compactionReduction < 20 && metrics.compaction.compactionEvents > 0)
+      p4Verdict = "WARN";
 
     phaseDecisions.push({
       phase: 4,
@@ -154,12 +159,16 @@ export class BaselineComparator {
       Math.floor(metrics.toolResults.spilledBytes / 4);
 
     const estimatedTokenEconomyPercent =
-      totalBaselineTokens > 0 ? Math.min(100, Math.round((totalSavedTokens / totalBaselineTokens) * 100)) : 0;
+      totalBaselineTokens > 0
+        ? Math.min(100, Math.round((totalSavedTokens / totalBaselineTokens) * 100))
+        : 0;
 
     // Latency Overhead
     const latencyOverheadPercent =
       this.baseline.averageTurnDurationMs > 0
-        ? Math.round((metrics.performance.averageHookDurationMs / this.baseline.averageTurnDurationMs) * 100)
+        ? Math.round(
+            (metrics.performance.averageHookDurationMs / this.baseline.averageTurnDurationMs) * 100,
+          )
         : 0;
 
     const hasNoGo = phaseDecisions.some((d) => d.verdict === "NO-GO");

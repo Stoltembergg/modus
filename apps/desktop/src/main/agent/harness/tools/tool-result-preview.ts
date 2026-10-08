@@ -6,10 +6,7 @@ import type { SpilledToolResult } from "./tool-result-storage";
  * Supports both line-oriented output (scripts, git diffs, logs) and
  * char-oriented minified outputs (raw JSON, base64 strings).
  */
-export function generateSpillPreview(
-  spill: SpilledToolResult,
-  policy: ToolResultPolicy
-): string {
+export function generateSpillPreview(spill: SpilledToolResult, policy: ToolResultPolicy): string {
   const lines = spill.fullContent.split("\n");
   const totalLines = lines.length;
   const tokenEstimate = Math.ceil(spill.sizeBytes / 4);

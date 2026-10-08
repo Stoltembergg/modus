@@ -1,12 +1,12 @@
-import type { PluginManifest } from './plugin-types';
-import { contextEnginePluginManifest } from './plugins/context-engine-plugin';
-import { failureIntelPluginManifest } from './plugins/failure-intel-plugin';
-import { groupsPluginManifest } from './plugins/groups-plugin';
-import { memoryPluginManifest } from './plugins/memory-plugin';
-import { modelRouterPluginManifest } from './plugins/model-router-plugin';
-import { verifierPluginManifest } from './plugins/verifier-plugin';
+import type { PluginManifest } from "./plugin-types";
+import { contextEnginePluginManifest } from "./plugins/context-engine-plugin";
+import { failureIntelPluginManifest } from "./plugins/failure-intel-plugin";
+import { groupsPluginManifest } from "./plugins/groups-plugin";
+import { memoryPluginManifest } from "./plugins/memory-plugin";
+import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
+import { verifierPluginManifest } from "./plugins/verifier-plugin";
 
-export type HostPluginTrust = 'core' | 'official';
+export type HostPluginTrust = "core" | "official";
 
 export interface HostPluginEntry {
   readonly manifest: PluginManifest;
@@ -47,12 +47,12 @@ export class HostPluginCatalog implements PluginManifestCatalog {
 }
 
 export const BUILT_IN_PLUGIN_ENTRIES: readonly HostPluginEntry[] = Object.freeze([
-  Object.freeze({ manifest: memoryPluginManifest, trustLevel: 'core' as const }),
-  Object.freeze({ manifest: modelRouterPluginManifest, trustLevel: 'core' as const }),
-  Object.freeze({ manifest: contextEnginePluginManifest, trustLevel: 'core' as const }),
-  Object.freeze({ manifest: verifierPluginManifest, trustLevel: 'core' as const }),
-  Object.freeze({ manifest: failureIntelPluginManifest, trustLevel: 'core' as const }),
-  Object.freeze({ manifest: groupsPluginManifest, trustLevel: 'core' as const }),
+  Object.freeze({ manifest: memoryPluginManifest, trustLevel: "core" as const }),
+  Object.freeze({ manifest: modelRouterPluginManifest, trustLevel: "core" as const }),
+  Object.freeze({ manifest: contextEnginePluginManifest, trustLevel: "core" as const }),
+  Object.freeze({ manifest: verifierPluginManifest, trustLevel: "core" as const }),
+  Object.freeze({ manifest: failureIntelPluginManifest, trustLevel: "core" as const }),
+  Object.freeze({ manifest: groupsPluginManifest, trustLevel: "core" as const }),
 ]);
 
 export const BUILT_IN_PLUGIN_CATALOG = new HostPluginCatalog(BUILT_IN_PLUGIN_ENTRIES);

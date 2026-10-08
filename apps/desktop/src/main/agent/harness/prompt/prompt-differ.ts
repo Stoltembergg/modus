@@ -14,7 +14,7 @@ export function fingerprintSection(content: string): string {
  */
 export function detectChanges(
   previousFingerprints: Map<string, string>,
-  currentSections: Map<string, PromptSection>
+  currentSections: Map<string, PromptSection>,
 ): string[] {
   const changed: string[] = [];
 

@@ -11,8 +11,8 @@ import {
   CircularDependencyError,
   type DependencyNode,
   type TransitiveDependent,
-} from './plugin-dependency-types';
-import type { PluginManifest } from './plugin-types';
+} from "./plugin-dependency-types";
+import type { PluginManifest } from "./plugin-types";
 
 export class DependencyGraph {
   private nodes = new Map<string, DependencyNode>();
@@ -149,7 +149,7 @@ export class DependencyGraph {
         directDependents: [],
         transitiveDependents: [],
         totalAffected: 0,
-        severity: 'none',
+        severity: "none",
         critical: false,
         message: `Plugin "${pluginId}" not found in dependency graph.`,
       };
@@ -186,27 +186,27 @@ export class DependencyGraph {
     }
 
     const totalAffected = direct.length + transitive.length;
-    let severity: BlastRadiusSeverity = 'none';
+    let severity: BlastRadiusSeverity = "none";
 
     if (totalAffected === 0) {
-      severity = 'none';
+      severity = "none";
     } else if (totalAffected <= 2) {
-      severity = 'low';
+      severity = "low";
     } else if (totalAffected <= 5) {
-      severity = 'medium';
+      severity = "medium";
     } else {
-      severity = 'high';
+      severity = "high";
     }
 
     // Criticality check
-    const isCritical = severity === 'high' || direct.length > 0;
+    const isCritical = severity === "high" || direct.length > 0;
 
     let message = `Removing or updating "${pluginId}" affects ${totalAffected} plugin(s).`;
     if (direct.length > 0) {
-      message += ` Direct dependents: ${direct.join(', ')}.`;
+      message += ` Direct dependents: ${direct.join(", ")}.`;
     }
     if (transitive.length > 0) {
-      message += ` Transitive dependents: ${transitive.map((t) => `${t.pluginId} (via ${t.via.join('->')})`).join(', ')}.`;
+      message += ` Transitive dependents: ${transitive.map((t) => `${t.pluginId} (via ${t.via.join("->")})`).join(", ")}.`;
     }
 
     return {
@@ -308,29 +308,29 @@ export class DependencyGraph {
     const lines: string[] = [];
 
     if (this.nodes.size === 0) {
-      return '(empty dependency graph)';
+      return "(empty dependency graph)";
     }
 
     for (const [id, node] of this.nodes.entries()) {
       lines.push(`${id}@${node.version}`);
       if (node.provides.length > 0) {
-        lines.push(`  provides: ${node.provides.join(', ')}`);
+        lines.push(`  provides: ${node.provides.join(", ")}`);
       }
       if (node.dependencies.length > 0) {
-        lines.push('  depends on:');
+        lines.push("  depends on:");
         for (const dep of node.dependencies) {
           lines.push(`    ↓ ${dep}`);
         }
       }
       if (node.dependents.length > 0) {
-        lines.push('  required by:');
+        lines.push("  required by:");
         for (const dep of node.dependents) {
           lines.push(`    ↑ ${dep}`);
         }
       }
-      lines.push('');
+      lines.push("");
     }
 
-    return lines.join('\n').trimEnd();
+    return lines.join("\n").trimEnd();
   }
 }

@@ -100,7 +100,7 @@ export class ToolResultStorage {
 
     // Sort by lastAccessedAt ascending (oldest first)
     const sorted = Array.from(this.inMemoryStorage.values()).sort(
-      (a, b) => a.lastAccessedAt - b.lastAccessedAt
+      (a, b) => a.lastAccessedAt - b.lastAccessedAt,
     );
 
     for (const record of sorted) {
@@ -181,7 +181,7 @@ export class ToolResultStorage {
    */
   retrieveResult(
     spillId: string,
-    options?: SpillRetrievalOptions
+    options?: SpillRetrievalOptions,
   ): SpillRetrievalResult | undefined {
     const record = this.inMemoryStorage.get(spillId);
     if (!record) return undefined;

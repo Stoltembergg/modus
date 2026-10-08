@@ -68,17 +68,20 @@ describe("PI SDK Integration & Harness Feasibility POC", () => {
     expect(hookResult.content[0].text.length).toBeLessThan(500);
 
     // 1b. Test agent.afterToolCall wiring (agent loop boundary)
-    const afterCallResult = await session.agent.afterToolCall!({
-      assistantMessage: {} as any,
-      toolCall: { id: "call_2", name: "bash", arguments: { command: "cat large.txt" } } as any,
-      args: { command: "cat large.txt" },
-      result: {
-        content: [{ type: "text", text: largePayload }],
-        details: {},
+    const afterCallResult = await session.agent.afterToolCall!(
+      {
+        assistantMessage: {} as any,
+        toolCall: { id: "call_2", name: "bash", arguments: { command: "cat large.txt" } } as any,
+        args: { command: "cat large.txt" },
+        result: {
+          content: [{ type: "text", text: largePayload }],
+          details: {},
+        },
+        isError: false,
+        context: {} as any,
       },
-      isError: false,
-      context: {} as any,
-    }, new AbortController().signal);
+      new AbortController().signal,
+    );
 
     expect(afterCallResult).toBeDefined();
     expect(afterCallResult?.content?.[0]?.type).toBe("text");
@@ -223,7 +226,7 @@ describe("PI SDK Integration & Harness Feasibility POC", () => {
       "Hello agent",
       undefined,
       "Base System Prompt",
-      {}
+      {},
     );
 
     expect(beforeAgentStartFired).toBe(true);

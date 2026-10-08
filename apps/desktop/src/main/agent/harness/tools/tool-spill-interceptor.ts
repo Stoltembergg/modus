@@ -40,11 +40,7 @@ export function interceptToolResult(input: ToolSpillInterceptInput): ToolSpillIn
     };
   }
 
-  const evaluation = evaluateToolSpill(
-    input.toolName,
-    input.output,
-    input.customPolicy
-  );
+  const evaluation = evaluateToolSpill(input.toolName, input.output, input.customPolicy);
 
   if (!evaluation.shouldSpill) {
     return {

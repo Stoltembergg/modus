@@ -3,9 +3,9 @@
  * Type definitions for Version Preservation, Auto-Rollback, Safe Mode and Self-Healing Recovery.
  */
 
-import type { PluginManifest } from './plugin-types';
+import type { PluginManifest } from "./plugin-types";
 
-export type SafeModeLevel = 'core' | 'official' | 'verified';
+export type SafeModeLevel = "core" | "official" | "verified";
 
 export interface PluginBackup {
   pluginId: string;
@@ -16,21 +16,21 @@ export interface PluginBackup {
 }
 
 export type DiagnosisIssueType =
-  | 'plugin_error'
-  | 'missing_dependencies'
-  | 'circular_dependency'
-  | 'high_failure_rate';
+  | "plugin_error"
+  | "missing_dependencies"
+  | "circular_dependency"
+  | "high_failure_rate";
 
 export type DiagnosisRecommendation =
-  | 'rollback_or_disable'
-  | 'install_dependencies'
-  | 'remove_one'
-  | 'disable';
+  | "rollback_or_disable"
+  | "install_dependencies"
+  | "remove_one"
+  | "disable";
 
 export interface PluginDiagnosisIssue {
   type: DiagnosisIssueType;
   pluginId: string;
-  severity: 'low' | 'medium' | 'high' | 'critical';
+  severity: "low" | "medium" | "high" | "critical";
   error?: string | undefined;
   missing?: string[] | undefined;
   cycle?: string[] | undefined;
@@ -45,7 +45,7 @@ export interface DiagnosisReport {
   timestamp: string;
 }
 
-export type RecoveryActionType = 'rolled_back' | 'disabled' | 'uninstalled' | 'none';
+export type RecoveryActionType = "rolled_back" | "disabled" | "uninstalled" | "none";
 
 export interface RecoveryAction {
   pluginId: string;
@@ -66,9 +66,14 @@ export class UpdateFailedError extends Error {
   public readonly attemptedVersion: string;
   public readonly rolledBackToVersion: string;
 
-  constructor(message: string, pluginId: string, attemptedVersion: string, rolledBackToVersion: string) {
+  constructor(
+    message: string,
+    pluginId: string,
+    attemptedVersion: string,
+    rolledBackToVersion: string,
+  ) {
     super(message);
-    this.name = 'UpdateFailedError';
+    this.name = "UpdateFailedError";
     this.pluginId = pluginId;
     this.attemptedVersion = attemptedVersion;
     this.rolledBackToVersion = rolledBackToVersion;

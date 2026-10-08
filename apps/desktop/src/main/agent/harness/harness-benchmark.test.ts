@@ -63,7 +63,10 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
     ToolResultStorage.resetInstance();
 
     // Simulate 35 KB build output (e.g. webpack or vite bundle log)
-    const rawOutput = "Build step: compiling modules...\n" + "chunk-details: ".repeat(2500) + "\nBuild finished in 4.2s.";
+    const rawOutput =
+      "Build step: compiling modules...\n" +
+      "chunk-details: ".repeat(2500) +
+      "\nBuild finished in 4.2s.";
     const rawEstimatedTokens = Math.ceil(rawOutput.length / 4);
 
     const intercept = interceptToolResult({
@@ -75,7 +78,8 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
     expect(intercept.spilled).toBe(true);
 
     const spilledEstimatedTokens = Math.ceil(intercept.effectiveContent.length / 4);
-    const tokenReductionPercent = ((rawEstimatedTokens - spilledEstimatedTokens) / rawEstimatedTokens) * 100;
+    const tokenReductionPercent =
+      ((rawEstimatedTokens - spilledEstimatedTokens) / rawEstimatedTokens) * 100;
 
     // Expected token reduction: > 85%
     expect(tokenReductionPercent).toBeGreaterThanOrEqual(85);
@@ -88,14 +92,47 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
     const messages: MessageLike[] = [
       { id: "m0", role: "user", content: "Run the full test suite" },
       { id: "m1", role: "assistant", content: "Starting tests across 8 packages..." },
-      { id: "m2", role: "tool", toolName: "run_command", content: "DEBUG [auth]: " + "x".repeat(12000) },
-      { id: "m3", role: "tool", toolName: "run_command", content: "DEBUG [billing]: " + "y".repeat(12000) },
-      { id: "m4", role: "tool", toolName: "run_command", content: "DEBUG [cart]: " + "z".repeat(12000) },
-      { id: "m5", role: "assistant", content: "Partial success in auth and cart; retrying billing..." },
-      { id: "m6", role: "tool", toolName: "run_command", content: "DEBUG [billing retry]: " + "w".repeat(12000) },
+      {
+        id: "m2",
+        role: "tool",
+        toolName: "run_command",
+        content: "DEBUG [auth]: " + "x".repeat(12000),
+      },
+      {
+        id: "m3",
+        role: "tool",
+        toolName: "run_command",
+        content: "DEBUG [billing]: " + "y".repeat(12000),
+      },
+      {
+        id: "m4",
+        role: "tool",
+        toolName: "run_command",
+        content: "DEBUG [cart]: " + "z".repeat(12000),
+      },
+      {
+        id: "m5",
+        role: "assistant",
+        content: "Partial success in auth and cart; retrying billing...",
+      },
+      {
+        id: "m6",
+        role: "tool",
+        toolName: "run_command",
+        content: "DEBUG [billing retry]: " + "w".repeat(12000),
+      },
       { id: "m7", role: "assistant", content: "Billing passed after retry." },
-      { id: "m8", role: "tool", toolName: "run_command", content: "DEBUG [cleanup]: " + "k".repeat(12000) },
-      { id: "m9", role: "assistant", content: "All suites completed successfully: 48 tests passed." },
+      {
+        id: "m8",
+        role: "tool",
+        toolName: "run_command",
+        content: "DEBUG [cleanup]: " + "k".repeat(12000),
+      },
+      {
+        id: "m9",
+        role: "assistant",
+        content: "All suites completed successfully: 48 tests passed.",
+      },
     ];
 
     const evidence: PreservedEvidence[] = [
@@ -112,8 +149,8 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
       contextWindow: 20_000,
       outputReserve: 1_000,
       headroom: 1_000,
-      thresholdRatio: 0.80, // trigger at 15,200 tokens
-      targetRatioAfterPrune: 0.40, // prune down to 7,600 tokens
+      thresholdRatio: 0.8, // trigger at 15,200 tokens
+      targetRatioAfterPrune: 0.4, // prune down to 7,600 tokens
       preserveCategories: ["qa_check" as const],
     };
 
@@ -170,7 +207,9 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
 
     // Critical invariants: 100% preservation of warnings and deliverables
     expect(formattedResult.response).toContain("SQL injection vulnerability detected");
-    expect(formattedResult.response).toContain("Do not restart the server without running the safety migration script");
+    expect(formattedResult.response).toContain(
+      "Do not restart the server without running the safety migration script",
+    );
     expect(formattedResult.deliverablesSummary).toBe("*1 file(s) modified.*");
     expect(formattedResult.response).toContain("*1 file(s) modified.*");
   });

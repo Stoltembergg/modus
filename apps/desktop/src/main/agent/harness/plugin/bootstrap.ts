@@ -3,10 +3,10 @@
  * Bootstraps core capabilities and loads internal plugins in topological dependency order.
  */
 
-import { CapabilityRegistry } from '../capability/capability-registry';
-import { CORE_CAPABILITIES, registerCoreCapabilities } from '../capability/core-capabilities';
-import { PluginLoader } from './plugin-loader';
-import { BUILT_IN_PLUGIN_ENTRIES } from './plugin-catalog';
+import { CapabilityRegistry } from "../capability/capability-registry";
+import { CORE_CAPABILITIES, registerCoreCapabilities } from "../capability/core-capabilities";
+import { BUILT_IN_PLUGIN_ENTRIES } from "./plugin-catalog";
+import { PluginLoader } from "./plugin-loader";
 
 export interface BootstrapResult {
   registry: CapabilityRegistry;

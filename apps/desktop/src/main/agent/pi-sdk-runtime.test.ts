@@ -494,16 +494,20 @@ afterAll(async () => {
 describe("PiSdkRuntime", () => {
   it("waits for plugin bootstrap to settle before startup lifecycle sync", async () => {
     let releaseBootstrap!: () => void;
-    const bootstrapGate = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
     const sync = vi.fn(async () => [] as string[]);
     const { PluginLoader } = await import("./harness/plugin/plugin-loader");
     vi.spyOn(PluginLoader.prototype, "load").mockImplementation(async () => {
       await bootstrapGate;
       throw new Error("controlled bootstrap stop");
     });
-    const lifecycleSpy = vi.spyOn(PiSdkRuntime.prototype, "getPluginLifecycleService").mockReturnValue({
-      syncOnStartup: sync,
-    } as never);
+    const lifecycleSpy = vi
+      .spyOn(PiSdkRuntime.prototype, "getPluginLifecycleService")
+      .mockReturnValue({
+        syncOnStartup: sync,
+      } as never);
     setFeatureFlagOverrides({ MODUS_PLUGINS: true, MODUS_PLUGIN_LIFECYCLE: true });
     const runtime = new PiSdkRuntime();
     await Promise.resolve();
@@ -7143,14 +7147,10 @@ describe("PiSdkRuntime Phase 7 response policy wiring", () => {
   it("appends the response policy directive and evaluates the settled response when enabled", async () => {
     setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: true });
 
-    const systemPrompt = await runTurnWithAssistantText(
-      "P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6",
-    );
+    const systemPrompt = await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
 
     expect(systemPrompt).toContain('<response_policy level="standard">');
-    expect(
-      ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated,
-    ).toBeGreaterThan(0);
+    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
   });
 
   it("omits the directive and skips evaluation when the flag is disabled", async () => {
@@ -7224,12 +7224,8 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
 
-    expect(
-      ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated,
-    ).toBeGreaterThan(0);
-    expect(
-      HarnessObserver.getInstance().snapshot().response.violationsDetected,
-    ).toBeGreaterThan(0);
+    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
+    expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
   });
 });
 

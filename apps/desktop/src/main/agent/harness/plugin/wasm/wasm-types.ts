@@ -11,10 +11,10 @@ export class WasmFuelExhaustedError extends Error {
   ) {
     super(
       `WASM execution fuel exhausted (limit: ${fuelLimit.toString()}, burned: ${fuelBurned.toString()})${
-        pluginId ? ` in plugin "${pluginId}"` : ''
+        pluginId ? ` in plugin "${pluginId}"` : ""
       }`,
     );
-    this.name = 'WasmFuelExhaustedError';
+    this.name = "WasmFuelExhaustedError";
   }
 }
 
@@ -26,10 +26,10 @@ export class WasmMemoryOutOfBoundsError extends Error {
   ) {
     super(
       `WASM memory access out of bounds: requested ${requestedBytes} bytes, max allowed is ${maxAllowedBytes} bytes${
-        pluginId ? ` for plugin "${pluginId}"` : ''
+        pluginId ? ` for plugin "${pluginId}"` : ""
       }`,
     );
-    this.name = 'WasmMemoryOutOfBoundsError';
+    this.name = "WasmMemoryOutOfBoundsError";
   }
 }
 
@@ -39,11 +39,9 @@ export class WasmExecutionTimeoutError extends Error {
     public readonly pluginId?: string,
   ) {
     super(
-      `WASM execution timed out after ${timeoutMs}ms${
-        pluginId ? ` for plugin "${pluginId}"` : ''
-      }`,
+      `WASM execution timed out after ${timeoutMs}ms${pluginId ? ` for plugin "${pluginId}"` : ""}`,
     );
-    this.name = 'WasmExecutionTimeoutError';
+    this.name = "WasmExecutionTimeoutError";
   }
 }
 
@@ -53,9 +51,9 @@ export class WasmCompilationError extends Error {
     public readonly moduleName?: string,
   ) {
     super(
-      `Failed to compile WASM module${moduleName ? ` "${moduleName}"` : ''}: ${originalMessage}`,
+      `Failed to compile WASM module${moduleName ? ` "${moduleName}"` : ""}: ${originalMessage}`,
     );
-    this.name = 'WasmCompilationError';
+    this.name = "WasmCompilationError";
   }
 }
 

@@ -9,7 +9,9 @@ import type {
 
 export type ModusNativeDispatchDelegate = {
   spawnSubagent?: ((input: SubagentSpawnInput) => Promise<SubagentSpawnResult>) | undefined;
-  waitSubagent?: ((subagentId: string, timeoutMs?: number) => Promise<SubagentWaitResult>) | undefined;
+  waitSubagent?:
+    | ((subagentId: string, timeoutMs?: number) => Promise<SubagentWaitResult>)
+    | undefined;
   stopSubagent?: ((subagentId: string) => Promise<void>) | undefined;
   getSubagentStatus?: ((subagentId: string) => Promise<SubagentStatus>) | undefined;
 };

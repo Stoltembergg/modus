@@ -64,7 +64,7 @@ export function identifyPruneCandidates(
   options?: {
     minCandidateBytes?: number | undefined; // Only consider items > minCandidateBytes (default 1024)
     neverPrunePaths?: string[] | undefined;
-  }
+  },
 ): PruneCandidate[] {
   const minBytes = options?.minCandidateBytes ?? 1024;
   const neverPrune = new Set(options?.neverPrunePaths ?? []);
@@ -76,9 +76,10 @@ export function identifyPruneCandidates(
 
   // Pass 1: Gather file accesses and search executions
   messages.forEach((msg, idx) => {
-    const rawText = typeof msg.content === "string" 
-      ? msg.content 
-      : msg.content.map((c) => c.text ?? "").join("\n");
+    const rawText =
+      typeof msg.content === "string"
+        ? msg.content
+        : msg.content.map((c) => c.text ?? "").join("\n");
 
     const toolName = msg.toolName ?? "";
 
@@ -90,7 +91,11 @@ export function identifyPruneCandidates(
         list.push(idx);
         filesTouched.set(p, list);
       }
-    } else if (toolName.includes("grep") || toolName.includes("search") || toolName.includes("find")) {
+    } else if (
+      toolName.includes("grep") ||
+      toolName.includes("search") ||
+      toolName.includes("find")
+    ) {
       const match = rawText.match(/(?:query|pattern)[:=]\s*["']?([^"'\n]+)/i);
       const q = match?.[1]?.trim() ?? toolName;
       const list = searchQueries.get(q) ?? [];
@@ -103,9 +108,10 @@ export function identifyPruneCandidates(
   messages.forEach((msg, idx) => {
     if (!isToolOriginated(msg)) return;
 
-    const rawText = typeof msg.content === "string" 
-      ? msg.content 
-      : msg.content.map((c) => c.text ?? "").join("\n");
+    const rawText =
+      typeof msg.content === "string"
+        ? msg.content
+        : msg.content.map((c) => c.text ?? "").join("\n");
 
     const sizeBytes = Buffer.byteLength(rawText, "utf8");
     if (sizeBytes < minBytes) return;
@@ -115,11 +121,19 @@ export function identifyPruneCandidates(
     let superseded = false;
     let path: string | undefined = undefined;
 
-    if (toolName.includes("run_command") || toolName.includes("terminal") || toolName.includes("bash")) {
+    if (
+      toolName.includes("run_command") ||
+      toolName.includes("terminal") ||
+      toolName.includes("bash")
+    ) {
       candidateType = "log";
       // Command outputs older than recent turns are prime pruning candidates
       superseded = idx < messages.length - 4;
-    } else if (toolName.includes("grep") || toolName.includes("find") || toolName.includes("search")) {
+    } else if (
+      toolName.includes("grep") ||
+      toolName.includes("find") ||
+      toolName.includes("search")
+    ) {
       candidateType = "search";
       // If same search was run later, or later turns exist
       superseded = idx < messages.length - 4;
@@ -129,7 +143,7 @@ export function identifyPruneCandidates(
       path = match?.[1]?.trim();
       if (path && neverPrune.has(path)) return;
       // If file was read multiple times, earlier reads are superseded
-      const touches = path ? filesTouched.get(path) ?? [] : [];
+      const touches = path ? (filesTouched.get(path) ?? []) : [];
       superseded = touches.some((t) => t > idx);
     }
 
@@ -163,7 +177,7 @@ export function identifyPruneCandidates(
  */
 export function pruneCandidates(
   candidates: PruneCandidate[],
-  targetTokensToSave: number
+  targetTokensToSave: number,
 ): PruneResult {
   const priorityScore = (c: PruneCandidate): number => {
     let score = 0;

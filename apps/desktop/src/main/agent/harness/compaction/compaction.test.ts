@@ -1,14 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createModusCompactionExtension } from "../../pi-compaction-extension";
-import {
-  resetFeatureFlagOverrides,
-  setFeatureFlagOverrides,
-} from "../feature-flags";
+import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { HarnessKernel } from "../kernel/harness-kernel";
-import {
-  compactionTelemetry,
-  coordinateCompaction,
-} from "./compaction-coordinator";
+import { compactionTelemetry, coordinateCompaction } from "./compaction-coordinator";
 import { defaultCompactionHook } from "./compaction-hook";
 import {
   calculateCompactionMetrics,
@@ -44,7 +38,7 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
       const sonnetPolicy = getCompactionPolicy("claude-sonnet-4-5-20250921");
       expect(sonnetPolicy.modelId).toContain("claude-sonnet-4-5");
       expect(sonnetPolicy.contextWindow).toBe(200_000);
-      expect(sonnetPolicy.thresholdRatio).toBe(0.80);
+      expect(sonnetPolicy.thresholdRatio).toBe(0.8);
 
       const deepseekPolicy = getCompactionPolicy("deepseek-chat");
       expect(deepseekPolicy.contextWindow).toBe(64_000);
@@ -326,8 +320,8 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
         contextWindow: 10_000,
         outputReserve: 1_000,
         headroom: 1_000,
-        thresholdRatio: 0.80, // trigger at 7,200 tokens
-        targetRatioAfterPrune: 0.50, // target 4,500 tokens
+        thresholdRatio: 0.8, // trigger at 7,200 tokens
+        targetRatioAfterPrune: 0.5, // target 4,500 tokens
         preserveCategories: ["qa_check" as const],
       };
 
@@ -344,7 +338,9 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
       expect(result.reason).toBe("headroom_restored_via_pruning");
       expect(result.savedTokens).toBeGreaterThan(0);
       expect(result.prunedCount).toBeGreaterThan(0);
-      expect(result.remainingTokens).toBeLessThan(customPolicy.contextWindow * customPolicy.thresholdRatio);
+      expect(result.remainingTokens).toBeLessThan(
+        customPolicy.contextWindow * customPolicy.thresholdRatio,
+      );
     });
 
     it("requires compaction and enhances summary with preserved evidence if still above threshold", () => {
@@ -353,8 +349,8 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
         contextWindow: 10_000,
         outputReserve: 1_000,
         headroom: 1_000,
-        thresholdRatio: 0.50, // trigger at 4,500
-        targetRatioAfterPrune: 0.30,
+        thresholdRatio: 0.5, // trigger at 4,500
+        targetRatioAfterPrune: 0.3,
         preserveCategories: ["qa_check" as const, "plan_acceptance" as const],
       };
 
@@ -429,7 +425,7 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
           runId: "run-kernel-1",
           mode: "build",
           state: new Map(),
-        }
+        },
       );
 
       expect(output.shouldCancelCompaction).toBe(true);

@@ -42,10 +42,7 @@ export function detectRepeatHypothesis(
     };
   }
 
-  const signatureCounts = new Map<
-    string,
-    { count: number; strategyCode: string }
-  >();
+  const signatureCounts = new Map<string, { count: number; strategyCode: string }>();
   for (const attempt of relevantAttempts) {
     const sig = failureAttemptSignature(attempt);
     const existing = signatureCounts.get(sig);

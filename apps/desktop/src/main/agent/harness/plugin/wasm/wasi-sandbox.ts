@@ -4,8 +4,8 @@
  * Provides fine-grained workspace preopens, secure environment sanitization, and output isolation.
  */
 
-import { WASI } from 'node:wasi';
-import type { WasiOptions } from './wasm-types';
+import { WASI } from "node:wasi";
+import type { WasiOptions } from "./wasm-types";
 
 export class WasiSandbox {
   private wasiInstance: WASI | null = null;
@@ -20,7 +20,7 @@ export class WasiSandbox {
 
   private initializeWasi(): void {
     const cleanEnv: Record<string, string> = {
-      RUST_BACKTRACE: '0',
+      RUST_BACKTRACE: "0",
       ...(this.options.env ?? {}),
     };
 
@@ -28,8 +28,8 @@ export class WasiSandbox {
 
     try {
       this.wasiInstance = new WASI({
-        version: 'preview1',
-        args: this.options.args ?? ['modus-plugin'],
+        version: "preview1",
+        args: this.options.args ?? ["modus-plugin"],
         env: cleanEnv,
         preopens,
         returnOnExit: true,
@@ -59,40 +59,26 @@ export class WasiSandbox {
         proc_exit: (code: number): void => {
           this.stderrBuffer.push(`Process exited with code: ${code}`);
         },
-        fd_write: (
-          fd: number,
-          _iovs: number,
-          _iovs_len: number,
-          _nwritten: number,
-        ): number => {
+        fd_write: (fd: number, _iovs: number, _iovs_len: number, _nwritten: number): number => {
           return 0;
         },
         fd_close: (_fd: number): number => 0,
-        fd_seek: (
-          _fd: number,
-          _offset: bigint,
-          _whence: number,
-          _newoffset: number,
-        ): number => 0,
+        fd_seek: (_fd: number, _offset: bigint, _whence: number, _newoffset: number): number => 0,
         environ_get: (_environ: number, _environ_buf: number): number => 0,
         environ_sizes_get: (_environ_count: number, _environ_buf_size: number): number => 0,
-        clock_time_get: (
-          _clockid: number,
-          _precision: bigint,
-          _time: number,
-        ): number => 0,
+        clock_time_get: (_clockid: number, _precision: bigint, _time: number): number => 0,
       },
     };
   }
 
   public start(instance: WebAssembly.Instance): void {
-    if (this.wasiInstance && typeof instance.exports._start === 'function') {
+    if (this.wasiInstance && typeof instance.exports._start === "function") {
       try {
         this.wasiInstance.start(instance);
       } catch {
         // Ignored or exited
       }
-    } else if (this.wasiInstance && typeof instance.exports.__wasm_call_ctors === 'function') {
+    } else if (this.wasiInstance && typeof instance.exports.__wasm_call_ctors === "function") {
       try {
         this.wasiInstance.initialize(instance);
       } catch {
@@ -102,11 +88,11 @@ export class WasiSandbox {
   }
 
   public getStdout(): string {
-    return this.stdoutBuffer.join('');
+    return this.stdoutBuffer.join("");
   }
 
   public getStderr(): string {
-    return this.stderrBuffer.join('');
+    return this.stderrBuffer.join("");
   }
 
   public clearOutputs(): void {

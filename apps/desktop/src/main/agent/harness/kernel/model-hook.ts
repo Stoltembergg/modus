@@ -14,14 +14,10 @@ export const modelSelectHook: HarnessHook<ModelSelectInput, ModelSelectOutput> =
   phase: "model_select",
   priority: 10,
   isCritical: false,
-  execute: async (
-    input: ModelSelectInput,
-    context: HarnessContext
-  ): Promise<ModelSelectOutput> => {
-    const classification =
-      input.taskComplexity ? { complexity: input.taskComplexity, risk: "low" } :
-      (input.taskClassification ||
-      (context.state.get("task_classification") as any));
+  execute: async (input: ModelSelectInput, context: HarnessContext): Promise<ModelSelectOutput> => {
+    const classification = input.taskComplexity
+      ? { complexity: input.taskComplexity, risk: "low" }
+      : input.taskClassification || (context.state.get("task_classification") as any);
 
     let thinkingBudget = input.requestedThinking ?? 4096;
     let thinkingLevel: "low" | "medium" | "high" = "medium";
