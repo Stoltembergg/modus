@@ -4711,6 +4711,10 @@ describe("PiSdkRuntime", () => {
       requestTool(name);
       await Promise.all([runtime.ensure(window, sessionId), runtime.ensure(window, sessionId)]);
       expect(clearTodos).not.toHaveBeenCalledWith(sessionId);
+      expect(first.thinkingLevel).toBe("high");
+      expect(mocks.createAgentSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({ thinkingLevel: "high" }),
+      );
       expect(sessionAt().thinkingLevel).toBe("high");
 
       await turn();
