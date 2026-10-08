@@ -1189,7 +1189,7 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     expect(input).not.toHaveProperty("thinkingLevel");
   });
 
-  it("L3b: a Modus 1:1 session is forced to the Modus turn model (plan default)", async () => {
+  it("preserves the exact Modus model selected for a 1:1 session", async () => {
     mocks.getAgentSession.mockReturnValue({
       id: "session-1",
       model: "modus/anthropic/claude-fable-5-1",
@@ -1200,7 +1200,8 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
       { sessionId: "session-1", message: "hi", model: "modus/anthropic/claude-fable-5-1" } as never,
     );
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
-    expect(input.model).toBe("modus/deepseek/deepseek-flash");
+    expect(input.model).toBe("modus/anthropic/claude-fable-5-1");
+    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
     expect(mocks.getAgentSession).toHaveBeenCalledWith("session-1");
   });
 
@@ -1222,4 +1223,21 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     ).rejects.toThrow("No model is configured");
     expect(prompt).not.toHaveBeenCalled();
   });
+
+  it.each(["byok/removed-model", "modus/removed-model"])(
+    "refuses unavailable explicit model %s without sending a request to the Settings default",
+    async (selectedModel) => {
+      mocks.getAgentSession.mockReturnValue({ id: "session-1", model: selectedModel });
+      mocks.isUsableModelId.mockReturnValue(false);
+      const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+      await expect(
+        handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
+      ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
+
+      expect(prompt).not.toHaveBeenCalled();
+      expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+      expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
+    },
+  );
 });

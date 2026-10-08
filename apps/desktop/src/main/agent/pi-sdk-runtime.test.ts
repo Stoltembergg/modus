@@ -125,6 +125,7 @@ vi.mock("./model-service", () => ({
     thinkingLevels: ["off", "low", "medium", "high"],
   })),
   findModel: vi.fn(() => mocks.model),
+  isUsableModelId: vi.fn(() => true),
   getDefaultModel: vi.fn(() => mocks.model),
   getModelInfo: vi.fn(() => ({
     id: "mock/model",
@@ -155,6 +156,7 @@ const { getDatabase } = await import("../db/database");
 const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned } = await import(
   "./pi-sdk-runtime"
 );
+const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
@@ -467,6 +469,9 @@ beforeEach(async () => {
   cwd = await mkdtemp(join(tmpdir(), "modus-pi-runtime-cwd-"));
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
+  vi.mocked(modelService.findModel).mockReset().mockReturnValue(mocks.model as never);
+  vi.mocked(modelService.isUsableModelId).mockReset().mockReturnValue(true);
+  vi.mocked(modelService.getDefaultModel).mockReset().mockReturnValue(mocks.model as never);
   mocks.setPiSubscriber(undefined);
   mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({ kind: "create" }));
   mocks.sessionManagerOpen.mockClear();
@@ -494,6 +499,146 @@ afterAll(async () => {
 describe("PiSdkRuntime", () => {
   afterEach(() => {
     resetFeatureFlagOverrides();
+  });
+
+  it("refuses a removed explicit model before creating a session", async () => {
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(
+      new PiSdkRuntime().create(createWindowStub(), {
+        workspaceId: `workspace-${crypto.randomUUID()}`,
+        cwd,
+        title: "Selected model",
+        model: "openai/removed-model",
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/removed-model");
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses an unavailable model with a registry entry", async () => {
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(
+      new PiSdkRuntime().create(createWindowStub(), {
+        workspaceId: `workspace-${crypto.randomUUID()}`,
+        cwd,
+        title: "Unavailable provider",
+        model: "mock/model",
+      }),
+    ).rejects.toThrow("Selected model is unavailable: mock/model");
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cold resume when the stored model was removed", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase()
+      .prepare("update agent_sessions set model = ? where id = ?")
+      .run("byok/removed-model", sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "byok/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      "Selected model is unavailable: byok/removed-model",
+    );
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+    const row = getDatabase()
+      .prepare("select model from agent_sessions where id = ?")
+      .get(sessionId) as { model: string };
+    expect(row.model).toBe("byok/removed-model");
+  });
+
+  it("rejects a removed per-turn model before the cached session prompt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "modus/removed-model" ? undefined : (mocks.model as never),
+    );
+
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send this to another model",
+        model: "modus/removed-model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: modus/removed-model");
+
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable per-turn model before the session prompt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send while the selected provider is unavailable",
+        model: "mock/model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: mock/model");
+
+    expect(session.prompt).not.toHaveBeenCalled();
+  });
+
+  it("lets an explicit model replace a removed model during cold resume", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase()
+      .prepare("update agent_sessions set model = ? where id = ?")
+      .run("openai/removed-model", sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    await runtime.prompt(window, {
+      context: [],
+      message: "Use the replacement explicitly",
+      model: "mock/model",
+      sessionId,
+    });
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+    expect(session.setModel).toHaveBeenCalledWith(mocks.model);
+    const row = getDatabase()
+      .prepare("select model from agent_sessions where id = ?")
+      .get(sessionId) as { model: string };
+    expect(row.model).toBe("mock/model");
   });
 
   it("waits for plugin bootstrap to settle before startup lifecycle sync", async () => {

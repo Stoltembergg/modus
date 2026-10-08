@@ -3,26 +3,26 @@ import { turnModelForPane } from "./ChatPane";
 
 const MODELS = [{ id: "openai/gpt-5" }, { id: "modus/zai/glm" }];
 
-describe("L3b turnModelForPane mirrors main's turn model", () => {
-  it("a Modus session shows the Modus turn model", () => {
+describe("turnModelForPane preserves explicit session selection", () => {
+  it("keeps the exact model stored by a Modus session", () => {
     expect(
       turnModelForPane("openai/gpt-5", "modus/anthropic/claude-fable-5-1", MODELS, "modus/zai/glm"),
-    ).toBe("modus/zai/glm");
+    ).toBe("modus/anthropic/claude-fable-5-1");
   });
 
-  it("an own-provider session keeps its stored model; gone → Settings default", () => {
+  it("keeps a BYOK model even after it disappears from the available model catalog", () => {
     expect(turnModelForPane("modus/zai/glm", "openai/gpt-5", MODELS, "modus/zai/glm")).toBe(
       "openai/gpt-5",
     );
     expect(turnModelForPane("openai/gpt-5", "gone/model", MODELS, "modus/zai/glm")).toBe(
-      "openai/gpt-5",
+      "gone/model",
     );
   });
 
-  it("no stored model: the Settings default, Modus rule when it is a Modus model", () => {
+  it("uses the Settings default only when there is no session model", () => {
     expect(turnModelForPane("openai/gpt-5", undefined, MODELS, "modus/zai/glm")).toBe(
       "openai/gpt-5",
     );
-    expect(turnModelForPane("modus/x/y", undefined, MODELS, "modus/zai/glm")).toBe("modus/zai/glm");
+    expect(turnModelForPane("modus/x/y", undefined, MODELS, "modus/zai/glm")).toBe("modus/x/y");
   });
 });

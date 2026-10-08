@@ -219,6 +219,37 @@ describe("Modus provider in the model service", () => {
     expect(onCallSettled).not.toHaveBeenCalled();
   });
 
+  it("does not replace a stale explicit Settings default with an available provider", () => {
+    const selected = "byok-relay/removed-model";
+    getDatabase()
+      .prepare(
+        `insert into app_settings (key, value, updated_at) values ('model.default', ?, ?)
+         on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(selected, new Date().toISOString());
+
+    try {
+      expect(ms.getDefaultModelId()).toBe(selected);
+      expect(ms.getModelSettings().defaultModel).toBe(selected);
+      expect(() => ms.getDefaultModel()).toThrow(`Selected model is unavailable: ${selected}`);
+    } finally {
+      ms.setDefaultModel(undefined);
+    }
+  });
+
+  it("rejects a removed explicit provider model without making a provider request", async () => {
+    const globalFetch = vi.spyOn(globalThis, "fetch");
+    const selected = "byok-relay/removed-model";
+
+    await expect(
+      ms.completeWithModel({ modelId: selected, systemPrompt: "s", prompt: "must not send" }),
+    ).rejects.toThrow(`Model not available: ${selected}`);
+
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(routerFetch).not.toHaveBeenCalled();
+    expect(onCallSettled).not.toHaveBeenCalled();
+  });
+
   it("Modus calls go to the router with the stripped model id and refresh credits", async () => {
     const auth = authSource("signed-in");
     const modus = installModus(auth, () => READY);

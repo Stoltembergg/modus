@@ -84,7 +84,8 @@ vi.mock("@earendil-works/pi-coding-agent", () => ({
 
 vi.mock("../model-service", () => ({
   getDefaultModel: () => ({ id: "test-model" }),
-  findModel: (modelId: string | undefined) => (modelId ? { id: modelId } : undefined),
+  findModel: (modelId: string | undefined) =>
+    modelId && modelId !== "byok/removed-model" ? { id: modelId } : undefined,
   getModelRegistry: () => ({ authStorage: {}, modelRegistry: {} }),
 }));
 
@@ -708,6 +709,17 @@ describe("runHyperPlanRevision", () => {
         (options) => (options.model as { id: string }).id === "composer-model",
       ),
     ).toBe(true);
+  });
+
+  it("refuses an unavailable explicit model without creating alternate sessions", async () => {
+    useSuccessfulPromptHandler();
+
+    await expect(
+      runHyperPlanRevision(revisionInput(), { modelId: "byok/removed-model" }),
+    ).rejects.toThrow("Selected model is unavailable: byok/removed-model");
+
+    expect(mocks.sessionOptions).toHaveLength(0);
+    expect(mocks.promptTexts).toHaveLength(0);
   });
 
   it("falls back to the default model when no model id is provided", async () => {

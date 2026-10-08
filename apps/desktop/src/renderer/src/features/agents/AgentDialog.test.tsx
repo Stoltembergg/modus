@@ -369,6 +369,22 @@ describe("AgentDialog", () => {
     expect(within(dialog).queryByRole("button", { name: "Regenerate" })).toBeNull();
     expect(within(dialog).queryByRole("textbox", { name: /What should it help with/ })).toBeNull();
   });
+
+  it("does not replace an unavailable explicit default when creating a custom agent", async () => {
+    const user = userEvent.setup();
+    const create = vi.fn(async () => undefined);
+    const { dialog } = renderDialog({ models: MODELS.slice(0, 1), create });
+    await user.type(field(dialog, "Name"), "Cy");
+    await user.type(field(dialog, "Role"), "Scribe");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toBe(
+        GROUP_ERROR_MESSAGES["agent-model-unavailable"],
+      ),
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
 });
 
 describe("AgentDialog explicit capabilities", () => {
