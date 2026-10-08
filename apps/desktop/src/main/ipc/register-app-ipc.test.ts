@@ -1169,6 +1169,10 @@ describe("agent:prompt preserves the session model", () => {
   });
 
   it("an old session's model (sent by the renderer) and its thinking are ignored for the run", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "anthropic/claude-opus-5-5",
+    });
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await handler?.(
       trustedEvent as never,
@@ -1210,13 +1214,35 @@ describe("agent:prompt preserves the session model", () => {
     expect(input.model).toBe("openai/gpt-5");
   });
 
-  it("refuses the turn when Settings has no default model", async () => {
+  it("defers a legacy session with no database model to runtime branch restoration", async () => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", model: undefined });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(
+      trustedEvent as never,
+      {
+        sessionId: "session-1",
+        message: "hi",
+        model: "renderer/untrusted",
+      } as never,
+    );
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).not.toHaveProperty("model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("defers an absent session choice to runtime when Settings has no default", async () => {
     mocks.getDefaultModelId.mockReturnValue(undefined);
+    prompt.mockRejectedValueOnce(new Error("No model is configured"));
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await expect(
       handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
     ).rejects.toThrow("No model is configured");
-    expect(prompt).not.toHaveBeenCalled();
+    expect(prompt).toHaveBeenCalledTimes(1);
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).not.toHaveProperty("model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 
   it.each([

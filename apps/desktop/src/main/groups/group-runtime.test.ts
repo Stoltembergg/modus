@@ -1584,9 +1584,10 @@ describe("group turns preserve each member's selected model", () => {
 
   it("does not wake a group member with an unavailable explicit model", async () => {
     const selectedModel = "byok/removed-model";
+    const defaultModelId = vi.fn(() => "openai/available-default");
     setGroupTurnModelResolver((agentModelId) =>
       resolveTurnModel(agentModelId, {
-        defaultModelId: () => "openai/available-default",
+        defaultModelId,
         isUsable: (modelId) => modelId !== selectedModel,
       }),
     );
@@ -1604,7 +1605,12 @@ describe("group turns preserve each member's selected model", () => {
     await flush();
 
     expect(runtime.calls).toHaveLength(0);
-    expect(room(group.id).some((message) => message.body.includes(selectedModel))).toBe(true);
+    expect(defaultModelId).not.toHaveBeenCalled();
+    expect(
+      room(group.id).some(
+        (message) => message.error === `Selected model is unavailable: ${selectedModel}`,
+      ),
+    ).toBe(true);
   });
 });
 

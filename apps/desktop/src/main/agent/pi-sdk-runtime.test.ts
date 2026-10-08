@@ -46,8 +46,14 @@ const mocks = vi.hoisted(() => {
     setPiSubscriber: (next: ((event: unknown) => void) | undefined) => {
       subscriber = next;
     },
-    sessionManagerCreate: vi.fn(() => ({ kind: "create" })),
-    sessionManagerOpen: vi.fn(() => ({ kind: "open" })),
+    sessionManagerCreate: vi.fn(() => ({
+      kind: "create",
+      buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+    })),
+    sessionManagerOpen: vi.fn(() => ({
+      kind: "open",
+      buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+    })),
     settingsManagerInMemory: vi.fn(
       (_settings?: Parameters<typeof SettingsManager.inMemory>[0]) => ({}),
     ),
@@ -484,7 +490,10 @@ beforeEach(async () => {
     .mockReset()
     .mockReturnValue(mocks.model as never);
   mocks.setPiSubscriber(undefined);
-  mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({ kind: "create" }));
+  mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({
+    kind: "create",
+    buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+  }));
   mocks.sessionManagerOpen.mockClear();
   mocks.settingsManagerInMemory.mockReset().mockImplementation(() => ({}));
   mocks.resourceLoaderOptions = [];
@@ -612,6 +621,45 @@ describe("PiSdkRuntime", () => {
     );
   });
 
+  it("uses a legacy PI branch selection for a prompt before consulting the default", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    const selectedModel = {
+      id: "remembered-model",
+      name: "Remembered Model",
+      provider: "provider-legacy",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "provider-legacy/remembered-model"
+        ? (selectedModel as never)
+        : (mocks.model as never),
+    );
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-legacy", modelId: "remembered-model" },
+      }),
+    } as never);
+    const session = createMockPiSession({ model: selectedModel as never });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "Continue with the saved model",
+      sessionId,
+    });
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(session.setModel).toHaveBeenCalledWith(selectedModel);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a legacy PI branch model when that exact provider model is unavailable", async () => {
     const sessionId = `legacy-session-${crypto.randomUUID()}`;
     const piSessionFile = join(userData, `${sessionId}.jsonl`);
@@ -637,6 +685,26 @@ describe("PiSdkRuntime", () => {
     expect(mocks.createAgentSession).not.toHaveBeenCalled();
   });
 
+  it("does not default a legacy session when its PI branch cannot be restored", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    mocks.sessionManagerOpen.mockImplementationOnce(() => {
+      throw new Error("invalid PI session file");
+    });
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      `Unable to restore the saved model selection for session ${sessionId}.`,
+    );
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
   it("rejects a removed per-turn model before the cached session prompt", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
@@ -649,15 +717,17 @@ describe("PiSdkRuntime", () => {
       modelId === "modus/removed-model" ? undefined : (mocks.model as never),
     );
 
-    const result = await runtime.prompt(window, {
-      context: [],
-      message: "Do not send this to another model",
-      model: "modus/removed-model",
-      sessionId,
-    });
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send this to another model",
+        model: "modus/removed-model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: modus/removed-model");
 
-    expect(result).toMatchObject({ outcome: "failed" });
     expect(session.prompt).not.toHaveBeenCalled();
+    expect(session.setModel).not.toHaveBeenCalled();
     expect(window.webContents.send).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
@@ -677,15 +747,17 @@ describe("PiSdkRuntime", () => {
     await runtime.ensure(window, sessionId);
     vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
 
-    const result = await runtime.prompt(window, {
-      context: [],
-      message: "Do not send while the selected provider is unavailable",
-      model: "mock/model",
-      sessionId,
-    });
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send while the selected provider is unavailable",
+        model: "mock/model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: mock/model");
 
-    expect(result).toMatchObject({ outcome: "failed" });
     expect(session.prompt).not.toHaveBeenCalled();
+    expect(session.setModel).not.toHaveBeenCalled();
     expect(window.webContents.send).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
@@ -6152,6 +6224,53 @@ describe("PiSdkRuntime", () => {
       cwd,
       windowsHide: true,
     });
+    expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
+    expect(worktrees.stdout).not.toContain("modus/subagent/");
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a worktree if the explicit subagent model becomes unavailable before creation", async () => {
+    await initGitRepo();
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    const selectedModel = {
+      id: "race-model",
+      name: "Race Model",
+      provider: "openai",
+    };
+    let lookups = 0;
+    vi.mocked(modelService.findModel).mockImplementation((modelId) => {
+      if (modelId !== "openai/race-model") return mocks.model as never;
+      lookups += 1;
+      return lookups === 1 ? (selectedModel as never) : undefined;
+    });
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
+        parentSessionId,
+        task: "Keep the requested model",
+        prompt: "Do not switch models.",
+        subagentType: "writer",
+        subagent: {
+          name: "writer",
+          body: "Write code.",
+          model: "openai/race-model",
+          readOnly: false,
+          isolation: "worktree",
+        },
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/race-model");
+
+    const worktrees = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      windowsHide: true,
+    });
+    expect(lookups).toBe(2);
     expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
     expect(worktrees.stdout).not.toContain("modus/subagent/");
     expect(mocks.createAgentSession).not.toHaveBeenCalled();

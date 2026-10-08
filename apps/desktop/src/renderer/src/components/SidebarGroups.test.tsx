@@ -307,6 +307,10 @@ describe("SidebarGroups", () => {
     await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
     await user.type(within(dialog).getByRole("textbox", { name: "Agent 1 name" }), "Cy");
     expect((removeA as HTMLButtonElement).disabled).toBe(false);
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: "Model for new agents" }),
+      "m-1",
+    );
     await user.click(removeA);
     await user.selectOptions(within(dialog).getByRole("combobox", { name: /Lead/ }), "member-b");
     await user.click(within(dialog).getByRole("button", { name: "Save members" }));
