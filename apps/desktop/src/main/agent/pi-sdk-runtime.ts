@@ -127,8 +127,17 @@ import {
   releaseHyperPlanRunReservation,
 } from "./harness/hyperplan-draft-store";
 import { evaluateIntentGate } from "./harness/intent-gate";
+import type {
+  HarnessContext,
+  PromptBuildInput,
+  PromptBuildOutput,
+  TurnSettleInput,
+  TurnSettleOutput,
+} from "./harness/kernel/harness-hooks";
+import { HarnessKernel } from "./harness/kernel/harness-kernel";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
+import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
   AutoRollbackManager,
   bootstrapModusPlugins,
@@ -156,6 +165,10 @@ import {
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
+import {
+  defaultPromptBuildResponsePolicyHook,
+  defaultTurnSettleResponsePolicyHook,
+} from "./harness/response/response-hooks";
 import {
   isSafeReadonlySpecialistRole,
   planSafeDispatch,
@@ -806,6 +819,7 @@ function composeSubagentPrompt(input: {
 type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
+  private harnessKernel = new HarnessKernel();
   private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
   private pluginLoader: PluginLoader = new PluginLoader(this.capabilityRegistry);
   private pluginStateStore?: PluginStateStore | undefined;
@@ -844,6 +858,10 @@ export class PiSdkRuntime implements AgentRuntime {
   >();
 
   constructor() {
+    this.harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
+    this.harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
+    this.harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
+
     // Make the agent terminal tools (run/read/list/write/kill), the built-in
     // web tools (search/fetch), and the live to-do tool available to the chat
     // profile before any session is assembled.
@@ -2166,6 +2184,22 @@ export class PiSdkRuntime implements AgentRuntime {
     // An agent's 1:1 chat (A3) carries its persona, like its turns in the room.
     const personaPrompt = agentChatPersonaPrompt(sessionId);
     this.personaPrompts.set(sessionId, personaPrompt);
+    let responsePolicyPrompt = "";
+    if (isFeatureFlagEnabled("MODUS_USE_KERNEL") && isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")) {
+      const promptBuildContext: HarnessContext = {
+        sessionId,
+        runId: sessionId,
+        workspaceId: getAgentSession(sessionId)?.workspaceId,
+        cwd,
+        mode: "build",
+        state: new Map(),
+      };
+      const promptBuild = await this.harnessKernel.executePhase<
+        PromptBuildInput,
+        PromptBuildOutput
+      >("prompt_build", { basePrompt: "" }, promptBuildContext);
+      responsePolicyPrompt = promptBuild.finalSystemPrompt;
+    }
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -2175,6 +2209,7 @@ export class PiSdkRuntime implements AgentRuntime {
       appendSystemPrompt: [
         describeAgentShellForPrompt(shell),
         RESPONSE_FORMAT_BASE,
+        ...(responsePolicyPrompt ? [responsePolicyPrompt] : []),
         ...(globalGuidancePrompt ? [globalGuidancePrompt] : []),
         ...(rulesPrompt ? [rulesPrompt] : []),
         ...(personaPrompt ? [personaPrompt] : []),
@@ -2182,6 +2217,42 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     await loader.reload();
     return { settingsManager, loader };
+  }
+
+  private async settleHarnessTurn(
+    runtimeSession: SdkRuntimeSession,
+    input: PromptAgentInput,
+    tracker: RunOutputTracker,
+  ): Promise<void> {
+    const state = new Map<string, string | number>([
+      ["harness.turn_start_time", tracker.startedAt],
+    ]);
+    const assistantResponse = runAssistantOutput(input.sessionId, tracker.runId);
+    if (assistantResponse) state.set("harness.assistant_response", assistantResponse);
+
+    const activeTodos = getLatestSessionTodos(input.sessionId) ?? [];
+    const context: HarnessContext = {
+      sessionId: input.sessionId,
+      runId: tracker.runId,
+      workspaceId: runtimeSession.info.workspaceId,
+      cwd: runtimeSession.info.cwd,
+      mode: input.mode ?? "build",
+      state,
+      startedAt: tracker.startedAt,
+    };
+    const turn: TurnSettleInput = {
+      runId: tracker.runId,
+      completed: getAgentRun(tracker.runId)?.status === "completed",
+      hasActiveTodos: activeTodos.some(
+        (todo) => todo.status === "pending" || todo.status === "in_progress",
+      ),
+      turnTokens: tracker.tokenUsage.totalTokens,
+    };
+    await this.harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+      "turn_settle",
+      turn,
+      context,
+    );
   }
 
   /**
@@ -3711,6 +3782,19 @@ export class PiSdkRuntime implements AgentRuntime {
       clearMcpCitationRun(input.sessionId, run.id);
       releasePreflight();
       await captureTurnEnd();
+      if (
+        runtimeSession &&
+        outputTracker &&
+        isFeatureFlagEnabled("MODUS_USE_KERNEL") &&
+        (isFeatureFlagEnabled("MODUS_RESPONSE_POLICY") ||
+          isFeatureFlagEnabled("MODUS_OBSERVABILITY"))
+      ) {
+        try {
+          await this.settleHarnessTurn(runtimeSession, input, outputTracker);
+        } catch (error) {
+          console.warn("[modus-harness] turn_settle failed open:", error);
+        }
+      }
       removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
       console.info(
         `[modus-timing] turn end (idle emit) +${Date.now() - outputTracker.startedAt}ms`,
