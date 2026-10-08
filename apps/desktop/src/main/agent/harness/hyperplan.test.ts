@@ -86,6 +86,7 @@ vi.mock("../model-service", () => ({
   getDefaultModel: () => ({ id: "test-model" }),
   findModel: (modelId: string | undefined) =>
     modelId && modelId !== "byok/removed-model" ? { id: modelId } : undefined,
+  isUsableModelId: (modelId: string) => modelId !== "byok/removed-model",
   getModelRegistry: () => ({ authStorage: {}, modelRegistry: {} }),
 }));
 

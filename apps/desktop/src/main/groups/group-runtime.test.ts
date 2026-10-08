@@ -1549,11 +1549,9 @@ describe("group turns preserve each member's selected model", () => {
   afterEach(() => setGroupTurnModelResolver(undefined));
 
   it("a Modus agent and an own-provider agent run their exact selected models", async () => {
-    const MODUS_TURN = "modus/deepseek/deepseek-flash";
     setGroupTurnModelResolver((agentModelId, _sessionId) =>
       resolveTurnModel(agentModelId, {
         defaultModelId: () => "openai/gpt-5",
-        modusTurnModelId: () => MODUS_TURN,
         isUsable: () => true,
       }),
     );
@@ -1589,7 +1587,6 @@ describe("group turns preserve each member's selected model", () => {
     setGroupTurnModelResolver((agentModelId) =>
       resolveTurnModel(agentModelId, {
         defaultModelId: () => "openai/available-default",
-        modusTurnModelId: () => undefined,
         isUsable: (modelId) => modelId !== selectedModel,
       }),
     );

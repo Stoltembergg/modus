@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   assertHyperPlanSessionAvailable: vi.fn(),
   startProviderAuth: vi.fn(),
   getDefaultModelId: vi.fn(),
-  getModusTurnModelId: vi.fn(),
   isUsableModelId: vi.fn(),
   requireAgentChatWritable: vi.fn(),
   restoreCheckpoint: vi.fn(),
@@ -75,7 +74,6 @@ vi.mock("../agent/model-service", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent/model-service")>()),
   startProviderAuth: mocks.startProviderAuth,
   getDefaultModelId: mocks.getDefaultModelId,
-  getModusTurnModelId: mocks.getModusTurnModelId,
   isUsableModelId: mocks.isUsableModelId,
 }));
 vi.mock("../agents/agents-store", async (importOriginal) => ({
@@ -1152,7 +1150,7 @@ describe("subagent worktree IPC with Agent Group member sessions", () => {
   });
 });
 
-describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
+describe("agent:prompt preserves the session model", () => {
   const sender = { mainFrame: { url: "file:///app/index.html" } };
   const trustedEvent = { sender, senderFrame: sender.mainFrame };
   const prompt = vi.fn(async () => ({ outcome: "ok" }));
@@ -1161,7 +1159,6 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     mocks.handlers.clear();
     prompt.mockClear();
     mocks.getDefaultModelId.mockReset().mockReturnValue("anthropic/claude-opus-5-5");
-    mocks.getModusTurnModelId.mockReset().mockReturnValue("modus/deepseek/deepseek-flash");
     mocks.isUsableModelId.mockReset().mockReturnValue(true);
     mocks.getAgentSession.mockReset();
     mocks.requireAgentChatWritable.mockReset();
@@ -1201,18 +1198,16 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     );
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
     expect(input.model).toBe("modus/anthropic/claude-fable-5-1");
-    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
     expect(mocks.getAgentSession).toHaveBeenCalledWith("session-1");
   });
 
-  it("L3b: an own-provider 1:1 session keeps its stored model (not the Settings default)", async () => {
+  it("a BYOK session keeps its stored model instead of the Settings default", async () => {
     mocks.getAgentSession.mockReturnValue({ id: "session-1", model: "openai/gpt-5" });
     mocks.getDefaultModelId.mockReturnValue("modus/deepseek/deepseek-flash");
     const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
     await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
     expect(input.model).toBe("openai/gpt-5");
-    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
   });
 
   it("refuses the turn when Settings has no default model", async () => {
@@ -1238,6 +1233,5 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
 
     expect(prompt).not.toHaveBeenCalled();
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
-    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
   });
 });

@@ -149,7 +149,6 @@ vi.mock("./model-service", () => ({
     thinkingLevel: variant === "high" ? "high" : "off",
     variant: variant ?? "off",
   })),
-  setDefaultModel: vi.fn(),
 }));
 
 const { getDatabase } = await import("../db/database");
@@ -351,25 +350,27 @@ function insertSession(
 ): void {
   const now = new Date().toISOString();
   insertWorkspace(workspaceId);
-  getDatabase().prepare(
-    `insert into agent_sessions (
+  getDatabase()
+    .prepare(
+      `insert into agent_sessions (
       id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
       created_at, updated_at
      )
      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    sessionId,
-    workspaceId,
-    title,
-    cwd,
-    "idle",
-    "pi-sdk",
-    "mock/model",
-    "old-pi-session",
-    missingSessionFile,
-    now,
-    now,
-  );
+    )
+    .run(
+      sessionId,
+      workspaceId,
+      title,
+      cwd,
+      "idle",
+      "pi-sdk",
+      "mock/model",
+      "old-pi-session",
+      missingSessionFile,
+      now,
+      now,
+    );
 }
 
 function setTaskToolContext(workspaceId: string, sessionId: string, window: unknown): void {
@@ -5928,6 +5929,36 @@ describe("PiSdkRuntime", () => {
     } finally {
       toolRegistry.unregisterTool("synthetic_mutator");
     }
+  });
+
+  it("does not substitute an unavailable explicit subagent model", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+      "Parent chat",
+    );
+    const selectedModel = "openai/removed-subagent-model";
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
+        parentSessionId,
+        task: "Audit model selection",
+        prompt: "Use only the chosen model.",
+        subagentType: "reviewer",
+        subagent: {
+          name: "reviewer",
+          body: "Review the change.",
+          model: selectedModel,
+          readOnly: true,
+        },
+      }),
+    ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
+
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
   });
 
   it("applies configured subagent tool allow and deny lists", async () => {

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { agentPromptSchema } from "../ipc/schemas";
 import {
-  isModusModelId,
   NO_DEFAULT_MODEL_MESSAGE,
   resolveTurnModel,
   type TurnModelDeps,
@@ -84,7 +83,6 @@ describe("explicit turn model identity", () => {
     ]);
     return {
       defaultModelId: () => "openai/gpt-5",
-      modusTurnModelId: () => MODUS_PLAN,
       isUsable: (id) => usable.has(id),
       ...overrides,
     };
@@ -92,17 +90,14 @@ describe("explicit turn model identity", () => {
 
   it("preserves the exact selected Modus model instead of remapping to the plan model", () => {
     const selected = "modus/anthropic/claude-opus-5-5";
-    const resolveModusTurnModelId = vi.fn(() => MODUS_PLAN);
     expect(
       resolveTurnModel(
         selected,
         deps({
           isUsable: (id) => id === selected,
-          modusTurnModelId: resolveModusTurnModelId,
         }),
       ),
     ).toBe(selected);
-    expect(resolveModusTurnModelId).not.toHaveBeenCalled();
   });
 
   it("preserves the selected BYOK model when the Settings default is another provider", () => {
@@ -142,9 +137,7 @@ describe("explicit turn model identity", () => {
     ).toThrow("Selected model is unavailable: byok/removed-model");
   });
 
-  it("preserves the Modus identity when checking a provider and identifies it in errors", () => {
-    expect(isModusModelId(MODUS_PLAN)).toBe(true);
-    expect(isModusModelId("openai/gpt-5")).toBe(false);
+  it("preserves the Modus identity and identifies it in errors", () => {
     expect(() => resolveTurnModel(MODUS_PLAN, deps({ isUsable: () => false }))).toThrow(
       `Selected model is unavailable: ${MODUS_PLAN}`,
     );
