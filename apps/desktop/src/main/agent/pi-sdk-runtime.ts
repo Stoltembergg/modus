@@ -2558,7 +2558,8 @@ export class PiSdkRuntime implements AgentRuntime {
       );
     }
     const selectedThinking =
-      previousSession && requestedModelId === undefined
+      previousSession &&
+      (requestedModelId === undefined || requestedModelId === storedModelId)
         ? {
             model: selectedModel,
             thinkingLevel: previousSession.session.thinkingLevel,
