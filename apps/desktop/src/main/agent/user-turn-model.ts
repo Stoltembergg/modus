@@ -35,14 +35,22 @@ export function resolveTurnModel(
   return selected;
 }
 
+/** Resolve a persisted selection without applying defaults before session restoration. */
+export function resolveExplicitTurnModel(
+  candidate: string | null | undefined,
+  deps: TurnModelDeps,
+): string | undefined {
+  if (candidate === undefined || candidate === null || candidate === "") return undefined;
+  return resolveTurnModel(candidate, deps);
+}
+
 type ParsedPrompt = ReturnType<(typeof agentPromptSchema)["parse"]>;
 
-/** agent:prompt payload -> runtime input, on `turnModelId` (resolveTurnModel). */
+/** agent:prompt payload -> runtime input; an absent model stays unset for session restoration. */
 export function userTurnPromptInput(
   parsed: ParsedPrompt,
   turnModelId: string | undefined,
 ): PromptAgentInput {
-  if (!turnModelId) throw new Error(NO_DEFAULT_MODEL_MESSAGE);
   return {
     sessionId: parsed.sessionId,
     message: parsed.message,
@@ -53,7 +61,7 @@ export function userTurnPromptInput(
     ...(parsed.skills !== undefined ? { skills: parsed.skills } : {}),
     ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
     // parsed.model / thinkingLevel / thinkingVariant are deliberately dropped.
-    model: turnModelId,
+    ...(turnModelId ? { model: turnModelId } : {}),
     ...(parsed.planId !== undefined ? { planId: parsed.planId } : {}),
   };
 }

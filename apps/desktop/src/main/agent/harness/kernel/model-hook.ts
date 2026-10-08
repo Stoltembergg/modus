@@ -7,7 +7,7 @@ import type {
 
 /**
  * Standard Model Select Hook:
- * Dynamically adjusts thinking variant and model parameters based on task complexity.
+ * Preserves the requested model identity while adjusting thinking parameters by task complexity.
  */
 export const modelSelectHook: HarnessHook<ModelSelectInput, ModelSelectOutput> = {
   name: "model_select_thinking_budget",
@@ -33,12 +33,13 @@ export const modelSelectHook: HarnessHook<ModelSelectInput, ModelSelectOutput> =
     }
 
     const effectiveModel = input.requestedModel || "default";
+    const provider = input.requestedModel?.split("/")[0];
 
     return {
       selectedModel: effectiveModel,
       effectiveModel,
       thinkingBudget,
-      provider: "openrouter",
+      ...(provider ? { provider } : {}),
       thinkingLevel,
       maxTokens: thinkingLevel === "high" ? 16384 : 8192,
     };

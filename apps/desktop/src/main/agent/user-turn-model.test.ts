@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentPromptSchema } from "../ipc/schemas";
 import {
   NO_DEFAULT_MODEL_MESSAGE,
+  resolveExplicitTurnModel,
   resolveTurnModel,
   type TurnModelDeps,
   userTurnPromptInput,
@@ -65,10 +66,13 @@ describe("userTurnPromptInput (L2 fields; model from resolveTurnModel, L3b)", ()
     });
   });
 
-  it("no default model configured: the turn is refused (never falls back to the session model)", () => {
-    expect(() =>
-      userTurnPromptInput(parse({ sessionId: "s1", message: "hi", model: "x/y" }), undefined),
-    ).toThrow(NO_DEFAULT_MODEL_MESSAGE);
+  it("leaves an absent stored selection for runtime session restoration", () => {
+    const input = userTurnPromptInput(
+      parse({ sessionId: "s1", message: "hi", model: "renderer/untrusted" }),
+      undefined,
+    );
+
+    expect(input).not.toHaveProperty("model");
   });
 });
 
@@ -115,6 +119,26 @@ describe("explicit turn model identity", () => {
     expect(() => resolveTurnModel(undefined, deps({ defaultModelId: () => undefined }))).toThrow(
       NO_DEFAULT_MODEL_MESSAGE,
     );
+  });
+
+  it("leaves an absent persisted choice unresolved until the runtime restores the session", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(resolveExplicitTurnModel(undefined, deps({ defaultModelId }))).toBeUndefined();
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unavailable persisted choice without substituting the default", () => {
+    const selected = "byok/removed-model";
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveExplicitTurnModel(
+        selected,
+        deps({ defaultModelId, isUsable: () => false }),
+      ),
+    ).toThrow(`Selected model is unavailable: ${selected}`);
+    expect(defaultModelId).not.toHaveBeenCalled();
   });
 
   it.each([

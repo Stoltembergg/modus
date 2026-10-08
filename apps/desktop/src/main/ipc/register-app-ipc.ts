@@ -78,7 +78,7 @@ import {
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import {
-  resolveTurnModel,
+  resolveExplicitTurnModel,
   type TurnModelDeps,
   userTurnPromptInput,
 } from "../agent/user-turn-model";
@@ -385,14 +385,16 @@ export function registerAppIpc({
 } = {}): void {
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
-  // One strict model-selection rule for 1:1 (agent:prompt) and group-room turns.
+  // Validate stored 1:1/group choices here; an absent choice stays unset until the runtime has
+  // restored any legacy PI branch, and only then may it apply the Settings default.
   const turnModelDeps: TurnModelDeps = {
     defaultModelId: () => getDefaultModelId(),
     isUsable: (modelId) => isUsableModelId(modelId),
   };
-  setGroupTurnModelResolver((agentModelId, sessionId) =>
-    resolveTurnModel(agentModelId ?? getAgentSession(sessionId)?.model, turnModelDeps),
-  );
+  setGroupTurnModelResolver((agentModelId, sessionId) => {
+    const selectedModelId = agentModelId ?? getAgentSession(sessionId)?.model;
+    return resolveExplicitTurnModel(selectedModelId, turnModelDeps);
+  });
 
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
@@ -546,13 +548,15 @@ export function registerAppIpc({
       throw toGroupIpcError(error);
     }
     // The session's stored model is authoritative. Never trust the renderer's model or
-    // thinking fields; an unavailable stored selection is rejected before the prompt.
+    // thinking fields; an unavailable stored selection is rejected before the prompt. A legacy
+    // session with no DB model is left unset so the runtime can restore its PI branch first.
+    const turnModelId = resolveExplicitTurnModel(
+      getAgentSession(parsed.sessionId)?.model,
+      turnModelDeps,
+    );
     await getAgentRuntime().prompt(
       getSenderWindow(event),
-      userTurnPromptInput(
-        parsed,
-        resolveTurnModel(getAgentSession(parsed.sessionId)?.model, turnModelDeps),
-      ),
+      userTurnPromptInput(parsed, turnModelId),
     );
   });
 

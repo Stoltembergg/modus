@@ -36,19 +36,6 @@ jobs:
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check
 
-      - name: Temporary A16 lint diagnostics
-        if: failure()
-        run: >
-          npx biome check --max-diagnostics=1000
-          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
-          apps/desktop/src/main/agent/pi-sdk-runtime.ts
-          apps/desktop/src/main/agent/model-service.ts
-          apps/desktop/src/main/agent/user-turn-model.ts
-          apps/desktop/src/main/agent/user-turn-model.test.ts
-          apps/desktop/src/renderer/src/features/agent/ChatPane.tsx
-          apps/desktop/src/renderer/src/features/composer/Composer.tsx
-          apps/desktop/src/renderer/src/features/groups/NewGroupModal.tsx
-
       - name: Test
         # Keep adversarial and runaway security scenarios behind manual authorization.
         run: >

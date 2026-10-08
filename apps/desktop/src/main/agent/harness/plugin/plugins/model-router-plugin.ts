@@ -1,6 +1,6 @@
 /**
  * Modus Internal Plugin — @modus/model-router (Fase 10A Piloto 2)
- * Near-stateless capability providing intelligent model selection and execution routing.
+ * Preserves explicit model selection and routes execution targets without choosing replacements.
  */
 
 import type { CapabilityImplementation } from "../../capability/capability-types";
@@ -14,52 +14,33 @@ export interface ModelRouteContext {
 }
 
 export interface ModelSelectionResult {
-  selectedModel: string;
+  selectedModel?: string | undefined;
   reason: string;
-  fallbackModel: string;
+  fallbackModel?: string | undefined;
   temperature: number;
 }
 
 export interface RoutingDecision {
   target: "local" | "cloud" | "subagent_mesh";
-  model: string;
+  model?: string | undefined;
   speculativeVerification: boolean;
 }
 
 const modelSelectImpl: CapabilityImplementation<ModelRouteContext, ModelSelectionResult> = {
   execute: (ctx) => {
+    const temperature =
+      ctx.complexity === "complex" ? 0.1 : ctx.complexity === "simple" ? 0.3 : 0.2;
     if (ctx.preferredModel) {
       return {
         selectedModel: ctx.preferredModel,
         reason: "Explicitly requested by user preference",
-        fallbackModel: "gemini-2.5-pro",
-        temperature: 0.2,
+        fallbackModel: ctx.preferredModel,
+        temperature,
       };
     }
-
-    if (ctx.complexity === "complex" || (ctx.tokenEstimate && ctx.tokenEstimate > 8000)) {
-      return {
-        selectedModel: "claude-3-7-sonnet",
-        reason: "Complex task or high context requirement",
-        fallbackModel: "gemini-2.5-pro",
-        temperature: 0.1,
-      };
-    }
-
-    if (ctx.complexity === "simple") {
-      return {
-        selectedModel: "gemini-3.8-flash",
-        reason: "Low complexity fast completion",
-        fallbackModel: "claude-3-7-sonnet",
-        temperature: 0.3,
-      };
-    }
-
     return {
-      selectedModel: "gemini-2.5-pro",
-      reason: "Standard balanced execution",
-      fallbackModel: "claude-3-7-sonnet",
-      temperature: 0.2,
+      reason: "No explicit model selected; defer to the session default",
+      temperature,
     };
   },
 };
@@ -70,7 +51,7 @@ const modelRouteImpl: CapabilityImplementation<ModelRouteContext, RoutingDecisio
       ctx.task.toLowerCase().includes("spec") || ctx.task.toLowerCase().includes("plan");
     return {
       target: isMultiTurnSpec ? "subagent_mesh" : "cloud",
-      model: ctx.complexity === "complex" ? "claude-3-7-sonnet" : "gemini-2.5-pro",
+      ...(ctx.preferredModel ? { model: ctx.preferredModel } : {}),
       speculativeVerification: isMultiTurnSpec,
     };
   },
@@ -81,7 +62,7 @@ export const modelRouterPluginManifest: PluginManifest = {
   name: "Modus Model Router",
   version: "1.0.0",
   author: "Modus Core Team",
-  description: "Stateless capability providing dynamic model routing and selection",
+  description: "Preserves explicit model identity and routes execution targets",
   trustLevel: "core",
 
   provides: [

@@ -39,6 +39,7 @@ import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
 import {
+  cleanupSubagentWorktree,
   createSubagentWorktree,
   finishSubagentWorktree,
   getChangeStatsSinceStrict,
@@ -2543,9 +2544,32 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
 
+    const sessionFile =
+      info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
+    let sessionManager: SessionManager;
+    if (previousSession) {
+      sessionManager = previousSession.session.sessionManager;
+    } else if (sessionFile) {
+      try {
+        sessionManager = SessionManager.open(sessionFile, sessionDir, info.cwd);
+      } catch (error) {
+        throw new Error(`Unable to restore the saved model selection for session ${sessionId}.`, {
+          cause: error,
+        });
+      }
+    } else {
+      sessionManager = SessionManager.create(info.cwd, sessionDir);
+    }
+
+    const shouldRecoverBranchModel =
+      requestedModelId === undefined && !previousSession?.session.model && !info.model;
+    const branchModel = shouldRecoverBranchModel
+      ? sessionManager.buildSessionContext().model
+      : null;
+    const branchModelId = branchModel ? `${branchModel.provider}/${branchModel.modelId}` : undefined;
     const storedModelId = previousSession?.session.model
       ? modelToId(previousSession.session.model)
-      : info.model;
+      : (info.model || branchModelId);
     const selectedModel =
       requestedModelId !== undefined
         ? requireUsableSelectedModel(requestedModelId)
@@ -2572,20 +2596,6 @@ export class PiSdkRuntime implements AgentRuntime {
       agentDir,
       previousSession?.session.settingsManager,
     );
-    const sessionFile =
-      info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
-    let sessionManager: SessionManager;
-    if (previousSession) {
-      sessionManager = previousSession.session.sessionManager;
-    } else {
-      try {
-        sessionManager = sessionFile
-          ? SessionManager.open(sessionFile, sessionDir, info.cwd)
-          : SessionManager.create(info.cwd, sessionDir);
-      } catch {
-        sessionManager = SessionManager.create(info.cwd, sessionDir);
-      }
-    }
     const resumed = await this.assembleSession({
       info,
       emit,
@@ -4136,8 +4146,13 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const emit = this.emitToWindow(window);
     const requestedModel = input.subagent?.model;
+    const parentRuntime = this.sessions.get(parent.id);
+    const inheritedModel = parentRuntime?.session.model
+      ? modelToId(parentRuntime.session.model)
+      : parent.model;
     const childModel =
-      requestedModel && requestedModel !== "inherit" ? requestedModel : (parent.model ?? undefined);
+      requestedModel && requestedModel !== "inherit" ? requestedModel : (inheritedModel ?? undefined);
+    if (childModel !== undefined) requireUsableSelectedModel(childModel);
     const childSessionId = randomUUID();
     const worktree =
       input.subagent && !input.subagent.readOnly && input.subagent.isolation === "worktree"
@@ -4146,18 +4161,30 @@ export class PiSdkRuntime implements AgentRuntime {
             name: input.subagent.name || input.subagentType,
           })
         : undefined;
-    const session = await this.create(window, {
-      id: childSessionId,
-      workspaceId: parent.workspaceId,
-      cwd: worktree?.path ?? parent.cwd,
-      title: input.task,
-      ...(childModel ? { model: childModel } : {}),
-      parentSessionId: parent.id,
-      subagentTask: input.task,
-      subagentType: input.subagentType,
-      ...(input.subagent?.readOnly ? { subagentReadOnly: true } : {}),
-      ...(worktree ? { subagentWorktree: worktree } : {}),
-    });
+    let session: AgentSessionInfo;
+    try {
+      session = await this.create(window, {
+        id: childSessionId,
+        workspaceId: parent.workspaceId,
+        cwd: worktree?.path ?? parent.cwd,
+        title: input.task,
+        ...(childModel ? { model: childModel } : {}),
+        parentSessionId: parent.id,
+        subagentTask: input.task,
+        subagentType: input.subagentType,
+        ...(input.subagent?.readOnly ? { subagentReadOnly: true } : {}),
+        ...(worktree ? { subagentWorktree: worktree } : {}),
+      });
+    } catch (error) {
+      if (worktree) {
+        try {
+          await cleanupSubagentWorktree(parent.cwd, worktree);
+        } catch (cleanupError) {
+          console.error("[modus] failed to clean up a rejected subagent worktree", cleanupError);
+        }
+      }
+      throw error;
+    }
     this.parentSessionByChild.set(session.id, parent.id);
     emit({
       type: "subagent.started",
@@ -4566,13 +4593,26 @@ export class PiSdkRuntime implements AgentRuntime {
     thinkingVariant?: string,
   ): Promise<ReturnType<typeof findModel>> {
     const model = requireUsableSelectedModel(modelId);
+    const sameModel =
+      runtimeSession.session.model !== undefined &&
+      modelToId(runtimeSession.session.model) === modelId;
+    const preserveThinking = thinkingVariant === undefined && sameModel;
+    const thinkingLevel = preserveThinking
+      ? runtimeSession.session.thinkingLevel
+      : undefined;
+    const thinkingBudget = preserveThinking
+      ? runtimeSession.session.agent.thinkingBudgets?.high
+      : undefined;
     const resolved = resolveModelThinking(
       model,
       thinkingVariant ?? getModelThinkingVariant(modelId),
     );
     await runtimeSession.session.setModel(resolved.model);
-    runtimeSession.session.setThinkingLevel(resolved.thinkingLevel);
-    setSessionThinkingBudget(runtimeSession.session, resolved.thinkingBudget);
+    runtimeSession.session.setThinkingLevel(thinkingLevel ?? resolved.thinkingLevel);
+    setSessionThinkingBudget(
+      runtimeSession.session,
+      preserveThinking ? thinkingBudget : resolved.thinkingBudget,
+    );
     const updated = updateAgentSessionMetadata(runtimeSession.info.id, {
       model: modelToId(model),
     });
