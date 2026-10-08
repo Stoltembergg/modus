@@ -1277,6 +1277,7 @@ describe("reviewStart preserves the session model", () => {
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
     mocks.getAgentRuntime.mockReset();
     mocks.startAgentReview.mockReset().mockResolvedValue({ id: "review-1" });
     mocks.getDefaultModelId.mockReset().mockReturnValue("openai/current-default");
@@ -1294,10 +1295,13 @@ describe("reviewStart preserves the session model", () => {
     const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
     if (!handler) throw new Error("Review start IPC handler was not registered.");
 
-    await handler(trustedEvent as never, {
-      cwd: "C:/workspace",
-      sessionId: "session-1",
-    } as never);
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
 
     expect(mocks.startAgentReview).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: "byok/session-model" }),
@@ -1315,13 +1319,38 @@ describe("reviewStart preserves the session model", () => {
     const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
     if (!handler) throw new Error("Review start IPC handler was not registered.");
 
-    await handler(trustedEvent as never, {
-      cwd: "C:/workspace",
-      sessionId: "session-1",
-    } as never);
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
 
     expect(mocks.startAgentReview).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: "byok/agent-model" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("restores an unlinked legacy branch before choosing the review model", async () => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1", model: "byok/legacy-model" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(
+      trustedEvent as never,
+      {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never,
+    );
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1");
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/legacy-model" }),
     );
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
@@ -1336,10 +1365,13 @@ describe("reviewStart preserves the session model", () => {
     if (!handler) throw new Error("Review start IPC handler was not registered.");
 
     await expect(
-      handler(trustedEvent as never, {
-        cwd: "C:/workspace",
-        sessionId: "session-1",
-      } as never),
+      handler(
+        trustedEvent as never,
+        {
+          cwd: "C:/workspace",
+          sessionId: "session-1",
+        } as never,
+      ),
     ).rejects.toThrow("Selected model is unavailable: byok/removed-model");
 
     expect(mocks.startAgentReview).not.toHaveBeenCalled();
