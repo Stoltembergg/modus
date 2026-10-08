@@ -4601,9 +4601,7 @@ export class PiSdkRuntime implements AgentRuntime {
       runtimeSession.session.model !== undefined &&
       modelToId(runtimeSession.session.model) === modelId;
     const preserveThinking = thinkingVariant === undefined && sameModel;
-    const thinkingLevel = preserveThinking
-      ? runtimeSession.session.thinkingLevel
-      : undefined;
+    const thinkingLevel = preserveThinking ? runtimeSession.session.thinkingLevel : undefined;
     const thinkingBudget = preserveThinking
       ? runtimeSession.session.agent.thinkingBudgets?.high
       : undefined;
