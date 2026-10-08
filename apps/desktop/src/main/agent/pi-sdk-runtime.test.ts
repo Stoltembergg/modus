@@ -469,9 +469,13 @@ beforeEach(async () => {
   cwd = await mkdtemp(join(tmpdir(), "modus-pi-runtime-cwd-"));
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
-  vi.mocked(modelService.findModel).mockReset().mockReturnValue(mocks.model as never);
+  vi.mocked(modelService.findModel)
+    .mockReset()
+    .mockReturnValue(mocks.model as never);
   vi.mocked(modelService.isUsableModelId).mockReset().mockReturnValue(true);
-  vi.mocked(modelService.getDefaultModel).mockReset().mockReturnValue(mocks.model as never);
+  vi.mocked(modelService.getDefaultModel)
+    .mockReset()
+    .mockReturnValue(mocks.model as never);
   mocks.setPiSubscriber(undefined);
   mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({ kind: "create" }));
   mocks.sessionManagerOpen.mockClear();

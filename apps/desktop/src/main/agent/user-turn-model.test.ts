@@ -122,19 +122,16 @@ describe("explicit turn model identity", () => {
     );
   });
 
-  it.each(["openai/removed-model", "modus/removed-model"])(
-    "refuses an unavailable explicit model %s without consulting the Settings default",
-    (selected) => {
-      const defaultModelId = vi.fn(() => "openai/gpt-5");
-      expect(() =>
-        resolveTurnModel(
-          selected,
-          deps({ defaultModelId, isUsable: () => false }),
-        ),
-      ).toThrow(`Selected model is unavailable: ${selected}`);
-      expect(defaultModelId).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "openai/removed-model",
+    "modus/removed-model",
+  ])("refuses an unavailable explicit model %s without consulting the Settings default", (selected) => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+    expect(() =>
+      resolveTurnModel(selected, deps({ defaultModelId, isUsable: () => false })),
+    ).toThrow(`Selected model is unavailable: ${selected}`);
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
 
   it("refuses a stale explicit Settings default", () => {
     expect(() =>

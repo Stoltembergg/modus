@@ -1224,20 +1224,20 @@ describe("agent:prompt turn model (L2 fields, L3b Modus-only forcing)", () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
-  it.each(["byok/removed-model", "modus/removed-model"])(
-    "refuses unavailable explicit model %s without sending a request to the Settings default",
-    async (selectedModel) => {
-      mocks.getAgentSession.mockReturnValue({ id: "session-1", model: selectedModel });
-      mocks.isUsableModelId.mockReturnValue(false);
-      const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+  it.each([
+    "byok/removed-model",
+    "modus/removed-model",
+  ])("refuses unavailable explicit model %s without sending a request to the Settings default", async (selectedModel) => {
+    mocks.getAgentSession.mockReturnValue({ id: "session-1", model: selectedModel });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
 
-      await expect(
-        handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
-      ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
+    await expect(
+      handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never),
+    ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
 
-      expect(prompt).not.toHaveBeenCalled();
-      expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
-      expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
-    },
-  );
+    expect(prompt).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+    expect(mocks.getModusTurnModelId).not.toHaveBeenCalled();
+  });
 });
