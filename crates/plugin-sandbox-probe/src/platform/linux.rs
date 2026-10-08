@@ -67,7 +67,7 @@ fn inspect_cgroup_v2() -> String {
             content.lines().find_map(|line| {
                 let (hierarchy, path) = line.split_once(':')?;
                 let (controllers, path) = path.split_once(':')?;
-                (hierarchy == "0" && controllers.is_empty()).then_some(path)
+                (hierarchy == "0" && controllers.is_empty()).then(|| path.to_owned())
             })
         });
     let Some(membership) = membership else {
