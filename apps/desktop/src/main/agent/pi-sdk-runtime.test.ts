@@ -656,7 +656,9 @@ describe("PiSdkRuntime", () => {
     });
 
     expect(getDefaultModel).not.toHaveBeenCalled();
-    expect(session.setModel).toHaveBeenCalledWith(selectedModel);
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: selectedModel }),
+    );
     expect(session.prompt).toHaveBeenCalledTimes(1);
   });
 

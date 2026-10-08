@@ -9,6 +9,7 @@ let userData: string;
 vi.mock("electron", () => ({ app: { getPath: () => userData } }));
 
 const { getDatabase } = await import("../db/database");
+const { getAgentSession, updateAgentSessionMetadata } = await import("../agent/agent-store");
 const { ensureChatsWorkspace } = await import("../workspace/workspace-store");
 const { createAgent, createAgentInGroup, createGroupWithNewAgents, setAgentArchived, updateAgent } =
   await import("../agents/agents-store");
@@ -48,7 +49,7 @@ const { runGroupTool, setGroupTaskWakeSink } = await import("../agent/tools/grou
 const { insertLegacyGroup } = await import("./legacy-group.fixture");
 const { createGroupTask } = await import("./group-task-store");
 const { setGroupTurnModelResolver } = await import("./group-runtime-lib");
-const { resolveTurnModel } = await import("../agent/user-turn-model");
+const { resolveAgentTurnModel, resolveTurnModel } = await import("../agent/user-turn-model");
 type PromptTurnResult = import("../agent/runtime").PromptTurnResult;
 type TurnSettledEvent = import("../agent/runtime").TurnSettledEvent;
 type PromptAgentInput = import("../agent/runtime").PromptAgentInput;
@@ -1579,6 +1580,41 @@ describe("group turns preserve each member's selected model", () => {
     expect(runtime.calls[0]?.input).toMatchObject({
       sessionId: builder?.sessionId,
       model: "anthropic/claude-opus-5-5",
+    });
+  });
+
+  it("keeps a member session's explicit model when its agent has a different model", async () => {
+    const agentModel = "openai/gpt-5";
+    const sessionModel = "modus/anthropic/claude-fable-5-1";
+    setGroupTurnModelResolver((agentModelId, sessionId) =>
+      resolveAgentTurnModel(
+        agentModelId,
+        getAgentSession(sessionId)?.model,
+        true,
+        {
+          defaultModelId: () => "openai/available-default",
+          isUsable: () => true,
+        },
+      ),
+    );
+    const group = createGroupWithNewAgents({
+      name: uid("SessionModelGroup"),
+      workspaceId: insertWorkspace(),
+      members: [
+        { name: "Planner", role: "Lead", modelId: agentModel },
+        { name: "Builder", role: "Builder", modelId: "openai/available-default" },
+      ],
+    });
+    const planner = group.members.find((member) => member.name === "Planner");
+    if (!planner) throw new Error("Planner group member was not created.");
+    updateAgentSessionMetadata(planner.sessionId, { model: sessionModel });
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Planner plan it" });
+
+    expect(runtime.calls[0]?.input).toMatchObject({
+      sessionId: planner.sessionId,
+      model: sessionModel,
     });
   });
 
