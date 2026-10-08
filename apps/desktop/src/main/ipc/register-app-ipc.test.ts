@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   startOriginalPlanBuild: vi.fn(),
   assertHyperPlanSessionAvailable: vi.fn(),
   startProviderAuth: vi.fn(),
+  startAgentReview: vi.fn(),
+  getAgent: vi.fn(),
   getDefaultModelId: vi.fn(),
   isUsableModelId: vi.fn(),
   requireAgentChatWritable: vi.fn(),
@@ -56,6 +58,10 @@ vi.mock("../agent/tools/plan-tools", () => ({
   registerPlanTools: vi.fn(),
 }));
 vi.mock("../agent/runtime-registry", () => ({ getAgentRuntime: mocks.getAgentRuntime }));
+vi.mock("../agent/review-service", () => ({
+  listAgentReviews: vi.fn(() => []),
+  startAgentReview: mocks.startAgentReview,
+}));
 vi.mock("../plan/plan-store", () => ({
   fingerprintPlanSource: mocks.fingerprintPlanSource,
   promotePlanRevision: mocks.promotePlanRevision,
@@ -78,6 +84,7 @@ vi.mock("../agent/model-service", async (importOriginal) => ({
 }));
 vi.mock("../agents/agents-store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agents-store")>()),
+  getAgent: mocks.getAgent,
   requireAgentChatWritable: mocks.requireAgentChatWritable,
 }));
 
@@ -170,6 +177,7 @@ describe("dedicated HyperPlan review IPC", () => {
     registerHyperPlanDraftOwner(5);
     mocks.handlers.clear();
     mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
     mocks.getAgentRuntime.mockReset();
     mocks.readPlanById.mockReset();
     mocks.updatePlanContentById.mockReset();
@@ -1258,6 +1266,83 @@ describe("agent:prompt preserves the session model", () => {
     ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
 
     expect(prompt).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+});
+
+describe("reviewStart preserves the session model", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.getAgentSession.mockReset();
+    mocks.getAgentRuntime.mockReset();
+    mocks.startAgentReview.mockReset().mockResolvedValue({ id: "review-1" });
+    mocks.getDefaultModelId.mockReset().mockReturnValue("openai/current-default");
+    mocks.isUsableModelId.mockReset().mockReturnValue(true);
+    mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("passes the exact stored session model to the dedicated review", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "byok/session-model",
+    });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(trustedEvent as never, {
+      cwd: "C:/workspace",
+      sessionId: "session-1",
+    } as never);
+
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/session-model" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("prefers the linked agent model over a stale session model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "openai/stale-model",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await handler(trustedEvent as never, {
+      cwd: "C:/workspace",
+      sessionId: "session-1",
+    } as never);
+
+    expect(mocks.startAgentReview).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "byok/agent-model" }),
+    );
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("does not start a review on the default when the stored model is unavailable", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      model: "byok/removed-model",
+    });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.reviewStart);
+    if (!handler) throw new Error("Review start IPC handler was not registered.");
+
+    await expect(
+      handler(trustedEvent as never, {
+        cwd: "C:/workspace",
+        sessionId: "session-1",
+      } as never),
+    ).rejects.toThrow("Selected model is unavailable: byok/removed-model");
+
+    expect(mocks.startAgentReview).not.toHaveBeenCalled();
     expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 });
