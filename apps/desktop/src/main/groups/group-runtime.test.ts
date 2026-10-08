@@ -1587,15 +1587,10 @@ describe("group turns preserve each member's selected model", () => {
     const agentModel = "openai/gpt-5";
     const sessionModel = "modus/anthropic/claude-fable-5-1";
     setGroupTurnModelResolver((agentModelId, sessionId) =>
-      resolveAgentTurnModel(
-        agentModelId,
-        getAgentSession(sessionId)?.model,
-        true,
-        {
-          defaultModelId: () => "openai/available-default",
-          isUsable: () => true,
-        },
-      ),
+      resolveAgentTurnModel(agentModelId, getAgentSession(sessionId)?.model, true, {
+        defaultModelId: () => "openai/available-default",
+        isUsable: () => true,
+      }),
     );
     const group = createGroupWithNewAgents({
       name: uid("SessionModelGroup"),
