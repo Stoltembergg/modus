@@ -49,7 +49,7 @@ type ParsedPrompt = ReturnType<(typeof agentPromptSchema)["parse"]>;
 /** agent:prompt payload -> runtime input; an absent model stays unset for session restoration. */
 export function userTurnPromptInput(
   parsed: ParsedPrompt,
-  turnModelId: string | undefined,
+  turnModelId: string | null | undefined,
 ): PromptAgentInput {
   return {
     sessionId: parsed.sessionId,

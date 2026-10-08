@@ -2086,7 +2086,7 @@ export class PiSdkRuntime implements AgentRuntime {
   private async getOrResume(
     window: BrowserWindowType,
     sessionId: string,
-    requestedModelId?: string,
+    requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
     const pending = this.resumePromises.get(sessionId);
     if (pending) {
@@ -2530,7 +2530,7 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
     sessionId: string,
     previousSession?: SdkRuntimeSession,
-    requestedModelId?: string,
+    requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
     if (!info) {
@@ -2572,7 +2572,7 @@ export class PiSdkRuntime implements AgentRuntime {
       : (info.model || branchModelId);
     const selectedModel =
       requestedModelId !== undefined
-        ? requireUsableSelectedModel(requestedModelId)
+        ? requireUsableSelectedModel(requestedModelId as string)
         : storedModelId !== undefined
           ? requireUsableSelectedModel(storedModelId)
           : getDefaultModel();

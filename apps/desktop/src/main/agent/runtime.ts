@@ -44,9 +44,10 @@ export type PromptAgentInput = {
    * every prompt and is applied authoritatively at turn start, so a turn is
    * self-describing and never runs with stale model/thinking — surviving
    * mid-session switches, rollback/edit-resend, and session resume without
-   * relying on session-state plumbing. Omitted ⇒ keep the session's current model.
+   * relying on session-state plumbing. Omitted keeps the session's current model;
+   * `null` selects the current Settings default for this turn.
    */
-  model?: string;
+  model?: string | null;
   thinkingLevel?: ThinkingLevel;
   thinkingVariant?: string;
   /** Set when this prompt is a "Build this plan" action; binds the turn to the plan. */

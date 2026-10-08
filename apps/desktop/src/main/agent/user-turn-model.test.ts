@@ -74,6 +74,15 @@ describe("userTurnPromptInput (L2 fields; model from resolveTurnModel, L3b)", ()
 
     expect(input).not.toHaveProperty("model");
   });
+
+  it("preserves an explicit request to use the current Settings default", () => {
+    const input = userTurnPromptInput(
+      parse({ sessionId: "s1", message: "hi", model: "renderer/untrusted" }),
+      null,
+    );
+
+    expect(input).toHaveProperty("model", null);
+  });
 });
 
 describe("explicit turn model identity", () => {

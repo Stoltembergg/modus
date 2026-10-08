@@ -4929,6 +4929,88 @@ describe("PiSdkRuntime", () => {
     expect(lastSystemPrompt()).not.toContain("Persona marker one.");
   });
 
+  it("uses the current Settings default after an agent model is cleared on a live session", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const previousModel = {
+      id: "previous",
+      name: "Previous model",
+      provider: "previous-provider",
+    };
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "previous-provider/previous"
+        ? (previousModel as never)
+        : modelId === "default-provider/current-default"
+          ? (defaultModel as never)
+          : (mocks.model as never),
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: "previous-provider/previous" });
+
+    const session = createMockPiSession({ model: previousModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    updateAgent(agentId, { modelId: null });
+
+    await runtime.prompt(window, {
+      context: [],
+      message: "Continue with the app default",
+      model: null,
+      sessionId,
+    });
+
+    expect(session.setModel).toHaveBeenLastCalledWith(defaultModel);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the current Settings default instead of a removed PI branch model after an agent model is cleared", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    const findModel = vi.mocked(modelService.findModel);
+    findModel.mockImplementation((modelId) =>
+      modelId === "default-provider/current-default" ? (defaultModel as never) : undefined,
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: null });
+    getDatabase()
+      .prepare("update agent_sessions set pi_session_file = ? where id = ?")
+      .run(piSessionFile, sessionId);
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "removed-provider", modelId: "retired-model" },
+      }),
+    } as never);
+    const session = createMockPiSession({ model: defaultModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "Use the current default",
+      model: null,
+      sessionId,
+    });
+
+    expect(findModel).not.toHaveBeenCalledWith("removed-provider/retired-model");
+    expect(session.setModel).toHaveBeenCalledWith(defaultModel);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a turn in a 1:1 chat whose group is blocked (no Project), before any session work (A3)", async () => {
     const { sessionId, group } = await agentChatSession("Be terse.");
     getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
