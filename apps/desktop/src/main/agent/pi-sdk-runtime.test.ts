@@ -333,6 +333,16 @@ function registerOfflineMcpTool(name: string, output: string, dangerous = false)
   });
 }
 
+function insertWorkspace(workspaceId: string): void {
+  const now = new Date().toISOString();
+  getDatabase()
+    .prepare(
+      `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+       values (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(workspaceId, cwd, "repo", 1, now, now);
+}
+
 function insertSession(
   sessionId: string,
   workspaceId: string,
@@ -340,12 +350,8 @@ function insertSession(
   title = "session",
 ): void {
   const now = new Date().toISOString();
-  const db = getDatabase();
-  db.prepare(
-    `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
-     values (?, ?, ?, ?, ?, ?)`,
-  ).run(workspaceId, cwd, "repo", 1, now, now);
-  db.prepare(
+  insertWorkspace(workspaceId);
+  getDatabase().prepare(
     `insert into agent_sessions (
       id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
       created_at, updated_at
@@ -511,10 +517,12 @@ describe("PiSdkRuntime", () => {
     );
     const getDefaultModel = vi.mocked(modelService.getDefaultModel);
     getDefaultModel.mockClear();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
 
     await expect(
       new PiSdkRuntime().create(createWindowStub(), {
-        workspaceId: `workspace-${crypto.randomUUID()}`,
+        workspaceId,
         cwd,
         title: "Selected model",
         model: "openai/removed-model",
@@ -529,10 +537,12 @@ describe("PiSdkRuntime", () => {
     vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
     const getDefaultModel = vi.mocked(modelService.getDefaultModel);
     getDefaultModel.mockClear();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
 
     await expect(
       new PiSdkRuntime().create(createWindowStub(), {
-        workspaceId: `workspace-${crypto.randomUUID()}`,
+        workspaceId,
         cwd,
         title: "Unavailable provider",
         model: "mock/model",
@@ -579,16 +589,22 @@ describe("PiSdkRuntime", () => {
       modelId === "modus/removed-model" ? undefined : (mocks.model as never),
     );
 
-    await expect(
-      runtime.prompt(window, {
-        context: [],
-        message: "Do not send this to another model",
-        model: "modus/removed-model",
-        sessionId,
-      }),
-    ).rejects.toThrow("Selected model is unavailable: modus/removed-model");
+    const result = await runtime.prompt(window, {
+      context: [],
+      message: "Do not send this to another model",
+      model: "modus/removed-model",
+      sessionId,
+    });
 
+    expect(result).toMatchObject({ outcome: "failed" });
     expect(session.prompt).not.toHaveBeenCalled();
+    expect(window.webContents.send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        type: "runtime.error",
+        message: "Selected model is unavailable: modus/removed-model",
+      }),
+    );
   });
 
   it("rejects an unavailable per-turn model before the session prompt", async () => {
@@ -601,16 +617,22 @@ describe("PiSdkRuntime", () => {
     await runtime.ensure(window, sessionId);
     vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
 
-    await expect(
-      runtime.prompt(window, {
-        context: [],
-        message: "Do not send while the selected provider is unavailable",
-        model: "mock/model",
-        sessionId,
-      }),
-    ).rejects.toThrow("Selected model is unavailable: mock/model");
+    const result = await runtime.prompt(window, {
+      context: [],
+      message: "Do not send while the selected provider is unavailable",
+      model: "mock/model",
+      sessionId,
+    });
 
+    expect(result).toMatchObject({ outcome: "failed" });
     expect(session.prompt).not.toHaveBeenCalled();
+    expect(window.webContents.send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        type: "runtime.error",
+        message: "Selected model is unavailable: mock/model",
+      }),
+    );
   });
 
   it("lets an explicit model replace a removed model during cold resume", async () => {
