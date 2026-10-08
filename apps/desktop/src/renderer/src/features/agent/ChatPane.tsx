@@ -76,10 +76,7 @@ import { WorkingSubagentBar } from "./WorkingSubagentBar";
 /**
  * Keep the exact saved session identity; only sessions without one use the app default.
  */
-export function turnModelForPane(
-  defaultModel: string,
-  sessionModel?: string | undefined,
-): string {
+export function turnModelForPane(defaultModel: string, sessionModel?: string | undefined): string {
   return sessionModel || defaultModel;
 }
 

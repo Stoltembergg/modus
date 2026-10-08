@@ -138,9 +138,7 @@ export function NewGroupModal({
     return `m${keySeq.current}`;
   };
   const fallbackModelId =
-    defaultModelId && models.some((model) => model.id === defaultModelId)
-      ? defaultModelId
-      : "";
+    defaultModelId && models.some((model) => model.id === defaultModelId) ? defaultModelId : "";
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: loaded once per open.
   useEffect(() => {

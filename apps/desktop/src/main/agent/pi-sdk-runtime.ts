@@ -2543,9 +2543,7 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
 
-    const storedModelId = previousSession
-      ? modelToId(previousSession.session.model)
-      : info.model;
+    const storedModelId = previousSession ? modelToId(previousSession.session.model) : info.model;
     const selectedModel =
       requestedModelId !== undefined
         ? requireUsableSelectedModel(requestedModelId)
@@ -2558,8 +2556,7 @@ export class PiSdkRuntime implements AgentRuntime {
       );
     }
     const selectedThinking =
-      previousSession &&
-      (requestedModelId === undefined || requestedModelId === storedModelId)
+      previousSession && (requestedModelId === undefined || requestedModelId === storedModelId)
         ? {
             model: selectedModel,
             thinkingLevel: previousSession.session.thinkingLevel,

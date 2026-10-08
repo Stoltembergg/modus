@@ -779,11 +779,7 @@ export function Composer({
             <button
               aria-label={isRunning ? "Stop" : "Send"}
               className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-fg text-canvas transition-colors hover:bg-fg-muted active:scale-[0.94] disabled:bg-chip-strong disabled:text-fg-faint"
-              disabled={
-                isRunning
-                  ? !onAbort
-                  : !hasContent || !canSubmit || submitting || !model
-              }
+              disabled={isRunning ? !onAbort : !hasContent || !canSubmit || submitting || !model}
               onClick={() => {
                 if (isRunning) onAbort?.();
                 else send();
