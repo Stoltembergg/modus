@@ -578,70 +578,64 @@ describe("PiSdkRuntime", () => {
     expect(row.model).toBe("byok/removed-model");
   });
 
-  it(
-    "restores the selected model from a legacy PI branch when the database model is missing",
-    async () => {
-      const sessionId = `legacy-session-${crypto.randomUUID()}`;
-      const piSessionFile = join(userData, `${sessionId}.jsonl`);
-      await writeFile(piSessionFile, "\n");
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
-      getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
-      const selectedModel = {
-        id: "remembered-model",
-        name: "Remembered Model",
-        provider: "provider-legacy",
-      };
-      vi.mocked(modelService.findModel).mockImplementation((modelId) =>
-        modelId === "provider-legacy/remembered-model"
-          ? (selectedModel as never)
-          : (mocks.model as never),
-      );
-      mocks.sessionManagerOpen.mockReturnValueOnce({
-        kind: "open",
-        buildSessionContext: () => ({
-          messages: [{ role: "assistant" }],
-          model: { provider: "provider-legacy", modelId: "remembered-model" },
-        }),
-      } as never);
-      const getDefaultModel = vi.mocked(modelService.getDefaultModel);
-      getDefaultModel.mockClear();
+  it("restores the selected model from a legacy PI branch when the database model is missing", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    const selectedModel = {
+      id: "remembered-model",
+      name: "Remembered Model",
+      provider: "provider-legacy",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "provider-legacy/remembered-model"
+        ? (selectedModel as never)
+        : (mocks.model as never),
+    );
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-legacy", modelId: "remembered-model" },
+      }),
+    } as never);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
 
-      await new PiSdkRuntime().ensure(createWindowStub(), sessionId);
+    await new PiSdkRuntime().ensure(createWindowStub(), sessionId);
 
-      expect(getDefaultModel).not.toHaveBeenCalled();
-      expect(mocks.createAgentSession).toHaveBeenCalledWith(
-        expect.objectContaining({ model: selectedModel }),
-      );
-    },
-  );
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: selectedModel }),
+    );
+  });
 
-  it(
-    "refuses a legacy PI branch model when that exact provider model is unavailable",
-    async () => {
-      const sessionId = `legacy-session-${crypto.randomUUID()}`;
-      const piSessionFile = join(userData, `${sessionId}.jsonl`);
-      await writeFile(piSessionFile, "\n");
-      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
-      getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
-      vi.mocked(modelService.findModel).mockReturnValue(undefined as never);
-      mocks.sessionManagerOpen.mockReturnValueOnce({
-        kind: "open",
-        buildSessionContext: () => ({
-          messages: [{ role: "assistant" }],
-          model: { provider: "provider-removed", modelId: "retired-model" },
-        }),
-      } as never);
-      const getDefaultModel = vi.mocked(modelService.getDefaultModel);
-      getDefaultModel.mockClear();
+  it("refuses a legacy PI branch model when that exact provider model is unavailable", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    vi.mocked(modelService.findModel).mockReturnValue(undefined as never);
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-removed", modelId: "retired-model" },
+      }),
+    } as never);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
 
-      await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
-        "Selected model is unavailable: provider-removed/retired-model",
-      );
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      "Selected model is unavailable: provider-removed/retired-model",
+    );
 
-      expect(getDefaultModel).not.toHaveBeenCalled();
-      expect(mocks.createAgentSession).not.toHaveBeenCalled();
-    },
-  );
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
 
   it("rejects a removed per-turn model before the cached session prompt", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
@@ -6125,46 +6119,43 @@ describe("PiSdkRuntime", () => {
     );
   });
 
-  it(
-    "rejects an unavailable explicit worktree subagent model without leaving a checkout",
-    async () => {
-      await initGitRepo();
-      const parentSessionId = `session-${crypto.randomUUID()}`;
-      insertSession(
+  it("rejects an unavailable explicit worktree subagent model without leaving a checkout", async () => {
+    await initGitRepo();
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
         parentSessionId,
-        `workspace-${crypto.randomUUID()}`,
-        join(userData, "missing.jsonl"),
-      );
-      vi.mocked(modelService.findModel).mockImplementation((modelId) =>
-        modelId === "openai/removed-model" ? undefined : (mocks.model as never),
-      );
-      const runtime = new PiSdkRuntime();
+        task: "Use the selected model",
+        prompt: "Do not switch models.",
+        subagentType: "writer",
+        subagent: {
+          name: "writer",
+          body: "Write code.",
+          model: "openai/removed-model",
+          readOnly: false,
+          isolation: "worktree",
+        },
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/removed-model");
 
-      await expect(
-        runtime.runSubagent(createWindowStub(), {
-          parentSessionId,
-          task: "Use the selected model",
-          prompt: "Do not switch models.",
-          subagentType: "writer",
-          subagent: {
-            name: "writer",
-            body: "Write code.",
-            model: "openai/removed-model",
-            readOnly: false,
-            isolation: "worktree",
-          },
-        }),
-      ).rejects.toThrow("Selected model is unavailable: openai/removed-model");
-
-      const worktrees = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
-        cwd,
-        windowsHide: true,
-      });
-      expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
-      expect(worktrees.stdout).not.toContain("modus/subagent/");
-      expect(mocks.createAgentSession).not.toHaveBeenCalled();
-    },
-  );
+    const worktrees = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      windowsHide: true,
+    });
+    expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
+    expect(worktrees.stdout).not.toContain("modus/subagent/");
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
 
   it("does not inject subagent run status into root prompts", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
