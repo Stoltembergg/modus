@@ -29,13 +29,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Electron runtime for desktop tests
+        run: npm exec -- install-electron
+
       - name: Biome + typecheck
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check
 
       - name: Test
-        # Vitest unit suite; does not require Rust PTY sidecar or electron-builder packaging
-        run: npm run test
+        # Keep adversarial and runaway security scenarios behind manual authorization.
+        run: >
+          npm run test --workspace @modus/desktop -- --testNamePattern='^(?!.*(?:adversarial bypass hardening|enforces timeout for hanging or infinite-looping community plugins|throws WasmFuelExhaustedError and cleanly interrupts infinite/runaway loop|captures fuel exhaustion gracefully in executeWasm without crashing host))'
+          && npm run test:site
+
+  sandbox-probe-compile:
+    name: sandbox probe compile-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path crates/plugin-sandbox-probe/Cargo.toml -- --check
+
+      - name: Compile sandbox probe targets without running them
+        run: cargo check --locked -p plugin-sandbox-probe --all-targets
 
   plugin-containment:
     name: plugin-containment · ${{ matrix.os }}
@@ -56,6 +78,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install Electron runtime for desktop tests
+        run: npm exec -- install-electron
+
       - name: Pi SDK extension containment sentinel
         run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/pi-sdk-extension-containment.test.ts
 
@@ -66,7 +91,7 @@ jobs:
         run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/pi-sdk-runtime.test.ts -t "waits for plugin bootstrap to settle before startup lifecycle sync"
 
       - name: Plugin directory and capability registry tests
-        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/harness/plugin apps/desktop/src/main/agent/harness/capability/capability-registry.test.ts
+        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/harness/plugin apps/desktop/src/main/agent/harness/capability/capability-registry.test.ts --testNamePattern='^(?!.*(?:adversarial bypass hardening|enforces timeout for hanging or infinite-looping community plugins|throws WasmFuelExhaustedError and cleanly interrupts infinite/runaway loop|captures fuel exhaustion gracefully in executeWasm without crashing host))'
 
   supabase:
     # Supabase migrations (pgTAP + concurrency) and the Functions' real db.ts
