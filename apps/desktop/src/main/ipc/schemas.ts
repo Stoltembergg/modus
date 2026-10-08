@@ -445,7 +445,7 @@ export const subagentsCreateSchema = z.object({
   scope: z.enum(["user", "workspace"]).optional(),
   name: nonEmptyString.max(64),
   description: z.string().trim().max(280),
-  model: z.string().trim().max(120).optional(),
+  model: z.string().max(120).optional(),
   readOnly: z.boolean(),
   tools: z.array(z.string().trim().min(1).max(80)).optional(),
   disallowedTools: z.array(z.string().trim().min(1).max(80)).optional(),
@@ -993,7 +993,7 @@ export const agentsGenerateProfileSchema = z
     // Absent in the create-group modal (A4): no group yet, `roles` carries the chosen ones.
     groupId: agentIdString.optional(),
     roles: z.array(agentFields.role).max(MAX_PROFILE_ROLES).optional(),
-    modelId: z.string().trim().min(1).max(256),
+    modelId: z.string().min(1).max(256),
     name: agentFields.name,
     description: z.string().trim().max(500).optional(),
     agentId: agentIdString.optional(),

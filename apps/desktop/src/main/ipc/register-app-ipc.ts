@@ -39,7 +39,6 @@ import {
   getCustomProviderConfig,
   getDefaultModelId,
   getModelSettings,
-  getModusTurnModelId,
   getProviderAuthState,
   getProviderDetail,
   isUsableModelId,
@@ -386,16 +385,13 @@ export function registerAppIpc({
 } = {}): void {
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
-  // L3b: one turn-model rule for 1:1 (agent:prompt) and group-room turns.
+  // One strict model-selection rule for 1:1 (agent:prompt) and group-room turns.
   const turnModelDeps: TurnModelDeps = {
     defaultModelId: () => getDefaultModelId(),
-    modusTurnModelId: () => getModusTurnModelId(),
     isUsable: (modelId) => isUsableModelId(modelId),
   };
   setGroupTurnModelResolver((agentModelId, sessionId) =>
-    resolveTurnModel(agentModelId ?? getAgentSession(sessionId)?.model, turnModelDeps, {
-      keepUnusable: agentModelId !== undefined,
-    }),
+    resolveTurnModel(agentModelId ?? getAgentSession(sessionId)?.model, turnModelDeps),
   );
 
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
@@ -549,9 +545,8 @@ export function registerAppIpc({
     } catch (error) {
       throw toGroupIpcError(error);
     }
-    // L3b: a Modus session runs on the Modus turn model (Settings pick if allowed, else the
-    // plan default); an own-provider session keeps its stored model. Never the renderer's
-    // model or thinking (the model's own config applies).
+    // The session's stored model is authoritative. Never trust the renderer's model or
+    // thinking fields; an unavailable stored selection is rejected before the prompt.
     await getAgentRuntime().prompt(
       getSenderWindow(event),
       userTurnPromptInput(

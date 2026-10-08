@@ -195,10 +195,11 @@ import {
   getDefaultModel,
   getModelRegistry,
   getModelThinkingVariant,
+  isUsableModelId,
+  listModels,
   listScopedModels,
   modelToId,
   resolveModelThinking,
-  setDefaultModel,
 } from "./model-service";
 import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
@@ -246,6 +247,14 @@ import {
 import { registerVisualTools, VISUAL_AUTHORING_GUIDELINES } from "./tools/visual-tools";
 import { formatWaitedDuration, registerWaitTools } from "./tools/wait-tools";
 import { registerWebTools } from "./tools/web-tools";
+
+function requireUsableSelectedModel(modelId: string): NonNullable<ReturnType<typeof findModel>> {
+  const model = findModel(modelId);
+  if (!model || !isUsableModelId(modelId)) {
+    throw new Error(`Selected model is unavailable: ${modelId}`);
+  }
+  return model;
+}
 
 /**
  * Appended to the agent's system prompt so responses render well in Modus's
@@ -2076,10 +2085,18 @@ export class PiSdkRuntime implements AgentRuntime {
   private async getOrResume(
     window: BrowserWindowType,
     sessionId: string,
+    requestedModelId?: string,
   ): Promise<SdkRuntimeSession | undefined> {
     const pending = this.resumePromises.get(sessionId);
     if (pending) {
-      return await pending;
+      try {
+        return await pending;
+      } catch (error) {
+        // An explicit prompt/model change can recover a cold session whose saved model has
+        // disappeared. Rebuild with that requested identity instead of inheriting the failed
+        // stored selection.
+        if (requestedModelId === undefined) throw error;
+      }
     }
     const existing = this.sessions.get(sessionId);
     let previousSession: SdkRuntimeSession | undefined;
@@ -2105,7 +2122,8 @@ export class PiSdkRuntime implements AgentRuntime {
       disposing = this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
-    const resume = () => this.createRuntimeSession(window, sessionId, previousSession);
+    const resume = () =>
+      this.createRuntimeSession(window, sessionId, previousSession, requestedModelId);
     const next = (disposing ? disposing.then(resume) : resume()).finally(() => {
       this.resumePromises.delete(sessionId);
     });
@@ -2445,13 +2463,14 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<AgentSessionInfo> {
     const emit = this.emitToWindow(window);
     const emitVolatile = this.emitVolatileToWindow(window);
-    const selectedModel = findModel(input.model) ?? getDefaultModel();
+    const selectedModel =
+      input.model === undefined ? getDefaultModel() : requireUsableSelectedModel(input.model);
     if (!selectedModel) {
       throw new Error(
         "No model is configured. Open Settings and connect a provider before starting a chat.",
       );
     }
-    const modelId = selectedModel ? modelToId(selectedModel) : input.model;
+    const modelId = modelToId(selectedModel);
     const recordInput: Parameters<typeof createAgentSessionRecord>[0] = {
       workspaceId: input.workspaceId,
       cwd: input.cwd,
@@ -2510,6 +2529,7 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
     sessionId: string,
     previousSession?: SdkRuntimeSession,
+    requestedModelId?: string,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
     if (!info) {
@@ -2523,6 +2543,28 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
 
+    const storedModelId = previousSession
+      ? modelToId(previousSession.session.model)
+      : info.model;
+    const selectedModel =
+      requestedModelId !== undefined
+        ? requireUsableSelectedModel(requestedModelId)
+        : storedModelId !== undefined
+          ? requireUsableSelectedModel(storedModelId)
+          : getDefaultModel();
+    if (!selectedModel) {
+      throw new Error(
+        "No model is configured. Open Settings and connect a provider before resuming this chat.",
+      );
+    }
+    const selectedThinking =
+      previousSession && requestedModelId === undefined
+        ? {
+            model: selectedModel,
+            thinkingLevel: previousSession.session.thinkingLevel,
+            thinkingBudget: previousSession.session.agent.thinkingBudgets?.high,
+          }
+        : resolveModelThinking(selectedModel);
     const { settingsManager, loader } = await this.createSessionResources(
       info.cwd,
       info.id,
@@ -2530,21 +2572,6 @@ export class PiSdkRuntime implements AgentRuntime {
       agentDir,
       previousSession?.session.settingsManager,
     );
-
-    const selectedModel =
-      previousSession?.session.model ?? findModel(info.model) ?? getDefaultModel();
-    if (!selectedModel) {
-      throw new Error(
-        "No model is configured. Open Settings and connect a provider before resuming this chat.",
-      );
-    }
-    const selectedThinking = previousSession
-      ? {
-          model: selectedModel,
-          thinkingLevel: previousSession.session.thinkingLevel,
-          thinkingBudget: previousSession.session.agent.thinkingBudgets?.high,
-        }
-      : resolveModelThinking(selectedModel);
     const sessionFile =
       info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
     let sessionManager: SessionManager;
@@ -2786,7 +2813,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     let runtimeSession: SdkRuntimeSession | undefined;
     try {
-      runtimeSession = await this.getOrResume(window, input.sessionId);
+      runtimeSession = await this.getOrResume(window, input.sessionId, input.model);
     } catch (error) {
       throw failEarlyPrompt(error);
     }
@@ -2855,13 +2882,14 @@ export class PiSdkRuntime implements AgentRuntime {
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
       // with stale model/thinking (mid-session switch, edit-and-resend, resume).
-      if (input.model !== undefined) {
-        await this.applyModelSelection(
-          runtimeSession,
-          input.model,
-          input.thinkingVariant ?? input.thinkingLevel,
-        );
-      }
+      // A direct runtime caller may omit `model`; in that case retain the session's exact
+      // identity. IPC callers provide their authoritative selection explicitly.
+      const turnModelId = input.model ?? modelToId(runtimeSession.session.model);
+      await this.applyModelSelection(
+        runtimeSession,
+        turnModelId,
+        input.thinkingVariant ?? input.thinkingLevel,
+      );
     } catch (error) {
       throw failEarlyPrompt(error);
     }
@@ -4102,7 +4130,7 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     const emit = this.emitToWindow(window);
-    const requestedModel = input.subagent?.model.trim();
+    const requestedModel = input.subagent?.model;
     const childModel =
       requestedModel && requestedModel !== "inherit" ? requestedModel : (parent.model ?? undefined);
     const childSessionId = randomUUID();
@@ -4161,8 +4189,8 @@ export class PiSdkRuntime implements AgentRuntime {
     },
   ): Promise<void> {
     const childModel =
-      input.subagent?.model.trim() && input.subagent.model.trim() !== "inherit"
-        ? input.subagent.model.trim()
+      input.subagent?.model && input.subagent.model !== "inherit"
+        ? input.subagent.model
         : (session.model ?? undefined);
     let promptError: unknown;
     try {
@@ -4532,10 +4560,7 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<ReturnType<typeof findModel>> {
-    const model = findModel(modelId);
-    if (!model) {
-      return undefined;
-    }
+    const model = requireUsableSelectedModel(modelId);
     const resolved = resolveModelThinking(
       model,
       thinkingVariant ?? getModelThinkingVariant(modelId),
@@ -4558,15 +4583,11 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<AgentSessionInfo> {
-    const runtimeSession = await this.getOrResume(window, sessionId);
+    const runtimeSession = await this.getOrResume(window, sessionId, modelId);
     if (!runtimeSession) {
       throw new Error(`Unable to set model: ${modelId}`);
     }
-    const model = await this.applyModelSelection(runtimeSession, modelId, thinkingVariant);
-    if (!model) {
-      throw new Error(`Unable to set model: ${modelId}`);
-    }
-    setDefaultModel(modelToId(model));
+    await this.applyModelSelection(runtimeSession, modelId, thinkingVariant);
     this.emitContextUsage(runtimeSession);
     return runtimeSession.info;
   }
@@ -4580,21 +4601,21 @@ export class PiSdkRuntime implements AgentRuntime {
       return cycleDefaultModel(direction);
     }
 
-    const runtimeSession = await this.getOrResume(window, sessionId);
-    if (!runtimeSession) {
-      return cycleDefaultModel(direction);
-    }
-
-    const next = cycleDefaultModel(direction);
-    const model = findModel(next.id);
-    if (!model) {
-      throw new Error(`Unable to cycle to model: ${next.id}`);
-    }
-    const resolved = resolveModelThinking(model, next.thinkingVariant);
-    await runtimeSession.session.setModel(resolved.model);
-    runtimeSession.session.setThinkingLevel(resolved.thinkingLevel);
-    setSessionThinkingBudget(runtimeSession.session, resolved.thinkingBudget);
-    updateAgentSessionMetadata(sessionId, { model: modelToId(model) });
+    const candidates = listModels().filter((model) => !model.locked);
+    if (candidates.length === 0) throw new Error("No models are available to select.");
+    const cachedSession = this.sessions.get(sessionId);
+    const currentId = cachedSession
+      ? modelToId(cachedSession.session.model)
+      : getAgentSession(sessionId)?.model;
+    const currentIndex = candidates.findIndex((model) => model.id === currentId);
+    const offset = direction === "backward" ? -1 : 1;
+    const nextIndex =
+      currentIndex < 0 ? 0 : (currentIndex + offset + candidates.length) % candidates.length;
+    const next = candidates[nextIndex];
+    if (!next) throw new Error("No models are available to select.");
+    const runtimeSession = await this.getOrResume(window, sessionId, next.id);
+    if (!runtimeSession) throw new Error(`Agent session not found: ${sessionId}`);
+    await this.applyModelSelection(runtimeSession, next.id, next.thinkingVariant);
     this.emitContextUsage(runtimeSession);
     return next;
   }

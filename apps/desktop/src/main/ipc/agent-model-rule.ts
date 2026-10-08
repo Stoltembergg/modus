@@ -13,7 +13,7 @@ export function requireAgentModel(
   changed = true,
 ): void {
   if (agent.templateId) return;
-  const id = agent.modelId?.trim();
+  const id = agent.modelId;
   if (!id) {
     throw new Error(
       encodeGroupErrorMessage("agent-model-required", "Choose a model for this agent."),

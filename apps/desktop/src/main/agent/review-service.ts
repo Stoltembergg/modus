@@ -167,9 +167,15 @@ async function runPiReview(cwd: string, diff: string, depth: AgentReviewDepth): 
   await loader.reload();
 
   const selectedModel = getDefaultModel();
+  if (!selectedModel) {
+    throw new Error(
+      "No model is configured. Open Settings and connect a provider before reviewing.",
+    );
+  }
   const sessionOptions: Parameters<typeof createAgentSession>[0] = {
     cwd,
     agentDir,
+    model: selectedModel,
     authStorage: getModelRegistry().authStorage,
     modelRegistry: getModelRegistry(),
     resourceLoader: loader,
@@ -178,9 +184,6 @@ async function runPiReview(cwd: string, diff: string, depth: AgentReviewDepth): 
     tools: toolRegistry.resolveActiveTools("review"),
     customTools: toolRegistry.getCustomToolDefinitions("review"),
   };
-  if (selectedModel !== undefined) {
-    sessionOptions.model = selectedModel;
-  }
   const { session } = await createAgentSession(sessionOptions);
 
   let text = "";

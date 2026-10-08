@@ -355,13 +355,8 @@ export function App() {
     setModelSettings(settings);
     setModels(settings.models);
     setModel((current) => {
-      if (
-        current &&
-        settings.models.some((item: ModelInfo) => item.id === current && !item.locked)
-      ) {
-        return current;
-      }
-      return settings.defaultModel ?? settings.models[0]?.id ?? "";
+      if (current) return current;
+      return settings.defaultModel ?? "";
     });
   }, []);
 
@@ -1555,7 +1550,6 @@ export function App() {
                                   contextUsage={contextUsageBySession[visibleSession.id]}
                                   defaultModel={model}
                                   modusStatus={modelSettings?.modus}
-                                  modusDefaultModel={modelSettings?.modusDefaultModel}
                                   hub={hubRef.current}
                                   initialEvents={initialEventsBySession[visibleSession.id]}
                                   key={visibleSession.id}

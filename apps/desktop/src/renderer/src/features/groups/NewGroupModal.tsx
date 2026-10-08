@@ -140,7 +140,7 @@ export function NewGroupModal({
   const fallbackModelId =
     defaultModelId && models.some((model) => model.id === defaultModelId)
       ? defaultModelId
-      : (models.find((model) => !model.locked)?.id ?? "");
+      : "";
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: loaded once per open.
   useEffect(() => {
