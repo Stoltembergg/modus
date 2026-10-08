@@ -492,6 +492,10 @@ afterAll(async () => {
 });
 
 describe("PiSdkRuntime", () => {
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+  });
+
   it("waits for plugin bootstrap to settle before startup lifecycle sync", async () => {
     let releaseBootstrap!: () => void;
     const bootstrapGate = new Promise<void>((resolve) => {
