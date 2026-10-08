@@ -31,6 +31,22 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     };
   });
 
+  it("preserves the requested model provider in model selection", async () => {
+    const selectedModel = "byok/vendor/model-with-slashes";
+    const result = await modelSelectHook.execute(
+      { requestedModel: selectedModel, taskComplexity: "high" },
+      mockContext,
+    );
+
+    expect(result.selectedModel).toBe(selectedModel);
+    expect(result.effectiveModel).toBe(selectedModel);
+    expect(result.provider).toBe("byok");
+
+    const noSelection = await modelSelectHook.execute({ taskComplexity: "high" }, mockContext);
+    expect(noSelection.selectedModel).toBe("default");
+    expect(noSelection.provider).toBeUndefined();
+  });
+
   it("1.1 Registers hooks and executes in strict priority order", async () => {
     const executionOrder: string[] = [];
 

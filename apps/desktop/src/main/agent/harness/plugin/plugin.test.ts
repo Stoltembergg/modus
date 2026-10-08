@@ -178,19 +178,21 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     it("loads @modus/model-router and routes tasks dynamically", async () => {
       await loader.load(modelRouterPluginManifest);
 
-      // 1. Complex task routes to sonnet
+      // 1. Complexity never selects a replacement model for the session.
       const complexSelect = await registry.execute<any, any>("model.select", {
         task: "Refactor entire distributed messaging layer",
         complexity: "complex",
       });
-      expect(complexSelect.selectedModel).toBe("claude-3-7-sonnet");
+      expect(complexSelect.selectedModel).toBeUndefined();
+      expect(complexSelect.fallbackModel).toBeUndefined();
 
-      // 2. Simple task routes to flash
+      // 2. A simple task also leaves selection to the session default.
       const simpleSelect = await registry.execute<any, any>("model.select", {
         task: "Print hello world",
         complexity: "simple",
       });
-      expect(simpleSelect.selectedModel).toBe("gemini-3.8-flash");
+      expect(simpleSelect.selectedModel).toBeUndefined();
+      expect(simpleSelect.fallbackModel).toBeUndefined();
 
       // 3. Explicit preference respected
       const customSelect = await registry.execute<any, any>("model.select", {
@@ -198,6 +200,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         preferredModel: "deepseek-v3",
       });
       expect(customSelect.selectedModel).toBe("deepseek-v3");
+      expect(customSelect.fallbackModel).toBe("deepseek-v3");
 
       // 4. Model routing strategy
       const routeDecision = await registry.execute<any, any>("model.route", {
@@ -205,7 +208,15 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         complexity: "complex",
       });
       expect(routeDecision.target).toBe("subagent_mesh");
+      expect(routeDecision.model).toBeUndefined();
       expect(routeDecision.speculativeVerification).toBe(true);
+
+      const selectedRoute = await registry.execute<any, any>("model.route", {
+        task: "Continue the selected provider session",
+        preferredModel: "byok/claude-opus-5-5",
+        complexity: "complex",
+      });
+      expect(selectedRoute.model).toBe("byok/claude-opus-5-5");
     });
   });
 
