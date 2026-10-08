@@ -1582,6 +1582,16 @@ describe("group turns preserve each member's selected model", () => {
     });
   });
 
+  it("forwards the app-default directive to a group member with no model", () => {
+    setGroupTurnModelResolver(() => null as unknown as undefined);
+    const { group, beta } = squad();
+    const { runtime, groups } = setup();
+
+    groups.postUserMessage({ groupId: group.id, body: "@Beta take a look" });
+
+    expect(runtime.calls[0]?.input).toMatchObject({ sessionId: beta, model: null });
+  });
+
   it("does not wake a group member with an unavailable explicit model", async () => {
     const selectedModel = "byok/removed-model";
     const defaultModelId = vi.fn(() => "openai/available-default");

@@ -4711,6 +4711,7 @@ describe("PiSdkRuntime", () => {
       requestTool(name);
       await Promise.all([runtime.ensure(window, sessionId), runtime.ensure(window, sessionId)]);
       expect(clearTodos).not.toHaveBeenCalledWith(sessionId);
+      expect(sessionAt().thinkingLevel).toBe("high");
 
       await turn();
 
