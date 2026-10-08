@@ -425,6 +425,24 @@ export function migrateDatabase(db: DatabaseSync): void {
     );
     create index if not exists idx_harness_promotions_workspace_status
       on harness_promotions(workspace_id, status, updated_at desc);
+
+    create table if not exists harness_group_messages (
+      id text primary key,
+      group_id text not null,
+      from_agent text not null,
+      to_agent text not null,
+      content text not null,
+      revision integer not null default 0,
+      sent_at text not null,
+      acked_at text,
+      dedupe_hash text not null
+    );
+    create index if not exists idx_harness_group_messages_to_ack
+      on harness_group_messages(to_agent, acked_at, sent_at);
+    create index if not exists idx_harness_group_messages_group
+      on harness_group_messages(group_id, sent_at);
+    create index if not exists idx_harness_group_messages_dedupe
+      on harness_group_messages(dedupe_hash, sent_at);
   `);
 
   // Agent Groups: rooms of normal agent_sessions. A null workspace_id means the

@@ -123,6 +123,25 @@ import {
   ownsHyperPlanStartReservation,
   releaseHyperPlanRunReservation,
 } from "./harness/hyperplan-draft-store";
+import { isFeatureFlagEnabled } from "./harness/feature-flags";
+import { CapabilityRegistry } from "./harness/capability/capability-registry";
+import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
+import {
+  AutoRollbackManager,
+  bootstrapModusPlugins,
+  type DependencyGraph,
+  PluginFailureCorrelation,
+  PluginHealthMonitor,
+  PluginInstrumentation,
+  PluginIsolationHost,
+  PluginLifecycleService,
+  PluginLoader,
+  PluginRecoveryManager,
+  PluginSafeModeManager,
+  PluginStateStore,
+  PluginVersionManager,
+  SecurityAuditLogger,
+} from "./harness/plugin";
 import { evaluateIntentGate } from "./harness/intent-gate";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
@@ -190,6 +209,9 @@ import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
 import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
+import { SubagentProviderRegistry } from "./harness/subagents/subagent-provider-registry";
+import { ModusNativeSubagentProvider } from "./harness/subagents/modus-native-provider";
+import type { SubagentStatus, SubagentSpawnInput, SubagentSpawnResult, SubagentWaitResult } from "./harness/subagents/subagent-provider";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
@@ -779,6 +801,17 @@ function composeSubagentPrompt(input: {
 type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
+  private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
+  private pluginLoader: PluginLoader = new PluginLoader(this.capabilityRegistry);
+  private pluginStateStore?: PluginStateStore | undefined;
+  private pluginLifecycleService?: PluginLifecycleService | undefined;
+  private pluginInstrumentation?: PluginInstrumentation | undefined;
+  private pluginHealthMonitor?: PluginHealthMonitor | undefined;
+  private pluginFailureCorrelation?: PluginFailureCorrelation | undefined;
+  private pluginIsolationHost?: PluginIsolationHost | undefined;
+  private securityAuditLogger?: SecurityAuditLogger | undefined;
+  private bootstrapPromise?: Promise<void> | undefined;
+  private pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
@@ -822,9 +855,230 @@ export class PiSdkRuntime implements AgentRuntime {
     registerSubagentTools(this);
     registerWaitTools(this);
     registerGroupTools();
+
+    if (isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")) {
+      registerCoreCapabilities(this.capabilityRegistry);
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGINS")) {
+      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader).then(() => {}).catch((err) => {
+        console.error("[modus] Failed to bootstrap plugins:", err);
+      });
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGIN_TRACING")) {
+      this.pluginInstrumentation = new PluginInstrumentation();
+      this.pluginHealthMonitor = new PluginHealthMonitor(this.pluginInstrumentation);
+      this.pluginFailureCorrelation = new PluginFailureCorrelation(this.pluginInstrumentation);
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")) {
+      this.securityAuditLogger = new SecurityAuditLogger();
+      this.pluginIsolationHost = new PluginIsolationHost({ auditLogger: this.securityAuditLogger });
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE")) {
+      const svc = this.getPluginLifecycleService();
+      this.pluginSyncPromise = (this.bootstrapPromise ?? Promise.resolve())
+        .then(() => svc.syncOnStartup())
+        .catch((err) => {
+          console.error("[modus] Failed to sync plugins on startup:", err);
+          return [];
+        });
+    }
   }
 
   /** Active tool names for routing, using the same filter as prompt construction. */
+  getCapabilityRegistry(): CapabilityRegistry {
+    return this.capabilityRegistry;
+  }
+
+  getPluginLoader(): PluginLoader {
+    return this.pluginLoader;
+  }
+
+  getPluginStateStore(): PluginStateStore {
+    if (!this.pluginStateStore) {
+      try {
+        const userData = app.getPath("userData");
+        this.pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
+      } catch (err) {
+        console.warn("[modus] plugin state falling back to in-memory store (persistence disabled):", err instanceof Error ? err.message : String(err));
+        this.pluginStateStore = new PluginStateStore(":memory:");
+      }
+    }
+    return this.pluginStateStore;
+  }
+
+  getPluginLifecycleService(): PluginLifecycleService {
+    if (!this.pluginLifecycleService) {
+      this.pluginLifecycleService = new PluginLifecycleService(
+        this.getPluginStateStore(),
+        this.pluginLoader,
+        this.capabilityRegistry,
+      );
+    }
+    return this.pluginLifecycleService;
+  }
+
+  getSubagentRegistry(): SubagentProviderRegistry {
+    const registry = SubagentProviderRegistry.getInstance();
+    const defaultProvider = registry.getDefaultProvider();
+    if (defaultProvider instanceof ModusNativeSubagentProvider) {
+      defaultProvider.setDelegate({
+        spawnSubagent: async (input: SubagentSpawnInput): Promise<SubagentSpawnResult> => {
+          if (!input.sessionId) {
+            return {
+              subagentId: "unavailable",
+              status: "failed",
+              errorMessage: "Parent sessionId is required to spawn a native subagent",
+            };
+          }
+          const parentSession = getAgentSession(input.sessionId);
+          if (!parentSession) {
+            return {
+              subagentId: "unavailable",
+              sessionId: input.sessionId,
+              status: "failed",
+              errorMessage: `Parent session ${input.sessionId} not found`,
+            };
+          }
+          const stubWindow = {
+            webContents: {
+              send: () => {},
+            },
+            isDestroyed: () => false,
+            isFocused: () => true,
+            isMinimized: () => false,
+          } as unknown as BrowserWindowType;
+          try {
+            const res = await this.runSubagent(stubWindow, {
+              parentSessionId: input.sessionId,
+              task: input.task,
+              prompt: input.task,
+              subagentType: input.role,
+              subagent: {
+                name: input.role,
+                body: "",
+                model: "inherit",
+                readOnly: false,
+                ...(input.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
+              },
+            });
+            return {
+              subagentId: res.session.id,
+              sessionId: input.sessionId,
+              status: "spawned",
+            };
+          } catch (err) {
+            return {
+              subagentId: "unavailable",
+              sessionId: input.sessionId,
+              status: "failed",
+              errorMessage: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+        waitSubagent: async (subagentId: string, timeoutMs?: number): Promise<SubagentWaitResult> => {
+          const childSession = getAgentSession(subagentId);
+          const parentId = childSession?.parentSessionId;
+          if (!parentId) {
+            return {
+              subagentId,
+              success: false,
+              error: `Subagent ${subagentId} parent session not found`,
+            };
+          }
+          const waitResult = await this.waitBackground({
+            sessionId: parentId,
+            subagentIds: [subagentId],
+            timeoutMs: timeoutMs ?? 30000,
+          });
+          const child = waitResult.subagents.find((item) => item.id === subagentId);
+                    return {
+            subagentId,
+            success: child?.status === "completed",
+            ...(child?.output ? { output: child.output } : {}),
+            ...(child?.status === "error" && child?.output ? { error: child.output } : {}),
+          };
+        },
+        stopSubagent: async (subagentId: string): Promise<void> => {
+          await this.abort(subagentId);
+        },
+        getSubagentStatus: async (subagentId: string): Promise<SubagentStatus> => {
+          const session = getAgentSession(subagentId);
+          if (!session) {
+            return {
+              subagentId,
+              state: "failed",
+              error: `Session ${subagentId} not found`,
+            };
+          }
+          const task = this.backgroundChildTasks.get(subagentId);
+          const childRun = listAgentRuns(subagentId).at(-1);
+          let state: SubagentStatus["state"] = "running";
+          if (task?.status === "completed" || session.status === "completed" || childRun?.status === "completed") state = "completed";
+          else if (task?.status === "error" || session.status === "error" || childRun?.status === "failed") state = "failed";
+          else if (session.status === "cancelled" || childRun?.status === "cancelled") state = "aborted";
+          return {
+            subagentId,
+            state,
+          };
+        },
+      });
+    }
+    return registry;
+  }
+
+  getDependencyGraph(): DependencyGraph {
+    return this.getPluginLifecycleService().getDependencyGraph();
+  }
+
+  getPluginInstrumentation(): PluginInstrumentation | undefined {
+    return this.pluginInstrumentation;
+  }
+
+  getPluginHealthMonitor(): PluginHealthMonitor | undefined {
+    return this.pluginHealthMonitor;
+  }
+
+  getPluginFailureCorrelation(): PluginFailureCorrelation | undefined {
+    return this.pluginFailureCorrelation;
+  }
+
+  getPluginIsolationHost(): PluginIsolationHost | undefined {
+    return this.pluginIsolationHost;
+  }
+
+  getSecurityAuditLogger(): SecurityAuditLogger | undefined {
+    return this.securityAuditLogger;
+  }
+
+  getPluginVersionManager(): PluginVersionManager {
+    return this.getPluginLifecycleService().getVersionManager();
+  }
+
+  getPluginSafeModeManager(): PluginSafeModeManager {
+    return this.getPluginLifecycleService().getSafeModeManager();
+  }
+
+  getPluginRecoveryManager(): PluginRecoveryManager {
+    return this.getPluginLifecycleService().getRecoveryManager();
+  }
+
+  getAutoRollbackManager(): AutoRollbackManager {
+    return this.getPluginLifecycleService().getAutoRollbackManager();
+  }
+
+  async waitForPlugins(): Promise<void> {
+    if (this.bootstrapPromise) {
+      await this.bootstrapPromise;
+    }
+    if (this.pluginSyncPromise) {
+      await this.pluginSyncPromise;
+    }
+  }
+
   getActiveToolNames(sessionId: string, profile: ToolProfileName): readonly string[] {
     const info = this.sessions.get(sessionId)?.info ?? getAgentSession(sessionId);
     return info ? activeToolNamesForSession(info, profile) : [];
@@ -1891,6 +2145,7 @@ export class PiSdkRuntime implements AgentRuntime {
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
+      noExtensions: true,
       extensionFactories: [createModusPermissionExtension(sessionId, emit, cwd)],
       settingsManager,
       appendSystemPrompt: [

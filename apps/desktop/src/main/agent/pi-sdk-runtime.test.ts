@@ -175,6 +175,11 @@ const { resolveQuestionRequest } = await import("../interaction/question-broker"
 const todoToolRuntime = await import("./tools/todo-tools");
 const permissionExtension = await import("./pi-permission-extension");
 const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
+const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
+  "./harness/feature-flags"
+);
+const { ResponsePolicyRegistry } = await import("./harness/response");
+const { HarnessObserver } = await import("./harness/observability");
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
@@ -487,6 +492,52 @@ afterAll(async () => {
 });
 
 describe("PiSdkRuntime", () => {
+  it("waits for plugin bootstrap to settle before startup lifecycle sync", async () => {
+    let releaseBootstrap!: () => void;
+    const bootstrapGate = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+    const sync = vi.fn(async () => [] as string[]);
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    vi.spyOn(PluginLoader.prototype, "load").mockImplementation(async () => {
+      await bootstrapGate;
+      throw new Error("controlled bootstrap stop");
+    });
+    const lifecycleSpy = vi.spyOn(PiSdkRuntime.prototype, "getPluginLifecycleService").mockReturnValue({
+      syncOnStartup: sync,
+    } as never);
+    setFeatureFlagOverrides({ MODUS_PLUGINS: true, MODUS_PLUGIN_LIFECYCLE: true });
+    const runtime = new PiSdkRuntime();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(sync).not.toHaveBeenCalled();
+
+    releaseBootstrap();
+    await runtime.waitForPlugins();
+    expect(sync).toHaveBeenCalledOnce();
+    lifecycleSpy.mockRestore();
+  });
+
+  it("restrictive extension loader", async () => {
+    const sessionId = `extension-containment-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "hello",
+      sessionId,
+    });
+
+    const options = mocks.resourceLoaderOptions.at(-1) as {
+      noExtensions?: boolean;
+      additionalExtensionPaths?: unknown[];
+      cliEnabledExtensions?: unknown[];
+      extensionFactories?: unknown[];
+    };
+    expect(options.noExtensions).toBe(true);
+    expect(options.additionalExtensionPaths).toBeUndefined();
+    expect(options.cliEnabledExtensions).toBeUndefined();
+    expect(options.extensionFactories).toHaveLength(1);
+  });
+
   it.each([
     "selected",
     "original",
@@ -7049,5 +7100,260 @@ describe("L2: run branch snapshot + context line", () => {
     ).rejects.toThrow('A branch "deleted-branch" não existe mais');
     expect(prompt).not.toHaveBeenCalled();
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+});
+
+describe("PiSdkRuntime Phase 7 response policy wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  async function runTurnWithAssistantText(text: string): Promise<string> {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: text },
+        });
+        mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "hello",
+      sessionId,
+    });
+    return (
+      mocks.resourceLoaderOptions.at(-1) as { appendSystemPrompt: string[] }
+    ).appendSystemPrompt.join("\n");
+  }
+
+  it("appends the response policy directive and evaluates the settled response when enabled", async () => {
+    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: true });
+
+    const systemPrompt = await runTurnWithAssistantText(
+      "P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6",
+    );
+
+    expect(systemPrompt).toContain('<response_policy level="standard">');
+    expect(
+      ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated,
+    ).toBeGreaterThan(0);
+  });
+
+  it("omits the directive and skips evaluation when the flag is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: false });
+
+    const systemPrompt = await runTurnWithAssistantText("done");
+
+    expect(systemPrompt).not.toContain("<response_policy");
+    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(0);
+  });
+});
+
+describe("PiSdkRuntime Phase 8 observability wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  async function runTurnWithAssistantText(text: string): Promise<string> {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: text },
+        });
+        mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "hello",
+      sessionId,
+    });
+    return sessionId;
+  }
+
+  it("records a session turn with a real duration when enabled", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true });
+
+    const sessionId = await runTurnWithAssistantText("done");
+
+    const metrics = HarnessObserver.getInstance().getSessionMetrics(sessionId);
+    expect(metrics).toBeDefined();
+    expect(metrics?.turnCount).toBeGreaterThan(0);
+    expect(metrics?.totalDurationMs).toBeGreaterThan(0);
+  });
+
+  it("records nothing when the flag is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: false });
+
+    const sessionId = await runTurnWithAssistantText("done");
+
+    expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+  });
+
+  it("mirrors response evaluations into the observer end to end", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
+
+    await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
+
+    expect(
+      ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated,
+    ).toBeGreaterThan(0);
+    expect(
+      HarnessObserver.getInstance().snapshot().response.violationsDetected,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
+  /**
+   * Offline PI sessions whose mocked model stream pushes a real text delta
+   * (the shared helper only pushes `done`, which yields no assistant text
+   * and would make every child fail with "no assistant output").
+   */
+  async function useOfflineDeltaSessions(): Promise<void> {
+    const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+      "@earendil-works/pi-coding-agent",
+    );
+    const authStorage = sdk.AuthStorage.inMemory({
+      mock: { type: "api_key", key: "offline-test-only" },
+    });
+    const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
+    mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
+    mocks.settingsManagerInMemory.mockImplementation((settings) =>
+      sdk.SettingsManager.inMemory(settings),
+    );
+    mocks.createAgentSession.mockImplementation(async (options) => {
+      const loaderOptions = mocks.resourceLoaderOptions.at(-1) as ConstructorParameters<
+        typeof sdk.DefaultResourceLoader
+      >[0];
+      const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
+      await resourceLoader.reload();
+      const { session } = await sdk.createAgentSession({
+        ...options,
+        authStorage,
+        modelRegistry,
+        resourceLoader,
+        model: {
+          api: "openai-completions",
+          baseUrl: "https://offline.invalid",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 100_000,
+          maxTokens: 1000,
+          ...options.model,
+        },
+      });
+      session.agent.streamFn = (model, context) => {
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "text", text: "Done." }],
+          stopReason: "stop",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "start", partial: message });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "Done.", partial: message });
+        stream.push({ type: "done", reason: "stop", message });
+        return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
+      };
+      return { session };
+    });
+  }
+
+  it("spawns a real headless child through the provider and harvests output via wait", async () => {
+    await useOfflineDeltaSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi", sessionId });
+    expect(spawnRes.status).toBe("spawned");
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+    expect(waitRes.output).toContain("Done.");
+  });
+
+  it("honors worktree isolation requested through the provider", async () => {
+    await useOfflineDeltaSessions();
+    await initGitRepo();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({
+      role: "builder",
+      task: "build it",
+      sessionId,
+      isolation: "worktree",
+    });
+    expect(spawnRes.status).toBe("spawned");
+    const { getAgentSession: getSession } = await import("./agent-store");
+    expect(getSession(spawnRes.subagentId)?.subagentWorktree).toBeDefined();
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+  });
+
+  it("returns failed (does not throw) when the parent session does not exist", async () => {
+    await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi" });
+    expect(spawnRes.status).toBe("failed");
+    expect(spawnRes.errorMessage).toContain("sessionId");
+  });
+
+  it("reports harvested child status from the session instead of failed", async () => {
+    await useOfflineDeltaSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi", sessionId });
+    expect(spawnRes.status).toBe("spawned");
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+    const status = await provider.status(spawnRes.subagentId);
+    expect(status.state).toBe("completed");
   });
 });

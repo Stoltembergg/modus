@@ -339,6 +339,16 @@ export type AdaptiveDecision = {
   changeStrategy?: ChangeStrategyPlan;
 };
 
+/** Verdict produced by the Phase 5 failure-loop guard (repeat guards / circuit breaker). */
+export type AdaptiveFailureLoopAction = {
+  action: "change_strategy" | "delegate" | "consult_oracle" | "circuit_break";
+  reasonCodes: string[];
+  reason?: string | undefined;
+  suggestion?: string | undefined;
+  task?: string | undefined;
+  role?: "debugger" | "explore" | "oracle" | undefined;
+};
+
 export type AdaptiveDecisionSnapshot = {
   sessionId: string;
   runId: string;
@@ -363,6 +373,8 @@ export type AdaptiveDecisionSnapshot = {
   oracleConsulted?: boolean;
   /** True when a capped Oracle findings digest is available (Gap 5). */
   oracleDigestPresent?: boolean;
+  /** Phase 5 repeat-guard verdict for this decision (post_failure boundary only). */
+  failureLoopAction?: AdaptiveFailureLoopAction | undefined;
 };
 
 export type ContextUncertaintyCandidate = {

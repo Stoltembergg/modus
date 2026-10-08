@@ -1,0 +1,66 @@
+name: plugin-sandbox-probe-linux
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "crates/plugin-sandbox-probe/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/plugin-sandbox-probe-linux.yml"
+  pull_request:
+    paths:
+      - "crates/plugin-sandbox-probe/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/plugin-sandbox-probe-linux.yml"
+
+jobs:
+  linux-feasibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format, test, and build
+        run: |
+          cargo fmt --manifest-path crates/plugin-sandbox-probe/Cargo.toml -- --check
+          cargo test --locked -p plugin-sandbox-probe
+          cargo build --locked -p plugin-sandbox-probe
+      - name: Collect diagnostic report
+        if: always()
+        run: |
+          mkdir -p plugin-sandbox-probe-artifact
+          {
+            printf 'os='; . /etc/os-release; printf '%s\n' "$PRETTY_NAME"
+            printf 'kernel='; uname -r
+            printf 'architecture='; uname -m
+          } > plugin-sandbox-probe-artifact/host-evidence.txt
+          if [ -x target/debug/plugin-sandbox-probe ]; then
+            printf 'binary_sha256=' >> plugin-sandbox-probe-artifact/host-evidence.txt
+            sha256sum target/debug/plugin-sandbox-probe >> plugin-sandbox-probe-artifact/host-evidence.txt
+          fi
+          set +e
+          cargo run --locked -p plugin-sandbox-probe -- --probe > plugin-sandbox-probe-artifact/report.json 2> plugin-sandbox-probe-artifact/probe.stderr
+          probe_status=$?
+          set -e
+          printf 'probe_exit_code=%s\n' "$probe_status" >> plugin-sandbox-probe-artifact/host-evidence.txt
+          if [ "$probe_status" -ne 0 ]; then exit "$probe_status"; fi
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("plugin-sandbox-probe-artifact/report.json")
+          report = json.loads(path.read_text())
+          assert report["verdict"] == "NO_GO", report
+          assert report["audit_findings_closed"] is False, report
+          assert report["plugin_bytes_received"] is False, report
+          PY
+      - name: Archive diagnostic artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-sandbox-probe-linux
+          path: plugin-sandbox-probe-artifact/
