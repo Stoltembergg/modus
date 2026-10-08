@@ -142,10 +142,7 @@ describe("explicit turn model identity", () => {
     const defaultModelId = vi.fn(() => "openai/gpt-5");
 
     expect(() =>
-      resolveExplicitTurnModel(
-        selected,
-        deps({ defaultModelId, isUsable: () => false }),
-      ),
+      resolveExplicitTurnModel(selected, deps({ defaultModelId, isUsable: () => false })),
     ).toThrow(`Selected model is unavailable: ${selected}`);
     expect(defaultModelId).not.toHaveBeenCalled();
   });

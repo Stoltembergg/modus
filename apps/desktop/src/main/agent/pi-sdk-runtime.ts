@@ -2566,10 +2566,12 @@ export class PiSdkRuntime implements AgentRuntime {
     const branchModel = shouldRecoverBranchModel
       ? sessionManager.buildSessionContext().model
       : null;
-    const branchModelId = branchModel ? `${branchModel.provider}/${branchModel.modelId}` : undefined;
+    const branchModelId = branchModel
+      ? `${branchModel.provider}/${branchModel.modelId}`
+      : undefined;
     const storedModelId = previousSession?.session.model
       ? modelToId(previousSession.session.model)
-      : (info.model || branchModelId);
+      : info.model || branchModelId;
     const selectedModel =
       requestedModelId !== undefined
         ? requireUsableSelectedModel(requestedModelId as string)
@@ -4151,7 +4153,9 @@ export class PiSdkRuntime implements AgentRuntime {
       ? modelToId(parentRuntime.session.model)
       : parent.model;
     const childModel =
-      requestedModel && requestedModel !== "inherit" ? requestedModel : (inheritedModel ?? undefined);
+      requestedModel && requestedModel !== "inherit"
+        ? requestedModel
+        : (inheritedModel ?? undefined);
     if (childModel !== undefined) requireUsableSelectedModel(childModel);
     const childSessionId = randomUUID();
     const worktree =
