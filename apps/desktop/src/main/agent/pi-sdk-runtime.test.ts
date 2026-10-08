@@ -4929,7 +4929,7 @@ describe("PiSdkRuntime", () => {
     expect(lastSystemPrompt()).not.toContain("Persona marker one.");
   });
 
-  it("uses the current Settings default after an agent model is cleared on a live session", async () => {
+  it("uses the Settings default after clearing an agent model on a live session", async () => {
     const { updateAgent } = await import("../agents/agents-store");
     const { sessionId, agentId } = await agentChatSession("Use the agent model.");
     const previousModel = {
@@ -4970,7 +4970,7 @@ describe("PiSdkRuntime", () => {
     expect(session.prompt).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the current Settings default instead of a removed PI branch model after an agent model is cleared", async () => {
+  it("uses the Settings default after clearing an agent model with a removed PI branch", async () => {
     const { updateAgent } = await import("../agents/agents-store");
     const { sessionId, agentId } = await agentChatSession("Use the agent model.");
     const piSessionFile = join(userData, `${sessionId}.jsonl`);

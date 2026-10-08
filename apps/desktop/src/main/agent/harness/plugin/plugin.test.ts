@@ -425,7 +425,8 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         task: "quick query",
         complexity: "simple",
       });
-      expect(selectResult.selectedModel).toBe("gemini-3.8-flash");
+      expect(selectResult.selectedModel).toBeUndefined();
+      expect(selectResult.fallbackModel).toBeUndefined();
     });
   });
 
