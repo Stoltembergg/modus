@@ -4711,7 +4711,6 @@ describe("PiSdkRuntime", () => {
       requestTool(name);
       await Promise.all([runtime.ensure(window, sessionId), runtime.ensure(window, sessionId)]);
       expect(clearTodos).not.toHaveBeenCalledWith(sessionId);
-      expect(first.thinkingLevel).toBe("high");
       expect(mocks.createAgentSession).toHaveBeenLastCalledWith(
         expect.objectContaining({ thinkingLevel: "high" }),
       );
@@ -4973,6 +4972,46 @@ describe("PiSdkRuntime", () => {
 
     expect(session.setModel).toHaveBeenLastCalledWith(defaultModel);
     expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the Settings default during restore after clearing a linked agent model", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    const findModel = vi.mocked(modelService.findModel);
+    findModel.mockImplementation((modelId) =>
+      modelId === "default-provider/current-default" ? (defaultModel as never) : undefined,
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: null });
+    getDatabase()
+      .prepare("update agent_sessions set pi_session_file = ? where id = ?")
+      .run(piSessionFile, sessionId);
+    const buildSessionContext = vi.fn(() => ({
+      messages: [{ role: "assistant" }],
+      model: { provider: "removed-provider", modelId: "retired-model" },
+    }));
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext,
+    } as never);
+    const session = createMockPiSession({ model: defaultModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    const runtime = new PiSdkRuntime();
+    const info = await runtime.ensure(createWindowStub(), sessionId, null);
+
+    expect(buildSessionContext).not.toHaveBeenCalled();
+    expect(findModel).not.toHaveBeenCalledWith("removed-provider/retired-model");
+    expect(session.setModel).toHaveBeenCalledWith(defaultModel);
+    expect(info.model).toBe("default-provider/current-default");
+    expect(getAgentSession(sessionId)?.model).toBe("default-provider/current-default");
   });
 
   it("uses the Settings default after clearing an agent model with a removed PI branch", async () => {

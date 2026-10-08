@@ -1222,8 +1222,8 @@ export function ChatPane({
       }
       return item;
     });
-    // L2: the model sent is the Settings default; main ignores it anyway and forces the
-    // current default (and that model's own thinking config) on every user turn.
+    // Main ignores the renderer's model as authority and resolves the stored session or agent
+    // selection; the payload remains advisory UI state only.
     const userMessageId = `local-user:${crypto.randomUUID()}`;
     setAgentEvents((events) =>
       appendAgentEvents(

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentPromptSchema } from "../ipc/schemas";
 import {
   NO_DEFAULT_MODEL_MESSAGE,
+  resolveAgentTurnModel,
   resolveExplicitTurnModel,
   resolveTurnModel,
   type TurnModelDeps,
@@ -111,6 +112,56 @@ describe("explicit turn model identity", () => {
         }),
       ),
     ).toBe(selected);
+  });
+
+  it("uses an agent's current explicit model instead of a stale session model", () => {
+    const selected = "byok/selected-model";
+
+    expect(
+      resolveAgentTurnModel(
+        selected,
+        "openai/stale-model",
+        true,
+        deps({ isUsable: (id) => id === selected }),
+      ),
+    ).toBe(selected);
+  });
+
+  it("preserves a session model when its linked agent has no separate model", () => {
+    const selected = "byok/session-model";
+    expect(
+      resolveAgentTurnModel(
+        undefined,
+        selected,
+        true,
+        deps({ isUsable: (id) => id === selected }),
+      ),
+    ).toBe(selected);
+  });
+
+  it("rejects an unavailable agent model instead of trying the session or default", () => {
+    const defaultModelId = vi.fn(() => "openai/gpt-5");
+
+    expect(() =>
+      resolveAgentTurnModel(
+        "byok/removed-model",
+        "openai/gpt-5",
+        true,
+        deps({ defaultModelId, isUsable: (id) => id === "openai/gpt-5" }),
+      ),
+    ).toThrow("Selected model is unavailable: byok/removed-model");
+    expect(defaultModelId).not.toHaveBeenCalled();
+  });
+
+  it(
+    "requests the current Settings default when neither a linked agent nor session has a model",
+    () => {
+      expect(resolveAgentTurnModel(undefined, undefined, true, deps())).toBeNull();
+    },
+  );
+
+  it("leaves an unlinked legacy session unset for PI branch restoration", () => {
+    expect(resolveAgentTurnModel(undefined, undefined, false, deps())).toBeUndefined();
   });
 
   it("preserves the selected BYOK model when the Settings default is another provider", () => {

@@ -2538,7 +2538,7 @@ export class GroupRuntime {
         delivery: "normal",
         userMessageId: wake.promptUserMessageId,
         ...(groupTask ? { groupTask } : {}),
-        ...(model ? { model } : {}),
+        ...(model !== undefined ? { model } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
     } catch (error) {

@@ -98,7 +98,12 @@ export type TurnSettledEvent = {
 
 export type AgentRuntime = {
   create(window: BrowserWindowType, input: CreateAgentRuntimeInput): Promise<AgentSessionInfo>;
-  ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo>;
+  /** Omitted restores the persisted choice; `null` selects the current Settings default. */
+  ensure(
+    window: BrowserWindowType,
+    sessionId: string,
+    modelId?: string | null,
+  ): Promise<AgentSessionInfo>;
   /** Additive result: existing callers may ignore it. */
   prompt(window: BrowserWindowType, input: PromptAgentInput): Promise<PromptTurnResult>;
   /** pi's own `isStreaming` for a live session (false when not loaded). */

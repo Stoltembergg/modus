@@ -1169,6 +1169,7 @@ describe("agent:prompt preserves the session model", () => {
     mocks.getDefaultModelId.mockReset().mockReturnValue("anthropic/claude-opus-5-5");
     mocks.isUsableModelId.mockReset().mockReturnValue(true);
     mocks.getAgentSession.mockReset();
+    mocks.getAgent.mockReset();
     mocks.requireAgentChatWritable.mockReset();
     mocks.fromWebContents.mockReturnValue(mocks.senderWindow);
     mocks.getAgentRuntime.mockReturnValue({ prompt });
@@ -1220,6 +1221,93 @@ describe("agent:prompt preserves the session model", () => {
     await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
     const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
     expect(input.model).toBe("openai/gpt-5");
+  });
+
+  it("uses the linked agent's current model instead of a stale session model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "openai/stale-model",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input.model).toBe("byok/agent-model");
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("uses the Settings default when a linked agent has no model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: null });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentPrompt);
+
+    await handler?.(trustedEvent as never, { sessionId: "session-1", message: "hi" } as never);
+
+    const input = (prompt.mock.calls[0] as unknown as [unknown, Record<string, unknown>])[1];
+    expect(input).toHaveProperty("model", null);
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
+  });
+
+  it("passes a linked agent's current model into session restoration", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "openai/stale-model",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/agent-model" });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", "byok/agent-model");
+  });
+
+  it("passes the app-default directive into restoration for a linked agent without a model", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: null,
+    });
+    mocks.getAgent.mockReturnValue({ modelId: null });
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await handler(trustedEvent as never, "session-1" as never);
+
+    expect(ensure).toHaveBeenCalledWith(mocks.senderWindow, "session-1", null);
+  });
+
+  it("rejects a removed linked agent model before restoring its session", async () => {
+    mocks.getAgentSession.mockReturnValue({
+      id: "session-1",
+      agentId: "agent-1",
+      model: "openai/stale-model",
+    });
+    mocks.getAgent.mockReturnValue({ modelId: "byok/removed-model" });
+    mocks.isUsableModelId.mockReturnValue(false);
+    const ensure = vi.fn().mockResolvedValue({ id: "session-1" });
+    mocks.getAgentRuntime.mockReturnValue({ ensure });
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentEnsure);
+    if (!handler) throw new Error("Agent ensure IPC handler was not registered.");
+
+    await expect(handler(trustedEvent as never, "session-1" as never)).rejects.toThrow(
+      "Selected model is unavailable: byok/removed-model",
+    );
+
+    expect(ensure).not.toHaveBeenCalled();
+    expect(mocks.getDefaultModelId).not.toHaveBeenCalled();
   });
 
   it("defers a legacy session with no database model to runtime branch restoration", async () => {

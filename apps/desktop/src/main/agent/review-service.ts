@@ -12,7 +12,12 @@ import { z } from "zod";
 import type { AgentReviewDepth, AgentReviewIssue, AgentReviewResult } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
 import { readDiff } from "../git/git-service";
-import { getDefaultModel, getModelRegistry } from "./model-service";
+import {
+  findModel,
+  getDefaultModel,
+  getModelRegistry,
+  isUsableModelId,
+} from "./model-service";
 import { toolRegistry } from "./tools/registry";
 
 const reviewIssueSchema = z.object({
@@ -153,7 +158,29 @@ export function parseReviewOutput(
   }
 }
 
-async function runPiReview(cwd: string, diff: string, depth: AgentReviewDepth): Promise<string> {
+function requireReviewModel(modelId?: string | null) {
+  if (modelId === undefined || modelId === null) {
+    const model = getDefaultModel();
+    if (!model) {
+      throw new Error(
+        "No model is configured. Open Settings and connect a provider before reviewing.",
+      );
+    }
+    return model;
+  }
+  const model = findModel(modelId);
+  if (!model || !isUsableModelId(modelId)) {
+    throw new Error(`Selected model is unavailable: ${modelId}`);
+  }
+  return model;
+}
+
+async function runPiReview(
+  cwd: string,
+  diff: string,
+  depth: AgentReviewDepth,
+  modelId?: string | null,
+): Promise<string> {
   const agentDir = join(app.getPath("userData"), "pi-agent");
   mkdirSync(agentDir, { recursive: true });
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: false } });
@@ -166,12 +193,7 @@ async function runPiReview(cwd: string, diff: string, depth: AgentReviewDepth): 
   });
   await loader.reload();
 
-  const selectedModel = getDefaultModel();
-  if (!selectedModel) {
-    throw new Error(
-      "No model is configured. Open Settings and connect a provider before reviewing.",
-    );
-  }
+  const selectedModel = requireReviewModel(modelId);
   const sessionOptions: Parameters<typeof createAgentSession>[0] = {
     cwd,
     agentDir,
@@ -207,6 +229,7 @@ export async function startAgentReview(input: {
   sessionId?: string;
   workspaceId?: string;
   depth?: AgentReviewDepth;
+  modelId?: string | null;
 }): Promise<AgentReviewResult> {
   const unstaged = await readDiff(input.cwd, undefined, "unstaged");
   const staged = await readDiff(input.cwd, undefined, "staged");
@@ -231,7 +254,7 @@ export async function startAgentReview(input: {
   }
 
   try {
-    const response = await runPiReview(input.cwd, diff, depth);
+    const response = await runPiReview(input.cwd, diff, depth, input.modelId);
     const parsed = parseReviewOutput(response, diff);
     return persistReview({
       ...baseReview,

@@ -44,9 +44,21 @@ export function resolveExplicitTurnModel(
   return resolveTurnModel(candidate, deps);
 }
 
+/** Resolve the linked agent or session's choice before explicitly requesting the App default. */
+export function resolveAgentTurnModel(
+  agentModelId: string | null | undefined,
+  sessionModelId: string | null | undefined,
+  isAgentSession: boolean,
+  deps: TurnModelDeps,
+): string | null | undefined {
+  const persistedModelId = agentModelId || sessionModelId;
+  const explicitModelId = resolveExplicitTurnModel(persistedModelId, deps);
+  return explicitModelId ?? (isAgentSession ? null : undefined);
+}
+
 type ParsedPrompt = ReturnType<(typeof agentPromptSchema)["parse"]>;
 
-/** agent:prompt payload -> runtime input; an absent model stays unset for session restoration. */
+/** agent:prompt payload -> runtime input; absent restores legacy sessions, null selects the default. */
 export function userTurnPromptInput(
   parsed: ParsedPrompt,
   turnModelId: string | null | undefined,
@@ -61,7 +73,7 @@ export function userTurnPromptInput(
     ...(parsed.skills !== undefined ? { skills: parsed.skills } : {}),
     ...(parsed.mode !== undefined ? { mode: parsed.mode } : {}),
     // parsed.model / thinkingLevel / thinkingVariant are deliberately dropped.
-    ...(turnModelId ? { model: turnModelId } : {}),
+    ...(turnModelId !== undefined ? { model: turnModelId } : {}),
     ...(parsed.planId !== undefined ? { planId: parsed.planId } : {}),
   };
 }

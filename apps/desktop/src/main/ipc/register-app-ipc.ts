@@ -78,6 +78,7 @@ import {
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import {
+  resolveAgentTurnModel,
   resolveExplicitTurnModel,
   type TurnModelDeps,
   userTurnPromptInput,
@@ -385,15 +386,20 @@ export function registerAppIpc({
 } = {}): void {
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
-  // Validate stored 1:1/group choices here; an absent choice stays unset until the runtime has
-  // restored any legacy PI branch, and only then may it apply the Settings default.
+  // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
+  // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.
   const turnModelDeps: TurnModelDeps = {
     defaultModelId: () => getDefaultModelId(),
     isUsable: (modelId) => isUsableModelId(modelId),
   };
   setGroupTurnModelResolver((agentModelId, sessionId) => {
-    const selectedModelId = agentModelId ?? getAgentSession(sessionId)?.model;
-    return resolveExplicitTurnModel(selectedModelId, turnModelDeps);
+    const session = getAgentSession(sessionId);
+    return resolveAgentTurnModel(
+      agentModelId,
+      session?.model,
+      session?.agentId !== undefined,
+      turnModelDeps,
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
@@ -525,9 +531,25 @@ export function registerAppIpc({
 
   ipcMain.handle(IPC_CHANNELS.agentEnsure, async (event, sessionId: string) => {
     assertTrustedSender(event);
+    const parsedSessionId = parseIpcInput(
+      sessionIdSchema,
+      sessionId,
+      IPC_CHANNELS.agentEnsure,
+    );
+    const session = getAgentSession(parsedSessionId);
+    const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+    const requestedModelId = session
+      ? resolveAgentTurnModel(
+          agentModelId,
+          session.model,
+          session.agentId !== undefined,
+          turnModelDeps,
+        )
+      : undefined;
     return await getAgentRuntime().ensure(
       getSenderWindow(event),
-      parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentEnsure),
+      parsedSessionId,
+      requestedModelId,
     );
   });
 
@@ -547,11 +569,15 @@ export function registerAppIpc({
     } catch (error) {
       throw toGroupIpcError(error);
     }
-    // The session's stored model is authoritative. Never trust the renderer's model or
-    // thinking fields; an unavailable stored selection is rejected before the prompt. A legacy
-    // session with no DB model is left unset so the runtime can restore its PI branch first.
-    const turnModelId = resolveExplicitTurnModel(
-      getAgentSession(parsed.sessionId)?.model,
+    // The linked agent's choice is authoritative for its chat. Never trust renderer model/thinking;
+    // an unavailable explicit model is rejected here. Unlinked legacy rows remain unset so the
+    // runtime can restore their PI branch; a linked agent without a model explicitly uses default.
+    const session = getAgentSession(parsed.sessionId);
+    const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+    const turnModelId = resolveAgentTurnModel(
+      agentModelId,
+      session?.model,
+      session?.agentId !== undefined,
       turnModelDeps,
     );
     await getAgentRuntime().prompt(
@@ -1233,6 +1259,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.reviewStart, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(reviewStartSchema, input, IPC_CHANNELS.reviewStart);
+    const session = parsed.sessionId ? getAgentSession(parsed.sessionId) : undefined;
     if (parsed.sessionId) {
       const startedEvent = {
         type: "review.started",
@@ -1243,11 +1270,25 @@ export function registerAppIpc({
       getSenderWindow(event).webContents.send(IPC_CHANNELS.agentEvent, startedEvent);
     }
     try {
+      const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+      let reviewModelId = session
+        ? resolveAgentTurnModel(
+            agentModelId,
+            session.model,
+            session.agentId !== undefined,
+            turnModelDeps,
+          )
+        : undefined;
+      if (session && reviewModelId === undefined) {
+        const restored = await getAgentRuntime().ensure(getSenderWindow(event), session.id);
+        reviewModelId = resolveExplicitTurnModel(restored.model, turnModelDeps);
+      }
       const review = await startAgentReview({
         cwd: parsed.cwd,
         ...(parsed.sessionId !== undefined ? { sessionId: parsed.sessionId } : {}),
         ...(parsed.workspaceId !== undefined ? { workspaceId: parsed.workspaceId } : {}),
         ...(parsed.depth !== undefined ? { depth: parsed.depth } : {}),
+        ...(reviewModelId !== undefined ? { modelId: reviewModelId } : {}),
       });
       if (parsed.sessionId) {
         const completedEvent = {

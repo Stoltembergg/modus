@@ -34,7 +34,11 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
-import { agentChatPersonaPrompt, requireAgentChatWritable } from "../agents/agents-store";
+import {
+  agentChatPersonaPrompt,
+  getAgent,
+  requireAgentChatWritable,
+} from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
@@ -308,6 +312,12 @@ type SdkRuntimeSession = {
         failed: boolean;
       }
     | undefined;
+};
+
+type PreviousSessionSelection = {
+  modelId?: string;
+  thinkingLevel: AgentSession["thinkingLevel"];
+  thinkingBudget?: number;
 };
 
 function lastCompactionEnd(
@@ -2101,6 +2111,7 @@ export class PiSdkRuntime implements AgentRuntime {
     }
     const existing = this.sessions.get(sessionId);
     let previousSession: SdkRuntimeSession | undefined;
+    let previousSelection: PreviousSessionSelection | undefined;
     let disposing: Promise<void> | undefined;
     if (existing) {
       const resourcesChanged =
@@ -2117,14 +2128,33 @@ export class PiSdkRuntime implements AgentRuntime {
       // are current for this turn. The in-memory to-dos stay.
       // PI has no public custom-definition setter. A tool-only refresh reuses
       // the live SessionManager: its branch may not have reached disk yet.
-      if (toolsChanged && !resourcesChanged) previousSession = existing;
+      if (toolsChanged && !resourcesChanged) {
+        previousSession = existing;
+        // dispose() aborts the SDK agent and can reset its live thinking state. Snapshot the
+        // selected identity and thinking configuration before awaiting that disposal.
+        previousSelection = {
+          ...(existing.session.model
+            ? { modelId: modelToId(existing.session.model) }
+            : {}),
+          thinkingLevel: existing.session.thinkingLevel,
+          ...(existing.session.agent.thinkingBudgets?.high !== undefined
+            ? { thinkingBudget: existing.session.agent.thinkingBudgets.high }
+            : {}),
+        };
+      }
       // Publish the rebuild promise before yielding so concurrent ensure/prompt
       // calls cannot resume from disk and discard the live branch.
       disposing = this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
     const resume = () =>
-      this.createRuntimeSession(window, sessionId, previousSession, requestedModelId);
+      this.createRuntimeSession(
+        window,
+        sessionId,
+        previousSession,
+        previousSelection,
+        requestedModelId,
+      );
     const next = (disposing ? disposing.then(resume) : resume()).finally(() => {
       this.resumePromises.delete(sessionId);
     });
@@ -2169,10 +2199,26 @@ export class PiSdkRuntime implements AgentRuntime {
     );
   }
 
-  async ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo> {
-    const runtimeSession = await this.getOrResume(window, sessionId);
+  async ensure(
+    window: BrowserWindowType,
+    sessionId: string,
+    requestedModelId?: string | null,
+  ): Promise<AgentSessionInfo> {
+    const runtimeSession = await this.getOrResume(window, sessionId, requestedModelId);
     if (!runtimeSession) {
       throw new Error(`Agent session not found: ${sessionId}`);
+    }
+    if (requestedModelId !== undefined) {
+      const model =
+        requestedModelId === null
+          ? getDefaultModel()
+          : requireUsableSelectedModel(requestedModelId);
+      if (!model) {
+        throw new Error(
+          "No model is configured. Open Settings and connect a provider before resuming this chat.",
+        );
+      }
+      await this.applyModelSelection(runtimeSession, modelToId(model));
     }
     return runtimeSession.info;
   }
@@ -2530,6 +2576,7 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
     sessionId: string,
     previousSession?: SdkRuntimeSession,
+    previousSelection?: PreviousSessionSelection,
     requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
@@ -2562,33 +2609,42 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     const shouldRecoverBranchModel =
-      requestedModelId === undefined && !previousSession?.session.model && !info.model;
+      requestedModelId === undefined &&
+      !previousSelection?.modelId &&
+      !previousSession?.session.model &&
+      !info.model;
     const branchModel = shouldRecoverBranchModel
       ? sessionManager.buildSessionContext().model
       : null;
     const branchModelId = branchModel
       ? `${branchModel.provider}/${branchModel.modelId}`
       : undefined;
-    const storedModelId = previousSession?.session.model
-      ? modelToId(previousSession.session.model)
-      : info.model || branchModelId;
+    const storedModelId = previousSelection
+      ? (previousSelection.modelId ?? info.model ?? branchModelId)
+      : previousSession?.session.model
+        ? modelToId(previousSession.session.model)
+        : (info.model || branchModelId);
     const selectedModel =
-      requestedModelId !== undefined
-        ? requireUsableSelectedModel(requestedModelId as string)
-        : storedModelId !== undefined
-          ? requireUsableSelectedModel(storedModelId)
-          : getDefaultModel();
+      requestedModelId === null
+        ? getDefaultModel()
+        : requestedModelId !== undefined
+          ? requireUsableSelectedModel(requestedModelId)
+          : storedModelId !== undefined
+            ? requireUsableSelectedModel(storedModelId)
+            : getDefaultModel();
     if (!selectedModel) {
       throw new Error(
         "No model is configured. Open Settings and connect a provider before resuming this chat.",
       );
     }
     const selectedThinking =
-      previousSession && (requestedModelId === undefined || requestedModelId === storedModelId)
+      previousSession &&
+      previousSelection &&
+      (requestedModelId === undefined || requestedModelId === storedModelId)
         ? {
             model: selectedModel,
-            thinkingLevel: previousSession.session.thinkingLevel,
-            thinkingBudget: previousSession.session.agent.thinkingBudgets?.high,
+            thinkingLevel: previousSelection.thinkingLevel,
+            thinkingBudget: previousSelection.thinkingBudget,
           }
         : resolveModelThinking(selectedModel);
     const { settingsManager, loader } = await this.createSessionResources(
@@ -2894,19 +2950,28 @@ export class PiSdkRuntime implements AgentRuntime {
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
       // with stale model/thinking (mid-session switch, edit-and-resend, resume).
-      // A direct runtime caller may omit `model`; in that case retain the session's exact
-      // identity. IPC callers provide their authoritative selection explicitly.
+      // A direct runtime caller may omit `model`; retain and validate the session's exact
+      // identity without reapplying it. IPC callers provide their authoritative choice.
+      const defaultModel = input.model === null ? getDefaultModel() : undefined;
       const turnModelId =
-        input.model ??
-        (runtimeSession.session.model ? modelToId(runtimeSession.session.model) : undefined);
+        input.model === null
+          ? defaultModel
+            ? modelToId(defaultModel)
+            : undefined
+          : (input.model ??
+            (runtimeSession.session.model ? modelToId(runtimeSession.session.model) : undefined));
       if (turnModelId === undefined) {
         throw new Error("No model is selected for this session.");
       }
-      await this.applyModelSelection(
-        runtimeSession,
-        turnModelId,
-        input.thinkingVariant ?? input.thinkingLevel,
-      );
+      if (input.model === undefined) {
+        requireUsableSelectedModel(turnModelId);
+      } else {
+        await this.applyModelSelection(
+          runtimeSession,
+          turnModelId,
+          input.thinkingVariant ?? input.thinkingLevel,
+        );
+      }
     } catch (error) {
       throw failEarlyPrompt(error);
     }

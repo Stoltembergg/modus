@@ -1583,7 +1583,7 @@ describe("group turns preserve each member's selected model", () => {
   });
 
   it("forwards the app-default directive to a group member with no model", () => {
-    setGroupTurnModelResolver(() => null as unknown as undefined);
+    setGroupTurnModelResolver(() => null);
     const { group, beta } = squad();
     const { runtime, groups } = setup();
 
