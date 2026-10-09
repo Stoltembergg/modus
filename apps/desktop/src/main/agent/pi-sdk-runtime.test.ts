@@ -9144,9 +9144,16 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       expect(observer.getSessionMetrics(memberB)?.policyEvaluations).toBe(1);
       expect(observer.getSessionMetrics(child)?.policyEvaluations).toBe(1);
       for (const sessionId of [memberA, memberB, child]) {
-        const responseDeltas = listAgentEvents(sessionId)
-          .map(({ event }) => event)
-          .filter((event) => event.type === "message.delta")
+        const events = listAgentEvents(sessionId).map(({ event }) => event);
+        const assistantMessageIds = new Set(
+          events
+            .filter((event) => event.type === "message.started" && event.role === "assistant")
+            .map((event) => (event.type === "message.started" ? event.messageId : "")),
+        );
+        const responseDeltas = events
+          .filter(
+            (event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId),
+          )
           .map((event) => (event.type === "message.delta" ? event.delta : ""))
           .join("");
         expect(responseDeltas).toBe(response);
