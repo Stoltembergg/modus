@@ -1119,9 +1119,7 @@ export function registerAppIpc({
 
   ipcMain.handle(IPC_CHANNELS.filesWatchStatus, (event, cwd: string) => {
     assertTrustedSender(event);
-    return isWorkspaceWatched(
-      parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatchStatus),
-    );
+    return isWorkspaceWatched(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatchStatus));
   });
 
   ipcMain.handle(IPC_CHANNELS.filesUnwatch, (event, cwd: string) => {

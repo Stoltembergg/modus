@@ -257,11 +257,7 @@ export function getRunSourceWritePaths(sessionId: string, runId: string): string
        order by c.rowid asc limit 1`,
       )
       .get(runId, sessionId) as { cwd?: string; current_cwd?: string } | undefined;
-    if (
-      !owner?.cwd ||
-      !owner.current_cwd ||
-      !sameWorkspacePath(owner.cwd, owner.current_cwd)
-    ) {
+    if (!owner?.cwd || !owner.current_cwd || !sameWorkspacePath(owner.cwd, owner.current_cwd)) {
       return [];
     }
     const rows = db
@@ -924,14 +920,8 @@ function hasCurrentVerifiedTaskEvidence(
          and json_extract(payload_json, '$.runId') = ?
        order by rowid desc limit 1`,
     )
-    .get(state.sessionId, state.runId) as
-    | { event_rowid: number; payload_json: string }
-    | undefined;
-  if (
-    !row ||
-    !Number.isSafeInteger(row.event_rowid) ||
-    row.event_rowid >= stateRowId
-  ) {
+    .get(state.sessionId, state.runId) as { event_rowid: number; payload_json: string } | undefined;
+  if (!row || !Number.isSafeInteger(row.event_rowid) || row.event_rowid >= stateRowId) {
     return false;
   }
 

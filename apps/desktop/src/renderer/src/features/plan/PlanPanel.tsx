@@ -9,9 +9,7 @@ const WORKSPACE_REVISION_RECHECK_MS = 5_000;
 
 function workspacePathKey(path: string, platform: string): string {
   const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  return platform === "win32" || platform === "darwin"
-    ? normalized.toLowerCase()
-    : normalized;
+  return platform === "win32" || platform === "darwin" ? normalized.toLowerCase() : normalized;
 }
 
 /** Read-only Plan document shown in the Inspector. */
@@ -51,36 +49,39 @@ export const PlanPanel = memo(function PlanPanel({
   }>(() => ({ key: "", revisions: new Map() }));
   const currentWorkspaceRevisions =
     revisionSnapshot.key === revisionKey ? revisionSnapshot.revisions : new Map();
-  const refreshWorkspaceRevisions = useCallback(async (invalidate = true): Promise<void> => {
-    if (!invalidate && revisionRequestInFlight.current) return;
-    const requestId = ++revisionRequestId.current;
-    if (!active || !sessionCwd || !plan?.sessionId || evidenceRunIds.length === 0) {
-      setRevisionSnapshot({ key: revisionKey, revisions: new Map() });
-      return;
-    }
-    if (invalidate) setRevisionSnapshot({ key: revisionKey, revisions: new Map() });
-    revisionRequestInFlight.current = true;
-    try {
-      const revisions = await Promise.all(
-        evidenceRunIds.map(async (runId) => {
-          try {
-            const revision = await window.modus.agent.runWorkspaceRevision({
-              sessionId: plan.sessionId,
-              runId,
-            });
-            return [runId, revision] as const;
-          } catch {
-            return [runId, undefined] as const;
-          }
-        }),
-      );
-      if (revisionRequestId.current === requestId) {
-        setRevisionSnapshot({ key: revisionKey, revisions: new Map(revisions) });
+  const refreshWorkspaceRevisions = useCallback(
+    async (invalidate = true): Promise<void> => {
+      if (!invalidate && revisionRequestInFlight.current) return;
+      const requestId = ++revisionRequestId.current;
+      if (!active || !sessionCwd || !plan?.sessionId || evidenceRunIds.length === 0) {
+        setRevisionSnapshot({ key: revisionKey, revisions: new Map() });
+        return;
       }
-    } finally {
-      if (revisionRequestId.current === requestId) revisionRequestInFlight.current = false;
-    }
-  }, [active, evidenceRunIds, plan?.sessionId, revisionKey, sessionCwd]);
+      if (invalidate) setRevisionSnapshot({ key: revisionKey, revisions: new Map() });
+      revisionRequestInFlight.current = true;
+      try {
+        const revisions = await Promise.all(
+          evidenceRunIds.map(async (runId) => {
+            try {
+              const revision = await window.modus.agent.runWorkspaceRevision({
+                sessionId: plan.sessionId,
+                runId,
+              });
+              return [runId, revision] as const;
+            } catch {
+              return [runId, undefined] as const;
+            }
+          }),
+        );
+        if (revisionRequestId.current === requestId) {
+          setRevisionSnapshot({ key: revisionKey, revisions: new Map(revisions) });
+        }
+      } finally {
+        if (revisionRequestId.current === requestId) revisionRequestInFlight.current = false;
+      }
+    },
+    [active, evidenceRunIds, plan?.sessionId, revisionKey, sessionCwd],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -103,9 +104,7 @@ export const PlanPanel = memo(function PlanPanel({
     const unsubscribe = files.onChanged((event) => {
       const currentRoot = watchedRoot ?? sessionCwd;
       const platform = window.modus.app.platform;
-      if (
-        workspacePathKey(event.cwd, platform) !== workspacePathKey(currentRoot, platform)
-      ) {
+      if (workspacePathKey(event.cwd, platform) !== workspacePathKey(currentRoot, platform)) {
         return;
       }
       if (event.watching === false) {

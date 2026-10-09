@@ -271,7 +271,9 @@ describe("dedicated HyperPlan review IPC", () => {
 
     await expect(handler(trustedEvent as never, "C:/workspace" as never)).resolves.toBe(false);
     expect(mocks.isWorkspaceWatched).toHaveBeenCalledWith("C:/workspace");
-    await expect(handler(trustedEvent as never, { cwd: "C:/workspace" } as never)).rejects.toThrow();
+    await expect(
+      handler(trustedEvent as never, { cwd: "C:/workspace" } as never),
+    ).rejects.toThrow();
   });
 
   it("reviews only an owned Spec plan and passes bounded plan data to the dedicated coordinator", async () => {

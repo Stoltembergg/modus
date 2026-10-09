@@ -3864,10 +3864,7 @@ export class PiSdkRuntime implements AgentRuntime {
             this.transitionPlanBuild(
               runtimeSession,
               buildPlan.id,
-              changes &&
-                !changes.truncated &&
-                changes.fileCount > 0 &&
-                attributedSourceChange
+              changes && !changes.truncated && changes.fileCount > 0 && attributedSourceChange
                 ? "built"
                 : "not_built",
             );

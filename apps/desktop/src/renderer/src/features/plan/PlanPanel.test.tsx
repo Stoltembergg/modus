@@ -115,14 +115,14 @@ describe("PlanPanel", () => {
     if (!spec) throw new Error("Test plan requires a Spec.");
     const criterion = spec.acceptanceCriteria[0];
     if (!criterion) throw new Error("Test plan requires an acceptance criterion.");
-    let onChanged: ((event: { cwd: string; paths: string[]; watching?: boolean }) => void) | undefined;
+    let onChanged:
+      | ((event: { cwd: string; paths: string[]; watching?: boolean }) => void)
+      | undefined;
     const passedPlan: PlanRef = {
       ...plan,
       spec: {
         ...spec,
-        acceptanceCriteria: [
-          { ...criterion, requiredCheckKinds: ["tests"], status: "passed" },
-        ],
+        acceptanceCriteria: [{ ...criterion, requiredCheckKinds: ["tests"], status: "passed" }],
         evidence: [
           {
             id: "evidence-tests",
@@ -189,9 +189,7 @@ describe("PlanPanel", () => {
       ...plan,
       spec: {
         ...spec,
-        acceptanceCriteria: [
-          { ...criterion, requiredCheckKinds: ["tests"], status: "passed" },
-        ],
+        acceptanceCriteria: [{ ...criterion, requiredCheckKinds: ["tests"], status: "passed" }],
         evidence: [
           {
             id: "evidence-tests",
@@ -249,7 +247,9 @@ describe("PlanPanel", () => {
     if (!spec) throw new Error("Test plan requires a Spec.");
     const criterion = spec.acceptanceCriteria[0];
     if (!criterion) throw new Error("Test plan requires an acceptance criterion.");
-    let onChanged: ((event: { cwd: string; paths: string[]; watching?: boolean }) => void) | undefined;
+    let onChanged:
+      | ((event: { cwd: string; paths: string[]; watching?: boolean }) => void)
+      | undefined;
     const passedPlan: PlanRef = {
       ...plan,
       spec: {
