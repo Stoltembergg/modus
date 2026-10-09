@@ -254,9 +254,7 @@ describe("PlanPanel", () => {
       ...plan,
       spec: {
         ...spec,
-        acceptanceCriteria: [
-          { ...criterion, requiredCheckKinds: ["tests"], status: "passed" },
-        ],
+        acceptanceCriteria: [{ ...criterion, requiredCheckKinds: ["tests"], status: "passed" }],
         evidence: [
           {
             id: "evidence-tests",
@@ -321,9 +319,7 @@ describe("PlanPanel", () => {
       ...plan,
       spec: {
         ...spec,
-        acceptanceCriteria: [
-          { ...criterion, requiredCheckKinds: ["tests"], status: "passed" },
-        ],
+        acceptanceCriteria: [{ ...criterion, requiredCheckKinds: ["tests"], status: "passed" }],
         evidence: [
           {
             id: "evidence-tests",
