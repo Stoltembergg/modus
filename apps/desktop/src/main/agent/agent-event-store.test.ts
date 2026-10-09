@@ -2152,7 +2152,7 @@ fs.renameSync("original-manifest-link", "package.json");
     );
   });
 
-  it("accepts a completed recognized bash check without explicit exit code but keeps unknown tools unavailable", () => {
+  it("keeps a recognized bash check without explicit exit code unavailable", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId);
     const run = createAgentRun({ sessionId, prompt: "run test checks" });
@@ -2176,7 +2176,17 @@ fs.renameSync("original-manifest-link", "package.json");
     const evidence = getRunToolEvidence(sessionId, run.id);
     const ended = evidence.find((event) => event.type === "tool.ended");
 
-    expect(ended).toMatchObject({ type: "tool.ended", checkName: "tests", exitCode: 0 });
+    expect(ended).toMatchObject({ type: "tool.ended", checkName: "tests" });
+    expect(ended).not.toHaveProperty("exitCode");
+    expect(
+      summarizeRunQA({
+        sessionId,
+        runId: run.id,
+        changedPaths: [],
+        requiredChecks: ["tests"],
+        events: evidence,
+      }),
+    ).toMatchObject({ required: true, status: "unavailable" });
   });
 
   it("keeps a started call without an end as incomplete exact-run evidence", () => {

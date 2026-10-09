@@ -7153,7 +7153,7 @@ describe("PiSdkRuntime", () => {
     ["only foreign-run checks pass", "foreign", "unknown"],
     ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
     ["the strict scope result is truncated", "scope-truncated", "unknown"],
-    ["a bash check has no exit result", "bash-missing-exit", "unknown"],
+    ["a terminal check has no exit result", "terminal-missing-exit", "unknown"],
   ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
     const sessionId = `task-state-spec-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -7192,7 +7192,7 @@ describe("PiSdkRuntime", () => {
             description: "Tests and typecheck pass.",
             todoIds: ["todo-verify"],
             requiredCheckKinds:
-              evidenceCase === "bash-missing-exit" ? ["tests"] : ["tests", "typecheck"],
+              evidenceCase === "terminal-missing-exit" ? ["tests"] : ["tests", "typecheck"],
             status: "pending",
           },
         ],
@@ -7235,12 +7235,12 @@ describe("PiSdkRuntime", () => {
           evidenceCase === "scope-truncated"
         ) {
           checks = ["npm test", "tsc --noEmit"];
-        } else if (evidenceCase === "partial" || evidenceCase === "bash-missing-exit") {
+        } else if (evidenceCase === "partial" || evidenceCase === "terminal-missing-exit") {
           checks = ["npm test"];
         }
         checks.forEach((command, index) => {
           const isError = evidenceCase === "failed" && index === 1;
-          const toolName = evidenceCase === "bash-missing-exit" ? "bash" : "terminal_run";
+          const toolName = "terminal_run";
           mocks.emitPiEvent({
             type: "tool_execution_start",
             toolCallId: `current-check-${index}`,
@@ -7253,7 +7253,7 @@ describe("PiSdkRuntime", () => {
             toolName,
             isError,
             result:
-              evidenceCase === "bash-missing-exit"
+              evidenceCase === "terminal-missing-exit"
                 ? { details: {} }
                 : { details: { exitCode: isError ? 1 : 0 } },
           });
@@ -7283,10 +7283,10 @@ describe("PiSdkRuntime", () => {
         source: "plan",
         status: expectedVerification,
         requiredCheckKinds:
-          evidenceCase === "bash-missing-exit" ? ["tests"] : ["tests", "typecheck"],
+          evidenceCase === "terminal-missing-exit" ? ["tests"] : ["tests", "typecheck"],
       }),
     );
-    if (evidenceCase === "bash-missing-exit") {
+    if (evidenceCase === "terminal-missing-exit") {
       const qaRow = getDatabase()
         .prepare(
           "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
