@@ -7051,9 +7051,26 @@ describe("PiSdkRuntime", () => {
   });
 
   it("aborts active subagents when the parent session is aborted", async () => {
+    await initGitRepo();
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(parentSessionId, workspaceId, join(userData, "missing.jsonl"), "Parent chat");
+    let releaseScope!: (
+      value: Awaited<ReturnType<typeof gitMemoryContext.getChangeStatsSinceStrict>>,
+    ) => void;
+    let notifyScopeStarted!: () => void;
+    const scopeGate = new Promise<
+      Awaited<ReturnType<typeof gitMemoryContext.getChangeStatsSinceStrict>>
+    >((resolve) => {
+      releaseScope = resolve;
+    });
+    const scopeStarted = new Promise<void>((resolve) => {
+      notifyScopeStarted = resolve;
+    });
+    vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockImplementation(async () => {
+      notifyScopeStarted();
+      return await scopeGate;
+    });
     let rejectPrompt: ((error: Error) => void) | undefined;
     const childPrompt = vi.fn(
       () =>
@@ -7074,6 +7091,8 @@ describe("PiSdkRuntime", () => {
       subagentType: "worker",
     });
     await vi.waitFor(() => expect(childPrompt).toHaveBeenCalled());
+    const childRun = getActiveAgentRun(started.session.id);
+    if (!childRun) throw new Error("expected an active child run before abort");
     mocks.setManagedProcesses([
       {
         id: "app-child",
@@ -7087,15 +7106,36 @@ describe("PiSdkRuntime", () => {
     ]);
 
     await runtime.abort(parentSessionId);
+    await scopeStarted;
+    await vi.waitFor(() =>
+      expect(
+        getDatabase()
+          .prepare("select status from agent_sessions where id = ?")
+          .get(started.session.id),
+      ).toEqual({ status: "cancelled" }),
+    );
+    releaseScope({ files: [], added: 0, removed: 0, fileCount: 0, truncated: false });
+    await vi.waitFor(() => {
+      expect(getAgentRun(childRun.id)?.status).toBe("cancelled");
+      expect(
+        getDatabase()
+          .prepare("select status from agent_sessions where id = ?")
+          .get(started.session.id),
+      ).toEqual({ status: "cancelled" });
+    });
 
     expect(childAbort).toHaveBeenCalledOnce();
     expect(childPiSession.dispose).toHaveBeenCalled();
     expect(mocks.killManagedProcess).toHaveBeenCalledWith("app-child");
     expect(
-      getDatabase()
-        .prepare("select status from agent_sessions where id = ?")
-        .get(started.session.id),
-    ).toEqual({ status: "cancelled" });
+      (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([, event]) =>
+          (event as AgentEvent).type === "session.status" &&
+          (event as Extract<AgentEvent, { type: "session.status" }>).sessionId ===
+            started.session.id &&
+          (event as Extract<AgentEvent, { type: "session.status" }>).status.type === "idle",
+      ),
+    ).toBe(true);
   });
 
   it("does not count completed subagents against the active subagent limit", async () => {
