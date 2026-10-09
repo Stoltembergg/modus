@@ -188,12 +188,9 @@ export class PromptRegistry {
   }
 
   /**
-   * Assembles the system prompt optimizing for Anthropic Prompt Caching:
-   * - Stable / static sections first (priority ascending).
-   * - Volatile / dynamic sections last (priority ascending).
-   * - Injects ephemeral cache_control breakpoints on the static prefix block.
-   *
-   * Enforces SLO: assembly under 100ms.
+   * Assembles the complete prompt deterministically and reports heuristic token
+   * estimates. `systemBlocks` is descriptive output only; the Pi runtime sends
+   * the assembled string and does not forward provider-specific cache metadata.
    */
   async assemblePrompt(
     sessionId: string,

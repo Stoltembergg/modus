@@ -27,17 +27,26 @@ export const promptBuildHook: HarnessHook<PromptBuildInput, PromptBuildOutput> =
         context.state.set("promptRegistry", registry);
       }
 
-      // If custom system sections were passed in input, update them into the registry
-      if (input.systemSections && input.systemSections.length > 0) {
-        for (const sec of input.systemSections) {
-          registry.registerSection({
-            id: sec.id,
-            priority: sec.priority ?? (sec.volatile ? 500 : 250),
-            content: sec.content,
-            fingerprint: "",
-            volatile: !!sec.volatile,
-          });
+      // A runtime-owned registry contains only the current SDK prompt sections.
+      // Remove sections that disappeared on this turn so stale workspace or
+      // persona instructions cannot survive a prompt refresh.
+      if (context.state.get("promptRegistryManagedSections") === true) {
+        const activeIds = new Set(input.systemSections?.map((section) => section.id) ?? []);
+        if (input.basePrompt.trim().length > 0) activeIds.add("base_prompt");
+        for (const section of registry.getAllSections()) {
+          if (!activeIds.has(section.id)) registry.unregisterSection(section.id);
         }
+      }
+
+      // If custom system sections were passed in input, update them into the registry.
+      for (const sec of input.systemSections ?? []) {
+        registry.registerSection({
+          id: sec.id,
+          priority: sec.priority ?? (sec.volatile ? 500 : 250),
+          content: sec.content,
+          fingerprint: "",
+          volatile: !!sec.volatile,
+        });
       }
 
       if (input.basePrompt && input.basePrompt.trim().length > 0) {
@@ -53,11 +62,10 @@ export const promptBuildHook: HarnessHook<PromptBuildInput, PromptBuildOutput> =
       const assembly = await registry.assemblePrompt(context.sessionId, { context });
       context.state.set("prompt_assembly_result", assembly);
       context.state.set("final_system_prompt", assembly.prompt);
-      context.state.set("prompt_system_blocks", assembly.systemBlocks);
-      context.state.set("prompt_cache_metadata", {
+      context.state.set("prompt_estimates", {
+        totalTokensEstimate: assembly.totalTokensEstimate,
         staticRatio: assembly.staticRatio,
-        staticPrefixTokens: assembly.staticPrefixTokensEstimate,
-        cacheBreakpointSectionId: assembly.cacheBreakpointSectionId,
+        staticPrefixTokensEstimate: assembly.staticPrefixTokensEstimate,
       });
 
       return {

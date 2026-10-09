@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
+  type BeforeAgentStartEvent,
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
@@ -148,6 +149,8 @@ import type {
   TurnSettleOutput,
 } from "./harness/kernel/harness-hooks";
 import { HarnessKernel } from "./harness/kernel/harness-kernel";
+import { promptBuildHook } from "./harness/kernel/prompt-hook";
+import { PromptRegistry } from "./harness/prompt/prompt-registry";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
 import { HarnessObserver } from "./harness/observability/harness-observer";
@@ -314,6 +317,10 @@ type SdkRuntimeSession = {
   emit: EmitAgentEvent;
   emitVolatile: EmitAgentEvent;
   observerSessionToken: symbol;
+  /** Session-owned registry and resources; never shared between group members. */
+  promptRegistry?: PromptRegistry | undefined;
+  promptLifecycleToken: symbol;
+  resourceLoader: DefaultResourceLoader;
   /** Last compaction.ended seen on this session (for threshold continue). */
   lastCompactionEnd:
     | {
@@ -914,6 +921,7 @@ export class PiSdkRuntime implements AgentRuntime {
   constructor() {
     this.harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
     this.harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
+    this.harnessKernel.registerHook(promptBuildHook);
     this.harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
     this.harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
     this.harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
@@ -2507,11 +2515,17 @@ export class PiSdkRuntime implements AgentRuntime {
     emit: EmitAgentEvent,
     agentDir: string,
     previousSettingsManager?: SettingsManager,
-  ): Promise<{ settingsManager: SettingsManager; loader: DefaultResourceLoader }> {
+  ): Promise<{
+    settingsManager: SettingsManager;
+    loader: DefaultResourceLoader;
+    promptLifecycleToken: symbol;
+  }> {
     // Inject a cross-platform-resolved POSIX shell so the bash tool works out of
     // the box (notably on Windows, where PI's default picks the broken WSL stub),
     // and tell the model which shell it's actually driving.
     const shell = resolveAgentShell();
+    const promptLifecycleToken = Symbol(`prompt-session:${sessionId}`);
+    const promptRegistryEnabled = isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY");
     const settingsManager =
       previousSettingsManager ??
       SettingsManager.inMemory({
@@ -2528,7 +2542,11 @@ export class PiSdkRuntime implements AgentRuntime {
     const personaPrompt = agentChatPersonaPrompt(sessionId);
     this.personaPrompts.set(sessionId, personaPrompt);
     let responsePolicyPrompt = "";
-    if (isFeatureFlagEnabled("MODUS_USE_KERNEL") && isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")) {
+    if (
+      !promptRegistryEnabled &&
+      isFeatureFlagEnabled("MODUS_USE_KERNEL") &&
+      isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")
+    ) {
       const promptBuildContext: HarnessContext = {
         sessionId,
         runId: sessionId,
@@ -2548,25 +2566,125 @@ export class PiSdkRuntime implements AgentRuntime {
       agentDir,
       noExtensions: true,
       extensionFactories: [
-        createModusPermissionExtension(sessionId, emit, cwd, {
-          beforeToolCall: (event) => this.beforeRepeatGuardToolCall(sessionId, event),
-          cancelToolCall: (toolCallId) =>
-            this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId),
-          afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
-        }),
+        createModusPermissionExtension(
+          sessionId,
+          emit,
+          cwd,
+          {
+            beforeToolCall: (event) => this.beforeRepeatGuardToolCall(sessionId, event),
+            cancelToolCall: (toolCallId) =>
+              this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId),
+            afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
+          },
+          promptRegistryEnabled
+            ? (event) => this.applyPromptRegistry(sessionId, promptLifecycleToken, event)
+            : undefined,
+        ),
       ],
       settingsManager,
       appendSystemPrompt: [
         describeAgentShellForPrompt(shell),
         RESPONSE_FORMAT_BASE,
         ...(responsePolicyPrompt ? [responsePolicyPrompt] : []),
-        ...(globalGuidancePrompt ? [globalGuidancePrompt] : []),
-        ...(rulesPrompt ? [rulesPrompt] : []),
-        ...(personaPrompt ? [personaPrompt] : []),
+        ...(!promptRegistryEnabled && globalGuidancePrompt ? [globalGuidancePrompt] : []),
+        ...(!promptRegistryEnabled && rulesPrompt ? [rulesPrompt] : []),
+        ...(!promptRegistryEnabled && personaPrompt ? [personaPrompt] : []),
       ],
     });
     await loader.reload();
-    return { settingsManager, loader };
+    return { settingsManager, loader, promptLifecycleToken };
+  }
+
+  /**
+   * Build the current Pi system prompt through the existing HarnessKernel.
+   * Pi's before_agent_start contract is the supported per-turn replacement
+   * point; the complete prompt is always returned, regardless of fingerprints.
+   */
+  private async applyPromptRegistry(
+    sessionId: string,
+    promptLifecycleToken: symbol,
+    event: BeforeAgentStartEvent,
+  ): Promise<{ systemPrompt: string } | undefined> {
+    if (!isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) return undefined;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    if (
+      !runtimeSession ||
+      !registry ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken
+    ) {
+      return undefined;
+    }
+
+    const runId = getActiveAgentRun(sessionId)?.id;
+    const isCurrent = (): boolean =>
+      this.sessions.get(sessionId) === runtimeSession &&
+      runtimeSession.promptLifecycleToken === promptLifecycleToken &&
+      (!runId || getActiveAgentRun(sessionId)?.id === runId) &&
+      (!runId || !this.cancellingRuns.has(runId));
+    if (!isCurrent()) return undefined;
+
+    const globalGuidancePrompt = resolveGlobalGuidancePrompt();
+    const rulesBudget =
+      RULES_MAX_TOTAL_BYTES - Buffer.byteLength(globalGuidancePrompt ?? "", "utf8");
+    const contextFilePaths = event.systemPromptOptions.contextFiles?.map((file) => file.path) ?? [];
+    const rulesPrompt =
+      rulesBudget > 0
+        ? resolveAlwaysRulesPrompt(runtimeSession.info.cwd, rulesBudget, contextFilePaths)
+        : undefined;
+    const personaPrompt = agentChatPersonaPrompt(sessionId);
+    const systemSections: PromptBuildInput["systemSections"] = [
+      {
+        id: "pi_sdk_system_prompt",
+        priority: 10,
+        content: event.systemPrompt,
+      },
+      ...(globalGuidancePrompt
+        ? [{ id: "global_guidance", priority: 20, content: globalGuidancePrompt }]
+        : []),
+      ...(rulesPrompt ? [{ id: "workspace_rules", priority: 30, content: rulesPrompt }] : []),
+      ...(personaPrompt ? [{ id: "agent_persona", priority: 40, content: personaPrompt }] : []),
+    ];
+    const context: HarnessContext = {
+      sessionId,
+      runId: runId ?? sessionId,
+      ...(runtimeSession.info.workspaceId ? { workspaceId: runtimeSession.info.workspaceId } : {}),
+      cwd: runtimeSession.info.cwd,
+      mode: "build",
+      sessionToken: runtimeSession.observerSessionToken,
+      isCurrent,
+      state: new Map([
+        ["promptRegistry", registry],
+        ["promptRegistryManagedSections", true],
+      ]),
+    };
+    const assembled = await this.harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
+      "prompt_build",
+      { basePrompt: "", systemSections },
+      context,
+    );
+    if (!isCurrent() || typeof assembled?.finalSystemPrompt !== "string") return undefined;
+
+    // Fingerprints record change detection only. Pi still receives the complete
+    // assembly on every turn; no provider-specific cache metadata is forwarded.
+    registry.markAsSent(sessionId);
+    return { systemPrompt: assembled.finalSystemPrompt };
+  }
+
+  private async refreshPromptResources(runtimeSession: SdkRuntimeSession): Promise<void> {
+    if (!isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) return;
+    try {
+      // Pi rebuilds its base prompt from this loader when active tools are set.
+      // Reloading here refreshes project context files and skills through the
+      // SDK's supported resource lifecycle before before_agent_start runs.
+      await runtimeSession.resourceLoader.reload();
+    } catch (error) {
+      console.warn(
+        "[modus] prompt resources could not be refreshed; using the loaded snapshot:",
+        error,
+      );
+    }
   }
 
   private async settleHarnessTurn(
@@ -2629,6 +2747,7 @@ export class PiSdkRuntime implements AgentRuntime {
     emitVolatile: EmitAgentEvent;
     agentDir: string;
     loader: DefaultResourceLoader;
+    promptLifecycleToken: symbol;
     settingsManager: SettingsManager;
     sessionManager: SessionManager;
     model: NonNullable<Parameters<typeof createAgentSession>[0]>["model"];
@@ -2796,6 +2915,11 @@ export class PiSdkRuntime implements AgentRuntime {
       emit: params.emit,
       emitVolatile: params.emitVolatile,
       observerSessionToken: HarnessObserver.getInstance().beginSession(params.info.id),
+      ...(isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")
+        ? { promptRegistry: new PromptRegistry() }
+        : {}),
+      promptLifecycleToken: params.promptLifecycleToken,
+      resourceLoader: params.loader,
       lastCompactionEnd: undefined,
     };
     this.sessions.set(params.info.id, runtimeSession);
@@ -2841,7 +2965,7 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(sessionDir, { recursive: true });
 
     const warmup = (async () => {
-      const { settingsManager, loader } = await this.createSessionResources(
+      const { settingsManager, loader, promptLifecycleToken } = await this.createSessionResources(
         input.cwd,
         info.id,
         emit,
@@ -2853,6 +2977,7 @@ export class PiSdkRuntime implements AgentRuntime {
         emitVolatile,
         agentDir,
         loader,
+        promptLifecycleToken,
         settingsManager,
         sessionManager: SessionManager.create(input.cwd, sessionDir),
         model: selectedThinking?.model ?? selectedModel,
@@ -2946,7 +3071,7 @@ export class PiSdkRuntime implements AgentRuntime {
             thinkingBudget: previousSelection.thinkingBudget,
           }
         : resolveModelThinking(selectedModel);
-    const { settingsManager, loader } = await this.createSessionResources(
+    const { settingsManager, loader, promptLifecycleToken } = await this.createSessionResources(
       info.cwd,
       info.id,
       emit,
@@ -2959,6 +3084,7 @@ export class PiSdkRuntime implements AgentRuntime {
       emitVolatile,
       agentDir,
       loader,
+      promptLifecycleToken,
       settingsManager,
       sessionManager,
       model: selectedThinking?.model ?? selectedModel,
@@ -3239,6 +3365,7 @@ export class PiSdkRuntime implements AgentRuntime {
     setAgentToolContext(toolContext);
 
     try {
+      await this.refreshPromptResources(runtimeSession);
       // Per-turn mode: switch the active tool set (plan = read-only research +
       // plan artifacts; build = full chat tools). setActiveToolsByName also rebuilds
       // the system prompt for the new set, and takes effect on this turn.
@@ -4492,6 +4619,12 @@ export class PiSdkRuntime implements AgentRuntime {
     const userMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
     if (emitUserMessage) this.emitUserMessage(runtimeSession.emit, input, userMessageId);
     try {
+      await this.refreshPromptResources(runtimeSession);
+      if (isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) {
+        runtimeSession.session.setActiveToolsByName(
+          activeToolNamesForSession(runtimeSession.info, runtimeSession.profile),
+        );
+      }
       const message = await this.composeTurnMessage(runtimeSession, input, {
         includeProjectMemory: false,
       });
@@ -4973,6 +5106,11 @@ export class PiSdkRuntime implements AgentRuntime {
       this.sessions.delete(sessionId);
       HarnessObserver.getInstance().releaseSession(sessionId, runtimeSession.observerSessionToken);
     }
+    runtimeSession.promptRegistry?.cleanSession(sessionId);
+    for (const section of runtimeSession.promptRegistry?.getAllSections() ?? []) {
+      runtimeSession.promptRegistry?.unregisterSection(section.id);
+    }
+    runtimeSession.promptRegistry = undefined;
     runtimeSession.unsubscribe();
     runtimeSession.session.dispose();
     this.clearRepeatGuardSession(sessionId);

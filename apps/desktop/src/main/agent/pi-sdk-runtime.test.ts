@@ -275,6 +275,10 @@ async function useOfflinePiToolSessions() {
     >[0];
     const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
     await resourceLoader.reload();
+    const runtimeResourceLoader = options.resourceLoader as {
+      reload: () => Promise<void>;
+    };
+    runtimeResourceLoader.reload = () => resourceLoader.reload();
     const { session } = await sdk.createAgentSession({
       ...options,
       authStorage,
@@ -9127,6 +9131,9 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(registry?.getAllSections().map((section) => section.id)).toEqual(
       expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance", "workspace_rules"]),
     );
+    expect(registry?.getAllSections().map((section) => section.id)).not.toEqual(
+      expect.arrayContaining(["persona", "rules", "skills", "memory", "context", "policy"]),
+    );
     await runtime.releaseRuntime(sessionId);
   });
 
@@ -9254,7 +9261,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
 
   it("isolates Agent Group member registries and clears one when that session is recreated", async () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
-    const { createGroupWithNewAgents } = await import("../agents/agents-store");
+    const { createGroupWithNewAgents, updateAgent } = await import("../agents/agents-store");
     const workspaceId = `prompt-registry-group-${crypto.randomUUID()}`;
     insertWorkspace(workspaceId);
     const group = createGroupWithNewAgents({
@@ -9337,13 +9344,89 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(secondPrompt).toContain("Member B persona marker.");
     expect(secondPrompt).not.toContain("Member A persona marker.");
 
+    const firstAgentId = group.members[0]?.agentId ?? "";
+    updateAgent(firstAgentId, { instructions: "Member A persona updated during the session." });
+    await promptMember(firstSessionId);
+    const updatedPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    const updatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    expect(updatedPrompt).toContain("Member A persona updated during the session.");
+    expect(updatedPrompt).not.toContain("Member A persona marker.");
+    expect(updatedRegistry).toBeDefined();
+    expect(updatedRegistry).not.toBe(firstRegistry);
+
     await runtime.releaseRuntime(firstSessionId);
     await promptMember(firstSessionId);
     const recreatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
     expect(recreatedRegistry).toBeDefined();
-    expect(recreatedRegistry).not.toBe(firstRegistry);
+    expect(recreatedRegistry).not.toBe(updatedRegistry);
     await runtime.releaseRuntime(firstSessionId);
     await runtime.releaseRuntime(secondSessionId);
+  });
+
+  it("discards a pending registry callback when its session is released", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionId } = await createSession(runtime);
+    await runtime.ensure(window, sessionId);
+
+    type PromptRegistryLike = {
+      assemblePrompt: (
+        sessionId: string,
+        options?: { context?: HarnessContext },
+      ) => Promise<unknown>;
+      getAllSections: () => Array<{ id: string }>;
+      getTrackedSessionCount: () => number;
+    };
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: PromptRegistryLike }>;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    if (!registry) throw new Error("Expected a session-owned PromptRegistry.");
+
+    const factories = (
+      mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories: Array<
+          (pi: { on: (event: string, handler: (event: unknown) => unknown) => void }) => void
+        >;
+      }
+    ).extensionFactories;
+    let beforeAgentStart: ((event: unknown) => unknown) | undefined;
+    factories[0]?.({
+      on: (event, handler) => {
+        if (event === "before_agent_start") beforeAgentStart = handler;
+      },
+    });
+    expect(beforeAgentStart).toBeDefined();
+
+    let notifyAssemblyStarted!: () => void;
+    const assemblyStarted = new Promise<void>((resolve) => {
+      notifyAssemblyStarted = resolve;
+    });
+    let releaseAssembly!: () => void;
+    const assemblyGate = new Promise<void>((resolve) => {
+      releaseAssembly = resolve;
+    });
+    const originalAssemble = registry.assemblePrompt.bind(registry);
+    vi.spyOn(registry, "assemblePrompt").mockImplementation(async (id, options) => {
+      notifyAssemblyStarted();
+      await assemblyGate;
+      return originalAssemble(id, options as never);
+    });
+    const pendingCallback = beforeAgentStart?.({
+      systemPrompt: "Pi base prompt",
+      systemPromptOptions: { cwd, contextFiles: [] },
+    });
+    await assemblyStarted;
+    await runtime.releaseRuntime(sessionId);
+    releaseAssembly();
+
+    await expect(pendingCallback).resolves.toBeUndefined();
+    expect(registry.getTrackedSessionCount()).toBe(0);
+    expect(registry.getAllSections()).toEqual([]);
   });
 });
 

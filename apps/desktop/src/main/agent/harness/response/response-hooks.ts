@@ -21,23 +21,32 @@ import { ResponsePolicyRegistry } from "./response-registry";
  * into the model's system prompt context.
  */
 export const defaultPromptBuildResponsePolicyHook: HarnessHook<
-  PromptBuildInput,
+  PromptBuildInput | PromptBuildOutput,
   PromptBuildOutput
 > = {
   name: "response-policy-prompt-build",
   phase: "prompt_build",
   priority: 45, // After core persona/context, before model select
-  execute: async (input: PromptBuildInput, context: HarnessContext): Promise<PromptBuildOutput> => {
-    const existingSections = (input.systemSections ?? []).map((s) => ({
-      id: s.id,
-      content: s.content,
-      volatile: s.volatile ?? false,
-    }));
+  dependsOn: ["prompt_build_assembler"],
+  execute: async (
+    input: PromptBuildInput | PromptBuildOutput,
+    context: HarnessContext,
+  ): Promise<PromptBuildOutput> => {
+    const isAssembled = "finalSystemPrompt" in input;
+    const basePrompt = isAssembled ? input.finalSystemPrompt : input.basePrompt;
+    const existingSections = isAssembled
+      ? input.activePromptSections
+      : (input.systemSections ?? []).map((section) => ({
+          id: section.id,
+          content: section.content,
+          volatile: section.volatile ?? false,
+        }));
 
     // Fail-open pass-through if feature flag is disabled
     if (!isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")) {
+      if (isAssembled) return input;
       return {
-        finalSystemPrompt: input.basePrompt,
+        finalSystemPrompt: basePrompt,
         activePromptSections: existingSections,
       };
     }
@@ -55,11 +64,14 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
       context.state.set("harness.response_policy_prompt", policyPrompt);
       context.state.set("harness.response_policy", policy);
 
-      const base = input.basePrompt ?? "";
-      const updatedPrompt = base ? `${base}\n\n${policyPrompt}` : policyPrompt;
+      const alreadyIncluded = existingSections.some((section) => section.id === "response_policy");
+      let updatedPrompt = basePrompt;
+      if (!alreadyIncluded) {
+        updatedPrompt = basePrompt ? `${basePrompt}\n\n${policyPrompt}` : policyPrompt;
+      }
 
       const activeSections = [...existingSections];
-      if (!activeSections.some((s) => s.id === "response_policy")) {
+      if (!alreadyIncluded) {
         activeSections.push({
           id: "response_policy",
           content: policyPrompt,
@@ -74,7 +86,7 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
     } catch (error) {
       console.warn("[modus-response] failed to inject response policy prompt (fail-open):", error);
       return {
-        finalSystemPrompt: input.basePrompt,
+        finalSystemPrompt: basePrompt,
         activePromptSections: existingSections,
       };
     }

@@ -1,4 +1,8 @@
-import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type {
+  BeforeAgentStartEvent,
+  BeforeAgentStartEventResult,
+  ExtensionFactory,
+} from "@earendil-works/pi-coding-agent";
 import { shouldPrompt } from "../../shared/approval";
 import type { AgentEvent } from "../../shared/contracts";
 import { requestPermission } from "../permissions/permission-broker";
@@ -24,14 +28,22 @@ type RepeatGuardBridge = {
   cancelToolCall: (toolCallId: string) => void;
   afterToolCall: (event: RepeatGuardToolResult) => Promise<void>;
 };
+type BeforeAgentStartBridge = (
+  event: BeforeAgentStartEvent,
+) => Promise<BeforeAgentStartEventResult | undefined> | BeforeAgentStartEventResult | undefined;
 
 export function createModusPermissionExtension(
   sessionId: string,
   emit: PermissionEmitter,
   cwd?: string,
   repeatGuard?: RepeatGuardBridge,
+  beforeAgentStart?: BeforeAgentStartBridge,
 ): ExtensionFactory {
   return (pi) => {
+    if (beforeAgentStart) {
+      pi.on("before_agent_start", beforeAgentStart);
+    }
+
     pi.on("tool_call", async (event) => {
       const repeatDecision = await repeatGuard?.beforeToolCall({
         toolCallId: event.toolCallId,
