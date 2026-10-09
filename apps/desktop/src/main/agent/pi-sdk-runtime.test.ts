@@ -3405,10 +3405,11 @@ describe("PiSdkRuntime", () => {
     const qa = JSON.parse(qaRow.payload_json) as {
       result: { status: string; evidence: Array<{ checkName?: string; status: string }> };
     };
-    const currentFingerprint = await gitMemoryContext.getGroupSourceFingerprint(cwd);
+    const qaFingerprintCalls = fingerprintCalls;
+    const currentFingerprint = await getFingerprint(cwd);
     const gate = resolveGroupTaskEvidence(groupTaskStore.getGroupTask(task.id), currentFingerprint);
 
-    expect(fingerprintCalls).toBe(2);
+    expect(qaFingerprintCalls).toBe(2);
     expect(qa.result).toMatchObject({
       status: "unavailable",
       evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
