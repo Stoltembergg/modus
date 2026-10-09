@@ -3,7 +3,7 @@
  * Comprehensive test suite for Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs).
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CapabilityRegistry } from "../../capability/capability-registry";
 import {
   isFeatureFlagEnabled,
@@ -229,6 +229,60 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   });
 
   describe("19.6 — WASI Sandbox Environment", () => {
+    it.each([
+      "wasi_snapshot_preview1",
+      "wasi_unstable",
+      "wasi_snapshot_preview2",
+      "wasi:cli/run@0.2.0",
+    ])("rejects WASI imports from %s when the host has no grant policy", async (moduleName) => {
+      const encode = (value: string) => {
+        const bytes = new TextEncoder().encode(value);
+        return [bytes.length, ...bytes];
+      };
+      const typeSection = [1, 0x60, 1, 0x7f, 0]; // (i32) -> ()
+      const importSection = [1, ...encode(moduleName), ...encode("proc_exit"), 0, 0];
+      const bytes = Uint8Array.from([
+        0x00,
+        0x61,
+        0x73,
+        0x6d,
+        0x01,
+        0x00,
+        0x00,
+        0x00,
+        1,
+        typeSection.length,
+        ...typeSection,
+        2,
+        importSection.length,
+        ...importSection,
+      ]);
+      const instantiate = vi
+        .spyOn(WebAssembly, "instantiate")
+        .mockRejectedValue(new Error("WASM instantiation sentinel"));
+
+      try {
+        await expect(wasmHost.createInstance(bytes)).rejects.toThrow(
+          "WASI imports are not authorized by the host",
+        );
+        await expect(wasmHost.createInstance(bytes, { wasi: { enabled: false } })).rejects.toThrow(
+          "WASI imports are not authorized by the host",
+        );
+        await expect(
+          wasmHost.createInstance(bytes, {
+            wasi: {
+              enabled: true,
+              env: { MODUS_TEST_SECRET: "caller supplied" },
+              preopens: { "/": "." },
+            },
+          }),
+        ).rejects.toThrow("WASI imports are not authorized by the host");
+        expect(instantiate).not.toHaveBeenCalled();
+      } finally {
+        instantiate.mockRestore();
+      }
+    });
+
     it("initializes WASI sandbox and provides preview1 imports", () => {
       const wasi = new WasiSandbox({
         args: ["test-arg"],

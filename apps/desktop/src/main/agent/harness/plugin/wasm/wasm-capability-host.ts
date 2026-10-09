@@ -6,7 +6,7 @@
 
 import { createHash } from "node:crypto";
 import type { PluginRpcResponse } from "../plugin-isolation-types";
-import { WasiSandbox } from "./wasi-sandbox";
+import type { WasiSandbox } from "./wasi-sandbox";
 import { WasmFuelMeter } from "./wasm-fuel-meter";
 import { WasmPluginInstance } from "./wasm-instance";
 import {
@@ -69,10 +69,7 @@ export class WasmCapabilityHost {
         name: imp.name,
         kind: imp.kind,
       });
-      if (
-        imp.module.startsWith("wasi_snapshot_preview1") ||
-        imp.module.startsWith("wasi_unstable")
-      ) {
+      if (/^wasi(?:_|:)/i.test(imp.module)) {
         wasiDetected = true;
       }
     }
@@ -86,7 +83,8 @@ export class WasmCapabilityHost {
   }
 
   /**
-   * Creates an isolated instance of a WASM module with fuel metering and WASI sandbox.
+   * Creates a WASM instance with fuel metering. WASI imports stay disabled until the host
+   * has a grant-backed policy for imports, environment, and preopens.
    */
   public async createInstance(
     wasmBytes: Uint8Array,
@@ -95,24 +93,18 @@ export class WasmCapabilityHost {
     const module = await this.compileModule(wasmBytes, options.pluginId);
     const inspection = this.inspectModule(module);
 
+    if (inspection.wasiDetected) {
+      throw new Error("WASI imports are not authorized by the host");
+    }
+
     const fuelMeter = new WasmFuelMeter(
       options.fuel ?? { initialFuel: 1_000_000n },
       options.pluginId,
     );
 
-    let wasiSandbox: WasiSandbox | undefined;
     const importObject: Record<string, Record<string, WebAssembly.ImportValue>> = {};
 
-    // 1. WASI imports if requested or detected
-    if (options.wasi?.enabled || inspection.wasiDetected) {
-      wasiSandbox = new WasiSandbox(options.wasi ?? {});
-      const wasiImports = wasiSandbox.getImportObject();
-      for (const [mod, fns] of Object.entries(wasiImports)) {
-        importObject[mod] = { ...(importObject[mod] ?? {}), ...fns };
-      }
-    }
-
-    // 2. Fuel metering imports
+    // 1. Fuel metering imports
     const fuelImports = fuelMeter.createHostImports();
     importObject.env = {
       ...(importObject.env ?? {}),
@@ -121,7 +113,7 @@ export class WasmCapabilityHost {
       host_now: (): number => performance.now(),
     };
 
-    // 3. User host imports
+    // 2. User host imports
     if (options.hostImports) {
       for (const [mod, fns] of Object.entries(options.hostImports)) {
         importObject[mod] = { ...(importObject[mod] ?? {}), ...fns };
@@ -140,10 +132,6 @@ export class WasmCapabilityHost {
 
     const wasmInstance = await WebAssembly.instantiate(module, importObject);
 
-    if (wasiSandbox) {
-      wasiSandbox.start(wasmInstance);
-    }
-
     const pluginInstance = new WasmPluginInstance(
       wasmInstance,
       fuelMeter,
@@ -151,7 +139,7 @@ export class WasmCapabilityHost {
       memoryInstance,
     );
 
-    return { instance: pluginInstance, ...(wasiSandbox !== undefined ? { wasiSandbox } : {}) };
+    return { instance: pluginInstance };
   }
 
   /**
