@@ -14,9 +14,8 @@ vi.mock("./harness/adaptive-oracle-bridge", () => ({
 }));
 
 vi.mock("./pi-sdk-runtime", async () => {
-  const featureFlags = await vi.importActual<typeof import("./harness/feature-flags")>(
-    "./harness/feature-flags"
-  );
+  const featureFlags =
+    await vi.importActual<typeof import("./harness/feature-flags")>("./harness/feature-flags");
   return {
     PiSdkRuntime: class {
       constructor() {
