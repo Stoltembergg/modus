@@ -79,8 +79,7 @@ export function interceptToolResult(input: ToolSpillInterceptInput): ToolSpillIn
       originalBytes,
       effectiveBytes: originalBytes,
       bytesSaved: 0,
-      failureCode:
-        error instanceof ToolResultStorageError ? error.code : "storage_unavailable",
+      failureCode: error instanceof ToolResultStorageError ? error.code : "storage_unavailable",
     };
   }
 

@@ -208,6 +208,7 @@ import {
   transitionHarnessTaskState,
 } from "./harness/task-state";
 import { evaluateTodoContinuation } from "./harness/todo-continuation";
+import type { SpillAuthorizationContext } from "./harness/tools/tool-result-storage";
 import {
   cycleDefaultModel,
   findModel,
@@ -223,7 +224,6 @@ import {
 import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
 import { createModusToolSpillHandler } from "./pi-tool-spill-extension";
-import type { SpillAuthorizationContext } from "./harness/tools/tool-result-storage";
 import { planModePreamble, profileForMode } from "./plan-prompt";
 import { PI_ROOT_LEAF } from "./rollback-service";
 import type {
@@ -255,8 +255,8 @@ import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
-import { registerSpillTools } from "./tools/spill-tools";
 import { toolRegistry } from "./tools/registry";
+import { registerSpillTools } from "./tools/spill-tools";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
 import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
@@ -2684,8 +2684,7 @@ export class PiSdkRuntime implements AgentRuntime {
           {
             beforeToolCall: (event) =>
               this.beforeRepeatGuardToolCall(sessionId, event, promptLifecycleToken),
-            cancelToolCall: (toolCallId) =>
-              this.cancelPendingToolCall(sessionId, toolCallId),
+            cancelToolCall: (toolCallId) => this.cancelPendingToolCall(sessionId, toolCallId),
             afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
           },
           promptRegistryEnabled

@@ -9,8 +9,8 @@ import type { AgentEvent } from "../../shared/contracts";
 import { requestPermission } from "../permissions/permission-broker";
 import { findWorkspaceAllowDecision, getApprovalMode } from "../permissions/permission-store";
 import { getActiveAgentRun } from "./agent-run-store";
-import { getToolTarget, toolRegistry } from "./tools/registry";
 import type { ToolResultSpillHandler } from "./pi-tool-spill-extension";
+import { getToolTarget, toolRegistry } from "./tools/registry";
 
 type PermissionEmitter = (event: AgentEvent) => void;
 type RepeatGuardToolCall = {

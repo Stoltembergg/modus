@@ -169,11 +169,7 @@ function safeUtf8End(bytes: Buffer, start: number, candidate: number): number {
 }
 
 function isUtf8Boundary(bytes: Buffer, offset: number): boolean {
-  return (
-    offset === bytes.length ||
-    offset === 0 ||
-    (((bytes[offset] ?? 0) & 0xc0) !== 0x80)
-  );
+  return offset === bytes.length || offset === 0 || ((bytes[offset] ?? 0) & 0xc0) !== 0x80;
 }
 
 function toSpilledToolResult(row: SpillRow): SpilledToolResult {
@@ -307,8 +303,7 @@ export class ToolResultStorage {
       typeof input.toolName !== "string" ||
       input.toolName.length === 0 ||
       input.toolName.length > 128 ||
-      (input.spillReason !== "byte_limit_exceeded" &&
-        input.spillReason !== "line_limit_exceeded")
+      (input.spillReason !== "byte_limit_exceeded" && input.spillReason !== "line_limit_exceeded")
     ) {
       throw new ToolResultStorageError("invalid_content");
     }
@@ -412,7 +407,9 @@ export class ToolResultStorage {
       !Number.isSafeInteger(offsetLine) ||
       offsetLine < 0 ||
       (offsetByte !== undefined &&
-        (!Number.isSafeInteger(offsetByte) || offsetByte < 0 || options?.offsetLine !== undefined)) ||
+        (!Number.isSafeInteger(offsetByte) ||
+          offsetByte < 0 ||
+          options?.offsetLine !== undefined)) ||
       !Number.isSafeInteger(limitLines) ||
       limitLines < 1 ||
       limitLines > TOOL_RESULT_SPILL_LIMITS.maxRecoveryLines ||
@@ -445,10 +442,9 @@ export class ToolResultStorage {
       | SpillRow
       | undefined;
     if (!row) {
-      this.database.prepare("delete from tool_result_spills where id = ? and expires_at <= ?").run(
-        spillId,
-        now,
-      );
+      this.database
+        .prepare("delete from tool_result_spills where id = ? and expires_at <= ?")
+        .run(spillId, now);
       return undefined;
     }
 
@@ -462,8 +458,7 @@ export class ToolResultStorage {
       return undefined;
     }
 
-    const start =
-      offsetByte === undefined ? offsetForLine(contentBytes, offsetLine) : offsetByte;
+    const start = offsetByte === undefined ? offsetForLine(contentBytes, offsetLine) : offsetByte;
     if (start > contentBytes.length || !isUtf8Boundary(contentBytes, start)) {
       throw new ToolResultStorageError("invalid_content");
     }
@@ -471,7 +466,10 @@ export class ToolResultStorage {
     const lineEnd = endForLineLimit(contentBytes, start, limitLines);
     const end = safeUtf8End(contentBytes, start, Math.min(lineEnd, start + maxBytes));
     const content = contentBytes.subarray(start, end).toString("utf8");
-    const newlinesReturned = countNewlines(Buffer.from(content, "utf8"), Buffer.byteLength(content, "utf8"));
+    const newlinesReturned = countNewlines(
+      Buffer.from(content, "utf8"),
+      Buffer.byteLength(content, "utf8"),
+    );
     const linesReturned =
       content.length === 0 ? 0 : newlinesReturned + (content.endsWith("\n") ? 0 : 1);
     const hasMore = end < contentBytes.length;

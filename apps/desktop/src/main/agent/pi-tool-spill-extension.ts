@@ -1,7 +1,4 @@
-import type {
-  ToolResultEvent,
-  ToolResultEventResult,
-} from "@earendil-works/pi-coding-agent";
+import type { ToolResultEvent, ToolResultEventResult } from "@earendil-works/pi-coding-agent";
 import { isFeatureFlagEnabled } from "./harness/feature-flags";
 import type {
   SpillAuthorizationContext,

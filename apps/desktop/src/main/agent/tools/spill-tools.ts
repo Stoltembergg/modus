@@ -5,10 +5,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { isFeatureFlagEnabled } from "../harness/feature-flags";
-import { TOOL_RESULT_SPILL_LIMITS } from "../harness/tools/tool-result-storage";
 import { handleRetrieveSpilledToolResult } from "../harness/tools/retrieve-spill-tool";
-import { resolveAgentToolContext } from "./tool-context";
+import { TOOL_RESULT_SPILL_LIMITS } from "../harness/tools/tool-result-storage";
 import { toolRegistry } from "./registry";
+import { resolveAgentToolContext } from "./tool-context";
 
 export const RETRIEVE_SPILL_TOOL_NAME = "retrieve_spilled_tool_result";
 
@@ -76,17 +76,20 @@ export const retrieveSpillTool: ToolDefinition<typeof retrieveSpillParams> = def
       };
     }
 
-    const result = handleRetrieveSpilledToolResult({
-      spillId: params.spill_id,
-      offsetLine: params.offset_line,
-      offsetByte: params.offset_byte,
-      limitLines: params.limit_lines,
-      maxBytes: params.max_bytes,
-    }, {
-      sessionId: owner.sessionId,
-      runId: owner.runId,
-      workspaceId: owner.workspaceId,
-    });
+    const result = handleRetrieveSpilledToolResult(
+      {
+        spillId: params.spill_id,
+        offsetLine: params.offset_line,
+        offsetByte: params.offset_byte,
+        limitLines: params.limit_lines,
+        maxBytes: params.max_bytes,
+      },
+      {
+        sessionId: owner.sessionId,
+        runId: owner.runId,
+        workspaceId: owner.workspaceId,
+      },
+    );
 
     if (!result.success || result.content === undefined) {
       return {

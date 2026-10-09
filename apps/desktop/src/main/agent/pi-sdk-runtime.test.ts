@@ -9716,7 +9716,8 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
 
       const recovered = messagesFor(sessionAt())
         .filter(
-          (message) => message.role === "toolResult" && message.toolName === RETRIEVE_SPILL_TOOL_NAME,
+          (message) =>
+            message.role === "toolResult" && message.toolName === RETRIEVE_SPILL_TOOL_NAME,
         )
         .at(-1);
       expect(JSON.stringify(recovered?.content)).toContain("offline output line 0:");

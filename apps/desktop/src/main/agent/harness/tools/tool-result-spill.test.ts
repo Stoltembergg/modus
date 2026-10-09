@@ -1,10 +1,11 @@
-import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { migrateDatabase } from "../../../db/database";
+import { createModusToolSpillHandler } from "../../pi-tool-spill-extension";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { HarnessKernel } from "../kernel/harness-kernel";
 import { toolsRegisterHook } from "../kernel/tools-hook";
@@ -21,7 +22,6 @@ import {
   ToolResultStorageError,
 } from "./tool-result-storage";
 import { interceptToolResult } from "./tool-spill-interceptor";
-import { createModusToolSpillHandler } from "../../pi-tool-spill-extension";
 
 vi.mock("electron", () => ({ app: { getPath: () => "/tmp/modus-spill-storage-test" } }));
 
@@ -37,31 +37,25 @@ function seedScope(
 ): void {
   if (!db.prepare("select 1 from workspaces where id = ?").get(workspaceId)) {
     const now = new Date().toISOString();
-    db
-      .prepare(
-        `insert into workspaces
+    db.prepare(
+      `insert into workspaces
           (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
          values (?, ?, 'spill test', 0, ?, ?)`,
-      )
-      .run(workspaceId, `/spill-test/${workspaceId}`, now, now);
+    ).run(workspaceId, `/spill-test/${workspaceId}`, now, now);
   }
   if (!db.prepare("select 1 from agent_sessions where id = ?").get(sessionId)) {
     const now = new Date().toISOString();
-    db
-      .prepare(
-        `insert into agent_sessions
+    db.prepare(
+      `insert into agent_sessions
           (id, workspace_id, title, cwd, status, created_at, updated_at)
          values (?, ?, 'spill test', '/spill-test', 'running', ?, ?)`,
-      )
-      .run(sessionId, workspaceId, now, now);
+    ).run(sessionId, workspaceId, now, now);
   }
   if (!db.prepare("select 1 from agent_runs where id = ?").get(runId)) {
-    db
-      .prepare(
-        `insert into agent_runs (id, session_id, prompt, status, started_at)
+    db.prepare(
+      `insert into agent_runs (id, session_id, prompt, status, started_at)
          values (?, ?, 'spill test', 'running', ?)`,
-      )
-      .run(runId, sessionId, new Date().toISOString());
+    ).run(runId, sessionId, new Date().toISOString());
   }
 }
 
@@ -228,7 +222,11 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       const lines = Array.from({ length: 50 }, (_, i) => `Line ${i}`);
       const content = lines.join("\n");
 
-      const scope = { sessionId: "session-slice", runId: "run-slice", workspaceId: "workspace-slice" };
+      const scope = {
+        sessionId: "session-slice",
+        runId: "run-slice",
+        workspaceId: "workspace-slice",
+      };
       const spill = storeSpill(storage, {
         ...scope,
         toolName: "read",
@@ -280,7 +278,9 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       // Clear session-1
       storage.clearSession("session-1");
       expect(storage.listSpills(authorizedScope)).toHaveLength(0);
-      expect(storage.listSpills({ sessionId: "session-2", runId: "run-3", workspaceId: "workspace-2" })).toHaveLength(1);
+      expect(
+        storage.listSpills({ sessionId: "session-2", runId: "run-3", workspaceId: "workspace-2" }),
+      ).toHaveLength(1);
     });
   });
 
@@ -383,7 +383,11 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       seedScope("group-member-2", "group-member-run", "workspace-1");
 
       const sameSessionNextRun = { ...authorizedScope, runId: "run-next" };
-      seedScope(sameSessionNextRun.sessionId, sameSessionNextRun.runId, sameSessionNextRun.workspaceId);
+      seedScope(
+        sameSessionNextRun.sessionId,
+        sameSessionNextRun.runId,
+        sameSessionNextRun.workspaceId,
+      );
       const allowed = handleRetrieveSpilledToolResult(
         { spillId: record.id },
         sameSessionNextRun,
@@ -394,7 +398,11 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
 
       const modelSuppliedIdentity = Object.assign(
         { spillId: record.id },
-        { sessionId: authorizedScope.sessionId, runId: authorizedScope.runId, workspaceId: "workspace-1" },
+        {
+          sessionId: authorizedScope.sessionId,
+          runId: authorizedScope.runId,
+          workspaceId: "workspace-1",
+        },
       );
       const deniedMember = handleRetrieveSpilledToolResult(
         modelSuppliedIdentity,
