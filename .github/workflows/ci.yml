@@ -32,6 +32,21 @@ jobs:
       - name: Install Electron runtime for desktop tests
         run: npm exec -- install-electron
 
+      - name: A17 targeted Biome diagnostics
+        continue-on-error: true
+        run: >
+          npx biome check --max-diagnostics=100
+          apps/desktop/src/main/agent/harness/qa-evidence.ts
+          apps/desktop/src/main/agent/harness/task-state.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.ts
+          apps/desktop/src/main/agent/runtime-qa-helper.ts
+          apps/desktop/src/main/groups/group-task-details.ts
+          apps/desktop/src/main/groups/group-task-evidence.ts
+          apps/desktop/src/main/groups/group-task-store.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-01.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-06.ts
+          apps/desktop/src/shared/group-work-state.ts
+
       - name: Biome + typecheck
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check
