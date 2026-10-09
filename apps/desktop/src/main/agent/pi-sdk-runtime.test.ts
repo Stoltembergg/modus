@@ -255,6 +255,8 @@ async function useOfflinePiToolSessions() {
   const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
   const sessions: AgentSession[] = [];
   let requestedTool: string | undefined;
+  let scriptedToolCalls: Array<{ name: string; input: unknown }> | undefined;
+  let scriptedToolCallIndex = 0;
   mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
   mocks.settingsManagerInMemory.mockImplementation((settings) =>
     sdk.SettingsManager.inMemory(settings),
@@ -283,7 +285,13 @@ async function useOfflinePiToolSessions() {
     });
     session.agent.streamFn = (model, context) => {
       const stream = createAssistantMessageEventStream();
-      const toolName = context.messages.at(-1)?.role !== "toolResult" ? requestedTool : undefined;
+      const scriptedCall = scriptedToolCalls?.[scriptedToolCallIndex];
+      if (scriptedToolCalls) scriptedToolCallIndex += 1;
+      const toolName = scriptedToolCalls
+        ? scriptedCall?.name
+        : context.messages.at(-1)?.role !== "toolResult"
+          ? requestedTool
+          : undefined;
       const callTool = Boolean(toolName);
       const message: AssistantMessage = {
         role: "assistant",
@@ -291,7 +299,14 @@ async function useOfflinePiToolSessions() {
         provider: model.provider,
         model: model.id,
         content: toolName
-          ? [{ type: "toolCall", id: crypto.randomUUID(), name: toolName, arguments: {} }]
+          ? [
+              {
+                type: "toolCall",
+                id: crypto.randomUUID(),
+                name: toolName,
+                arguments: scriptedCall?.input ?? {},
+              },
+            ]
           : [{ type: "text", text: "Done." }],
         stopReason: callTool ? "toolUse" : "stop",
         usage: {
@@ -319,6 +334,13 @@ async function useOfflinePiToolSessions() {
     },
     requestTool: (name: string) => {
       requestedTool = name;
+      scriptedToolCalls = undefined;
+      scriptedToolCallIndex = 0;
+    },
+    requestToolSequence: (calls: Array<{ name: string; input: unknown }>) => {
+      requestedTool = undefined;
+      scriptedToolCalls = calls;
+      scriptedToolCallIndex = 0;
     },
   };
 }
@@ -340,6 +362,31 @@ function registerOfflineMcpTool(name: string, output: string, dangerous = false)
       ui: { verb: "Lookup" },
     },
     definition,
+  });
+}
+
+function registerOfflineRepeatGuardTool(
+  name: string,
+  execute: ToolDefinition["execute"],
+): void {
+  toolRegistry.registerTool({
+    entry: {
+      name,
+      profiles: ["chat", "plan"],
+      permission: { danger: "safe", action: "mcp.call" },
+      capabilities: ["read"],
+      ui: { verb: "Lookup" },
+    },
+    definition: {
+      name,
+      label: "Offline repeat guard fixture",
+      description: "Execute a deterministic local repeat guard fixture.",
+      parameters: Type.Object({
+        target: Type.String(),
+        options: Type.Optional(Type.Object({ mode: Type.String() })),
+      }),
+      execute,
+    },
   });
 }
 
@@ -8744,5 +8791,249 @@ describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
     expect(waitRes.success).toBe(true);
     const status = await provider.status(spawnRes.subagentId);
     expect(status.state).toBe("completed");
+  });
+});
+
+describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
+  beforeEach(async () => {
+    const { resetRepeatGuardConfig } = await import("./harness/guards/repeat-guard-config");
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    resetRepeatGuardConfig();
+    ToolInvocationTracker.getInstance().clearAll();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+  });
+
+  it("blocks the next identical call before the Pi SDK executes it and records a decision", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { setRepeatGuardConfig, resetRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const sessionId = `repeat-guard-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+    const events: AgentEvent[] = [];
+    runtime.onEvent((event) => events.push(event));
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the same lookup until you have the answer.",
+        sessionId,
+      });
+
+      expect(executions).toBe(3);
+      expect(events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "harness.failure", sessionId })]),
+      );
+      expect(
+        events.some(
+          (event) =>
+            event.type === "harness.decision" &&
+            JSON.stringify(event).includes("repeat_guard_tool_loop"),
+        ),
+      ).toBe(true);
+    } finally {
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("stops recurrent failed tool calls before another failing execution", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-failure-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_failure_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      throw new Error("fixture failure");
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retry the lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(3);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("allows identical calls when their results show progress", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-progress-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_progress_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return {
+        content: [{ type: "text", text: `progress-${executions}` }],
+        details: { revision: executions },
+      };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Continue checking until the state changes.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("allows the same tool when its arguments change", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-args-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_args_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, (_, index) => ({
+        name: toolName,
+        input: { target: "same", options: { mode: `variant-${index}` } },
+      })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Try the lookup with different modes.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps histories isolated between runs and Agent Group members", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberA = `repeat-group-a-${crypto.randomUUID()}`;
+    const memberB = `repeat-group-b-${crypto.randomUUID()}`;
+    insertSession(memberA, workspaceId, join(userData, "missing-a.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(memberB, workspaceId, cwd, join(userData, "missing-b.jsonl"), now, now);
+    createAgentGroupWithMembers({
+      name: "Repeat Guard isolation",
+      workspaceId,
+      members: [{ sessionId: memberA }, { sessionId: memberB }],
+    });
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+    const toolName = `mcp_repeat_group_${crypto.randomUUID().replaceAll("-", "")}`;
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    try {
+      requestToolSequence(
+        Array.from({ length: 3 }, () => ({ name: toolName, input: { target: "same" } })),
+      );
+      await runtime.prompt(window, { context: [], message: "Repeat lookup.", sessionId: memberA });
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(window, { context: [], message: "Repeat lookup again.", sessionId: memberA });
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(window, { context: [], message: "Repeat lookup as member B.", sessionId: memberB });
+
+      expect(executions).toBe(5);
+    } finally {
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(memberA);
+      await runtime.releaseRuntime(memberB);
+    }
+  });
+
+  it("does not track or block repeated calls while the feature flag is off", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    const sessionId = `repeat-off-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_off_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: false });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+      expect(ToolInvocationTracker.getInstance().getInvocations(sessionId)).toHaveLength(0);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 });
