@@ -304,7 +304,11 @@ export function summarizeHarnessQA(input: {
     }
   }
   const result = summarizeRunQA({ ...input, events });
-  if (input.aborted && result.status === "passed") {
+  if (
+    input.aborted &&
+    result.required &&
+    ["missing", "passed", "user_confirmed"].includes(result.status)
+  ) {
     result.status = "cancelled";
     result.reasonCode = "required_check_cancelled";
   }
