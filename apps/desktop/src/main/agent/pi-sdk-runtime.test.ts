@@ -3306,10 +3306,14 @@ describe("PiSdkRuntime", () => {
       releaseScope = resolve;
     });
     let runId = "";
+    let pauseNextScope = true;
     vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockImplementation(
       async (workspace, base) => {
-        notifyScopeStarted();
-        await scopeGate;
+        if (pauseNextScope) {
+          pauseNextScope = false;
+          notifyScopeStarted();
+          await scopeGate;
+        }
         return realScope(workspace, base);
       },
     );
