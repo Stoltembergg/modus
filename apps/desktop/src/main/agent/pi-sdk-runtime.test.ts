@@ -8649,7 +8649,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
   async function runTurnWithAssistantText(
     text: string,
-    options: { runtime?: PiSdkRuntime; sessionId?: string } = {},
+    options: { runtime?: InstanceType<typeof PiSdkRuntime>; sessionId?: string } = {},
   ): Promise<string> {
     const sessionId = options.sessionId ?? `session-${crypto.randomUUID()}`;
     if (!getAgentSession(sessionId)) {
