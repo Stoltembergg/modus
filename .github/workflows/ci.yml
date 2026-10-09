@@ -57,6 +57,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Check A17 runtime files with Biome
+        run: >
+          npx biome check
+          apps/desktop/src/main/agent/agent-event-store.ts
+          apps/desktop/src/main/agent/harness/qa-evidence.test.ts
+          apps/desktop/src/main/agent/harness/qa-evidence.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.ts
+          apps/desktop/src/main/agent/runtime-qa-helper.ts
+          apps/desktop/src/main/agent/workspace-source-revision.test.ts
+          apps/desktop/src/main/agent/workspace-source-revision.ts
+
       - name: Install Electron runtime for desktop tests
         run: npm exec -- install-electron
 
