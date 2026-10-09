@@ -3412,13 +3412,13 @@ describe("PiSdkRuntime", () => {
     const gate = resolveGroupTaskEvidence(groupTaskStore.getGroupTask(task.id), currentFingerprint);
 
     expect(qaFingerprintCalls).toBe(2);
+    expect(gate.criterionOutcomes).toEqual([
+      expect.objectContaining({ criterionId: "tests", status: "missing" }),
+    ]);
     expect(qa.result).toMatchObject({
       status: "unavailable",
       evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
     });
-    expect(gate.criterionOutcomes).toEqual([
-      expect.objectContaining({ criterionId: "tests", status: "missing" }),
-    ]);
   });
 
   it("keeps a run cancelled when abort arrives during final workspace scope collection", async () => {
