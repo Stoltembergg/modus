@@ -9104,13 +9104,35 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       "./harness/guards/repeat-guard-config"
     );
     const sessionId = `repeat-group-dispatch-${crypto.randomUUID()}`;
+    const secondMemberId = `repeat-group-dispatch-b-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
-    insertSession(sessionId, workspaceId, join(userData, "missing-group-dispatch.jsonl"), "Member A");
+    insertSession(
+      sessionId,
+      workspaceId,
+      join(userData, "missing-group-dispatch.jsonl"),
+      "Member A",
+    );
+    const createdAt = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(
+        secondMemberId,
+        workspaceId,
+        cwd,
+        join(userData, "missing-group-dispatch-b.jsonl"),
+        createdAt,
+        createdAt,
+      );
     const group = createAgentGroupWithMembers({
       name: "Repeat Guard dispatch",
       mode: "free",
       workspaceId,
-      members: [{ sessionId }],
+      members: [{ sessionId }, { sessionId: secondMemberId }],
       leadSessionId: sessionId,
     });
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
@@ -9125,6 +9147,8 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
 
     const runtime = new PiSdkRuntime();
     const window = createWindowStub();
+    const observedEvents: AgentEvent[] = [];
+    const removeEventListener = runtime.onEvent((event) => observedEvents.push(event));
     let dispatchedTurn: ReturnType<PiSdkRuntime["prompt"]> | undefined;
     const groupAgentRuntime: import("../groups/group-runtime-lib").GroupAgentRuntime = {
       prompt: (targetWindow, input) => {
@@ -9152,12 +9176,27 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       );
       groups.postUserMessage({ groupId: group.id, body: "@Member A repeat lookup." });
       await vi.waitFor(() => expect(dispatchedTurn).toBeDefined());
-      const result = await dispatchedTurn;
+      const turn = dispatchedTurn;
+      if (!turn) throw new Error("Agent Group did not dispatch a member turn.");
+      const result = await turn;
 
       expect(result.outcome).toBe("ok");
       expect(executions).toBe(3);
+      expect(observedEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "harness.decision",
+            boundary: "tool_guard",
+            decision: expect.objectContaining({
+              action: "avoid_retry",
+              reasonCodes: expect.arrayContaining(["repeat_guard_tool_loop"]),
+            }),
+          }),
+        ]),
+      );
     } finally {
       groups.dispose();
+      removeEventListener();
       resetRepeatGuardConfig();
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);

@@ -18,9 +18,9 @@ import {
   type FailureLoopAction,
 } from "./failure-loop-guard";
 import {
-  type RepeatGuardDecision,
   detectRepeatTools,
   detectUnproductiveToolRepeat,
+  type RepeatGuardDecision,
   ToolInvocationTracker,
 } from "./repeat-tool-guard";
 

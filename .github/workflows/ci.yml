@@ -59,7 +59,7 @@ jobs:
 
       - name: Check A17 and repeat-guard runtime files with Biome
         run: >
-          npx biome check
+          npx biome check --max-diagnostics=100
           apps/desktop/src/main/agent/agent-event-store.ts
           apps/desktop/src/main/agent/agent-event-store.test.ts
           apps/desktop/src/main/agent/harness/guards/guards.test.ts
