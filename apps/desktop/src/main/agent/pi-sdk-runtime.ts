@@ -2646,6 +2646,9 @@ export class PiSdkRuntime implements AgentRuntime {
       ...(rulesPrompt ? [{ id: "workspace_rules", priority: 30, content: rulesPrompt }] : []),
       ...(personaPrompt ? [{ id: "agent_persona", priority: 40, content: personaPrompt }] : []),
     ];
+    const state: HarnessContext["state"] = new Map();
+    state.set("promptRegistry", registry);
+    state.set("promptRegistryManagedSections", true);
     const context: HarnessContext = {
       sessionId,
       runId: runId ?? sessionId,
@@ -2654,10 +2657,7 @@ export class PiSdkRuntime implements AgentRuntime {
       mode: "build",
       sessionToken: runtimeSession.observerSessionToken,
       isCurrent,
-      state: new Map([
-        ["promptRegistry", registry],
-        ["promptRegistryManagedSections", true],
-      ]),
+      state,
     };
     const assembled = await this.harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
       "prompt_build",
