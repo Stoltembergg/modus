@@ -336,6 +336,8 @@ type SdkRuntimeSession = {
         failed: boolean;
       }
     | undefined;
+  /** True only while the runtime is awaiting an explicitly requested native compaction. */
+  manualCompactionInProgress?: boolean | undefined;
 };
 
 type PreviousSessionSelection = {
@@ -3132,20 +3134,28 @@ export class PiSdkRuntime implements AgentRuntime {
             !normalized.failed
           ) {
             const tracker = this.runOutputTrackers.get(params.info.id);
+            const activeRunId =
+              tracker?.runId &&
+              !this.cancellingRuns.has(tracker.runId) &&
+              getAgentRun(tracker.runId)?.status === "running"
+                ? tracker.runId
+                : undefined;
+            const manualCompactionInProgress =
+              runtimeSession.manualCompactionInProgress === true &&
+              !tracker?.runId &&
+              !getActiveAgentRun(params.info.id);
             const observer = HarnessObserver.getInstance();
             if (
               runtimeSession &&
               this.sessions.get(params.info.id) === runtimeSession &&
               runtimeSession.promptLifecycleToken === params.promptLifecycleToken &&
-              tracker?.runId &&
-              !this.cancellingRuns.has(tracker.runId) &&
-              getAgentRun(tracker.runId)?.status === "running" &&
-              observer.isSessionCurrent(params.info.id, runtimeSession.observerSessionToken)
+              observer.isSessionCurrent(params.info.id, runtimeSession.observerSessionToken) &&
+              (activeRunId !== undefined || manualCompactionInProgress)
             ) {
               observer.recordNativeCompaction(
                 params.info.id,
                 runtimeSession.observerSessionToken,
-                tracker.runId,
+                activeRunId,
               );
             }
           }
@@ -3224,6 +3234,7 @@ export class PiSdkRuntime implements AgentRuntime {
       promptLifecycleToken: params.promptLifecycleToken,
       resourceLoader: params.loader,
       lastCompactionEnd: undefined,
+      manualCompactionInProgress: false,
     };
     this.sessions.set(params.info.id, runtimeSession);
     publishContextUsage();
@@ -4766,6 +4777,7 @@ export class PiSdkRuntime implements AgentRuntime {
       updateAgentSessionStatus(sessionId, "running");
       runtimeSession.emit({ type: "session.status", sessionId, status: { type: "busy" } });
       runtimeSession.lastCompactionEnd = undefined;
+      runtimeSession.manualCompactionInProgress = true;
       try {
         await runtimeSession.session.compact();
         const compaction = lastCompactionEnd(runtimeSession);
@@ -4777,6 +4789,7 @@ export class PiSdkRuntime implements AgentRuntime {
           failed: compaction?.failed ?? false,
         });
       } finally {
+        runtimeSession.manualCompactionInProgress = false;
         updateAgentSessionStatus(sessionId, "idle");
         runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
       }

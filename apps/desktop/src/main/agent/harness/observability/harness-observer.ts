@@ -340,7 +340,7 @@ export class HarnessObserver {
     );
   }
 
-  recordNativeCompaction(sessionId: string, sessionToken: symbol, runId: string): void {
+  recordNativeCompaction(sessionId: string, sessionToken: symbol, runId?: string): void {
     if (!this.isSessionCurrent(sessionId, sessionToken)) return;
     this.nativeCompactionsObserved++;
     this.emitEvent("harness.compaction.native", {}, sessionId, runId);

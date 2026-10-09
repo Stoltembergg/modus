@@ -407,17 +407,10 @@ async function useOfflinePiToolSessions(
             stream.push({ type: "start", partial: message });
             const partialText = message.content.find((block) => block.type === "text");
             if (partialText?.type === "text") {
-              stream.push({ type: "text_start", contentIndex: 0, partial: message });
               stream.push({
                 type: "text_delta",
                 contentIndex: 0,
                 delta: partialText.text,
-                partial: message,
-              });
-              stream.push({
-                type: "text_end",
-                contentIndex: 0,
-                content: partialText.text,
                 partial: message,
               });
             }
@@ -426,17 +419,10 @@ async function useOfflinePiToolSessions(
             stream.push({ type: "start", partial: message });
             const textBlock = message.content.find((block) => block.type === "text");
             if (textBlock?.type === "text" && textBlock.text.length > 0) {
-              stream.push({ type: "text_start", contentIndex: 0, partial: message });
               stream.push({
                 type: "text_delta",
                 contentIndex: 0,
                 delta: textBlock.text,
-                partial: message,
-              });
-              stream.push({
-                type: "text_end",
-                contentIndex: 0,
-                content: textBlock.text,
                 partial: message,
               });
             }

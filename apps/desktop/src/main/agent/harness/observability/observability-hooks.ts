@@ -20,7 +20,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
   priority: 55,
   isCritical: false,
 
-  async execute(input: TurnSettleInput, context: HarnessContext): Promise<TurnSettleOutput> {
+  async execute(_input: TurnSettleInput, context: HarnessContext): Promise<TurnSettleOutput> {
     const defaultOutput: TurnSettleOutput = {
       settled: true,
       triggerContinuation: false,
@@ -40,7 +40,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
         | undefined;
       if (
         isFeatureFlagEnabled("MODUS_RESPONSE_POLICY") &&
-        evaluation?.runId === input.runId &&
+        evaluation?.runId === context.runId &&
         evaluation.status === "evaluated" &&
         context.sessionToken &&
         context.state?.get("harness.response_policy_observed") !== true
@@ -49,7 +49,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
           evaluation.violated === true,
           context.sessionId,
           context.sessionToken,
-          input.runId,
+          context.runId,
         );
         context.state.set("harness.response_policy_observed", true);
       }
