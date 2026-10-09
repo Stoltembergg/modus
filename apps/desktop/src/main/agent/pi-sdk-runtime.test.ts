@@ -365,10 +365,7 @@ function registerOfflineMcpTool(name: string, output: string, dangerous = false)
   });
 }
 
-function registerOfflineRepeatGuardTool(
-  name: string,
-  execute: ToolDefinition["execute"],
-): void {
+function registerOfflineRepeatGuardTool(name: string, execute: ToolDefinition["execute"]): void {
   toolRegistry.registerTool({
     entry: {
       name,
