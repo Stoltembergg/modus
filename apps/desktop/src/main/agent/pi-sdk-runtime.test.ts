@@ -9261,8 +9261,18 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
       name: `Prompt Registry Group ${crypto.randomUUID()}`,
       workspaceId,
       members: [
-        { name: "Registry A", role: "Builder", instructions: "Member A persona marker." },
-        { name: "Registry B", role: "Reviewer", instructions: "Member B persona marker." },
+        {
+          name: "Registry A",
+          role: "Builder",
+          instructions: "Member A persona marker.",
+          modelId: "mock/model",
+        },
+        {
+          name: "Registry B",
+          role: "Reviewer",
+          instructions: "Member B persona marker.",
+          modelId: "mock/model",
+        },
       ],
     });
     const firstSessionId = `prompt-registry-member-a-${crypto.randomUUID()}`;
