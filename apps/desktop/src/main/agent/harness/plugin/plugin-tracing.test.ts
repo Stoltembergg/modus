@@ -105,6 +105,7 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
     });
 
     it("dispatches trace events to unified HarnessObserver", async () => {
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
       const observer = HarnessObserver.getInstance();
       const instrumentation = new PluginInstrumentation();
 
@@ -126,6 +127,22 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
       expect(snap.plugins?.totalExecutions).toBe(1);
       expect(snap.plugins?.failureCount).toBe(0);
       expect(snap.plugins?.activePluginCount).toBe(1);
+    });
+
+    it("keeps Observer plugin metrics disabled without disabling plugin tracing", async () => {
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: false });
+      const observer = HarnessObserver.getInstance();
+      const instrumentation = new PluginInstrumentation();
+
+      await instrumentation.trace(
+        "@modus/observer-disabled-plugin",
+        "prompt.enrich",
+        async () => "enriched",
+      );
+
+      expect(instrumentation.getRecentTraces()).toHaveLength(1);
+      expect(observer.snapshot().plugins?.totalExecutions).toBe(0);
+      expect(observer.getRecentEvents(10)).toHaveLength(0);
     });
 
     it("supports custom collector callback and respects max trace buffer", async () => {
