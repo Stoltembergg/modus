@@ -43,7 +43,7 @@ jobs:
           && npm run test:site
 
   verifier-first-regressions:
-    name: verifier-first runtime regressions
+    name: verifier-first and repeat-guard runtime regressions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -57,15 +57,24 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check A17 runtime files with Biome
+      - name: Check A17 and repeat-guard runtime files with Biome
         run: >
           npx biome check
           apps/desktop/src/main/agent/agent-event-store.ts
           apps/desktop/src/main/agent/agent-event-store.test.ts
+          apps/desktop/src/main/agent/harness/guards/guards.test.ts
+          apps/desktop/src/main/agent/harness/guards/repeat-guard-hook.ts
+          apps/desktop/src/main/agent/harness/guards/repeat-tool-guard.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-hooks.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-kernel.ts
+          apps/desktop/src/main/agent/harness/meta-controller.ts
+          apps/desktop/src/main/agent/pi-permission-extension.ts
           apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
           apps/desktop/src/main/agent/harness/qa-evidence.test.ts
           apps/desktop/src/main/agent/harness/qa-evidence.ts
           apps/desktop/src/main/agent/pi-sdk-runtime.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-01.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-03.ts
           apps/desktop/src/main/agent/runtime-qa-helper.ts
           apps/desktop/src/main/agent/workspace-source-revision.test.ts
           apps/desktop/src/main/agent/workspace-source-revision.ts

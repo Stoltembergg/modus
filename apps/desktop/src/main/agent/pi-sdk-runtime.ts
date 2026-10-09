@@ -126,6 +126,11 @@ import {
 } from "./harness/failure-intelligence";
 import { isFeatureFlagEnabled } from "./harness/feature-flags";
 import {
+  defaultToolCallRepeatGuardHook,
+  defaultToolResultRepeatGuardHook,
+} from "./harness/guards/repeat-guard-hook";
+import { fingerprintToolArgs, ToolInvocationTracker } from "./harness/guards/repeat-tool-guard";
+import {
   isHyperPlanSessionReserved,
   ownsHyperPlanStartReservation,
   releaseHyperPlanRunReservation,
@@ -145,11 +150,6 @@ import type {
 import { HarnessKernel } from "./harness/kernel/harness-kernel";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
-import { defaultToolCallRepeatGuardHook, defaultToolResultRepeatGuardHook } from "./harness/guards/repeat-guard-hook";
-import {
-  fingerprintToolArgs,
-  ToolInvocationTracker,
-} from "./harness/guards/repeat-tool-guard";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
   AutoRollbackManager,
@@ -1711,22 +1711,14 @@ export class PiSdkRuntime implements AgentRuntime {
     sessionId: string,
     input: ToolCallInput,
   ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
-    if (
-      !isFeatureFlagEnabled("MODUS_USE_KERNEL") ||
-      !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")
-    ) {
+    if (!isFeatureFlagEnabled("MODUS_USE_KERNEL") || !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
       return undefined;
     }
 
     const runtimeSession = this.sessions.get(sessionId);
     const activeRun = getActiveAgentRun(sessionId);
     const tracker = this.runOutputTrackers.get(sessionId);
-    if (
-      !runtimeSession ||
-      !activeRun ||
-      !tracker ||
-      activeRun.id !== tracker.runId
-    ) {
+    if (!runtimeSession || !activeRun || !tracker || activeRun.id !== tracker.runId) {
       return undefined;
     }
 
