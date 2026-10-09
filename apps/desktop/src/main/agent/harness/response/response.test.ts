@@ -341,6 +341,42 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       });
     });
 
+    it("honors an explicitly disabled response policy without reporting violations", async () => {
+      setFeatureFlagOverrides({
+        MODUS_USE_KERNEL: true,
+        MODUS_RESPONSE_POLICY: true,
+      });
+      const response = "P1\n\nP2\n\nP3";
+      const contextWithResponse: HarnessContext = {
+        ...mockContext,
+        state: new Map<string, any>([
+          ["harness.assistant_response", response],
+          [
+            "harness.response_policy",
+            resolveResponsePolicy("standard", { maxParagraphs: 1, enforcementMode: "off" }),
+          ],
+        ]),
+      };
+
+      await defaultTurnSettleResponsePolicyHook.execute(
+        {
+          runId: "disabled-policy-run",
+          completed: true,
+          outcome: "completed",
+          hasActiveTodos: false,
+          turnTokens: 0,
+        },
+        contextWithResponse,
+      );
+
+      expect(contextWithResponse.state.get("harness.assistant_response")).toBe(response);
+      expect(contextWithResponse.state.get("harness.response_policy_evaluation")).toMatchObject({
+        runId: "disabled-policy-run",
+        status: "evaluated",
+        violated: false,
+      });
+    });
+
     it("hooks fail open gracefully without throwing if state has unexpected data", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
