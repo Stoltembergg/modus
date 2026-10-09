@@ -57,9 +57,17 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check A17 and repeat-guard runtime files with Biome
+      - name: Check A17, A21.2 and repeat-guard runtime files with Biome
         run: >
           npx biome check --max-diagnostics=100
+          apps/desktop/src/main/agent/harness/feature-flags.ts
+          apps/desktop/src/main/agent/harness/feature-flags.test.ts
+          apps/desktop/src/main/agent/runtime-registry.ts
+          apps/desktop/src/main/agent/runtime-registry.test.ts
+          apps/desktop/src/main/agent/harness/observability/harness-observer.ts
+          apps/desktop/src/main/agent/harness/observability/observability-hooks.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-kernel.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-hooks.ts
           apps/desktop/src/main/agent/agent-event-store.ts
           apps/desktop/src/main/agent/agent-event-store.test.ts
           apps/desktop/src/main/agent/harness/guards/guards.test.ts
@@ -110,6 +118,14 @@ jobs:
           apps/desktop/src/renderer/src/features/plan/PlanPanel.test.tsx
           apps/desktop/src/renderer/src/features/plan/SpecAcceptanceCriteria.test.tsx
           -t 'records not_required for a simple run without requested checks|invalidates completed QA when the workspace changes|does not bind Agent Group QA to a source edit|keeps a run cancelled when abort arrives during final workspace scope collection|workspace-bound QA|workspace source revision|does not certify a test invocation that updates snapshots|does not call an empty verification hook result verified|build turn lifecycle|external workspace edit|does not call a completed no-change turn built|persists Spec Build Task State correctly|rejects verified state with zero checks and a fabricated passing event ID|revalidates persisted QA against the current source revision|removes a displayed QA pass after the watched workspace changes|revalidates persisted QA when filesystem notifications do not arrive|live workspace watching is unavailable|workspace watcher is unavailable at startup|workspace watcher status|reports whether live workspace watching is active|reads the current workspace revision for one exact session and run|derives and persists checks for a todo-side-only linked criterion|requires linked passing evidence before showing a passed criterion|shows required checks and bounded linked evidence'
+
+      - name: Run A21.2 feature flag and lifecycle regressions
+        run: >
+          npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000
+          apps/desktop/src/main/agent/harness/feature-flags.test.ts
+          apps/desktop/src/main/agent/runtime-registry.test.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          -t 'preserves the established defaults|reports malformed environment values|disables only features whose dependencies are invalid|does not enable dependencies or plugins|keeps valid, explicitly enabled features active|validates valid flags before constructing the singleton|diagnoses invalid dependencies and disables them before constructing the singleton|releases only one Agent Group member|starts a fresh observer lifetime|discards a pending stale turn-settle hook|persists a private-data-free Task State|keeps repeated calls usable when Repeat Guards are requested without the kernel'
 
   sandbox-probe-compile:
     name: sandbox probe compile-only
