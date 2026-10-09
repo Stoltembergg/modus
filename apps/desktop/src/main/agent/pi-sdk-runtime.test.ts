@@ -5531,7 +5531,16 @@ describe("PiSdkRuntime", () => {
     };
     expect(loader.cwd).toBe(moved);
     expect(loader.appendSystemPrompt.join("\n")).toContain("Worktree rule marker 4b.");
-    expect(permission).toHaveBeenCalledWith(sessionId, expect.any(Function), moved);
+    expect(permission).toHaveBeenCalledWith(
+      sessionId,
+      expect.any(Function),
+      moved,
+      expect.objectContaining({
+        beforeToolCall: expect.any(Function),
+        cancelToolCall: expect.any(Function),
+        afterToolCall: expect.any(Function),
+      }),
+    );
     // Unlike releaseRuntime, the rebuild keeps the in-memory to-dos.
     expect(clearCache).not.toHaveBeenCalledWith(sessionId);
     permission.mockRestore();
