@@ -9123,6 +9123,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(deliveredPrompt).toBe(assembly?.prompt);
     expect(deliveredPrompt).toContain("registry global marker");
     expect(deliveredPrompt).toContain("registry workspace marker");
+    expect(deliveredPrompt?.match(/registry workspace marker/g)).toHaveLength(1);
     expect(registry?.getAllSections().map((section) => section.id)).toEqual(
       expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance", "workspace_rules"]),
     );
@@ -9183,6 +9184,22 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     const firstSession = sessionAt();
     expect(systemPromptsFor(firstSession).at(-1)).toContain("global version one");
     expect(systemPromptsFor(firstSession).at(-1)).toContain("workspace version one");
+    const runtimeSessions = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          {
+            promptRegistry?: {
+              getSection(id: string): { fingerprint: string } | undefined;
+              getChangedSections(sessionId: string): Array<{ id: string }>;
+            };
+          }
+        >;
+      }
+    ).sessions;
+    const firstRegistry = runtimeSessions.get(sessionId)?.promptRegistry;
+    const firstGlobalFingerprint = firstRegistry?.getSection("global_guidance")?.fingerprint;
+    expect(firstRegistry?.getChangedSections(sessionId)).toEqual([]);
 
     mocks.globalGuidance = "<global_guidance>global version two</global_guidance>";
     await writeFile(join(cwd, "AGENTS.md"), "workspace version two", "utf8");
@@ -9195,7 +9212,128 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(currentPrompt).not.toContain("global version one");
     expect(currentPrompt).not.toContain("workspace version one");
     expect(currentPrompt.match(/workspace version two/g)).toHaveLength(1);
+    const currentRegistry = runtimeSessions.get(sessionId)?.promptRegistry;
+    expect(currentRegistry).toBe(firstRegistry);
+    expect(currentRegistry?.getSection("global_guidance")?.fingerprint).not.toBe(
+      firstGlobalFingerprint,
+    );
+    expect(currentRegistry?.getChangedSections(sessionId)).toEqual([]);
     await runtime.releaseRuntime(sessionId);
+  });
+
+  it("keeps the existing Pi system prompt when PromptRegistry is disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: false,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    mocks.globalGuidance = "<global_guidance>legacy global marker</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "legacy workspace marker", "utf8");
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Keep the legacy prompt path.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: unknown }>;
+      }
+    ).sessions.get(sessionId);
+    expect(runtimeSession?.promptRegistry).toBeUndefined();
+    expect(deliveredPrompt).toContain("legacy global marker");
+    expect(deliveredPrompt).toContain("legacy workspace marker");
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("isolates Agent Group member registries and clears one when that session is recreated", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { createGroupWithNewAgents } = await import("../agents/agents-store");
+    const workspaceId = `prompt-registry-group-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const group = createGroupWithNewAgents({
+      name: `Prompt Registry Group ${crypto.randomUUID()}`,
+      workspaceId,
+      members: [
+        { name: "Registry A", role: "Builder", instructions: "Member A persona marker." },
+        { name: "Registry B", role: "Reviewer", instructions: "Member B persona marker." },
+      ],
+    });
+    const firstSessionId = `prompt-registry-member-a-${crypto.randomUUID()}`;
+    const secondSessionId = `prompt-registry-member-b-${crypto.randomUUID()}`;
+    const insertGroupMemberSession = (sessionId: string, agentId: string, title: string) => {
+      const now = new Date().toISOString();
+      getDatabase()
+        .prepare(
+          `insert into agent_sessions (
+            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+            agent_id, kind, created_at, updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sessionId,
+          workspaceId,
+          title,
+          cwd,
+          "idle",
+          "pi-sdk",
+          "mock/model",
+          null,
+          join(userData, `${sessionId}.jsonl`),
+          agentId,
+          "chat",
+          now,
+          now,
+        );
+    };
+    insertGroupMemberSession(firstSessionId, group.members[0]?.agentId ?? "", "Registry A");
+    insertGroupMemberSession(secondSessionId, group.members[1]?.agentId ?? "", "Registry B");
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const promptMember = (sessionId: string) =>
+      runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Use this member's instructions.",
+        sessionId,
+      });
+    await promptMember(firstSessionId);
+    const firstPiSession = sessionAt();
+    const firstPrompt = systemPromptsFor(firstPiSession).at(-1) ?? "";
+    await promptMember(secondSessionId);
+    const secondPiSession = sessionAt();
+    const secondPrompt = systemPromptsFor(secondPiSession).at(-1) ?? "";
+    const runtimeSessions = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: object }>;
+      }
+    ).sessions;
+    const firstRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    const secondRegistry = runtimeSessions.get(secondSessionId)?.promptRegistry;
+
+    expect(firstRegistry).toBeDefined();
+    expect(secondRegistry).toBeDefined();
+    expect(firstRegistry).not.toBe(secondRegistry);
+    expect(firstPrompt).toContain("Member A persona marker.");
+    expect(firstPrompt).not.toContain("Member B persona marker.");
+    expect(secondPrompt).toContain("Member B persona marker.");
+    expect(secondPrompt).not.toContain("Member A persona marker.");
+
+    await runtime.releaseRuntime(firstSessionId);
+    await promptMember(firstSessionId);
+    const recreatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    expect(recreatedRegistry).toBeDefined();
+    expect(recreatedRegistry).not.toBe(firstRegistry);
+    await runtime.releaseRuntime(firstSessionId);
+    await runtime.releaseRuntime(secondSessionId);
   });
 });
 
