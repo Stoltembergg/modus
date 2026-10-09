@@ -9074,7 +9074,7 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
   });
 
   async function createSession(
-    runtime: PiSdkRuntime,
+    runtime: InstanceType<typeof PiSdkRuntime>,
     sessionId = `prompt-registry-${crypto.randomUUID()}`,
   ) {
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
