@@ -19,15 +19,56 @@ export type HarnessFeatureFlags = {
 
 let overrides: Partial<HarnessFeatureFlags> = {};
 
+const FEATURE_FLAG_ENVIRONMENT_KEYS: readonly (keyof HarnessFeatureFlags)[] = [
+  "MODUS_USE_KERNEL",
+  "MODUS_PROMPT_REGISTRY",
+  "MODUS_TOOL_RESULT_SPILL",
+  "MODUS_COMPACTION_PRUNING",
+  "MODUS_REPEAT_GUARDS",
+  "MODUS_GROUPS_MAILBOX",
+  "MODUS_RESPONSE_POLICY",
+  "MODUS_OBSERVABILITY",
+  "MODUS_CAPABILITY_REGISTRY",
+  "MODUS_PLUGINS",
+  "MODUS_PLUGIN_LIFECYCLE",
+  "MODUS_PLUGIN_TRACING",
+  "MODUS_PLUGIN_ISOLATION",
+  "MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE",
+  "MODUS_PLUGIN_ROLLBACK_SAFE_MODE",
+  "MODUS_PLUGIN_WASM_SANDBOX",
+];
+
+const FEATURE_FLAG_DEPENDENCIES: Partial<
+  Record<keyof HarnessFeatureFlags, readonly (keyof HarnessFeatureFlags)[]>
+> = {
+  MODUS_PROMPT_REGISTRY: ["MODUS_USE_KERNEL"],
+  MODUS_TOOL_RESULT_SPILL: ["MODUS_USE_KERNEL"],
+  MODUS_COMPACTION_PRUNING: ["MODUS_USE_KERNEL"],
+  MODUS_REPEAT_GUARDS: ["MODUS_USE_KERNEL"],
+  MODUS_GROUPS_MAILBOX: ["MODUS_USE_KERNEL"],
+  MODUS_RESPONSE_POLICY: ["MODUS_USE_KERNEL"],
+  MODUS_OBSERVABILITY: ["MODUS_USE_KERNEL"],
+  MODUS_CAPABILITY_REGISTRY: ["MODUS_USE_KERNEL"],
+  MODUS_PLUGINS: ["MODUS_USE_KERNEL", "MODUS_CAPABILITY_REGISTRY"],
+  MODUS_PLUGIN_LIFECYCLE: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+  MODUS_PLUGIN_TRACING: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+  MODUS_PLUGIN_ISOLATION: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+  MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+  MODUS_PLUGIN_ROLLBACK_SAFE_MODE: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+  MODUS_PLUGIN_WASM_SANDBOX: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
+};
+
 function parseEnvBool(val: string | undefined, defaultValue: boolean): boolean {
-  if (val === undefined || val === "") return defaultValue;
-  return val === "1" || val.toLowerCase() === "true";
+  if (val === undefined || val.trim() === "") return defaultValue;
+  const normalized = val.trim().toLowerCase();
+  return normalized === "1" || normalized === "true";
 }
 
 /**
- * Gets the active feature flags, combining process.env with any testing overrides.
+ * Gets the configured feature flags, combining process.env with any testing overrides.
+ * Invalid values fail closed in parseEnvBool and are reported by validateFeatureFlags.
  */
-export function getFeatureFlags(): HarnessFeatureFlags {
+function getConfiguredFeatureFlags(): HarnessFeatureFlags {
   return {
     MODUS_USE_KERNEL:
       overrides.MODUS_USE_KERNEL ?? parseEnvBool(process.env.MODUS_USE_KERNEL, true), // Enabled by default for Fase 1
@@ -69,6 +110,31 @@ export function getFeatureFlags(): HarnessFeatureFlags {
 }
 
 /**
+ * Gets the effective feature flags. Features whose declared prerequisites are
+ * disabled are themselves disabled; this never turns a prerequisite on.
+ */
+export function getFeatureFlags(): HarnessFeatureFlags {
+  const effective = getConfiguredFeatureFlags();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    for (const flag of FEATURE_FLAG_ENVIRONMENT_KEYS) {
+      const dependencies = FEATURE_FLAG_DEPENDENCIES[flag];
+      if (
+        effective[flag] &&
+        dependencies?.some((dependency) => !effective[dependency])
+      ) {
+        effective[flag] = false;
+        changed = true;
+      }
+    }
+  }
+
+  return effective;
+}
+
+/**
  * Checks whether a specific feature flag is currently enabled.
  */
 export function isFeatureFlagEnabled(flag: keyof HarnessFeatureFlags): boolean {
@@ -77,87 +143,39 @@ export function isFeatureFlagEnabled(flag: keyof HarnessFeatureFlags): boolean {
 
 /**
  * Validates dependencies between feature flags.
- * Throws or returns an array of validation errors if dependent flags are enabled without their prerequisites.
+ * Returns configuration errors for malformed values and unmet dependencies.
  */
 export function validateFeatureFlags(
-  flags: Partial<HarnessFeatureFlags> = getFeatureFlags(),
+  flags?: Partial<HarnessFeatureFlags>,
 ): string[] {
+  const configured = flags ?? getConfiguredFeatureFlags();
+  const errors: string[] = flags ? [] : getInvalidEnvironmentValues();
+
+  for (const flag of FEATURE_FLAG_ENVIRONMENT_KEYS) {
+    const dependencies = FEATURE_FLAG_DEPENDENCIES[flag];
+    for (const dependency of dependencies ?? []) {
+      if (configured[flag] && !configured[dependency]) {
+        errors.push(`${flag} requires ${dependency} to be enabled`);
+      }
+    }
+  }
+
+  return errors;
+}
+
+function getInvalidEnvironmentValues(): string[] {
+  const validValues = new Set(["true", "false", "1", "0"]);
   const errors: string[] = [];
 
-  if (!flags.MODUS_USE_KERNEL) {
-    if (flags.MODUS_PROMPT_REGISTRY) {
-      errors.push("MODUS_PROMPT_REGISTRY requires MODUS_USE_KERNEL to be enabled");
+  for (const flag of FEATURE_FLAG_ENVIRONMENT_KEYS) {
+    if (overrides[flag] !== undefined) continue;
+    const value = process.env[flag];
+    if (value === undefined || value.trim() === "") continue;
+    if (!validValues.has(value.trim().toLowerCase())) {
+      errors.push(
+        `${flag} has invalid value ${JSON.stringify(value)}; expected true, false, 1, or 0`,
+      );
     }
-    if (flags.MODUS_TOOL_RESULT_SPILL) {
-      errors.push("MODUS_TOOL_RESULT_SPILL requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_COMPACTION_PRUNING) {
-      errors.push("MODUS_COMPACTION_PRUNING requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_REPEAT_GUARDS) {
-      errors.push("MODUS_REPEAT_GUARDS requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_GROUPS_MAILBOX) {
-      errors.push("MODUS_GROUPS_MAILBOX requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_RESPONSE_POLICY) {
-      errors.push("MODUS_RESPONSE_POLICY requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_OBSERVABILITY) {
-      errors.push("MODUS_OBSERVABILITY requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_CAPABILITY_REGISTRY) {
-      errors.push("MODUS_CAPABILITY_REGISTRY requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGINS) {
-      errors.push("MODUS_PLUGINS requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_LIFECYCLE) {
-      errors.push("MODUS_PLUGIN_LIFECYCLE requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_TRACING) {
-      errors.push("MODUS_PLUGIN_TRACING requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_ISOLATION) {
-      errors.push("MODUS_PLUGIN_ISOLATION requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE) {
-      errors.push("MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_ROLLBACK_SAFE_MODE) {
-      errors.push("MODUS_PLUGIN_ROLLBACK_SAFE_MODE requires MODUS_USE_KERNEL to be enabled");
-    }
-    if (flags.MODUS_PLUGIN_WASM_SANDBOX) {
-      errors.push("MODUS_PLUGIN_WASM_SANDBOX requires MODUS_USE_KERNEL to be enabled");
-    }
-  }
-
-  if (flags.MODUS_PLUGINS && !flags.MODUS_CAPABILITY_REGISTRY) {
-    errors.push("MODUS_PLUGINS requires MODUS_CAPABILITY_REGISTRY to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_LIFECYCLE && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_LIFECYCLE requires MODUS_PLUGINS to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_TRACING && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_TRACING requires MODUS_PLUGINS to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_ISOLATION && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_ISOLATION requires MODUS_PLUGINS to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE requires MODUS_PLUGINS to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_ROLLBACK_SAFE_MODE && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_ROLLBACK_SAFE_MODE requires MODUS_PLUGINS to be enabled");
-  }
-
-  if (flags.MODUS_PLUGIN_WASM_SANDBOX && !flags.MODUS_PLUGINS) {
-    errors.push("MODUS_PLUGIN_WASM_SANDBOX requires MODUS_PLUGINS to be enabled");
   }
 
   return errors;

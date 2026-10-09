@@ -150,6 +150,7 @@ import type {
 import { HarnessKernel } from "./harness/kernel/harness-kernel";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
+import { HarnessObserver } from "./harness/observability/harness-observer";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
   AutoRollbackManager,
@@ -312,6 +313,7 @@ type SdkRuntimeSession = {
   unsubscribe: () => void;
   emit: EmitAgentEvent;
   emitVolatile: EmitAgentEvent;
+  observerSessionToken: symbol;
   /** Last compaction.ended seen on this session (for threshold continue). */
   lastCompactionEnd:
     | {
@@ -2557,9 +2559,22 @@ export class PiSdkRuntime implements AgentRuntime {
     if (assistantResponse) state.set("harness.assistant_response", assistantResponse);
 
     const activeTodos = getLatestSessionTodos(input.sessionId) ?? [];
+    const sessionToken = runtimeSession.observerSessionToken;
     const context: HarnessContext = {
       sessionId: input.sessionId,
       runId: tracker.runId,
+      sessionToken,
+      isCurrent: () => {
+        const observer = HarnessObserver.getInstance();
+        return (
+          this.sessions.get(input.sessionId) === runtimeSession &&
+          runtimeSession.observerSessionToken === sessionToken &&
+          observer.isSessionCurrent(input.sessionId, sessionToken) &&
+          this.runOutputTrackers.get(input.sessionId) === tracker &&
+          !this.cancellingRuns.has(tracker.runId) &&
+          getAgentRun(tracker.runId)?.status !== "cancelled"
+        );
+      },
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       mode: input.mode ?? "build",
@@ -2758,6 +2773,7 @@ export class PiSdkRuntime implements AgentRuntime {
       unsubscribe,
       emit: params.emit,
       emitVolatile: params.emitVolatile,
+      observerSessionToken: HarnessObserver.getInstance().beginSession(params.info.id),
       lastCompactionEnd: undefined,
     };
     this.sessions.set(params.info.id, runtimeSession);
@@ -4851,8 +4867,15 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!runtimeSession) {
       return;
     }
-    if (activeRun) {
-      this.cancellingRuns.add(activeRun.id);
+    const outputTracker = this.runOutputTrackers.get(sessionId);
+    const runId = outputTracker?.runId ?? activeRun?.id;
+    if (runId) {
+      this.cancellingRuns.add(runId);
+    }
+    if (outputTracker) {
+      // Invalidate old turn hooks while keeping the live SDK session usable.
+      // The next turn receives the new lifetime token; aggregate metrics remain.
+      runtimeSession.observerSessionToken = HarnessObserver.getInstance().beginSession(sessionId);
     }
 
     try {
@@ -4919,14 +4942,18 @@ export class PiSdkRuntime implements AgentRuntime {
     this.parentSessionByChild.delete(sessionId);
     this.personaPrompts.delete(sessionId);
     if (!runtimeSession) {
+      HarnessObserver.getInstance().releaseSession(sessionId);
       this.clearRepeatGuardSession(sessionId);
       return;
     }
 
+    if (this.sessions.get(sessionId) === runtimeSession) {
+      this.sessions.delete(sessionId);
+      HarnessObserver.getInstance().releaseSession(sessionId, runtimeSession.observerSessionToken);
+    }
     runtimeSession.unsubscribe();
     runtimeSession.session.dispose();
     this.clearRepeatGuardSession(sessionId);
-    this.sessions.delete(sessionId);
   }
 
   private async closeSubagentTree(rootSessionId: string, reason: string): Promise<void> {

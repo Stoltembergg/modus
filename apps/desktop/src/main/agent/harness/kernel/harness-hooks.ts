@@ -16,6 +16,10 @@ export type HarnessPhase =
 export type HarnessContext = {
   sessionId: string;
   runId: string;
+  /** Session lifetime identity used to reject work from a released incarnation. */
+  sessionToken?: symbol | undefined;
+  /** False after the session or run that owns this hook execution is no longer current. */
+  isCurrent?: (() => boolean) | undefined;
   workspaceId?: string | undefined;
   cwd?: string | undefined;
   mode: "build" | "plan" | "spec";

@@ -8849,6 +8849,83 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
+  it("invalidates pending turn-settle hooks on cancellation and starts a fresh observer lifetime", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const runtime = new PiSdkRuntime();
+    const sessionId = `observer-cancelled-${crypto.randomUUID()}`;
+    let notifyPending!: () => void;
+    let resumePending!: () => void;
+    const pendingStarted = new Promise<void>((resolve) => {
+      notifyPending = resolve;
+    });
+    const pendingGate = new Promise<void>((resolve) => {
+      resumePending = resolve;
+    });
+    let shouldPause = true;
+    const laterHook = vi.fn();
+    const kernel = (
+      runtime as unknown as {
+        harnessKernel: {
+          registerHook(hook: {
+            name: string;
+            phase: "turn_settle";
+            priority: number;
+            isCritical: boolean;
+            execute: (input: unknown) => Promise<unknown> | unknown;
+          }): void;
+        };
+      }
+    ).harnessKernel;
+    kernel.registerHook({
+      name: "test-pending-session-cancel",
+      phase: "turn_settle",
+      priority: 50,
+      isCritical: false,
+      execute: async (input) => {
+        if (shouldPause) {
+          shouldPause = false;
+          notifyPending();
+          await pendingGate;
+        }
+        return input;
+      },
+    });
+    kernel.registerHook({
+      name: "test-session-cancel-later-hook",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input) => {
+        laterHook();
+        return input;
+      },
+    });
+
+    try {
+      const oldTurn = runTurnWithAssistantText("Cancelled turn.", { runtime, sessionId });
+      await pendingStarted;
+      await runtime.abort(sessionId);
+      resumePending();
+      await oldTurn;
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+      expect(laterHook).not.toHaveBeenCalled();
+
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Continue after cancellation.",
+        sessionId,
+      });
+
+      expect(laterHook).toHaveBeenCalledTimes(1);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+    } finally {
+      resumePending();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("mirrors response evaluations into the observer end to end", async () => {
     setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
 

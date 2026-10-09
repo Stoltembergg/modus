@@ -26,7 +26,10 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
       triggerContinuation: false,
     };
 
-    if (!isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+    if (
+      !isFeatureFlagEnabled("MODUS_OBSERVABILITY") ||
+      (context.isCurrent && !context.isCurrent())
+    ) {
       return defaultOutput;
     }
 
@@ -40,7 +43,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
         typeof startMs === "number" && startMs > 0 ? Math.max(0, Date.now() - startMs) : 0;
 
       if (sessionId) {
-        observer.recordSessionTurn(sessionId, durationMs);
+        observer.recordSessionTurn(sessionId, durationMs, context.sessionToken);
       }
 
       // Mirror response-policy evaluations recorded earlier in this turn_settle
@@ -56,21 +59,24 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
           charactersSaved: responseMetrics.charactersSaved,
         },
         sessionId,
+        context.sessionToken,
       );
 
       // Record any prompt tokens saved from the current turn
       const tokensSaved = context.state?.get("harness.prompt_tokens_saved");
       if (typeof tokensSaved === "number" && tokensSaved > 0) {
-        observer.recordPromptSections([], [], tokensSaved, sessionId);
+        observer.recordPromptSections([], [], tokensSaved, sessionId, context.sessionToken);
       }
 
       // Track assistant token metrics from the input
       if (input.turnTokens > 0) {
-        observer.recordPromptSections([], [], 0, sessionId);
+        observer.recordPromptSections([], [], 0, sessionId, context.sessionToken);
       }
 
       // Context state tag indicating observability harvested
-      context.state?.set("harness.observability_harvested", true);
+      if (!context.isCurrent || context.isCurrent()) {
+        context.state?.set("harness.observability_harvested", true);
+      }
 
       return defaultOutput;
     } catch (err) {

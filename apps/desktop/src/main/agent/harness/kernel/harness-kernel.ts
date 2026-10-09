@@ -73,6 +73,9 @@ export class HarnessKernel {
     if (!flags.MODUS_USE_KERNEL) {
       return initialInput as unknown as TOutput;
     }
+    if (context.isCurrent && !context.isCurrent()) {
+      return initialInput as unknown as TOutput;
+    }
 
     const hooks = this.getHooksForPhase(phase);
     console.info(`[modus-harness] Phase: ${phase}, hooks: ${hooks.length}`);
@@ -80,18 +83,21 @@ export class HarnessKernel {
     let currentData: any = initialInput;
 
     for (const hook of hooks) {
+      if (context.isCurrent && !context.isCurrent()) break;
       const startTime = performance.now();
       let success = true;
       let errorMsg: string | undefined = undefined;
 
       try {
-        currentData = await hook.execute(currentData, context);
+        const output = await hook.execute(currentData, context);
+        if (context.isCurrent && !context.isCurrent()) break;
+        currentData = output;
       } catch (err: any) {
+        if (context.isCurrent && !context.isCurrent()) break;
         success = false;
         errorMsg = err?.message || String(err);
 
         if (hook.isCritical) {
-          this.recordExecution(hook.name, phase, startTime, false, errorMsg);
           throw new Error(`Critical harness hook ${hook.name} failed: ${errorMsg}`);
         } else {
           // Graceful fallback: log and continue with previous data
@@ -100,7 +106,9 @@ export class HarnessKernel {
           );
         }
       } finally {
-        this.recordExecution(hook.name, phase, startTime, success, errorMsg);
+        if (!context.isCurrent || context.isCurrent()) {
+          this.recordExecution(hook.name, phase, startTime, success, errorMsg);
+        }
       }
     }
 

@@ -68,6 +68,7 @@ export class HarnessObserver {
 
   // Session-level tracking
   private sessionMetrics = new Map<string, SessionHarnessMetrics>();
+  private sessionLifetimes = new Map<string, symbol>();
 
   // Ring buffer for recent telemetry events
   private recentEvents: TelemetryEvent[] = [];
@@ -83,6 +84,29 @@ export class HarnessObserver {
 
   static resetInstance(): void {
     HarnessObserver.instance = null;
+  }
+
+  /** Starts a fresh temporary metrics lifetime for a runtime session. */
+  beginSession(sessionId: string): symbol {
+    this.releaseSession(sessionId);
+    const token = Symbol(`harness-session:${sessionId}`);
+    this.sessionLifetimes.set(sessionId, token);
+    return token;
+  }
+
+  /**
+   * Releases only the matching session lifetime. Supplying its token prevents
+   * a late disposer from clearing metrics belonging to a recreated session.
+   */
+  releaseSession(sessionId: string, token?: symbol): void {
+    if (token !== undefined && this.sessionLifetimes.get(sessionId) !== token) return;
+    this.sessionLifetimes.delete(sessionId);
+    this.sessionMetrics.delete(sessionId);
+    this.recentEvents = this.recentEvents.filter((event) => event.sessionId !== sessionId);
+  }
+
+  isSessionCurrent(sessionId: string, token: symbol): boolean {
+    return this.sessionLifetimes.get(sessionId) === token;
   }
 
   clear(): void {
@@ -248,7 +272,9 @@ export class HarnessObserver {
     skipped: string[],
     tokensSaved: number,
     sessionId?: string,
+    sessionToken?: symbol,
   ): void {
+    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
     this.promptTotalSectionsSent += sent.length;
     this.promptSkippedSections += skipped.length;
     this.promptTokensSaved += tokensSaved;
@@ -326,7 +352,9 @@ export class HarnessObserver {
   mirrorResponsePolicyMetrics(
     totals: { violationsDetected: number; totalFormatted: number; charactersSaved: number },
     sessionId?: string,
+    sessionToken?: symbol,
   ): void {
+    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
     const fresh = {
       violationsDetected: Math.max(0, totals.violationsDetected),
       totalFormatted: Math.max(0, totals.totalFormatted),
@@ -424,7 +452,8 @@ export class HarnessObserver {
   }
 
   // --- Session Turn Tracking ---
-  recordSessionTurn(sessionId: string, durationMs: number): void {
+  recordSessionTurn(sessionId: string, durationMs: number, sessionToken?: symbol): void {
+    if (sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
     const session = this.ensureSession(sessionId);
     session.turnCount++;
     session.totalDurationMs += durationMs;
