@@ -393,7 +393,16 @@ async function useOfflinePiToolSessions(
         if (terminalEventPushed) return;
         terminalEventPushed = true;
         try {
-          stream.push({ type: "error", reason: "aborted", error: message });
+          stream.push({
+            type: "error",
+            reason: "aborted",
+            error: {
+              ...message,
+              content: [],
+              stopReason: "aborted",
+              errorMessage: "Offline stream aborted.",
+            },
+          });
         } catch {
           // The SDK may close this stream when the runtime cancels its session.
         }
@@ -403,29 +412,45 @@ async function useOfflinePiToolSessions(
         terminalEventPushed = true;
         options?.signal?.removeEventListener("abort", pushAbortedEvent);
         try {
+          const textBlock = message.content.find((block) => block.type === "text");
+          const responseText = textBlock?.type === "text" ? textBlock.text : "";
+          const emptyPartial: AssistantMessage = {
+            ...message,
+            content: responseText.length > 0 ? [{ type: "text", text: "" }] : [],
+            stopReason: "stop",
+          };
+          stream.push({ type: "start", partial: emptyPartial });
+
+          const splitAt = Math.ceil(responseText.length / 2);
+          const chunks = [responseText.slice(0, splitAt), responseText.slice(splitAt)].filter(
+            (chunk) => chunk.length > 0,
+          );
+          let accumulatedText = "";
+          for (const chunk of chunks) {
+            accumulatedText += chunk;
+            stream.push({
+              type: "text_delta",
+              contentIndex: 0,
+              delta: chunk,
+              partial: {
+                ...message,
+                content: [{ type: "text", text: accumulatedText }],
+                stopReason: "stop",
+              },
+            });
+          }
+
           if (stopReason === "error" || stopReason === "aborted") {
-            stream.push({ type: "start", partial: message });
-            const partialText = message.content.find((block) => block.type === "text");
-            if (partialText?.type === "text") {
-              stream.push({
-                type: "text_delta",
-                contentIndex: 0,
-                delta: partialText.text,
-                partial: message,
-              });
-            }
-            stream.push({ type: "error", reason: stopReason, error: message });
+            stream.push({
+              type: "error",
+              reason: stopReason,
+              error: {
+                ...message,
+                stopReason,
+                errorMessage: `Offline stream ${stopReason}.`,
+              },
+            });
           } else {
-            stream.push({ type: "start", partial: message });
-            const textBlock = message.content.find((block) => block.type === "text");
-            if (textBlock?.type === "text" && textBlock.text.length > 0) {
-              stream.push({
-                type: "text_delta",
-                contentIndex: 0,
-                delta: textBlock.text,
-                partial: message,
-              });
-            }
             stream.push({ type: "done", reason: stopReason, message });
           }
         } catch {
