@@ -13,6 +13,7 @@ import { buildContextChips } from "../../shared/context-chips";
 import type {
   AdaptiveDecision,
   AdaptiveDecisionMode,
+  AdaptiveFailureLoopAction,
   AdaptiveFailureAttempt,
   AgentEvent,
   AgentResponseModel,
@@ -134,12 +135,21 @@ import type {
   HarnessContext,
   PromptBuildInput,
   PromptBuildOutput,
+  ToolCallInput,
+  ToolCallOutput,
+  ToolResultInput,
+  ToolResultOutput,
   TurnSettleInput,
   TurnSettleOutput,
 } from "./harness/kernel/harness-hooks";
 import { HarnessKernel } from "./harness/kernel/harness-kernel";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
+import { defaultToolCallRepeatGuardHook, defaultToolResultRepeatGuardHook } from "./harness/guards/repeat-guard-hook";
+import {
+  fingerprintToolArgs,
+  ToolInvocationTracker,
+} from "./harness/guards/repeat-tool-guard";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
   AutoRollbackManager,
@@ -340,6 +350,7 @@ const CONTINUE_AFTER_COMPACTION =
 
 type RunOutputTracker = {
   runId: string;
+  mode: PromptAgentInput["mode"];
   hasVisibleOutput: boolean;
   startedAt: number;
   tokenUsage: AgentRunTokenUsage;
@@ -876,6 +887,10 @@ export class PiSdkRuntime implements AgentRuntime {
   private questionPendingListeners = new Set<(sessionId: string) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
+  private repeatGuardPendingToolCalls = new Map<
+    string,
+    Map<string, { runId: string; toolName: string; input: unknown }>
+  >();
   private cancellingRuns = new Set<string>();
   private preflightReservations = new Map<string, symbol>();
   private pendingIntentGates = new Map<string, { runId: string; controller: AbortController }>();
@@ -895,6 +910,8 @@ export class PiSdkRuntime implements AgentRuntime {
   >();
 
   constructor() {
+    this.harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
+    this.harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
     this.harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
     this.harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
     this.harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
@@ -1182,6 +1199,7 @@ export class PiSdkRuntime implements AgentRuntime {
       updateAgentRunStatus(runId, "cancelled");
       runtimeSession.emit({ type: "run.cancelled", sessionId, runId });
     }
+    this.clearRepeatGuardRun(sessionId, runId);
     removeRunOutputTrackerIfOwned(this.runOutputTrackers, sessionId, outputTracker);
     this.releasePromptPreflight(sessionId, preflightReservation);
     if (ownsActiveSession) {
@@ -1269,6 +1287,7 @@ export class PiSdkRuntime implements AgentRuntime {
     } finally {
       if (!preserveStartedRun) {
         clearMcpCitationRun(input.sessionId, input.runId);
+        this.clearRepeatGuardRun(input.sessionId, input.runId);
         if (input.outputTracker) {
           removeRunOutputTrackerIfOwned(
             this.runOutputTrackers,
@@ -1478,10 +1497,11 @@ export class PiSdkRuntime implements AgentRuntime {
       workspaceId: string;
       mode: "build" | "plan" | "spec";
       classification: HarnessTaskState["classification"];
-      boundary: "pre_prompt" | "post_qa" | "post_failure";
+      boundary: "pre_prompt" | "post_qa" | "post_failure" | "tool_guard";
       changedPaths?: string[];
       revision?: string;
       qaStatus?: AutoQAStatus;
+      failureLoopAction?: AdaptiveFailureLoopAction;
       remainingContinuationBudget?: number;
     },
   ): Promise<AdaptiveDecision | undefined> {
@@ -1533,6 +1553,7 @@ export class PiSdkRuntime implements AgentRuntime {
             ? { qaStatus: tracker.lastQaStatus }
             : {}),
         failureAttempts: [...tracker.failureAttempts, ...blacklistAttempts],
+        ...(input.failureLoopAction ? { failureLoopAction: input.failureLoopAction } : {}),
         impact,
         remainingContinuationBudget: input.remainingContinuationBudget ?? 1,
         enabledModelIds: listScopedModels().map((entry) => modelToId(entry.model)),
@@ -1543,7 +1564,11 @@ export class PiSdkRuntime implements AgentRuntime {
       tracker.lastAdaptiveDecision = decision;
       const dispatch = planSafeDispatch(decision);
       if (dispatch.kind === "verify_gate") tracker.forceVerifyGate = true;
-      if (dispatch.kind === "retrieve_local" && !tracker.adaptiveRetrievalDigest) {
+      if (
+        input.boundary !== "tool_guard" &&
+        dispatch.kind === "retrieve_local" &&
+        !tracker.adaptiveRetrievalDigest
+      ) {
         try {
           const memoryDigest = await planTurnContext({
             workspaceId: input.workspaceId,
@@ -1566,6 +1591,7 @@ export class PiSdkRuntime implements AgentRuntime {
       // flushed immediately at post_qa/post_failure (gate already cleared).
       if (
         (dispatch.kind === "spawn_readonly_specialist" || dispatch.kind === "mcp_preflight") &&
+        input.boundary !== "tool_guard" &&
         !tracker.adaptiveSpecialistSpawned
       ) {
         tracker.pendingAdaptiveSpawn = dispatch;
@@ -1665,6 +1691,208 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
+  private createToolGuardContext(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+  ): HarnessContext {
+    const context: HarnessContext = {
+      sessionId: runtimeSession.info.id,
+      runId: tracker.runId,
+      workspaceId: runtimeSession.info.workspaceId,
+      cwd: runtimeSession.info.cwd,
+      mode: tracker.mode ?? "build",
+      state: new Map([["harness.failure_attempts", tracker.failureAttempts]]),
+      startedAt: tracker.startedAt,
+    };
+    return context;
+  }
+
+  private async beforeRepeatGuardToolCall(
+    sessionId: string,
+    input: ToolCallInput,
+  ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
+    if (
+      !isFeatureFlagEnabled("MODUS_USE_KERNEL") ||
+      !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")
+    ) {
+      return undefined;
+    }
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      !activeRun ||
+      !tracker ||
+      activeRun.id !== tracker.runId
+    ) {
+      return undefined;
+    }
+
+    const context = this.createToolGuardContext(runtimeSession, tracker);
+    const output = await this.harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
+      "tool_call",
+      input,
+      context,
+    );
+    const decision = output.repeatGuardDecision;
+    if (decision?.action === "block") {
+      this.recordAdaptiveFailure(runtimeSession, tracker, {
+        sessionId,
+        runId: activeRun.id,
+        strategyCode: "repeat_tool_loop",
+        reasonCode: decision.reasonCode ?? "repeat_guard_tool_loop",
+        hypothesisCode: `repeat_${fingerprintToolArgs({
+          toolName: input.toolName,
+          input: input.input,
+        })}`,
+        ...(tracker.taskState?.revision ? { revision: tracker.taskState.revision } : {}),
+        persistToWorkspace: false,
+      });
+      const classification =
+        tracker.taskState?.classification ??
+        classifyHarnessTask({
+          text: "Repeated tool call made no progress.",
+          mode: tracker.mode ?? "build",
+          contextPaths: [],
+          changedPaths: [],
+        });
+      await this.consultAdaptiveController(runtimeSession, tracker, {
+        sessionId,
+        runId: activeRun.id,
+        workspaceId: runtimeSession.info.workspaceId,
+        mode: tracker.mode ?? "build",
+        classification,
+        boundary: "tool_guard",
+        failureLoopAction: decision.failureLoopAction,
+        remainingContinuationBudget: 0,
+      });
+      return { block: true, reason: decision.reason };
+    }
+
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId) ?? new Map();
+    pending.set(input.toolCallId, {
+      runId: activeRun.id,
+      toolName: input.toolName,
+      input: input.input,
+    });
+    this.repeatGuardPendingToolCalls.set(sessionId, pending);
+    return undefined;
+  }
+
+  private cancelPendingRepeatGuardToolCall(sessionId: string, toolCallId: string): void {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId);
+    pending?.delete(toolCallId);
+    if (pending?.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
+  }
+
+  private async afterRepeatGuardToolCall(
+    sessionId: string,
+    event: {
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      content: readonly { type: string; text?: string | undefined }[];
+      details: unknown;
+      isError: boolean;
+    },
+  ): Promise<void> {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId)?.get(event.toolCallId);
+    this.cancelPendingRepeatGuardToolCall(sessionId, event.toolCallId);
+    if (!pending || pending.toolName !== event.toolName) return;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      !activeRun ||
+      !tracker ||
+      activeRun.id !== pending.runId ||
+      tracker.runId !== pending.runId ||
+      !isFeatureFlagEnabled("MODUS_USE_KERNEL") ||
+      !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")
+    ) {
+      return;
+    }
+
+    const outcome =
+      this.cancellingRuns.has(pending.runId) || getAgentRun(pending.runId)?.status === "cancelled"
+        ? "cancelled"
+        : event.isError
+          ? "failed"
+          : "success";
+    const resultFingerprint = fingerprintToolArgs({
+      isError: event.isError,
+      content: event.content.map((item) => {
+        if (item.type === "text") return { type: item.type, text: item.text ?? "" };
+        if ("data" in item) {
+          return {
+            type: item.type,
+            mimeType: "mimeType" in item ? item.mimeType : undefined,
+            dataFingerprint: fingerprintToolArgs(item.data),
+          };
+        }
+        return { type: item.type };
+      }),
+      details: event.details,
+    });
+    const state = tracker.taskState;
+    const progressFingerprint = fingerprintToolArgs({
+      phase: state?.phase,
+      verificationStatus: state?.verificationStatus,
+      criteria: state?.criteria.map((criterion) => [criterion.criterionId, criterion.status]),
+      openQuestionRefs: state?.openQuestionRefs,
+      evidenceRefs: state?.evidenceRefs.map((evidence) => evidence.eventId),
+      revision: state?.revision,
+    });
+    const resultInput: ToolResultInput = {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      input: pending.input,
+      outcome,
+      resultFingerprint,
+      progressFingerprint,
+    };
+    await this.harnessKernel.executePhase<ToolResultInput, ToolResultOutput>(
+      "tool_result",
+      resultInput,
+      this.createToolGuardContext(runtimeSession, tracker),
+    );
+
+    if (outcome === "failed") {
+      this.recordAdaptiveFailure(runtimeSession, tracker, {
+        sessionId,
+        runId: pending.runId,
+        strategyCode: "tool_execution",
+        reasonCode: "tool_execution_failed",
+        hypothesisCode: `tool_${fingerprintToolArgs({
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+        })}`,
+        ...(tracker.taskState?.revision ? { revision: tracker.taskState.revision } : {}),
+        persistToWorkspace: false,
+      });
+    }
+  }
+
+  private clearRepeatGuardRun(sessionId: string, runId: string): void {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId);
+    if (pending) {
+      for (const [toolCallId, invocation] of pending) {
+        if (invocation.runId === runId) pending.delete(toolCallId);
+      }
+      if (pending.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
+    }
+    ToolInvocationTracker.getInstance().clearRun(sessionId, runId);
+  }
+
+  private clearRepeatGuardSession(sessionId: string): void {
+    this.repeatGuardPendingToolCalls.delete(sessionId);
+    ToolInvocationTracker.getInstance().clearSession(sessionId);
+  }
+
   private recordAdaptiveFailure(
     runtimeSession: SdkRuntimeSession,
     tracker: RunOutputTracker,
@@ -1676,6 +1904,7 @@ export class PiSdkRuntime implements AgentRuntime {
       revision?: string;
       evidenceEventIds?: string[];
       hypothesisCode?: string;
+      persistToWorkspace?: boolean;
     },
   ): void {
     try {
@@ -1706,7 +1935,7 @@ export class PiSdkRuntime implements AgentRuntime {
         attempt,
       });
       const workspaceId = runtimeSession.info.workspaceId;
-      if (workspaceId) {
+      if (workspaceId && input.persistToWorkspace !== false) {
         upsertFailureBlacklistEntry({
           workspaceId,
           strategyCode: attempt.strategyCode,
@@ -2302,7 +2531,14 @@ export class PiSdkRuntime implements AgentRuntime {
       cwd,
       agentDir,
       noExtensions: true,
-      extensionFactories: [createModusPermissionExtension(sessionId, emit, cwd)],
+      extensionFactories: [
+        createModusPermissionExtension(sessionId, emit, cwd, {
+          beforeToolCall: (event) => this.beforeRepeatGuardToolCall(sessionId, event),
+          cancelToolCall: (toolCallId) =>
+            this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId),
+          afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
+        }),
+      ],
       settingsManager,
       appendSystemPrompt: [
         describeAgentShellForPrompt(shell),
@@ -3169,6 +3405,7 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       outputTracker = {
         runId: run.id,
+        mode: input.mode ?? "build",
         hasVisibleOutput: false,
         startedAt: Date.now(),
         tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
@@ -3334,7 +3571,9 @@ export class PiSdkRuntime implements AgentRuntime {
             }
           }
           clearMcpCitationRun(input.sessionId, run.id);
+          this.clearRepeatGuardRun(input.sessionId, run.id);
           if (outputTracker) {
+            this.clearRepeatGuardRun(input.sessionId, run.id);
             removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
           }
           releasePreflight();
@@ -3985,6 +4224,7 @@ export class PiSdkRuntime implements AgentRuntime {
         }
       }
       this.cancellingRuns.delete(run.id);
+      this.clearRepeatGuardRun(input.sessionId, run.id);
       removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
       console.info(
         `[modus-timing] turn end (idle emit) +${Date.now() - outputTracker.startedAt}ms`,
@@ -4687,11 +4927,13 @@ export class PiSdkRuntime implements AgentRuntime {
     this.parentSessionByChild.delete(sessionId);
     this.personaPrompts.delete(sessionId);
     if (!runtimeSession) {
+      this.clearRepeatGuardSession(sessionId);
       return;
     }
 
     runtimeSession.unsubscribe();
     runtimeSession.session.dispose();
+    this.clearRepeatGuardSession(sessionId);
     this.sessions.delete(sessionId);
   }
 

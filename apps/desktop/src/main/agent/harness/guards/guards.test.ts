@@ -16,6 +16,7 @@ import {
 import { detectRepeatHypothesis } from "./repeat-hypothesis-guard";
 import {
   detectRepeatTools,
+  detectUnproductiveToolRepeat,
   fingerprintToolArgs,
   type ToolInvocation,
   ToolInvocationTracker,
@@ -117,6 +118,36 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
       expect(pattern.identical).toBe(true);
     });
 
+    it("only blocks an identical call streak when its results or task state stop progressing", () => {
+      const now = 1_000_000;
+      const args = { path: "src/example.ts" };
+      const argsFingerprint = fingerprintToolArgs(args);
+      const invocations: ToolInvocation[] = Array.from({ length: 3 }, (_, index) => ({
+        toolName: "edit_file",
+        argsFingerprint,
+        timestamp: now - (2 - index) * 1000,
+        outcome: "failed",
+        resultFingerprint: `failure-${index}`,
+        progressFingerprint: "same-task-state",
+      }));
+
+      expect(
+        detectUnproductiveToolRepeat(invocations, "edit_file", args, undefined, now),
+      ).toMatchObject({ count: 3, identical: true });
+      expect(
+        detectUnproductiveToolRepeat(
+          invocations.map((invocation, index) => ({
+            ...invocation,
+            progressFingerprint: `task-progress-${index}`,
+          })),
+          "edit_file",
+          args,
+          undefined,
+          now,
+        ),
+      ).toBeUndefined();
+    });
+
     it("ignores invocations outside the sliding time window", () => {
       const now = 1000_000;
       const fp = fingerprintToolArgs({ command: "cargo build" });
@@ -177,10 +208,15 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
       setRepeatGuardConfig({ maxTrackedInvocations: 5 });
 
       for (let i = 0; i < 10; i++) {
-        tracker.record("sess-1", "grep", { query: `term_${i}` });
+        tracker.record("sess-1", "run-1", "grep", { query: `term_${i}` }, {
+          toolCallId: `call-${i}`,
+          outcome: "success",
+          resultFingerprint: `result-${i}`,
+          progressFingerprint: `progress-${i}`,
+        });
       }
 
-      const stored = tracker.getInvocations("sess-1");
+      const stored = tracker.getInvocations("sess-1", "run-1");
       expect(stored).toHaveLength(5);
       expect(stored[4]!.argsFingerprint).toBe(fingerprintToolArgs({ query: "term_9" }));
 
@@ -349,9 +385,14 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
 
       const tracker = ToolInvocationTracker.getInstance();
       const fp = fingerprintToolArgs({ file: "a.ts" });
-      tracker.record("sess-on", "edit", fp);
-      tracker.record("sess-on", "edit", fp);
-      tracker.record("sess-on", "edit", fp);
+      for (let index = 0; index < 3; index += 1) {
+        tracker.record("sess-on", "run-on", "edit", fp, {
+          toolCallId: `call-${index}`,
+          outcome: "success",
+          resultFingerprint: "same-result",
+          progressFingerprint: "same-progress",
+        });
+      }
 
       const context: HarnessContext = {
         sessionId: "sess-on",
@@ -568,6 +609,38 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
 
       expect(decision.action).toBe("avoid_retry");
     });
+  });
+
+  it("routes a tool-loop verdict through the Meta Controller without QA failure", () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+
+    const decision = decideNext({
+      sessionId: "s",
+      runId: "r",
+      workspaceId: "w",
+      mode: "build",
+      classification: {
+        taskType: "implementation",
+        complexity: "simple",
+        risk: "low",
+        confidence: "high",
+        reasons: [],
+      },
+      failureAttempts: [],
+      remainingContinuationBudget: 0,
+      enabledModelIds: [],
+      decisionMode: "advisory",
+      openQuestionCount: 0,
+      unresolvedCriterionCount: 1,
+      failureLoopAction: {
+        action: "change_strategy",
+        suggestion: "Change the repeated tool call.",
+        reasonCodes: ["tool_loop_detected", "identical_tool_call_loop"],
+      },
+    });
+
+    expect(decision.action).toBe("avoid_retry");
+    expect(decision.reasonCodes).toContain("repeat_guard_tool_loop");
   });
 
   describe("5.7 Performance Benchmark (SLO < 5ms)", () => {

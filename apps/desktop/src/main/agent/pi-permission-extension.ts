@@ -7,14 +7,39 @@ import { getActiveAgentRun } from "./agent-run-store";
 import { getToolTarget, toolRegistry } from "./tools/registry";
 
 type PermissionEmitter = (event: AgentEvent) => void;
+type RepeatGuardToolCall = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+};
+type RepeatGuardToolResult = RepeatGuardToolCall & {
+  content: readonly { type: string; text?: string | undefined }[];
+  details: unknown;
+  isError: boolean;
+};
+type RepeatGuardBridge = {
+  beforeToolCall: (
+    event: RepeatGuardToolCall,
+  ) => Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined>;
+  cancelToolCall: (toolCallId: string) => void;
+  afterToolCall: (event: RepeatGuardToolResult) => Promise<void>;
+};
 
 export function createModusPermissionExtension(
   sessionId: string,
   emit: PermissionEmitter,
   cwd?: string,
+  repeatGuard?: RepeatGuardBridge,
 ): ExtensionFactory {
   return (pi) => {
     pi.on("tool_call", async (event) => {
+      const repeatDecision = await repeatGuard?.beforeToolCall({
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+      });
+      if (repeatDecision?.block) return repeatDecision;
+
       const { action, dangerous } = toolRegistry.classify(event);
       // Resolved approval mode (project override → global → default) decides
       // whether a dangerous call pauses for the user.
@@ -39,6 +64,7 @@ export function createModusPermissionExtension(
       const decision = await requestPermission(permissionInput);
 
       if (decision.decision === "deny") {
+        repeatGuard?.cancelToolCall(event.toolCallId);
         // Denying ONE tool call does not stop the run: PI feeds the refusal
         // back to the model, which carries on (acknowledges, tries another
         // way, or wraps up) and the run completes normally. The old code
@@ -50,6 +76,17 @@ export function createModusPermissionExtension(
       }
 
       return undefined;
+    });
+
+    pi.on("tool_result", async (event) => {
+      await repeatGuard?.afterToolCall({
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.input,
+        content: event.content,
+        details: event.details,
+        isError: event.isError,
+      });
     });
   };
 }

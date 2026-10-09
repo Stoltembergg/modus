@@ -19,6 +19,8 @@ export class HarnessKernel {
     // Initialize phase buckets
     const phases: HarnessPhase[] = [
       "turn_start",
+      "tool_call",
+      "tool_result",
       "context_resolve",
       "prompt_build",
       "model_select",

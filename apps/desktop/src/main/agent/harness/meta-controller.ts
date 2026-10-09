@@ -119,8 +119,9 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
   const oracleConsulted = snapshot.oracleConsulted === true;
   const qaFailed = qa === "failed" || verification === "failed";
   // Phase 5: verdict from the failure-loop guard (repeat guards + circuit breaker).
+  const toolLoopTriggered = snapshot.failureLoopAction?.reasonCodes.includes("tool_loop_detected");
   const loopAction =
-    isFeatureFlagEnabled("MODUS_REPEAT_GUARDS") && qaFailed
+    isFeatureFlagEnabled("MODUS_REPEAT_GUARDS") && (qaFailed || toolLoopTriggered)
       ? snapshot.failureLoopAction
       : undefined;
   const changeStrategy = selectChangeStrategy({
@@ -155,6 +156,24 @@ export function decideNext(snapshot: AdaptiveDecisionSnapshot): AdaptiveDecision
       confidence: "high",
       expectedUncertaintyReduction: 20,
     };
+  }
+
+  if (loopAction && !qaFailed) {
+    return withChangeStrategy(
+      {
+        ...base,
+        action: loopAction.action === "circuit_break" ? "replan" : "avoid_retry",
+        reasonCodes: ["repeat_guard_tool_loop", ...loopAction.reasonCodes].slice(0, 8),
+        confidence: "high",
+        expectedUncertaintyReduction: 8,
+      },
+      {
+        ...changeStrategy,
+        recommended:
+          changeStrategy.recommended === "none" ? "replan_scope" : changeStrategy.recommended,
+        reasonCodes: [...changeStrategy.reasonCodes, "repeat_guard_tool_loop"].slice(0, 8),
+      },
+    );
   }
 
   if (
@@ -523,7 +542,9 @@ export function formatAdaptiveDecisionHint(decision: AdaptiveDecision): string |
         "Adaptive policy: verification evidence is still required before treating this task as done. Use only the eligible required check scripts already named for this turn.";
       break;
     case "avoid_retry":
-      hint = `Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.${strategySuffix}`;
+      hint = decision.reasonCodes.includes("repeat_guard_tool_loop")
+        ? "Adaptive policy: the same tool call repeated without progress. Change the inputs or approach; keep the selected model and provider."
+        : `Adaptive policy: an equivalent failed strategy was already tested at this revision. Do not repeat it; reformulate, gather new evidence, or ask the user.${strategySuffix}`;
       break;
     case "replan":
       hint = `Adaptive policy: last verification failed. Replan with a different strategy and record what was ruled out.${strategySuffix}`;

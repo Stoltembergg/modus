@@ -3,6 +3,8 @@ import type { IntentGateResult } from "../intent-gate";
 
 export type HarnessPhase =
   | "turn_start"
+  | "tool_call"
+  | "tool_result"
   | "context_resolve"
   | "prompt_build"
   | "model_select"
@@ -48,6 +50,28 @@ export type TurnStartOutput = {
   gateResult?: IntentGateResult | undefined;
   effectiveMessage?: string | undefined;
 };
+
+/* Pi SDK tool execution phases */
+export type ToolCallInput = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+};
+
+export type ToolCallOutput = ToolCallInput & {
+  repeatGuardDecision?: import("../guards/repeat-tool-guard").RepeatGuardDecision | undefined;
+};
+
+export type ToolResultInput = {
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  outcome: "success" | "failed" | "cancelled";
+  resultFingerprint: string;
+  progressFingerprint: string;
+};
+
+export type ToolResultOutput = ToolResultInput;
 
 /* Phase 2: context_resolve */
 export type ContextResolveInput = {

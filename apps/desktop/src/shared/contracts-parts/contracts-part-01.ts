@@ -375,7 +375,7 @@ export type AdaptiveDecisionSnapshot = {
   oracleConsulted?: boolean;
   /** True when a capped Oracle findings digest is available (Gap 5). */
   oracleDigestPresent?: boolean;
-  /** Phase 5 repeat-guard verdict for this decision (post_failure boundary only). */
+  /** Repeat-guard verdict for a post-failure or pre-tool decision. */
   failureLoopAction?: AdaptiveFailureLoopAction | undefined;
 };
 

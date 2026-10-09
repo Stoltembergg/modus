@@ -8946,6 +8946,38 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
     }
   });
 
+  it("allows repeated calls to a configured read-only tool", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { setRepeatGuardConfig } = await import("./harness/guards/repeat-guard-config");
+    const sessionId = `repeat-readonly-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_readonly_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3, whitelistedTools: [toolName] });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat a safe lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("clears an in-flight invocation when the Pi SDK run is cancelled", async () => {
     const { requestToolSequence } = await useOfflinePiToolSessions();
     const sessionId = `repeat-cancel-${crypto.randomUUID()}`;

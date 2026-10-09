@@ -38,7 +38,7 @@ type AgentEventPayload =
       sessionId: string;
       runId: string;
       decision: AdaptiveDecision;
-      boundary: "pre_prompt" | "post_qa" | "post_failure";
+      boundary: "pre_prompt" | "post_qa" | "post_failure" | "tool_guard";
     }
   | {
       type: "harness.failure";

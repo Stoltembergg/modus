@@ -3,6 +3,10 @@ import { isFeatureFlagEnabled } from "../feature-flags";
 import type {
   HarnessContext,
   HarnessHook,
+  ToolCallInput,
+  ToolCallOutput,
+  ToolResultInput,
+  ToolResultOutput,
   TurnStartInput,
   TurnStartOutput,
   VerificationCheckInput,
@@ -14,7 +18,79 @@ import {
   type FailureLoopAction,
 } from "./failure-loop-guard";
 import { detectRepeatHypothesis } from "./repeat-hypothesis-guard";
-import { detectRepeatTools, ToolInvocationTracker } from "./repeat-tool-guard";
+import {
+  detectRepeatTools,
+  detectUnproductiveToolRepeat,
+  ToolInvocationTracker,
+  type RepeatGuardDecision,
+} from "./repeat-tool-guard";
+
+/** Pi SDK pre-execution hook: its block decision is consumed before tool execution. */
+export const defaultToolCallRepeatGuardHook: HarnessHook<ToolCallInput, ToolCallOutput> = {
+  name: "harness_repeat_guard_tool_call",
+  phase: "tool_call",
+  priority: 10,
+  isCritical: false,
+  execute: (input: ToolCallInput, context: HarnessContext): ToolCallOutput => {
+    if (!isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) return input;
+
+    const pattern = detectUnproductiveToolRepeat(
+      ToolInvocationTracker.getInstance().getInvocations(context.sessionId, context.runId),
+      input.toolName,
+      input.input,
+    );
+    if (!pattern) return input;
+
+    const attempts: AdaptiveFailureAttempt[] = context.state.get("harness.failure_attempts") ?? [];
+    const loopAction = detectFailureLoop({ attempts, repeatTools: [pattern] }) ?? {
+      action: "change_strategy" as const,
+      suggestion: `Do not repeat the same ${input.toolName} call without new progress. Change its inputs or strategy.`,
+      reasonCodes: ["tool_loop_detected", "tool_loop_change_strategy", ...pattern.reasons],
+    };
+    const failureLoopAction = {
+      ...loopAction,
+      reasonCodes: [...new Set(["tool_loop_detected", ...loopAction.reasonCodes])].slice(0, 8),
+    };
+    const decision: RepeatGuardDecision = {
+      action: "block",
+      sessionId: context.sessionId,
+      runId: context.runId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      reasonCode: "repeat_guard_tool_loop",
+      reason: `Blocked ${input.toolName}: ${pattern.count} consecutive identical calls made no progress. Change the inputs or approach.`,
+      pattern,
+      failureLoopAction,
+    };
+    context.state.set("harness.repeat_guard_decision", decision);
+    return { ...input, repeatGuardDecision: decision };
+  },
+};
+
+/** Pi SDK post-execution hook: records only calls authorized by the pre-execution hook. */
+export const defaultToolResultRepeatGuardHook: HarnessHook<ToolResultInput, ToolResultOutput> = {
+  name: "harness_repeat_guard_tool_result",
+  phase: "tool_result",
+  priority: 10,
+  isCritical: false,
+  execute: (input: ToolResultInput, context: HarnessContext): ToolResultOutput => {
+    if (isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
+      ToolInvocationTracker.getInstance().record(
+        context.sessionId,
+        context.runId,
+        input.toolName,
+        input.input,
+        {
+          toolCallId: input.toolCallId,
+          outcome: input.outcome,
+          resultFingerprint: input.resultFingerprint,
+          progressFingerprint: input.progressFingerprint,
+        },
+      );
+    }
+    return input;
+  },
+};
 
 /**
  * Preserves everything the upstream intent hook produced (classification,
@@ -44,7 +120,7 @@ export const defaultTurnStartRepeatGuardHook: HarnessHook<TurnStartInput, TurnSt
       const tracker = ToolInvocationTracker.getInstance();
       const breaker = CircuitBreakerRegistry.getInstance();
 
-      const invocations = tracker.getInvocations(sessionId);
+      const invocations = tracker.getInvocations(sessionId, context.runId);
       const repeatPatterns = detectRepeatTools(invocations);
 
       // Store analysis on context.state for consumption by meta-controller or runtime
@@ -103,7 +179,7 @@ export const defaultVerificationRepeatGuardHook: HarnessHook<
       const tracker = ToolInvocationTracker.getInstance();
       const breaker = CircuitBreakerRegistry.getInstance();
 
-      const invocations = tracker.getInvocations(sessionId);
+      const invocations = tracker.getInvocations(sessionId, context.runId);
       const repeatTools = detectRepeatTools(invocations);
 
       const attempts: AdaptiveFailureAttempt[] =
