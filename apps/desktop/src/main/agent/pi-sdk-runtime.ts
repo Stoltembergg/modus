@@ -3990,17 +3990,21 @@ export class PiSdkRuntime implements AgentRuntime {
         `[modus-timing] turn end (idle emit) +${Date.now() - outputTracker.startedAt}ms`,
       );
       const session = getAgentSession(input.sessionId);
-      if (session?.status !== "error") {
+      const sessionWasCancelled = session?.status === "cancelled";
+      // A late subagent finalizer must preserve the terminal state set by tree abort.
+      if (session?.status !== "error" && !sessionWasCancelled) {
         updateAgentSessionStatus(input.sessionId, "idle");
       }
       // The turn is over (completed/failed/cancelled all funnel through here):
       // publish the authoritative `idle` status so the composer unlocks, and
       // dim the in-app browser's "AI in control" glow + cursor.
-      emitForStart({
-        type: "session.status",
-        sessionId: input.sessionId,
-        status: { type: "idle" },
-      });
+      if (!sessionWasCancelled) {
+        emitForStart({
+          type: "session.status",
+          sessionId: input.sessionId,
+          status: { type: "idle" },
+        });
+      }
       if (session?.workspaceId) {
         releaseAgentBrowserControl(session.workspaceId, input.sessionId);
       }
