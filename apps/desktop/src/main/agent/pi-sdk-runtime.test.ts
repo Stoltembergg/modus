@@ -7358,6 +7358,11 @@ describe("PiSdkRuntime", () => {
         },
       });
     }
+    if (evidenceCase === "missing") {
+      const persistedPlan = readPlanById(join(userData, "plans"), plan.id);
+      expect(persistedPlan?.spec?.evidence).toEqual([]);
+      expect(persistedPlan?.spec?.acceptanceCriteria[0]?.status).toBe("blocked");
+    }
   });
 
   it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {
