@@ -426,6 +426,8 @@ async function useOfflinePiToolSessions(
   };
 }
 
+const createOfflinePiToolSessions = useOfflinePiToolSessions;
+
 function registerOfflineMcpTool(name: string, output: string, dangerous = false): void {
   const definition: ToolDefinition = {
     name,
@@ -8766,7 +8768,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       `workspace-${crypto.randomUUID()}`,
       join(userData, "missing.jsonl"),
     );
-    await useOfflinePiToolSessions({
+    await createOfflinePiToolSessions({
       assistantText: input.text,
       ...(input.stopReason ? { assistantStopReason: input.stopReason } : {}),
     });
@@ -8857,9 +8859,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(0);
     expect(HarnessObserver.getInstance().snapshot().response.formattedCount).toBe(0);
-    expect(
-      listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed"),
-    ).toBe(true);
+    expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed")).toBe(true);
   });
 
   it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {
