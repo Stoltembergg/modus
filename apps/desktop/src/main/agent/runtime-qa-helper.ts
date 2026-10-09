@@ -124,13 +124,14 @@ export function planEvidenceFromQA(
     for (const checkKind of criterion.requiredCheckKinds) {
       const label = PLAN_CHECK_LABELS[checkKind];
       if (!label) continue;
-      const qaEvidence = qa.evidence.find((item) => item.label === label);
-      const reference = qaEvidence ?? {
-        id: `missing:${plan.id}:${criterion.id}:${checkKind}`,
-        kind: "check",
-        status: "missing" as const,
-        label,
-      };
+      const reference = qa.evidence.find((item) => item.label === label);
+      if (
+        !reference?.id ||
+        !reference.eventId ||
+        (qa.status === "cancelled" && reference.status === "passed")
+      ) {
+        continue;
+      }
       evidence.push({
         ...reference,
         id: hashContent(`${plan.id}:${criterion.id}:${checkKind}:${reference.id}`),
@@ -280,9 +281,7 @@ export function summarizeHarnessQA(input: {
   const evidence = hasValidRunStart
     ? getRunToolEvidence(input.sessionId, input.runId, restoreRowId)
     : [];
-  const events: RunQAEvent[] = evidence.map((event) =>
-    input.aborted && event.type === "tool.ended" ? { ...event, aborted: true } : event,
-  );
+  const events: RunQAEvent[] = [...evidence];
   if (input.aborted) {
     const endedCallIds = new Set(
       events.flatMap((event) => (event.type === "tool.ended" ? [event.toolCallId] : [])),
@@ -295,7 +294,6 @@ export function summarizeHarnessQA(input: {
         type: "tool.ended",
         sessionId: event.sessionId,
         runId: event.runId,
-        eventId: `aborted:${event.eventId}`.slice(0, 240),
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         checkName: event.checkName,
@@ -306,14 +304,20 @@ export function summarizeHarnessQA(input: {
     }
   }
   const result = summarizeRunQA({ ...input, events });
+  if (input.aborted && result.status === "passed") {
+    result.status = "cancelled";
+    result.reasonCode = "required_check_cancelled";
+  }
   if (!input.changedScopeKnown && result.required) {
-    result.status = "unavailable";
-    result.reasonCode = "required_check_unavailable";
     result.evidence = result.evidence.map((item) =>
       item.status === "passed" || item.status === "user_confirmed"
         ? { ...item, status: "unavailable" }
         : item,
     );
+    if (result.status === "passed" || result.status === "user_confirmed") {
+      result.status = "unavailable";
+      result.reasonCode = "required_check_unavailable";
+    }
   }
   return {
     result,

@@ -100,7 +100,7 @@ export function collectGroupTaskRunEvidence(
         sessionId: binding.sessionId,
         runId: binding.runId,
         eventRowId: qaEventRowId,
-        evidenceId: item.id,
+        ...(item.id ? { evidenceId: item.id } : {}),
         sourceFingerprint: fingerprint,
       });
     }
@@ -159,6 +159,7 @@ export function resolveGroupTaskEvidence(
         ref.criterionId !== criterion.id ||
         ref.criteriaVersion !== task.criteriaVersion ||
         ref.sourceFingerprint !== sourceFingerprint ||
+        !ref.evidenceId ||
         !ref.checkName ||
         !criterion.requiredCheckKinds.includes(ref.checkName)
       )
@@ -166,10 +167,16 @@ export function resolveGroupTaskEvidence(
       const binding = getGroupTaskRunBinding(ref.sessionId, ref.runId);
       if (!binding || !activeBinding(binding, task)) continue;
       const qa = getHarnessQAEventByRowId(ref.eventRowId, ref.sessionId, ref.runId);
-      if (!qa || qa.result.sourceFingerprint !== sourceFingerprint) continue;
+      if (
+        !qa ||
+        qa.result.status === "cancelled" ||
+        qa.result.sourceFingerprint !== sourceFingerprint
+      )
+        continue;
       const item = qa.result.evidence.find(
         (evidence) =>
           evidence.id === ref.evidenceId &&
+          evidence.eventId !== undefined &&
           evidence.checkName === ref.checkName &&
           evidence.status === "passed",
       );

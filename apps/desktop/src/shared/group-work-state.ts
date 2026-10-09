@@ -36,7 +36,7 @@ export type GroupTaskEvidenceRef = {
   sessionId: string;
   runId: string;
   eventRowId: number;
-  evidenceId: string;
+  evidenceId?: string;
   sourceFingerprint: string;
 };
 

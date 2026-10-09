@@ -142,7 +142,7 @@ export type VerificationEvidenceStatus =
   | "user_confirmed";
 export type AutoQAStatus = VerificationEvidenceStatus | "not_required";
 export type HarnessEvidenceRef = {
-  id: string;
+  id?: string;
   kind: string;
   status: VerificationEvidenceStatus;
   runId?: string;

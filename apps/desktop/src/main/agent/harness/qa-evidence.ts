@@ -32,7 +32,7 @@ export type VerificationEvidenceStatus =
 export type AutoQAStatus = VerificationEvidenceStatus | "not_required";
 
 export type HarnessEvidenceRef = {
-  id: string;
+  id?: string;
   kind: string;
   status: VerificationEvidenceStatus;
   runId?: string;
@@ -46,7 +46,6 @@ export type HarnessEvidenceRef = {
 type ToolEventBase = {
   sessionId: string;
   runId: string;
-  eventId: string;
   toolCallId: string;
   toolName: string;
   checkName?: string;
@@ -68,9 +67,10 @@ export type RecognizedCheckInvocation = {
 };
 
 export type RunQAEvent =
-  | (ToolEventBase & { type: "tool.started" })
+  | (ToolEventBase & { type: "tool.started"; eventId: string })
   | (ToolEventBase & {
       type: "tool.ended";
+      eventId?: string;
       checkConfigStable?: boolean;
       exitCode?: number;
       error?: boolean;
@@ -592,7 +592,6 @@ function evidenceRef(
   revision?: string,
 ): HarnessEvidenceRef {
   const result: HarnessEvidenceRef = {
-    id: `${input.runId}:${check}${eventId ? `:${eventId}` : ""}`.slice(0, 240),
     kind: "check",
     status,
     runId: input.runId,
@@ -601,7 +600,10 @@ function evidenceRef(
       ? { checkName: check as HarnessTaskCheckKind }
       : {}),
   };
-  if (eventId) result.eventId = eventId.slice(0, 120);
+  if (eventId) {
+    result.id = eventId.slice(0, 120);
+    result.eventId = eventId.slice(0, 120);
+  }
   if (revision) result.revision = revision.slice(0, 120);
   if (paths) result.paths = paths;
   return result;
@@ -631,13 +633,15 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       fullProject?: boolean;
       mutatesSource?: boolean;
       generation: number;
+      sequence: number;
     }
   >();
   const invalidatingActions = new Set<string>();
   const latest = new Map<string, HarnessEvidenceRef>();
+  const latestSequence = new Map<string, number>();
   let generation = 0;
 
-  for (const event of events) {
+  for (const [sequence, event] of events.entries()) {
     if (event.type === "tool.started") {
       const shellTool = event.toolName === "bash" || event.toolName === "terminal_run";
       const invocation = shellTool
@@ -653,6 +657,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       if (sourceMutation || unclassifiedShellAction) {
         generation += 1;
         latest.clear();
+        latestSequence.clear();
         invalidatingActions.add(event.toolCallId);
       }
       starts.set(event.toolCallId, {
@@ -662,6 +667,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
         ...(fullProject ? { fullProject: true } : {}),
         ...(mutatesSource ? { mutatesSource: true } : {}),
         generation,
+        sequence,
       });
       continue;
     }
@@ -669,11 +675,13 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
     if (event.type === "tool.ended" && invalidatingActions.delete(event.toolCallId)) {
       generation += 1;
       latest.clear();
+      latestSequence.clear();
     }
 
     if (event.type === "tool.ended" && event.checkConfigStable === false) {
       generation += 1;
       latest.clear();
+      latestSequence.clear();
       continue;
     }
 
@@ -696,6 +704,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
           event.revision,
         ),
       );
+      latestSequence.set(check, sequence);
       continue;
     }
 
@@ -742,6 +751,32 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
         event.revision ?? started.event.revision,
       ),
     );
+    latestSequence.set(check, sequence);
+  }
+
+  for (const started of starts.values()) {
+    const check = started.checkName;
+    if (
+      !check ||
+      !requested.includes(check) ||
+      started.mutatesSource === true ||
+      started.generation !== generation ||
+      started.sequence <= (latestSequence.get(check) ?? -1)
+    ) {
+      continue;
+    }
+    latest.set(
+      check,
+      evidenceRef(
+        input,
+        check,
+        "unavailable",
+        undefined,
+        evidencePaths(started.paths),
+        started.event.revision,
+      ),
+    );
+    latestSequence.set(check, started.sequence);
   }
 
   const evidence = requested

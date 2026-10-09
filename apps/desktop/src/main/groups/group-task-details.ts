@@ -69,15 +69,27 @@ function evidenceStatus(
   if (qa.result.sourceFingerprint !== sourceFingerprint)
     return stale("The QA event belongs to a different source revision.");
   const item = qa.result.evidence.find(
-    (candidate) => candidate.id === ref.evidenceId && candidate.checkName === ref.checkName,
+    (candidate) =>
+      candidate.checkName === ref.checkName &&
+      (ref.evidenceId === undefined
+        ? candidate.id === undefined
+        : candidate.id === ref.evidenceId),
   );
   if (!item) return { ...base, status: "missing", reason: "This QA check is no longer available." };
-  const status: VerificationEvidenceStatus = item.status;
+  const status: VerificationEvidenceStatus =
+    qa.result.status === "cancelled" && item.status === "passed" ? "cancelled" : item.status;
   return {
     ...base,
     ...(binding.executionId ? { executionId: binding.executionId } : {}),
     status,
-    ...(status === "passed" ? {} : { reason: `The QA check is ${status.replaceAll("_", " ")}.` }),
+    ...(status === "passed"
+      ? {}
+      : {
+          reason:
+            qa.result.status === "cancelled" && item.status === "passed"
+              ? "The run was cancelled before task verification settled."
+              : `The QA check is ${status.replaceAll("_", " ")}.`,
+        }),
   };
 }
 

@@ -301,6 +301,7 @@ function reduceHarnessTaskEvent(
           items.find(({ status }) => status === "passed"),
         );
         const distinctEvents =
+          event.result.status !== "cancelled" &&
           selected.every(Boolean) &&
           new Set(selected.map((item) => item?.eventId)).size === kinds.length;
         const ids = distinctEvents ? selected.map((item) => item!.eventId!) : [];
