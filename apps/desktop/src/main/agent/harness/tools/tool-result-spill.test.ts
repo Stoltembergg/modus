@@ -368,7 +368,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
         storage,
       );
       expect(missingRes.success).toBe(false);
-      expect(missingRes.error).toContain("not available");
+      expect(missingRes.error).toContain("unavailable");
     });
   });
 
