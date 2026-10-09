@@ -128,6 +128,9 @@ jobs:
           apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
           -t 'preserves the established defaults|reports malformed environment values|disables only features whose dependencies are invalid|does not enable dependencies or plugins|keeps valid, explicitly enabled features active|validates valid flags before constructing the singleton|diagnoses invalid dependencies and disables them before constructing the singleton|records per-turn response outcomes against their owning sessions|mirrors response evaluations into the observer end to end|attributes interleaved policy outcomes to their owning runtime sessions|releases only one Agent Group member|starts a fresh observer lifetime|discards a pending stale turn-settle hook|persists a private-data-free Task State|keeps repeated calls usable when Repeat Guards are requested without the kernel'
 
+      - name: Typecheck desktop after A21.2 runtime regressions
+        run: npm run typecheck --workspace @modus/desktop
+
   sandbox-probe-compile:
     name: sandbox probe compile-only
     runs-on: ubuntu-latest
