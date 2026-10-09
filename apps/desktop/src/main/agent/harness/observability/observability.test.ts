@@ -195,7 +195,9 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const health = observer.getHealthStatus();
       expect(observer.snapshot().response.criticalSectionsOmitted).toBe(0);
       expect(observer.snapshot().response.formattedCount).toBe(0);
-      expect(health.alerts.some((a) => a.metric === "response.criticalSectionsOmitted")).toBe(false);
+      expect(health.alerts.some((a) => a.metric === "response.criticalSectionsOmitted")).toBe(
+        false,
+      );
     });
 
     it("triggers warning alert if hook latency SLO is breached", () => {
@@ -458,7 +460,12 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
           state: new Map<string, any>([
             [
               "harness.response_policy_evaluation",
-              { runId, outcome: "completed", status: "evaluated", violated: raw.includes("before") },
+              {
+                runId,
+                outcome: "completed",
+                status: "evaluated",
+                violated: raw.includes("before"),
+              },
             ],
           ]),
         };

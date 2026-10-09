@@ -388,6 +388,23 @@ async function useOfflinePiToolSessions(
         timestamp: Date.now(),
       };
       if (stopReason === "error" || stopReason === "aborted") {
+        stream.push({ type: "start", partial: message });
+        const partialText = message.content.find((block) => block.type === "text");
+        if (partialText?.type === "text") {
+          stream.push({ type: "text_start", contentIndex: 0, partial: message });
+          stream.push({
+            type: "text_delta",
+            contentIndex: 0,
+            delta: partialText.text,
+            partial: message,
+          });
+          stream.push({
+            type: "text_end",
+            contentIndex: 0,
+            content: partialText.text,
+            partial: message,
+          });
+        }
         stream.push({ type: "error", reason: stopReason, error: message });
       } else {
         stream.push({ type: "done", reason: stopReason, message });
@@ -8768,7 +8785,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     sessionId: string;
     text: string;
     stopReason?: AssistantMessage["stopReason"];
-  }): Promise<void> {
+  }): Promise<{ sessionId: string; systemPrompt: string }> {
     insertSession(
       input.sessionId,
       `workspace-${crypto.randomUUID()}`,
@@ -8785,7 +8802,9 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       message: "Return the complete result.",
       sessionId: input.sessionId,
     });
+    const systemPrompt = offline.sessionAt().systemPrompt;
     await runtime.releaseRuntime(input.sessionId);
+    return { sessionId: input.sessionId, systemPrompt };
   }
 
   it("records a session turn with a real duration when enabled", async () => {
@@ -8865,6 +8884,55 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
     expect(HarnessObserver.getInstance().snapshot().response.formattedCount).toBe(0);
     expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed")).toBe(true);
+  });
+
+  it("keeps the ResponsePolicy prompt active without enabling Observer metrics", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: false,
+    });
+    const sessionId = `response-no-observer-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).toContain('<response_policy level="standard">');
+    expect(metrics.turns.total).toBe(0);
+    expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("records Observer outcomes without enabling ResponsePolicy", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `observer-no-response-policy-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).not.toContain("<response_policy");
+    expect(metrics.turns).toMatchObject({ total: 1, completed: 1, noResponse: 0 });
+    expect(metrics.turns.providerTotalTokens).toBe(2);
+    expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("keeps both ResponsePolicy and Observer inactive when both flags are disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: false,
+    });
+    const sessionId = `no-response-no-observer-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).not.toContain("<response_policy");
+    expect(metrics.turns.total).toBe(0);
+    expect(metrics.response.evaluatedCount).toBe(0);
   });
 
   it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {

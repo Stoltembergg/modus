@@ -263,7 +263,6 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
     });
 
   });
-
   describe("7.7 Kernel Hooks Integration", () => {
     const mockContext: HarnessContext = {
       sessionId: "test-session",
