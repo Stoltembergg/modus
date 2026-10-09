@@ -1697,9 +1697,23 @@ export class PiSdkRuntime implements AgentRuntime {
     runtimeSession: SdkRuntimeSession,
     tracker: RunOutputTracker,
   ): HarnessContext {
+    const sessionToken = runtimeSession.observerSessionToken;
     const context: HarnessContext = {
       sessionId: runtimeSession.info.id,
       runId: tracker.runId,
+      sessionToken,
+      isCurrent: () => {
+        const sessionId = runtimeSession.info.id;
+        const observer = HarnessObserver.getInstance();
+        return (
+          this.sessions.get(sessionId) === runtimeSession &&
+          runtimeSession.observerSessionToken === sessionToken &&
+          observer.isSessionCurrent(sessionId, sessionToken) &&
+          this.runOutputTrackers.get(sessionId) === tracker &&
+          !this.cancellingRuns.has(tracker.runId) &&
+          getAgentRun(tracker.runId)?.status !== "cancelled"
+        );
+      },
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       mode: tracker.mode ?? "build",
@@ -1725,11 +1739,17 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     const context = this.createToolGuardContext(runtimeSession, tracker);
+    if (!context.isCurrent?.()) {
+      return { block: true, reason: "The session run is no longer active." };
+    }
     const output = await this.harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
       "tool_call",
       input,
       context,
     );
+    if (!context.isCurrent?.()) {
+      return { block: true, reason: "The session run is no longer active." };
+    }
     const decision = output.repeatGuardDecision;
     if (decision?.action === "block") {
       this.recordAdaptiveFailure(runtimeSession, tracker, {
@@ -1849,11 +1869,13 @@ export class PiSdkRuntime implements AgentRuntime {
       resultFingerprint,
       progressFingerprint,
     };
+    const context = this.createToolGuardContext(runtimeSession, tracker);
     await this.harnessKernel.executePhase<ToolResultInput, ToolResultOutput>(
       "tool_result",
       resultInput,
-      this.createToolGuardContext(runtimeSession, tracker),
+      context,
     );
+    if (!context.isCurrent?.()) return;
 
     if (outcome === "failed") {
       this.recordAdaptiveFailure(runtimeSession, tracker, {
