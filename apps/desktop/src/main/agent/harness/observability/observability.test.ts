@@ -36,10 +36,11 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(snap.promptSections.estimatedTokensSaved).toBeNull();
       expect(snap.toolResults.spilledResults).toBe(0);
       expect(snap.toolResults.retrievalLatency).toBeNull();
+      expect(snap.toolResults.successfulRetrievals).toBe(0);
       expect(snap.compaction.frequencyReductionPercent).toBeNull();
       expect(snap.repeatGuards.falsePositiveCount).toBeNull();
-      expect(snap.response.criticalSectionsOmitted).toBe(0);
-      expect(snap.performance.hookSystemOverheadMs).toBe(0);
+      expect(snap.response.evaluatedCount).toBe(0);
+      expect(snap.performance.sampledHookDurationTotalMs).toBeNull();
     });
 
     it("records hook executions and calculates average and P95 durations", () => {
@@ -50,23 +51,26 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       observer.recordHookExecution("prompt_build", "modular_prompt", 4.0, true);
 
       const snap = observer.snapshot();
-      expect(snap.performance.totalHookExecutions).toBe(3);
+      expect(snap.performance.sampledHookExecutionCount).toBe(3);
       expect(snap.performance.averageHookDurationMs).toBeCloseTo(2.67, 1);
       expect(snap.performance.p95HookDurationMs).toBeGreaterThanOrEqual(2.5);
     });
 
     it("records tool spills, compaction pruning, and prompt compilations", () => {
       const observer = HarnessObserver.getInstance();
+      const sessionId = "sess-1";
+      const sessionToken = observer.beginSession(sessionId);
 
-      observer.recordToolResultSpill("bash", 3500, 4000, "spill-123", "sess-1");
-      observer.recordToolResultRetrieval(15, "sess-1");
-      observer.recordCompactionPruning(8000, 1800, "sess-1");
-      observer.recordPromptSections(["base", "tools"], ["rules"], 600, "sess-1");
+      observer.recordToolResultSpill("bash", 3500, 4000, "spill-123", sessionId, sessionToken);
+      observer.recordToolResultRetrieval(15, sessionId, sessionToken, "run-1");
+      observer.recordCompactionPruning(8000, 1800, sessionId, sessionToken, "run-1");
+      observer.recordPromptSections(["base", "tools"], ["rules"], 600, sessionId, sessionToken, "run-1");
 
       const snap = observer.snapshot();
       expect(snap.toolResults.spilledResults).toBe(1);
       expect(snap.toolResults.spilledBytes).toBe(4000);
       expect(snap.toolResults.retrievalLatency).toBe(15);
+      expect(snap.toolResults.successfulRetrievals).toBe(1);
       expect(snap.toolResults.modelContextBytesReduced).toBe(3500);
       expect(snap.toolResults.estimatedTokensSaved).toBe(875);
 
@@ -127,8 +131,6 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(snap.repeatGuards.falsePositiveCount).toBeNull();
       expect(snap.response.violationsDetected).toBe(1);
       expect(snap.response.evaluatedCount).toBe(1);
-      expect(snap.response.charactersSaved).toBe(0);
-      expect(snap.response.criticalSectionsOmitted).toBe(0);
     });
 
     it("aggregates metrics per session accurately", () => {
@@ -151,24 +153,77 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
           totalTokens: 30,
         },
       });
-      observer.recordPromptSections(["sec1"], [], 300, sessionId);
-      observer.recordToolResultSpill("grep", 1800, 2000, "sp1", sessionId);
+      observer.recordSessionTurn({
+        sessionId,
+        durationMs: 75,
+        sessionToken,
+        runId: "run-2",
+        outcome: "cancelled",
+        hasAssistantResponse: false,
+      });
+      observer.recordSessionTurn({
+        sessionId,
+        durationMs: 50,
+        sessionToken,
+        runId: "run-3",
+        outcome: "failed",
+        hasAssistantResponse: true,
+      });
+      observer.recordPromptSections(["sec1"], [], 300, sessionId, sessionToken, "run-1");
+      observer.recordToolResultSpill("grep", 1800, 2000, "sp1", sessionId, sessionToken, "run-1");
       observer.recordRepeatGuardEvaluation("grep", true, sessionId, sessionToken, "run-1");
 
       const sessionMetrics = observer.getSessionMetrics(sessionId);
       expect(sessionMetrics).toBeDefined();
-      expect(sessionMetrics?.turnCount).toBe(1);
-      expect(sessionMetrics?.totalDurationMs).toBe(450);
+      expect(sessionMetrics?.turnCount).toBe(3);
+      expect(sessionMetrics?.totalDurationMs).toBe(575);
+      expect(sessionMetrics?.durationReports).toBe(3);
+      expect(sessionMetrics?.durationMsByOutcome).toEqual({
+        completed: 450,
+        failed: 50,
+        blocked: 0,
+        cancelled: 75,
+        interrupted: 0,
+      });
+      expect(sessionMetrics?.noResponseDurationMs).toBe(75);
+      expect(sessionMetrics?.noResponseDurationReports).toBe(1);
       expect(sessionMetrics?.outcomes.completed).toBe(1);
+      expect(sessionMetrics?.outcomes.failed).toBe(1);
+      expect(sessionMetrics?.outcomes.cancelled).toBe(1);
+      expect(sessionMetrics?.policyEvaluations).toBe(0);
+      expect(observer.snapshot().turns.durationMsByOutcome.cancelled).toBe(75);
+      expect(observer.snapshot().turns.noResponseDurationMs).toBe(75);
       expect(sessionMetrics?.providerReportedTotalTokens).toBe(30);
       expect(sessionMetrics?.guardBlocks).toBe(1);
       expect(sessionMetrics?.spilledResults).toBe(1);
       expect(sessionMetrics?.estimatedTokensSaved).toBeGreaterThanOrEqual(300);
     });
 
+    it("keeps terminal counts while reporting invalid duration as unavailable", () => {
+      const observer = HarnessObserver.getInstance();
+      const sessionId = "invalid-duration-session";
+      const sessionToken = observer.beginSession(sessionId);
+
+      observer.recordSessionTurn({
+        sessionId,
+        durationMs: Number.NaN,
+        sessionToken,
+        runId: "invalid-duration-run",
+        outcome: "completed",
+        hasAssistantResponse: true,
+      });
+
+      expect(observer.snapshot().turns.completed).toBe(1);
+      expect(observer.snapshot().turns.durationReports).toBe(0);
+      expect(observer.snapshot().turns.durationMsByOutcome.completed).toBe(0);
+      expect(observer.getSessionMetrics(sessionId)?.durationReports).toBe(0);
+    });
+
     it("emits and stores ring-buffered telemetry events", () => {
       const observer = HarnessObserver.getInstance();
-      observer.recordHookExecution("turn_start", "h1", 1.0, true, undefined, "s1");
+      const sessionId = "s1";
+      const sessionToken = observer.beginSession(sessionId);
+      observer.recordHookExecution("turn_start", "h1", 1.0, true, undefined, sessionId, sessionToken, "run-1");
 
       const events = observer.getRecentEvents(10);
       expect(events.length).toBe(1);
@@ -187,17 +242,14 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(health.alerts).toHaveLength(0);
     });
 
-    it("does not report response omission when the streamed response is never rewritten", () => {
+    it("reports only actual advisory response evaluations, not omission counters", () => {
       const observer = HarnessObserver.getInstance();
       const sessionToken = observer.beginSession("response-no-rewrite");
       observer.recordResponsePolicyEvaluation(true, "response-no-rewrite", sessionToken, "run-1");
 
       const health = observer.getHealthStatus();
-      expect(observer.snapshot().response.criticalSectionsOmitted).toBe(0);
-      expect(observer.snapshot().response.formattedCount).toBe(0);
-      expect(health.alerts.some((a) => a.metric === "response.criticalSectionsOmitted")).toBe(
-        false,
-      );
+      expect(observer.snapshot().response).toEqual({ evaluatedCount: 1, violationsDetected: 1 });
+      expect(health.alerts).toHaveLength(0);
     });
 
     it("triggers warning alert if hook latency SLO is breached", () => {
@@ -214,7 +266,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
   });
 
   describe("8.3 Baseline Comparison & Go/No-Go Decision Matrix", () => {
-    it("evaluates all phases with GO verdict when meeting criteria", () => {
+    it("does not approve unmeasured compaction and repeat-guard outcomes", () => {
       const observer = HarnessObserver.getInstance();
       // Phase 2 saving
       observer.recordPromptSections(["a"], ["b"], 150000);
@@ -235,7 +287,12 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const comparator = new BaselineComparator();
       const result = comparator.evaluate(observer.snapshot(), 100);
 
-      expect(result.overallVerdict).toBe("GO");
+      expect(result.overallVerdict).toBe("WARN");
+      expect(result.latencyOverheadPercent).toBeNull();
+      expect(result.phaseDecisions.find((decision) => decision.phase === 6)).toMatchObject({
+        verdict: "WARN",
+        achieved: "unavailable",
+      });
       expect(result.phaseDecisions).toHaveLength(6);
       expect(result.phaseDecisions.every((d) => d.verdict === "GO" || d.verdict === "WARN")).toBe(
         true,
@@ -252,8 +309,19 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const result = comparator.evaluate(observer.snapshot(), 100);
 
       const p7 = result.phaseDecisions.find((d) => d.phase === 7);
-      expect(p7?.verdict).toBe("GO");
-      expect(p7?.notes).toContain("streamed response was not rewritten");
+      expect(p7?.verdict).toBe("WARN");
+      expect(p7?.notes).toContain("does not rewrite streamed output");
+    });
+
+    it("does not claim a response-quality pass when no completed response was evaluated", () => {
+      const result = new BaselineComparator().evaluate(HarnessObserver.getInstance().snapshot());
+      const p7 = result.phaseDecisions.find((decision) => decision.phase === 7);
+
+      expect(p7).toMatchObject({
+        verdict: "WARN",
+        achieved: "unavailable; no completed response was evaluated",
+      });
+      expect(result.overallVerdict).toBe("WARN");
     });
   });
 
@@ -279,11 +347,14 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
         outcome: "completed",
         hasAssistantResponse: true,
       });
-      observer.recordPromptSections(["s1"], [], 250, "sess-1");
+      observer.recordPromptSections(["s1"], [], 250, "sess-1", sessionToken, "run-1");
 
       const sessionCsv = MetricsExporter.exportSessionsCSV(observer.getAllSessions());
-      expect(sessionCsv).toContain("sessionId,turnCount,totalDurationMs");
-      expect(sessionCsv).toContain('"sess-1",1,500');
+      expect(sessionCsv).toContain(
+        "sessionId,turnCount,totalDurationMs,durationReports,completedDurationMs,completedDurationReports",
+      );
+      expect(sessionCsv).toContain("hookExecutions,guardBlocks,policyEvaluations,policyViolations");
+      expect(sessionCsv).toContain('"sess-1",1,500,1,500,1,0,0,0,0,0,0');
 
       const summaryCsv = MetricsExporter.exportSummaryCSV(observer.snapshot());
       expect(summaryCsv).toContain("Category,Metric,Value");
@@ -428,10 +499,12 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
     it("records 1,000 metrics events in well under budget", () => {
       const observer = HarnessObserver.getInstance();
       const start = Date.now();
+      const sessionId = "sess-1";
+      const sessionToken = observer.beginSession(sessionId);
 
       for (let i = 0; i < 1000; i++) {
-        observer.recordHookExecution("turn_start", "intent", 0.5, true, undefined, "sess-1");
-        observer.recordPromptSections(["a"], ["b"], 10, "sess-1");
+        observer.recordHookExecution("turn_start", "intent", 0.5, true, undefined, sessionId, sessionToken, `run-${i}`);
+        observer.recordPromptSections(["a"], ["b"], 10, sessionId, sessionToken, `run-${i}`);
       }
 
       const elapsed = Date.now() - start;
@@ -486,7 +559,6 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       expect(observer.snapshot().response.violationsDetected).toBe(2);
       expect(observer.snapshot().response.evaluatedCount).toBe(2);
-      expect(observer.snapshot().response.formattedCount).toBe(0);
       expect(observer.getSessionMetrics("s-response-a")?.policyViolations).toBe(1);
       expect(observer.getSessionMetrics("s-response-b")?.policyViolations).toBe(1);
     });

@@ -57,6 +57,11 @@ describe("Pi SDK compaction context extension", () => {
   });
 
   it("prunes only with a current scope and records safe metrics", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_OBSERVABILITY: true,
+    });
     const observer = HarnessObserver.getInstance();
     const observerSessionToken = observer.beginSession("scope-session");
     const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
@@ -97,6 +102,37 @@ describe("Pi SDK compaction context extension", () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: false });
     expect(handlers.get("context")?.(event, context)).toBeUndefined();
     expect(recordPruning).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps safe pruning active without recording metrics when Observer is disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_OBSERVABILITY: false,
+    });
+    const observer = HarnessObserver.getInstance();
+    const sessionId = "observer-disabled-compaction";
+    const observerSessionToken = observer.beginSession(sessionId);
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const { handlers, on } = captureHandlers();
+    createModusCompactionExtension(() => ({
+      sessionId,
+      runId: "observer-disabled-run",
+      observerSessionToken,
+    }))({ on } as never);
+
+    const result = await handlers.get("context")?.(
+      { type: "context", messages: duplicateReadMessages() },
+      {
+        model: { id: "fixture-model", contextWindow: 20_000 },
+        signal: undefined,
+        getContextUsage: () => ({ tokens: 15_000, contextWindow: 20_000, percent: 75 }),
+      },
+    );
+
+    expect(result).toBeDefined();
+    expect(recordPruning).not.toHaveBeenCalled();
+    expect(observer.snapshot().compaction.pruningEvents).toBe(0);
   });
 
   it("fails open for cancellation, stale scope, and unavailable context usage", async () => {

@@ -174,7 +174,7 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
     ]);
 
     const snapshot = observer.snapshot();
-    expect(snapshot.performance.totalHookExecutions).toBeGreaterThanOrEqual(6);
+    expect(snapshot.performance.sampledHookExecutionCount).toBeGreaterThanOrEqual(6);
     expect(snapshot.performance.averageHookDurationMs).toBeGreaterThan(0);
   });
 

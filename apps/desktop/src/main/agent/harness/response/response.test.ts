@@ -304,7 +304,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       expect(mockContext.state.get("harness.response_policy_prompt")).toBeDefined();
     });
 
-    it("turn_settle hook evaluates and formats response when flag is enabled", async () => {
+    it("turn_settle hook evaluates the streamed response without formatting it", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_RESPONSE_POLICY: true,
@@ -384,7 +384,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
   });
 
   describe("7.9 Fase 7 review regressions", () => {
-    it("records metrics and formats when the runtime-provided response is present", async () => {
+    it("evaluates the runtime-provided response without producing a second output", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_RESPONSE_POLICY: true,

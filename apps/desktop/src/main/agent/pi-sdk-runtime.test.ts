@@ -260,6 +260,7 @@ async function useOfflinePiToolSessions(
     assistantUsageTotalTokens?: number;
     assistantText?: string;
     assistantStopReason?: AssistantMessage["stopReason"];
+    responseGate?: Promise<void>;
     captureContextHandlers?: boolean;
     onStream?: (
       session: AgentSession,
@@ -387,27 +388,38 @@ async function useOfflinePiToolSessions(
         },
         timestamp: Date.now(),
       };
-      if (stopReason === "error" || stopReason === "aborted") {
-        stream.push({ type: "start", partial: message });
-        const partialText = message.content.find((block) => block.type === "text");
-        if (partialText?.type === "text") {
-          stream.push({ type: "text_start", contentIndex: 0, partial: message });
-          stream.push({
-            type: "text_delta",
-            contentIndex: 0,
-            delta: partialText.text,
-            partial: message,
-          });
-          stream.push({
-            type: "text_end",
-            contentIndex: 0,
-            content: partialText.text,
-            partial: message,
-          });
+      const pushResponseEvents = () => {
+        try {
+          if (stopReason === "error" || stopReason === "aborted") {
+            stream.push({ type: "start", partial: message });
+            const partialText = message.content.find((block) => block.type === "text");
+            if (partialText?.type === "text") {
+              stream.push({ type: "text_start", contentIndex: 0, partial: message });
+              stream.push({
+                type: "text_delta",
+                contentIndex: 0,
+                delta: partialText.text,
+                partial: message,
+              });
+              stream.push({
+                type: "text_end",
+                contentIndex: 0,
+                content: partialText.text,
+                partial: message,
+              });
+            }
+            stream.push({ type: "error", reason: stopReason, error: message });
+          } else {
+            stream.push({ type: "done", reason: stopReason, message });
+          }
+        } catch {
+          // The SDK may close this stream when the runtime cancels its session.
         }
-        stream.push({ type: "error", reason: stopReason, error: message });
+      };
+      if (offlineOptions.responseGate) {
+        void offlineOptions.responseGate.then(pushResponseEvents);
       } else {
-        stream.push({ type: "done", reason: stopReason, message });
+        pushResponseEvents();
       }
       // The installed SDK and app resolve different pi-ai patch versions.
       return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
@@ -8862,8 +8874,6 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     expect(deliveredResponse).toBe(response);
     expect(responseMetrics.violationsDetected).toBe(1);
-    expect(responseMetrics.formattedCount).toBe(0);
-    expect(responseMetrics.charactersSaved).toBe(0);
   });
 
   it("does not evaluate a partial assistant message from a failed Pi SDK turn as a final response", async () => {
@@ -8882,8 +8892,86 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     await runOfflinePiTurn({ sessionId, text: partial, stopReason: "error" });
 
     expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
-    expect(HarnessObserver.getInstance().snapshot().response.formattedCount).toBe(0);
+    expect(HarnessObserver.getInstance().snapshot().turns.failed).toBe(1);
+    expect(HarnessObserver.getInstance().snapshot().turns.cancelled).toBe(0);
+    const streamedPartial = listAgentEvents(sessionId)
+      .map(({ event }) => event)
+      .filter((event) => event.type === "message.delta")
+      .map((event) => (event.type === "message.delta" ? event.delta : ""))
+      .join("");
+    expect(streamedPartial).toContain(partial);
     expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed")).toBe(true);
+  });
+
+  it("records cancellation from a pending real Pi SDK stream without evaluating partial output", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-cancelled-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    let announceStreamStarted!: () => void;
+    let resolveResponse!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      announceStreamStarted = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const runtime = new PiSdkRuntime();
+    const { sessionAt } = await createOfflinePiToolSessions({
+      assistantText: "This output must remain partial.",
+      responseGate,
+      onStream: () => announceStreamStarted(),
+    });
+
+    try {
+      const promptTask = runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Cancel the pending response.",
+        sessionId,
+      });
+      await streamStarted;
+      await runtime.abort(sessionId);
+      resolveResponse();
+      await promptTask;
+
+      expect(sessionAt()).toBeDefined();
+      expect(HarnessObserver.getInstance().snapshot().turns).toMatchObject({
+        total: 1,
+        cancelled: 1,
+        failed: 0,
+        noResponse: 1,
+      });
+      expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.outcomes.cancelled).toBe(1);
+      expect(
+        listAgentEvents(sessionId).some(({ event }) => event.type === "run.cancelled"),
+      ).toBe(true);
+    } finally {
+      resolveResponse();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("counts a no-output Pi SDK turn as failed without a policy pass", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-empty-${crypto.randomUUID()}`;
+
+    await runOfflinePiTurn({ sessionId, text: "" });
+
+    expect(HarnessObserver.getInstance().snapshot().turns).toMatchObject({
+      failed: 1,
+      noResponse: 1,
+    });
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
   });
 
   it("keeps the ResponsePolicy prompt active without enabling Observer metrics", async () => {
@@ -8936,7 +9024,11 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
   });
 
   it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     const memberA = `observer-group-a-${crypto.randomUUID()}`;
     const memberB = `observer-group-b-${crypto.randomUUID()}`;
@@ -8966,15 +9058,56 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     });
     const runtime = new PiSdkRuntime();
     const observer = HarnessObserver.getInstance();
+    const response = "Group response complete.\n\nThe second paragraph remains intact.";
 
     try {
-      await runTurnWithAssistantText("A completed.", { runtime, sessionId: memberA });
-      await runTurnWithAssistantText("B completed.", { runtime, sessionId: memberB });
-      await runTurnWithAssistantText("Child completed.", { runtime, sessionId: child });
-      observer.recordPromptSections(["a"], [], 1, memberA);
-      observer.recordPromptSections(["b"], [], 2, memberB);
-      observer.recordPromptSections(["child"], [], 3, child);
+      await createOfflinePiToolSessions({ assistantText: response });
+      const window = createWindowStub();
+      // Construct the real Pi SDK sessions one at a time; run their streams
+      // concurrently below to exercise attribution under simultaneous turns.
+      for (const sessionId of [memberA, memberB, child]) {
+        await runtime.ensure(window, sessionId);
+      }
+      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberA, { maxParagraphs: 1 });
+      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberB, { maxParagraphs: 10 });
 
+      await Promise.all(
+        [memberA, memberB, child].map((sessionId) =>
+          runtime.prompt(window, {
+            context: [],
+            delivery: "normal",
+            message: "Return the full group response.",
+            sessionId,
+          }),
+        ),
+      );
+      const globalTurnCount = observer.snapshot().turns.total;
+
+      expect(globalTurnCount).toBe(3);
+      expect(observer.snapshot().response.evaluatedCount).toBe(3);
+      expect(observer.snapshot().response.violationsDetected).toBe(1);
+      expect(observer.getSessionMetrics(memberA)?.policyViolations).toBe(1);
+      expect(observer.getSessionMetrics(memberB)?.policyViolations).toBe(0);
+      expect(observer.getSessionMetrics(child)?.policyViolations).toBe(0);
+      expect(observer.getSessionMetrics(memberA)?.policyEvaluations).toBe(1);
+      expect(observer.getSessionMetrics(memberB)?.policyEvaluations).toBe(1);
+      expect(observer.getSessionMetrics(child)?.policyEvaluations).toBe(1);
+      for (const sessionId of [memberA, memberB, child]) {
+        const responseDeltas = listAgentEvents(sessionId)
+          .map(({ event }) => event)
+          .filter((event) => event.type === "message.delta")
+          .map((event) => (event.type === "message.delta" ? event.delta : ""))
+          .join("");
+        expect(responseDeltas).toBe(response);
+      }
+      const responseEvents = observer
+        .getRecentEvents(50)
+        .filter((event) => event.type === "harness.response.evaluated");
+      expect(responseEvents).toHaveLength(3);
+      expect(responseEvents.map((event) => event.sessionId).sort()).toEqual(
+        [memberA, memberB, child].sort(),
+      );
+      expect(responseEvents.every((event) => Boolean(event.runId))).toBe(true);
       expect(observer.getSessionMetrics(memberA)).toBeDefined();
       expect(observer.getSessionMetrics(memberB)).toBeDefined();
       expect(observer.getSessionMetrics(child)).toBeDefined();
@@ -8984,7 +9117,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       expect(observer.getSessionMetrics(memberA)).toBeUndefined();
       expect(observer.getSessionMetrics(memberB)).toBeDefined();
       expect(observer.getSessionMetrics(child)).toBeDefined();
-      expect(observer.snapshot().promptSections.estimatedTokensSaved).toBe(6);
+      expect(observer.snapshot().turns.total).toBe(globalTurnCount);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberA)).toBe(false);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberB)).toBe(true);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === child)).toBe(true);
@@ -9001,16 +9134,35 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     const sessionId = `observer-recreated-${crypto.randomUUID()}`;
 
     try {
-      await runTurnWithAssistantText("First turn.", { runtime, sessionId });
+      await createOfflinePiToolSessions({ assistantText: "First turn." });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "First turn.",
+        sessionId,
+      });
       expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
 
       await runtime.releaseRuntime(sessionId);
 
       expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
 
-      await runTurnWithAssistantText("Second turn.", { runtime, sessionId });
+      await createOfflinePiToolSessions({ assistantText: "Second turn." });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Second turn.",
+        sessionId,
+      });
 
       expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+      expect(HarnessObserver.getInstance().snapshot().turns.total).toBe(2);
+      const deltas = listAgentEvents(sessionId)
+        .map(({ event }) => event)
+        .filter((event) => event.type === "message.delta")
+        .map((event) => (event.type === "message.delta" ? event.delta : ""));
+      expect(deltas.join(" ")).toContain("First turn.");
+      expect(deltas.join(" ")).toContain("Second turn.");
     } finally {
       await runtime.releaseRuntime(sessionId);
     }
@@ -9779,6 +9931,7 @@ describe("PiSdkRuntime compaction pruning production wiring", () => {
       MODUS_USE_KERNEL: true,
       MODUS_COMPACTION_PRUNING: true,
       MODUS_TOOL_RESULT_SPILL: false,
+      MODUS_OBSERVABILITY: true,
     });
     const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
       contextWindow: 20_000,
@@ -10278,9 +10431,14 @@ describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
 });
 
 describe("PiSdkRuntime Tool Result Spill integration", () => {
+  beforeEach(() => {
+    HarnessObserver.resetInstance();
+  });
+
   afterEach(() => {
     resetFeatureFlagOverrides();
     registerSpillTools();
+    HarnessObserver.resetInstance();
   });
 
   it("keeps large Pi tool results inline when spill is disabled", async () => {
@@ -10328,7 +10486,11 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
       (_, index) => `offline output line ${index}: ${"result".repeat(8)}`,
     ).join("\n");
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_TOOL_RESULT_SPILL: true });
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_TOOL_RESULT_SPILL: true,
+      MODUS_OBSERVABILITY: true,
+    });
     registerOfflineMcpTool(toolName, originalOutput);
     requestTool(toolName);
     const runtime = new PiSdkRuntime();
@@ -10372,6 +10534,30 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
       expect(JSON.stringify(recovered?.content)).toContain("offline output line 0:");
       expect(JSON.stringify(recovered?.content)).toContain("offline output line 2:");
       expect(JSON.stringify(recovered?.content)).not.toContain("offline output line 3:");
+      const observer = HarnessObserver.getInstance();
+      const metrics = observer.snapshot();
+      expect(metrics.toolResults.spilledResults).toBe(1);
+      expect(metrics.toolResults.successfulRetrievals).toBe(1);
+      expect(metrics.toolResults.spilledBytes).toBeGreaterThan(0);
+      expect(metrics.toolResults.modelContextBytesReduced).toBeGreaterThan(0);
+      expect(metrics.toolResults.estimatedTokensSaved).toBeGreaterThan(0);
+      expect(metrics.promptSections.estimatedTokensSaved).toBeNull();
+      expect(metrics.turns.providerUsageReports).toBeGreaterThan(0);
+      const spillEvents = observer
+        .getRecentEvents(100)
+        .filter((event) => event.type === "harness.tool.spilled");
+      const retrievalEvents = observer
+        .getRecentEvents(100)
+        .filter((event) => event.type === "harness.tool.retrieved");
+      expect(spillEvents).toHaveLength(1);
+      expect(retrievalEvents).toHaveLength(1);
+      expect(spillEvents[0]?.sessionId).toBe(sessionId);
+      expect(retrievalEvents[0]?.sessionId).toBe(sessionId);
+      expect(spillEvents[0]?.runId).toEqual(expect.any(String));
+      expect(retrievalEvents[0]?.runId).toEqual(expect.any(String));
+      expect(JSON.stringify(observer.getRecentEvents(100))).not.toContain(
+        "offline output line 0:",
+      );
     } finally {
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);
@@ -10381,6 +10567,7 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
 
 describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
   beforeEach(async () => {
+    HarnessObserver.resetInstance();
     const { resetRepeatGuardConfig } = await import("./harness/guards/repeat-guard-config");
     const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
     resetRepeatGuardConfig();
@@ -10389,6 +10576,7 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
 
   afterEach(() => {
     resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
   });
 
   it("blocks the next identical call before the Pi SDK executes it and records a decision", async () => {
@@ -10399,7 +10587,11 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
     const sessionId = `repeat-guard-${crypto.randomUUID()}`;
     const toolName = `mcp_repeat_${crypto.randomUUID().replaceAll("-", "")}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_REPEAT_GUARDS: true,
+      MODUS_OBSERVABILITY: true,
+    });
     setRepeatGuardConfig({ toolRepeatThreshold: 3 });
     let executions = 0;
     registerOfflineRepeatGuardTool(toolName, async () => {
@@ -10424,6 +10616,18 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       expect(events).toEqual(
         expect.arrayContaining([expect.objectContaining({ type: "harness.failure", sessionId })]),
       );
+      const observer = HarnessObserver.getInstance();
+      expect(observer.snapshot().repeatGuards).toMatchObject({
+        evaluatedToolCalls: 4,
+        blockedLoopCount: 1,
+        falsePositiveCount: null,
+        circuitBreakerTrips: null,
+      });
+      const guardEvents = observer
+        .getRecentEvents(50)
+        .filter((event) => event.type === "harness.guard.evaluated");
+      expect(guardEvents).toHaveLength(4);
+      expect(guardEvents.every((event) => event.sessionId === sessionId && event.runId)).toBe(true);
       expect(
         events.some(
           (event) =>
