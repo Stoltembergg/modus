@@ -64,7 +64,14 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       observer.recordToolResultSpill("bash", 3500, 4000, "spill-123", sessionId, sessionToken);
       observer.recordToolResultRetrieval(15, sessionId, sessionToken, "run-1");
       observer.recordCompactionPruning(8000, 1800, sessionId, sessionToken, "run-1");
-      observer.recordPromptSections(["base", "tools"], ["rules"], 600, sessionId, sessionToken, "run-1");
+      observer.recordPromptSections(
+        ["base", "tools"],
+        ["rules"],
+        600,
+        sessionId,
+        sessionToken,
+        "run-1",
+      );
 
       const snap = observer.snapshot();
       expect(snap.toolResults.spilledResults).toBe(1);
@@ -223,7 +230,16 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const observer = HarnessObserver.getInstance();
       const sessionId = "s1";
       const sessionToken = observer.beginSession(sessionId);
-      observer.recordHookExecution("turn_start", "h1", 1.0, true, undefined, sessionId, sessionToken, "run-1");
+      observer.recordHookExecution(
+        "turn_start",
+        "h1",
+        1.0,
+        true,
+        undefined,
+        sessionId,
+        sessionToken,
+        "run-1",
+      );
 
       const events = observer.getRecentEvents(10);
       expect(events.length).toBe(1);
@@ -249,6 +265,11 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const health = observer.getHealthStatus();
       expect(observer.snapshot().response).toEqual({ evaluatedCount: 1, violationsDetected: 1 });
+      expect(observer.getRecentEvents(1)[0]).toMatchObject({
+        type: "harness.response.evaluated",
+        runId: "run-1",
+        data: { outcome: "completed", violation: true },
+      });
       expect(health.alerts).toHaveLength(0);
     });
 
@@ -503,7 +524,16 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const sessionToken = observer.beginSession(sessionId);
 
       for (let i = 0; i < 1000; i++) {
-        observer.recordHookExecution("turn_start", "intent", 0.5, true, undefined, sessionId, sessionToken, `run-${i}`);
+        observer.recordHookExecution(
+          "turn_start",
+          "intent",
+          0.5,
+          true,
+          undefined,
+          sessionId,
+          sessionToken,
+          `run-${i}`,
+        );
         observer.recordPromptSections(["a"], ["b"], 10, sessionId, sessionToken, `run-${i}`);
       }
 

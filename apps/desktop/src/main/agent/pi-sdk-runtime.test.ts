@@ -8947,10 +8947,12 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
         noResponse: 1,
       });
       expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
-      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.outcomes.cancelled).toBe(1);
-      expect(
-        listAgentEvents(sessionId).some(({ event }) => event.type === "run.cancelled"),
-      ).toBe(true);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.outcomes.cancelled).toBe(
+        1,
+      );
+      expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.cancelled")).toBe(
+        true,
+      );
     } finally {
       resolveResponse();
       await runtime.releaseRuntime(sessionId);
@@ -10555,9 +10557,7 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
       expect(retrievalEvents[0]?.sessionId).toBe(sessionId);
       expect(spillEvents[0]?.runId).toEqual(expect.any(String));
       expect(retrievalEvents[0]?.runId).toEqual(expect.any(String));
-      expect(JSON.stringify(observer.getRecentEvents(100))).not.toContain(
-        "offline output line 0:",
-      );
+      expect(JSON.stringify(observer.getRecentEvents(100))).not.toContain("offline output line 0:");
     } finally {
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);
