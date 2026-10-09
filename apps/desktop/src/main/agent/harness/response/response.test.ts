@@ -261,7 +261,6 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       registry.clearSessionPolicy(sessionId);
       expect(registry.getSessionPolicy(sessionId).level).toBe("standard");
     });
-
   });
   describe("7.7 Kernel Hooks Integration", () => {
     const mockContext: HarnessContext = {
