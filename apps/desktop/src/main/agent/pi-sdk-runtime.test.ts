@@ -9061,9 +9061,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
       expect(observer.snapshot().compaction.nativeCompactionsObserved).toBe(1);
       expect(
-        observer
-          .getRecentEvents()
-          .filter((event) => event.type === "harness.compaction.native"),
+        observer.getRecentEvents().filter((event) => event.type === "harness.compaction.native"),
       ).toContainEqual(expect.objectContaining({ sessionId, runId: undefined }));
     } finally {
       await runtime.releaseRuntime(sessionId);
