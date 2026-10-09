@@ -5,10 +5,10 @@ import {
   type AgentSession,
   type BeforeAgentStartEvent,
   createAgentSession,
-  type ToolResultEvent,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
+  type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { app, type BrowserWindow as BrowserWindowType } from "electron";
 import { buildContextChips } from "../../shared/context-chips";
