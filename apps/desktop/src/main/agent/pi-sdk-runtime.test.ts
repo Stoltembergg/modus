@@ -161,6 +161,7 @@ const { getDatabase } = await import("../db/database");
 const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned } = await import(
   "./pi-sdk-runtime"
 );
+const agentEventStore = await import("./agent-event-store");
 const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
@@ -187,6 +188,9 @@ const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
 );
 const { ResponsePolicyRegistry } = await import("./harness/response");
 const { HarnessObserver } = await import("./harness/observability");
+const groupStore = await import("../groups/group-store");
+const groupTaskStore = await import("../groups/group-task-store");
+const { resolveGroupTaskEvidence } = await import("../groups/group-task-evidence");
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
@@ -2683,6 +2687,7 @@ describe("PiSdkRuntime", () => {
   it("records not_required for a simple run without requested checks", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const workspaceRevisionSpy = vi.spyOn(agentEventStore, "getRunWorkspaceRevision");
     mocks.createAgentSession.mockImplementationOnce(async () => ({
       session: createMockPiSession({
         prompt: vi.fn(async () => {
@@ -2713,6 +2718,7 @@ describe("PiSdkRuntime", () => {
         ).payload_json,
       ),
     ).toMatchObject({ result: { required: false, status: "not_required", evidence: [] } });
+    expect(workspaceRevisionSpy).not.toHaveBeenCalled();
   });
 
   it("does not require or retry a check explicitly negated in the Build request", async () => {
@@ -3298,6 +3304,118 @@ describe("PiSdkRuntime", () => {
       status: "unavailable",
       evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
     });
+  });
+
+  it("does not bind Agent Group QA to a source edit made during final fingerprint collection", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const reviewerSessionId = `reviewer-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(
+        reviewerSessionId,
+        workspaceId,
+        "Reviewer",
+        cwd,
+        join(userData, "reviewer.jsonl"),
+        now,
+        now,
+      );
+    await initGitRepoWithKnownEmptyScope();
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Verifier First QA race",
+      workspaceId,
+      members: [{ sessionId }, { sessionId: reviewerSessionId }],
+    });
+    const execution = groupStore.appendGroupMessage({
+      groupId: group.id,
+      authorKind: "user",
+      body: "Run the task checks.",
+    });
+    const task = groupStore.createGroupTask({
+      groupId: group.id,
+      title: "Keep QA tied to checked source",
+      status: "in_progress",
+      ownerSessionId: sessionId,
+      executionId: execution.id,
+      kind: "code",
+      priority: "normal",
+      dependencyIds: [],
+      criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+      verificationPolicy: { mode: "required", requireReview: false },
+    });
+    const getFingerprint = gitMemoryContext.getGroupSourceFingerprint;
+    let fingerprintCalls = 0;
+    vi.spyOn(gitMemoryContext, "getGroupSourceFingerprint").mockImplementation(async (source) => {
+      fingerprintCalls += 1;
+      if (fingerprintCalls === 2) {
+        await writeFile(join(cwd, "changed-during-fingerprint.ts"), "export const changed = true;\n");
+      }
+      return getFingerprint(source);
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "group-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "group-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The requested test check passed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and report the result.",
+      sessionId,
+      groupTask: {
+        taskId: task.id,
+        groupId: group.id,
+        executionId: execution.id,
+        role: "owner",
+      },
+    });
+
+    const qaRow = getDatabase()
+      .prepare(
+        "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+      )
+      .get(sessionId) as { payload_json: string };
+    const qa = JSON.parse(qaRow.payload_json) as {
+      result: { status: string; evidence: Array<{ checkName?: string; status: string }> };
+    };
+    const currentFingerprint = await gitMemoryContext.getGroupSourceFingerprint(cwd);
+    const gate = resolveGroupTaskEvidence(groupTaskStore.getGroupTask(task.id), currentFingerprint);
+
+    expect(fingerprintCalls).toBe(2);
+    expect(qa.result).toMatchObject({
+      status: "unavailable",
+      evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+    });
+    expect(gate.criterionOutcomes).toEqual([
+      expect.objectContaining({ criterionId: "tests", status: "missing" }),
+    ]);
   });
 
   it("keeps a run cancelled when abort arrives during final workspace scope collection", async () => {
