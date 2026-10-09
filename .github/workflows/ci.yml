@@ -67,7 +67,7 @@ jobs:
           apps/desktop/src/main/agent/harness/qa-evidence.test.ts
           apps/desktop/src/main/agent/harness/kernel/harness-kernel.test.ts
           apps/desktop/src/main/agent/workspace-source-revision.test.ts
-          -t 'invalidates completed QA when the workspace changes|does not bind Agent Group QA to a source edit|keeps a run cancelled when abort arrives during final workspace scope collection|workspace-bound QA|workspace source revision|does not certify a test invocation that updates snapshots|does not call an empty verification hook result verified|build turn lifecycle|does not call a completed no-change turn built|persists Spec Build Task State correctly when a current-run check fails'
+          -t 'records not_required for a simple run without requested checks|invalidates completed QA when the workspace changes|does not bind Agent Group QA to a source edit|keeps a run cancelled when abort arrives during final workspace scope collection|workspace-bound QA|workspace source revision|does not certify a test invocation that updates snapshots|does not call an empty verification hook result verified|build turn lifecycle|does not call a completed no-change turn built|persists Spec Build Task State correctly when a current-run check fails'
 
   sandbox-probe-compile:
     name: sandbox probe compile-only
