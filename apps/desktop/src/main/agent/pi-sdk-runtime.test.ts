@@ -2524,7 +2524,7 @@ describe("PiSdkRuntime", () => {
             .get(sessionId) as { payload_json: string }
         ).payload_json,
       ),
-    ).toMatchObject({ result: { status: "unavailable", required: true } });
+    ).toMatchObject({ result: { status: "missing", required: true } });
   });
 
   it.each([
@@ -2865,7 +2865,7 @@ describe("PiSdkRuntime", () => {
           type: "tool_execution_start",
           toolCallId: "aborted-check-call",
           toolName: "terminal_run",
-          args: { command: "npm run typecheck" },
+          args: { command: "tsc --noEmit" },
         });
         notifyCheckStarted?.();
         return new Promise<void>((_resolve, reject) => {
