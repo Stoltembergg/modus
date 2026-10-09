@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
