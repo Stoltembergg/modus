@@ -3251,8 +3251,10 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     await initGitRepoWithKnownEmptyScope();
+    let runId = "";
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "external-edit-tests",
