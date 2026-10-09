@@ -768,11 +768,21 @@ describe("summarizeRunQA", () => {
   });
 
   it("keeps missing required checks distinct", () => {
-    expect(summarize([], ["src/a.ts"], ["tests", "typecheck"])).toMatchObject({
+    const result = summarize([], ["src/a.ts"], ["tests", "typecheck"]);
+
+    expect(result).toMatchObject({
       required: true,
       status: "missing",
       reasonCode: "required_check_missing",
     });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({ status: "missing", label: "Tests" }),
+      expect.objectContaining({ status: "missing", label: "Typecheck" }),
+    ]);
+    for (const evidence of result.evidence) {
+      expect(evidence).not.toHaveProperty("id");
+      expect(evidence).not.toHaveProperty("eventId");
+    }
   });
 
   it("keeps an unknown-only required check as an unmet obligation without exposing its name", () => {

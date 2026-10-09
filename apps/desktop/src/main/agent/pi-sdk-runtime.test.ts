@@ -2850,9 +2850,22 @@ describe("PiSdkRuntime", () => {
       prompt: vi.fn(() => {
         mocks.emitPiEvent({
           type: "tool_execution_start",
-          toolCallId: "aborted-check-call",
+          toolCallId: "completed-tests-call",
           toolName: "terminal_run",
           args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "completed-tests-call",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "aborted-check-call",
+          toolName: "terminal_run",
+          args: { command: "npm run typecheck" },
         });
         notifyCheckStarted?.();
         return new Promise<void>((_resolve, reject) => {
@@ -2865,7 +2878,7 @@ describe("PiSdkRuntime", () => {
     const prompt = runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Run tests",
+      message: "Run tests and typecheck",
       sessionId,
     });
     await checkStarted;
@@ -2880,9 +2893,35 @@ describe("PiSdkRuntime", () => {
           )
           .get(sessionId) as { payload_json: string }
       ).payload_json,
-    ) as { result: { required: boolean; status: string } };
+    ) as {
+      result: {
+        required: boolean;
+        status: string;
+        evidence: Array<{ id?: string; eventId?: string; label: string; status: string }>;
+      };
+    };
+    const completedEvent = getDatabase()
+      .prepare(
+        "select id from agent_events where session_id = ? and type = 'tool.ended' and json_extract(payload_json, '$.toolCallId') = ?",
+      )
+      .get(sessionId, "completed-tests-call") as { id: string } | undefined;
+
     expect(result.result).toMatchObject({ required: true, status: "cancelled" });
     expect(result.result.status).not.toBe("passed");
+    expect(completedEvent).toBeDefined();
+    expect(result.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Tests",
+          status: "unavailable",
+          eventId: completedEvent?.id,
+        }),
+        expect.objectContaining({ label: "Typecheck", status: "cancelled" }),
+      ]),
+    );
+    const cancelledEvidence = result.result.evidence.find((item) => item.label === "Typecheck");
+    expect(cancelledEvidence).not.toHaveProperty("eventId");
+    expect(cancelledEvidence).not.toHaveProperty("id");
   });
 
   it("does not continue todos after input is queued into the current run", async () => {
