@@ -142,6 +142,7 @@ type AgentEventPayload =
       isError: boolean;
       exitCode?: number;
       aborted?: boolean;
+      timedOut?: boolean;
       skipped?: boolean;
     }
   | { type: "permission.requested"; sessionId: string; request: PermissionRequest }

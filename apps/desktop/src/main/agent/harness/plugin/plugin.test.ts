@@ -235,7 +235,8 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         ],
       });
       expect(verifiedRes.status).toBe("unknown");
-      expect(verifiedRes.passedCount).toBe(2);
+      expect(verifiedRes.passedCount).toBe(0);
+      expect(verifiedRes.missingCount).toBe(2);
 
       // 2. Any failed -> failed
       const failedRes = await registry.execute<any, any>("verification.assess", {
@@ -247,14 +248,16 @@ describe("Fase 10 — Modus Internal Plugins", () => {
           { id: "2", name: "typecheck", status: "failed" },
         ],
       });
-      expect(failedRes.status).toBe("failed");
-      expect(failedRes.failedCount).toBe(1);
+      expect(failedRes.status).toBe("unknown");
+      expect(failedRes.failedCount).toBe(0);
+      expect(failedRes.missingCount).toBe(2);
 
       // 3. Run checks
       const checks = await registry.execute<any, any>("verification.run", {
         checks: [{ name: "vitest", command: "npm test" }],
       });
       expect(checks.length).toBe(1);
+      expect(checks[0]).not.toHaveProperty("id");
       expect(checks[0].status).toBe("unavailable");
 
       const noQa = await registry.execute<any, any>("verification.assess", {

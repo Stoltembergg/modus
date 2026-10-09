@@ -2836,7 +2836,7 @@ describe("PiSdkRuntime", () => {
     expect(prompts[1]).not.toContain(prohibited);
   });
 
-  it("marks a started check unavailable when its run is aborted before the tool ends", async () => {
+  it("marks a started check cancelled when its run is aborted before the tool ends", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     let rejectPrompt: ((error: Error) => void) | undefined;
@@ -2881,7 +2881,7 @@ describe("PiSdkRuntime", () => {
           .get(sessionId) as { payload_json: string }
       ).payload_json,
     ) as { result: { required: boolean; status: string } };
-    expect(result.result).toMatchObject({ required: true, status: "unavailable" });
+    expect(result.result).toMatchObject({ required: true, status: "cancelled" });
     expect(result.result.status).not.toBe("passed");
   });
 
@@ -7154,6 +7154,7 @@ describe("PiSdkRuntime", () => {
     ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
     ["the strict scope result is truncated", "scope-truncated", "unknown"],
     ["a terminal check has no exit result", "terminal-missing-exit", "unknown"],
+    ["a required terminal check times out", "terminal-timed-out", "unknown"],
   ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
     const sessionId = `task-state-spec-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -7192,7 +7193,9 @@ describe("PiSdkRuntime", () => {
             description: "Tests and typecheck pass.",
             todoIds: ["todo-verify"],
             requiredCheckKinds:
-              evidenceCase === "terminal-missing-exit" ? ["tests"] : ["tests", "typecheck"],
+              evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out"
+                ? ["tests"]
+                : ["tests", "typecheck"],
             status: "pending",
           },
         ],
@@ -7235,7 +7238,11 @@ describe("PiSdkRuntime", () => {
           evidenceCase === "scope-truncated"
         ) {
           checks = ["npm test", "tsc --noEmit"];
-        } else if (evidenceCase === "partial" || evidenceCase === "terminal-missing-exit") {
+        } else if (
+          evidenceCase === "partial" ||
+          evidenceCase === "terminal-missing-exit" ||
+          evidenceCase === "terminal-timed-out"
+        ) {
           checks = ["npm test"];
         }
         checks.forEach((command, index) => {
@@ -7255,7 +7262,9 @@ describe("PiSdkRuntime", () => {
             result:
               evidenceCase === "terminal-missing-exit"
                 ? { details: {} }
-                : { details: { exitCode: isError ? 1 : 0 } },
+                : evidenceCase === "terminal-timed-out"
+                  ? { details: { timedOut: true } }
+                  : { details: { exitCode: isError ? 1 : 0 } },
           });
         });
         mocks.emitPiEvent({
@@ -7283,10 +7292,12 @@ describe("PiSdkRuntime", () => {
         source: "plan",
         status: expectedVerification,
         requiredCheckKinds:
-          evidenceCase === "terminal-missing-exit" ? ["tests"] : ["tests", "typecheck"],
+          evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out"
+            ? ["tests"]
+            : ["tests", "typecheck"],
       }),
     );
-    if (evidenceCase === "terminal-missing-exit") {
+    if (evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out") {
       const qaRow = getDatabase()
         .prepare(
           "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
@@ -7294,9 +7305,17 @@ describe("PiSdkRuntime", () => {
         .get(sessionId) as { payload_json: string };
       expect(JSON.parse(qaRow.payload_json)).toMatchObject({
         result: {
-          status: "unavailable",
-          reasonCode: "required_check_unavailable",
-          evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+          status: evidenceCase === "terminal-timed-out" ? "timed_out" : "unavailable",
+          reasonCode:
+            evidenceCase === "terminal-timed-out"
+              ? "required_check_timed_out"
+              : "required_check_unavailable",
+          evidence: [
+            expect.objectContaining({
+              checkName: "tests",
+              status: evidenceCase === "terminal-timed-out" ? "timed_out" : "unavailable",
+            }),
+          ],
         },
       });
     }

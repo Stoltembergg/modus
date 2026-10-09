@@ -134,6 +134,8 @@ export type HarnessRisk = "low" | "medium" | "high";
 export type VerificationEvidenceStatus =
   | "passed"
   | "failed"
+  | "timed_out"
+  | "cancelled"
   | "skipped"
   | "missing"
   | "unavailable"

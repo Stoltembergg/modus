@@ -720,13 +720,15 @@ function summarizeHarnessQA(input: {
   }
   const result = summarizeRunQA({ ...input, events });
   if (!input.changedScopeKnown && result.required) {
-    result.status = "unavailable";
-    result.reasonCode = "required_check_unavailable";
     result.evidence = result.evidence.map((item) =>
       item.status === "passed" || item.status === "user_confirmed"
         ? { ...item, status: "unavailable" }
         : item,
     );
+    if (result.status === "passed" || result.status === "user_confirmed") {
+      result.status = "unavailable";
+      result.reasonCode = "required_check_unavailable";
+    }
   }
   return {
     result,
@@ -3752,9 +3754,13 @@ export class PiSdkRuntime implements AgentRuntime {
             ...(changes && changes.fileCount > 0 ? { changes } : {}),
             ...this.runResponseMetadata(outputTracker),
           });
-          // The build turn completed cleanly → the plan is built.
+          // Mark the plan built only when this run produced a current workspace diff.
           if (buildPlan) {
-            this.transitionPlanBuild(runtimeSession, buildPlan.id, "built");
+            this.transitionPlanBuild(
+              runtimeSession,
+              buildPlan.id,
+              changes && changes.fileCount > 0 ? "built" : "not_built",
+            );
           }
         } else {
           const message =

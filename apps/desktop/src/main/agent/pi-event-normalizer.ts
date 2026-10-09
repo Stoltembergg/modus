@@ -136,7 +136,7 @@ function toolResultExitCode(result: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) ? value : undefined;
 }
 
-function toolResultFlag(result: unknown, flag: "aborted" | "skipped"): boolean {
+function toolResultFlag(result: unknown, flag: "aborted" | "skipped" | "timedOut"): boolean {
   if (!result || typeof result !== "object") return false;
   const outer = result as Record<string, unknown>;
   const details =
@@ -262,6 +262,7 @@ export function normalizePiEvent(
     case "tool_execution_end": {
       const exitCode = toolResultExitCode(event.result);
       const aborted = toolResultFlag(event.result, "aborted");
+      const timedOut = toolResultFlag(event.result, "timedOut");
       const skipped = toolResultFlag(event.result, "skipped");
       return [
         {
@@ -272,6 +273,7 @@ export function normalizePiEvent(
           isError: event.isError,
           ...(exitCode !== undefined ? { exitCode } : {}),
           ...(aborted ? { aborted: true } : {}),
+          ...(timedOut ? { timedOut: true } : {}),
           ...(skipped ? { skipped: true } : {}),
         },
       ];

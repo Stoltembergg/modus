@@ -7,8 +7,8 @@ import type {
 
 /**
  * Standard Verification Check Hook:
- * Inspects tool executions for failed commands, lint errors, or broken tests,
- * enforcing the Verifier-First pattern.
+ * Reports tool errors but does not approve verification without authoritative
+ * QA evidence linked to the run and its workspace scope.
  */
 export const verificationCheckHook: HarnessHook<VerificationCheckInput, VerificationCheckOutput> = {
   name: "verification_check_qa",
@@ -32,17 +32,19 @@ export const verificationCheckHook: HarnessHook<VerificationCheckInput, Verifica
       violations.push(`Command execution failed with exit code ${input.exitCode}`);
     }
 
-    const allPassed = violations.length === 0;
-    context.state.set("verification_all_passed", allPassed);
+    // This hook receives neither authoritative QA-store references nor a
+    // check scope, so tool output alone cannot establish verification.
+    context.state.set("verification_all_passed", false);
 
     return {
-      verified: allPassed,
-      allPassed,
+      verified: false,
+      allPassed: false,
       violations,
-      checksRun: executions.length,
-      evidenceRef: `evidence-${input.runId}`,
-      failureReason: allPassed ? undefined : violations.join("; "),
-      suggestedAction: allPassed ? "proceed" : "retry",
+      checksRun: 0,
+      failureReason: violations.length
+        ? violations.join("; ")
+        : "No authoritative QA evidence is linked to this run.",
+      suggestedAction: violations.length ? "retry" : "proceed",
     };
   },
 };

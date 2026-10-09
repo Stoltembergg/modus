@@ -83,6 +83,8 @@ const TASK_STATE_CRITERION_STATUSES = [
 const TASK_STATE_EVIDENCE_STATUSES: VerificationEvidenceStatus[] = [
   "passed",
   "failed",
+  "timed_out",
+  "cancelled",
   "skipped",
   "missing",
   "unavailable",
@@ -127,6 +129,7 @@ export type HarnessInsightEventEvidence = {
   isError?: boolean;
   exitCode?: number;
   aborted?: boolean;
+  timedOut?: boolean;
   skipped?: boolean;
   tokenTotal?: number;
   contextTokens?: number;
@@ -915,15 +918,6 @@ export function getRunToolEvidence(
       started.packageConfigDigest !== undefined
         ? payload[QA_CHECK_CONFIG_STABLE_FIELD] === true
         : undefined;
-    const exitCode =
-      event.exitCode ??
-      (started.toolName === "bash" &&
-      !event.isError &&
-      !event.aborted &&
-      !event.skipped &&
-      started.checkName
-        ? 0
-        : undefined);
     evidence.push({
       type: "tool.ended",
       sessionId,
@@ -936,9 +930,10 @@ export function getRunToolEvidence(
       ...(started.fullProject ? { fullProject: true } : {}),
       ...(started.mutatesSource ? { mutatesSource: true } : {}),
       ...(checkConfigStable !== undefined ? { checkConfigStable } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
       error: event.isError,
       ...(event.aborted ? { aborted: true } : {}),
+      ...(event.timedOut ? { timedOut: true } : {}),
       ...(event.skipped ? { skipped: true } : {}),
     });
   }
@@ -1077,6 +1072,8 @@ export function getWorkspaceHarnessInsightEvidence(
               json_extract(e.payload_json, '$.exitCode') as exit_code,
               json_extract(e.payload_json, '$.aborted') as aborted,
               json_type(e.payload_json, '$.aborted') as aborted_type,
+              json_extract(e.payload_json, '$.timedOut') as timed_out,
+              json_type(e.payload_json, '$.timedOut') as timed_out_type,
               json_extract(e.payload_json, '$.skipped') as skipped,
               json_type(e.payload_json, '$.skipped') as skipped_type,
               json_extract(e.payload_json, '$.tokenUsage.totalTokens') as token_total,
@@ -1155,6 +1152,8 @@ export function getWorkspaceHarnessInsightEvidence(
     }
     const aborted = sqliteBoolean(row.aborted, row.aborted_type);
     if (aborted !== undefined) result.aborted = aborted;
+    const timedOut = sqliteBoolean(row.timed_out, row.timed_out_type);
+    if (timedOut !== undefined) result.timedOut = timedOut;
     const skipped = sqliteBoolean(row.skipped, row.skipped_type);
     if (skipped !== undefined) result.skipped = skipped;
     if (typeof row.token_total === "number" && Number.isFinite(row.token_total)) {

@@ -22,6 +22,8 @@ import {
 export type VerificationEvidenceStatus =
   | "passed"
   | "failed"
+  | "timed_out"
+  | "cancelled"
   | "skipped"
   | "missing"
   | "unavailable"
@@ -73,6 +75,7 @@ export type RunQAEvent =
       exitCode?: number;
       error?: boolean;
       aborted?: boolean;
+      timedOut?: boolean;
       skipped?: boolean;
       output?: string;
     })
@@ -719,19 +722,15 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       continue;
     const eligibleShell =
       started.event.toolName === "bash" || started.event.toolName === "terminal_run";
-    const status: VerificationEvidenceStatus = event.aborted
-      ? "unavailable"
-      : event.skipped
-        ? "skipped"
-        : event.error || (event.exitCode !== undefined && event.exitCode !== 0)
-          ? "failed"
-          : !eligibleShell
-            ? "unavailable"
-            : event.exitCode === undefined
-              ? started.event.toolName === "bash"
-                ? "passed"
-                : "unavailable"
-              : "passed";
+    let status: VerificationEvidenceStatus;
+    if (event.timedOut) status = "timed_out";
+    else if (event.aborted) status = "cancelled";
+    else if (event.skipped) status = "skipped";
+    else if (event.error || (event.exitCode !== undefined && event.exitCode !== 0)) {
+      status = "failed";
+    } else if (!eligibleShell || event.exitCode === undefined) {
+      status = "unavailable";
+    } else status = "passed";
     latest.set(
       check,
       evidenceRef(
@@ -754,6 +753,12 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
   if (statuses.includes("failed")) {
     status = "failed";
     reasonCode = "required_check_failed";
+  } else if (statuses.includes("timed_out")) {
+    status = "timed_out";
+    reasonCode = "required_check_timed_out";
+  } else if (statuses.includes("cancelled")) {
+    status = "cancelled";
+    reasonCode = "required_check_cancelled";
   } else if (statuses.includes("skipped")) {
     status = "skipped";
     reasonCode = "required_check_skipped";

@@ -7,7 +7,7 @@ import type { CapabilityImplementation } from "../../capability/capability-types
 import type { PluginManifest } from "../plugin-types";
 
 export interface VerificationCheck {
-  id: string;
+  id?: string | undefined;
   name: string;
   command?: string | undefined;
   status: "passed" | "failed" | "missing" | "unavailable";
@@ -22,7 +22,7 @@ export interface VerificationContext {
 }
 
 export interface VerificationAssessment {
-  status: "verified" | "failed" | "unknown";
+  status: "unknown" | "not_required";
   passedCount: number;
   failedCount: number;
   missingCount: number;
@@ -35,13 +35,11 @@ const verificationRunImpl: CapabilityImplementation<
   VerificationCheck[]
 > = {
   execute: (ctx) => {
-    // Returns simulated run records; in real execution integrates with harness-qa-helper
-    return ctx.checks.map((c, i) => ({
-      id: `chk-${i}-${c.name}`,
+    return ctx.checks.map((c) => ({
       name: c.name,
       command: c.command,
-      status: "passed",
-      outputSnippet: "Check executed successfully (exit code 0)",
+      status: "unavailable",
+      outputSnippet: "This capability does not execute checks; use runtime QA evidence.",
     }));
   },
 };
@@ -54,7 +52,7 @@ const verificationAssessImpl: CapabilityImplementation<
     const totalChecks = ctx.checks.length;
     if (totalChecks === 0) {
       return {
-        status: ctx.required ? "unknown" : "verified",
+        status: ctx.required ? "unknown" : "not_required",
         passedCount: 0,
         failedCount: 0,
         missingCount: 0,
@@ -63,20 +61,12 @@ const verificationAssessImpl: CapabilityImplementation<
       };
     }
 
-    const passedCount = ctx.checks.filter((c) => c.status === "passed").length;
-    const failedCount = ctx.checks.filter((c) => c.status === "failed").length;
-    const missingCount = ctx.checks.filter(
-      (c) => c.status === "missing" || c.status === "unavailable",
-    ).length;
-
-    let status: "verified" | "failed" | "unknown" = "unknown";
-    if (failedCount > 0) {
-      status = "failed";
-    } else if (passedCount === totalChecks) {
-      status = "verified";
-    } else {
-      status = "unknown";
-    }
+    // Capability inputs are caller claims. This plugin cannot validate them
+    // against the runtime's session/run/scope-bound evidence store.
+    const passedCount = 0;
+    const failedCount = 0;
+    const missingCount = totalChecks;
+    const status = "unknown" as const;
 
     return {
       status,
@@ -84,7 +74,7 @@ const verificationAssessImpl: CapabilityImplementation<
       failedCount,
       missingCount,
       totalChecks,
-      summary: `Verification completed: ${passedCount}/${totalChecks} passed, ${failedCount} failed, ${missingCount} missing (${status})`,
+      summary: `Verification is unavailable: ${missingCount} checks lack authoritative runtime evidence (${status})`,
     };
   },
 };
