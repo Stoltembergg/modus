@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   type AssistantMessage,
+  type Context,
   createAssistantMessageEventStream,
   Type,
 } from "@earendil-works/pi-ai";
@@ -262,6 +263,7 @@ async function useOfflinePiToolSessions() {
   const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
   const sessions: AgentSession[] = [];
   const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
+  const deliveredMessages: Array<{ session: AgentSession; messages: Context["messages"] }> = [];
   let requestedTool: string | undefined;
   let scriptedToolCalls: Array<{ name: string; input: unknown }> | undefined;
   let scriptedToolCallIndex = 0;
@@ -297,6 +299,7 @@ async function useOfflinePiToolSessions() {
     });
     session.agent.streamFn = (model, context) => {
       deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
+      deliveredMessages.push({ session, messages: [...context.messages] });
       const stream = createAssistantMessageEventStream();
       const scriptedCall = scriptedToolCalls?.[scriptedToolCallIndex];
       if (scriptedToolCalls) scriptedToolCallIndex += 1;
@@ -349,6 +352,10 @@ async function useOfflinePiToolSessions() {
       deliveredSystemPrompts
         .filter((entry) => entry.session === session)
         .map((entry) => entry.prompt),
+    messagesFor: (session: AgentSession) =>
+      deliveredMessages
+        .filter((entry) => entry.session === session)
+        .flatMap((entry) => entry.messages),
     requestTool: (name: string) => {
       requestedTool = name;
       scriptedToolCalls = undefined;
@@ -9614,6 +9621,48 @@ describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
     expect(waitRes.success).toBe(true);
     const status = await provider.status(spawnRes.subagentId);
     expect(status.state).toBe("completed");
+  });
+});
+
+describe("PiSdkRuntime Tool Result Spill integration", () => {
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+  });
+
+  it("sends a bounded spill preview after a large Pi tool result", async () => {
+    const { messagesFor, requestTool, sessionAt } = await useOfflinePiToolSessions();
+    const sessionId = `tool-spill-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const toolName = `mcp_spill_${crypto.randomUUID().replaceAll("-", "")}`;
+    const originalOutput = Array.from(
+      { length: 900 },
+      (_, index) => `offline output line ${index}: ${"result".repeat(8)}`,
+    ).join("\n");
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_TOOL_RESULT_SPILL: true });
+    registerOfflineMcpTool(toolName, originalOutput);
+    requestTool(toolName);
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Run the offline lookup and summarize its output.",
+        sessionId,
+      });
+
+      const toolResult = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === toolName,
+      );
+      expect(toolResult).toBeDefined();
+      expect(Buffer.byteLength(JSON.stringify(toolResult?.content) ?? "", "utf8")).toBeLessThan(
+        Buffer.byteLength(originalOutput, "utf8"),
+      );
+      expect(JSON.stringify(toolResult?.content)).toContain("spill-");
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 });
 
