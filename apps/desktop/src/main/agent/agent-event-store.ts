@@ -12,7 +12,6 @@ import type {
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
-import { getWorkspaceSourceRevision } from "./workspace-source-revision";
 import { type RunQAEvent, recognizeCheckInvocation } from "./harness/qa-evidence";
 import {
   MAX_TASK_STATE_CRITERIA,
@@ -23,6 +22,7 @@ import {
   MAX_TASK_STATE_SCAN,
   SAFE_TASK_STATE_ID,
 } from "./harness/task-state";
+import { getWorkspaceSourceRevision } from "./workspace-source-revision";
 
 type AgentEventRow = {
   event_cursor: number;
@@ -401,9 +401,7 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
     ...(value.packageConfigDigest
       ? { packageConfigDigest: value.packageConfigDigest as string }
       : {}),
-    ...(value.workspaceRevision
-      ? { workspaceRevision: value.workspaceRevision as string }
-      : {}),
+    ...(value.workspaceRevision ? { workspaceRevision: value.workspaceRevision as string } : {}),
   };
 }
 

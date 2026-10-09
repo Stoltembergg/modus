@@ -3358,7 +3358,10 @@ describe("PiSdkRuntime", () => {
     vi.spyOn(gitMemoryContext, "getGroupSourceFingerprint").mockImplementation(async (source) => {
       fingerprintCalls += 1;
       if (fingerprintCalls === 2) {
-        await writeFile(join(cwd, "changed-during-fingerprint.ts"), "export const changed = true;\n");
+        await writeFile(
+          join(cwd, "changed-during-fingerprint.ts"),
+          "export const changed = true;\n",
+        );
       }
       return getFingerprint(source);
     });

@@ -26,10 +26,7 @@ function runGit(cwd: string, args: string[]): Buffer {
 }
 
 function pathList(bytes: Buffer): string[] | undefined {
-  const paths = bytes
-    .toString("utf8")
-    .split("\0")
-    .filter(Boolean);
+  const paths = bytes.toString("utf8").split("\0").filter(Boolean);
   if (paths.some((path) => path.includes("\uFFFD"))) return undefined;
   return paths;
 }
@@ -61,9 +58,7 @@ export function getWorkspaceSourceRevision(cwd: string, baseCommit: string): str
     const tracked = pathList(
       runGit(root, ["diff", "--name-only", "--no-renames", "-z", resolvedBase, "--"]),
     );
-    const untracked = pathList(
-      runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
-    );
+    const untracked = pathList(runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
     if (!tracked || !untracked) return undefined;
     const paths = [...new Set([...tracked, ...untracked])].sort((a, b) =>
       Buffer.compare(Buffer.from(a), Buffer.from(b)),
