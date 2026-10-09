@@ -192,6 +192,8 @@ const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/t
 const { resolveQuestionRequest } = await import("../interaction/question-broker");
 const todoToolRuntime = await import("./tools/todo-tools");
 const permissionExtension = await import("./pi-permission-extension");
+const permissionStore = await import("../permissions/permission-store");
+const permissionBroker = await import("../permissions/permission-broker");
 const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
 const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
   "./harness/feature-flags"
@@ -757,6 +759,53 @@ describe("PiSdkRuntime", () => {
 
     expect(getDefaultModel).not.toHaveBeenCalled();
     expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted workspace identity for permission grants across worktree cwd changes", async () => {
+    const sessionId = `permission-worktree-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const worktreeCwd = join(cwd, ".modus", "worktrees", sessionId);
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(worktreeCwd, sessionId);
+    const command = "rm -rf build-output";
+    permissionStore.recordPermissionDecision("shell.execute", command, "allow-workspace", {
+      workspaceId,
+      toolName: "bash",
+    });
+    const runtime = new PiSdkRuntime();
+    const unexpectedPrompt = vi
+      .spyOn(permissionBroker, "requestPermission")
+      .mockRejectedValue(new Error("A matching workspace grant should bypass the prompt."));
+
+    try {
+      await runtime.ensure(createWindowStub(), sessionId);
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories: Array<(api: object) => void>;
+      };
+      let toolCallHandler: ((event: unknown) => Promise<unknown>) | undefined;
+      options.extensionFactories[0]?.({
+        on(event: string, handler: unknown) {
+          if (event === "tool_call") {
+            toolCallHandler = handler as (event: unknown) => Promise<unknown>;
+          }
+        },
+      });
+
+      await expect(
+        toolCallHandler?.({
+          type: "tool_call",
+          toolCallId: "workspace-grant-call",
+          toolName: "bash",
+          input: { command },
+        }),
+      ).resolves.toBeUndefined();
+      expect(unexpectedPrompt).not.toHaveBeenCalled();
+    } finally {
+      unexpectedPrompt.mockRestore();
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 
   it("refuses an unavailable model with a registry entry", async () => {

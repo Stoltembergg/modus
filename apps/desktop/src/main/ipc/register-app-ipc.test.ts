@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   fingerprintPlanSource: vi.fn(),
   promotePlanRevision: vi.fn(),
   publishPlanUpdated: vi.fn(),
+  recordPermissionDecision: vi.fn(),
   startPlanBuild: vi.fn(),
   startOriginalPlanBuild: vi.fn(),
   assertHyperPlanSessionAvailable: vi.fn(),
@@ -94,6 +95,10 @@ vi.mock("../agents/agents-store", async (importOriginal) => ({
   getAgent: mocks.getAgent,
   requireAgentChatWritable: mocks.requireAgentChatWritable,
 }));
+vi.mock("../permissions/permission-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../permissions/permission-store")>()),
+  recordPermissionDecision: mocks.recordPermissionDecision,
+}));
 
 import type { HyperPlanRevision, HyperPlanSummary, PlanRef } from "../../shared/contracts";
 import {
@@ -107,6 +112,55 @@ import {
 import { IPC_CHANNELS } from "./channels";
 import { registerAppIpc } from "./register-app-ipc";
 import { registerTrustedSender } from "./trusted-sender";
+
+describe("permission decision IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.recordPermissionDecision.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("requires a live permission request before recording a decision", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.permissionDecide);
+    if (!handler) throw new Error("Permission decision IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          action: "shell.execute",
+          target: "rm -rf build-output",
+          decision: "allow-workspace",
+        } as never,
+      ),
+    ).toThrow();
+    expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+
+  it("does not persist decisions for expired permission requests", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.permissionDecide);
+    if (!handler) throw new Error("Permission decision IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          requestId: "expired-request",
+          sessionId: "session-a",
+          action: "shell.execute",
+          target: "rm -rf build-output",
+          decision: "allow-workspace",
+        } as never,
+      ),
+    ).toThrow("Permission request is no longer active.");
+    expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+});
 
 const summary: HyperPlanSummary = {
   critiques: [

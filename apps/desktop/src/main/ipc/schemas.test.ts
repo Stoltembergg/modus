@@ -323,10 +323,27 @@ describe("IPC schemas", () => {
     expect(
       parseIpcInput(
         permissionDecideSchema,
+        {
+          requestId: "request-1",
+          action: "git.write",
+          target: "git clean -f",
+          decision: "deny",
+        },
+        "permission:decide",
+      ),
+    ).toEqual({
+      requestId: "request-1",
+      action: "git.write",
+      target: "git clean -f",
+      decision: "deny",
+    });
+    expect(() =>
+      parseIpcInput(
+        permissionDecideSchema,
         { action: "git.write", target: "git clean -f", decision: "deny" },
         "permission:decide",
       ),
-    ).toEqual({ action: "git.write", target: "git clean -f", decision: "deny" });
+    ).toThrow("Invalid IPC payload");
   });
 
   // Regression: a prompt turn must carry its own execution params (mode, model,

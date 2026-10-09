@@ -41,6 +41,7 @@ export function createModusPermissionExtension(
   repeatGuard?: RepeatGuardBridge,
   beforeAgentStart?: BeforeAgentStartBridge,
   spillToolResult?: ToolResultSpillHandler,
+  workspaceId?: string,
 ): ExtensionFactory {
   return (pi) => {
     if (beforeAgentStart) {
@@ -48,6 +49,13 @@ export function createModusPermissionExtension(
     }
 
     pi.on("tool_call", async (event) => {
+      if (!toolRegistry.isKnownTool(event.toolName)) {
+        return {
+          block: true,
+          reason: `Unregistered tool is not permitted: ${event.toolName}`,
+        };
+      }
+
       const repeatDecision = await repeatGuard?.beforeToolCall({
         toolCallId: event.toolCallId,
         toolName: event.toolName,
@@ -68,13 +76,15 @@ export function createModusPermissionExtension(
       }
 
       const target = getToolTarget(event);
-      if (findWorkspaceAllowDecision(action, target)) {
+      if (workspaceId && findWorkspaceAllowDecision(action, target, workspaceId, event.toolName)) {
         return undefined;
       }
 
       const run = getActiveAgentRun(sessionId);
       const permissionInput: Parameters<typeof requestPermission>[0] = {
         sessionId,
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+        toolName: event.toolName,
         action,
         target,
         reason: `Blocked dangerous ${event.toolName} tool call before execution.`,

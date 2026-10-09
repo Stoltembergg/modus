@@ -216,7 +216,6 @@ import {
   clearProjectApprovalMode,
   getApprovalModeState,
   listPermissionDecisions,
-  recordPermissionDecision,
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
@@ -1176,13 +1175,11 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.permissionDecide, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(permissionDecideSchema, input, IPC_CHANNELS.permissionDecide);
-    if (parsed.requestId) {
-      const resolved = resolvePermissionRequest(parsed.requestId, parsed.decision);
-      if (resolved) {
-        return resolved;
-      }
+    const resolved = resolvePermissionRequest(parsed.requestId, parsed.decision);
+    if (!resolved) {
+      throw new Error("Permission request is no longer active.");
     }
-    return recordPermissionDecision(parsed.action, parsed.target, parsed.decision);
+    return resolved;
   });
 
   ipcMain.handle(IPC_CHANNELS.permissionList, (event) => {

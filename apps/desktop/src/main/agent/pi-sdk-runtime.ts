@@ -2748,6 +2748,7 @@ export class PiSdkRuntime implements AgentRuntime {
               );
             },
           ),
+          getAgentSession(sessionId)?.workspaceId,
         ),
         ...(isFeatureFlagEnabled("MODUS_COMPACTION_PRUNING")
           ? [

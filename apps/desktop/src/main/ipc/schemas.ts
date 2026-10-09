@@ -545,7 +545,7 @@ export const gitCheckoutSchema = z.object({
 });
 
 export const permissionDecideSchema = z.object({
-  requestId: optionalNonEmptyString,
+  requestId: nonEmptyString,
   sessionId: optionalNonEmptyString,
   action: z.enum([
     "shell.execute",

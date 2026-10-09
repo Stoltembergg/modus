@@ -55,7 +55,9 @@ export function migrateDatabase(db: DatabaseSync): void {
       action text not null,
       target text not null,
       decision text not null,
-      created_at text not null
+      created_at text not null,
+      workspace_id text references workspaces(id) on delete cascade,
+      tool_name text
     );
 
     create table if not exists agent_events (
@@ -202,6 +204,13 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_browser_recents_workspace_recent
       on browser_recents(workspace_id, last_opened_at desc);
   `);
+
+  // Workspace approvals are matched against durable workspace and tool identity.
+  // Legacy rows stay NULL scoped because their original workspace cannot be proven.
+  addColumn(db, "permissions", "workspace_id", "text references workspaces(id) on delete cascade");
+  addColumn(db, "permissions", "tool_name", "text");
+  db.exec(`create index if not exists idx_permissions_workspace_tool_grant
+    on permissions(workspace_id, tool_name, action, target, decision)`);
 
   addColumn(db, "agent_sessions", "runtime", "text not null default 'pi-sdk'");
   addColumn(db, "agent_sessions", "model", "text");

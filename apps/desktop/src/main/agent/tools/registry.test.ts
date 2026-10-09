@@ -281,7 +281,12 @@ describe("ToolRegistry classify", () => {
       action: "file.delete",
       dangerous: true,
     });
-    expect(registry.classify(toolEvent("unknown_tool", {})).dangerous).toBe(false);
+    expect(registry.classify(toolEvent("unknown_tool", {}))).toEqual({
+      action: "mcp.call",
+      dangerous: true,
+    });
+    expect(registry.isKnownTool("unknown_tool")).toBe(false);
+    expect(registry.isReadOnlySafe("unknown_tool")).toBe(false);
   });
 });
 
