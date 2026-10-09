@@ -252,9 +252,9 @@ describe("dedicated HyperPlan review IPC", () => {
     const handler = mocks.handlers.get(IPC_CHANNELS.agentRunWorkspaceRevision);
     if (!handler) throw new Error("Run workspace revision IPC handler was not registered.");
 
-    await expect(
+    expect(
       handler(trustedEvent as never, { sessionId: "session-1", runId: "run-1" } as never),
-    ).resolves.toBe(revision);
+    ).toBe(revision);
     expect(mocks.getRunWorkspaceRevision).toHaveBeenCalledWith("session-1", "run-1");
     await expect(
       handler(
@@ -269,7 +269,7 @@ describe("dedicated HyperPlan review IPC", () => {
     const handler = mocks.handlers.get(IPC_CHANNELS.filesWatchStatus);
     if (!handler) throw new Error("Files watcher status IPC handler was not registered.");
 
-    await expect(handler(trustedEvent as never, "C:/workspace" as never)).resolves.toBe(false);
+    expect(handler(trustedEvent as never, "C:/workspace" as never)).toBe(false);
     expect(mocks.isWorkspaceWatched).toHaveBeenCalledWith("C:/workspace");
     await expect(
       handler(trustedEvent as never, { cwd: "C:/workspace" } as never),

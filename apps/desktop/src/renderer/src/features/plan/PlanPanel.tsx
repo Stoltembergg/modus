@@ -1,6 +1,6 @@
 import { IconLayoutList } from "@tabler/icons-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { PlanRef } from "../../../../shared/contracts";
+import type { FilesChangeEvent, PlanRef } from "../../../../shared/contracts";
 import { EmptyState } from "../../components/ui/Panel";
 import { MarkdownMessage } from "../agent/MarkdownMessage";
 import { SpecAcceptanceCriteria } from "./SpecAcceptanceCriteria";
@@ -19,7 +19,7 @@ export const PlanPanel = memo(function PlanPanel({
   active = true,
 }: {
   plan: PlanRef | undefined;
-  sessionCwd?: string;
+  sessionCwd?: string | undefined;
   active?: boolean;
 }) {
   const revisionRequestId = useRef(0);
@@ -101,7 +101,7 @@ export const PlanPanel = memo(function PlanPanel({
       if (watchReady && !watcherUnavailable) void refreshWorkspaceRevisions(false);
     }, WORKSPACE_REVISION_RECHECK_MS);
     const files = window.modus.files;
-    const unsubscribe = files.onChanged((event) => {
+    const unsubscribe = files.onChanged((event: FilesChangeEvent) => {
       const currentRoot = watchedRoot ?? sessionCwd;
       const platform = window.modus.app.platform;
       if (workspacePathKey(event.cwd, platform) !== workspacePathKey(currentRoot, platform)) {
@@ -119,7 +119,7 @@ export const PlanPanel = memo(function PlanPanel({
     });
     void files
       .watch(sessionCwd)
-      .then(async (root) => {
+      .then(async (root: string) => {
         if (cancelled) {
           void files.unwatch(root);
           return;

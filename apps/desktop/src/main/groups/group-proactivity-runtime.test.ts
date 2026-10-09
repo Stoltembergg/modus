@@ -98,7 +98,7 @@ function recordPassingCheckEvent(
   if (result.status !== "passed" || !evidence?.id || !evidence.eventId) {
     throw new Error("Missing passed QA from persisted check events.");
   }
-  return evidence;
+  return { ...evidence, id: evidence.id, eventId: evidence.eventId };
 }
 
 const flush = async () => {
