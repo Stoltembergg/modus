@@ -3995,16 +3995,12 @@ export class PiSdkRuntime implements AgentRuntime {
       if (session?.status !== "error" && !sessionWasCancelled) {
         updateAgentSessionStatus(input.sessionId, "idle");
       }
-      // The turn is over (completed/failed/cancelled all funnel through here):
-      // publish the authoritative `idle` status so the composer unlocks, and
-      // dim the in-app browser's "AI in control" glow + cursor.
-      if (!sessionWasCancelled) {
-        emitForStart({
-          type: "session.status",
-          sessionId: input.sessionId,
-          status: { type: "idle" },
-        });
-      }
+      // `session.status` releases the composer; the run and database retain cancellation.
+      emitForStart({
+        type: "session.status",
+        sessionId: input.sessionId,
+        status: { type: "idle" },
+      });
       if (session?.workspaceId) {
         releaseAgentBrowserControl(session.workspaceId, input.sessionId);
       }
