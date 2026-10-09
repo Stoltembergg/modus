@@ -9011,7 +9011,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
         arrivals++;
         if (arrivals === 2) releaseObservers();
         await bothEvaluated;
-        return input;
+        return { settled: true, triggerContinuation: false };
       },
     };
     kernel.registerHook(interleaveHook);
