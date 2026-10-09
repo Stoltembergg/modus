@@ -9291,7 +9291,11 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
       runtime as unknown as {
         sessions: Map<
           string,
-          { promptRegistry?: { assemblePrompt: (id: string, options?: unknown) => Promise<unknown> } }
+          {
+            promptRegistry?: {
+              assemblePrompt: (id: string, options?: unknown) => Promise<unknown>;
+            };
+          }
         >;
       }
     ).sessions.get(sessionId);
