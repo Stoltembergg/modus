@@ -32,35 +32,6 @@ jobs:
       - name: Install Electron runtime for desktop tests
         run: npm exec -- install-electron
 
-      - name: A17 expanded Biome diagnostics
-        continue-on-error: true
-        run: >
-          npx biome check --max-diagnostics=600
-          apps/desktop/src/main/agent/agent-event-store.test.ts
-          apps/desktop/src/main/agent/agent-event-store.ts
-          apps/desktop/src/main/agent/harness/kernel/harness-kernel.test.ts
-          apps/desktop/src/main/agent/harness/kernel/verification-hook.ts
-          apps/desktop/src/main/agent/harness/plugin/plugin.test.ts
-          apps/desktop/src/main/agent/harness/plugin/plugins/verifier-plugin.ts
-          apps/desktop/src/main/agent/harness/qa-evidence.test.ts
-          apps/desktop/src/main/agent/harness/qa-evidence.ts
-          apps/desktop/src/main/agent/harness/task-state.test.ts
-          apps/desktop/src/main/agent/harness/task-state.ts
-          apps/desktop/src/main/agent/pi-event-normalizer.test.ts
-          apps/desktop/src/main/agent/pi-event-normalizer.ts
-          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
-          apps/desktop/src/main/agent/pi-sdk-runtime.ts
-          apps/desktop/src/main/agent/runtime-qa-helper.ts
-          apps/desktop/src/main/groups/group-runtime.ts
-          apps/desktop/src/main/groups/group-task-details.ts
-          apps/desktop/src/main/groups/group-task-evidence.test.ts
-          apps/desktop/src/main/groups/group-task-evidence.ts
-          apps/desktop/src/main/groups/group-task-store.ts
-          apps/desktop/src/shared/contracts-parts/contracts-part-01.ts
-          apps/desktop/src/shared/contracts-parts/contracts-part-03.ts
-          apps/desktop/src/shared/contracts-parts/contracts-part-06.ts
-          apps/desktop/src/shared/group-work-state.ts
-
       - name: Biome + typecheck
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check

@@ -654,8 +654,7 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
       const sourceMutation =
         mutatesSource === true ||
         ["write", "edit", "terminal_write"].includes(event.toolName) ||
-        (event.toolName.startsWith("mcp_") &&
-          !event.toolName.startsWith("mcp_v1_allowlisted_"));
+        (event.toolName.startsWith("mcp_") && !event.toolName.startsWith("mcp_v1_allowlisted_"));
       const unclassifiedShellAction = shellTool && !invocation && !checkName;
       if (sourceMutation || unclassifiedShellAction) {
         generation += 1;
