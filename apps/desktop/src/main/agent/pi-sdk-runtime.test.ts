@@ -2924,6 +2924,80 @@ describe("PiSdkRuntime", () => {
     expect(cancelledEvidence).not.toHaveProperty("id");
   });
 
+  it("keeps passed check results when the run is cancelled afterward", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyChecksCompleted: (() => void) | undefined;
+    const checksCompleted = new Promise<void>((resolve) => {
+      notifyChecksCompleted = resolve;
+    });
+    const abort = vi.fn(async () => rejectPrompt?.(new Error("Aborted")));
+    let runId: string | undefined;
+    const session = createMockPiSession({
+      abort,
+      prompt: vi.fn(() => {
+        runId = getActiveAgentRun(sessionId)?.id;
+        for (const [index, command] of ["npm test", "tsc --noEmit"].entries()) {
+          const toolCallId = `completed-check-${index}`;
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId,
+            toolName: "terminal_run",
+            args: { command },
+          });
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName: "terminal_run",
+            isError: false,
+            result: { details: { exitCode: 0 } },
+          });
+        }
+        notifyChecksCompleted?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and typecheck",
+      sessionId,
+    });
+
+    await checksCompleted;
+    await runtime.abort(sessionId);
+    await prompt;
+
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    const qa = JSON.parse(qaPayload) as {
+      result: {
+        status: string;
+        evidence: Array<{ label: string; status: string; eventId?: string; id?: string }>;
+      };
+    };
+
+    expect(qa.result.status).toBe("cancelled");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Tests", status: "passed" }),
+        expect.objectContaining({ label: "Typecheck", status: "passed" }),
+      ]),
+    );
+    expect(getLatestHarnessTaskState(sessionId, runId ?? "")?.verificationStatus).toBe("unknown");
+  });
+
   it("does not continue todos after input is queued into the current run", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
