@@ -246,7 +246,7 @@ describe("dedicated HyperPlan review IPC", () => {
     registerAppIpc();
   });
 
-  it("reads the current workspace revision for one exact session and run", async () => {
+  it("reads the current workspace revision for one exact session and run", () => {
     const revision = "a".repeat(64);
     mocks.getRunWorkspaceRevision.mockReturnValue(revision);
     const handler = mocks.handlers.get(IPC_CHANNELS.agentRunWorkspaceRevision);
@@ -256,24 +256,22 @@ describe("dedicated HyperPlan review IPC", () => {
       handler(trustedEvent as never, { sessionId: "session-1", runId: "run-1" } as never),
     ).toBe(revision);
     expect(mocks.getRunWorkspaceRevision).toHaveBeenCalledWith("session-1", "run-1");
-    await expect(
+    expect(() =>
       handler(
         trustedEvent as never,
         { sessionId: "session-1", runId: "run-1", workspaceId: "other" } as never,
       ),
-    ).rejects.toThrow();
+    ).toThrow();
   });
 
-  it("reports whether live workspace watching is active for QA freshness", async () => {
+  it("reports whether live workspace watching is active for QA freshness", () => {
     mocks.isWorkspaceWatched.mockReturnValue(false);
     const handler = mocks.handlers.get(IPC_CHANNELS.filesWatchStatus);
     if (!handler) throw new Error("Files watcher status IPC handler was not registered.");
 
     expect(handler(trustedEvent as never, "C:/workspace" as never)).toBe(false);
     expect(mocks.isWorkspaceWatched).toHaveBeenCalledWith("C:/workspace");
-    await expect(
-      handler(trustedEvent as never, { cwd: "C:/workspace" } as never),
-    ).rejects.toThrow();
+    expect(() => handler(trustedEvent as never, { cwd: "C:/workspace" } as never)).toThrow();
   });
 
   it("reviews only an owned Spec plan and passes bounded plan data to the dedicated coordinator", async () => {
