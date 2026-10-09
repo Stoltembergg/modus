@@ -4,8 +4,8 @@ import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
   type BeforeAgentStartEvent,
-  type ToolResultEvent,
   createAgentSession,
+  type ToolResultEvent,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
