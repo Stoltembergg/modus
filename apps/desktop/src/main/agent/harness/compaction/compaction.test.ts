@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createModusCompactionExtension } from "../../pi-compaction-extension";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { HarnessKernel } from "../kernel/harness-kernel";
+import { HarnessObserver } from "../observability/harness-observer";
 import { compactionTelemetry, coordinateCompaction } from "./compaction-coordinator";
 import { defaultCompactionHook } from "./compaction-hook";
 import {
@@ -434,170 +435,72 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
   });
 
   describe("4.6 PI SDK Compaction Extension", () => {
+    function captureHandlers() {
+      const handlers = new Map<string, (event: never, context: never) => unknown>();
+      const on = (event: string, handler: unknown): void => {
+        handlers.set(event, handler as (event: never, context: never) => unknown);
+      };
+      return { handlers, on };
+    }
+
     it("returns undefined when MODUS_COMPACTION_PRUNING is disabled", async () => {
       setFeatureFlagOverrides({
         MODUS_COMPACTION_PRUNING: false,
       });
 
-      const extensionFactory = createModusCompactionExtension("sess-1");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
+      const { handlers, on } = captureHandlers();
+      createModusCompactionExtension(() => undefined)({ on } as never);
 
-      extensionFactory(mockPi);
-      expect(handler).toBeDefined();
-
-      const result = await handler({
-        reason: "threshold",
-        preparation: {
-          messagesToSummarize: [],
-          tokensBefore: 180_000,
-          firstKeptEntryId: "entry-5",
-        },
-      });
-
-      expect(result).toBeUndefined();
+      expect([...handlers.keys()]).toEqual(["context"]);
+      expect(
+        handlers.get("context")?.(
+          { type: "context", messages: [] } as never,
+          {
+            signal: undefined,
+            getContextUsage: () => undefined,
+            model: undefined,
+          } as never,
+        ),
+      ).toBeUndefined();
     });
 
-    it("cancels compaction when enabled and under threshold", async () => {
+    it("leaves manual, threshold, and overflow compaction to the Pi SDK", () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_COMPACTION_PRUNING: true,
       });
 
-      const extensionFactory = createModusCompactionExtension("sess-2");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
+      const { handlers, on } = captureHandlers();
+      createModusCompactionExtension(() => undefined)({ on } as never);
 
-      extensionFactory(mockPi);
-      const result = await handler({
-        reason: "threshold",
-        preparation: {
-          messagesToSummarize: [],
-          tokensBefore: 40_000, // well under default threshold
-          firstKeptEntryId: "entry-1",
-        },
-      });
-
-      expect(result).toEqual({ cancel: true });
+      // Pi sends manual, threshold, automatic, and overflow compaction through
+      // session_before_compact. Leaving that hook unregistered delegates every
+      // reason to the SDK without intercepting or cancelling it.
+      expect([...handlers.keys()]).toEqual(["context"]);
     });
 
-    it("never cancels manual compaction (/compact)", async () => {
+    it("does not register compaction cancellation when the context exceeds the model window", () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_COMPACTION_PRUNING: true,
       });
 
-      const extensionFactory = createModusCompactionExtension("sess-manual");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
-
-      extensionFactory(mockPi);
-      const result = await handler!({
-        reason: "manual",
-        preparation: {
-          messagesToSummarize: [],
-          tokensBefore: 40_000,
-          firstKeptEntryId: "entry-1",
-        },
-      });
-
-      expect(result).toBeUndefined();
+      const { handlers, on } = captureHandlers();
+      createModusCompactionExtension(() => undefined)({ on } as never);
+      expect(handlers.has("session_before_compact")).toBe(false);
+      expect([...handlers.keys()]).toEqual(["context"]);
     });
 
-    it("never cancels overflow recovery, even below the policy threshold", async () => {
+    it("keeps Pi's native summary generation available when compaction is required", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_COMPACTION_PRUNING: true,
       });
 
-      const extensionFactory = createModusCompactionExtension("sess-overflow");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
-
-      extensionFactory(mockPi);
-      const result = await handler!({
-        reason: "overflow",
-        preparation: {
-          messagesToSummarize: [],
-          tokensBefore: 40_000, // below the default threshold
-          firstKeptEntryId: "entry-1",
-        },
-      });
-
-      expect(result).toBeUndefined();
-    });
-
-    it("does not cancel compaction when tokens exceed the real context window", async () => {
-      setFeatureFlagOverrides({
-        MODUS_USE_KERNEL: true,
-        MODUS_COMPACTION_PRUNING: true,
-      });
-
-      const extensionFactory = createModusCompactionExtension("sess-window");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
-
-      extensionFactory(mockPi);
-      const result = await handler!(
-        {
-          reason: "threshold",
-          preparation: {
-            messagesToSummarize: [],
-            tokensBefore: 120_000,
-            firstKeptEntryId: "entry-1",
-          },
-        },
-        { model: { id: "custom-small-model", contextWindow: 64_000 } },
-      );
-
-      expect(result).toBeUndefined();
-    });
-
-    it("returns undefined (delegating to LLM compact) when compaction is required above threshold", async () => {
-      setFeatureFlagOverrides({
-        MODUS_USE_KERNEL: true,
-        MODUS_COMPACTION_PRUNING: true,
-      });
-
-      const extensionFactory = createModusCompactionExtension("sess-over");
-      let handler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "session_before_compact") handler = fn;
-        },
-      };
-
-      extensionFactory(mockPi);
-      const result = await handler!({
-        reason: "threshold",
-        preparation: {
-          messagesToSummarize: [],
-          tokensBefore: 180_000,
-          firstKeptEntryId: "entry-10",
-        },
-      });
-
-      expect(result).toBeUndefined();
+      const { handlers, on } = captureHandlers();
+      createModusCompactionExtension(() => undefined)({ on } as never);
+      expect(handlers.has("session_before_compact")).toBe(false);
+      expect([...handlers.keys()]).toEqual(["context"]);
     });
 
     it("applies context hook pruning non-destructively for LLM requests", async () => {
@@ -606,40 +509,52 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
         MODUS_COMPACTION_PRUNING: true,
       });
 
-      const extensionFactory = createModusCompactionExtension("sess-ctx");
-      let contextHandler: any = null;
-      const mockPi: any = {
-        on: (event: string, fn: any) => {
-          if (event === "context") contextHandler = fn;
-        },
-      };
-
-      extensionFactory(mockPi);
-      expect(contextHandler).toBeDefined();
-
+      const sessionId = "sess-ctx";
+      const observer = HarnessObserver.getInstance();
+      const observerSessionToken = observer.beginSession(sessionId);
+      const { handlers, on } = captureHandlers();
+      createModusCompactionExtension(() => ({
+        sessionId,
+        runId: "run-ctx",
+        observerSessionToken,
+      }))({ on } as never);
       const messages = [
-        { id: "m1", role: "user", content: "hello" },
         {
-          id: "m2",
           role: "toolResult",
-          toolName: "grep_search",
-          content: "huge search result\n" + "line data\n".repeat(15000),
+          toolName: "read",
+          toolCallId: "read-first",
+          isError: false,
+          content: [{ type: "text", text: "stable read result\n".repeat(200) }],
         },
-        { id: "m3", role: "user", content: "continue" },
-        { id: "m4", role: "assistant", content: "working" },
-        { id: "m5", role: "user", content: "finish" },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "read-later",
+          isError: false,
+          content: [{ type: "text", text: "stable read result\n".repeat(200) }],
+        },
       ];
 
-      const mockCtx: any = {
-        model: { id: "deepseek-chat" },
-        getContextUsage: () => ({ tokens: 55_000 }),
-      };
+      const originalText = (messages[0]?.content as Array<{ text: string }>)[0]?.text;
+      const result = await handlers.get("context")?.(
+        { type: "context", messages } as never,
+        {
+          signal: undefined,
+          model: { id: "deepseek-chat", contextWindow: 64_000 },
+          getContextUsage: () => ({ tokens: 55_000, contextWindow: 64_000, percent: 85 }),
+        } as never,
+      );
 
-      const result = await contextHandler!({ messages }, mockCtx);
       expect(result).toBeDefined();
-      expect(result.messages).toHaveLength(5);
-      const m2Pruned = result.messages.find((m: any) => m.id === "m2");
-      expect(m2Pruned.content).toContain("[Pruned superseded");
+      const resultMessages = (result as { messages: typeof messages }).messages;
+      expect(resultMessages).toHaveLength(2);
+      expect(resultMessages[0]?.content[0]?.text).toMatch(/identical later result/i);
+      expect(resultMessages[1]?.content[0]?.text).toBe(originalText);
+      expect(messages[0]?.content[0]?.text).toBe(originalText);
+      expect(observer.getRecentEvents().at(-1)?.data).toMatchObject({
+        measuredContextBytesRemoved: expect.any(Number),
+        estimatedTokensSaved: expect.any(Number),
+      });
     });
   });
 });

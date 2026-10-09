@@ -68,10 +68,45 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(snap.toolResults.retrievalLatency).toBe(15);
 
       expect(snap.compaction.compactionEvents).toBe(1);
-      expect(snap.compaction.tokensSavedByPruning).toBe(1800);
+      expect(snap.compaction.estimatedTokensSavedByPruning).toBe(1800);
 
       expect(snap.promptSections.tokensSaved).toBe(600);
       expect(snap.promptSections.skippedSections).toBe(1);
+    });
+
+    it("records measured context bytes and estimated tokens only for the current session and run", () => {
+      const observer = HarnessObserver.getInstance();
+      const sessionId = "compaction-session";
+      const sessionToken = observer.beginSession(sessionId);
+
+      observer.recordCompactionPruning(4096, 1024, sessionId, sessionToken, "run-current");
+
+      expect(observer.snapshot().compaction).toMatchObject({
+        totalPrunedBytes: 4096,
+        estimatedTokensSavedByPruning: 1024,
+      });
+      expect(observer.getRecentEvents()).toContainEqual(
+        expect.objectContaining({
+          type: "harness.compaction.pruned",
+          sessionId,
+          runId: "run-current",
+          data: {
+            measuredContextBytesRemoved: 4096,
+            estimatedTokensSaved: 1024,
+          },
+        }),
+      );
+
+      observer.beginSession(sessionId);
+      observer.recordCompactionPruning(8192, 2048, sessionId, sessionToken, "run-stale");
+
+      expect(observer.snapshot().compaction).toMatchObject({
+        totalPrunedBytes: 4096,
+        estimatedTokensSavedByPruning: 1024,
+      });
+      expect(observer.getRecentEvents()).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId: "run-stale" })]),
+      );
     });
 
     it("tracks repeat guards and response policy evaluations", () => {

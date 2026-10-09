@@ -254,7 +254,13 @@ function createMockPiSession(overrides: Record<string, unknown> = {}): Record<st
 }
 
 /** Real PI tool registration/execution, with only the provider stream replaced. */
-async function useOfflinePiToolSessions() {
+async function useOfflinePiToolSessions(
+  offlineOptions: {
+    contextWindow?: number;
+    assistantUsageTotalTokens?: number;
+    onStream?: (session: AgentSession, context: Context) => void;
+  } = {},
+) {
   const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
     "@earendil-works/pi-coding-agent",
   );
@@ -294,12 +300,16 @@ async function useOfflinePiToolSessions() {
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 100_000,
+        contextWindow: offlineOptions.contextWindow ?? 100_000,
         maxTokens: 1000,
         ...options.model,
+        ...(offlineOptions.contextWindow !== undefined
+          ? { contextWindow: offlineOptions.contextWindow }
+          : {}),
       },
     });
     session.agent.streamFn = (model, context) => {
+      offlineOptions.onStream?.(session, context);
       deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
       deliveredMessages.push({ session, messages: [...context.messages] });
       const stream = createAssistantMessageEventStream();
@@ -311,6 +321,7 @@ async function useOfflinePiToolSessions() {
           ? requestedTool
           : undefined;
       const callTool = Boolean(toolName);
+      const reportedTotalTokens = offlineOptions.assistantUsageTotalTokens ?? 2;
       const message: AssistantMessage = {
         role: "assistant",
         api: model.api,
@@ -328,11 +339,11 @@ async function useOfflinePiToolSessions() {
           : [{ type: "text", text: "Done." }],
         stopReason: callTool ? "toolUse" : "stop",
         usage: {
-          input: 1,
+          input: Math.max(0, reportedTotalTokens - 1),
           output: 1,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: 2,
+          totalTokens: reportedTotalTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         timestamp: Date.now(),
@@ -358,6 +369,8 @@ async function useOfflinePiToolSessions() {
       deliveredMessages
         .filter((entry) => entry.session === session)
         .flatMap((entry) => entry.messages),
+    contextsFor: (session: AgentSession) =>
+      deliveredMessages.filter((entry) => entry.session === session).map((entry) => entry.messages),
     requestTool: (name: string, input: Record<string, unknown> = {}) => {
       requestedTool = name;
       requestedToolInput = input;
@@ -5375,7 +5388,9 @@ describe("PiSdkRuntime", () => {
   });
 
   it("uses an MCP tool added after the first chat turn and preserves the live history", async () => {
-    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions({
+      assistantUsageTotalTokens: 30_000,
+    });
     const sessionId = `session-${crypto.randomUUID()}`;
     const name = "mcp_added_after_turn";
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
@@ -9501,6 +9516,347 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     await expect(pendingCallback).resolves.toBeUndefined();
     expect(registry.getTrackedSessionCount()).toBe(0);
     expect(registry.getAllSections()).toEqual([]);
+  });
+});
+
+describe("PiSdkRuntime compaction pruning production wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
+  });
+
+  it("does not register pruning when MODUS_USE_KERNEL disables its dependency", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: false, MODUS_COMPACTION_PRUNING: true });
+    const sessionId = `compaction-disabled-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Keep native compaction behavior.",
+        sessionId,
+      });
+
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories?: unknown[];
+      };
+      expect(options.extensionFactories).toHaveLength(1);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("does not register the compaction extension when pruning is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: false });
+    const sessionId = `compaction-flag-off-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Keep pruning disabled for this session.",
+        sessionId,
+      });
+
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories?: unknown[];
+      };
+      expect(options.extensionFactories).toHaveLength(1);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("prunes only a later duplicate in the real Pi context hook and leaves session history intact", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_TOOL_RESULT_SPILL: false,
+    });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-pruning-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "repeatable-read-result.txt");
+    const source = "export interface StableItem { readonly key: string; }\n".repeat(1200);
+    await writeFile(fixturePath, source, "utf8");
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read the same informational file twice and compare the results.",
+        sessionId,
+      });
+
+      const piSession = sessionAt();
+      const contexts = contextsFor(piSession);
+      const modelBoundContext = contexts.at(-1) ?? [];
+      const modelBoundResults = modelBoundContext.filter(
+        (message) => message.role === "toolResult",
+      );
+      const lastText = modelBoundResults.at(-1)?.content.find((block) => block.type === "text");
+      const firstText = modelBoundResults[0]?.content.find((block) => block.type === "text");
+      const storedResults = piSession.agent.state.messages.filter(
+        (message) => message.role === "toolResult" && message.toolName === "read",
+      );
+
+      expect(modelBoundResults).toHaveLength(2);
+      expect(firstText?.type === "text" && /identical later result/i.test(firstText.text)).toBe(
+        true,
+      );
+      expect(lastText?.type === "text" ? lastText.text : "").toContain("StableItem");
+      expect(storedResults).toHaveLength(2);
+      expect(
+        storedResults.every(
+          (message) =>
+            "content" in message &&
+            Array.isArray(message.content) &&
+            message.content.some(
+              (block) => block.type === "text" && block.text.includes("StableItem"),
+            ),
+        ),
+      ).toBe(true);
+      expect(piSession.model?.id).toBe("model");
+      expect(piSession.model?.provider).toBe("mock");
+      expect(piSession.extensionRunner.hasHandlers("context")).toBe(true);
+      expect(piSession.extensionRunner.hasHandlers("session_before_compact")).toBe(false);
+      expect(recordPruning).toHaveBeenCalledWith(
+        expect.any(Number),
+        expect.any(Number),
+        sessionId,
+        expect.any(Symbol),
+        expect.any(String),
+      );
+      const event = observer
+        .getRecentEvents()
+        .find((candidate) => candidate.type === "harness.compaction.pruned");
+      expect(event?.data).toMatchObject({
+        measuredContextBytesRemoved: expect.any(Number),
+        estimatedTokensSaved: expect.any(Number),
+      });
+      expect(JSON.stringify(event?.data)).not.toContain("StableItem");
+      expect(event?.runId).toEqual(expect.any(String));
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("uses the selected model's real context window before pruning", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 100_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-large-window-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "large-window-result.txt");
+    await writeFile(
+      fixturePath,
+      "export interface StableWindowItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read the same informational file twice.",
+        sessionId,
+      });
+
+      const piSession = sessionAt();
+      const results = (contextsFor(piSession).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const texts = results.map((message) =>
+        message.content.find((block) => block.type === "text"),
+      );
+
+      expect(piSession.model?.contextWindow).toBe(100_000);
+      expect(results).toHaveLength(2);
+      expect(
+        texts.every((block) => block?.type === "text" && block.text.includes("StableWindowItem")),
+      ).toBe(true);
+      expect(recordPruning).not.toHaveBeenCalled();
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps duplicate QA evidence intact in the productive Pi context", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_TOOL_RESULT_SPILL: false,
+    });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-qa-evidence-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "qa-evidence.txt");
+    await writeFile(
+      fixturePath,
+      "Vitest check passed for the verified fixture row\n".repeat(1200),
+      "utf8",
+    );
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Preserve the QA evidence from both reads.",
+        sessionId,
+      });
+
+      const results = (contextsFor(sessionAt()).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const texts = results.map((message) =>
+        message.content.find((block) => block.type === "text"),
+      );
+
+      expect(results).toHaveLength(2);
+      expect(
+        texts.every(
+          (block) => block?.type === "text" && block.text.includes("Vitest check passed"),
+        ),
+      ).toBe(true);
+      expect(recordPruning).not.toHaveBeenCalled();
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("isolates repeat pruning between Agent Group member sessions", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, contextsFor, requestTool, requestToolSequence } =
+      await useOfflinePiToolSessions({ contextWindow: 20_000 });
+    const runtime = new PiSdkRuntime();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const firstSessionId = `group-member-a-${crypto.randomUUID()}`;
+    const secondSessionId = `group-member-b-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    insertWorkspace(workspaceId);
+    for (const [sessionId, title] of [
+      [firstSessionId, "Member A"],
+      [secondSessionId, "Member B"],
+    ] as const) {
+      getDatabase()
+        .prepare(
+          `insert into agent_sessions (
+            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+            created_at, updated_at
+          ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', null, ?, ?, ?)`,
+        )
+        .run(sessionId, workspaceId, title, cwd, join(userData, `${sessionId}.jsonl`), now, now);
+    }
+    groupStore.createAgentGroupWithMembers({
+      name: "Compaction isolation",
+      workspaceId,
+      members: [{ sessionId: firstSessionId }, { sessionId: secondSessionId }],
+      leadSessionId: firstSessionId,
+    });
+    const fixturePath = join(cwd, "group-member-result.txt");
+    await writeFile(
+      fixturePath,
+      "export interface GroupItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+
+    try {
+      requestToolSequence([
+        { name: "read", input: { path: fixturePath } },
+        { name: "read", input: { path: fixturePath } },
+      ]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read this file twice.",
+        sessionId: firstSessionId,
+      });
+      const firstResults = (contextsFor(sessionAt(0)).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+
+      requestTool("read", { path: fixturePath });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read this file once in the other group member session.",
+        sessionId: secondSessionId,
+      });
+      const secondResults = (contextsFor(sessionAt(1)).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const firstText = firstResults[0]?.content.find((block) => block.type === "text");
+      const secondText = secondResults[0]?.content.find((block) => block.type === "text");
+
+      expect(firstText?.type === "text" && /identical later result/i.test(firstText.text)).toBe(
+        true,
+      );
+      expect(secondResults).toHaveLength(1);
+      expect(secondText?.type === "text" && secondText.text.includes("GroupItem")).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(firstSessionId);
+      await runtime.releaseRuntime(secondSessionId);
+    }
+  });
+
+  it("keeps manual compaction on the Pi SDK native path", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const sessionId = `compaction-native-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "native-compaction-input.txt");
+    await writeFile(
+      fixturePath,
+      "export interface NativeHistoryItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+
+    try {
+      for (const turn of ["first turn", "second turn", "third turn"]) {
+        requestTool("read", { path: fixturePath });
+        await runtime.prompt(window, { context: [], message: turn, sessionId });
+      }
+
+      const piSession = sessionAt();
+      expect(piSession.extensionRunner.hasHandlers("session_before_compact")).toBe(false);
+      expect(piSession.sessionManager.getBranch().length).toBeGreaterThan(10);
+      await runtime.compact(window, sessionId);
+      expect(
+        piSession.sessionManager.getBranch().some((entry) => entry.type === "compaction"),
+      ).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 });
 
