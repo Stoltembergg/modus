@@ -54,6 +54,7 @@ type ToolEventBase = {
   fullProject?: boolean;
   mutatesSource?: boolean;
   revision?: string;
+  workspaceRevision?: string;
 };
 
 export type RecognizedCheckName = "tests" | "typecheck" | "lint" | "build";
@@ -72,6 +73,7 @@ export type RunQAEvent =
       type: "tool.ended";
       eventId?: string;
       checkConfigStable?: boolean;
+      sourceStable?: boolean;
       exitCode?: number;
       error?: boolean;
       aborted?: boolean;
@@ -427,7 +429,9 @@ export function recognizeCheckInvocation(
   ) {
     return undefined;
   }
-  const mutatesSource = tokens.some((token) => /^--(?:write|fix|apply)(?:=.*)?$/i.test(token));
+  const mutatesSource = tokens.some((token) =>
+    /^(?:-u|--(?:write|fix|apply|update|updatesnapshot|update-snapshot))(?:=.*)?$/i.test(token),
+  );
   const executable = tokens[0]?.toLowerCase();
   if (!executable) return undefined;
 
@@ -814,4 +818,53 @@ export function summarizeRunQA(input: SummarizeRunQAInput): HarnessQAResult {
   }
 
   return { required: true, status, reasonCode, evidence };
+}
+
+/** Keep passing evidence valid only for the source content observed at check start, end, and QA time. */
+export function bindRunQAtoWorkspaceRevision(input: {
+  result: HarnessQAResult;
+  events: RunQAEvent[];
+  workspaceRevision: string | undefined;
+}): HarnessQAResult {
+  if (!input.result.required) return input.result;
+  const starts = new Map<string, Extract<RunQAEvent, { type: "tool.started" }>>();
+  for (const event of input.events) {
+    if (event.type === "tool.started") starts.set(event.toolCallId, event);
+  }
+
+  let invalidatedPass = false;
+  const evidence = input.result.evidence.map((item) => {
+    if (item.status !== "passed") return item;
+    if (!item.eventId) {
+      invalidatedPass = true;
+      return { ...item, status: "unavailable" as const };
+    }
+    const ended = input.events.find(
+      (event): event is Extract<RunQAEvent, { type: "tool.ended" }> =>
+        event.type === "tool.ended" && event.eventId === item.eventId,
+    );
+    const started = ended ? starts.get(ended.toolCallId) : undefined;
+    const current = input.workspaceRevision;
+    const isCurrent = Boolean(
+      current &&
+        started?.workspaceRevision &&
+        ended?.workspaceRevision &&
+        ended.sourceStable === true &&
+        started.workspaceRevision === ended.workspaceRevision &&
+        ended.workspaceRevision === current,
+    );
+    if (!current || !isCurrent) {
+      invalidatedPass = true;
+      return { ...item, status: "unavailable" as const };
+    }
+    return { ...item, revision: current };
+  });
+
+  return {
+    ...input.result,
+    ...(input.result.status === "passed" && invalidatedPass
+      ? { status: "unavailable" as const, reasonCode: "required_check_unavailable" }
+      : {}),
+    evidence,
+  };
 }

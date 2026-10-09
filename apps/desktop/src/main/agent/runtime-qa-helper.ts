@@ -3,8 +3,13 @@ import { join } from "node:path";
 import type { HarnessTaskCheckKind, PlanEvidenceRef, PlanRef } from "../../shared/contracts";
 import { getGroupTask } from "../groups/group-task-store";
 import { hashContent, isPlanCriterionLinkedToTodos } from "../plan/plan-store";
-import { getLatestCheckpointRestoreRowId, getRunToolEvidence } from "./agent-event-store";
 import {
+  getLatestCheckpointRestoreRowId,
+  getRunToolEvidence,
+  getRunWorkspaceRevision,
+} from "./agent-event-store";
+import {
+  bindRunQAtoWorkspaceRevision,
   type RunQAEvent,
   recognizeCheckInvocation,
   resolvePackageCheckScript,
@@ -303,12 +308,14 @@ export function summarizeHarnessQA(input: {
       });
     }
   }
-  const result = summarizeRunQA({ ...input, events });
-  if (
-    input.aborted &&
-    result.required &&
-    ["missing", "passed", "user_confirmed"].includes(result.status)
-  ) {
+  const result = bindRunQAtoWorkspaceRevision({
+    result: summarizeRunQA({ ...input, events }),
+    events,
+    workspaceRevision: hasValidRunStart
+      ? getRunWorkspaceRevision(input.sessionId, input.runId)
+      : undefined,
+  });
+  if (input.aborted && result.required) {
     result.status = "cancelled";
     result.reasonCode = "required_check_cancelled";
   }

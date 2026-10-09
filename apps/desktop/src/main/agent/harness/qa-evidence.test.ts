@@ -7,7 +7,12 @@ import {
   controlledAgentCommand,
   parseControlledNpmCheck,
 } from "../../terminal/agent-command-policy";
-import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
+import {
+  bindRunQAtoWorkspaceRevision,
+  type RunQAEvent,
+  recognizeCheckInvocation,
+  summarizeRunQA,
+} from "./qa-evidence";
 
 const sessionId = "session-safe-1";
 const runId = "run-safe-1";
@@ -358,6 +363,46 @@ function pair(overrides: Partial<Extract<RunQAEvent, { type: "tool.ended" }>> = 
 
 const summarize = (events: RunQAEvent[], changedPaths = ["src/a.ts"], requiredChecks = ["tests"]) =>
   summarizeRunQA({ sessionId, runId, changedPaths, requiredChecks, events });
+
+describe("workspace-bound QA", () => {
+  it("keeps a pass only while its start, end, and current source revisions match", () => {
+    const revision = "a".repeat(64);
+    const events = pair({ sourceStable: true, workspaceRevision: revision });
+    const started = events[0];
+    if (started?.type === "tool.started") started.workspaceRevision = revision;
+    const result = summarize(events);
+
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: revision }),
+    ).toMatchObject({ status: "passed", evidence: [expect.objectContaining({ revision })] });
+    expect(
+      bindRunQAtoWorkspaceRevision({
+        result,
+        events,
+        workspaceRevision: "b".repeat(64),
+      }),
+    ).toMatchObject({
+      status: "unavailable",
+      reasonCode: "required_check_unavailable",
+      evidence: [expect.objectContaining({ status: "unavailable" })],
+    });
+  });
+
+  it("rejects a pass when source content changed during the check or has no revision", () => {
+    const revision = "c".repeat(64);
+    const events = pair({ sourceStable: false, workspaceRevision: revision });
+    const started = events[0];
+    if (started?.type === "tool.started") started.workspaceRevision = revision;
+    const result = summarize(events);
+
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: revision }),
+    ).toMatchObject({ status: "unavailable" });
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: undefined }),
+    ).toMatchObject({ status: "unavailable" });
+  });
+});
 
 function commandPair(command: string, toolName = "terminal_run", paths?: string[]): RunQAEvent[] {
   const base = {

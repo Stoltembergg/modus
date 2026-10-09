@@ -2285,8 +2285,10 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     await initGitRepoWithKnownEmptyScope();
+    let runId = "";
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "qa-terminal-call",
@@ -3285,6 +3287,12 @@ describe("PiSdkRuntime", () => {
     ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
 
     expect(outcome.outcome).toBe("ok");
+    expect(getAgentRun(runId)?.status).toBe("completed");
+    expect(
+      listAgentEvents(sessionId).some(
+        ({ event }) => event.runId === runId && event.type === "run.completed",
+      ),
+    ).toBe(true);
     expect(qa.result).toMatchObject({
       required: true,
       status: "unavailable",

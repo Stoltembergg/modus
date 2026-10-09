@@ -12,6 +12,7 @@ import type {
 } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { getDatabase } from "../db/database";
+import { getWorkspaceSourceRevision } from "./workspace-source-revision";
 import { type RunQAEvent, recognizeCheckInvocation } from "./harness/qa-evidence";
 import {
   MAX_TASK_STATE_CRITERIA,
@@ -42,6 +43,8 @@ const MAX_RUN_TOOL_EVENTS = 500;
 // Main-owned fields stored beside durable events; listAgentEvents strips them before IPC.
 const QA_CHECK_SNAPSHOT_FIELD = "__qaCheckSnapshot";
 const QA_CHECK_CONFIG_STABLE_FIELD = "__qaCheckConfigStable";
+const QA_CHECK_SOURCE_STABLE_FIELD = "__qaCheckSourceStable";
+const QA_CHECK_SOURCE_REVISION_FIELD = "__qaCheckSourceRevision";
 type PersistedQACheckSnapshot = {
   version: 1;
   checkName?: HarnessTaskCheckKind;
@@ -49,6 +52,7 @@ type PersistedQACheckSnapshot = {
   fullProject?: true;
   mutatesSource?: true;
   packageConfigDigest?: string;
+  workspaceRevision?: string;
 };
 const MAX_CODEGRAPH_DISCOVERY_EVENTS = 200;
 const MAX_CODEGRAPH_DISCOVERY_REFS = 200;
@@ -165,7 +169,37 @@ function eventWithoutQACheckSnapshot(event: AgentEvent): Record<string, unknown>
   const payload = { ...event } as Record<string, unknown>;
   delete payload[QA_CHECK_SNAPSHOT_FIELD];
   delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
   return payload;
+}
+
+function workspaceRevisionForRun(
+  db: ReturnType<typeof getDatabase>,
+  sessionId: string,
+  runId: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `select s.cwd, c.commit_hash
+       from agent_checkpoints c
+       join agent_sessions s on s.id = c.session_id
+       where c.session_id = ? and c.run_id = ? and c.kind = 'auto'
+       order by c.rowid asc limit 1`,
+    )
+    .get(sessionId, runId) as { cwd?: string; commit_hash?: string } | undefined;
+  if (!row?.cwd || !row.commit_hash) return undefined;
+  return getWorkspaceSourceRevision(row.cwd, row.commit_hash);
+}
+
+/** Content revision of the active run's current Git workspace, when bounded reads are safe. */
+export function getRunWorkspaceRevision(sessionId: string, runId: string): string | undefined {
+  if (!sessionId || !runId) return undefined;
+  try {
+    return workspaceRevisionForRun(getDatabase(), sessionId, runId);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Capture only typed recognition metadata from the event's owning session at start time. */
@@ -189,6 +223,10 @@ function createQACheckSnapshot(
   const paths = invocation?.paths ?? (checkName ? safeToolPaths(args) : undefined);
   const fullProject = checkName && !paths ? invocation?.fullProject : false;
   const mutatesSource = invocation?.mutatesSource;
+  const workspaceRevision =
+    checkName && !mutatesSource && event.runId
+      ? workspaceRevisionForRun(db, event.sessionId, event.runId)
+      : undefined;
   return {
     version: 1,
     ...(checkName ? { checkName } : {}),
@@ -198,7 +236,52 @@ function createQACheckSnapshot(
     ...(invocation?.packageConfigDigest
       ? { packageConfigDigest: invocation.packageConfigDigest }
       : {}),
+    ...(workspaceRevision ? { workspaceRevision } : {}),
   };
+}
+
+/** Recheck the source content synchronously at the durable tool completion boundary. */
+function qaCheckWorkspaceSourceAtEnd(
+  event: Extract<AgentEvent, { type: "tool.ended" }>,
+  db: ReturnType<typeof getDatabase>,
+): { stable: boolean; revision?: string } | undefined {
+  if (!event.runId) return undefined;
+  const row = db
+    .prepare(
+      `select payload_json from agent_events
+       where session_id = ? and type = 'tool.started'
+         and json_extract(payload_json, '$.runId') = ?
+         and json_extract(payload_json, '$.toolCallId') = ?
+       order by rowid asc limit 1`,
+    )
+    .get(event.sessionId, event.runId, event.toolCallId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    const started = payload as unknown as Extract<AgentEvent, { type: "tool.started" }>;
+    if (
+      started.type !== "tool.started" ||
+      started.sessionId !== event.sessionId ||
+      started.runId !== event.runId ||
+      started.toolCallId !== event.toolCallId ||
+      (event.toolName !== undefined && started.toolName !== event.toolName)
+    ) {
+      return undefined;
+    }
+    const snapshot = readQACheckSnapshot(payload);
+    if (snapshot.state !== "valid" || !snapshot.snapshot.checkName) return undefined;
+    const revision = workspaceRevisionForRun(db, event.sessionId, event.runId);
+    return {
+      stable: Boolean(
+        snapshot.snapshot.workspaceRevision &&
+          revision &&
+          revision === snapshot.snapshot.workspaceRevision,
+      ),
+      ...(revision ? { revision } : {}),
+    };
+  } catch {
+    return { stable: false };
+  }
 }
 
 /** Revalidate package-script identity against the owning session before storing the end event. */
@@ -256,6 +339,11 @@ function serializeAgentEvent(event: AgentEvent, db: ReturnType<typeof getDatabas
   } else if (event.type === "tool.ended") {
     const stable = packageCheckConfigIsStableAtEnd(event, db);
     if (stable !== undefined) payload[QA_CHECK_CONFIG_STABLE_FIELD] = stable;
+    const source = qaCheckWorkspaceSourceAtEnd(event, db);
+    if (source) {
+      payload[QA_CHECK_SOURCE_STABLE_FIELD] = source.stable;
+      if (source.revision) payload[QA_CHECK_SOURCE_REVISION_FIELD] = source.revision;
+    }
   }
   return JSON.stringify(payload);
 }
@@ -270,6 +358,7 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
       "fullProject",
       "mutatesSource",
       "packageConfigDigest",
+      "workspaceRevision",
     ]) ||
     value.version !== 1 ||
     (value.checkName !== undefined &&
@@ -291,11 +380,15 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
     (value.packageConfigDigest !== undefined &&
       (typeof value.packageConfigDigest !== "string" ||
         !/^[a-f0-9]{64}$/.test(value.packageConfigDigest))) ||
+    (value.workspaceRevision !== undefined &&
+      (typeof value.workspaceRevision !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.workspaceRevision))) ||
     (value.checkName === undefined &&
       (value.paths !== undefined ||
         value.fullProject !== undefined ||
         value.mutatesSource !== undefined ||
-        value.packageConfigDigest !== undefined))
+        value.packageConfigDigest !== undefined ||
+        value.workspaceRevision !== undefined))
   ) {
     return undefined;
   }
@@ -307,6 +400,9 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
     ...(value.mutatesSource ? { mutatesSource: true as const } : {}),
     ...(value.packageConfigDigest
       ? { packageConfigDigest: value.packageConfigDigest as string }
+      : {}),
+    ...(value.workspaceRevision
+      ? { workspaceRevision: value.workspaceRevision as string }
       : {}),
   };
 }
@@ -371,6 +467,8 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
       >;
       delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
       delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
+      delete existingEvent[QA_CHECK_SOURCE_STABLE_FIELD];
+      delete existingEvent[QA_CHECK_SOURCE_REVISION_FIELD];
       if (
         existingBeforeInsert.session_id !== event.sessionId ||
         existingBeforeInsert.type !== event.type ||
@@ -397,6 +495,8 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
     const existingEvent = JSON.parse(existing.payload_json) as Record<string, unknown>;
     delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
     delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
+    delete existingEvent[QA_CHECK_SOURCE_STABLE_FIELD];
+    delete existingEvent[QA_CHECK_SOURCE_REVISION_FIELD];
     if (
       existing.session_id !== event.sessionId ||
       existing.type !== event.type ||
@@ -840,6 +940,7 @@ export function getRunToolEvidence(
       fullProject?: boolean;
       mutatesSource?: boolean;
       packageConfigDigest?: string;
+      workspaceRevision?: string;
     }
   >();
   const evidence: RunQAEvent[] = [];
@@ -896,6 +997,9 @@ export function getRunToolEvidence(
         ...(snapshot.state === "valid" && snapshot.snapshot.packageConfigDigest
           ? { packageConfigDigest: snapshot.snapshot.packageConfigDigest }
           : {}),
+        ...(snapshot.state === "valid" && snapshot.snapshot.workspaceRevision
+          ? { workspaceRevision: snapshot.snapshot.workspaceRevision }
+          : {}),
       });
       evidence.push({
         type: "tool.started",
@@ -908,6 +1012,9 @@ export function getRunToolEvidence(
         ...(paths ? { paths } : {}),
         ...(fullProject ? { fullProject: true } : {}),
         ...(mutatesSource ? { mutatesSource: true } : {}),
+        ...(snapshot.state === "valid" && snapshot.snapshot.workspaceRevision
+          ? { workspaceRevision: snapshot.snapshot.workspaceRevision }
+          : {}),
       });
       continue;
     }
@@ -918,6 +1025,8 @@ export function getRunToolEvidence(
       started.packageConfigDigest !== undefined
         ? payload[QA_CHECK_CONFIG_STABLE_FIELD] === true
         : undefined;
+    const sourceStable = payload[QA_CHECK_SOURCE_STABLE_FIELD];
+    const sourceRevision = payload[QA_CHECK_SOURCE_REVISION_FIELD];
     evidence.push({
       type: "tool.ended",
       sessionId,
@@ -929,7 +1038,10 @@ export function getRunToolEvidence(
       ...(started.paths ? { paths: started.paths } : {}),
       ...(started.fullProject ? { fullProject: true } : {}),
       ...(started.mutatesSource ? { mutatesSource: true } : {}),
+      ...(started.workspaceRevision ? { workspaceRevision: started.workspaceRevision } : {}),
       ...(checkConfigStable !== undefined ? { checkConfigStable } : {}),
+      ...(typeof sourceStable === "boolean" ? { sourceStable } : {}),
+      ...(typeof sourceRevision === "string" ? { workspaceRevision: sourceRevision } : {}),
       ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
       error: event.isError,
       ...(event.aborted ? { aborted: true } : {}),
@@ -1229,6 +1341,8 @@ export function listAgentEvents(
     const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
     delete payload[QA_CHECK_SNAPSHOT_FIELD];
     delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+    delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
+    delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
     return {
       id: row.id,
       event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,

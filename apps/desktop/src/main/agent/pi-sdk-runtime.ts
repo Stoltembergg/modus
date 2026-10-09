@@ -86,6 +86,7 @@ import {
   getLatestSessionTodos,
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
+  getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
   listAgentEvents,
   recordAgentEvent,
@@ -161,6 +162,7 @@ import {
   upsertProjectModelDiscoveries,
 } from "./harness/project-model-store";
 import {
+  bindRunQAtoWorkspaceRevision,
   type RunQAEvent,
   recognizeCheckInvocation,
   resolvePackageCheckScript,
@@ -716,12 +718,14 @@ function summarizeHarnessQA(input: {
       });
     }
   }
-  const result = summarizeRunQA({ ...input, events });
-  if (
-    input.aborted &&
-    result.required &&
-    ["missing", "passed", "user_confirmed"].includes(result.status)
-  ) {
+  const result = bindRunQAtoWorkspaceRevision({
+    result: summarizeRunQA({ ...input, events }),
+    events,
+    workspaceRevision: hasValidRunStart
+      ? getRunWorkspaceRevision(input.sessionId, input.runId)
+      : undefined,
+  });
+  if (input.aborted && result.required) {
     result.status = "cancelled";
     result.reasonCode = "required_check_cancelled";
   }
@@ -1819,6 +1823,13 @@ export class PiSdkRuntime implements AgentRuntime {
             : item,
         );
       }
+    }
+    if (
+      result.required &&
+      (aborted || this.cancellingRuns.has(runId) || getAgentRun(runId)?.status === "cancelled")
+    ) {
+      result.status = "cancelled";
+      result.reasonCode = "required_check_cancelled";
     }
     if (plan?.spec && result.required) {
       const evidence = planEvidenceFromQA(plan, result);
@@ -3346,6 +3357,8 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     let runCheckpoint: Awaited<ReturnType<typeof createCheckpoint>> | undefined;
     let turnEndAttempted = false;
+    let settledChangedPaths: string[] = [];
+    let settledChangedScopeKnown = false;
     const captureTurnEnd = async (): Promise<void> => {
       if (!runCheckpoint || turnEndAttempted || !getAgentRun(run.id)) return;
       turnEndAttempted = true;
@@ -3360,8 +3373,43 @@ export class PiSdkRuntime implements AgentRuntime {
         return undefined;
       });
     };
-    let settledChangedPaths: string[] = [];
-    let settledChangedScopeKnown = false;
+    const captureCurrentRunScope = async (): Promise<void> => {
+      if (!runCheckpoint) return;
+      const changes = await getChangeStatsSinceStrict(
+        runtimeSession.info.cwd,
+        runCheckpoint.commitHash,
+      ).catch(() => undefined);
+      settledChangedScopeKnown = changes !== undefined && !changes.truncated;
+      settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
+    };
+    const cancellationRequested = (): boolean =>
+      this.cancellingRuns.has(run.id) || getAgentRun(run.id)?.status === "cancelled";
+    const settleCancelledRun = async (): Promise<void> => {
+      await captureCurrentRunScope();
+      await captureTurnEnd();
+      await this.emitHarnessQA(
+        runtimeSession,
+        input,
+        outputTracker,
+        settledChangedPaths,
+        settledChangedScopeKnown,
+        true,
+      );
+      if (getAgentRun(run.id)?.status === "running") {
+        updateAgentRunStatus(run.id, "cancelled");
+        finalizeProjectMemoryRunBestEffort({
+          sessionId: input.sessionId,
+          runId: run.id,
+          outcome: "cancelled",
+        });
+        emitForStart({
+          type: "run.cancelled",
+          sessionId: input.sessionId,
+          runId: run.id,
+          ...this.runResponseMetadata(outputTracker),
+        });
+      }
+    };
     try {
       const intentGate =
         startInput ||
@@ -3680,7 +3728,15 @@ export class PiSdkRuntime implements AgentRuntime {
         break;
       }
       const currentRun = getAgentRun(run.id);
+      if (currentRun?.status === "cancelled") {
+        await settleCancelledRun();
+        return;
+      }
       if (currentRun?.status === "running") {
+        if (cancellationRequested()) {
+          await settleCancelledRun();
+          return;
+        }
         // Authoritative end-of-turn outcome, read from pi's own record: if the
         // last assistant message ended with `stopReason: "error"`, the turn
         // failed after exhausting any auto-retries. This is the SINGLE place a
@@ -3689,7 +3745,7 @@ export class PiSdkRuntime implements AgentRuntime {
         const turnError = lastAssistantTurnError(runtimeSession.session);
         if (turnError) {
           await captureTurnEnd();
-          this.emitHarnessQA(
+          await this.emitHarnessQA(
             runtimeSession,
             input,
             outputTracker,
@@ -3726,13 +3782,21 @@ export class PiSdkRuntime implements AgentRuntime {
           }
           settledChangedScopeKnown = changes !== undefined && !changes.truncated;
           settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
-          this.emitHarnessQA(
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
+          }
+          await this.emitHarnessQA(
             runtimeSession,
             input,
             outputTracker,
             settledChangedPaths,
             settledChangedScopeKnown,
           );
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
+          }
           console.info(
             `[modus-timing] getChangeStatsSince +${Date.now() - outputTracker.startedAt}ms`,
           );
@@ -3742,13 +3806,17 @@ export class PiSdkRuntime implements AgentRuntime {
               ? getLatestCheckpointRestoreRowId(input.sessionId, outputTracker.runStartedRowId)
               : undefined;
           if (latestRestoreRowId !== outputTracker.lastQaRestoreRowId) {
-            this.emitHarnessQA(
+            await this.emitHarnessQA(
               runtimeSession,
               input,
               outputTracker,
               settledChangedPaths,
               settledChangedScopeKnown,
             );
+          }
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
           }
           updateAgentRunStatus(run.id, "completed");
           finalizeProjectMemoryRunBestEffort({
@@ -3830,39 +3898,11 @@ export class PiSdkRuntime implements AgentRuntime {
         return;
       }
       if (currentRun.status === "cancelled") {
-        await captureTurnEnd();
-        this.emitHarnessQA(
-          runtimeSession,
-          input,
-          outputTracker,
-          settledChangedPaths,
-          settledChangedScopeKnown,
-          true,
-        );
+        await settleCancelledRun();
         return;
       }
       if (this.cancellingRuns.has(run.id)) {
-        await captureTurnEnd();
-        this.emitHarnessQA(
-          runtimeSession,
-          input,
-          outputTracker,
-          settledChangedPaths,
-          settledChangedScopeKnown,
-          true,
-        );
-        updateAgentRunStatus(run.id, "cancelled");
-        finalizeProjectMemoryRunBestEffort({
-          sessionId: input.sessionId,
-          runId: run.id,
-          outcome: "cancelled",
-        });
-        emitForStart({
-          type: "run.cancelled",
-          sessionId: input.sessionId,
-          runId: run.id,
-          ...this.runResponseMetadata(outputTracker),
-        });
+        await settleCancelledRun();
         return;
       }
       await captureTurnEnd();
@@ -3914,6 +3954,7 @@ export class PiSdkRuntime implements AgentRuntime {
           console.warn("[modus-harness] turn_settle failed open:", error);
         }
       }
+      this.cancellingRuns.delete(run.id);
       removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
       console.info(
         `[modus-timing] turn end (idle emit) +${Date.now() - outputTracker.startedAt}ms`,
@@ -4555,9 +4596,6 @@ export class PiSdkRuntime implements AgentRuntime {
     try {
       await runtimeSession.session.abort();
     } finally {
-      if (activeRun) {
-        this.cancellingRuns.delete(activeRun.id);
-      }
       const activeRunNow = getActiveAgentRun(sessionId);
       const outputTrackerNow = this.runOutputTrackers.get(sessionId);
       const stillOwnsSession = activeRun
