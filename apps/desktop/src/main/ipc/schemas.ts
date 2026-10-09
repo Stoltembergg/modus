@@ -116,6 +116,9 @@ export const agentPromptSchema = z.object({
 });
 
 export const sessionIdSchema = nonEmptyString;
+export const agentRunWorkspaceRevisionSchema = z
+  .object({ sessionId: sourceSnapshotIdSchema, runId: sourceSnapshotIdSchema })
+  .strict();
 
 /**
  * L2: the renderer sends ONLY a branch name; the main process validates it against the

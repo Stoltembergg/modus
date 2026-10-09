@@ -162,6 +162,7 @@ const api: ModusApi = {
     listArchived: (workspaceId) => ipcRenderer.invoke("agent:list-archived", workspaceId),
     listEvents: (sessionId) => ipcRenderer.invoke("agent:list-events", sessionId),
     listRuns: (sessionId) => ipcRenderer.invoke("agent:list-runs", sessionId),
+    runWorkspaceRevision: (input) => ipcRenderer.invoke("agent:run-workspace-revision", input),
     ensure: (sessionId) => ipcRenderer.invoke("agent:ensure", sessionId),
     releaseRuntime: (sessionId) => ipcRenderer.invoke("agent:release-runtime", sessionId),
     prompt: (input) => ipcRenderer.invoke("agent:prompt", input),
@@ -269,6 +270,7 @@ const api: ModusApi = {
     read: (input) => ipcRenderer.invoke("files:read", input),
     write: (input) => ipcRenderer.invoke("files:write", input),
     watch: (cwd) => ipcRenderer.invoke("files:watch", cwd),
+    isWatching: (cwd) => ipcRenderer.invoke("files:watch-status", cwd),
     unwatch: (cwd) => ipcRenderer.invoke("files:unwatch", cwd),
     onChanged: (callback) => {
       const listener = (_event: IpcRendererEvent, payload: unknown) =>

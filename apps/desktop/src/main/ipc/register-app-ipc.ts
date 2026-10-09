@@ -13,7 +13,11 @@ import {
   shell,
 } from "electron";
 import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
-import { listAgentEvents, recordAgentEvent } from "../agent/agent-event-store";
+import {
+  getRunWorkspaceRevision,
+  listAgentEvents,
+  recordAgentEvent,
+} from "../agent/agent-event-store";
 import { listAgentRuns } from "../agent/agent-run-store";
 import {
   getAgentSession,
@@ -126,7 +130,12 @@ import { getComposioService } from "../composio/composio-service-instance";
 import { resolveContext, searchContext } from "../context/context-service";
 import { addDocSource, listDocSources, searchDocs } from "../docs/docs-service";
 import { listDirectory, readWorkspaceFile, writeWorkspaceFile } from "../files/files-service";
-import { emitFilesEvent, unwatchWorkspace, watchWorkspace } from "../files/files-watcher";
+import {
+  emitFilesEvent,
+  isWorkspaceWatched,
+  unwatchWorkspace,
+  watchWorkspace,
+} from "../files/files-watcher";
 import { readWorkspacePreview } from "../files/preview-kind";
 import {
   abortSubagentWorktreeApply,
@@ -258,6 +267,7 @@ import {
   agentListSchema,
   agentPromptSchema,
   agentRollbackSchema,
+  agentRunWorkspaceRevisionSchema,
   agentSetBranchSchema,
   agentSetModelSchema,
   approvalModeClearProjectSchema,
@@ -527,6 +537,16 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.agentListRuns, (event, sessionId: string) => {
     assertTrustedSender(event);
     return listAgentRuns(parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentListRuns));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentRunWorkspaceRevision, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      agentRunWorkspaceRevisionSchema,
+      input,
+      IPC_CHANNELS.agentRunWorkspaceRevision,
+    );
+    return getRunWorkspaceRevision(parsed.sessionId, parsed.runId);
   });
 
   ipcMain.handle(IPC_CHANNELS.agentEnsure, async (event, sessionId: string) => {
@@ -1095,6 +1115,13 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.filesWatch, (event, cwd: string) => {
     assertTrustedSender(event);
     return watchWorkspace(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatch));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.filesWatchStatus, (event, cwd: string) => {
+    assertTrustedSender(event);
+    return isWorkspaceWatched(
+      parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatchStatus),
+    );
   });
 
   ipcMain.handle(IPC_CHANNELS.filesUnwatch, (event, cwd: string) => {

@@ -355,6 +355,8 @@ export type ModusApi = {
       sessionId: string,
     ): Promise<Array<{ id: string; event: AgentEvent; createdAt?: string }>>;
     listRuns(sessionId: string): Promise<AgentRunInfo[]>;
+    /** Current source-content revision for one exact run and its owning session. */
+    runWorkspaceRevision(input: { sessionId: string; runId: string }): Promise<string | undefined>;
     ensure(sessionId: string): Promise<AgentSessionInfo>;
     /**
      * Drop in-memory SDK runtime for this session only (no descendant abort /
@@ -545,6 +547,8 @@ export type ModusApi = {
     write(input: { cwd: string; path: string; content: string }): Promise<FileWriteResult>;
     /** Start live-watching the workspace root (ref-counted). Returns resolved root. */
     watch(cwd: string): Promise<string>;
+    /** Check whether the workspace still has an active filesystem watcher. */
+    isWatching(cwd: string): Promise<boolean>;
     /** Stop live-watching (ref-counted). */
     unwatch(cwd: string): Promise<void>;
     /** Subscribe to debounced workspace-change events. Returns an unsubscribe fn. */

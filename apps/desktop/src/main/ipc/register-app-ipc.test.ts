@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: never[]) => unknown>(),
   getAgentSession: vi.fn(),
   getAgentRuntime: vi.fn(),
+  getRunWorkspaceRevision: vi.fn(),
+  isWorkspaceWatched: vi.fn(),
   readPlanById: vi.fn(),
   updatePlanContentById: vi.fn(),
   recordAgentEvent: vi.fn(),
@@ -45,7 +47,12 @@ vi.mock("../agent/agent-store", () => ({
 vi.mock("../agent/agent-event-store", () => ({
   listAgentEvents: vi.fn(() => []),
   recordAgentEvent: mocks.recordAgentEvent,
+  getRunWorkspaceRevision: mocks.getRunWorkspaceRevision,
   getWorkspaceHarnessInsightEvidence: vi.fn(() => ({ runs: [], events: [] })),
+}));
+vi.mock("../files/files-watcher", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../files/files-watcher")>()),
+  isWorkspaceWatched: mocks.isWorkspaceWatched,
 }));
 vi.mock("../agent/checkpoint-service", () => ({
   getLastTurnComparison: vi.fn(),
@@ -179,6 +186,8 @@ describe("dedicated HyperPlan review IPC", () => {
     mocks.getAgentSession.mockReset();
     mocks.getAgent.mockReset();
     mocks.getAgentRuntime.mockReset();
+    mocks.getRunWorkspaceRevision.mockReset();
+    mocks.isWorkspaceWatched.mockReset();
     mocks.readPlanById.mockReset();
     mocks.updatePlanContentById.mockReset();
     mocks.recordAgentEvent.mockReset();
@@ -235,6 +244,34 @@ describe("dedicated HyperPlan review IPC", () => {
     });
     registerTrustedSender(sender, "file:///app/index.html");
     registerAppIpc();
+  });
+
+  it("reads the current workspace revision for one exact session and run", async () => {
+    const revision = "a".repeat(64);
+    mocks.getRunWorkspaceRevision.mockReturnValue(revision);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentRunWorkspaceRevision);
+    if (!handler) throw new Error("Run workspace revision IPC handler was not registered.");
+
+    await expect(
+      handler(trustedEvent as never, { sessionId: "session-1", runId: "run-1" } as never),
+    ).resolves.toBe(revision);
+    expect(mocks.getRunWorkspaceRevision).toHaveBeenCalledWith("session-1", "run-1");
+    await expect(
+      handler(
+        trustedEvent as never,
+        { sessionId: "session-1", runId: "run-1", workspaceId: "other" } as never,
+      ),
+    ).rejects.toThrow();
+  });
+
+  it("reports whether live workspace watching is active for QA freshness", async () => {
+    mocks.isWorkspaceWatched.mockReturnValue(false);
+    const handler = mocks.handlers.get(IPC_CHANNELS.filesWatchStatus);
+    if (!handler) throw new Error("Files watcher status IPC handler was not registered.");
+
+    await expect(handler(trustedEvent as never, "C:/workspace" as never)).resolves.toBe(false);
+    expect(mocks.isWorkspaceWatched).toHaveBeenCalledWith("C:/workspace");
+    await expect(handler(trustedEvent as never, { cwd: "C:/workspace" } as never)).rejects.toThrow();
   });
 
   it("reviews only an owned Spec plan and passes bounded plan data to the dedicated coordinator", async () => {

@@ -1667,6 +1667,7 @@ export function App() {
                             activeWorkspace={activeWorkspace}
                             contextUsageBySession={contextUsageBySession}
                             cwd={reviewCwd ?? activeCwd}
+                            sessionCwd={activeSession?.cwd}
                             defaultModel={model}
                             hub={hubRef.current}
                             sessionId={activeSession?.id}

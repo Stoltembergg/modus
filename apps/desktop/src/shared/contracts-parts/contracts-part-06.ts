@@ -209,6 +209,8 @@ export type FileWriteResult = {
 export type FilesChangeEvent = {
   cwd: string;
   paths: string[];
+  /** Present and false when the workspace watcher can no longer observe changes. */
+  watching?: boolean;
 };
 
 /* ── Plan Mode ─────────────────────────────────────────────────────────── */
