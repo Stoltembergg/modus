@@ -166,12 +166,8 @@ const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
-const {
-  getLatestHarnessTaskState,
-  getRunToolEvidence,
-  listAgentEvents,
-  recordAgentEvent,
-} = await import("./agent-event-store");
+const { getLatestHarnessTaskState, getRunToolEvidence, listAgentEvents, recordAgentEvent } =
+  await import("./agent-event-store");
 const { summarizeRunQA } = await import("./harness/qa-evidence");
 const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
 const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
@@ -3241,6 +3237,118 @@ describe("PiSdkRuntime", () => {
     expect(qa.result.evidence).toEqual(
       expect.arrayContaining([expect.objectContaining({ checkName: "tests", status: "missing" })]),
     );
+  });
+
+  it("invalidates completed QA when the workspace changes after a check without a tool event", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "external-edit-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "external-edit-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        await writeFile(join(cwd, "edited-after-check.ts"), "export const changed = true;\n");
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The check completed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    const outcome = await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests for this change and report the result.",
+      sessionId,
+    });
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
+
+    expect(outcome.outcome).toBe("ok");
+    expect(qa.result).toMatchObject({
+      required: true,
+      status: "unavailable",
+      evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+    });
+  });
+
+  it("keeps a run cancelled when abort arrives during final workspace scope collection", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    const realScope = gitMemoryContext.getChangeStatsSinceStrict;
+    let notifyScopeStarted!: () => void;
+    let releaseScope!: () => void;
+    const scopeStarted = new Promise<void>((resolve) => {
+      notifyScopeStarted = resolve;
+    });
+    const scopeGate = new Promise<void>((resolve) => {
+      releaseScope = resolve;
+    });
+    let runId = "";
+    vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockImplementation(
+      async (workspace, base) => {
+        notifyScopeStarted();
+        await scopeGate;
+        return realScope(workspace, base);
+      },
+    );
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The requested work is complete." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and typecheck for this change.",
+      sessionId,
+    });
+
+    await scopeStarted;
+    await runtime.abort(sessionId);
+    releaseScope();
+    await prompt;
+
+    const eventTypes = listAgentEvents(sessionId).map(({ event }) => event.type);
+    const qaEvent = listAgentEvents(sessionId)
+      .map(({ event }) => event)
+      .filter((event) => event.type === "harness.qa")
+      .at(-1);
+    const run = getAgentRun(runId);
+
+    expect(run?.status).toBe("cancelled");
+    expect(eventTypes).toContain("run.cancelled");
+    expect(eventTypes).not.toContain("run.completed");
+    expect(qaEvent).toMatchObject({ type: "harness.qa", result: { status: "cancelled" } });
+    expect(getLatestHarnessTaskState(sessionId, runId)?.verificationStatus).toBe("unknown");
   });
 
   it("does not continue todos after input is queued into the current run", async () => {

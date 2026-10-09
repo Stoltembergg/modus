@@ -729,6 +729,24 @@ describe("summarizeRunQA", () => {
     expect(result.evidence).toEqual([expect.objectContaining({ status: "missing" })]);
   });
 
+  it.each([
+    "vitest run -u",
+    "vitest run --update",
+    "jest -u",
+    "jest --updateSnapshot",
+    "npx vitest run -u",
+  ])("does not certify a test invocation that updates snapshots: %s", (command) => {
+    expect(recognizeCheckInvocation("terminal_run", command)).toMatchObject({
+      checkName: "tests",
+      mutatesSource: true,
+    });
+    expect(summarize([...commandPair("npm test"), ...commandPair(command)])).toMatchObject({
+      required: true,
+      status: "missing",
+      evidence: [expect.objectContaining({ status: "missing" })],
+    });
+  });
+
   it("allows a fresh non-mutating check after a source-mutating invocation to pass", () => {
     const result = summarize([
       ...commandPair("vitest run"),
