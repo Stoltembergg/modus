@@ -9149,7 +9149,7 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
     const window = createWindowStub();
     const observedEvents: AgentEvent[] = [];
     const removeEventListener = runtime.onEvent((event) => observedEvents.push(event));
-    let dispatchedTurn: ReturnType<PiSdkRuntime["prompt"]> | undefined;
+    let dispatchedTurn: ReturnType<typeof runtime.prompt> | undefined;
     const groupAgentRuntime: import("../groups/group-runtime-lib").GroupAgentRuntime = {
       prompt: (targetWindow, input) => {
         dispatchedTurn = runtime.prompt(targetWindow, input);

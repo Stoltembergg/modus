@@ -38,7 +38,12 @@ export function createModusPermissionExtension(
         toolName: event.toolName,
         input: event.input,
       });
-      if (repeatDecision?.block) return repeatDecision;
+      if (repeatDecision?.block) {
+        return {
+          block: true,
+          ...(repeatDecision.reason === undefined ? {} : { reason: repeatDecision.reason }),
+        };
+      }
 
       const { action, dangerous } = toolRegistry.classify(event);
       // Resolved approval mode (project override → global → default) decides

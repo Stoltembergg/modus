@@ -1757,7 +1757,7 @@ export class PiSdkRuntime implements AgentRuntime {
         mode: tracker.mode ?? "build",
         classification,
         boundary: "tool_guard",
-        failureLoopAction: decision.failureLoopAction,
+        ...(decision.failureLoopAction ? { failureLoopAction: decision.failureLoopAction } : {}),
         remainingContinuationBudget: 0,
       });
       return { block: true, reason: decision.reason };
