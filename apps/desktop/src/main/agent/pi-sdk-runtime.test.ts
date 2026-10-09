@@ -868,7 +868,11 @@ describe("PiSdkRuntime", () => {
       .mockReturnValue({
         syncOnStartup: sync,
       } as never);
-    setFeatureFlagOverrides({ MODUS_PLUGINS: true, MODUS_PLUGIN_LIFECYCLE: true });
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
     const runtime = new PiSdkRuntime();
     await Promise.resolve();
     await Promise.resolve();
@@ -8934,8 +8938,12 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
     expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
-    expect(HarnessObserver.getInstance().getSessionMetrics(sessionA)?.policyViolations).toBeGreaterThan(0);
-    expect(HarnessObserver.getInstance().getSessionMetrics(sessionB)?.policyViolations).toBeGreaterThan(0);
+    expect(
+      HarnessObserver.getInstance().getSessionMetrics(sessionA)?.policyViolations,
+    ).toBeGreaterThan(0);
+    expect(
+      HarnessObserver.getInstance().getSessionMetrics(sessionB)?.policyViolations,
+    ).toBeGreaterThan(0);
   });
 });
 

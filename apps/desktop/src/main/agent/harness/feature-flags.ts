@@ -121,10 +121,7 @@ export function getFeatureFlags(): HarnessFeatureFlags {
     changed = false;
     for (const flag of FEATURE_FLAG_ENVIRONMENT_KEYS) {
       const dependencies = FEATURE_FLAG_DEPENDENCIES[flag];
-      if (
-        effective[flag] &&
-        dependencies?.some((dependency) => !effective[dependency])
-      ) {
+      if (effective[flag] && dependencies?.some((dependency) => !effective[dependency])) {
         effective[flag] = false;
         changed = true;
       }
@@ -143,11 +140,10 @@ export function isFeatureFlagEnabled(flag: keyof HarnessFeatureFlags): boolean {
 
 /**
  * Validates dependencies between feature flags.
- * Returns configuration errors for malformed values and unmet dependencies.
+ * Returns configuration errors for malformed values and unmet
+ * dependencies.
  */
-export function validateFeatureFlags(
-  flags?: Partial<HarnessFeatureFlags>,
-): string[] {
+export function validateFeatureFlags(flags?: Partial<HarnessFeatureFlags>): string[] {
   const configured = flags ?? getConfiguredFeatureFlags();
   const errors: string[] = flags ? [] : getInvalidEnvironmentValues();
 

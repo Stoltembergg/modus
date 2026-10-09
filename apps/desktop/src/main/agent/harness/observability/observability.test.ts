@@ -393,8 +393,16 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
           ]),
         };
       };
-      const contextA = contextFor("s-response-a", "r-response-a", "response A before formatting");
-      const contextB = contextFor("s-response-b", "r-response-b", "response B before formatting");
+      const contextA = contextFor(
+        "s-response-a",
+        "r-response-a",
+        "response A before formatting",
+      );
+      const contextB = contextFor(
+        "s-response-b",
+        "r-response-b",
+        "response B before formatting",
+      );
 
       await Promise.all([
         defaultObservabilityTurnSettleHook.execute(
