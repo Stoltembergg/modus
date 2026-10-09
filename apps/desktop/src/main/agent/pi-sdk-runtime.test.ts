@@ -17,6 +17,13 @@ import type {
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, PlanRef } from "../../shared/contracts";
+import type {
+  HarnessContext,
+  HarnessHook,
+  TurnSettleInput,
+  TurnSettleOutput,
+} from "./harness/kernel/harness-hooks";
+import type { HarnessKernel } from "./harness/kernel/harness-kernel";
 
 let userData: string;
 let cwd: string;
@@ -8944,6 +8951,83 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(
       HarnessObserver.getInstance().getSessionMetrics(sessionB)?.policyViolations,
     ).toBeGreaterThan(0);
+  });
+
+  it("attributes interleaved policy outcomes to their owning runtime sessions", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_OBSERVABILITY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    const observer = HarnessObserver.getInstance();
+    const responsePolicyRegistry = ResponsePolicyRegistry.getInstance();
+    responsePolicyRegistry.setSessionPolicy("policy-session-a", {
+      maxParagraphs: 1,
+      enforcementMode: "strict",
+    });
+    responsePolicyRegistry.setSessionPolicy("policy-session-b", {
+      maxParagraphs: 5,
+      enforcementMode: "strict",
+    });
+
+    const runtime = new PiSdkRuntime();
+    const kernel = (runtime as unknown as { harnessKernel: HarnessKernel }).harnessKernel;
+    let arrivals = 0;
+    let releaseObservers!: () => void;
+    const bothEvaluated = new Promise<void>((resolve) => {
+      releaseObservers = resolve;
+    });
+    const interleaveHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
+      name: "test-response-policy-observer-interleave",
+      phase: "turn_settle",
+      priority: 45,
+      isCritical: false,
+      execute: async (input) => {
+        arrivals++;
+        if (arrivals === 2) releaseObservers();
+        await bothEvaluated;
+        return input;
+      },
+    };
+    kernel.registerHook(interleaveHook);
+
+    const contextFor = (sessionId: string, runId: string, response: string): HarnessContext => {
+      const sessionToken = observer.beginSession(sessionId);
+      return {
+        sessionId,
+        runId,
+        sessionToken,
+        isCurrent: () => observer.isSessionCurrent(sessionId, sessionToken),
+        workspaceId: `workspace-${sessionId}`,
+        cwd,
+        mode: "build",
+        state: new Map([["harness.assistant_response", response]]),
+      };
+    };
+    const contexts = [
+      contextFor("policy-session-a", "policy-run-a", "P1\n\nP2\n\nP3"),
+      contextFor("policy-session-b", "policy-run-b", "Q1\n\nQ2\n\nQ3"),
+    ];
+
+    await Promise.all(
+      contexts.map((context) =>
+        kernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+          "turn_settle",
+          {
+            runId: context.runId,
+            completed: true,
+            hasActiveTodos: false,
+            turnTokens: 0,
+          },
+          context,
+        ),
+      ),
+    );
+
+    expect(observer.snapshot().response.violationsDetected).toBe(1);
+    expect(observer.snapshot().response.formattedCount).toBe(1);
+    expect(observer.getSessionMetrics("policy-session-a")?.policyViolations).toBe(1);
+    expect(observer.getSessionMetrics("policy-session-b")?.policyViolations).toBe(0);
   });
 });
 
