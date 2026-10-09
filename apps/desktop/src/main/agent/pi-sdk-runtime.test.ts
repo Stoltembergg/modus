@@ -7390,7 +7390,20 @@ describe("PiSdkRuntime", () => {
     mocks.createAgentSession.mockImplementationOnce(async () => ({
       session: createMockPiSession({
         prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "build-write",
+            toolName: "write",
+            args: { path: "implementation.ts", content: "export const implemented = true;\n" },
+          });
           await writeFile(join(cwd, "implementation.ts"), "export const implemented = true;\n");
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: "build-write",
+            toolName: "write",
+            isError: false,
+            result: { details: {} },
+          });
           mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
           mocks.emitPiEvent({
             type: "message_update",
@@ -7430,6 +7443,44 @@ describe("PiSdkRuntime", () => {
     });
     // Status transitions are broadcast so the Plan panel + Review card react.
     expect(rows.filter((row) => row.type === "plan.updated").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not mark an external workspace edit as built by this run", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "External edit");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "External edit",
+      overview: "Build only from run-attributed changes.",
+      content: "# External edit",
+      todos: [{ content: "Implement the change" }],
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          // The workspace changes, but this run has no successful source-write event.
+          await writeFile(join(cwd, "external-change.ts"), "export const external = true;\n");
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "Build finished." },
+          });
+        }),
+      }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: `Build the approved plan "${plan.title}".`,
+      sessionId,
+      planId: plan.id,
+    });
+
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
   });
 
   it("does not call a completed no-change turn built and keeps optional QA not required", async () => {
