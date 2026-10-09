@@ -262,29 +262,6 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       expect(registry.getSessionPolicy(sessionId).level).toBe("standard");
     });
 
-    it("tracks evaluation metrics and character savings", () => {
-      const registry = ResponsePolicyRegistry.getInstance();
-
-      registry.recordEvaluation({
-        violated: true,
-        formatted: true,
-        charsBefore: 1000,
-        charsAfter: 400,
-      });
-
-      registry.recordEvaluation({
-        violated: false,
-        formatted: false,
-        charsBefore: 200,
-        charsAfter: 200,
-      });
-
-      const metrics = registry.getMetrics();
-      expect(metrics.totalEvaluated).toBe(2);
-      expect(metrics.violationsDetected).toBe(1);
-      expect(metrics.totalFormatted).toBe(1);
-      expect(metrics.charactersSaved).toBe(600);
-    });
   });
 
   describe("7.7 Kernel Hooks Integration", () => {
@@ -316,6 +293,7 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_RESPONSE_POLICY: true,
+        MODUS_OBSERVABILITY: true,
       });
 
       const out = await defaultPromptBuildResponsePolicyHook.execute(
@@ -338,24 +316,38 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
         ...mockContext,
         state: new Map<string, any>([
           ["harness.assistant_response", "P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6\n\nP7"],
+          ["harness.response_policy", resolveResponsePolicy("standard", { maxParagraphs: 1 })],
           ["harness.deliverables", [{ type: "file_changed", id: "1", label: "f.ts" }]],
         ]),
       };
 
       const out = await defaultTurnSettleResponsePolicyHook.execute(
-        { runId: "test-run", completed: true, hasActiveTodos: false, turnTokens: 100 },
+        {
+          runId: "test-run",
+          completed: true,
+          outcome: "completed",
+          hasActiveTodos: false,
+          turnTokens: 100,
+        },
         contextWithResponse,
       );
 
       expect(out.settled).toBe(true);
-      expect(contextWithResponse.state.get("harness.formatted_response")).toBeDefined();
-      expect(contextWithResponse.state.get("harness.response_violated")).toBe(true);
+      expect(contextWithResponse.state.get("harness.assistant_response")).toBe(
+        "P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6\n\nP7",
+      );
+      expect(contextWithResponse.state.get("harness.formatted_response")).toBeUndefined();
+      expect(contextWithResponse.state.get("harness.response_policy_evaluation")).toMatchObject({
+        status: "evaluated",
+        violated: true,
+      });
     });
 
     it("hooks fail open gracefully without throwing if state has unexpected data", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_RESPONSE_POLICY: true,
+        MODUS_OBSERVABILITY: true,
       });
 
       const corruptedContext: HarnessContext = {
@@ -412,12 +404,21 @@ describe("Phase 7 — Response Policy DSL & Formatting Unification", () => {
       };
 
       await defaultTurnSettleResponsePolicyHook.execute(
-        { runId: "r-regr", completed: true, hasActiveTodos: false, turnTokens: 100 },
+        {
+          runId: "r-regr",
+          completed: true,
+          outcome: "completed",
+          hasActiveTodos: false,
+          turnTokens: 100,
+        },
         context,
       );
 
-      expect(context.state.get("harness.formatted_response")).toBeDefined();
-      expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(1);
+      expect(context.state.get("harness.formatted_response")).toBeUndefined();
+      expect(context.state.get("harness.response_policy_evaluation")).toMatchObject({
+        runId: "r-regr",
+        status: "evaluated",
+      });
     });
 
     it("renders the compact deliverables one-liner inside the response", () => {

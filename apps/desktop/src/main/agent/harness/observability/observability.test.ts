@@ -33,10 +33,11 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(snap.response).toBeDefined();
       expect(snap.performance).toBeDefined();
 
-      expect(snap.promptSections.tokensSaved).toBe(0);
+      expect(snap.promptSections.estimatedTokensSaved).toBeNull();
       expect(snap.toolResults.spilledResults).toBe(0);
-      expect(snap.compaction.frequencyReductionPercent).toBe(0);
-      expect(snap.repeatGuards.falsePositiveCount).toBe(0);
+      expect(snap.toolResults.retrievalLatency).toBeNull();
+      expect(snap.compaction.frequencyReductionPercent).toBeNull();
+      expect(snap.repeatGuards.falsePositiveCount).toBeNull();
       expect(snap.response.criticalSectionsOmitted).toBe(0);
       expect(snap.performance.hookSystemOverheadMs).toBe(0);
     });
@@ -57,7 +58,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
     it("records tool spills, compaction pruning, and prompt compilations", () => {
       const observer = HarnessObserver.getInstance();
 
-      observer.recordToolResultSpill("bash", 4000, "spill-123", "sess-1");
+      observer.recordToolResultSpill("bash", 3500, 4000, "spill-123", "sess-1");
       observer.recordToolResultRetrieval(15, "sess-1");
       observer.recordCompactionPruning(8000, 1800, "sess-1");
       observer.recordPromptSections(["base", "tools"], ["rules"], 600, "sess-1");
@@ -66,11 +67,13 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(snap.toolResults.spilledResults).toBe(1);
       expect(snap.toolResults.spilledBytes).toBe(4000);
       expect(snap.toolResults.retrievalLatency).toBe(15);
+      expect(snap.toolResults.modelContextBytesReduced).toBe(3500);
+      expect(snap.toolResults.estimatedTokensSaved).toBe(875);
 
-      expect(snap.compaction.compactionEvents).toBe(1);
+      expect(snap.compaction.pruningEvents).toBe(1);
       expect(snap.compaction.estimatedTokensSavedByPruning).toBe(1800);
 
-      expect(snap.promptSections.tokensSaved).toBe(600);
+      expect(snap.promptSections.estimatedTokensSaved).toBe(600);
       expect(snap.promptSections.skippedSections).toBe(1);
     });
 
@@ -111,35 +114,56 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
     it("tracks repeat guards and response policy evaluations", () => {
       const observer = HarnessObserver.getInstance();
+      const sessionId = "sess-1";
+      const sessionToken = observer.beginSession(sessionId);
 
-      observer.recordRepeatGuardTrigger("fetch", "tool_loop", false, "sess-1");
-      observer.recordRepeatGuardTrigger("read", "hypothesis_loop", true, "sess-1");
-      observer.recordResponsePolicyEvaluation(true, true, 1200, 0, "sess-1");
+      observer.recordRepeatGuardEvaluation("fetch", true, sessionId, sessionToken, "run-1");
+      observer.recordRepeatGuardEvaluation("read", true, sessionId, sessionToken, "run-2");
+      observer.recordResponsePolicyEvaluation(true, sessionId, sessionToken, "run-3");
 
       const snap = observer.snapshot();
       expect(snap.repeatGuards.blockedLoopCount).toBe(2);
-      expect(snap.repeatGuards.falsePositiveCount).toBe(1);
+      expect(snap.repeatGuards.evaluatedToolCalls).toBe(2);
+      expect(snap.repeatGuards.falsePositiveCount).toBeNull();
       expect(snap.response.violationsDetected).toBe(1);
-      expect(snap.response.charactersSaved).toBe(1200);
+      expect(snap.response.evaluatedCount).toBe(1);
+      expect(snap.response.charactersSaved).toBe(0);
       expect(snap.response.criticalSectionsOmitted).toBe(0);
     });
 
     it("aggregates metrics per session accurately", () => {
       const observer = HarnessObserver.getInstance();
       const sessionId = "session-audit-1";
+      const sessionToken = observer.beginSession(sessionId);
 
-      observer.recordSessionTurn(sessionId, 450);
+      observer.recordSessionTurn({
+        sessionId,
+        durationMs: 450,
+        sessionToken,
+        runId: "run-1",
+        outcome: "completed",
+        hasAssistantResponse: true,
+        providerTokenUsage: {
+          input: 20,
+          output: 10,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 30,
+        },
+      });
       observer.recordPromptSections(["sec1"], [], 300, sessionId);
-      observer.recordToolResultSpill("grep", 2000, "sp1", sessionId);
-      observer.recordRepeatGuardTrigger("grep", "tool_loop", false, sessionId);
+      observer.recordToolResultSpill("grep", 1800, 2000, "sp1", sessionId);
+      observer.recordRepeatGuardEvaluation("grep", true, sessionId, sessionToken, "run-1");
 
       const sessionMetrics = observer.getSessionMetrics(sessionId);
       expect(sessionMetrics).toBeDefined();
       expect(sessionMetrics?.turnCount).toBe(1);
       expect(sessionMetrics?.totalDurationMs).toBe(450);
+      expect(sessionMetrics?.outcomes.completed).toBe(1);
+      expect(sessionMetrics?.providerReportedTotalTokens).toBe(30);
       expect(sessionMetrics?.guardBlocks).toBe(1);
       expect(sessionMetrics?.spilledResults).toBe(1);
-      expect(sessionMetrics?.tokensSaved).toBeGreaterThanOrEqual(300);
+      expect(sessionMetrics?.estimatedTokensSaved).toBeGreaterThanOrEqual(300);
     });
 
     it("emits and stores ring-buffered telemetry events", () => {
@@ -163,14 +187,15 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(health.alerts).toHaveLength(0);
     });
 
-    it("triggers critical alert if critical sections are omitted (RISCO 4)", () => {
+    it("does not report response omission when the streamed response is never rewritten", () => {
       const observer = HarnessObserver.getInstance();
-      observer.recordResponsePolicyEvaluation(true, true, 500, 2); // 2 critical sections omitted!
+      const sessionToken = observer.beginSession("response-no-rewrite");
+      observer.recordResponsePolicyEvaluation(true, "response-no-rewrite", sessionToken, "run-1");
 
       const health = observer.getHealthStatus();
-      expect(health.status).toBe("critical");
-      expect(health.alerts.some((a) => a.severity === "critical")).toBe(true);
-      expect(health.alerts[0]?.metric).toBe("response.criticalSectionsOmitted");
+      expect(observer.snapshot().response.criticalSectionsOmitted).toBe(0);
+      expect(observer.snapshot().response.formattedCount).toBe(0);
+      expect(health.alerts.some((a) => a.metric === "response.criticalSectionsOmitted")).toBe(false);
     });
 
     it("triggers warning alert if hook latency SLO is breached", () => {
@@ -192,16 +217,18 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       // Phase 2 saving
       observer.recordPromptSections(["a"], ["b"], 150000);
       // Phase 3 spill retrieval
-      observer.recordToolResultSpill("cat", 10000);
+      observer.recordToolResultSpill("cat", 8000, 10000);
       observer.recordToolResultRetrieval(40);
       // Phase 4 compaction pruning
       observer.recordCompactionPruning(20000, 5000);
       // Phase 5 repeat guards
-      observer.recordRepeatGuardTrigger("t1", "loop", false);
+      const guardToken = observer.beginSession("baseline-guards");
+      observer.recordRepeatGuardEvaluation("t1", true, "baseline-guards", guardToken, "run-1");
       // Phase 6 groups hook latency
       observer.recordHookExecution("turn_start", "mailbox", 0.8, true);
       // Phase 7 zero critical omissions
-      observer.recordResponsePolicyEvaluation(false, false, 0, 0);
+      const responseToken = observer.beginSession("baseline-response");
+      observer.recordResponsePolicyEvaluation(false, "baseline-response", responseToken, "run-2");
 
       const comparator = new BaselineComparator();
       const result = comparator.evaluate(observer.snapshot(), 100);
@@ -214,18 +241,17 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(result.estimatedTokenEconomyPercent).toBeGreaterThanOrEqual(30);
     });
 
-    it("evaluates NO-GO when critical criteria fail", () => {
+    it("does not claim a response omission based on advisory evaluation", () => {
       const observer = HarnessObserver.getInstance();
-      // Critical omission in response policy
-      observer.recordResponsePolicyEvaluation(true, true, 500, 3);
+      const sessionToken = observer.beginSession("baseline-response");
+      observer.recordResponsePolicyEvaluation(true, "baseline-response", sessionToken, "run-1");
 
       const comparator = new BaselineComparator();
       const result = comparator.evaluate(observer.snapshot(), 100);
 
-      expect(result.overallVerdict).toBe("NO-GO");
       const p7 = result.phaseDecisions.find((d) => d.phase === 7);
-      expect(p7?.verdict).toBe("NO-GO");
-      expect(result.recommendation).toContain("failed the threshold gates");
+      expect(p7?.verdict).toBe("GO");
+      expect(p7?.notes).toContain("streamed response was not rewritten");
     });
   });
 
@@ -237,12 +263,20 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       const jsonStr = MetricsExporter.exportJSON(observer.snapshot());
       expect(() => JSON.parse(jsonStr)).not.toThrow();
       expect(jsonStr).toContain('"promptSections"');
-      expect(jsonStr).toContain('"tokensSaved": 120');
+      expect(jsonStr).toContain('"estimatedTokensSaved": 120');
     });
 
     it("exports session and summary data to valid CSV", () => {
       const observer = HarnessObserver.getInstance();
-      observer.recordSessionTurn("sess-1", 500);
+      const sessionToken = observer.beginSession("sess-1");
+      observer.recordSessionTurn({
+        sessionId: "sess-1",
+        durationMs: 500,
+        sessionToken,
+        runId: "run-1",
+        outcome: "completed",
+        hasAssistantResponse: true,
+      });
       observer.recordPromptSections(["s1"], [], 250, "sess-1");
 
       const sessionCsv = MetricsExporter.exportSessionsCSV(observer.getAllSessions());
@@ -251,35 +285,38 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
 
       const summaryCsv = MetricsExporter.exportSummaryCSV(observer.snapshot());
       expect(summaryCsv).toContain("Category,Metric,Value");
-      expect(summaryCsv).toContain("promptSections,tokensSaved,250");
+      expect(summaryCsv).toContain("promptSections,estimatedTokensSaved,250");
     });
   });
 
   describe("8.5 Validation Gates & Rollback Plan (AJUSTE 3)", () => {
-    it("passes all three production gates when thresholds are satisfied", () => {
+    it("keeps correctness blocked while repeat guard false positives are unadjudicated", () => {
       const observer = HarnessObserver.getInstance();
       observer.recordPromptSections(["a"], [], 15000);
       observer.recordHookExecution("turn_start", "h1", 1.2, true);
-      observer.recordRepeatGuardTrigger("t1", "loop", false);
+      const sessionToken = observer.beginSession("gate-guards");
+      observer.recordRepeatGuardEvaluation("t1", false, "gate-guards", sessionToken, "run-1");
 
       const report = ValidationGates.evaluate(observer.snapshot(), {
         minTokenEconomyPercent: 20,
         baselineTotalTokens: 40000,
       });
 
-      expect(report.allGatesPassed).toBe(true);
-      expect(report.rollbackRequired).toBe(false);
+      expect(report.allGatesPassed).toBe(false);
+      expect(report.rollbackRequired).toBe(true);
       expect(report.gates).toHaveLength(3);
       expect(report.gates.map((g) => g.gateName)).toEqual([
         "Token Economy Gate",
         "Correctness Gate",
         "Performance Gate",
       ]);
+      expect(report.gates.find((gate) => gate.gateName === "Correctness Gate")?.passed).toBe(false);
     });
 
     it("demands rollback if correctness gate is breached", () => {
       const observer = HarnessObserver.getInstance();
-      observer.recordResponsePolicyEvaluation(true, true, 500, 1); // 1 critical omitted
+      const sessionToken = observer.beginSession("gate-response");
+      observer.recordResponsePolicyEvaluation(true, "gate-response", sessionToken, "run-1");
 
       const report = ValidationGates.evaluate(observer.snapshot());
       expect(report.allGatesPassed).toBe(false);
@@ -342,7 +379,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(mockContext.state?.get("harness.observability_harvested")).toBeUndefined();
     });
 
-    it("turn_settle hook records session turn and tokens when enabled", async () => {
+    it("does not infer prompt savings or session turns from token totals", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_OBSERVABILITY: true,
@@ -357,11 +394,8 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       expect(mockContext.state?.get("harness.observability_harvested")).toBe(true);
 
       const observer = HarnessObserver.getInstance();
-      const session = observer.getSessionMetrics("session-obs-test");
-      expect(session).toBeDefined();
-      expect(session?.turnCount).toBe(1);
-      expect(session?.totalDurationMs).toBeGreaterThanOrEqual(200);
-      expect(session?.tokensSaved).toBe(420);
+      expect(observer.getSessionMetrics("session-obs-test")).toBeUndefined();
+      expect(observer.snapshot().promptSections.estimatedTokensSaved).toBeNull();
     });
 
     it("hook fails open safely without throwing if context has invalid data", async () => {
@@ -422,10 +456,10 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
           cwd: ".",
           mode: "build",
           state: new Map<string, any>([
-            ["harness.response_policy", { enforcementMode: "strict" }],
-            ["harness.assistant_response", raw],
-            ["harness.formatted_response", "formatted"],
-            ["harness.response_violated", true],
+            [
+              "harness.response_policy_evaluation",
+              { runId, outcome: "completed", status: "evaluated", violated: raw.includes("before") },
+            ],
           ]),
         };
       };
@@ -444,21 +478,25 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       ]);
 
       expect(observer.snapshot().response.violationsDetected).toBe(2);
-      expect(observer.snapshot().response.formattedCount).toBe(2);
+      expect(observer.snapshot().response.evaluatedCount).toBe(2);
+      expect(observer.snapshot().response.formattedCount).toBe(0);
       expect(observer.getSessionMetrics("s-response-a")?.policyViolations).toBe(1);
       expect(observer.getSessionMetrics("s-response-b")?.policyViolations).toBe(1);
     });
 
-    it("computes a varying compaction avoidance ratio instead of a constant", () => {
+    it("does not infer avoided compactions from pruning counts", () => {
       const observer = HarnessObserver.getInstance();
+      const sessionId = "compaction-metrics";
+      const sessionToken = observer.beginSession(sessionId);
 
-      observer.recordCompactionPruning(8000, 1800);
-      observer.recordCompactionPruning(8000, 1800);
-      observer.recordCompactionPruning(8000, 1800);
-      expect(observer.snapshot().compaction.frequencyReductionPercent).toBe(100);
+      observer.recordCompactionPruning(8000, 1800, sessionId, sessionToken, "run-1");
+      observer.recordCompactionPruning(8000, 1800, sessionId, sessionToken, "run-2");
+      observer.recordCompactionPruning(8000, 1800, sessionId, sessionToken, "run-3");
+      expect(observer.snapshot().compaction.frequencyReductionPercent).toBeNull();
 
-      observer.recordActualCompaction();
-      expect(observer.snapshot().compaction.frequencyReductionPercent).toBe(75);
+      observer.recordNativeCompaction(sessionId, sessionToken, "run-4");
+      expect(observer.snapshot().compaction.nativeCompactionsObserved).toBe(1);
+      expect(observer.snapshot().compaction.frequencyReductionPercent).toBeNull();
     });
 
     it("aggregates plugin tracing metrics math in the snapshot", () => {

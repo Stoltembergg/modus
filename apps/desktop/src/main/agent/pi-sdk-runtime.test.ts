@@ -387,7 +387,11 @@ async function useOfflinePiToolSessions(
         },
         timestamp: Date.now(),
       };
-      stream.push({ type: "done", reason: stopReason, message });
+      if (stopReason === "error" || stopReason === "aborted") {
+        stream.push({ type: "error", reason: stopReason, error: message });
+      } else {
+        stream.push({ type: "done", reason: stopReason, message });
+      }
       // The installed SDK and app resolve different pi-ai patch versions.
       return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
     };
@@ -8659,11 +8663,13 @@ describe("PiSdkRuntime Phase 7 response policy wiring", () => {
   beforeEach(() => {
     resetFeatureFlagOverrides();
     ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
   });
 
   afterEach(() => {
     resetFeatureFlagOverrides();
     ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
   });
 
   async function runTurnWithAssistantText(text: string): Promise<string> {
@@ -8693,12 +8699,12 @@ describe("PiSdkRuntime Phase 7 response policy wiring", () => {
   }
 
   it("appends the response policy directive and evaluates the settled response when enabled", async () => {
-    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: true });
+    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: true, MODUS_OBSERVABILITY: true });
 
     const systemPrompt = await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
 
     expect(systemPrompt).toContain('<response_policy level="standard">');
-    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(1);
   });
 
   it("omits the directive and skips evaluation when the flag is disabled", async () => {
@@ -8707,7 +8713,7 @@ describe("PiSdkRuntime Phase 7 response policy wiring", () => {
     const systemPrompt = await runTurnWithAssistantText("done");
 
     expect(systemPrompt).not.toContain("<response_policy");
-    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(0);
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
   });
 });
 
@@ -8839,7 +8845,6 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(responseMetrics.violationsDetected).toBe(1);
     expect(responseMetrics.formattedCount).toBe(0);
     expect(responseMetrics.charactersSaved).toBe(0);
-    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalFormatted).toBe(0);
   });
 
   it("does not evaluate a partial assistant message from a failed Pi SDK turn as a final response", async () => {
@@ -8857,7 +8862,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     await runOfflinePiTurn({ sessionId, text: partial, stopReason: "error" });
 
-    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBe(0);
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
     expect(HarnessObserver.getInstance().snapshot().response.formattedCount).toBe(0);
     expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed")).toBe(true);
   });
@@ -8911,7 +8916,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       expect(observer.getSessionMetrics(memberA)).toBeUndefined();
       expect(observer.getSessionMetrics(memberB)).toBeDefined();
       expect(observer.getSessionMetrics(child)).toBeDefined();
-      expect(observer.snapshot().promptSections.tokensSaved).toBe(6);
+      expect(observer.snapshot().promptSections.estimatedTokensSaved).toBe(6);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberA)).toBe(false);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberB)).toBe(true);
       expect(observer.getRecentEvents(20).some((event) => event.sessionId === child)).toBe(true);
@@ -9102,7 +9107,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     }
   });
 
-  it("mirrors response evaluations into the observer end to end", async () => {
+  it("records response evaluations once into the observer end to end", async () => {
     setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
 
     const workspaceId = `response-policy-${crypto.randomUUID()}`;
@@ -9133,7 +9138,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       sessionId: sessionB,
     });
 
-    expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(2);
     expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
     expect(
       HarnessObserver.getInstance().getSessionMetrics(sessionA)?.policyViolations,
@@ -9215,7 +9220,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     );
 
     expect(observer.snapshot().response.violationsDetected).toBe(1);
-    expect(observer.snapshot().response.formattedCount).toBe(1);
+    expect(observer.snapshot().response.evaluatedCount).toBe(2);
     expect(observer.getSessionMetrics("policy-session-a")?.policyViolations).toBe(1);
     expect(observer.getSessionMetrics("policy-session-b")?.policyViolations).toBe(0);
   });
