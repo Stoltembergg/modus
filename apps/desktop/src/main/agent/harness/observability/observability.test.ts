@@ -311,7 +311,6 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_OBSERVABILITY: true,
-        MODUS_RESPONSE_POLICY: true,
       });
 
       const out = await defaultObservabilityTurnSettleHook.execute(
@@ -374,6 +373,7 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_OBSERVABILITY: true,
+        MODUS_RESPONSE_POLICY: true,
       });
 
       const observer = HarnessObserver.getInstance();

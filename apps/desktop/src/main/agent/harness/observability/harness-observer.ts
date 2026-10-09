@@ -321,7 +321,9 @@ export class HarnessObserver {
     charsSaved: number,
     criticalOmitted: number = 0,
     sessionId?: string,
+    sessionToken?: symbol,
   ): void {
+    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
     if (violation) this.responseViolationsDetected++;
     if (formatted) this.responseFormattedCount++;
     this.responseCharactersSaved += charsSaved;

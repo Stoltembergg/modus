@@ -5,7 +5,6 @@ import type {
   TurnSettleInput,
   TurnSettleOutput,
 } from "../kernel/harness-hooks";
-import { ResponsePolicyRegistry } from "../response/response-registry";
 import { HarnessObserver } from "./harness-observer";
 
 /**
@@ -46,21 +45,36 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
         observer.recordSessionTurn(sessionId, durationMs, context.sessionToken);
       }
 
-      // Mirror response-policy evaluations recorded earlier in this turn_settle
-      // (the response hook runs at priority 40, before this hook at 55).
-      // Without this, violations/formatted/charsSaved would never reach the
-      // observer in production: the registry has no other reader.
-      // Delta-based, so repeated turns never double count.
-      const responseMetrics = ResponsePolicyRegistry.getInstance().getMetrics();
-      observer.mirrorResponsePolicyMetrics(
-        {
-          violationsDetected: responseMetrics.violationsDetected,
-          totalFormatted: responseMetrics.totalFormatted,
-          charactersSaved: responseMetrics.charactersSaved,
-        },
-        sessionId,
-        context.sessionToken,
-      );
+      // Attribute response outcomes from this turn's state. Registry totals
+      // are global, so assigning their deltas to the current session can leak
+      // concurrent work into the wrong session.
+      const responsePolicy = context.state?.get("harness.response_policy") as
+        | { enforcementMode?: string }
+        | undefined;
+      const rawResponse = context.state?.get("harness.assistant_response");
+      const formattedResponse = context.state?.get("harness.formatted_response");
+      const violation = context.state?.get("harness.response_violated") === true;
+      if (
+        isFeatureFlagEnabled("MODUS_RESPONSE_POLICY") &&
+        responsePolicy &&
+        typeof rawResponse === "string" &&
+        context.state?.get("harness.response_policy_observed") !== true
+      ) {
+        const formatted = violation && responsePolicy.enforcementMode === "strict";
+        const charsSaved =
+          formatted && typeof formattedResponse === "string"
+            ? Math.max(0, rawResponse.length - formattedResponse.length)
+            : 0;
+        observer.recordResponsePolicyEvaluation(
+          violation,
+          formatted,
+          charsSaved,
+          0,
+          sessionId,
+          context.sessionToken,
+        );
+        context.state.set("harness.response_policy_observed", true);
+      }
 
       // Record any prompt tokens saved from the current turn
       const tokensSaved = context.state?.get("harness.prompt_tokens_saved");
