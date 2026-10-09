@@ -96,6 +96,17 @@ describe("safe duplicate tool-result pruning", () => {
       [toolResult("Build completed successfully"), toolResult("Build completed successfully")],
     ],
     [
+      "A17 task-state evidence with an unverified build",
+      [
+        toolResult(
+          '{"type":"harness.task_state","buildStatus":"built","verificationStatus":"verified","checksRun":0}',
+        ),
+        toolResult(
+          '{"type":"harness.task_state","buildStatus":"built","verificationStatus":"verified","checksRun":0}',
+        ),
+      ],
+    ],
+    [
       "spill reference",
       [
         toolResult("[Large output spilled: 9000 bytes; spill_id=spill-123]"),

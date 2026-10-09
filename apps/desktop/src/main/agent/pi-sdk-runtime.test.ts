@@ -258,7 +258,12 @@ async function useOfflinePiToolSessions(
   offlineOptions: {
     contextWindow?: number;
     assistantUsageTotalTokens?: number;
-    onStream?: (session: AgentSession, context: Context) => void;
+    captureContextHandlers?: boolean;
+    onStream?: (
+      session: AgentSession,
+      context: Context,
+      contextHandlers?: Array<(event: unknown, context: unknown) => unknown>,
+    ) => void;
   } = {},
 ) {
   const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
@@ -269,6 +274,10 @@ async function useOfflinePiToolSessions(
   });
   const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
   const sessions: AgentSession[] = [];
+  const contextHandlersBySession = new Map<
+    AgentSession,
+    Array<(event: unknown, context: unknown) => unknown>
+  >();
   const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
   const deliveredMessages: Array<{ session: AgentSession; messages: Context["messages"] }> = [];
   let requestedTool: string | undefined;
@@ -283,7 +292,33 @@ async function useOfflinePiToolSessions(
     const loaderOptions = mocks.resourceLoaderOptions.at(-1) as ConstructorParameters<
       typeof sdk.DefaultResourceLoader
     >[0];
-    const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
+    const capturedContextHandlers: Array<(event: unknown, context: unknown) => unknown> = [];
+    const extensionFactories = offlineOptions.captureContextHandlers
+      ? loaderOptions.extensionFactories?.map(
+          (factory) =>
+            ((api: object) => {
+              const instrumentedApi = new Proxy(api, {
+                get(target, property, receiver) {
+                  if (property !== "on") return Reflect.get(target, property, receiver);
+                  const register = Reflect.get(target, property, target);
+                  return (event: string, handler: unknown, ...args: unknown[]) => {
+                    if (event === "context") {
+                      capturedContextHandlers.push(
+                        handler as (event: unknown, context: unknown) => unknown,
+                      );
+                    }
+                    return Reflect.apply(register, target, [event, handler, ...args]);
+                  };
+                },
+              });
+              return (factory as (api: object) => unknown)(instrumentedApi);
+            }) as (typeof loaderOptions.extensionFactories)[number],
+        )
+      : loaderOptions.extensionFactories;
+    const resourceLoader = new sdk.DefaultResourceLoader({
+      ...loaderOptions,
+      ...(extensionFactories ? { extensionFactories } : {}),
+    });
     await resourceLoader.reload();
     const runtimeResourceLoader = options.resourceLoader as {
       reload: () => Promise<void>;
@@ -308,8 +343,9 @@ async function useOfflinePiToolSessions(
           : {}),
       },
     });
+    contextHandlersBySession.set(session, capturedContextHandlers);
     session.agent.streamFn = (model, context) => {
-      offlineOptions.onStream?.(session, context);
+      offlineOptions.onStream?.(session, context, capturedContextHandlers);
       deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
       deliveredMessages.push({ session, messages: [...context.messages] });
       const stream = createAssistantMessageEventStream();
@@ -361,6 +397,7 @@ async function useOfflinePiToolSessions(
       if (!session) throw new Error("Expected an offline PI session.");
       return session;
     },
+    contextHandlersFor: (session: AgentSession) => contextHandlersBySession.get(session) ?? [],
     systemPromptsFor: (session: AgentSession) =>
       deliveredSystemPrompts
         .filter((entry) => entry.session === session)
@@ -9720,7 +9757,12 @@ describe("PiSdkRuntime compaction pruning production wiring", () => {
     const fixturePath = join(cwd, "qa-evidence.txt");
     await writeFile(
       fixturePath,
-      "Vitest check passed for the verified fixture row\n".repeat(1200),
+      `${JSON.stringify({
+        type: "harness.task_state",
+        buildStatus: "built",
+        verificationStatus: "verified",
+        checksRun: 0,
+      })}\nVitest check passed for the verified fixture row\n`.repeat(1200),
       "utf8",
     );
     requestToolSequence([
@@ -9745,10 +9787,97 @@ describe("PiSdkRuntime compaction pruning production wiring", () => {
       expect(results).toHaveLength(2);
       expect(
         texts.every(
-          (block) => block?.type === "text" && block.text.includes("Vitest check passed"),
+          (block) =>
+            block?.type === "text" &&
+            block.text.includes("Vitest check passed") &&
+            block.text.includes('"buildStatus":"built"') &&
+            block.text.includes('"checksRun":0'),
         ),
       ).toBe(true);
       expect(recordPruning).not.toHaveBeenCalled();
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("ignores a captured Pi context callback after releasing and recreating the same session", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    let phase: "initial" | "recreated" = "initial";
+    let oldContextHandler: ((event: unknown, context: unknown) => unknown) | undefined;
+    let staleHandlerResult: unknown;
+    const duplicateText = "export interface StaleSessionItem { readonly key: string; }\n".repeat(
+      100,
+    );
+    const staleEvent = {
+      type: "context",
+      messages: [
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "old-session-first",
+          content: [{ type: "text", text: duplicateText }],
+          isError: false,
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "old-session-later",
+          content: [{ type: "text", text: duplicateText }],
+          isError: false,
+        },
+      ],
+    };
+    const { sessionAt, contextHandlersFor } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+      captureContextHandlers: true,
+      onStream: (session, _context, contextHandlers = []) => {
+        if (phase === "initial") {
+          // Capture the handler registered by the real Pi runtime without invoking it.
+          oldContextHandler = contextHandlers[0];
+          return;
+        }
+        staleHandlerResult = oldContextHandler?.(staleEvent, {
+          model: session.model,
+          signal: undefined,
+          getContextUsage: () => ({ tokens: 15_000, contextWindow: 20_000, percent: 75 }),
+        });
+      },
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const sessionId = `compaction-recreated-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+
+    try {
+      await runtime.prompt(window, {
+        context: [],
+        message: "Start the session before its first release.",
+        sessionId,
+      });
+      const releasedSession = sessionAt();
+      expect(releasedSession.extensionRunner.hasHandlers("context")).toBe(true);
+      expect(contextHandlersFor(releasedSession)).toHaveLength(1);
+      expect(oldContextHandler).toEqual(expect.any(Function));
+
+      await runtime.releaseRuntime(sessionId);
+      phase = "recreated";
+      await runtime.ensure(window, sessionId);
+      expect(sessionAt()).not.toBe(releasedSession);
+
+      await runtime.prompt(window, {
+        context: [],
+        message: "Start the recreated session.",
+        sessionId,
+      });
+
+      expect(staleHandlerResult).toBeUndefined();
+      expect(recordPruning).not.toHaveBeenCalled();
+      expect(
+        staleEvent.messages[0]?.content[0]?.type === "text" &&
+          staleEvent.messages[0].content[0].text,
+      ).toBe(duplicateText);
     } finally {
       await runtime.releaseRuntime(sessionId);
     }

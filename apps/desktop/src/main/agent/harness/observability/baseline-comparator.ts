@@ -155,7 +155,7 @@ export class BaselineComparator {
     // Total Economy Estimate across Prompt, Spill, and Compaction
     const totalSavedTokens =
       metrics.promptSections.tokensSaved +
-      metrics.compaction.tokensSavedByPruning +
+      metrics.compaction.estimatedTokensSavedByPruning +
       Math.floor(metrics.toolResults.spilledBytes / 4);
 
     const estimatedTokenEconomyPercent =

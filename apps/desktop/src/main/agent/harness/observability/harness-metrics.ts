@@ -19,7 +19,7 @@ export type CompactionMetrics = {
   frequencyReductionPercent: number;
   totalPrunedBytes: number;
   compactionEvents: number;
-  tokensSavedByPruning: number;
+  estimatedTokensSavedByPruning: number;
 };
 
 export type RepeatGuardsMetrics = {

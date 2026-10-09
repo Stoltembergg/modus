@@ -51,7 +51,7 @@ export class ValidationGates {
     // --- 1. Token Economy Gate ---
     const totalTokensSaved =
       metrics.promptSections.tokensSaved +
-      metrics.compaction.tokensSavedByPruning +
+      metrics.compaction.estimatedTokensSavedByPruning +
       Math.floor(metrics.toolResults.spilledBytes / 4);
 
     const baselineTokens = options.baselineTotalTokens ?? 45000;

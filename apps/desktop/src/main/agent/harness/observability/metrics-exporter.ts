@@ -53,7 +53,11 @@ export class MetricsExporter {
         `${metrics.compaction.frequencyReductionPercent}%`,
       ],
       ["compaction", "totalPrunedBytes", metrics.compaction.totalPrunedBytes],
-      ["compaction", "tokensSavedByPruning", metrics.compaction.tokensSavedByPruning],
+      [
+        "compaction",
+        "estimatedTokensSavedByPruning",
+        metrics.compaction.estimatedTokensSavedByPruning,
+      ],
       ["repeatGuards", "falsePositiveCount", metrics.repeatGuards.falsePositiveCount],
       ["repeatGuards", "blockedLoopCount", metrics.repeatGuards.blockedLoopCount],
       ["repeatGuards", "circuitBreakerTrips", metrics.repeatGuards.circuitBreakerTrips],

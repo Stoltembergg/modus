@@ -116,6 +116,7 @@ import {
 import { createCheckpoint } from "./checkpoint-service";
 import { CapabilityRegistry } from "./harness/capability/capability-registry";
 import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
+import { SAFE_DUPLICATE_PRUNE_TOOL_NAMES } from "./harness/compaction/compaction-pruner";
 import {
   listAvoidedStrategyCodesFromBlacklist,
   upsertFailureBlacklistEntry,
@@ -221,6 +222,7 @@ import {
   modelToId,
   resolveModelThinking,
 } from "./model-service";
+import { createModusCompactionExtension } from "./pi-compaction-extension";
 import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
 import { createModusToolSpillHandler } from "./pi-tool-spill-extension";
@@ -2710,6 +2712,42 @@ export class PiSdkRuntime implements AgentRuntime {
             },
           ),
         ),
+        ...(isFeatureFlagEnabled("MODUS_COMPACTION_PRUNING")
+          ? [
+              createModusCompactionExtension(() => {
+                const runtimeSession = this.sessions.get(sessionId);
+                if (runtimeSession?.promptLifecycleToken !== promptLifecycleToken) {
+                  return undefined;
+                }
+
+                const activeRun = getActiveAgentRun(sessionId);
+                if (
+                  !activeRun ||
+                  this.cancellingRuns.has(activeRun.id) ||
+                  getAgentRun(activeRun.id)?.status === "cancelled"
+                ) {
+                  return undefined;
+                }
+
+                const observer = HarnessObserver.getInstance();
+                if (!observer.isSessionCurrent(sessionId, runtimeSession.observerSessionToken)) {
+                  return undefined;
+                }
+
+                const toolNames = SAFE_DUPLICATE_PRUNE_TOOL_NAMES.filter(
+                  (toolName) =>
+                    toolRegistry.getEntry(toolName)?.kind === "builtin" &&
+                    toolRegistry.isReadOnlySafe(toolName),
+                );
+                return {
+                  sessionId,
+                  runId: activeRun.id,
+                  observerSessionToken: runtimeSession.observerSessionToken,
+                  toolNames,
+                };
+              }),
+            ]
+          : []),
       ],
       settingsManager,
       appendSystemPrompt: [

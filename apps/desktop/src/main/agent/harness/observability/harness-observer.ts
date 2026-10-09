@@ -240,17 +240,29 @@ export class HarnessObserver {
   }
 
   // --- Compaction Pruning Tracking ---
-  recordCompactionPruning(prunedBytes: number, savedTokens: number, sessionId?: string): void {
+  recordCompactionPruning(
+    measuredContextBytesRemoved: number,
+    estimatedTokensSaved: number,
+    sessionId?: string,
+    sessionToken?: symbol,
+    runId?: string,
+  ): void {
+    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
     this.compactionEvents++;
-    this.compactionPrunedBytes += prunedBytes;
-    this.compactionTokensSaved += savedTokens;
+    this.compactionPrunedBytes += measuredContextBytesRemoved;
+    this.compactionTokensSaved += estimatedTokensSaved;
 
     if (sessionId) {
       const session = this.ensureSession(sessionId);
-      session.tokensSaved += savedTokens;
+      session.tokensSaved += estimatedTokensSaved;
     }
 
-    this.emitEvent("harness.compaction.pruned", { prunedBytes, savedTokens }, sessionId);
+    this.emitEvent(
+      "harness.compaction.pruned",
+      { measuredContextBytesRemoved, estimatedTokensSaved },
+      sessionId,
+      runId,
+    );
   }
 
   /**
@@ -501,7 +513,7 @@ export class HarnessObserver {
       frequencyReductionPercent: reductionPercent,
       totalPrunedBytes: this.compactionPrunedBytes,
       compactionEvents: this.compactionEvents,
-      tokensSavedByPruning: this.compactionTokensSaved,
+      estimatedTokensSavedByPruning: this.compactionTokensSaved,
     };
 
     const repeatGuards: RepeatGuardsMetrics = {
