@@ -2998,6 +2998,198 @@ describe("PiSdkRuntime", () => {
     expect(getLatestHarnessTaskState(sessionId, runId ?? "")?.verificationStatus).toBe("unknown");
   });
 
+  it("does not verify a passed criterion when cancellation leaves another required check unrun", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Partial cancellation",
+      overview: "Keep completed checks distinct from an aborted run.",
+      content: "# Partial cancellation",
+      todos: [
+        { id: "todo-tests", content: "Run tests", acceptanceCriterionIds: ["ac-tests"] },
+        {
+          id: "todo-typecheck",
+          content: "Run typecheck",
+          acceptanceCriterionIds: ["ac-typecheck"],
+        },
+      ],
+      spec: {
+        requirements: [{ id: "req", text: "Verify each requested check." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-tests",
+            requirementId: "req",
+            description: "Tests pass.",
+            todoIds: ["todo-tests"],
+            requiredCheckKinds: ["tests"],
+            status: "pending",
+          },
+          {
+            id: "ac-typecheck",
+            requirementId: "req",
+            description: "Typecheck passes.",
+            todoIds: ["todo-typecheck"],
+            requiredCheckKinds: ["typecheck"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyCheckCompleted: (() => void) | undefined;
+    const checkCompleted = new Promise<void>((resolve) => {
+      notifyCheckCompleted = resolve;
+    });
+    let runId = "";
+    const session = createMockPiSession({
+      abort: vi.fn(async () => rejectPrompt?.(new Error("Aborted"))),
+      prompt: vi.fn(() => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "partial-cancel-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "partial-cancel-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        notifyCheckCompleted?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build this plan",
+      planId: plan.id,
+      sessionId,
+    });
+
+    await checkCompleted;
+    await runtime.abort(sessionId);
+    await prompt;
+
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as {
+      result: {
+        status: string;
+        evidence: Array<{ label: string; status: string }>;
+      };
+    };
+    const persistedPlan = readPlanById(join(userData, "plans"), plan.id);
+    const state = getLatestHarnessTaskState(sessionId, runId);
+
+    expect(qa.result.status).toBe("cancelled");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Tests", status: "passed" }),
+        expect.objectContaining({ label: "Typecheck", status: "missing" }),
+      ]),
+    );
+    expect(
+      persistedPlan?.spec?.acceptanceCriteria.find(({ id }) => id === "ac-tests")?.status,
+    ).toBe("blocked");
+    expect(state?.criteria).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "plan",
+          status: "unknown",
+          requiredCheckKinds: ["tests"],
+        }),
+      ]),
+    );
+  });
+
+  it("invalidates completed QA when an unallowlisted MCP tool changes source afterward", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    let promptCount = 0;
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        promptCount += 1;
+        if (promptCount > 1) return;
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "mcp-stale-qa-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "mcp-stale-qa-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "mcp-source-write",
+          toolName: "mcp_v1_dangerous_1_64_1_77",
+          args: { path: "mcp-changed.ts" },
+        });
+        await writeFile(join(cwd, "mcp-changed.ts"), "export const changed = true;\n");
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "mcp-source-write",
+          toolName: "mcp_v1_dangerous_1_64_1_77",
+          isError: false,
+          result: { details: {} },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The tool updated the source." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const outcome = await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and report the result.",
+      sessionId,
+    });
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
+
+    expect(outcome.outcome).toBe("ok");
+    expect(qa.result.status).toBe("missing");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkName: "tests", status: "missing" })]),
+    );
+  });
+
   it("does not continue todos after input is queued into the current run", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
