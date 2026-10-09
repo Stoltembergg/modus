@@ -88,6 +88,8 @@ function criterionStatus(
   if (outcome === "passed") return "passed";
   if (outcome === "review_approved") return "review_approved";
   if (evidence.some((item) => item.status === "failed")) return "failed";
+  if (evidence.some((item) => item.status === "timed_out")) return "timed_out";
+  if (evidence.some((item) => item.status === "cancelled")) return "cancelled";
   if (evidence.some((item) => item.status === "stale")) return "stale";
   if (evidence.some((item) => item.status === "unavailable")) return "unavailable";
   return "missing";
