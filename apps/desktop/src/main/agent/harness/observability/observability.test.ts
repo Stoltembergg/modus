@@ -369,52 +369,48 @@ describe("Phase 8 — Observability Dashboard, Telemetry & Final Validation Gate
   });
 
   describe("8.8 Fase 8 review regressions", () => {
-    it("mirrors response registry evaluations into the observer without double counting", async () => {
+    it("records per-turn response outcomes against their owning sessions", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_OBSERVABILITY: true,
       });
 
-      const registry = ResponsePolicyRegistry.getInstance();
-      registry.recordEvaluation({
-        violated: true,
-        formatted: true,
-        charsBefore: 1000,
-        charsAfter: 800,
-      });
-      registry.recordEvaluation({
-        violated: false,
-        formatted: false,
-        charsBefore: 500,
-        charsAfter: 500,
-      });
-
-      const context: HarnessContext = {
-        sessionId: "s-mirror",
-        runId: "r-mirror",
-        workspaceId: "w",
-        cwd: ".",
-        mode: "build",
-        state: new Map<string, any>(),
-      };
-
-      await defaultObservabilityTurnSettleHook.execute(
-        { runId: "r-mirror", completed: true, hasActiveTodos: false, turnTokens: 10 },
-        context,
-      );
-
       const observer = HarnessObserver.getInstance();
-      expect(observer.snapshot().response.violationsDetected).toBe(1);
-      expect(observer.snapshot().response.charactersSaved).toBe(200);
-      expect(observer.getSessionMetrics("s-mirror")?.policyViolations).toBe(1);
+      const contextFor = (sessionId: string, runId: string, raw: string): HarnessContext => {
+        const sessionToken = observer.beginSession(sessionId);
+        return {
+          sessionId,
+          runId,
+          sessionToken,
+          workspaceId: "w",
+          cwd: ".",
+          mode: "build",
+          state: new Map<string, any>([
+            ["harness.response_policy", { enforcementMode: "strict" }],
+            ["harness.assistant_response", raw],
+            ["harness.formatted_response", "formatted"],
+            ["harness.response_violated", true],
+          ]),
+        };
+      };
+      const contextA = contextFor("s-response-a", "r-response-a", "response A before formatting");
+      const contextB = contextFor("s-response-b", "r-response-b", "response B before formatting");
 
-      // A second harvest with no new evaluations records nothing new.
-      await defaultObservabilityTurnSettleHook.execute(
-        { runId: "r-mirror", completed: true, hasActiveTodos: false, turnTokens: 10 },
-        context,
-      );
-      expect(observer.snapshot().response.violationsDetected).toBe(1);
-      expect(observer.snapshot().response.charactersSaved).toBe(200);
+      await Promise.all([
+        defaultObservabilityTurnSettleHook.execute(
+          { runId: contextA.runId, completed: true, hasActiveTodos: false, turnTokens: 10 },
+          contextA,
+        ),
+        defaultObservabilityTurnSettleHook.execute(
+          { runId: contextB.runId, completed: true, hasActiveTodos: false, turnTokens: 10 },
+          contextB,
+        ),
+      ]);
+
+      expect(observer.snapshot().response.violationsDetected).toBe(2);
+      expect(observer.snapshot().response.formattedCount).toBe(2);
+      expect(observer.getSessionMetrics("s-response-a")?.policyViolations).toBe(1);
+      expect(observer.getSessionMetrics("s-response-b")?.policyViolations).toBe(1);
     });
 
     it("computes a varying compaction avoidance ratio instead of a constant", () => {

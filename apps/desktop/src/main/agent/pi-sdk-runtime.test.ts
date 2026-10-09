@@ -8929,10 +8929,13 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
   it("mirrors response evaluations into the observer end to end", async () => {
     setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
 
-    await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
+    const sessionA = await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
+    const sessionB = await runTurnWithAssistantText("Q1\n\nQ2\n\nQ3\n\nQ4\n\nQ5\n\nQ6");
 
     expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
     expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
+    expect(HarnessObserver.getInstance().getSessionMetrics(sessionA)?.policyViolations).toBeGreaterThan(0);
+    expect(HarnessObserver.getInstance().getSessionMetrics(sessionB)?.policyViolations).toBeGreaterThan(0);
   });
 });
 
