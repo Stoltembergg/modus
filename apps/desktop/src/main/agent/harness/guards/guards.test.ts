@@ -208,12 +208,18 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
       setRepeatGuardConfig({ maxTrackedInvocations: 5 });
 
       for (let i = 0; i < 10; i++) {
-        tracker.record("sess-1", "run-1", "grep", { query: `term_${i}` }, {
-          toolCallId: `call-${i}`,
-          outcome: "success",
-          resultFingerprint: `result-${i}`,
-          progressFingerprint: `progress-${i}`,
-        });
+        tracker.record(
+          "sess-1",
+          "run-1",
+          "grep",
+          { query: `term_${i}` },
+          {
+            toolCallId: `call-${i}`,
+            outcome: "success",
+            resultFingerprint: `result-${i}`,
+            progressFingerprint: `progress-${i}`,
+          },
+        );
       }
 
       const stored = tracker.getInvocations("sess-1", "run-1");

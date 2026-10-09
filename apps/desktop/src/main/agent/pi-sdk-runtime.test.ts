@@ -9096,6 +9096,74 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
     }
   });
 
+  it("enforces repeat guards when Agent Groups dispatch a member turn", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const { GroupRuntime } = await import("../groups/group-runtime");
+    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const sessionId = `repeat-group-dispatch-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-group-dispatch.jsonl"), "Member A");
+    const group = createAgentGroupWithMembers({
+      name: "Repeat Guard dispatch",
+      mode: "free",
+      workspaceId,
+      members: [{ sessionId }],
+      leadSessionId: sessionId,
+    });
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+
+    const toolName = `mcp_repeat_group_dispatch_${crypto.randomUUID().replaceAll("-", "")}`;
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    let dispatchedTurn: ReturnType<PiSdkRuntime["prompt"]> | undefined;
+    const groupAgentRuntime: import("../groups/group-runtime-lib").GroupAgentRuntime = {
+      prompt: (targetWindow, input) => {
+        dispatchedTurn = runtime.prompt(targetWindow, input);
+        return dispatchedTurn;
+      },
+      abort: (targetSessionId) => runtime.abort(targetSessionId),
+      isSessionStreaming: (targetSessionId) => runtime.isSessionStreaming(targetSessionId),
+      onTurnSettled: (listener) => runtime.onTurnSettled(listener),
+      onQuestionPending: (listener) => runtime.onQuestionPending(listener),
+      onEvent: (listener) => runtime.onEvent(listener),
+    };
+    const groups = new GroupRuntime({
+      runtime: groupAgentRuntime,
+      host: {
+        getWindow: () => window as never,
+        isUpdatePending: () => false,
+        emit: vi.fn(),
+      },
+    });
+
+    try {
+      requestToolSequence(
+        Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+      );
+      groups.postUserMessage({ groupId: group.id, body: "@Member A repeat lookup." });
+      await vi.waitFor(() => expect(dispatchedTurn).toBeDefined());
+      const result = await dispatchedTurn;
+
+      expect(result.outcome).toBe("ok");
+      expect(executions).toBe(3);
+    } finally {
+      groups.dispose();
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("does not track or block repeated calls while the feature flag is off", async () => {
     const { requestToolSequence } = await useOfflinePiToolSessions();
     const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");

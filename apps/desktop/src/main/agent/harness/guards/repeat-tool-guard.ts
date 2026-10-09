@@ -68,7 +68,10 @@ function stableSerialize(value: unknown, seen: WeakSet<object>): string {
   }
   const serialized = `{${Object.keys(value)
     .sort()
-    .map((key) => `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key], seen)}`)
+    .map(
+      (key) =>
+        `${JSON.stringify(key)}:${stableSerialize((value as Record<string, unknown>)[key], seen)}`,
+    )
     .join(",")}}`;
   seen.delete(value);
   return serialized;
@@ -179,16 +182,12 @@ export function detectUnproductiveToolRepeat(
   const argsFingerprint = fingerprintToolArgs(args);
   const recent = invocations.filter(
     (invocation) =>
-      invocation.outcome !== "cancelled" &&
-      now - invocation.timestamp <= config.toolRepeatWindowMs,
+      invocation.outcome !== "cancelled" && now - invocation.timestamp <= config.toolRepeatWindowMs,
   );
   const streak: ToolInvocation[] = [];
   for (let index = recent.length - 1; index >= 0; index -= 1) {
     const invocation = recent[index];
-    if (
-      invocation?.toolName !== toolName ||
-      invocation.argsFingerprint !== argsFingerprint
-    ) {
+    if (invocation?.toolName !== toolName || invocation.argsFingerprint !== argsFingerprint) {
       break;
     }
     streak.push(invocation);
@@ -202,7 +201,9 @@ export function detectUnproductiveToolRepeat(
   const evidence = streak.slice(0, config.toolRepeatThreshold);
   const repeatedFailures = evidence.every((invocation) => invocation.outcome === "failed");
   const resultFingerprints = new Set(evidence.map((invocation) => invocation.resultFingerprint));
-  const progressFingerprints = new Set(evidence.map((invocation) => invocation.progressFingerprint));
+  const progressFingerprints = new Set(
+    evidence.map((invocation) => invocation.progressFingerprint),
+  );
   const sameObservableResult =
     evidence.every((invocation) => invocation.resultFingerprint !== undefined) &&
     resultFingerprints.size === 1;

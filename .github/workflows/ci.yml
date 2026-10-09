@@ -43,7 +43,7 @@ jobs:
           && npm run test:site
 
   verifier-first-regressions:
-    name: verifier-first and repeat-guard runtime regressions
+    name: verifier-first runtime regressions
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

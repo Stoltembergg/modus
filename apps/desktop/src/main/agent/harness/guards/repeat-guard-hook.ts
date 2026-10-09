@@ -17,12 +17,11 @@ import {
   detectFailureLoop,
   type FailureLoopAction,
 } from "./failure-loop-guard";
-import { detectRepeatHypothesis } from "./repeat-hypothesis-guard";
 import {
+  type RepeatGuardDecision,
   detectRepeatTools,
   detectUnproductiveToolRepeat,
   ToolInvocationTracker,
-  type RepeatGuardDecision,
 } from "./repeat-tool-guard";
 
 /** Pi SDK pre-execution hook: its block decision is consumed before tool execution. */
