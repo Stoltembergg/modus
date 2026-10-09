@@ -13,8 +13,8 @@ import { buildContextChips } from "../../shared/context-chips";
 import type {
   AdaptiveDecision,
   AdaptiveDecisionMode,
-  AdaptiveFailureLoopAction,
   AdaptiveFailureAttempt,
+  AdaptiveFailureLoopAction,
   AgentEvent,
   AgentResponseModel,
   AgentRunInfo,
