@@ -5762,6 +5762,7 @@ describe("PiSdkRuntime", () => {
       }),
       undefined,
       expect.any(Function),
+      workspaceId,
     );
     // Unlike releaseRuntime, the rebuild keeps the in-memory to-dos.
     expect(clearCache).not.toHaveBeenCalledWith(sessionId);
