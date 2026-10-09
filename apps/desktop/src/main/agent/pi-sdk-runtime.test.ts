@@ -5561,6 +5561,7 @@ describe("PiSdkRuntime", () => {
         cancelToolCall: expect.any(Function),
         afterToolCall: expect.any(Function),
       }),
+      undefined,
     );
     // Unlike releaseRuntime, the rebuild keeps the in-memory to-dos.
     expect(clearCache).not.toHaveBeenCalledWith(sessionId);
@@ -9128,8 +9129,10 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(deliveredPrompt).toContain("registry global marker");
     expect(deliveredPrompt).toContain("registry workspace marker");
     expect(deliveredPrompt?.match(/registry workspace marker/g)).toHaveLength(1);
+    // Pi already includes AGENTS.md in its base prompt, so the registry avoids
+    // registering a duplicate workspace_rules section for the same content.
     expect(registry?.getAllSections().map((section) => section.id)).toEqual(
-      expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance", "workspace_rules"]),
+      expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance"]),
     );
     expect(registry?.getAllSections().map((section) => section.id)).not.toEqual(
       expect.arrayContaining(["persona", "rules", "skills", "memory", "context", "policy"]),
@@ -9256,6 +9259,61 @@ describe("PiSdkRuntime PromptRegistry production wiring", () => {
     expect(runtimeSession?.promptRegistry).toBeUndefined();
     expect(deliveredPrompt).toContain("legacy global marker");
     expect(deliveredPrompt).toContain("legacy workspace marker");
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("keeps all resolved Modus instructions when PromptRegistry assembly fails", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    mocks.globalGuidance = "<global_guidance>fallback global marker</global_guidance>";
+    const sessionId = `prompt-registry-fallback-${crypto.randomUUID()}`;
+    const workspaceId = `prompt-registry-fallback-workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-fallback.jsonl"));
+    await writeFile(join(cwd, "AGENTS.md"), "fallback workspace marker", "utf8");
+    const { createAgent } = await import("../agents/agents-store");
+    const agent = createAgent({
+      name: `Prompt fallback ${crypto.randomUUID()}`,
+      role: "Builder",
+      instructions: "fallback persona marker",
+    });
+    getDatabase()
+      .prepare("update agent_sessions set agent_id = ?, kind = 'chat' where id = ?")
+      .run(agent.id, sessionId);
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          { promptRegistry?: { assemblePrompt: (id: string, options?: unknown) => Promise<unknown> } }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    if (!registry) throw new Error("Expected a session-owned PromptRegistry.");
+    vi.spyOn(registry, "assemblePrompt").mockRejectedValue(
+      new Error("registry assembly unavailable"),
+    );
+
+    await runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Keep required instructions during registry failure.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    expect(deliveredPrompt).toContain("fallback global marker");
+    expect(deliveredPrompt).toContain("fallback workspace marker");
+    expect(deliveredPrompt).toContain("fallback persona marker");
+    expect(deliveredPrompt.match(/<response_policy level="standard">/g)).toHaveLength(1);
     await runtime.releaseRuntime(sessionId);
   });
 
