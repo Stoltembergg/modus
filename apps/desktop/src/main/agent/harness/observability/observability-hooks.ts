@@ -5,6 +5,7 @@ import type {
   TurnSettleInput,
   TurnSettleOutput,
 } from "../kernel/harness-hooks";
+import { ResponsePolicyRegistry } from "../response/response-registry";
 import { HarnessObserver } from "./harness-observer";
 
 /**
@@ -48,9 +49,12 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
       // Attribute response outcomes from this turn's state. Registry totals
       // are global, so assigning their deltas to the current session can leak
       // concurrent work into the wrong session.
-      const responsePolicy = context.state?.get("harness.response_policy") as
+      const responsePolicyFromRun = context.state?.get("harness.response_policy") as
         | { enforcementMode?: string }
         | undefined;
+      const responsePolicy =
+        responsePolicyFromRun ??
+        (sessionId ? ResponsePolicyRegistry.getInstance().getSessionPolicy(sessionId) : undefined);
       const rawResponse = context.state?.get("harness.assistant_response");
       const formattedResponse = context.state?.get("harness.formatted_response");
       const violation = context.state?.get("harness.response_violated") === true;
@@ -58,6 +62,7 @@ export const defaultObservabilityTurnSettleHook: HarnessHook<TurnSettleInput, Tu
         isFeatureFlagEnabled("MODUS_RESPONSE_POLICY") &&
         responsePolicy &&
         typeof rawResponse === "string" &&
+        typeof formattedResponse === "string" &&
         context.state?.get("harness.response_policy_observed") !== true
       ) {
         const formatted = violation && responsePolicy.enforcementMode === "strict";

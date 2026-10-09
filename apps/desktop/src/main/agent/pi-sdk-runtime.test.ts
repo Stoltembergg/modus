@@ -8940,8 +8940,33 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
   it("mirrors response evaluations into the observer end to end", async () => {
     setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
 
-    const sessionA = await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
-    const sessionB = await runTurnWithAssistantText("Q1\n\nQ2\n\nQ3\n\nQ4\n\nQ5\n\nQ6");
+    const workspaceId = `response-policy-${crypto.randomUUID()}`;
+    const sessionA = `response-policy-a-${crypto.randomUUID()}`;
+    const sessionB = `response-policy-b-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const { createAgentSessionRecord } = await import("./agent-store");
+    const sessions: Array<[string, string]> = [
+      [sessionA, "Response policy A"],
+      [sessionB, "Response policy B"],
+    ];
+    for (const [id, title] of sessions) {
+      createAgentSessionRecord({
+        id,
+        workspaceId,
+        title,
+        cwd,
+        piSessionFile: join(userData, `${id}.jsonl`),
+      });
+    }
+    const runtime = new PiSdkRuntime();
+    await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6", {
+      runtime,
+      sessionId: sessionA,
+    });
+    await runTurnWithAssistantText("Q1\n\nQ2\n\nQ3\n\nQ4\n\nQ5\n\nQ6", {
+      runtime,
+      sessionId: sessionB,
+    });
 
     expect(ResponsePolicyRegistry.getInstance().getMetrics().totalEvaluated).toBeGreaterThan(0);
     expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
