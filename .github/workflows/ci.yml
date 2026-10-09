@@ -123,9 +123,10 @@ jobs:
         run: >
           npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000
           apps/desktop/src/main/agent/harness/feature-flags.test.ts
+          apps/desktop/src/main/agent/harness/observability/observability.test.ts
           apps/desktop/src/main/agent/runtime-registry.test.ts
           apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
-          -t 'preserves the established defaults|reports malformed environment values|disables only features whose dependencies are invalid|does not enable dependencies or plugins|keeps valid, explicitly enabled features active|validates valid flags before constructing the singleton|diagnoses invalid dependencies and disables them before constructing the singleton|releases only one Agent Group member|starts a fresh observer lifetime|discards a pending stale turn-settle hook|persists a private-data-free Task State|keeps repeated calls usable when Repeat Guards are requested without the kernel'
+          -t 'preserves the established defaults|reports malformed environment values|disables only features whose dependencies are invalid|does not enable dependencies or plugins|keeps valid, explicitly enabled features active|validates valid flags before constructing the singleton|diagnoses invalid dependencies and disables them before constructing the singleton|records per-turn response outcomes against their owning sessions|releases only one Agent Group member|starts a fresh observer lifetime|discards a pending stale turn-settle hook|persists a private-data-free Task State|keeps repeated calls usable when Repeat Guards are requested without the kernel'
 
   sandbox-probe-compile:
     name: sandbox probe compile-only
