@@ -5894,7 +5894,8 @@ describe("PiSdkRuntime", () => {
       },
     });
     mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-    await new PiSdkRuntime().prompt(createWindowStub(), {
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
       message: "Fix a typo",
@@ -5930,6 +5931,16 @@ describe("PiSdkRuntime", () => {
       "verifying",
       "terminal",
     ]);
+
+    await runtime.releaseRuntime(sessionId);
+    expect(getLatestHarnessTaskState(sessionId, runId)).toEqual(state);
+    expect(
+      getDatabase()
+        .prepare(
+          "select count(*) as count from agent_events where session_id = ? and type = 'harness.task_state'",
+        )
+        .get(sessionId),
+    ).toEqual({ count: 4 });
   });
 
   it("rechecks QA after a restore during deferred turn-end capture", async () => {
@@ -8622,10 +8633,8 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     HarnessObserver.resetInstance();
   });
 
-  async function runTurnWithAssistantText(text: string): Promise<string> {
-    const sessionId = `session-${crypto.randomUUID()}`;
-    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-    const session = createMockPiSession({
+  function createAssistantPiSession(text: string): Record<string, unknown> {
+    return createMockPiSession({
       prompt: vi.fn(async () => {
         mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
         mocks.emitPiEvent({
@@ -8636,8 +8645,20 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
         mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
       }),
     });
+  }
+
+  async function runTurnWithAssistantText(
+    text: string,
+    options: { runtime?: PiSdkRuntime; sessionId?: string } = {},
+  ): Promise<string> {
+    const sessionId = options.sessionId ?? `session-${crypto.randomUUID()}`;
+    if (!getAgentSession(sessionId)) {
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    }
+    const session = createAssistantPiSession(text);
     mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-    await new PiSdkRuntime().prompt(createWindowStub(), {
+    const runtime = options.runtime ?? new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
       message: "hello",
@@ -8663,6 +8684,169 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     const sessionId = await runTurnWithAssistantText("done");
 
     expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+  });
+
+  it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberA = `observer-group-a-${crypto.randomUUID()}`;
+    const memberB = `observer-group-b-${crypto.randomUUID()}`;
+    const child = `observer-subagent-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const { createAgentSessionRecord } = await import("./agent-store");
+    const sessions: Array<[string, string]> = [
+      [memberA, "Member A"],
+      [memberB, "Member B"],
+      [child, "Member A child"],
+    ];
+    for (const [id, title] of sessions) {
+      createAgentSessionRecord({
+        id,
+        workspaceId,
+        title,
+        cwd,
+        piSessionFile: join(userData, `${id}.jsonl`),
+        ...(id === child ? { parentSessionId: memberA } : {}),
+      });
+    }
+    groupStore.createAgentGroupWithMembers({
+      name: "Observer lifecycle group",
+      workspaceId,
+      members: [{ sessionId: memberA }, { sessionId: memberB }],
+      leadSessionId: memberA,
+    });
+    const runtime = new PiSdkRuntime();
+    const observer = HarnessObserver.getInstance();
+
+    try {
+      await runTurnWithAssistantText("A completed.", { runtime, sessionId: memberA });
+      await runTurnWithAssistantText("B completed.", { runtime, sessionId: memberB });
+      await runTurnWithAssistantText("Child completed.", { runtime, sessionId: child });
+      observer.recordPromptSections(["a"], [], 1, memberA);
+      observer.recordPromptSections(["b"], [], 2, memberB);
+      observer.recordPromptSections(["child"], [], 3, child);
+
+      expect(observer.getSessionMetrics(memberA)).toBeDefined();
+      expect(observer.getSessionMetrics(memberB)).toBeDefined();
+      expect(observer.getSessionMetrics(child)).toBeDefined();
+
+      await runtime.releaseRuntime(memberA);
+
+      expect(observer.getSessionMetrics(memberA)).toBeUndefined();
+      expect(observer.getSessionMetrics(memberB)).toBeDefined();
+      expect(observer.getSessionMetrics(child)).toBeDefined();
+      expect(observer.snapshot().promptSections.tokensSaved).toBe(6);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberA)).toBe(false);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberB)).toBe(true);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === child)).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(memberA);
+      await runtime.releaseRuntime(memberB);
+      await runtime.releaseRuntime(child);
+    }
+  });
+
+  it("starts a fresh observer lifetime when the same session is recreated", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const runtime = new PiSdkRuntime();
+    const sessionId = `observer-recreated-${crypto.randomUUID()}`;
+
+    try {
+      await runTurnWithAssistantText("First turn.", { runtime, sessionId });
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+
+      await runtime.releaseRuntime(sessionId);
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+
+      await runTurnWithAssistantText("Second turn.", { runtime, sessionId });
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("discards a pending stale turn-settle hook after release and recreation", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const runtime = new PiSdkRuntime();
+    const sessionId = `observer-pending-${crypto.randomUUID()}`;
+    let notifyPending!: () => void;
+    let resumePending!: () => void;
+    const pendingStarted = new Promise<void>((resolve) => {
+      notifyPending = resolve;
+    });
+    const pendingGate = new Promise<void>((resolve) => {
+      resumePending = resolve;
+    });
+    let shouldPause = true;
+    const laterHook = vi.fn();
+    const kernel = (
+      runtime as unknown as {
+        harnessKernel: {
+          registerHook(hook: {
+            name: string;
+            phase: "turn_settle";
+            priority: number;
+            isCritical: boolean;
+            execute: (input: unknown) => Promise<unknown> | unknown;
+          }): void;
+        };
+      }
+    ).harnessKernel;
+    kernel.registerHook({
+      name: "test-pending-session-release",
+      phase: "turn_settle",
+      priority: 50,
+      isCritical: false,
+      execute: async (input) => {
+        if (shouldPause) {
+          shouldPause = false;
+          notifyPending();
+          await pendingGate;
+        }
+        return input;
+      },
+    });
+    kernel.registerHook({
+      name: "test-session-release-later-hook",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input) => {
+        laterHook();
+        return input;
+      },
+    });
+
+    try {
+      const oldTurn = runTurnWithAssistantText("Old turn.", { runtime, sessionId });
+      await pendingStarted;
+      await runtime.releaseRuntime(sessionId);
+
+      mocks.createAgentSession.mockImplementationOnce(async () => ({
+        session: createAssistantPiSession("New turn."),
+      }));
+      await runtime.ensure(createWindowStub(), sessionId);
+      resumePending();
+      await oldTurn;
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+      expect(laterHook).not.toHaveBeenCalled();
+
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "New turn.",
+        sessionId,
+      });
+
+      expect(laterHook).toHaveBeenCalledTimes(1);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+    } finally {
+      resumePending();
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 
   it("mirrors response evaluations into the observer end to end", async () => {
@@ -9233,6 +9417,38 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       await runtime.prompt(createWindowStub(), {
         context: [],
         message: "Repeat the lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+      expect(ToolInvocationTracker.getInstance().getInvocations(sessionId)).toHaveLength(0);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps repeated calls usable when Repeat Guards are requested without the kernel", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    const sessionId = `repeat-invalid-flags-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_invalid_flags_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: false, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the lookup with the kernel disabled.",
         sessionId,
       });
 
