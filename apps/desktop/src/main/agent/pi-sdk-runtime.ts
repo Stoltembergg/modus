@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
   type BeforeAgentStartEvent,
+  type ToolResultEvent,
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
@@ -221,6 +222,8 @@ import {
 } from "./model-service";
 import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
+import { createModusToolSpillHandler } from "./pi-tool-spill-extension";
+import type { SpillAuthorizationContext } from "./harness/tools/tool-result-storage";
 import { planModePreamble, profileForMode } from "./plan-prompt";
 import { PI_ROOT_LEAF } from "./rollback-service";
 import type {
@@ -252,6 +255,7 @@ import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
+import { registerSpillTools } from "./tools/spill-tools";
 import { toolRegistry } from "./tools/registry";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
@@ -900,6 +904,18 @@ export class PiSdkRuntime implements AgentRuntime {
     string,
     Map<string, { runId: string; toolName: string; input: unknown }>
   >();
+  private spillPendingToolCalls = new Map<
+    string,
+    Map<
+      string,
+      {
+        runId: string;
+        workspaceId: string;
+        toolName: string;
+        promptLifecycleToken: symbol;
+      }
+    >
+  >();
   private cancellingRuns = new Set<string>();
   private preflightReservations = new Map<string, symbol>();
   private pendingIntentGates = new Map<string, { runId: string; controller: AbortController }>();
@@ -939,6 +955,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerProjectMemoryTools();
     registerPlanTools();
     registerQuestionTools();
+    registerSpillTools();
     registerSubagentTools(this);
     registerWaitTools(this);
     registerGroupTools();
@@ -1734,7 +1751,10 @@ export class PiSdkRuntime implements AgentRuntime {
   private async beforeRepeatGuardToolCall(
     sessionId: string,
     input: ToolCallInput,
+    promptLifecycleToken: symbol,
   ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
+    this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
+    this.recordPendingSpillToolCall(sessionId, input, promptLifecycleToken);
     if (!isFeatureFlagEnabled("MODUS_USE_KERNEL") || !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
       return undefined;
     }
@@ -1748,6 +1768,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     const context = this.createToolGuardContext(runtimeSession, tracker);
     if (!context.isCurrent?.()) {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
       return { block: true, reason: "The session run is no longer active." };
     }
     const output = await this.harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
@@ -1756,10 +1777,12 @@ export class PiSdkRuntime implements AgentRuntime {
       context,
     );
     if (!context.isCurrent?.()) {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
       return { block: true, reason: "The session run is no longer active." };
     }
     const decision = output.repeatGuardDecision;
     if (decision?.action === "block") {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
       this.recordAdaptiveFailure(runtimeSession, tracker, {
         sessionId,
         runId: activeRun.id,
@@ -1807,6 +1830,84 @@ export class PiSdkRuntime implements AgentRuntime {
     const pending = this.repeatGuardPendingToolCalls.get(sessionId);
     pending?.delete(toolCallId);
     if (pending?.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
+  }
+
+  private cancelPendingToolCall(sessionId: string, toolCallId: string): void {
+    this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId);
+    this.cancelPendingSpillToolCall(sessionId, toolCallId);
+  }
+
+  private recordPendingSpillToolCall(
+    sessionId: string,
+    input: ToolCallInput,
+    promptLifecycleToken: symbol,
+  ): void {
+    if (!isFeatureFlagEnabled("MODUS_TOOL_RESULT_SPILL")) return;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken ||
+      !activeRun ||
+      !tracker ||
+      activeRun.id !== tracker.runId ||
+      this.cancellingRuns.has(activeRun.id) ||
+      getAgentRun(activeRun.id)?.status === "cancelled"
+    ) {
+      return;
+    }
+
+    const pending = this.spillPendingToolCalls.get(sessionId) ?? new Map();
+    pending.set(input.toolCallId, {
+      runId: activeRun.id,
+      workspaceId: runtimeSession.info.workspaceId,
+      toolName: input.toolName,
+      promptLifecycleToken,
+    });
+    this.spillPendingToolCalls.set(sessionId, pending);
+  }
+
+  private takeSpillAuthorization(
+    sessionId: string,
+    promptLifecycleToken: symbol,
+    event: ToolResultEvent,
+  ): SpillAuthorizationContext | undefined {
+    const pending = this.spillPendingToolCalls.get(sessionId);
+    const invocation = pending?.get(event.toolCallId);
+    this.cancelPendingSpillToolCall(sessionId, event.toolCallId);
+    if (!invocation || invocation.toolName !== event.toolName) return undefined;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken ||
+      invocation.promptLifecycleToken !== promptLifecycleToken ||
+      runtimeSession.info.workspaceId !== invocation.workspaceId ||
+      !activeRun ||
+      activeRun.id !== invocation.runId ||
+      !tracker ||
+      tracker.runId !== invocation.runId ||
+      this.cancellingRuns.has(invocation.runId) ||
+      getAgentRun(invocation.runId)?.status === "cancelled"
+    ) {
+      return undefined;
+    }
+
+    return {
+      sessionId,
+      runId: invocation.runId,
+      workspaceId: invocation.workspaceId,
+    };
+  }
+
+  private cancelPendingSpillToolCall(sessionId: string, toolCallId: string): void {
+    const pending = this.spillPendingToolCalls.get(sessionId);
+    pending?.delete(toolCallId);
+    if (pending?.size === 0) this.spillPendingToolCalls.delete(sessionId);
   }
 
   private async afterRepeatGuardToolCall(
@@ -1909,11 +2010,19 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       if (pending.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
     }
+    const spillPending = this.spillPendingToolCalls.get(sessionId);
+    if (spillPending) {
+      for (const [toolCallId, invocation] of spillPending) {
+        if (invocation.runId === runId) spillPending.delete(toolCallId);
+      }
+      if (spillPending.size === 0) this.spillPendingToolCalls.delete(sessionId);
+    }
     ToolInvocationTracker.getInstance().clearRun(sessionId, runId);
   }
 
   private clearRepeatGuardSession(sessionId: string): void {
     this.repeatGuardPendingToolCalls.delete(sessionId);
+    this.spillPendingToolCalls.delete(sessionId);
     ToolInvocationTracker.getInstance().clearSession(sessionId);
   }
 
@@ -2355,6 +2464,7 @@ export class PiSdkRuntime implements AgentRuntime {
   ): AgentToolContext {
     const sessionId = runtimeSession.info.id;
     const baseEmit = runtimeSession.emit;
+    const activeRunId = getActiveAgentRun(sessionId)?.id;
     // Real ask_user / approval on a group member must surface as Waiting for you
     // (and free the concurrency slot). Intent-gate is skipped for group_member.
     const emit: EmitAgentEvent =
@@ -2370,6 +2480,7 @@ export class PiSdkRuntime implements AgentRuntime {
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       sessionId,
+      ...(activeRunId ? { runId: activeRunId } : {}),
       profile,
       ...(mode ? { mode } : {}),
       ...(runtimeSession.info.parentSessionId
@@ -2571,14 +2682,34 @@ export class PiSdkRuntime implements AgentRuntime {
           emit,
           cwd,
           {
-            beforeToolCall: (event) => this.beforeRepeatGuardToolCall(sessionId, event),
+            beforeToolCall: (event) =>
+              this.beforeRepeatGuardToolCall(sessionId, event, promptLifecycleToken),
             cancelToolCall: (toolCallId) =>
-              this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId),
+              this.cancelPendingToolCall(sessionId, toolCallId),
             afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
           },
           promptRegistryEnabled
             ? (event) => this.applyPromptRegistry(sessionId, promptLifecycleToken, event)
             : undefined,
+          createModusToolSpillHandler(
+            sessionId,
+            (event) => this.takeSpillAuthorization(sessionId, promptLifecycleToken, event),
+            () => {
+              const runtimeSession = this.sessions.get(sessionId);
+              if (runtimeSession?.promptLifecycleToken === promptLifecycleToken) {
+                try {
+                  runtimeSession.emit({
+                    type: "runtime.error",
+                    sessionId,
+                    message:
+                      "Tool result spill could not be stored; the complete tool output was kept inline.",
+                  });
+                } catch {
+                  // A diagnostic failure must not change the original tool result.
+                }
+              }
+            },
+          ),
         ),
       ],
       settingsManager,
@@ -3556,6 +3687,7 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!run || run.sessionId !== input.sessionId) {
       throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
     }
+    toolContext.runId = run.id;
     if (probe) probe.runId = run.id;
     if (runBranch) {
       try {

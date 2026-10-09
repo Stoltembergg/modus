@@ -173,6 +173,7 @@ const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned }
 const agentEventStore = await import("./agent-event-store");
 const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
+const { registerSpillTools, RETRIEVE_SPILL_TOOL_NAME } = await import("./tools/spill-tools");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
@@ -265,6 +266,7 @@ async function useOfflinePiToolSessions() {
   const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
   const deliveredMessages: Array<{ session: AgentSession; messages: Context["messages"] }> = [];
   let requestedTool: string | undefined;
+  let requestedToolInput: unknown = {};
   let scriptedToolCalls: Array<{ name: string; input: unknown }> | undefined;
   let scriptedToolCallIndex = 0;
   mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
@@ -320,7 +322,7 @@ async function useOfflinePiToolSessions() {
                 type: "toolCall",
                 id: crypto.randomUUID(),
                 name: toolName,
-                arguments: scriptedCall?.input ?? {},
+                arguments: scriptedCall?.input ?? requestedToolInput,
               },
             ]
           : [{ type: "text", text: "Done." }],
@@ -356,13 +358,15 @@ async function useOfflinePiToolSessions() {
       deliveredMessages
         .filter((entry) => entry.session === session)
         .flatMap((entry) => entry.messages),
-    requestTool: (name: string) => {
+    requestTool: (name: string, input: unknown = {}) => {
       requestedTool = name;
+      requestedToolInput = input;
       scriptedToolCalls = undefined;
       scriptedToolCallIndex = 0;
     },
     requestToolSequence: (calls: Array<{ name: string; input: unknown }>) => {
       requestedTool = undefined;
+      requestedToolInput = {};
       scriptedToolCalls = calls;
       scriptedToolCallIndex = 0;
     },
@@ -9627,6 +9631,42 @@ describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
 describe("PiSdkRuntime Tool Result Spill integration", () => {
   afterEach(() => {
     resetFeatureFlagOverrides();
+    registerSpillTools();
+  });
+
+  it("keeps large Pi tool results inline when spill is disabled", async () => {
+    const { messagesFor, requestTool, sessionAt } = await useOfflinePiToolSessions();
+    const sessionId = `tool-spill-disabled-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const toolName = `mcp_spill_off_${crypto.randomUUID().replaceAll("-", "")}`;
+    const originalOutput = "offline output remains inline\n".repeat(900);
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_TOOL_RESULT_SPILL: false });
+    registerSpillTools();
+    expect(
+      toolRegistry
+        .getCustomToolDefinitions("chat")
+        .some((tool) => tool.name === RETRIEVE_SPILL_TOOL_NAME),
+    ).toBe(false);
+    registerOfflineMcpTool(toolName, originalOutput);
+    requestTool(toolName);
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Run the offline lookup.",
+        sessionId,
+      });
+
+      const toolResult = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === toolName,
+      );
+      expect(toolResult?.content).toEqual([{ type: "text", text: originalOutput }]);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 
   it("sends a bounded spill preview after a large Pi tool result", async () => {
@@ -9655,10 +9695,33 @@ describe("PiSdkRuntime Tool Result Spill integration", () => {
         (message) => message.role === "toolResult" && message.toolName === toolName,
       );
       expect(toolResult).toBeDefined();
-      expect(Buffer.byteLength(JSON.stringify(toolResult?.content) ?? "", "utf8")).toBeLessThan(
+      const preview = JSON.stringify(toolResult?.content) ?? "";
+      expect(Buffer.byteLength(preview, "utf8")).toBeLessThan(
         Buffer.byteLength(originalOutput, "utf8"),
       );
-      expect(JSON.stringify(toolResult?.content)).toContain("spill-");
+      const spillId = preview.match(/spill-[0-9a-f-]+/)?.[0];
+      expect(spillId).toBeDefined();
+
+      requestTool(RETRIEVE_SPILL_TOOL_NAME, {
+        spill_id: spillId,
+        offset_line: 0,
+        limit_lines: 3,
+        max_bytes: 2048,
+      });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retrieve the first section of the stored output.",
+        sessionId,
+      });
+
+      const recovered = messagesFor(sessionAt())
+        .filter(
+          (message) => message.role === "toolResult" && message.toolName === RETRIEVE_SPILL_TOOL_NAME,
+        )
+        .at(-1);
+      expect(JSON.stringify(recovered?.content)).toContain("offline output line 0:");
+      expect(JSON.stringify(recovered?.content)).toContain("offline output line 2:");
+      expect(JSON.stringify(recovered?.content)).not.toContain("offline output line 3:");
     } finally {
       toolRegistry.unregisterTool(toolName);
       await runtime.releaseRuntime(sessionId);

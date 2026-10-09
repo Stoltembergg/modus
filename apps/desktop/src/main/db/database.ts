@@ -78,6 +78,28 @@ export function migrateDatabase(db: DatabaseSync): void {
       error text
     );
 
+    create table if not exists tool_result_spills (
+      id text primary key,
+      session_id text not null references agent_sessions(id) on delete cascade,
+      run_id text not null references agent_runs(id) on delete cascade,
+      workspace_id text not null references workspaces(id) on delete cascade,
+      tool_name text not null check(length(tool_name) between 1 and 128),
+      full_content text not null,
+      content_hash text not null check(length(content_hash) = 64),
+      size_bytes integer not null check(size_bytes between 0 and 2097152),
+      line_count integer not null check(line_count >= 1),
+      is_error integer not null default 0 check(is_error in (0, 1)),
+      spill_reason text not null check(spill_reason in ('byte_limit_exceeded', 'line_limit_exceeded')),
+      created_at integer not null,
+      expires_at integer not null,
+      last_accessed_at integer not null,
+      check(size_bytes = length(cast(full_content as blob)))
+    );
+    create index if not exists idx_tool_result_spills_scope_expiry
+      on tool_result_spills(session_id, workspace_id, expires_at);
+    create index if not exists idx_tool_result_spills_expiry_lru
+      on tool_result_spills(expires_at, last_accessed_at);
+
     create table if not exists terminal_outputs (
       terminal_id text primary key,
       workspace_id text not null,

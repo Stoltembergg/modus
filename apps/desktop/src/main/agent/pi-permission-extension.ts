@@ -2,6 +2,7 @@ import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
   ExtensionFactory,
+  ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { shouldPrompt } from "../../shared/approval";
 import type { AgentEvent } from "../../shared/contracts";
@@ -9,6 +10,7 @@ import { requestPermission } from "../permissions/permission-broker";
 import { findWorkspaceAllowDecision, getApprovalMode } from "../permissions/permission-store";
 import { getActiveAgentRun } from "./agent-run-store";
 import { getToolTarget, toolRegistry } from "./tools/registry";
+import type { ToolResultSpillHandler } from "./pi-tool-spill-extension";
 
 type PermissionEmitter = (event: AgentEvent) => void;
 type RepeatGuardToolCall = {
@@ -38,6 +40,7 @@ export function createModusPermissionExtension(
   cwd?: string,
   repeatGuard?: RepeatGuardBridge,
   beforeAgentStart?: BeforeAgentStartBridge,
+  spillToolResult?: ToolResultSpillHandler,
 ): ExtensionFactory {
   return (pi) => {
     if (beforeAgentStart) {
@@ -95,7 +98,7 @@ export function createModusPermissionExtension(
       return undefined;
     });
 
-    pi.on("tool_result", async (event) => {
+    pi.on("tool_result", async (event: ToolResultEvent, ctx) => {
       await repeatGuard?.afterToolCall({
         toolCallId: event.toolCallId,
         toolName: event.toolName,
@@ -104,6 +107,7 @@ export function createModusPermissionExtension(
         details: event.details,
         isError: event.isError,
       });
+      return spillToolResult?.(event, ctx.signal);
     });
   };
 }

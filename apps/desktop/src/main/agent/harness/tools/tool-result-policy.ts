@@ -91,7 +91,10 @@ export function evaluateToolSpill(
   };
 
   const sizeBytes = Buffer.byteLength(output, "utf8");
-  const lineCount = output.split("\n").length;
+  let lineCount = 1;
+  for (const character of output) {
+    if (character === "\n") lineCount += 1;
+  }
 
   if (sizeBytes > policy.spillThresholdBytes) {
     return {
