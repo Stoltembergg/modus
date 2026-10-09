@@ -25,11 +25,10 @@ import { handleRetrieveSpilledToolResult } from "./tools/retrieve-spill-tool";
 import { ToolResultStorage } from "./tools/tool-result-storage";
 import { interceptToolResult } from "./tools/tool-spill-interceptor";
 
-function createSpillTestStorage(scope: {
-  sessionId: string;
-  runId: string;
-  workspaceId: string;
-}): { database: DatabaseSync; storage: ToolResultStorage } {
+function createSpillTestStorage(scope: { sessionId: string; runId: string; workspaceId: string }): {
+  database: DatabaseSync;
+  storage: ToolResultStorage;
+} {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
   migrateDatabase(database);
