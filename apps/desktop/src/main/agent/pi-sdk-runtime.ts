@@ -2659,17 +2659,58 @@ export class PiSdkRuntime implements AgentRuntime {
       isCurrent,
       state,
     };
-    const assembled = await this.harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
-      "prompt_build",
-      { basePrompt: "", systemSections },
-      context,
-    );
-    if (!isCurrent() || typeof assembled?.finalSystemPrompt !== "string") return undefined;
+    try {
+      const assembled = await this.harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
+        "prompt_build",
+        { basePrompt: "", systemSections },
+        context,
+      );
+      if (!isCurrent()) return undefined;
+      if (typeof assembled?.finalSystemPrompt !== "string") {
+        throw new Error("PromptRegistry returned no complete system prompt.");
+      }
 
-    // Fingerprints record change detection only. Pi still receives the complete
-    // assembly on every turn; no provider-specific cache metadata is forwarded.
-    registry.markAsSent(sessionId);
-    return { systemPrompt: assembled.finalSystemPrompt };
+      // Fingerprints record change detection only. Pi still receives the complete
+      // assembly on every turn; no provider-specific cache metadata is forwarded.
+      registry.markAsSent(sessionId);
+      return { systemPrompt: assembled.finalSystemPrompt };
+    } catch (error) {
+      if (!isCurrent()) return undefined;
+      console.warn(
+        "[modus] PromptRegistry assembly failed; using the complete resolved prompt sections:",
+        error,
+      );
+
+      const fallbackSections = [...(systemSections ?? [])].sort(
+        (a, b) => (a.priority ?? 250) - (b.priority ?? 250),
+      );
+      const fallbackPrompt = fallbackSections
+        .map((section) => section.content.trim())
+        .filter((content) => content.length > 0)
+        .join("\n\n");
+      const fallbackOutput: PromptBuildOutput = {
+        finalSystemPrompt: fallbackPrompt,
+        activePromptSections: fallbackSections.map((section) => ({
+          id: section.id,
+          content: section.content,
+          volatile: Boolean(section.volatile),
+        })),
+      };
+      try {
+        const responsePolicyOutput = await defaultPromptBuildResponsePolicyHook.execute(
+          fallbackOutput,
+          context,
+        );
+        if (!isCurrent()) return undefined;
+        return { systemPrompt: responsePolicyOutput.finalSystemPrompt };
+      } catch (policyError) {
+        console.warn(
+          "[modus] ResponsePolicy fallback failed; preserving the resolved Modus instructions:",
+          policyError,
+        );
+        return isCurrent() ? { systemPrompt: fallbackPrompt } : undefined;
+      }
+    }
   }
 
   private async refreshPromptResources(runtimeSession: SdkRuntimeSession): Promise<void> {
