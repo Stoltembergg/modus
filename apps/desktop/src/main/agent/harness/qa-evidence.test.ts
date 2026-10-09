@@ -681,7 +681,7 @@ describe("summarizeRunQA", () => {
 
   it("does not treat missing scope as blanket coverage for scoped checks", () => {
     expect(summarize(commandPair("vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
-      status: "missing",
+      status: "unavailable",
     });
     expect(
       summarize(commandPair("vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
@@ -764,7 +764,7 @@ describe("summarizeRunQA", () => {
 
   it("invalidates evidence when the check did not cover the changed paths", () => {
     const events = pair({ paths: ["src/old.ts"] });
-    expect(summarize(events, ["src/new.ts"])).toMatchObject({ status: "missing" });
+    expect(summarize(events, ["src/new.ts"])).toMatchObject({ status: "unavailable" });
   });
 
   it("keeps missing required checks distinct", () => {

@@ -166,9 +166,13 @@ const { toolRegistry } = await import("./tools/registry");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
-const { getLatestHarnessTaskState, listAgentEvents, recordAgentEvent } = await import(
-  "./agent-event-store"
-);
+const {
+  getLatestHarnessTaskState,
+  getRunToolEvidence,
+  listAgentEvents,
+  recordAgentEvent,
+} = await import("./agent-event-store");
+const { summarizeRunQA } = await import("./harness/qa-evidence");
 const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
 const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
   "./agent-run-store"
@@ -3016,6 +3020,7 @@ describe("PiSdkRuntime", () => {
           content: "Run typecheck",
           acceptanceCriterionIds: ["ac-typecheck"],
         },
+        { id: "todo-lint", content: "Run lint", acceptanceCriterionIds: ["ac-lint"] },
       ],
       spec: {
         requirements: [{ id: "req", text: "Verify each requested check." }],
@@ -3034,6 +3039,14 @@ describe("PiSdkRuntime", () => {
             description: "Typecheck passes.",
             todoIds: ["todo-typecheck"],
             requiredCheckKinds: ["typecheck"],
+            status: "pending",
+          },
+          {
+            id: "ac-lint",
+            requirementId: "req",
+            description: "Lint passes.",
+            todoIds: ["todo-lint"],
+            requiredCheckKinds: ["lint"],
             status: "pending",
           },
         ],
@@ -3063,6 +3076,19 @@ describe("PiSdkRuntime", () => {
           toolName: "terminal_run",
           isError: false,
           result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "partial-cancel-typecheck",
+          toolName: "terminal_run",
+          args: { command: "tsc --noEmit" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "partial-cancel-typecheck",
+          toolName: "terminal_run",
+          isError: true,
+          result: { details: { exitCode: 1 } },
         });
         notifyCheckCompleted?.();
         return new Promise<void>((_resolve, reject) => {
@@ -3105,7 +3131,8 @@ describe("PiSdkRuntime", () => {
     expect(qa.result.evidence).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "Tests", status: "passed" }),
-        expect.objectContaining({ label: "Typecheck", status: "missing" }),
+        expect.objectContaining({ label: "Typecheck", status: "failed" }),
+        expect.objectContaining({ label: "Lint", status: "missing" }),
       ]),
     );
     expect(
@@ -3126,6 +3153,11 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     await initGitRepoWithKnownEmptyScope();
+    const baseline = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd, windowsHide: true })
+    ).stdout.trim();
+    let qaBeforeMcp: ReturnType<typeof summarizeRunQA> | undefined;
+    let qaAfterMcp: ReturnType<typeof summarizeRunQA> | undefined;
     let promptCount = 0;
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
@@ -3144,6 +3176,16 @@ describe("PiSdkRuntime", () => {
           isError: false,
           result: { details: { exitCode: 0 } },
         });
+        const runId = getActiveAgentRun(sessionId)?.id ?? "";
+        const scopeBeforeMcp = await gitMemoryContext.getChangeStatsSinceStrict(cwd, baseline);
+        if (!scopeBeforeMcp) throw new Error("Expected a verifiable pre-MCP workspace scope.");
+        qaBeforeMcp = summarizeRunQA({
+          sessionId,
+          runId,
+          changedPaths: scopeBeforeMcp.files.map((file) => file.path),
+          requiredChecks: ["tests"],
+          events: getRunToolEvidence(sessionId, runId),
+        });
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "mcp-source-write",
@@ -3157,6 +3199,15 @@ describe("PiSdkRuntime", () => {
           toolName: "mcp_v1_dangerous_1_64_1_77",
           isError: false,
           result: { details: {} },
+        });
+        const scopeAfterMcp = await gitMemoryContext.getChangeStatsSinceStrict(cwd, baseline);
+        if (!scopeAfterMcp) throw new Error("Expected a verifiable post-MCP workspace scope.");
+        qaAfterMcp = summarizeRunQA({
+          sessionId,
+          runId,
+          changedPaths: scopeAfterMcp.files.map((file) => file.path),
+          requiredChecks: ["tests"],
+          events: getRunToolEvidence(sessionId, runId),
         });
         mocks.emitPiEvent({
           type: "message_update",
@@ -3184,6 +3235,8 @@ describe("PiSdkRuntime", () => {
     ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
 
     expect(outcome.outcome).toBe("ok");
+    expect(qaBeforeMcp?.status).toBe("passed");
+    expect(qaAfterMcp?.status).toBe("missing");
     expect(qa.result.status).toBe("missing");
     expect(qa.result.evidence).toEqual(
       expect.arrayContaining([expect.objectContaining({ checkName: "tests", status: "missing" })]),
@@ -7761,7 +7814,6 @@ describe("PiSdkRuntime", () => {
       "ac-pass",
       "ac-fail",
       "ac-skip",
-      "ac-block",
     ]);
   });
 

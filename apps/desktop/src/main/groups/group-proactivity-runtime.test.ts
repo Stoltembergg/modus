@@ -42,7 +42,8 @@ const {
   bindGroupTaskRun,
   recordGroupTaskEvidence,
 } = await import("./group-task-store");
-const { recordAgentEvent } = await import("../agent/agent-event-store");
+const { getRunToolEvidence, recordAgentEvent } = await import("../agent/agent-event-store");
+const { summarizeRunQA } = await import("../agent/harness/qa-evidence");
 const { getGroupSourceFingerprint } = await import("../git/git-service");
 const { getGroupTaskDetails } = await import("./group-task-details");
 const { readGroupChain, persistGroupChain } = await import("./group-job-store");
@@ -62,6 +63,42 @@ afterAll(() => {
 function must<T>(value: T | null | undefined): T {
   if (value === null || value === undefined) throw new Error("Missing test fixture value.");
   return value;
+}
+
+function recordPassingCheckEvent(
+  sessionId: string,
+  runId: string,
+): ReturnType<typeof summarizeRunQA>["evidence"][number] & { id: string; eventId: string } {
+  const toolCallId = crypto.randomUUID();
+  recordAgentEvent({
+    type: "tool.started",
+    sessionId,
+    runId,
+    toolCallId,
+    toolName: "terminal_run",
+    args: { command: "vitest run" },
+  });
+  recordAgentEvent({
+    type: "tool.ended",
+    sessionId,
+    runId,
+    toolCallId,
+    toolName: "terminal_run",
+    isError: false,
+    exitCode: 0,
+  });
+  const result = summarizeRunQA({
+    sessionId,
+    runId,
+    changedPaths: [],
+    requiredChecks: ["tests"],
+    events: getRunToolEvidence(sessionId, runId),
+  });
+  const evidence = result.evidence[0];
+  if (result.status !== "passed" || !evidence?.id || !evidence.eventId) {
+    throw new Error("Missing passed QA from persisted check events.");
+  }
+  return evidence;
 }
 
 const flush = async () => {
@@ -567,6 +604,7 @@ describe("task transition delivery", () => {
       expectedVersion: must(task.stateVersion),
       operationId: crypto.randomUUID(),
     });
+    const evidence = recordPassingCheckEvent(owner, runId);
     const qa: AgentEvent = {
       type: "harness.qa",
       sessionId: owner,
@@ -576,9 +614,7 @@ describe("task transition delivery", () => {
         status: "passed",
         reasonCode: "ok",
         sourceFingerprint: "source",
-        evidence: [
-          { id: "evidence", kind: "test", status: "passed", label: "Tests", checkName: "tests" },
-        ],
+        evidence: [evidence],
       },
     };
     const rowId = recordAgentEvent(qa);
@@ -596,7 +632,7 @@ describe("task transition delivery", () => {
           sessionId: owner,
           runId,
           eventRowId: rowId,
-          evidenceId: "evidence",
+          evidenceId: evidence.id,
           sourceFingerprint: "source",
         },
       ],
