@@ -85,6 +85,7 @@ import {
   getLatestCheckpointRestoreRowId,
   getLatestSessionTodos,
   getLatestTodoContinuationAttempt,
+  getRunSourceWritePaths,
   getRunToolEvidence,
   getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
@@ -317,6 +318,11 @@ type PreviousSessionSelection = {
   thinkingLevel: AgentSession["thinkingLevel"];
   thinkingBudget?: number;
 };
+
+function normalizeWorkspacePath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
 
 function lastCompactionEnd(
   runtimeSession: SdkRuntimeSession,
@@ -3844,10 +3850,26 @@ export class PiSdkRuntime implements AgentRuntime {
           });
           // Mark the plan built only when this run produced a current workspace diff.
           if (buildPlan) {
+            const sourceWritePaths = new Set(
+              getRunSourceWritePaths(input.sessionId, run.id).map(normalizeWorkspacePath),
+            );
+            const changedPaths = new Set(
+              (changes && !changes.truncated ? changes.files : []).map(({ path }) =>
+                normalizeWorkspacePath(path),
+              ),
+            );
+            const attributedSourceChange = [...sourceWritePaths].some((path) =>
+              changedPaths.has(path),
+            );
             this.transitionPlanBuild(
               runtimeSession,
               buildPlan.id,
-              changes && changes.fileCount > 0 ? "built" : "not_built",
+              changes &&
+                !changes.truncated &&
+                changes.fileCount > 0 &&
+                attributedSourceChange
+                ? "built"
+                : "not_built",
             );
           }
         } else {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { foldAgentEvents } from "../../shared/agent-events";
 import type {
   AgentEvent,
@@ -181,14 +182,23 @@ function workspaceRevisionForRun(
 ): string | undefined {
   const row = db
     .prepare(
-      `select s.cwd, c.commit_hash
+      `select c.cwd, s.cwd as current_cwd, c.commit_hash
        from agent_checkpoints c
        join agent_sessions s on s.id = c.session_id
        where c.session_id = ? and c.run_id = ? and c.kind = 'auto'
        order by c.rowid asc limit 1`,
     )
-    .get(sessionId, runId) as { cwd?: string; commit_hash?: string } | undefined;
-  if (!row?.cwd || !row.commit_hash) return undefined;
+    .get(sessionId, runId) as
+    | { cwd?: string; current_cwd?: string; commit_hash?: string }
+    | undefined;
+  if (
+    !row?.cwd ||
+    !row.current_cwd ||
+    !row.commit_hash ||
+    !sameWorkspacePath(row.cwd, row.current_cwd)
+  ) {
+    return undefined;
+  }
   return getWorkspaceSourceRevision(row.cwd, row.commit_hash);
 }
 
@@ -199,6 +209,127 @@ export function getRunWorkspaceRevision(sessionId: string, runId: string): strin
     return workspaceRevisionForRun(getDatabase(), sessionId, runId);
   } catch {
     return undefined;
+  }
+}
+
+function workspaceRelativeToolPath(cwd: string, value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim() || value.length > 1024 || value.includes("\0")) {
+    return undefined;
+  }
+  try {
+    const root = resolve(cwd);
+    const target = resolve(root, value);
+    const relativePath = relative(root, target);
+    if (
+      !relativePath ||
+      relativePath === "." ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+    return relativePath.split(sep).join("/");
+  } catch {
+    return undefined;
+  }
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+/** Source paths written by successful direct file tools in exactly one run. */
+export function getRunSourceWritePaths(sessionId: string, runId: string): string[] {
+  if (!SAFE_TASK_STATE_ID.test(sessionId) || !SAFE_TASK_STATE_ID.test(runId)) return [];
+  try {
+    const db = getDatabase();
+    const owner = db
+      .prepare(
+        `select c.cwd, s.cwd as current_cwd from agent_runs r
+         join agent_sessions s on s.id = r.session_id
+       join agent_checkpoints c on c.session_id = r.session_id and c.run_id = r.id
+       where r.id = ? and r.session_id = ? and c.kind = 'auto'
+       order by c.rowid asc limit 1`,
+      )
+      .get(runId, sessionId) as { cwd?: string; current_cwd?: string } | undefined;
+    if (
+      !owner?.cwd ||
+      !owner.current_cwd ||
+      !sameWorkspacePath(owner.cwd, owner.current_cwd)
+    ) {
+      return [];
+    }
+    const rows = db
+      .prepare(
+        `select type, payload_json from agent_events
+         where session_id = ? and type in ('tool.started', 'tool.ended')
+           and json_extract(payload_json, '$.runId') = ?
+         order by rowid asc limit ?`,
+      )
+      .all(sessionId, runId, MAX_RUN_TOOL_EVENTS + 1) as Array<{
+      type: string;
+      payload_json: string;
+    }>;
+    if (rows.length > MAX_RUN_TOOL_EVENTS) return [];
+
+    const started = new Map<string, { toolName: string; path: string }>();
+    const paths: string[] = [];
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        return [];
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+      const event = payload as AgentEvent;
+      if (
+        event.sessionId !== sessionId ||
+        !("runId" in event) ||
+        event.runId !== runId ||
+        event.type !== row.type
+      ) {
+        return [];
+      }
+      if (event.type === "tool.started") {
+        if (event.toolName !== "write" && event.toolName !== "edit") continue;
+        if (
+          typeof event.toolCallId !== "string" ||
+          !event.toolCallId ||
+          event.toolCallId.length > 256
+        ) {
+          return [];
+        }
+        const path = workspaceRelativeToolPath(owner.cwd, toolArgs(event).path);
+        if (!path || started.has(event.toolCallId)) return [];
+        started.set(event.toolCallId, { toolName: event.toolName, path });
+        continue;
+      }
+      if (event.type !== "tool.ended") continue;
+      if (typeof event.toolCallId !== "string" || !event.toolCallId) continue;
+      const call = started.get(event.toolCallId);
+      if (!call) continue;
+      started.delete(event.toolCallId);
+      if (
+        (event.toolName !== undefined && event.toolName !== call.toolName) ||
+        event.isError !== false ||
+        (event.exitCode !== undefined && event.exitCode !== 0) ||
+        event.aborted === true ||
+        event.timedOut === true ||
+        event.skipped === true
+      ) {
+        continue;
+      }
+      paths.push(call.path);
+    }
+    return [...new Set(paths)];
+  } catch {
+    return [];
   }
 }
 
@@ -770,6 +901,121 @@ function reconstructTaskState(value: unknown): HarnessTaskState | undefined {
   };
 }
 
+function hasCurrentVerifiedTaskEvidence(
+  db: ReturnType<typeof getDatabase>,
+  stateRowId: number,
+  state: HarnessTaskState,
+): boolean {
+  const currentRevision = workspaceRevisionForRun(db, state.sessionId, state.runId);
+  if (!currentRevision || state.revision !== currentRevision) return false;
+
+  const toolEvents = getRunToolEvidence(state.sessionId, state.runId);
+  const starts = new Map<string, Extract<RunQAEvent, { type: "tool.started" }>>();
+  const ends = new Map<string, Extract<RunQAEvent, { type: "tool.ended" }>>();
+  for (const event of toolEvents) {
+    if (event.type === "tool.started") starts.set(event.toolCallId, event);
+    else if (event.type === "tool.ended" && event.eventId) ends.set(event.eventId, event);
+  }
+
+  const row = db
+    .prepare(
+      `select rowid as event_rowid, payload_json from agent_events
+       where session_id = ? and type = 'harness.qa'
+         and json_extract(payload_json, '$.runId') = ?
+       order by rowid desc limit 1`,
+    )
+    .get(state.sessionId, state.runId) as
+    | { event_rowid: number; payload_json: string }
+    | undefined;
+  if (
+    !row ||
+    !Number.isSafeInteger(row.event_rowid) ||
+    row.event_rowid >= stateRowId
+  ) {
+    return false;
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(row.payload_json);
+  } catch {
+    return false;
+  }
+  if (
+    !isRecord(payload) ||
+    payload.type !== "harness.qa" ||
+    payload.sessionId !== state.sessionId ||
+    payload.runId !== state.runId ||
+    !isRecord(payload.result) ||
+    payload.result.required !== true ||
+    payload.result.status !== "passed" ||
+    !Array.isArray(payload.result.evidence)
+  ) {
+    return false;
+  }
+
+  const evidenceByEventId = new Map<string, Record<string, unknown>>();
+  for (const item of payload.result.evidence) {
+    if (
+      !isRecord(item) ||
+      item.kind !== "check" ||
+      item.status !== "passed" ||
+      item.runId !== state.runId ||
+      typeof item.eventId !== "string" ||
+      item.id !== item.eventId ||
+      typeof item.checkName !== "string" ||
+      item.revision !== currentRevision ||
+      evidenceByEventId.has(item.eventId)
+    ) {
+      continue;
+    }
+    evidenceByEventId.set(item.eventId, item);
+  }
+
+  const referenceByEventId = new Map(
+    state.evidenceRefs.map((reference) => [reference.eventId, reference]),
+  );
+  if (referenceByEventId.size !== state.evidenceRefs.length) return false;
+  const eventIdsAreRealPasses = [...referenceByEventId].every(([eventId, reference]) => {
+    const evidence = evidenceByEventId.get(eventId);
+    const ended = ends.get(eventId);
+    const started = ended ? starts.get(ended.toolCallId) : undefined;
+    return Boolean(
+      evidence &&
+        reference.kind === "check" &&
+        reference.status === "passed" &&
+        reference.revision === currentRevision &&
+        evidence.checkName === ended?.checkName &&
+        started?.checkName === ended?.checkName &&
+        (started?.toolName === "bash" || started?.toolName === "terminal_run") &&
+        ended?.toolName === started.toolName &&
+        ended.exitCode === 0 &&
+        ended.error === false &&
+        ended.aborted !== true &&
+        ended.timedOut !== true &&
+        ended.skipped !== true &&
+        ended.checkConfigStable !== false &&
+        started.workspaceRevision === currentRevision &&
+        ended.workspaceRevision === currentRevision &&
+        ended.sourceStable === true,
+    );
+  });
+  if (!eventIdsAreRealPasses) return false;
+
+  return state.criteria.every((criterion) => {
+    const remaining = new Set(criterion.evidenceEventIds);
+    if (remaining.size !== criterion.evidenceEventIds.length) return false;
+    for (const kind of criterion.requiredCheckKinds ?? []) {
+      const matching = [...remaining].find(
+        (eventId) => evidenceByEventId.get(eventId)?.checkName === kind,
+      );
+      if (!matching) return false;
+      remaining.delete(matching);
+    }
+    return remaining.size === 0;
+  });
+}
+
 /** Returns the newest valid snapshot for exactly one run, failing closed on malformed newer data. */
 export function getLatestHarnessTaskState(
   sessionId: string,
@@ -833,6 +1079,12 @@ export function getLatestHarnessTaskState(
       .prepare("select 1 from agent_runs where id = ? and session_id = ? limit 1")
       .get(runId, sessionId);
     if (!ownedRun) return undefined;
+    if (
+      state.verificationStatus === "verified" &&
+      !hasCurrentVerifiedTaskEvidence(db, candidate.event_rowid, state)
+    ) {
+      return undefined;
+    }
     return state;
   }
   return undefined;

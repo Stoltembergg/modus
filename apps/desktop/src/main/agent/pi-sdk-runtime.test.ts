@@ -3298,7 +3298,7 @@ describe("PiSdkRuntime", () => {
     expect(getAgentRun(runId)?.status).toBe("completed");
     expect(
       listAgentEvents(sessionId).some(
-        ({ event }) => event.runId === runId && event.type === "run.completed",
+        ({ event }) => "runId" in event && event.runId === runId && event.type === "run.completed",
       ),
     ).toBe(true);
     expect(qa.result).toMatchObject({
@@ -7562,8 +7562,11 @@ describe("PiSdkRuntime", () => {
         openQuestions: [],
       },
     });
+    let runId = "";
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        if (!runId) throw new Error("Expected an active run for workspace-bound QA evidence.");
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "reciprocal-typecheck",
@@ -7609,13 +7612,33 @@ describe("PiSdkRuntime", () => {
     });
     const updated = readPlanById(plansRoot, plan.id);
     expect(updated?.spec?.acceptanceCriteria[0]?.status).toBe("passed");
-    expect(updated?.spec?.evidence).toEqual([
-      expect.objectContaining({
-        criterionId: "ac-reciprocal",
-        label: "Typecheck",
-        status: "passed",
-      }),
-    ]);
+    const evidence = updated?.spec?.evidence[0];
+    expect(evidence).toMatchObject({
+      criterionId: "ac-reciprocal",
+      label: "Typecheck",
+      runId,
+      status: "passed",
+    });
+    expect(evidence?.eventId).toBeTruthy();
+    const evidenceEvent = evidence?.eventId
+      ? (getDatabase()
+          .prepare("select payload_json from agent_events where id = ? and session_id = ?")
+          .get(evidence.eventId, sessionId) as { payload_json: string } | undefined)
+      : undefined;
+    expect(JSON.parse(evidenceEvent?.payload_json ?? "{}")).toMatchObject({
+      runId,
+      type: "tool.ended",
+    });
+    const currentRevision = agentEventStore.getRunWorkspaceRevision(sessionId, runId);
+    expect(currentRevision).toBe(evidence?.revision);
+
+    await writeFile(join(cwd, "changed-after-qa.ts"), "export const changed = true;\n");
+    expect(agentEventStore.getRunWorkspaceRevision(sessionId, runId)).not.toBe(evidence?.revision);
+
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(join(cwd, "another-workspace"), sessionId);
+    expect(agentEventStore.getRunWorkspaceRevision(sessionId, runId)).toBeUndefined();
   });
 
   it("harvests discoveries only for selected completed children owned by the parent", async () => {
@@ -7898,6 +7921,22 @@ describe("PiSdkRuntime", () => {
         ) {
           checks = ["npm test"];
         }
+        if (evidenceCase === "failed") {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "implementation-write",
+            toolName: "write",
+            args: { path: "implementation.ts", content: "export const implemented = true;\n" },
+          });
+          await writeFile(join(cwd, "implementation.ts"), "export const implemented = true;\n");
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: "implementation-write",
+            toolName: "write",
+            isError: false,
+            result: { details: {} },
+          });
+        }
         checks.forEach((command, index) => {
           const isError = evidenceCase === "failed" && index === 1;
           const toolName = "terminal_run";
@@ -7940,6 +7979,11 @@ describe("PiSdkRuntime", () => {
     const persistedState = getLatestHarnessTaskState(sessionId, runId);
     expect(persistedState?.phase).toBe("terminal");
     expect(persistedState?.verificationStatus).toBe(expectedVerification);
+    if (evidenceCase === "failed") {
+      // Implementation and QA are separate claims: real same-run source writes
+      // establish `built`, while the failed required check remains unverified.
+      expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("built");
+    }
     expect(persistedState?.criteria).toContainEqual(
       expect.objectContaining({
         source: "plan",
@@ -7976,6 +8020,25 @@ describe("PiSdkRuntime", () => {
       const persistedPlan = readPlanById(join(userData, "plans"), plan.id);
       expect(persistedPlan?.spec?.evidence).toEqual([]);
       expect(persistedPlan?.spec?.acceptanceCriteria[0]?.status).toBe("blocked");
+    }
+    if (evidenceCase === "all") {
+      if (!persistedState) throw new Error("Expected verified Task State from the runtime.");
+      recordAgentEvent({
+        type: "harness.qa",
+        sessionId,
+        runId,
+        result: {
+          required: true,
+          status: "failed",
+          reasonCode: "newer_check_failed",
+          evidence: [],
+        },
+      });
+      // A crash after persisting the new QA row but before the Task State
+      // transition must not leave the earlier verified snapshot visible.
+      expect(getLatestHarnessTaskState(sessionId, runId)).toBeUndefined();
+      recordAgentEvent({ type: "harness.task_state", sessionId, runId, state: persistedState });
+      expect(getLatestHarnessTaskState(sessionId, runId)).toBeUndefined();
     }
   });
 

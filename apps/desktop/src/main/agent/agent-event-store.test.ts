@@ -230,7 +230,7 @@ describe("getLatestHarnessTaskState", () => {
     }
   });
 
-  it("rejects a verified snapshot without criteria and passing check evidence", () => {
+  it("rejects verified state with zero checks and a fabricated passing event ID", () => {
     const sessionId = `verified-empty-${crypto.randomUUID()}`;
     insertSession(sessionId);
     const workspaceId = `workspace-${sessionId}`;
@@ -281,7 +281,15 @@ describe("getLatestHarnessTaskState", () => {
 
     recordAgentEvent({ type: "harness.task_state", sessionId, runId: run.id, state: verified });
 
-    expect(getLatestHarnessTaskState(sessionId, run.id)).toEqual(verified);
+    expect(getRunToolEvidence(sessionId, run.id)).toEqual([]);
+    expect(
+      getDatabase()
+        .prepare(
+          "select 1 from agent_events where session_id = ? and type = 'harness.qa' and json_extract(payload_json, '$.runId') = ? limit 1",
+        )
+        .get(sessionId, run.id),
+    ).toBeUndefined();
+    expect(getLatestHarnessTaskState(sessionId, run.id)).toBeUndefined();
   });
 
   it("fails closed when a newer envelope run disagrees with the state run", () => {
