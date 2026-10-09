@@ -261,6 +261,7 @@ async function useOfflinePiToolSessions() {
   });
   const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
   const sessions: AgentSession[] = [];
+  const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
   let requestedTool: string | undefined;
   let scriptedToolCalls: Array<{ name: string; input: unknown }> | undefined;
   let scriptedToolCallIndex = 0;
@@ -291,6 +292,7 @@ async function useOfflinePiToolSessions() {
       },
     });
     session.agent.streamFn = (model, context) => {
+      deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
       const stream = createAssistantMessageEventStream();
       const scriptedCall = scriptedToolCalls?.[scriptedToolCallIndex];
       if (scriptedToolCalls) scriptedToolCallIndex += 1;
@@ -339,6 +341,10 @@ async function useOfflinePiToolSessions() {
       if (!session) throw new Error("Expected an offline PI session.");
       return session;
     },
+    systemPromptsFor: (session: AgentSession) =>
+      deliveredSystemPrompts
+        .filter((entry) => entry.session === session)
+        .map((entry) => entry.prompt),
     requestTool: (name: string) => {
       requestedTool = name;
       scriptedToolCalls = undefined;
@@ -9053,6 +9059,143 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(observer.snapshot().response.formattedCount).toBe(1);
     expect(observer.getSessionMetrics("policy-session-a")?.policyViolations).toBe(1);
     expect(observer.getSessionMetrics("policy-session-b")?.policyViolations).toBe(0);
+  });
+});
+
+describe("PiSdkRuntime PromptRegistry production wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  async function createSession(
+    runtime: PiSdkRuntime,
+    sessionId = `prompt-registry-${crypto.randomUUID()}`,
+  ) {
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    return { sessionId, runtime };
+  }
+
+  it("assembles current Modus instructions through a session registry and sends that exact prompt to Pi", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    mocks.globalGuidance = "<global_guidance>registry global marker</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "registry workspace marker", "utf8");
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Use the current project instructions.",
+      sessionId,
+    });
+
+    const piSession = sessionAt();
+    const deliveredPrompt = systemPromptsFor(piSession).at(-1);
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          {
+            promptRegistry?: {
+              assemblePrompt(sessionId: string): Promise<{ prompt: string }>;
+              getAllSections(): Array<{ id: string }>;
+            };
+          }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    const assembly = await registry?.assemblePrompt(sessionId);
+
+    expect(deliveredPrompt).toBe(assembly?.prompt);
+    expect(deliveredPrompt).toContain("registry global marker");
+    expect(deliveredPrompt).toContain("registry workspace marker");
+    expect(registry?.getAllSections().map((section) => section.id)).toEqual(
+      expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance", "workspace_rules"]),
+    );
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("chains ResponsePolicy after Registry exactly once in the real Pi SDK prompt", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Check prompt hook composition.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    expect(deliveredPrompt.match(/<response_policy level="standard">/g)).toHaveLength(1);
+    expect(deliveredPrompt).toContain("You are an expert coding assistant operating inside pi");
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          { promptRegistry?: { assemblePrompt(sessionId: string): Promise<{ prompt: string }> } }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registryAssembly = await runtimeSession?.promptRegistry?.assemblePrompt(sessionId);
+    const { DEFAULT_RESPONSE_LEVEL, RESPONSE_POLICY_PROMPTS } = await import(
+      "./harness/response/response-policy"
+    );
+    expect(registryAssembly).toBeDefined();
+    expect(deliveredPrompt).toBe(
+      `${registryAssembly?.prompt}\n\n${RESPONSE_POLICY_PROMPTS[DEFAULT_RESPONSE_LEVEL]}`,
+    );
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("refreshes global and project instructions between turns without duplicating Pi context files", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    mocks.globalGuidance = "<global_guidance>global version one</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "workspace version one", "utf8");
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+    const window = createWindowStub();
+
+    const turn = (message: string) =>
+      runtime.prompt(window, { context: [], delivery: "normal", message, sessionId });
+    await turn("first prompt");
+    const firstSession = sessionAt();
+    expect(systemPromptsFor(firstSession).at(-1)).toContain("global version one");
+    expect(systemPromptsFor(firstSession).at(-1)).toContain("workspace version one");
+
+    mocks.globalGuidance = "<global_guidance>global version two</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "workspace version two", "utf8");
+    await turn("second prompt");
+    const currentSession = sessionAt();
+    const currentPrompt = systemPromptsFor(currentSession).at(-1) ?? "";
+
+    expect(currentPrompt).toContain("global version two");
+    expect(currentPrompt).toContain("workspace version two");
+    expect(currentPrompt).not.toContain("global version one");
+    expect(currentPrompt).not.toContain("workspace version one");
+    expect(currentPrompt.match(/workspace version two/g)).toHaveLength(1);
+    await runtime.releaseRuntime(sessionId);
   });
 });
 
