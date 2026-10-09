@@ -6772,6 +6772,7 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
+    await initGitRepoWithKnownEmptyScope();
     const plansRoot = join(userData, "plans");
     const plan = writePlan(plansRoot, {
       workspaceId,
@@ -6787,6 +6788,7 @@ describe("PiSdkRuntime", () => {
     mocks.createAgentSession.mockImplementationOnce(async () => ({
       session: createMockPiSession({
         prompt: vi.fn(async () => {
+          await writeFile(join(cwd, "implementation.ts"), "export const implemented = true;\n");
           mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
           mocks.emitPiEvent({
             type: "message_update",
@@ -6809,7 +6811,7 @@ describe("PiSdkRuntime", () => {
       planId: plan.id,
     });
 
-    // Completed build turn → plan is built.
+    // A current run with a concrete workspace diff → plan is built.
     expect(readPlanById(plansRoot, plan.id)?.buildStatus).toBe("built");
 
     const rows = getDatabase()
@@ -6826,6 +6828,50 @@ describe("PiSdkRuntime", () => {
     });
     // Status transitions are broadcast so the Plan panel + Review card react.
     expect(rows.filter((row) => row.type === "plan.updated").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not call a completed no-change turn built and keeps optional QA not required", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "No change",
+      overview: "Describe the requested work.",
+      content: "# No change\n",
+      todos: [{ content: "Step one" }],
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "I explained the plan." },
+          });
+        }),
+      }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: `Build the approved plan "${plan.title}".`,
+      sessionId,
+      planId: plan.id,
+    });
+
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    const rows = getDatabase()
+      .prepare("select type, payload_json from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string; payload_json: string }>;
+    expect(rows.map(({ type }) => type)).toContain("run.completed");
+    const qaRow = rows.find(({ type }) => type === "harness.qa");
+    expect(JSON.parse(qaRow?.payload_json ?? "{}")).toMatchObject({
+      result: { required: false, status: "not_required" },
+    });
   });
 
   it("derives and persists checks for a todo-side-only linked criterion", async () => {
@@ -7107,6 +7153,7 @@ describe("PiSdkRuntime", () => {
     ["only foreign-run checks pass", "foreign", "unknown"],
     ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
     ["the strict scope result is truncated", "scope-truncated", "unknown"],
+    ["a bash check has no exit result", "bash-missing-exit", "unknown"],
   ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
     const sessionId = `task-state-spec-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -7144,7 +7191,8 @@ describe("PiSdkRuntime", () => {
             requirementId: "req-verify",
             description: "Tests and typecheck pass.",
             todoIds: ["todo-verify"],
-            requiredCheckKinds: ["tests", "typecheck"],
+            requiredCheckKinds:
+              evidenceCase === "bash-missing-exit" ? ["tests"] : ["tests", "typecheck"],
             status: "pending",
           },
         ],
@@ -7179,29 +7227,35 @@ describe("PiSdkRuntime", () => {
             });
           }
         }
-        const checks =
+        let checks: string[] = [];
+        if (
           evidenceCase === "all" ||
           evidenceCase === "failed" ||
           evidenceCase === "scope-unavailable" ||
           evidenceCase === "scope-truncated"
-            ? ["npm test", "tsc --noEmit"]
-            : evidenceCase === "partial"
-              ? ["npm test"]
-              : [];
+        ) {
+          checks = ["npm test", "tsc --noEmit"];
+        } else if (evidenceCase === "partial" || evidenceCase === "bash-missing-exit") {
+          checks = ["npm test"];
+        }
         checks.forEach((command, index) => {
           const isError = evidenceCase === "failed" && index === 1;
+          const toolName = evidenceCase === "bash-missing-exit" ? "bash" : "terminal_run";
           mocks.emitPiEvent({
             type: "tool_execution_start",
             toolCallId: `current-check-${index}`,
-            toolName: "terminal_run",
+            toolName,
             args: { command },
           });
           mocks.emitPiEvent({
             type: "tool_execution_end",
             toolCallId: `current-check-${index}`,
-            toolName: "terminal_run",
+            toolName,
             isError,
-            result: { details: { exitCode: isError ? 1 : 0 } },
+            result:
+              evidenceCase === "bash-missing-exit"
+                ? { details: {} }
+                : { details: { exitCode: isError ? 1 : 0 } },
           });
         });
         mocks.emitPiEvent({
@@ -7228,9 +7282,24 @@ describe("PiSdkRuntime", () => {
       expect.objectContaining({
         source: "plan",
         status: expectedVerification,
-        requiredCheckKinds: ["tests", "typecheck"],
+        requiredCheckKinds:
+          evidenceCase === "bash-missing-exit" ? ["tests"] : ["tests", "typecheck"],
       }),
     );
+    if (evidenceCase === "bash-missing-exit") {
+      const qaRow = getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+        )
+        .get(sessionId) as { payload_json: string };
+      expect(JSON.parse(qaRow.payload_json)).toMatchObject({
+        result: {
+          status: "unavailable",
+          reasonCode: "required_check_unavailable",
+          evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+        },
+      });
+    }
   });
 
   it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {

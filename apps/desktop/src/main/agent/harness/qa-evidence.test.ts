@@ -403,6 +403,49 @@ describe("summarizeRunQA", () => {
     });
   });
 
+  it("does not infer a bash check passed when its exit code is missing", () => {
+    const events = pair();
+    for (const event of events) {
+      if (event.type === "tool.started" || event.type === "tool.ended") {
+        event.toolName = "bash";
+      }
+    }
+    const ended = events[1];
+    if (ended?.type === "tool.ended") delete ended.exitCode;
+
+    expect(summarize(events)).toMatchObject({
+      required: true,
+      status: "unavailable",
+      reasonCode: "required_check_unavailable",
+      evidence: [expect.objectContaining({ status: "unavailable" })],
+    });
+  });
+
+  it("keeps a timed-out check distinct from a failed or unavailable check", () => {
+    const events = pair();
+    const ended = events[1];
+    if (ended?.type === "tool.ended") {
+      (ended as typeof ended & { timedOut: boolean }).timedOut = true;
+      delete ended.exitCode;
+    }
+
+    expect(summarize(events)).toMatchObject({
+      required: true,
+      status: "timed_out",
+      reasonCode: "required_check_timed_out",
+      evidence: [expect.objectContaining({ status: "timed_out" })],
+    });
+  });
+
+  it("keeps cancellation distinct from an unavailable check", () => {
+    expect(summarize(pair({ aborted: true }))).toMatchObject({
+      required: true,
+      status: "cancelled",
+      reasonCode: "required_check_cancelled",
+      evidence: [expect.objectContaining({ status: "cancelled" })],
+    });
+  });
+
   it("keeps a check-named unknown tool without an exit result unavailable", () => {
     const unknownTool: RunQAEvent[] = [
       {

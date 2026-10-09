@@ -47,6 +47,14 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
     expect(noSelection.provider).toBeUndefined();
   });
 
+  it("does not call an empty verification hook result verified", async () => {
+    const result = await verificationCheckHook.execute({ runId: mockContext.runId }, mockContext);
+
+    expect(result).toMatchObject({ verified: false, allPassed: false, checksRun: 0 });
+    expect(result.evidenceRef).toBeUndefined();
+    expect(mockContext.state.get("verification_all_passed")).toBe(false);
+  });
+
   it("1.1 Registers hooks and executes in strict priority order", async () => {
     const executionOrder: string[] = [];
 
@@ -367,7 +375,8 @@ describe("Fase 1: HarnessKernel and Hook System", () => {
       },
       mockContext,
     );
-    expect(verifyResult.allPassed).toBe(true);
+    expect(verifyResult).toMatchObject({ verified: false, allPassed: false, checksRun: 0 });
+    expect(verifyResult.evidenceRef).toBeUndefined();
 
     // Phase 7: turn_settle
     const settleResult = await kernel.executeHooks(

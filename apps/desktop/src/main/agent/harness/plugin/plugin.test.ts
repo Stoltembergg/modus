@@ -224,7 +224,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     it("loads @modus/verifier and assesses verification criteria", async () => {
       await loader.load(verifierPluginManifest);
 
-      // 1. All passed -> verified
+      // Caller-supplied status claims do not carry execution evidence.
       const verifiedRes = await registry.execute<any, any>("verification.assess", {
         sessionId: "sess-1",
         runId: "run-1",
@@ -234,7 +234,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
           { id: "2", name: "typecheck", status: "passed" },
         ],
       });
-      expect(verifiedRes.status).toBe("verified");
+      expect(verifiedRes.status).toBe("unknown");
       expect(verifiedRes.passedCount).toBe(2);
 
       // 2. Any failed -> failed
@@ -255,7 +255,15 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         checks: [{ name: "vitest", command: "npm test" }],
       });
       expect(checks.length).toBe(1);
-      expect(checks[0].status).toBe("passed");
+      expect(checks[0].status).toBe("unavailable");
+
+      const noQa = await registry.execute<any, any>("verification.assess", {
+        sessionId: "sess-1",
+        runId: "run-1",
+        required: false,
+        checks: [],
+      });
+      expect(noQa.status).toBe("not_required");
     });
   });
 
