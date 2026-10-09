@@ -8834,9 +8834,7 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
 
       expect(executions).toBe(3);
       expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "harness.failure", sessionId }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: "harness.failure", sessionId })]),
       );
       expect(
         events.some(
