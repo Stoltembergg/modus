@@ -883,6 +883,7 @@ describe("task transition delivery", () => {
         expectedVersion: must(task.stateVersion),
         operationId: crypto.randomUUID(),
       });
+      const evidence = recordPassingCheckEvent(owner, runId);
       const qa: AgentEvent = {
         type: "harness.qa",
         sessionId: owner,
@@ -892,9 +893,7 @@ describe("task transition delivery", () => {
           status: "passed",
           reasonCode: "ok",
           sourceFingerprint,
-          evidence: [
-            { id: "evidence", kind: "test", status: "passed", label: "Tests", checkName: "tests" },
-          ],
+          evidence: [evidence],
         },
       };
       const rowId = recordAgentEvent(qa);
@@ -912,7 +911,7 @@ describe("task transition delivery", () => {
             sessionId: owner,
             runId,
             eventRowId: rowId,
-            evidenceId: "evidence",
+            evidenceId: evidence.id,
             sourceFingerprint,
           },
         ],

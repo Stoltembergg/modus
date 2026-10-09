@@ -5877,6 +5877,7 @@ describe("PiSdkRuntime", () => {
   });
 
   it("rechecks QA after a restore during deferred turn-end capture", async () => {
+    await initGitRepo();
     const sessionId = `task-state-restore-race-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing-session.jsonl"));
@@ -5900,22 +5901,13 @@ describe("PiSdkRuntime", () => {
       fileCount: 0,
       truncated: false,
     });
+    const createCheckpoint = checkpointService.createCheckpoint;
     vi.spyOn(checkpointService, "createCheckpoint").mockImplementation(async (checkpointInput) => {
-      const checkpoint = {
-        id: checkpointInput.kind === "turn-end" ? "turn-end-checkpoint" : "run-checkpoint",
-        sessionId: checkpointInput.sessionId,
-        cwd: checkpointInput.cwd,
-        commitHash: "abc123",
-        kind: checkpointInput.kind ?? "auto",
-        createdAt: new Date().toISOString(),
-        ...(checkpointInput.runId ? { runId: checkpointInput.runId } : {}),
-        ...(checkpointInput.userMessageId ? { userMessageId: checkpointInput.userMessageId } : {}),
-      } as const;
       if (checkpointInput.kind === "turn-end") {
         notifyTurnEnd();
         return await turnEndGate;
       }
-      return checkpoint;
+      return await createCheckpoint(checkpointInput);
     });
     const session = createMockPiSession({
       prompt: () => {
