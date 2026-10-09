@@ -8791,7 +8791,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       `workspace-${crypto.randomUUID()}`,
       join(userData, "missing.jsonl"),
     );
-    await createOfflinePiToolSessions({
+    const offline = await createOfflinePiToolSessions({
       assistantText: input.text,
       ...(input.stopReason ? { assistantStopReason: input.stopReason } : {}),
     });
