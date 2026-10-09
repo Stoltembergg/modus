@@ -1,4 +1,5 @@
-import { getFeatureFlags } from "../feature-flags";
+import { getFeatureFlags, isFeatureFlagEnabled } from "../feature-flags";
+import { HarnessObserver } from "../observability/harness-observer";
 import type {
   HarnessContext,
   HarnessHook,
@@ -107,7 +108,20 @@ export class HarnessKernel {
         }
       } finally {
         if (!context.isCurrent || context.isCurrent()) {
+          const durationMs = performance.now() - startTime;
           this.recordExecution(hook.name, phase, startTime, success, errorMsg);
+          if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+            HarnessObserver.getInstance().recordHookExecution(
+              phase,
+              hook.name,
+              durationMs,
+              success,
+              undefined,
+              context.sessionId,
+              context.sessionToken,
+              context.runId,
+            );
+          }
         }
       }
     }

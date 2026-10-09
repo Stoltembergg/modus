@@ -24,7 +24,7 @@ export type ValidationGatesReport = {
  * ValidationGates
  * Evaluates the three formal production gates defined in AJUSTE 3 of the evolution review:
  * 1. Token Economy Gate (Economy >= 30%)
- * 2. Correctness Gate (0 critical sections dropped, false positive < 5%)
+ * 2. Correctness Gate (repeat-guard false positive rate < 5%)
  * 3. Performance Gate (Avg hook latency <= 5ms, memory growth <= 50%)
  */
 export class ValidationGates {
@@ -50,39 +50,47 @@ export class ValidationGates {
 
     // --- 1. Token Economy Gate ---
     const totalTokensSaved =
-      metrics.promptSections.tokensSaved +
+      (metrics.promptSections.estimatedTokensSaved ?? 0) +
       metrics.compaction.estimatedTokensSavedByPruning +
-      Math.floor(metrics.toolResults.spilledBytes / 4);
+      metrics.toolResults.estimatedTokensSaved;
 
     const baselineTokens = options.baselineTotalTokens ?? 45000;
     const achievedEconomyPercent =
       baselineTokens > 0 ? Math.min(100, Math.round((totalTokensSaved / baselineTokens) * 100)) : 0;
 
     const economyPassed = achievedEconomyPercent >= minTokenEconomy;
+    const hasTokenSavingsMeasurement =
+      metrics.promptSections.estimatedTokensSaved !== null ||
+      metrics.compaction.pruningEvents > 0 ||
+      metrics.toolResults.spilledResults > 0;
     gates.push({
       gateName: "Token Economy Gate",
-      passed: economyPassed,
-      score: `${achievedEconomyPercent}%`,
+      passed: hasTokenSavingsMeasurement && economyPassed,
+      score: hasTokenSavingsMeasurement ? `${achievedEconomyPercent}%` : "unavailable",
       threshold: `>= ${minTokenEconomy}%`,
-      details: `${totalTokensSaved} total tokens saved across prompt, compaction, and spill.`,
+      details: hasTokenSavingsMeasurement
+        ? `${totalTokensSaved} estimated tokens saved across available prompt, compaction, and spill measurements.`
+        : "Token savings measurements are unavailable.",
     });
 
     // --- 2. Correctness Gate ---
-    const criticalOmitted = metrics.response.criticalSectionsOmitted;
     const totalBlocks = metrics.repeatGuards.blockedLoopCount;
     const fpCount = metrics.repeatGuards.falsePositiveCount;
-    const fpRate = totalBlocks > 0 ? (fpCount / totalBlocks) * 100 : 0;
+    const fpRate = fpCount === null ? null : totalBlocks > 0 ? (fpCount / totalBlocks) * 100 : 0;
 
-    const correctnessPassed = criticalOmitted === 0 && fpRate <= maxFalsePositive;
+    const correctnessPassed = fpRate !== null && fpRate <= maxFalsePositive;
     gates.push({
       gateName: "Correctness Gate",
       passed: correctnessPassed,
-      score: `Critical Omitted: ${criticalOmitted}, FP Rate: ${fpRate.toFixed(1)}%`,
-      threshold: `Critical Omitted == 0 && FP Rate <= ${maxFalsePositive}%`,
+      score:
+        fpRate === null
+          ? "Repeat-guard FP Rate: unavailable"
+          : `Repeat-guard FP Rate: ${fpRate.toFixed(1)}%`,
+      threshold: `Repeat-guard FP Rate <= ${maxFalsePositive}%`,
       details:
-        criticalOmitted === 0
-          ? "All critical errors, blockers, and warnings preserved without omission."
-          : `CRITICAL FAILURE: ${criticalOmitted} critical sections were omitted!`,
+        fpRate === null
+          ? "ResponsePolicy leaves streamed output unchanged; content completeness is not measured here, and repeat-guard false-positive adjudication is unavailable."
+          : `ResponsePolicy leaves streamed output unchanged; repeat-guard false-positive rate was measured at ${fpRate.toFixed(1)}%.`,
     });
 
     // --- 3. Performance Gate ---
@@ -90,13 +98,18 @@ export class ValidationGates {
     const memoryGrowth = metrics.performance.memoryGrowthPercent;
 
     const performancePassed =
-      avgHookLatency <= maxAvgHookLatency && memoryGrowth <= maxMemoryGrowth;
+      avgHookLatency !== null &&
+      avgHookLatency <= maxAvgHookLatency &&
+      memoryGrowth <= maxMemoryGrowth;
     gates.push({
       gateName: "Performance Gate",
       passed: performancePassed,
-      score: `Avg Latency: ${avgHookLatency.toFixed(2)}ms, Mem Growth: ${memoryGrowth}%`,
+      score: `Avg Latency: ${avgHookLatency === null ? "unavailable" : `${avgHookLatency.toFixed(2)}ms`}, Mem Growth: ${memoryGrowth}%`,
       threshold: `Avg Latency <= ${maxAvgHookLatency}ms && Mem Growth <= ${maxMemoryGrowth}%`,
-      details: `Hook system overhead ${metrics.performance.hookSystemOverheadMs.toFixed(2)}ms across ${metrics.performance.totalHookExecutions} executions.`,
+      details:
+        avgHookLatency === null || metrics.performance.sampledHookDurationTotalMs === null
+          ? "Hook execution measurements are unavailable."
+          : `Sampled hook durations total ${metrics.performance.sampledHookDurationTotalMs.toFixed(2)}ms across ${metrics.performance.sampledHookExecutionCount} samples.`,
     });
 
     const allGatesPassed = gates.every((g) => g.passed);

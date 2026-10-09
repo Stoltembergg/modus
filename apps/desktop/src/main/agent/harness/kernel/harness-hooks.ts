@@ -196,8 +196,17 @@ export type VerificationCheckOutput = {
 export type TurnSettleInput = {
   runId: string;
   completed: boolean;
+  outcome?: "completed" | "failed" | "blocked" | "cancelled" | "interrupted" | undefined;
+  hasAssistantResponse?: boolean | undefined;
   hasActiveTodos: boolean;
   turnTokens: number;
+  providerTokenUsage?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+    totalTokens: number;
+  } | undefined;
 };
 
 export type TurnSettleOutput = {

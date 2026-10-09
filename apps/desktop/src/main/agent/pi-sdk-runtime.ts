@@ -1783,6 +1783,15 @@ export class PiSdkRuntime implements AgentRuntime {
       return { block: true, reason: "The session run is no longer active." };
     }
     const decision = output.repeatGuardDecision;
+    if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+      HarnessObserver.getInstance().recordRepeatGuardEvaluation(
+        input.toolName,
+        decision?.action === "block",
+        sessionId,
+        runtimeSession.observerSessionToken,
+        activeRun.id,
+      );
+    }
     if (decision?.action === "block") {
       this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
       this.recordAdaptiveFailure(runtimeSession, tracker, {
@@ -2710,6 +2719,32 @@ export class PiSdkRuntime implements AgentRuntime {
                 }
               }
             },
+            undefined,
+            ({ authorization, toolName, modelContextBytesReduced, storedBytes, spillId }) => {
+              if (!isFeatureFlagEnabled("MODUS_OBSERVABILITY")) return;
+              const currentSession = this.sessions.get(sessionId);
+              const tracker = this.runOutputTrackers.get(sessionId);
+              const observer = HarnessObserver.getInstance();
+              if (
+                !currentSession ||
+                currentSession.promptLifecycleToken !== promptLifecycleToken ||
+                tracker?.runId !== authorization.runId ||
+                this.cancellingRuns.has(authorization.runId) ||
+                getAgentRun(authorization.runId)?.status !== "running" ||
+                !observer.isSessionCurrent(sessionId, currentSession.observerSessionToken)
+              ) {
+                return;
+              }
+              observer.recordToolResultSpill(
+                toolName,
+                modelContextBytesReduced,
+                storedBytes,
+                spillId,
+                sessionId,
+                currentSession.observerSessionToken,
+                authorization.runId,
+              );
+            },
           ),
         ),
         ...(isFeatureFlagEnabled("MODUS_COMPACTION_PRUNING")
@@ -2840,6 +2875,16 @@ export class PiSdkRuntime implements AgentRuntime {
 
       // Fingerprints record change detection only. Pi still receives the complete
       // assembly on every turn; no provider-specific cache metadata is forwarded.
+      if (isFeatureFlagEnabled("MODUS_OBSERVABILITY") && runId) {
+        HarnessObserver.getInstance().recordPromptSections(
+          assembled.activePromptSections.map((section) => section.id),
+          [],
+          undefined,
+          sessionId,
+          runtimeSession.observerSessionToken,
+          runId,
+        );
+      }
       registry.markAsSent(sessionId);
       return { systemPrompt: assembled.finalSystemPrompt };
     } catch (error) {
@@ -2904,11 +2949,34 @@ export class PiSdkRuntime implements AgentRuntime {
     const state = new Map<string, string | number>([
       ["harness.turn_start_time", tracker.startedAt],
     ]);
+    const runStatus = getAgentRun(tracker.runId)?.status;
+    const outcome =
+      runStatus === "completed" ||
+      runStatus === "failed" ||
+      runStatus === "blocked" ||
+      runStatus === "cancelled"
+        ? runStatus
+        : "interrupted";
     const assistantResponse = runAssistantOutput(input.sessionId, tracker.runId);
-    if (assistantResponse) state.set("harness.assistant_response", assistantResponse);
+    const hasAssistantResponse = Boolean(assistantResponse?.trim());
+    if (outcome === "completed" && hasAssistantResponse) {
+      state.set("harness.assistant_response", assistantResponse as string);
+    }
+    state.set("harness.turn_outcome", outcome);
 
     const activeTodos = getLatestSessionTodos(input.sessionId) ?? [];
     const sessionToken = runtimeSession.observerSessionToken;
+    if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+      HarnessObserver.getInstance().recordSessionTurn({
+        sessionId: input.sessionId,
+        durationMs: Date.now() - tracker.startedAt,
+        sessionToken,
+        runId: tracker.runId,
+        outcome,
+        hasAssistantResponse,
+        ...(tracker.hasReportedUsage ? { providerTokenUsage: tracker.tokenUsage } : {}),
+      });
+    }
     const context: HarnessContext = {
       sessionId: input.sessionId,
       runId: tracker.runId,
@@ -2932,11 +3000,14 @@ export class PiSdkRuntime implements AgentRuntime {
     };
     const turn: TurnSettleInput = {
       runId: tracker.runId,
-      completed: getAgentRun(tracker.runId)?.status === "completed",
+      completed: outcome === "completed",
+      outcome,
+      hasAssistantResponse,
       hasActiveTodos: activeTodos.some(
         (todo) => todo.status === "pending" || todo.status === "in_progress",
       ),
       turnTokens: tracker.tokenUsage.totalTokens,
+      ...(tracker.hasReportedUsage ? { providerTokenUsage: tracker.tokenUsage } : {}),
     };
     await this.harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
       "turn_settle",
@@ -3055,6 +3126,29 @@ export class PiSdkRuntime implements AgentRuntime {
             aborted: normalized.aborted,
             failed: normalized.failed ?? false,
           };
+          if (
+            isFeatureFlagEnabled("MODUS_OBSERVABILITY") &&
+            !normalized.aborted &&
+            !normalized.failed
+          ) {
+            const tracker = this.runOutputTrackers.get(params.info.id);
+            const observer = HarnessObserver.getInstance();
+            if (
+              runtimeSession &&
+              this.sessions.get(params.info.id) === runtimeSession &&
+              runtimeSession.promptLifecycleToken === params.promptLifecycleToken &&
+              tracker?.runId &&
+              !this.cancellingRuns.has(tracker.runId) &&
+              getAgentRun(tracker.runId)?.status === "running" &&
+              observer.isSessionCurrent(params.info.id, runtimeSession.observerSessionToken)
+            ) {
+              observer.recordNativeCompaction(
+                params.info.id,
+                runtimeSession.observerSessionToken,
+                tracker.runId,
+              );
+            }
+          }
           this.finalizeProjectMemoryCompactionBestEffort({
             sessionId: normalized.sessionId,
             reason: normalized.reason,

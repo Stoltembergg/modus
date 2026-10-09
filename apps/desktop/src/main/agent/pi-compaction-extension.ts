@@ -63,13 +63,15 @@ export function createModusCompactionExtension(
 
         // Scope and lifetime are checked again by the observer before metrics
         // are accepted, so a released/recreated session cannot publish stale data.
-        HarnessObserver.getInstance().recordCompactionPruning(
-          pruned.measuredContextBytesRemoved,
-          pruned.estimatedTokensSaved,
-          scope.sessionId,
-          scope.observerSessionToken,
-          scope.runId,
-        );
+        if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+          HarnessObserver.getInstance().recordCompactionPruning(
+            pruned.measuredContextBytesRemoved,
+            pruned.estimatedTokensSaved,
+            scope.sessionId,
+            scope.observerSessionToken,
+            scope.runId,
+          );
+        }
 
         return { messages: pruned.messages };
       } catch {

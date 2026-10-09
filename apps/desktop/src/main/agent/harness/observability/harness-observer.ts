@@ -11,8 +11,34 @@ import type {
   SystemHealthStatus,
   TelemetryEvent,
   TelemetryEventType,
+  TurnMetrics,
+  TurnOutcome,
   ToolResultsMetrics,
 } from "./harness-metrics";
+
+function emptyOutcomeCounts(): Record<TurnOutcome, number> {
+  return { completed: 0, failed: 0, blocked: 0, cancelled: 0, interrupted: 0 };
+}
+
+function emptyTurnMetrics(): TurnMetrics {
+  return {
+    total: 0,
+    totalDurationMs: 0,
+    durationReports: 0,
+    durationMsByOutcome: emptyOutcomeCounts(),
+    durationReportsByOutcome: emptyOutcomeCounts(),
+    noResponseDurationMs: 0,
+    noResponseDurationReports: 0,
+    ...emptyOutcomeCounts(),
+    noResponse: 0,
+    providerUsageReports: 0,
+    providerInputTokens: 0,
+    providerOutputTokens: 0,
+    providerCacheReadTokens: 0,
+    providerCacheWriteTokens: 0,
+    providerTotalTokens: 0,
+  };
+}
 
 /**
  * HarnessObserver
@@ -27,7 +53,8 @@ export class HarnessObserver {
   private maxStoredEvents: number = 1000;
 
   // Aggregate subsystem counters
-  private promptTokensSaved = 0;
+  private promptEstimatedTokensSaved = 0;
+  private hasPromptTokenEstimate = false;
   private promptSkippedSections = 0;
   private promptTotalSectionsSent = 0;
 
@@ -35,20 +62,20 @@ export class HarnessObserver {
   private totalRetrievalLatencyMs = 0;
   private retrievalCount = 0;
   private spilledBytes = 0;
+  private modelContextBytesReduced = 0;
+  private spillEstimatedTokensSaved = 0;
 
   private compactionPrunedBytes = 0;
-  private compactionEvents = 0;
   private compactionTokensSaved = 0;
-  private actualCompactionCount = 0;
+  private compactionPruningEvents = 0;
+  private nativeCompactionsObserved = 0;
 
-  private guardFalsePositives = 0;
   private guardBlockedLoops = 0;
-  private guardCircuitBreakerTrips = 0;
+  private guardEvaluatedToolCalls = 0;
 
-  private responseCriticalSectionsOmitted = 0;
+  private responseEvaluatedCount = 0;
   private responseViolationsDetected = 0;
-  private responseCharactersSaved = 0;
-  private responseFormattedCount = 0;
+  private turns: TurnMetrics = emptyTurnMetrics();
 
   private hookDurationsMs: number[] = [];
   private initialMemoryUsageBytes = process.memoryUsage().heapUsed;
@@ -58,13 +85,6 @@ export class HarnessObserver {
   private pluginExecutions = 0;
   private pluginFailures = 0;
   private activePlugins = new Set<string>();
-
-  // Last mirrored ResponsePolicyRegistry totals, for delta computation.
-  private lastMirroredResponseTotals = {
-    violationsDetected: 0,
-    totalFormatted: 0,
-    charactersSaved: 0,
-  };
 
   // Session-level tracking
   private sessionMetrics = new Map<string, SessionHarnessMetrics>();
@@ -109,31 +129,37 @@ export class HarnessObserver {
     return this.sessionLifetimes.get(sessionId) === token;
   }
 
+  getSessionToken(sessionId: string): symbol | undefined {
+    return this.sessionLifetimes.get(sessionId);
+  }
+
   clear(): void {
-    this.promptTokensSaved = 0;
+    this.promptEstimatedTokensSaved = 0;
+    this.hasPromptTokenEstimate = false;
     this.promptSkippedSections = 0;
     this.promptTotalSectionsSent = 0;
     this.spilledResults = 0;
     this.totalRetrievalLatencyMs = 0;
     this.retrievalCount = 0;
     this.spilledBytes = 0;
+    this.modelContextBytesReduced = 0;
+    this.spillEstimatedTokensSaved = 0;
     this.compactionPrunedBytes = 0;
-    this.compactionEvents = 0;
     this.compactionTokensSaved = 0;
-    this.actualCompactionCount = 0;
-    this.guardFalsePositives = 0;
+    this.compactionPruningEvents = 0;
+    this.nativeCompactionsObserved = 0;
     this.guardBlockedLoops = 0;
-    this.guardCircuitBreakerTrips = 0;
-    this.responseCriticalSectionsOmitted = 0;
+    this.guardEvaluatedToolCalls = 0;
+    this.responseEvaluatedCount = 0;
     this.responseViolationsDetected = 0;
-    this.responseCharactersSaved = 0;
-    this.responseFormattedCount = 0;
+    this.turns = emptyTurnMetrics();
     this.hookDurationsMs = [];
     this.pluginDurationsMs = [];
     this.pluginExecutions = 0;
     this.pluginFailures = 0;
     this.activePlugins.clear();
     this.sessionMetrics.clear();
+    this.sessionLifetimes.clear();
     this.recentEvents = [];
   }
 
@@ -174,11 +200,20 @@ export class HarnessObserver {
         sessionId,
         turnCount: 0,
         totalDurationMs: 0,
-        tokensSaved: 0,
+        durationReports: 0,
+        durationMsByOutcome: emptyOutcomeCounts(),
+        durationReportsByOutcome: emptyOutcomeCounts(),
+        noResponseDurationMs: 0,
+        noResponseDurationReports: 0,
+        estimatedTokensSaved: 0,
         spilledResults: 0,
         hookExecutions: 0,
         guardBlocks: 0,
+        policyEvaluations: 0,
         policyViolations: 0,
+        outcomes: emptyOutcomeCounts(),
+        noResponseCount: 0,
+        providerReportedTotalTokens: 0,
         lastActiveTimestamp: Date.now(),
       };
       this.sessionMetrics.set(sessionId, session);
@@ -195,48 +230,80 @@ export class HarnessObserver {
     success: boolean,
     error?: string,
     sessionId?: string,
+    sessionToken?: symbol,
+    runId?: string,
   ): void {
-    this.hookDurationsMs.push(durationMs);
+    if (sessionId && (!sessionToken || !this.isSessionCurrent(sessionId, sessionToken))) return;
+    if (!Number.isFinite(durationMs) || durationMs < 0) return;
+    const measuredDurationMs = durationMs;
+    this.hookDurationsMs.push(measuredDurationMs);
     if (this.hookDurationsMs.length > 5000) {
       this.hookDurationsMs.shift();
     }
 
-    if (sessionId) {
+    if (sessionId && sessionToken) {
       const session = this.ensureSession(sessionId);
       session.hookExecutions++;
     }
 
     this.emitEvent(
       "harness.hook.executed",
-      { phase, hookName, durationMs, success, error },
+      { phase, hookName, durationMs: measuredDurationMs, success, error },
       sessionId,
+      runId,
     );
   }
 
   // --- Tool Result Spill Tracking ---
   recordToolResultSpill(
     toolName: string,
-    bytes: number,
+    modelContextBytesReduced: number,
+    storedBytes: number,
     spillId?: string,
     sessionId?: string,
+    sessionToken?: symbol,
+    runId?: string,
   ): void {
+    if (sessionId && (!sessionToken || !this.isSessionCurrent(sessionId, sessionToken))) return;
+    if (
+      !Number.isFinite(modelContextBytesReduced) ||
+      modelContextBytesReduced < 0 ||
+      !Number.isFinite(storedBytes) ||
+      storedBytes < 0
+    ) {
+      return;
+    }
     this.spilledResults++;
-    this.spilledBytes += bytes;
+    this.spilledBytes += storedBytes;
+    this.modelContextBytesReduced += modelContextBytesReduced;
+    const estimatedTokensSaved = Math.floor(modelContextBytesReduced / 4);
+    this.spillEstimatedTokensSaved += estimatedTokensSaved;
 
     if (sessionId) {
       const session = this.ensureSession(sessionId);
       session.spilledResults++;
-      // Rough token estimate: ~4 bytes per token
-      session.tokensSaved += Math.floor(bytes / 4);
+      session.estimatedTokensSaved += estimatedTokensSaved;
     }
 
-    this.emitEvent("harness.tool.spilled", { toolName, bytes, spillId }, sessionId);
+    this.emitEvent(
+      "harness.tool.spilled",
+      { toolName, modelContextBytesReduced, storedBytes, estimatedTokensSaved, spillId },
+      sessionId,
+      runId,
+    );
   }
 
-  recordToolResultRetrieval(durationMs: number, sessionId?: string): void {
+  recordToolResultRetrieval(
+    durationMs: number,
+    sessionId?: string,
+    sessionToken?: symbol,
+    runId?: string,
+  ): void {
+    if (sessionId && (!sessionToken || !this.isSessionCurrent(sessionId, sessionToken))) return;
+    if (!Number.isFinite(durationMs) || durationMs < 0) return;
     this.totalRetrievalLatencyMs += durationMs;
     this.retrievalCount++;
-    this.emitEvent("harness.tool.retrieved", { durationMs }, sessionId);
+    this.emitEvent("harness.tool.retrieved", { durationMs }, sessionId, runId);
   }
 
   // --- Compaction Pruning Tracking ---
@@ -247,14 +314,22 @@ export class HarnessObserver {
     sessionToken?: symbol,
     runId?: string,
   ): void {
-    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
-    this.compactionEvents++;
+    if (sessionId && (!sessionToken || !this.isSessionCurrent(sessionId, sessionToken))) return;
+    if (
+      !Number.isFinite(measuredContextBytesRemoved) ||
+      measuredContextBytesRemoved < 0 ||
+      !Number.isFinite(estimatedTokensSaved) ||
+      estimatedTokensSaved < 0
+    ) {
+      return;
+    }
+    this.compactionPruningEvents++;
     this.compactionPrunedBytes += measuredContextBytesRemoved;
     this.compactionTokensSaved += estimatedTokensSaved;
 
     if (sessionId) {
       const session = this.ensureSession(sessionId);
-      session.tokensSaved += estimatedTokensSaved;
+      session.estimatedTokensSaved += estimatedTokensSaved;
     }
 
     this.emitEvent(
@@ -265,160 +340,86 @@ export class HarnessObserver {
     );
   }
 
-  /**
-   * Records a real (non-pruned) compaction run. Tracked separately from
-   * pruning events so the avoidance ratio in snapshot() can actually vary
-   * instead of being a constant.
-   */
-  recordActualCompaction(sessionId?: string): void {
-    this.actualCompactionCount++;
-
-    if (sessionId) {
-      this.ensureSession(sessionId);
-    }
+  recordNativeCompaction(sessionId: string, sessionToken: symbol, runId: string): void {
+    if (!this.isSessionCurrent(sessionId, sessionToken)) return;
+    this.nativeCompactionsObserved++;
+    this.emitEvent("harness.compaction.native", {}, sessionId, runId);
   }
 
   // --- Prompt Sections Tracking ---
   recordPromptSections(
     sent: string[],
     skipped: string[],
-    tokensSaved: number,
+    estimatedTokensSaved: number | undefined,
     sessionId?: string,
     sessionToken?: symbol,
+    runId?: string,
   ): void {
-    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
+    if (sessionId && (!sessionToken || !this.isSessionCurrent(sessionId, sessionToken))) return;
     this.promptTotalSectionsSent += sent.length;
     this.promptSkippedSections += skipped.length;
-    this.promptTokensSaved += tokensSaved;
+    if (estimatedTokensSaved !== undefined && Number.isFinite(estimatedTokensSaved)) {
+      this.promptEstimatedTokensSaved += estimatedTokensSaved;
+      this.hasPromptTokenEstimate = true;
+    }
 
     if (sessionId) {
       const session = this.ensureSession(sessionId);
-      session.tokensSaved += tokensSaved;
+      if (estimatedTokensSaved !== undefined && Number.isFinite(estimatedTokensSaved)) {
+        session.estimatedTokensSaved += estimatedTokensSaved;
+      }
     }
 
     this.emitEvent(
       "harness.prompt.compiled",
-      { sentCount: sent.length, skippedCount: skipped.length, tokensSaved },
+      {
+        sentSectionIds: sent,
+        skippedSectionIds: skipped,
+        estimatedTokensSaved: estimatedTokensSaved ?? null,
+      },
       sessionId,
+      runId,
     );
   }
 
   // --- Repeat Guards Tracking ---
-  recordRepeatGuardTrigger(
+  recordRepeatGuardEvaluation(
     toolName: string,
-    guardType: string,
-    isFalsePositive: boolean = false,
-    sessionId?: string,
+    blocked: boolean,
+    sessionId: string,
+    sessionToken: symbol,
+    runId: string,
   ): void {
-    this.guardBlockedLoops++;
-    if (guardType === "circuit_breaker") {
-      this.guardCircuitBreakerTrips++;
-    }
-    if (isFalsePositive) {
-      this.guardFalsePositives++;
-    }
+    if (!this.isSessionCurrent(sessionId, sessionToken)) return;
+    this.guardEvaluatedToolCalls++;
+    if (blocked) this.guardBlockedLoops++;
 
-    if (sessionId) {
-      const session = this.ensureSession(sessionId);
-      session.guardBlocks++;
-    }
+    const session = this.ensureSession(sessionId);
+    if (blocked) session.guardBlocks++;
 
-    this.emitEvent("harness.guard.tripped", { toolName, guardType, isFalsePositive }, sessionId);
+    this.emitEvent("harness.guard.evaluated", { toolName, blocked }, sessionId, runId);
   }
 
   // --- Response Policy Tracking ---
   recordResponsePolicyEvaluation(
     violation: boolean,
-    formatted: boolean,
-    charsSaved: number,
-    criticalOmitted: number = 0,
-    sessionId?: string,
-    sessionToken?: symbol,
+    sessionId: string,
+    sessionToken: symbol,
+    runId: string,
   ): void {
-    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
+    if (!this.isSessionCurrent(sessionId, sessionToken)) return;
+    this.responseEvaluatedCount++;
     if (violation) this.responseViolationsDetected++;
-    if (formatted) this.responseFormattedCount++;
-    this.responseCharactersSaved += charsSaved;
-    this.responseCriticalSectionsOmitted += criticalOmitted;
 
-    if (sessionId) {
-      const session = this.ensureSession(sessionId);
-      if (violation) session.policyViolations++;
-      // Rough token estimate: ~4 chars per token
-      session.tokensSaved += Math.floor(charsSaved / 4);
-    }
+    const session = this.ensureSession(sessionId);
+    session.policyEvaluations++;
+    if (violation) session.policyViolations++;
 
     this.emitEvent(
-      "harness.response.formatted",
-      { violation, formatted, charsSaved, criticalOmitted },
+      "harness.response.evaluated",
+      { outcome: "completed", violation },
       sessionId,
-    );
-  }
-
-  /**
-   * Mirrors cumulative ResponsePolicyRegistry totals into the observer.
-   * Delta-based: only evaluations recorded since the last mirror call are
-   * added, and a registry reset simply re-baselines without double counting.
-   * criticalOmitted stays 0 here — the formatter never omits critical
-   * paragraphs by construction (Phase 7 invariant) and the registry tracks
-   * no omission counter.
-   */
-  mirrorResponsePolicyMetrics(
-    totals: { violationsDetected: number; totalFormatted: number; charactersSaved: number },
-    sessionId?: string,
-    sessionToken?: symbol,
-  ): void {
-    if (sessionId && sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
-    const fresh = {
-      violationsDetected: Math.max(0, totals.violationsDetected),
-      totalFormatted: Math.max(0, totals.totalFormatted),
-      charactersSaved: Math.max(0, totals.charactersSaved),
-    };
-    const added = {
-      violationsDetected: Math.max(
-        0,
-        fresh.violationsDetected - this.lastMirroredResponseTotals.violationsDetected,
-      ),
-      totalFormatted: Math.max(
-        0,
-        fresh.totalFormatted - this.lastMirroredResponseTotals.totalFormatted,
-      ),
-      charactersSaved: Math.max(
-        0,
-        fresh.charactersSaved - this.lastMirroredResponseTotals.charactersSaved,
-      ),
-    };
-    this.lastMirroredResponseTotals = fresh;
-
-    if (
-      added.violationsDetected === 0 &&
-      added.totalFormatted === 0 &&
-      added.charactersSaved === 0
-    ) {
-      return;
-    }
-
-    this.responseViolationsDetected += added.violationsDetected;
-    this.responseFormattedCount += added.totalFormatted;
-    this.responseCharactersSaved += added.charactersSaved;
-
-    if (sessionId) {
-      const session = this.ensureSession(sessionId);
-      session.policyViolations += added.violationsDetected;
-      // Rough token estimate: ~4 chars per token
-      session.tokensSaved += Math.floor(added.charactersSaved / 4);
-    }
-
-    this.emitEvent(
-      "harness.response.formatted",
-      {
-        violation: added.violationsDetected > 0,
-        formatted: added.totalFormatted > 0,
-        charsSaved: added.charactersSaved,
-        criticalOmitted: 0,
-        mirrored: true,
-      },
-      sessionId,
+      runId,
     );
   }
 
@@ -466,11 +467,74 @@ export class HarnessObserver {
   }
 
   // --- Session Turn Tracking ---
-  recordSessionTurn(sessionId: string, durationMs: number, sessionToken?: symbol): void {
-    if (sessionToken && !this.isSessionCurrent(sessionId, sessionToken)) return;
-    const session = this.ensureSession(sessionId);
+  recordSessionTurn(input: {
+    sessionId: string;
+    durationMs: number;
+    sessionToken: symbol;
+    runId: string;
+    outcome: TurnOutcome;
+    hasAssistantResponse: boolean;
+    providerTokenUsage?: {
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheWrite: number;
+      totalTokens: number;
+    };
+  }): void {
+    if (!this.isSessionCurrent(input.sessionId, input.sessionToken)) return;
+    const hasDuration = Number.isFinite(input.durationMs) && input.durationMs >= 0;
+    const durationMs = hasDuration ? input.durationMs : null;
+    const session = this.ensureSession(input.sessionId);
     session.turnCount++;
-    session.totalDurationMs += durationMs;
+    session.outcomes[input.outcome]++;
+    this.turns.total++;
+    this.turns[input.outcome]++;
+    if (hasDuration) {
+      session.totalDurationMs += input.durationMs;
+      session.durationReports++;
+      session.durationMsByOutcome[input.outcome] += input.durationMs;
+      session.durationReportsByOutcome[input.outcome]++;
+      this.turns.totalDurationMs += input.durationMs;
+      this.turns.durationReports++;
+      this.turns.durationMsByOutcome[input.outcome] += input.durationMs;
+      this.turns.durationReportsByOutcome[input.outcome]++;
+    }
+    if (!input.hasAssistantResponse) {
+      session.noResponseCount++;
+      this.turns.noResponse++;
+      if (hasDuration) {
+        session.noResponseDurationMs += input.durationMs;
+        session.noResponseDurationReports++;
+        this.turns.noResponseDurationMs += input.durationMs;
+        this.turns.noResponseDurationReports++;
+      }
+    }
+
+    if (input.providerTokenUsage) {
+      const usage = input.providerTokenUsage;
+      this.turns.providerUsageReports++;
+      this.turns.providerInputTokens += usage.input;
+      this.turns.providerOutputTokens += usage.output;
+      this.turns.providerCacheReadTokens += usage.cacheRead;
+      this.turns.providerCacheWriteTokens += usage.cacheWrite;
+      this.turns.providerTotalTokens += usage.totalTokens;
+      session.providerReportedTotalTokens += usage.totalTokens;
+    }
+
+    this.emitEvent(
+      "harness.turn.settled",
+      {
+        durationMs,
+        outcome: input.outcome,
+        hasAssistantResponse: input.hasAssistantResponse,
+        ...(input.providerTokenUsage
+          ? { providerReportedTokenUsage: input.providerTokenUsage }
+          : {}),
+      },
+      input.sessionId,
+      input.runId,
+    );
   }
 
   getSessionMetrics(sessionId: string): SessionHarnessMetrics | undefined {
@@ -490,53 +554,51 @@ export class HarnessObserver {
    */
   snapshot(): HarnessMetrics {
     const promptSections: PromptSectionsMetrics = {
-      tokensSaved: this.promptTokensSaved,
+      estimatedTokensSaved: this.hasPromptTokenEstimate ? this.promptEstimatedTokensSaved : null,
       skippedSections: this.promptSkippedSections,
       totalSectionsSent: this.promptTotalSectionsSent,
     };
 
     const toolResults: ToolResultsMetrics = {
       spilledResults: this.spilledResults,
+      successfulRetrievals: this.retrievalCount,
       retrievalLatency:
-        this.retrievalCount > 0 ? this.totalRetrievalLatencyMs / this.retrievalCount : 0,
+        this.retrievalCount > 0 ? this.totalRetrievalLatencyMs / this.retrievalCount : null,
       spilledBytes: this.spilledBytes,
+      modelContextBytesReduced: this.modelContextBytesReduced,
+      estimatedTokensSaved: this.spillEstimatedTokensSaved,
     };
 
-    // Share of compaction demand absorbed by pruning (avoids a full compaction).
-    const totalCompactionDemand = this.compactionEvents + this.actualCompactionCount;
-    const reductionPercent =
-      totalCompactionDemand === 0
-        ? 0
-        : Math.round((this.compactionEvents / totalCompactionDemand) * 100);
-
     const compaction: CompactionMetrics = {
-      frequencyReductionPercent: reductionPercent,
+      // Pi's native compaction demand is not exposed at the context hook where
+      // pruning runs. Pruning and compaction counts alone cannot prove avoidance.
+      frequencyReductionPercent: null,
       totalPrunedBytes: this.compactionPrunedBytes,
-      compactionEvents: this.compactionEvents,
+      pruningEvents: this.compactionPruningEvents,
+      nativeCompactionsObserved: this.nativeCompactionsObserved,
       estimatedTokensSavedByPruning: this.compactionTokensSaved,
     };
 
     const repeatGuards: RepeatGuardsMetrics = {
-      falsePositiveCount: this.guardFalsePositives,
+      falsePositiveCount: null,
       blockedLoopCount: this.guardBlockedLoops,
-      circuitBreakerTrips: this.guardCircuitBreakerTrips,
+      evaluatedToolCalls: this.guardEvaluatedToolCalls,
+      circuitBreakerTrips: null,
     };
 
     const response: ResponsePolicyMetrics = {
-      criticalSectionsOmitted: this.responseCriticalSectionsOmitted,
+      evaluatedCount: this.responseEvaluatedCount,
       violationsDetected: this.responseViolationsDetected,
-      charactersSaved: this.responseCharactersSaved,
-      formattedCount: this.responseFormattedCount,
     };
 
     // Performance calculations
-    const totalHookExecutions = this.hookDurationsMs.length;
-    const totalHookDuration = this.hookDurationsMs.reduce((acc, v) => acc + v, 0);
+    const sampledHookExecutionCount = this.hookDurationsMs.length;
+    const sampledHookDurationTotalMs = this.hookDurationsMs.reduce((acc, v) => acc + v, 0);
     const averageHookDurationMs =
-      totalHookExecutions > 0 ? totalHookDuration / totalHookExecutions : 0;
+      sampledHookExecutionCount > 0 ? sampledHookDurationTotalMs / sampledHookExecutionCount : 0;
 
     const sortedDurations = [...this.hookDurationsMs].sort((a, b) => a - b);
-    const p95Index = Math.floor(sortedDurations.length * 0.95);
+    const p95Index = Math.max(0, Math.ceil(sortedDurations.length * 0.95) - 1);
     const p95HookDurationMs = sortedDurations[p95Index] ?? averageHookDurationMs;
 
     const currentMemory = process.memoryUsage().heapUsed;
@@ -548,11 +610,14 @@ export class HarnessObserver {
         : 0;
 
     const performance: PerformanceMetrics = {
-      hookSystemOverheadMs: totalHookDuration,
+      sampledHookDurationTotalMs:
+        sampledHookExecutionCount > 0 ? sampledHookDurationTotalMs : null,
       memoryGrowthPercent: memoryGrowth,
-      totalHookExecutions,
-      averageHookDurationMs: Math.round(averageHookDurationMs * 100) / 100,
-      p95HookDurationMs: Math.round(p95HookDurationMs * 100) / 100,
+      sampledHookExecutionCount,
+      averageHookDurationMs:
+        sampledHookExecutionCount > 0 ? Math.round(averageHookDurationMs * 100) / 100 : null,
+      p95HookDurationMs:
+        sampledHookExecutionCount > 0 ? Math.round(p95HookDurationMs * 100) / 100 : null,
     };
 
     // Plugin Tracing calculations (Fase 12)
@@ -560,7 +625,7 @@ export class HarnessObserver {
     const totalPluginDur = this.pluginDurationsMs.reduce((acc, v) => acc + v, 0);
     const avgPluginDur = totalPluginExec > 0 ? totalPluginDur / totalPluginExec : 0;
     const sortedPluginDurations = [...this.pluginDurationsMs].sort((a, b) => a - b);
-    const p95PluginIdx = Math.floor(sortedPluginDurations.length * 0.95);
+    const p95PluginIdx = Math.max(0, Math.ceil(sortedPluginDurations.length * 0.95) - 1);
     const p95PluginDur = sortedPluginDurations[p95PluginIdx] ?? avgPluginDur;
 
     const plugins: PluginTracingMetrics = {
@@ -573,6 +638,7 @@ export class HarnessObserver {
     };
 
     return {
+      turns: { ...this.turns },
       promptSections,
       toolResults,
       compaction,
@@ -590,20 +656,8 @@ export class HarnessObserver {
     const snap = this.snapshot();
     const alerts: AlertRegression[] = [];
 
-    // Critical: Evidence Loss / Critical sections dropped (RISCO 4)
-    if (snap.response.criticalSectionsOmitted > 0) {
-      alerts.push({
-        metric: "response.criticalSectionsOmitted",
-        severity: "critical",
-        expected: 0,
-        actual: snap.response.criticalSectionsOmitted,
-        message: "Critical sections (errors, blockers, warnings) were omitted by response policy!",
-        timestamp: Date.now(),
-      });
-    }
-
     // Warning: High hook latency (SLO < 100ms)
-    if (snap.performance.p95HookDurationMs > 100) {
+    if (snap.performance.p95HookDurationMs !== null && snap.performance.p95HookDurationMs > 100) {
       alerts.push({
         metric: "performance.p95HookDurationMs",
         severity: "warning",

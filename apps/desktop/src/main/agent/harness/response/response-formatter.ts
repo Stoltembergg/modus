@@ -96,8 +96,9 @@ export function enforceResponsePolicy(
 }
 
 /**
- * Formats a message according to the active ResponsePolicy, incorporating deliverables
- * and semantic section filters.
+ * Standalone formatter for callers that have not streamed or persisted the output.
+ * PiSdkRuntime deliberately does not use this to rewrite a completed streamed response;
+ * its production ResponsePolicy path is prompt guidance plus advisory evaluation.
  */
 export function formatResponse(input: {
   message: string;

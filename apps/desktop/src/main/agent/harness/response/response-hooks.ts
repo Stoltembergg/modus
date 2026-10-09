@@ -7,7 +7,7 @@ import type {
   TurnSettleInput,
   TurnSettleOutput,
 } from "../kernel/harness-hooks";
-import { formatResponse } from "./response-formatter";
+import { enforceResponsePolicy } from "./response-formatter";
 import {
   DEFAULT_RESPONSE_LEVEL,
   RESPONSE_POLICY_PROMPTS,
@@ -94,8 +94,9 @@ export const defaultPromptBuildResponsePolicyHook: HarnessHook<
 };
 
 /**
- * Hook for `turn_settle` phase: inspects the final assistant output, evaluates policy
- * compliance, records metrics, and formats responses when strict mode is active.
+ * Hook for `turn_settle` phase: evaluates the completed assistant response.
+ * Response text is already streamed and persisted by Pi, so this hook is advisory
+ * and must never replace or truncate that text.
  */
 export const defaultTurnSettleResponsePolicyHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
   name: "response-policy-turn-settle",
@@ -114,29 +115,30 @@ export const defaultTurnSettleResponsePolicyHook: HarnessHook<TurnSettleInput, T
           typeof resolveResponsePolicy
         >) ?? registry.getSessionPolicy(context.sessionId);
 
+      const outcome = input.outcome ?? (input.completed ? "completed" : "interrupted");
       const rawResponse = context.state.get("harness.assistant_response") as string | undefined;
 
-      if (rawResponse && rawResponse.trim().length > 0) {
-        const deliverables = context.state.get("harness.deliverables");
-        const formatted = formatResponse({
-          message: rawResponse,
-          policy,
-          deliverables: Array.isArray(deliverables) ? deliverables : undefined,
+      if (outcome !== "completed" || !input.completed || !rawResponse?.trim()) {
+        context.state.set("harness.response_policy_evaluation", {
+          runId: input.runId,
+          outcome,
+          status: outcome === "completed" ? "no_response" : "not_applicable",
+          violated: false,
         });
-
-        registry.recordEvaluation({
-          violated: formatted.violated,
-          formatted: policy.enforcementMode === "strict" && formatted.violated,
-          charsBefore: rawResponse.length,
-          charsAfter: formatted.response.length,
-        });
-
-        context.state.set("harness.formatted_response", formatted.response);
-        context.state.set("harness.response_violated", formatted.violated);
-        if (formatted.reason) {
-          context.state.set("harness.response_violation_reason", formatted.reason);
-        }
+        return { settled: true, triggerContinuation: false };
       }
+
+      // Strict enforcement cannot rewrite a response that Pi already streamed.
+      // Preserve an explicit off preference; otherwise evaluate in advisory mode.
+      const evaluationMode = policy.enforcementMode === "off" ? "off" : "advisory";
+      const evaluation = enforceResponsePolicy(rawResponse, policy, evaluationMode);
+      context.state.set("harness.response_policy_evaluation", {
+        runId: input.runId,
+        outcome,
+        status: "evaluated",
+        violated: evaluation.violated,
+        ...(evaluation.reason ? { reason: evaluation.reason } : {}),
+      });
 
       return { settled: true, triggerContinuation: false };
     } catch (error) {

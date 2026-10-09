@@ -4,7 +4,9 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { getAgentRun } from "../agent-run-store";
 import { isFeatureFlagEnabled } from "../harness/feature-flags";
+import { HarnessObserver } from "../harness/observability/harness-observer";
 import { handleRetrieveSpilledToolResult } from "../harness/tools/retrieve-spill-tool";
 import { TOOL_RESULT_SPILL_LIMITS } from "../harness/tools/tool-result-storage";
 import { toolRegistry } from "./registry";
@@ -57,7 +59,7 @@ export const retrieveSpillTool: ToolDefinition<typeof retrieveSpillParams> = def
   execute: async (
     _toolCallId,
     params: RetrieveSpillParams,
-    _signal,
+    signal,
     _onUpdate,
     ctx,
   ): Promise<AgentToolResult<unknown>> => {
@@ -76,6 +78,7 @@ export const retrieveSpillTool: ToolDefinition<typeof retrieveSpillParams> = def
       };
     }
 
+    const startedAt = performance.now();
     const result = handleRetrieveSpilledToolResult(
       {
         spillId: params.spill_id,
@@ -114,6 +117,23 @@ export const retrieveSpillTool: ToolDefinition<typeof retrieveSpillParams> = def
         content: [{ type: "text", text: "Spilled result exceeds the configured response limit." }],
         details: { success: false },
       };
+    }
+
+    if (
+      isFeatureFlagEnabled("MODUS_OBSERVABILITY") &&
+      !signal?.aborted &&
+      getAgentRun(owner.runId)?.status === "running"
+    ) {
+      const observer = HarnessObserver.getInstance();
+      const sessionToken = observer.getSessionToken(owner.sessionId);
+      if (sessionToken) {
+        observer.recordToolResultRetrieval(
+          Math.max(0, performance.now() - startedAt),
+          owner.sessionId,
+          sessionToken,
+          owner.runId,
+        );
+      }
     }
 
     return {

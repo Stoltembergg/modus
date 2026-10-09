@@ -4,6 +4,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { isFeatureFlagEnabled } from "../feature-flags";
 import { HarnessObserver } from "../observability/harness-observer";
 import type { PluginTrace, PluginTraceMetadata, PluginTraceStatus } from "./plugin-tracing-types";
 
@@ -124,21 +125,23 @@ export class PluginInstrumentation {
     }
 
     // Mirror to unified HarnessObserver singleton
-    try {
-      HarnessObserver.getInstance().recordPluginTrace(
-        {
-          pluginId: trace.pluginId,
-          capability: trace.capability,
-          version: trace.version,
-          durationMs: trace.durationMs,
-          status: trace.status,
-          error: trace.error,
-          metadata: trace.metadata,
-        },
-        sessionId,
-      );
-    } catch {
-      // Fail-open
+    if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+      try {
+        HarnessObserver.getInstance().recordPluginTrace(
+          {
+            pluginId: trace.pluginId,
+            capability: trace.capability,
+            version: trace.version,
+            durationMs: trace.durationMs,
+            status: trace.status,
+            error: trace.error,
+            metadata: trace.metadata,
+          },
+          sessionId,
+        );
+      } catch {
+        // Fail-open
+      }
     }
   }
 

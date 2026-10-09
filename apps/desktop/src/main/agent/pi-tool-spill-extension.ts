@@ -17,6 +17,14 @@ export type ToolResultSpillHandler = (
   signal: AbortSignal | undefined,
 ) => Promise<ToolResultSpillEventResult | undefined>;
 
+export type ToolResultSpillObservation = {
+  authorization: SpillAuthorizationContext;
+  toolName: string;
+  modelContextBytesReduced: number;
+  storedBytes: number;
+  spillId: string;
+};
+
 /**
  * Builds the post-Repeat-Guard middleware used by the existing Pi permission
  * extension. It is a callback, not a second extension listener, so Pi sees one
@@ -27,6 +35,7 @@ export function createModusToolSpillHandler(
   resolveAuthorization: (event: ToolResultEvent) => SpillAuthorizationContext | undefined,
   onStorageFailure: () => void,
   storage?: ToolResultStorage,
+  onSpilled?: (observation: ToolResultSpillObservation) => void,
 ): ToolResultSpillHandler {
   return async (event, signal) => {
     const reportStorageFailure = (): void => {
@@ -79,6 +88,20 @@ export function createModusToolSpillHandler(
       return undefined;
     }
     if (!result.spilled) return undefined;
+
+    try {
+      if (result.spillId && result.spillRecord) {
+        onSpilled?.({
+          authorization,
+          toolName: event.toolName,
+          modelContextBytesReduced: result.bytesSaved,
+          storedBytes: result.spillRecord.sizeBytes,
+          spillId: result.spillId,
+        });
+      }
+    } catch {
+      // Observability must never affect a successfully stored tool result.
+    }
 
     // Preserve TextContent annotations and all SDK error/details fields by
     // patching only its text while retaining the exact result metadata.
