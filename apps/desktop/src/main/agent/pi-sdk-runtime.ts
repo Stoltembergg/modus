@@ -150,7 +150,6 @@ import type {
 } from "./harness/kernel/harness-hooks";
 import { HarnessKernel } from "./harness/kernel/harness-kernel";
 import { promptBuildHook } from "./harness/kernel/prompt-hook";
-import { PromptRegistry } from "./harness/prompt/prompt-registry";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
 import { HarnessObserver } from "./harness/observability/harness-observer";
@@ -176,6 +175,7 @@ import {
   upsertProjectModelChangedPaths,
   upsertProjectModelDiscoveries,
 } from "./harness/project-model-store";
+import { PromptRegistry } from "./harness/prompt/prompt-registry";
 import {
   bindRunQAtoWorkspaceRevision,
   type RunQAEvent,
