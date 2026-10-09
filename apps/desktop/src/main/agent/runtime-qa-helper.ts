@@ -308,13 +308,16 @@ export function summarizeHarnessQA(input: {
       });
     }
   }
-  const result = bindRunQAtoWorkspaceRevision({
-    result: summarizeRunQA({ ...input, events }),
-    events,
-    workspaceRevision: hasValidRunStart
-      ? getRunWorkspaceRevision(input.sessionId, input.runId)
-      : undefined,
-  });
+  const summarized = summarizeRunQA({ ...input, events });
+  const result = summarized.required
+    ? bindRunQAtoWorkspaceRevision({
+        result: summarized,
+        events,
+        workspaceRevision: hasValidRunStart
+          ? getRunWorkspaceRevision(input.sessionId, input.runId)
+          : undefined,
+      })
+    : summarized;
   if (input.aborted && result.required) {
     result.status = "cancelled";
     result.reasonCode = "required_check_cancelled";

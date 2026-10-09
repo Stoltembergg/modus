@@ -718,13 +718,16 @@ function summarizeHarnessQA(input: {
       });
     }
   }
-  const result = bindRunQAtoWorkspaceRevision({
-    result: summarizeRunQA({ ...input, events }),
-    events,
-    workspaceRevision: hasValidRunStart
-      ? getRunWorkspaceRevision(input.sessionId, input.runId)
-      : undefined,
-  });
+  const summarized = summarizeRunQA({ ...input, events });
+  const result = summarized.required
+    ? bindRunQAtoWorkspaceRevision({
+        result: summarized,
+        events,
+        workspaceRevision: hasValidRunStart
+          ? getRunWorkspaceRevision(input.sessionId, input.runId)
+          : undefined,
+      })
+    : summarized;
   if (input.aborted && result.required) {
     result.status = "cancelled";
     result.reasonCode = "required_check_cancelled";
@@ -1792,6 +1795,20 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<void> {
     const runId = tracker.runId;
     const plan = tracker.taskPlan;
+    let groupSourceFingerprint: string | undefined;
+    let groupSourceUnavailable = false;
+    if (input.groupTask) {
+      const binding = getGroupTaskRunBinding(input.sessionId, runId);
+      const task = binding ? getGroupTask(binding.taskId) : undefined;
+      const source = task ? getGroupTaskSourcePath(task) : undefined;
+      try {
+        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
+          throw new Error("Task checks did not run against the task owner's source.");
+        groupSourceFingerprint = await getGroupSourceFingerprint(source);
+      } catch {
+        groupSourceUnavailable = true;
+      }
+    }
     const summary = summarizeHarnessQA({
       sessionId: input.sessionId,
       runId,
@@ -1807,14 +1824,8 @@ export class PiSdkRuntime implements AgentRuntime {
     else tracker.lastQaRestoreRowId = summary.restoreRowId;
     const result = summary.result;
     if (input.groupTask) {
-      const binding = getGroupTaskRunBinding(input.sessionId, runId);
-      const task = binding ? getGroupTask(binding.taskId) : undefined;
-      const source = task ? getGroupTaskSourcePath(task) : undefined;
-      try {
-        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
-          throw new Error("Task checks did not run against the task owner's source.");
-        result.sourceFingerprint = await getGroupSourceFingerprint(source);
-      } catch {
+      if (groupSourceFingerprint) result.sourceFingerprint = groupSourceFingerprint;
+      if (groupSourceUnavailable) {
         result.status = "unavailable";
         result.reasonCode = "task_source_unavailable";
         result.evidence = result.evidence.map((item) =>
