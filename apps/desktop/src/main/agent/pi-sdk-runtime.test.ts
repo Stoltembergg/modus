@@ -8837,7 +8837,9 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
 
       expect(executions).toBe(3);
       expect(events).toEqual(
-        expect.arrayContaining([expect.objectContaining({ type: "harness.failure", sessionId })]),
+        expect.arrayContaining([
+          expect.objectContaining({ type: "harness.failure", sessionId }),
+        ]),
       );
       expect(
         events.some(
@@ -8949,6 +8951,60 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
     }
   });
 
+  it("clears an in-flight invocation when the Pi SDK run is cancelled", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-cancel-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_cancel_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    let signalToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      signalToolStarted = resolve;
+    });
+    registerOfflineRepeatGuardTool(toolName, async (_toolCallId, _params, signal) => {
+      executions += 1;
+      if (executions === 1) {
+        signalToolStarted();
+        await new Promise<void>((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error("cancelled"));
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(new Error("cancelled")), {
+            once: true,
+          });
+        });
+      }
+      return { content: [{ type: "text", text: "completed" }], details: {} };
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      const cancelledPrompt = runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Start then cancel the lookup.",
+        sessionId,
+      });
+      await toolStarted;
+      await runtime.abort(sessionId);
+      await cancelledPrompt;
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retry after cancellation.",
+        sessionId,
+      });
+
+      expect(executions).toBe(2);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
   it("keeps histories isolated between runs and Agent Group members", async () => {
     const { requestToolSequence } = await useOfflinePiToolSessions();
     const { createAgentGroupWithMembers } = await import("../groups/group-store");
@@ -8991,10 +9047,18 @@ describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
       await runtime.prompt(window, { context: [], message: "Repeat lookup.", sessionId: memberA });
 
       requestToolSequence([{ name: toolName, input: { target: "same" } }]);
-      await runtime.prompt(window, { context: [], message: "Repeat lookup again.", sessionId: memberA });
+      await runtime.prompt(window, {
+        context: [],
+        message: "Repeat lookup again.",
+        sessionId: memberA,
+      });
 
       requestToolSequence([{ name: toolName, input: { target: "same" } }]);
-      await runtime.prompt(window, { context: [], message: "Repeat lookup as member B.", sessionId: memberB });
+      await runtime.prompt(window, {
+        context: [],
+        message: "Repeat lookup as member B.",
+        sessionId: memberB,
+      });
 
       expect(executions).toBe(5);
     } finally {

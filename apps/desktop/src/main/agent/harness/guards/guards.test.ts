@@ -93,6 +93,13 @@ describe("Phase 5: Repeat Guards & Circuit Breakers", () => {
       expect(fingerprintToolArgs(null)).toBe("empty");
     });
 
+    it("includes nested argument changes in the stable fingerprint", () => {
+      const first = fingerprintToolArgs({ target: "same", options: { mode: "quick" } });
+      const second = fingerprintToolArgs({ target: "same", options: { mode: "thorough" } });
+
+      expect(first).not.toBe(second);
+    });
+
     it("detects repeating tool calls with identical arguments within sliding window", () => {
       const now = 1000_000;
       const fp = fingerprintToolArgs({ command: "cargo build" });
