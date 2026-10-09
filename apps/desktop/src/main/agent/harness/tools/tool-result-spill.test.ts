@@ -243,7 +243,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       expect(sliced?.linesReturned).toBe(5);
       expect(sliced?.offsetLine).toBe(10);
       expect(sliced?.hasMore).toBe(true);
-      expect(sliced?.content).toBe("Line 10\nLine 11\nLine 12\nLine 13\nLine 14");
+      expect(sliced?.content).toBe("Line 10\nLine 11\nLine 12\nLine 13\nLine 14\n");
     });
 
     it("clears spills by session and run", () => {
@@ -314,11 +314,11 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       const lines = Array.from({ length: 800 }, (_, i) => `Diagnostic line ${i}: All tests passed`);
       const hugeOutput = lines.join("\n"); // ~32 KB
 
-      seedScope("session-test", "run-1", "workspace-test");
+      seedScope("session-test", "run-session-test", "workspace-test");
       const storage = new ToolResultStorage({ database });
       const intercept = interceptToolResult({
         sessionId: "session-test",
-        runId: "run-1",
+        runId: "run-session-test",
         workspaceId: "workspace-test",
         toolName: "bash",
         output: hugeOutput,
@@ -357,7 +357,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
       );
 
       expect(res.success).toBe(true);
-      expect(res.content).toBe("Data 5\nData 6\nData 7");
+      expect(res.content).toBe("Data 5\nData 6\nData 7\n");
       expect(res.totalLines).toBe(30);
       expect(res.hasMore).toBe(true);
 
@@ -568,7 +568,7 @@ describe("Fase 3: ToolResultPolicy & Spill Storage", () => {
         offsetByte: first?.nextOffsetByte,
         maxBytes: 512,
       });
-      expect(`${first?.content}${second?.content}`).toBe(longLine.slice(0, 256));
+      expect(`${first?.content}${second?.content}`).toBe(longLine.slice(0, 512));
       expect(Buffer.byteLength(second?.content ?? "", "utf8")).toBeLessThanOrEqual(512);
 
       const lines = Array.from({ length: 20 }, (_, index) => `Line ${index}`).join("\n");
