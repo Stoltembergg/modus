@@ -347,7 +347,7 @@ async function useOfflinePiToolSessions(
       },
     });
     contextHandlersBySession.set(session, capturedContextHandlers);
-    session.agent.streamFn = (model, context) => {
+    session.agent.streamFn = (model, context, options) => {
       offlineOptions.onStream?.(session, context, capturedContextHandlers);
       deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
       deliveredMessages.push({ session, messages: [...context.messages] });
@@ -388,7 +388,20 @@ async function useOfflinePiToolSessions(
         },
         timestamp: Date.now(),
       };
+      let terminalEventPushed = false;
+      const pushAbortedEvent = () => {
+        if (terminalEventPushed) return;
+        terminalEventPushed = true;
+        try {
+          stream.push({ type: "error", reason: "aborted", error: message });
+        } catch {
+          // The SDK may close this stream when the runtime cancels its session.
+        }
+      };
       const pushResponseEvents = () => {
+        if (terminalEventPushed) return;
+        terminalEventPushed = true;
+        options?.signal?.removeEventListener("abort", pushAbortedEvent);
         try {
           if (stopReason === "error" || stopReason === "aborted") {
             stream.push({ type: "start", partial: message });
@@ -410,14 +423,39 @@ async function useOfflinePiToolSessions(
             }
             stream.push({ type: "error", reason: stopReason, error: message });
           } else {
+            stream.push({ type: "start", partial: message });
+            const textBlock = message.content.find((block) => block.type === "text");
+            if (textBlock?.type === "text" && textBlock.text.length > 0) {
+              stream.push({ type: "text_start", contentIndex: 0, partial: message });
+              stream.push({
+                type: "text_delta",
+                contentIndex: 0,
+                delta: textBlock.text,
+                partial: message,
+              });
+              stream.push({
+                type: "text_end",
+                contentIndex: 0,
+                content: textBlock.text,
+                partial: message,
+              });
+            }
             stream.push({ type: "done", reason: stopReason, message });
           }
         } catch {
           // The SDK may close this stream when the runtime cancels its session.
         }
       };
+      if (options?.signal?.aborted) {
+        pushAbortedEvent();
+      } else {
+        options?.signal?.addEventListener("abort", pushAbortedEvent, { once: true });
+      }
       if (offlineOptions.responseGate) {
-        void offlineOptions.responseGate.then(pushResponseEvents);
+        void offlineOptions.responseGate.then(() => {
+          if (options?.signal?.aborted) pushAbortedEvent();
+          else pushResponseEvents();
+        });
       } else {
         pushResponseEvents();
       }
@@ -8704,27 +8742,17 @@ describe("PiSdkRuntime Phase 7 response policy wiring", () => {
   async function runTurnWithAssistantText(text: string): Promise<string> {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
-    const session = createMockPiSession({
-      prompt: vi.fn(async () => {
-        mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
-        mocks.emitPiEvent({
-          type: "message_update",
-          message: { role: "assistant" },
-          assistantMessageEvent: { type: "text_delta", delta: text },
-        });
-        mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
-      }),
-    });
-    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-    await new PiSdkRuntime().prompt(createWindowStub(), {
+    const offline = await createOfflinePiToolSessions({ assistantText: text });
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
       message: "hello",
       sessionId,
     });
-    return (
-      mocks.resourceLoaderOptions.at(-1) as { appendSystemPrompt: string[] }
-    ).appendSystemPrompt.join("\n");
+    const systemPrompt = offline.sessionAt().systemPrompt;
+    await runtime.releaseRuntime(sessionId);
+    return systemPrompt;
   }
 
   it("appends the response policy directive and evaluates the settled response when enabled", async () => {
@@ -9007,6 +9035,39 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     expect(metrics.turns).toMatchObject({ total: 1, completed: 1, noResponse: 0 });
     expect(metrics.turns.providerTotalTokens).toBe(2);
     expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("records a successful manual native compaction without inventing a run id", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const sessionId = `observer-manual-compaction-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const compact = vi.fn(async () => {
+      mocks.emitPiEvent({ type: "compaction_start", reason: "manual" });
+      mocks.emitPiEvent({
+        type: "compaction_end",
+        reason: "manual",
+        aborted: false,
+        willRetry: false,
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ compact, isIdle: true }),
+    }));
+    const runtime = new PiSdkRuntime();
+    const observer = HarnessObserver.getInstance();
+
+    try {
+      await runtime.compact(createWindowStub(), sessionId);
+
+      expect(observer.snapshot().compaction.nativeCompactionsObserved).toBe(1);
+      expect(
+        observer
+          .getRecentEvents()
+          .filter((event) => event.type === "harness.compaction.native"),
+      ).toContainEqual(expect.objectContaining({ sessionId, runId: undefined }));
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 
   it("keeps both ResponsePolicy and Observer inactive when both flags are disabled", async () => {
@@ -9408,6 +9469,25 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       },
     };
     kernel.registerHook(interleaveHook);
+    const observedEvaluations: Array<{
+      sessionId: string;
+      evaluation: unknown;
+      observed: unknown;
+    }> = [];
+    kernel.registerHook({
+      name: "test-capture-response-policy-observation",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input, context) => {
+        observedEvaluations.push({
+          sessionId: context.sessionId,
+          evaluation: context.state.get("harness.response_policy_evaluation"),
+          observed: context.state.get("harness.response_policy_observed"),
+        });
+        return input;
+      },
+    });
 
     const contextFor = (sessionId: string, runId: string, response: string): HarnessContext => {
       const sessionToken = observer.beginSession(sessionId);
@@ -9442,6 +9522,20 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       ),
     );
 
+    expect(observedEvaluations).toEqual(
+      expect.arrayContaining([
+        {
+          sessionId: "policy-session-a",
+          evaluation: expect.objectContaining({ runId: "policy-run-a", violated: true }),
+          observed: true,
+        },
+        {
+          sessionId: "policy-session-b",
+          evaluation: expect.objectContaining({ runId: "policy-run-b", violated: false }),
+          observed: true,
+        },
+      ]),
+    );
     expect(observer.snapshot().response.violationsDetected).toBe(1);
     expect(observer.snapshot().response.evaluatedCount).toBe(2);
     expect(observer.getSessionMetrics("policy-session-a")?.policyViolations).toBe(1);

@@ -507,6 +507,7 @@ describe("Phase 4: Compaction com Pruning Inteligente", () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_COMPACTION_PRUNING: true,
+        MODUS_OBSERVABILITY: true,
       });
 
       const sessionId = "sess-ctx";
