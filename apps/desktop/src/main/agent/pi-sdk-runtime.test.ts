@@ -20,6 +20,7 @@ import type { AgentEvent, PlanRef } from "../../shared/contracts";
 
 let userData: string;
 let cwd: string;
+let fixtureRoot: string;
 const execFileAsync = promisify(execFile);
 
 const mocks = vi.hoisted(() => {
@@ -482,8 +483,11 @@ async function initGitRepoWithKnownEmptyScope(): Promise<void> {
 }
 
 beforeEach(async () => {
-  userData = await mkdtemp(join(tmpdir(), "modus-pi-runtime-test-"));
-  cwd = await mkdtemp(join(tmpdir(), "modus-pi-runtime-cwd-"));
+  fixtureRoot = await mkdtemp(join(tmpdir(), "modus-pi-runtime-test-"));
+  userData = join(fixtureRoot, "data");
+  cwd = join(fixtureRoot, "cwd");
+  await mkdir(userData, { recursive: true });
+  await mkdir(cwd, { recursive: true });
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
   vi.mocked(modelService.findModel)
@@ -516,8 +520,7 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await rm(userData, { recursive: true, force: true }).catch(() => undefined);
-  await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
+  await rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe("PiSdkRuntime", () => {

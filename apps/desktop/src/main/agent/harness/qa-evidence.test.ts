@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -155,7 +155,9 @@ describe("manifest read consistency", () => {
   it.skipIf(!process.getuid)(
     "observes sibling churn for a leaf directly inside the sticky temporary directory",
     async () => {
-      const cwd = await mkdtemp(join(tmpdir(), "modus-direct-leaf-churn-"));
+      const temporaryRoot = await mkdtemp(join(tmpdir(), "modus-direct-leaf-root-"));
+      chmodSync(temporaryRoot, 0o1777);
+      const cwd = await mkdtemp(join(temporaryRoot, "modus-direct-leaf-churn-"));
       let sibling: string | undefined;
       await writeFile(
         join(cwd, "package.json"),
@@ -164,7 +166,7 @@ describe("manifest read consistency", () => {
       const uid = 2 ** 31 - 1;
       const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(uid);
       manifestReadHook.statOwner = { path: realpathSync(cwd), uid };
-      const protectedParent = dirname(realpathSync(tmpdir()));
+      const protectedParent = dirname(realpathSync(temporaryRoot));
       manifestReadHook.beforeAccess = (path) => {
         if (path === protectedParent) {
           const error = new Error(
@@ -177,7 +179,7 @@ describe("manifest read consistency", () => {
       try {
         const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(before?.checkName).toBe("tests");
-        sibling = await mkdtemp(join(tmpdir(), "modus-direct-leaf-sibling-"));
+        sibling = await mkdtemp(join(temporaryRoot, "modus-direct-leaf-sibling-"));
         const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(after?.checkName).toBe("tests");
         expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
@@ -186,12 +188,12 @@ describe("manifest read consistency", () => {
         manifestReadHook.statOwner = undefined;
         uidSpy.mockRestore();
         if (sibling) await rm(sibling, { recursive: true, force: true });
-        await rm(cwd, { recursive: true, force: true });
+        await rm(temporaryRoot, { recursive: true, force: true });
       }
     },
   );
   it.skipIf(!process.getuid)(
-    "fails closed on global temporary churn when running as root",
+    "fails closed on temporary ancestor churn when running as root",
     async () => {
       const sandbox = await mkdtemp(join(tmpdir(), "modus-root-ancestor-"));
       const cwd = join(sandbox, "container", "project");
@@ -205,7 +207,7 @@ describe("manifest read consistency", () => {
       try {
         const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(before?.checkName).toBe("tests");
-        sibling = await mkdtemp(join(tmpdir(), "modus-root-sibling-"));
+        sibling = await mkdtemp(join(sandbox, "modus-root-sibling-"));
         const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(after?.checkName).toBe("tests");
         expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
