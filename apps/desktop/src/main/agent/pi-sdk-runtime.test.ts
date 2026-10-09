@@ -266,8 +266,8 @@ async function useOfflinePiToolSessions() {
   const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
   const deliveredMessages: Array<{ session: AgentSession; messages: Context["messages"] }> = [];
   let requestedTool: string | undefined;
-  let requestedToolInput: unknown = {};
-  let scriptedToolCalls: Array<{ name: string; input: unknown }> | undefined;
+  let requestedToolInput: Record<string, unknown> = {};
+  let scriptedToolCalls: Array<{ name: string; input: Record<string, unknown> }> | undefined;
   let scriptedToolCallIndex = 0;
   mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
   mocks.settingsManagerInMemory.mockImplementation((settings) =>
@@ -358,13 +358,13 @@ async function useOfflinePiToolSessions() {
       deliveredMessages
         .filter((entry) => entry.session === session)
         .flatMap((entry) => entry.messages),
-    requestTool: (name: string, input: unknown = {}) => {
+    requestTool: (name: string, input: Record<string, unknown> = {}) => {
       requestedTool = name;
       requestedToolInput = input;
       scriptedToolCalls = undefined;
       scriptedToolCallIndex = 0;
     },
-    requestToolSequence: (calls: Array<{ name: string; input: unknown }>) => {
+    requestToolSequence: (calls: Array<{ name: string; input: Record<string, unknown> }>) => {
       requestedTool = undefined;
       requestedToolInput = {};
       scriptedToolCalls = calls;

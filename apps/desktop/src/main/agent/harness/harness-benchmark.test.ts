@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it } from "vitest";
+import { migrateDatabase } from "../../db/database";
 import { CompactionCoordinator } from "./compaction/compaction-coordinator";
 import type { MessageLike } from "./compaction/compaction-pruner";
 import type { PreservedEvidence } from "./compaction/evidence-preservation";
@@ -15,6 +17,36 @@ import { ResponseFormatter } from "./response/response-formatter";
 import { ResponsePolicyRegistry } from "./response/response-registry";
 import { ToolResultStorage } from "./tools/tool-result-storage";
 import { interceptToolResult } from "./tools/tool-spill-interceptor";
+
+function createSpillTestStorage(scope: {
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+}): { database: DatabaseSync; storage: ToolResultStorage } {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  migrateDatabase(database);
+  const now = new Date().toISOString();
+  database
+    .prepare(
+      `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+       values (?, ?, 'spill test', 0, ?, ?)`,
+    )
+    .run(scope.workspaceId, `/spill-test/${scope.workspaceId}`, now, now);
+  database
+    .prepare(
+      `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+       values (?, ?, 'spill test', '/spill-test', 'running', ?, ?)`,
+    )
+    .run(scope.sessionId, scope.workspaceId, now, now);
+  database
+    .prepare(
+      `insert into agent_runs (id, session_id, prompt, status, started_at)
+       values (?, ?, ?, ?, ?)`,
+    )
+    .run(scope.runId, scope.sessionId, "spill test", "running", now);
+  return { database, storage: new ToolResultStorage({ database }) };
+}
 
 describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction", () => {
   beforeEach(() => {
@@ -69,20 +101,30 @@ describe("Phase 10 — DeepSeek Harness Performance Benchmarks & Token Reduction
       "\nBuild finished in 4.2s.";
     const rawEstimatedTokens = Math.ceil(rawOutput.length / 4);
 
-    const intercept = interceptToolResult({
+    const scope = {
       sessionId: "bench-spill-session",
       runId: "bench-spill-run",
-      toolName: "bash",
-      output: rawOutput,
-    });
-    expect(intercept.spilled).toBe(true);
+      workspaceId: "bench-spill-workspace",
+    };
+    const { database, storage } = createSpillTestStorage(scope);
+    try {
+      const intercept = interceptToolResult({
+        ...scope,
+        toolName: "bash",
+        output: rawOutput,
+        storage,
+      });
+      expect(intercept.spilled).toBe(true);
 
-    const spilledEstimatedTokens = Math.ceil(intercept.effectiveContent.length / 4);
-    const tokenReductionPercent =
-      ((rawEstimatedTokens - spilledEstimatedTokens) / rawEstimatedTokens) * 100;
+      const spilledEstimatedTokens = Math.ceil(intercept.effectiveContent.length / 4);
+      const tokenReductionPercent =
+        ((rawEstimatedTokens - spilledEstimatedTokens) / rawEstimatedTokens) * 100;
 
-    // Expected token reduction: > 85%
-    expect(tokenReductionPercent).toBeGreaterThanOrEqual(85);
+      // Expected token reduction: > 85%
+      expect(tokenReductionPercent).toBeGreaterThanOrEqual(85);
+    } finally {
+      database.close();
+    }
   });
 
   it("10.3 Benchmark: Compaction Pruning saves >= 50% ephemeral tokens before LLM summarization", () => {

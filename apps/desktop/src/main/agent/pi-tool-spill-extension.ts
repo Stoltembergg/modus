@@ -1,4 +1,4 @@
-import type { ToolResultEvent, ToolResultEventResult } from "@earendil-works/pi-coding-agent";
+import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { isFeatureFlagEnabled } from "./harness/feature-flags";
 import type {
   SpillAuthorizationContext,
@@ -6,10 +6,16 @@ import type {
 } from "./harness/tools/tool-result-storage";
 import { interceptToolResult } from "./harness/tools/tool-spill-interceptor";
 
+export interface ToolResultSpillEventResult {
+  content?: ToolResultEvent["content"];
+  details?: unknown;
+  isError?: boolean;
+}
+
 export type ToolResultSpillHandler = (
   event: ToolResultEvent,
   signal: AbortSignal | undefined,
-) => Promise<ToolResultEventResult | undefined>;
+) => Promise<ToolResultSpillEventResult | undefined>;
 
 /**
  * Builds the post-Repeat-Guard middleware used by the existing Pi permission

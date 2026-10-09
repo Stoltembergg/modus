@@ -70,7 +70,7 @@ export function interceptToolResult(input: ToolSpillInterceptInput): ToolSpillIn
       toolName: input.toolName,
       content: input.output,
       spillReason: evaluation.reason ?? "byte_limit_exceeded",
-      isError: input.isError,
+      ...(input.isError === undefined ? {} : { isError: input.isError }),
     });
   } catch (error) {
     return {

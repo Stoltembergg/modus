@@ -1,4 +1,6 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { migrateDatabase } from "../../db/database";
 import { CompactionCoordinator } from "./compaction/compaction-coordinator";
 import type { MessageLike } from "./compaction/compaction-pruner";
 import type { PreservedEvidence } from "./compaction/evidence-preservation";
@@ -22,6 +24,36 @@ import { SubagentProviderRegistry } from "./subagents/subagent-provider-registry
 import { handleRetrieveSpilledToolResult } from "./tools/retrieve-spill-tool";
 import { ToolResultStorage } from "./tools/tool-result-storage";
 import { interceptToolResult } from "./tools/tool-spill-interceptor";
+
+function createSpillTestStorage(scope: {
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+}): { database: DatabaseSync; storage: ToolResultStorage } {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  migrateDatabase(database);
+  const now = new Date().toISOString();
+  database
+    .prepare(
+      `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+       values (?, ?, 'spill test', 0, ?, ?)`,
+    )
+    .run(scope.workspaceId, `/spill-test/${scope.workspaceId}`, now, now);
+  database
+    .prepare(
+      `insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+       values (?, ?, 'spill test', '/spill-test', 'running', ?, ?)`,
+    )
+    .run(scope.sessionId, scope.workspaceId, now, now);
+  database
+    .prepare(
+      `insert into agent_runs (id, session_id, prompt, status, started_at)
+       values (?, ?, ?, ?, ?)`,
+    )
+    .run(scope.runId, scope.sessionId, "spill test", "running", now);
+  return { database, storage: new ToolResultStorage({ database }) };
+}
 
 describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", () => {
   let kernel: HarnessKernel;
@@ -178,22 +210,36 @@ describe("Phase 10 — DeepSeek-Inspired Harness End-to-End Integration Suite", 
   it("10.3 E2E Tool Result Spill & Retrieval: spills large output and provides transparent retrieval", async () => {
     const largeBashOutput =
       "Test run starting...\n" + "A".repeat(30 * 1024) + "\nTests complete: 15 passed.";
-    const interceptResult = interceptToolResult({
+    const scope = {
       sessionId: "session-tool-e2e",
       runId: "run-tool-e2e",
-      toolName: "bash",
-      output: largeBashOutput,
-    });
+      workspaceId: "workspace-tool-e2e",
+    };
+    const { database, storage } = createSpillTestStorage(scope);
+    try {
+      const interceptResult = interceptToolResult({
+        ...scope,
+        toolName: "bash",
+        output: largeBashOutput,
+        storage,
+      });
 
-    expect(interceptResult.spilled).toBe(true);
-    expect(interceptResult.spillId).toBeDefined();
-    expect(interceptResult.effectiveContent).toContain("[Large output spilled:");
-    expect(interceptResult.effectiveContent).toContain("retrieve_spilled_tool_result");
+      expect(interceptResult.spilled).toBe(true);
+      expect(interceptResult.spillId).toBeDefined();
+      expect(interceptResult.effectiveContent).toContain("[Large output spilled:");
+      expect(interceptResult.effectiveContent).toContain("retrieve_spilled_tool_result");
 
-    // Retrieve spilled content via tool
-    const retrieval = handleRetrieveSpilledToolResult({ spillId: interceptResult.spillId! });
-    expect(retrieval.success).toBe(true);
-    expect(retrieval.content).toBe(largeBashOutput);
+      // Retrieve a bounded chunk through the same authorized session, run, and workspace.
+      const retrieval = handleRetrieveSpilledToolResult(
+        { spillId: interceptResult.spillId!, maxBytes: 32768 },
+        scope,
+        storage,
+      );
+      expect(retrieval.success).toBe(true);
+      expect(retrieval.content).toBe(largeBashOutput);
+    } finally {
+      database.close();
+    }
   });
 
   it("10.4 E2E Compaction & Intelligent Pruning: restores headroom and preserves QA evidence", () => {
