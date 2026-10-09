@@ -105,8 +105,7 @@ export class BaselineComparator {
     if (compactionReduction !== null) {
       p4Verdict = "GO";
       if (compactionReduction < 10 && metrics.compaction.pruningEvents > 0) p4Verdict = "NO-GO";
-      else if (compactionReduction < 20 && metrics.compaction.pruningEvents > 0)
-        p4Verdict = "WARN";
+      else if (compactionReduction < 20 && metrics.compaction.pruningEvents > 0) p4Verdict = "WARN";
     }
 
     phaseDecisions.push({
@@ -114,8 +113,7 @@ export class BaselineComparator {
       name: "Compaction Intelligent Pruning",
       verdict: p4Verdict,
       target: "> 20% reduction",
-      achieved:
-        compactionReduction === null ? "unavailable" : `${compactionReduction}% reduction`,
+      achieved: compactionReduction === null ? "unavailable" : `${compactionReduction}% reduction`,
       notes: `${metrics.compaction.totalPrunedBytes} bytes pruned; ${metrics.compaction.nativeCompactionsObserved} native compactions observed. Avoided compactions cannot be inferred.`,
     });
 
@@ -134,7 +132,8 @@ export class BaselineComparator {
       name: "Repeat Guards & Circuit Breakers",
       verdict: p5Verdict,
       target: "< 5% false positive rate",
-      achieved: fpRate === null ? "unavailable" : `${fpRate.toFixed(1)}% (${fpCount}/${totalBlocks})`,
+      achieved:
+        fpRate === null ? "unavailable" : `${fpRate.toFixed(1)}% (${fpCount}/${totalBlocks})`,
       notes: `${totalBlocks} blocked loops across ${metrics.repeatGuards.evaluatedToolCalls} evaluated tool calls; false-positive adjudication and circuit-breaker trips are unavailable.`,
     });
 

@@ -11,9 +11,9 @@ import type {
   SystemHealthStatus,
   TelemetryEvent,
   TelemetryEventType,
+  ToolResultsMetrics,
   TurnMetrics,
   TurnOutcome,
-  ToolResultsMetrics,
 } from "./harness-metrics";
 
 function emptyOutcomeCounts(): Record<TurnOutcome, number> {
@@ -610,8 +610,7 @@ export class HarnessObserver {
         : 0;
 
     const performance: PerformanceMetrics = {
-      sampledHookDurationTotalMs:
-        sampledHookExecutionCount > 0 ? sampledHookDurationTotalMs : null,
+      sampledHookDurationTotalMs: sampledHookExecutionCount > 0 ? sampledHookDurationTotalMs : null,
       memoryGrowthPercent: memoryGrowth,
       sampledHookExecutionCount,
       averageHookDurationMs:

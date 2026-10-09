@@ -69,11 +69,7 @@ export class MetricsExporter {
   static exportSummaryCSV(metrics: HarnessMetrics): string {
     const rows = [
       ["Category", "Metric", "Value"],
-      [
-        "turns",
-        "completed",
-        metrics.turns.completed,
-      ],
+      ["turns", "completed", metrics.turns.completed],
       ["turns", "failed", metrics.turns.failed],
       ["turns", "blocked", metrics.turns.blocked],
       ["turns", "cancelled", metrics.turns.cancelled],

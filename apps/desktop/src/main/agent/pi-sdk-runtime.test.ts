@@ -9134,11 +9134,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
     const runtime = new PiSdkRuntime();
     const sessionId = `observer-recreated-${crypto.randomUUID()}`;
-    insertSession(
-      sessionId,
-      `workspace-${crypto.randomUUID()}`,
-      join(userData, "missing.jsonl"),
-    );
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
 
     try {
       await createOfflinePiToolSessions({ assistantText: "First turn." });
