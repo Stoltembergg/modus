@@ -457,6 +457,29 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_harness_promotions_workspace_status
       on harness_promotions(workspace_id, status, updated_at desc);
 
+    create table if not exists security_audit_state (
+      singleton integer primary key check (singleton = 1),
+      anchor_hash text not null,
+      latest_hash text not null,
+      next_sequence integer not null check (next_sequence >= 1)
+    );
+    insert or ignore into security_audit_state
+      (singleton, anchor_hash, latest_hash, next_sequence)
+      values (1, '0000000000000000000000000000000000000000000000000000000000000000',
+                 '0000000000000000000000000000000000000000000000000000000000000000', 1);
+    create table if not exists security_audit_events (
+      sequence integer primary key,
+      id text not null unique,
+      timestamp integer not null,
+      plugin_id text not null,
+      action text not null,
+      resource text not null,
+      decision text not null check (decision in ('allow','deny')),
+      reason text not null,
+      hash text not null,
+      previous_hash text not null
+    );
+
     create table if not exists harness_group_messages (
       id text primary key,
       group_id text not null,

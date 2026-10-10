@@ -22,10 +22,6 @@ export class PluginIsolationHost {
     this.audit = options.auditLogger ?? SecurityAuditLogger.getInstance();
   }
 
-  public getAuditLogger(): SecurityAuditLogger {
-    return this.audit;
-  }
-
   /**
    * This facade deliberately does not execute JavaScript. Trust labels and permission
    * declarations are data, not proof that a callback is host-owned or isolated.

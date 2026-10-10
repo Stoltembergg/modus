@@ -3,7 +3,8 @@
  * Comprehensive test suite for Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs).
  */
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CapabilityRegistry } from "../../capability/capability-registry";
 import {
   isFeatureFlagEnabled,
@@ -37,10 +38,19 @@ import {
 
 describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   let wasmHost: WasmCapabilityHost;
+  let auditDatabase: DatabaseSync;
 
   beforeEach(() => {
     wasmHost = new WasmCapabilityHost();
     resetFeatureFlagsOverride();
+    SecurityAuditLogger.resetInstance();
+    auditDatabase = new DatabaseSync(":memory:");
+    SecurityAuditLogger.getInstance({ database: auditDatabase });
+  });
+
+  afterEach(() => {
+    SecurityAuditLogger.resetInstance();
+    auditDatabase.close();
   });
 
   describe("19.1 — Compilation, Module Inspection & Caching", () => {
@@ -454,7 +464,6 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   describe("19.7 — PluginIsolationHost & Feature Flags Integration", () => {
     it("blocks WASM through PluginIsolationHost until OS-backed isolation exists", async () => {
       const audit = SecurityAuditLogger.getInstance();
-      audit.clear();
 
       const host = new PluginIsolationHost({ auditLogger: audit });
       const bytes = buildAddModule();

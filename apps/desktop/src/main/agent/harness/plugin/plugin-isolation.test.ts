@@ -1,6 +1,7 @@
 import fs, { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import {
@@ -15,14 +16,19 @@ import { type ExtendedPluginPermissions, PermissionDeniedError } from "./plugin-
 import { SecurityAuditLogger } from "./security-audit-logger";
 
 describe("Fase 13 — Plugin Isolation & Security", () => {
+  let auditDatabase: DatabaseSync;
+
   beforeEach(() => {
     resetFeatureFlagOverrides();
     SecurityAuditLogger.resetInstance();
+    auditDatabase = new DatabaseSync(":memory:");
+    SecurityAuditLogger.getInstance({ database: auditDatabase });
   });
 
   afterEach(() => {
     resetFeatureFlagOverrides();
     SecurityAuditLogger.resetInstance();
+    auditDatabase.close();
   });
 
   describe("13.1 — Cryptographic Security Audit Logger", () => {
@@ -53,7 +59,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(verification.valid).toBe(true);
     });
 
-    it("detects tampering when an audit entry hash or payload is modified", () => {
+    it("does not expose mutable audit entries to callers", () => {
       const logger = SecurityAuditLogger.getInstance();
 
       logger.log({
@@ -70,15 +76,18 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         decision: "deny",
       });
 
-      // Tamper with an entry in memory to simulate malicious modification
+      // Public reads are snapshots; callers cannot mutate the stored evidence.
       const entries = logger.getEntries();
-      const firstEntry = entries[0]!;
-      firstEntry.resource = "cat /etc/shadow";
+      const firstEntry = entries[0];
+      expect(firstEntry).toBeDefined();
+      if (!firstEntry) throw new Error("Expected a retained audit entry.");
+      expect(() => {
+        firstEntry.resource = "modified synthetic resource";
+      }).toThrow();
 
-      // Chain verification must fail
       const verification = logger.verifyChain();
-      expect(verification.valid).toBe(false);
-      expect(verification.reason).toContain("Tampering detected");
+      expect(verification.valid).toBe(true);
+      expect(logger.getEntries()[0]?.resource).toBe("ls");
     });
 
     it("filters audit entries by action, decision, or pluginId", () => {
@@ -91,6 +100,157 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(logger.getEntries({ pluginId: "p1" }).length).toBe(2);
       expect(logger.getEntries({ decision: "deny" }).length).toBe(1);
       expect(logger.getEntries({ action: "network.connect" }).length).toBe(1);
+    });
+
+    it("restores the audit chain from SQLite after logger recreation", () => {
+      const logger = SecurityAuditLogger.getInstance();
+      const entry = logger.log({
+        pluginId: "@modus/restart-fixture",
+        action: "capability.deny",
+        resource: "synthetic-capability",
+        decision: "deny",
+        timestamp: 10,
+      });
+
+      SecurityAuditLogger.resetInstance();
+      const restored = SecurityAuditLogger.getInstance({ database: auditDatabase });
+
+      expect(restored.getEntries()).toEqual([entry]);
+      expect(restored.verifyChain()).toEqual({ valid: true });
+    });
+
+    it("bounds retained rows and verifies the chain from its durable checkpoint", () => {
+      const logger = new SecurityAuditLogger({ database: auditDatabase, maxEntries: 2 });
+      for (let index = 0; index < 3; index++) {
+        logger.log({
+          pluginId: "@modus/bounded-fixture",
+          action: "capability.deny",
+          resource: `synthetic-${index}`,
+          decision: "deny",
+          timestamp: index + 1,
+        });
+      }
+
+      expect(logger.getEntries().map((entry) => entry.resource)).toEqual([
+        "synthetic-1",
+        "synthetic-2",
+      ]);
+      expect(
+        (
+          auditDatabase.prepare("select count(*) as count from security_audit_events").get() as {
+            count: number;
+          }
+        ).count,
+      ).toBe(2);
+      expect(logger.verifyChain()).toEqual({ valid: true });
+
+      const restored = new SecurityAuditLogger({ database: auditDatabase, maxEntries: 2 });
+      expect(restored.getEntries().map((entry) => entry.resource)).toEqual([
+        "synthetic-1",
+        "synthetic-2",
+      ]);
+      expect(restored.verifyChain()).toEqual({ valid: true });
+    });
+
+    it("refuses to claim a security decision when durable append fails", () => {
+      const database = new DatabaseSync(":memory:");
+      const logger = new SecurityAuditLogger({ database });
+      database.close();
+
+      expect(() =>
+        logger.log({
+          pluginId: "@modus/persistence-fixture",
+          action: "capability.deny",
+          resource: "synthetic-capability",
+          decision: "deny",
+        }),
+      ).toThrow();
+      expect(logger.getEntries()).toEqual([]);
+    });
+
+    it("rejects an oversized audit record before persisting it", () => {
+      const logger = SecurityAuditLogger.getInstance();
+
+      expect(() =>
+        logger.log({
+          pluginId: "@modus/bounds-fixture",
+          action: "capability.deny",
+          resource: "x".repeat(9_000),
+          decision: "deny",
+        }),
+      ).toThrow("Security audit entry exceeds supported bounds");
+      expect(logger.getEntries()).toEqual([]);
+    });
+
+    it("detects a persisted payload change and refuses later appends", () => {
+      const directory = mkdtempSync(join(tmpdir(), "modus-audit-tamper-"));
+      const databasePath = join(directory, "audit.sqlite");
+      const database = new DatabaseSync(databasePath);
+      const logger = new SecurityAuditLogger({ database });
+      try {
+        logger.log({
+          pluginId: "@modus/tamper-fixture",
+          action: "capability.deny",
+          resource: "original synthetic resource",
+          decision: "deny",
+        });
+        const tamperDatabase = new DatabaseSync(databasePath);
+        try {
+          tamperDatabase
+            .prepare("update security_audit_events set resource = ? where sequence = 1")
+            .run("changed synthetic resource");
+        } finally {
+          tamperDatabase.close();
+        }
+
+        expect(() =>
+          logger.log({
+            pluginId: "@modus/tamper-fixture",
+            action: "capability.deny",
+            resource: "later synthetic resource",
+            decision: "deny",
+          }),
+        ).toThrow("Security audit chain is unavailable");
+        expect(logger.verifyChain().valid).toBe(false);
+      } finally {
+        database.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
+    });
+
+    it("detects a persisted record ID change before a later append", () => {
+      const directory = mkdtempSync(join(tmpdir(), "modus-audit-id-tamper-"));
+      const databasePath = join(directory, "audit.sqlite");
+      const database = new DatabaseSync(databasePath);
+      const logger = new SecurityAuditLogger({ database });
+      try {
+        logger.log({
+          pluginId: "@modus/id-tamper-fixture",
+          action: "capability.deny",
+          resource: "synthetic-resource",
+          decision: "deny",
+        });
+        const tamperDatabase = new DatabaseSync(databasePath);
+        try {
+          tamperDatabase
+            .prepare("update security_audit_events set id = ? where sequence = 1")
+            .run("synthetic-replaced-id");
+        } finally {
+          tamperDatabase.close();
+        }
+
+        expect(() =>
+          logger.log({
+            pluginId: "@modus/id-tamper-fixture",
+            action: "capability.deny",
+            resource: "later synthetic resource",
+            decision: "deny",
+          }),
+        ).toThrow("Security audit chain is unavailable");
+      } finally {
+        database.close();
+        rmSync(directory, { recursive: true, force: true });
+      }
     });
   });
 
@@ -462,7 +622,9 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(response.latencyMs).toBeGreaterThanOrEqual(0);
       expect(implementationCalled).toBe(false);
 
-      const auditEntries = host.getAuditLogger().getEntries({ pluginId: "@community/text-helper" });
+      const auditEntries = SecurityAuditLogger.getInstance().getEntries({
+        pluginId: "@community/text-helper",
+      });
       expect(auditEntries).toHaveLength(1);
       expect(auditEntries[0]?.decision).toBe("deny");
     });
@@ -485,7 +647,9 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(response.error).toContain("OS-backed plugin isolation is unavailable");
       expect(implementationCalled).toBe(false);
 
-      const auditEntries = host.getAuditLogger().getEntries({ pluginId: "@community/flaky" });
+      const auditEntries = SecurityAuditLogger.getInstance().getEntries({
+        pluginId: "@community/flaky",
+      });
       expect(auditEntries.length).toBe(1);
       expect(auditEntries[0]?.decision).toBe("deny");
     });
@@ -520,7 +684,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(response.success).toBe(false);
       expect(response.error).toContain("OS-backed plugin isolation is unavailable");
       expect(
-        host.getAuditLogger().getEntries({ pluginId: "@community/wasm-helper" }),
+        SecurityAuditLogger.getInstance().getEntries({ pluginId: "@community/wasm-helper" }),
       ).toMatchObject([{ action: "wasm.execute.unused", decision: "deny" }]);
     });
   });
@@ -553,7 +717,41 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
 
       const runtime = new PiSdkRuntime();
       expect(runtime.getPluginIsolationHost()).toBeDefined();
-      expect(runtime.getSecurityAuditLogger()).toBeDefined();
+    });
+
+    it("persists a productive runtime denial through the shared audit logger", async () => {
+      setFeatureFlagOverrides({
+        MODUS_USE_KERNEL: true,
+        MODUS_CAPABILITY_REGISTRY: true,
+        MODUS_PLUGINS: true,
+        MODUS_PLUGIN_ISOLATION: true,
+      });
+      const runtime = new PiSdkRuntime();
+      const host = runtime.getPluginIsolationHost();
+      const implementation = vi.fn(() => "must not execute");
+      if (!host) throw new Error("Expected the feature-flagged denial facade.");
+
+      const result = await host.executeIsolated({
+        pluginId: "@external/synthetic-audit-fixture",
+        capability: "audit.synthetic",
+        context: {},
+        implementation,
+      });
+
+      expect(result.success).toBe(false);
+      expect(implementation).not.toHaveBeenCalled();
+      expect(SecurityAuditLogger.getInstance().getEntries()).toMatchObject([
+        {
+          pluginId: "@external/synthetic-audit-fixture",
+          action: "capability.execute.audit.synthetic",
+          decision: "deny",
+        },
+      ]);
+
+      SecurityAuditLogger.resetInstance();
+      const restored = SecurityAuditLogger.getInstance({ database: auditDatabase });
+      expect(restored.verifyChain()).toEqual({ valid: true });
+      expect(restored.getEntries()).toHaveLength(1);
     });
   });
 

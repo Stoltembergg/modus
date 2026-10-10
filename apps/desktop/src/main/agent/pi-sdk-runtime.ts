@@ -985,7 +985,7 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")) {
-      this.securityAuditLogger = new SecurityAuditLogger();
+      this.securityAuditLogger = SecurityAuditLogger.getInstance();
       this.pluginIsolationHost = new PluginIsolationHost({ auditLogger: this.securityAuditLogger });
     }
 
@@ -1177,10 +1177,6 @@ export class PiSdkRuntime implements AgentRuntime {
 
   getPluginIsolationHost(): PluginIsolationHost | undefined {
     return this.pluginIsolationHost;
-  }
-
-  getSecurityAuditLogger(): SecurityAuditLogger | undefined {
-    return this.securityAuditLogger;
   }
 
   getPluginVersionManager(): PluginVersionManager {

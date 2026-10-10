@@ -379,13 +379,14 @@ counting cancellation as a plugin failure.
   app cancellation path, and non-cooperative timeout limitation. The first two
   were fixed with RED/GREEN regressions; a second pass found no remaining
   concrete blocker. The reviewer confirmed that non-cooperative in-process
-  callbacks remain a limitation, as documented above. CI run `38021481027` on
-  `881b974` passed `verifier-first runtime regressions`, plugin containment on
-  Linux/macOS/Windows, sandbox compile-only, and the main typecheck/Biome/Test
-  job. The Supabase SQL job failed test 22 in
-  `17_free_monthly_renewal.test.sql` (expected 2026-10-31, got 2026-10-30); the
-  same failure appeared in CI at `ed00347` and remains unresolved. The follow-up
-  registry-signal patch requires its own remote CI run.
+  callbacks remain a limitation, as documented above. A separate read-only
+  review of the registry signal follow-up found no blocker. CI run `38021481027`
+  on `881b974` and run `38021720040` on `6f59b7e` passed
+  `verifier-first runtime regressions`, plugin containment on Linux/macOS/Windows,
+  sandbox compile-only, and the main typecheck/Biome/Test job. The Supabase SQL
+  job failed test 22 in `17_free_monthly_renewal.test.sql` (expected 2026-10-31,
+  got 2026-10-30); the same failure appeared at `ed00347` and remains unresolved.
+  Windows and macOS packaging for `6f59b7e` are still running.
 
 ### Limits
 
@@ -397,6 +398,69 @@ enforcement test was run. Terminal-host termination is an asynchronous kill
 request, and OS-level process-tree cleanup is only directly exercised for the
 benign app process fixture. A15 therefore remains **partially mitigated**, not
 a proof of hard preemption or a general containment boundary.
+
+## Milestone 6 — A20 durable security audit records
+
+**Status: bounded durable chain implemented; protection from a process with
+direct access to the application database remains unproven.**
+
+The root cause was that `SecurityAuditLogger` kept the chain only in a mutable
+array. `getEntries()` returned references into that array, `clear()` erased the
+chain, and runtime initialization constructed a separate logger instance rather
+than reusing one durable host-owned service.
+
+The logger now persists its ordered events and chain checkpoint in the
+application's existing SQLite database. Restart hydrates the retained entries
+and verifies the links, payload hashes, sequence numbers, and checkpoint. The
+retained chain is bounded to at most 10,000 entries, each serialized input is
+limited to 8 KiB, and old rows are pruned transactionally while their last hash
+becomes the next retained chain's checkpoint. Append failures throw and do not
+produce an in-memory success record. Returned entries are frozen snapshots;
+the public `clear()` operation was removed. `PiSdkRuntime` now uses the existing
+singleton logger when the isolation feature is enabled.
+
+### Evidence
+
+- RED/GREEN: the snapshot regression initially mutated a returned record and
+  `verifyChain()` then failed. It now rejects mutation, preserves the original
+  resource, and leaves the chain valid.
+- SQLite fixtures verify restart hydration, bounded retention and checkpoint
+  verification, no success when persistence is unavailable, rejection of
+  oversize records, and detection of a persisted payload change followed by
+  refusal to append. A separate RED/GREEN fixture changed a persisted event ID;
+  IDs and sequence numbers are now included in each hash. Tamper fixtures use a
+  temporary SQLite file and a second connection. The logger detects
+  other-connection commits with `PRAGMA data_version` and verifies the chain
+  before append; explicit verification reads a consistent SQLite snapshot. No
+  plugin or enforcement scenario ran.
+- A runtime integration fixture enables the existing isolation flag, invokes
+  the production denial facade with a synthetic callback, confirms the callback
+  is not called, then reconstructs the singleton and verifies its persisted
+  record. This proves wiring through `PiSdkRuntime` without executing plugin
+  code.
+- Targeted Vitest: `plugin-isolation.test.ts` audit and runtime cases **10
+  passed** (35 filtered); denied WASM facade audit integration **1 passed**
+  (30 filtered).
+- Desktop TypeScript typecheck: passed, exit 0. Targeted Biome check: exit 0
+  with **4 warnings and 5 infos** in the selected files; all reported
+  locations are outside the A20 hunks. No rules were disabled and no broad
+  formatting ran. `git diff --check`: passed.
+- Independent review caught reprocessing the retained chain on every append and
+  missing record IDs in the hash; the implementation was bounded with SQLite
+  `data_version`, the ID regression went RED/GREEN, and final follow-up found no
+  remaining blocker. Remote CI remains pending publication.
+
+### Limits
+
+The logger verifies the persisted chain on startup and explicit verification;
+before append it rechecks the chain when `PRAGMA data_version` shows a commit
+from another SQLite connection. A direct writer using the logger's own
+connection can bypass that version signal, and the hash chain is not a
+signature or separate trust anchor: a process with write access to both the
+SQLite events and checkpoint can rewrite them consistently. The current
+isolation facade still denies untrusted plugin execution, and this patch does
+not claim tamper resistance against host-process compromise or establish an OS
+boundary.
 
 ## Current matrix
 
@@ -421,7 +485,7 @@ a proof of hard preemption or a general containment boundary.
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Pending | Group mailbox replay/ack consistency; keep distinct from the active group runtime. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
-| A20 | Pending | Audit record integrity, bounds, and durability. |
+| A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Pending | Bounded event-history reads. |
 | A23 | Pending | Synthetic built-in plugin services and their production claims. |
