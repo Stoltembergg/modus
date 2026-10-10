@@ -1490,81 +1490,75 @@ describe("PiSdkRuntime", () => {
   });
 
   it("keeps plugin code unloaded when persistent lifecycle state cannot be opened", async () => {
-    const memoryEntry = (
-      await import("./harness/plugin/plugin-catalog")
-    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
-    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
-    const lifecycle = memoryEntry.manifest.lifecycle;
-    const originalOnLoad = lifecycle?.onLoad;
-    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
-    const onLoad = vi.fn(originalOnLoad);
-    lifecycle.onLoad = onLoad;
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: true,
       MODUS_PLUGIN_LIFECYCLE: true,
     });
-    await rm(userData, { recursive: true, force: true });
-    await writeFile(userData, "not a directory");
 
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
     try {
-      const runtime = new PiSdkRuntime();
+      await rm(userData, { recursive: true, force: true });
+      await writeFile(userData, "not a directory");
+      runtime = new PiSdkRuntime();
       await runtime.waitForPlugins();
 
-      expect(onLoad).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
     } finally {
-      lifecycle.onLoad = originalOnLoad;
-      await rm(userData, { recursive: true, force: true });
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+        await rm(userData, { recursive: true, force: true });
+      }
     }
   });
 
   it("does not use legacy plugin activation when lifecycle reconciliation is disabled", async () => {
-    const memoryEntry = (
-      await import("./harness/plugin/plugin-catalog")
-    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
-    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
-    const lifecycle = memoryEntry.manifest.lifecycle;
-    const originalOnLoad = lifecycle?.onLoad;
-    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
-    const onLoad = vi.fn(originalOnLoad);
-    lifecycle.onLoad = onLoad;
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: true,
       MODUS_PLUGIN_LIFECYCLE: false,
     });
 
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
     try {
-      const runtime = new PiSdkRuntime();
+      runtime = new PiSdkRuntime();
       await runtime.waitForPlugins();
-      expect(onLoad).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
     } finally {
-      lifecycle.onLoad = originalOnLoad;
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+      }
     }
   });
 
   it("does not let lifecycle startup activate plugins when MODUS_PLUGINS is disabled", async () => {
-    const memoryEntry = (
-      await import("./harness/plugin/plugin-catalog")
-    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
-    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
-    const lifecycle = memoryEntry.manifest.lifecycle;
-    const originalOnLoad = lifecycle?.onLoad;
-    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
-    const onLoad = vi.fn(originalOnLoad);
-    lifecycle.onLoad = onLoad;
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: false,
       MODUS_PLUGIN_LIFECYCLE: true,
     });
 
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
     try {
-      const runtime = new PiSdkRuntime();
+      runtime = new PiSdkRuntime();
       await runtime.waitForPlugins();
-      expect(onLoad).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
     } finally {
-      lifecycle.onLoad = originalOnLoad;
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+      }
     }
   });
 

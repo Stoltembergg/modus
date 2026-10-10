@@ -532,16 +532,11 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       );
       if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
       const manifest = memoryEntry.manifest;
-      const lifecycle = manifest.lifecycle;
-      const originalOnLoad = lifecycle?.onLoad;
-      if (!lifecycle || !originalOnLoad)
-        throw new Error("Built-in memory plugin has no onLoad hook");
-      const onLoad = vi.fn(originalOnLoad);
-      lifecycle.onLoad = onLoad;
       const bootstrapRegistry = new CapabilityRegistry();
       const bootstrapResult = await bootstrapModusPlugins(bootstrapRegistry, undefined, {
         deferActivation: true,
       });
+      const load = vi.spyOn(bootstrapResult.loader, "load");
       const memoryProvision = manifest.provides[0];
       if (!memoryProvision) throw new Error("Built-in memory plugin has no capability provision");
       const pluginImplementation = memoryProvision.implementation?.execute;
@@ -563,7 +558,6 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         disabledPlugins: [manifest.id],
       });
       expect(bootstrapResult.loader.getPlugin(manifest.id)).toBeUndefined();
-      expect(onLoad).not.toHaveBeenCalled();
 
       const restartedService = new PluginLifecycleService(
         store,
@@ -574,17 +568,19 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         await restartedService.syncOnStartup();
 
         expect(bootstrapResult.loader.getPlugin(manifest.id)).toBeUndefined();
-        expect(onLoad).not.toHaveBeenCalled();
+        expect(load.mock.calls.map(([loadedManifest]) => loadedManifest.id)).not.toContain(
+          manifest.id,
+        );
         expect(
           bootstrapRegistry
             .listProviders(capabilityId)
             .some((provider) => provider.implementation.execute === pluginImplementation),
         ).toBe(false);
       } finally {
+        load.mockRestore();
         for (const pluginId of bootstrapResult.loadedPlugins) {
           await bootstrapResult.loader.unload(pluginId).catch(() => undefined);
         }
-        lifecycle.onLoad = originalOnLoad;
       }
     });
 

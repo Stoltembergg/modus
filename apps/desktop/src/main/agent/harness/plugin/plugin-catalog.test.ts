@@ -12,6 +12,43 @@ describe("HostPluginCatalog", () => {
     expect(catalog.authorize({ ...memoryPluginManifest })).toBeUndefined();
   });
 
+  it("freezes the trusted manifest graph after the catalog captures its identity", () => {
+    const sourceProvision = memoryPluginManifest.provides[0];
+    if (!sourceProvision) throw new Error("Memory fixture has no capability provision");
+    const sourceImplementation = sourceProvision.implementation;
+    if (!sourceImplementation) throw new Error("Memory fixture has no implementation");
+    const originalExecute = sourceImplementation.execute;
+    const manifest = {
+      ...memoryPluginManifest,
+      id: "@test/frozen-catalog-manifest",
+      provides: [
+        {
+          ...sourceProvision,
+          capability: "catalog.fixture",
+          implementation: { execute: originalExecute },
+        },
+      ],
+    };
+    const provision = manifest.provides[0];
+    if (!provision?.implementation)
+      throw new Error("Catalog fixture has no capability implementation");
+    const implementation = provision.implementation;
+    const catalog = new HostPluginCatalog([{ manifest, trustLevel: "core" }]);
+    const replacement = () => "changed after authorization";
+
+    expect("entries" in catalog).toBe(false);
+    expect(Object.isFrozen(manifest)).toBe(true);
+    expect(Object.isFrozen(manifest.provides)).toBe(true);
+    expect(Object.isFrozen(implementation)).toBe(true);
+    expect(() => {
+      implementation.execute = replacement;
+    }).toThrow();
+    expect(implementation.execute).toBe(originalExecute);
+    expect(catalog.authorize(manifest)?.manifest.provides[0]?.implementation?.execute).toBe(
+      originalExecute,
+    );
+  });
+
   it("resolves host-owned trust rather than serialized manifest trust", () => {
     const testCatalog = new TestPluginCatalog();
     testCatalog.add(memoryPluginManifest, "official");

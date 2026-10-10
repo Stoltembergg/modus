@@ -19,17 +19,28 @@ export interface PluginManifestCatalog {
   resolveById?(id: string): HostPluginEntry | undefined;
 }
 
+function freezeManifestGraph(value: unknown, seen = new WeakSet<object>()): void {
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && "value" in descriptor) freezeManifestGraph(descriptor.value, seen);
+  }
+  Object.freeze(value);
+}
+
 export class HostPluginCatalog implements PluginManifestCatalog {
-  private readonly entries: ReadonlyMap<string, HostPluginEntry>;
+  #entries: ReadonlyMap<string, HostPluginEntry>;
 
   constructor(entries: readonly HostPluginEntry[]) {
     const byKey = new Map<string, HostPluginEntry>();
     for (const entry of entries) {
+      freezeManifestGraph(entry.manifest);
       const key = `${entry.manifest.id}@${entry.manifest.version}`;
       if (byKey.has(key)) throw new Error(`Duplicate host plugin catalog entry: ${key}`);
       byKey.set(key, Object.freeze({ manifest: entry.manifest, trustLevel: entry.trustLevel }));
     }
-    this.entries = byKey;
+    this.#entries = byKey;
   }
 
   public authorize(manifest: PluginManifest): HostPluginEntry | undefined {
@@ -38,11 +49,11 @@ export class HostPluginCatalog implements PluginManifestCatalog {
   }
 
   public resolve(id: string, version: string): HostPluginEntry | undefined {
-    return this.entries.get(`${id}@${version}`);
+    return this.#entries.get(`${id}@${version}`);
   }
 
   public resolveById(id: string): HostPluginEntry | undefined {
-    return Array.from(this.entries.values()).find((entry) => entry.manifest.id === id);
+    return Array.from(this.#entries.values()).find((entry) => entry.manifest.id === id);
   }
 }
 
