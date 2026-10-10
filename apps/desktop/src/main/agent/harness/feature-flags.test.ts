@@ -87,6 +87,21 @@ describe("Harness feature flag validation", () => {
     expect(isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")).toBe(false);
   });
 
+  it("requires durable lifecycle reconciliation before plugin activation", () => {
+    const flags = {
+      MODUS_USE_KERNEL: true,
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: false,
+    } as const;
+    setFeatureFlagOverrides(flags);
+
+    expect(validateFeatureFlags()).toContain(
+      "MODUS_PLUGINS requires MODUS_PLUGIN_LIFECYCLE to be enabled",
+    );
+    expect(isFeatureFlagEnabled("MODUS_PLUGINS")).toBe(false);
+  });
+
   it("keeps valid, explicitly enabled features active", () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
 

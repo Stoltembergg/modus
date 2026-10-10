@@ -1039,12 +1039,6 @@ export class PiSdkRuntime implements AgentRuntime {
           err instanceof Error ? err.message : String(err),
         );
       }
-    } else if (pluginsEnabled) {
-      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader)
-        .then(() => {})
-        .catch((err) => {
-          console.error("[modus] Failed to bootstrap plugins:", err);
-        });
     }
   }
 

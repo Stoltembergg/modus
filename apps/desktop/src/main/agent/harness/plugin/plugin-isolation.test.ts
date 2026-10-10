@@ -759,6 +759,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
+        MODUS_PLUGIN_LIFECYCLE: true,
         MODUS_PLUGIN_ISOLATION: true,
       });
 
@@ -771,6 +772,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
+        MODUS_PLUGIN_LIFECYCLE: true,
         MODUS_PLUGIN_ISOLATION: true,
       });
       const runtime = new PiSdkRuntime();

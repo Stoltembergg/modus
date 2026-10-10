@@ -476,6 +476,7 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
+        MODUS_PLUGIN_LIFECYCLE: true,
         MODUS_PLUGIN_TRACING: true,
       });
 

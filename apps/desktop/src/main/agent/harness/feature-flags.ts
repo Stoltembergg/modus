@@ -49,7 +49,10 @@ const FEATURE_FLAG_DEPENDENCIES: Partial<
   MODUS_RESPONSE_POLICY: ["MODUS_USE_KERNEL"],
   MODUS_OBSERVABILITY: ["MODUS_USE_KERNEL"],
   MODUS_CAPABILITY_REGISTRY: ["MODUS_USE_KERNEL"],
-  MODUS_PLUGINS: ["MODUS_USE_KERNEL", "MODUS_CAPABILITY_REGISTRY"],
+  // Plugin activation always depends on durable startup reconciliation. The
+  // legacy direct-bootstrap path could revive a persisted disabled/tombstoned
+  // built-in when lifecycle support was switched off.
+  MODUS_PLUGINS: ["MODUS_USE_KERNEL", "MODUS_CAPABILITY_REGISTRY", "MODUS_PLUGIN_LIFECYCLE"],
   MODUS_PLUGIN_LIFECYCLE: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
   MODUS_PLUGIN_TRACING: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],
   MODUS_PLUGIN_ISOLATION: ["MODUS_USE_KERNEL", "MODUS_PLUGINS"],

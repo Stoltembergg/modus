@@ -326,6 +326,29 @@ host-process boundary limitations remain.**
   Safe Mode is persisted in the existing plugin state database; full corruption
   and power-loss behavior beyond the injected restart fixtures is not proven.
 
+### A10 startup gate follow-up
+
+- Root cause: `MODUS_PLUGINS=true` with `MODUS_PLUGIN_LIFECYCLE=false` selected
+  the legacy direct bootstrap. That path loaded host built-ins without reading
+  persisted disabled/tombstone state and could revive a plugin after a restart.
+- The effective plugin flag now requires both capability registration and
+  lifecycle reconciliation. The runtime no longer performs legacy activation
+  if lifecycle reconciliation is absent. Startup's existing flag validator
+  reports the invalid combination, and effective flags keep the plugin
+  inactive. Defaults are unchanged: both plugin flags remain off by default.
+- RED: the new feature-flag test found no validation error for the invalid
+  combination, and the runtime test found all six built-ins loaded via the
+  legacy path. GREEN: exact-name runtime/flag regressions pass, including
+  enabled lifecycle startup preserving bootstrap-before-sync order. No sandbox
+  probe or adversarial group ran.
+- Final targeted Vitest after removing the unreachable branch: **2 files, 3
+  passed, 235 skipped**. Targeted Biome checked seven changed TypeScript files
+  with no errors (14 existing warnings and 6 infos); no formatter was run.
+  Desktop typecheck and `git diff --check` passed. Independent read-only review
+  found no blocker and confirmed the compatibility impact: configurations that
+  enable plugins without lifecycle reconciliation now leave them unloaded.
+  Remote CI for this follow-up commit remains pending publication.
+
 ## Milestone 4 — A05 WASM memory accounting
 
 **Status: host-side limits and accounting implemented; the external-plugin
@@ -1150,6 +1173,22 @@ rejected rather than mixed.
   (`38044280896`) and macOS x64/arm64 packaging (`38044280877`) passed. The
   current run-scoped paging change awaits its own remote CI after publication.
 
+### Remote CI on `40de2ec`
+
+- Workflow `38045043547`: Biome and desktop typecheck passed. Vitest completed
+  **4,591 passed, 8 skipped, 1 failed across 406 files** in **147.65s**. The
+  sole failure was `FastVectorDistance: computes cosine similarity and
+  distances in < 0.1ms`, measured at **0.10037799999997787 ms** against the
+  unchanged `<0.1 ms` assertion. The result is recorded without classifying the
+  failure as pre-existing or solely unstable.
+- Verifier-First runtime regressions, plugin containment on Ubuntu/macOS/
+  Windows, and compile-only sandbox target checks passed. The sandbox workflow
+  compiled targets only; no probe ran. pgTAP test 22 in
+  `17_free_monthly_renewal.test.sql` again expected `2026-10-31` and received
+  `2026-10-30`; it remains unresolved pending evidence-based comparison.
+- Windows x64 packaging (`38045043549`) and macOS x64/arm64 packaging
+  (`38045043554`) completed successfully.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -1163,7 +1202,7 @@ rejected rather than mixed.
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
 | A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
-| A10 | Mitigated when lifecycle is enabled; conditional legacy mode remains | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. If `MODUS_PLUGIN_LIFECYCLE=false`, the existing direct built-in bootstrap path intentionally skips store reconciliation; external artifact identity remains unavailable. |
+| A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated | Persisted Safe Mode policy is service-derived; disallowed upgrade/downgrade transitions are rejected before hot reload, and restore retains quarantine. Same-process runtime accessors still expose internal loader/service objects; no production caller was found, but the API surface remains a residual concern. Storage corruption/power-loss proof remains open. |

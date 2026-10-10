@@ -1442,6 +1442,19 @@ describe("PiSdkRuntime", () => {
     expect(() => runtime.getPluginStateStore()).toThrow();
   });
 
+  it("does not use legacy plugin activation when lifecycle reconciliation is disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: false,
+    });
+
+    const runtime = new PiSdkRuntime();
+    await runtime.waitForPlugins();
+
+    expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
+  });
+
   it("does not let lifecycle startup activate plugins when MODUS_PLUGINS is disabled", async () => {
     const memoryEntry = (
       await import("./harness/plugin/plugin-catalog")

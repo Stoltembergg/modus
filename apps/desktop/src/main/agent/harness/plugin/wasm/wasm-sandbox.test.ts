@@ -1139,6 +1139,7 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
+        MODUS_PLUGIN_LIFECYCLE: true,
         MODUS_PLUGIN_WASM_SANDBOX: true,
       });
 
