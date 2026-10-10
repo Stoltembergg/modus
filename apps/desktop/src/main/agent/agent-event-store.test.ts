@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { HarnessTaskClassification, HarnessTaskState } from "../../shared/contracts";
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
@@ -16,6 +17,7 @@ vi.mock("electron", () => ({
 }));
 
 const { getDatabase } = await import("../db/database");
+const { migrateDatabase } = await import("../db/database");
 const { createAgentRun } = await import("./agent-run-store");
 const {
   getLatestCheckpointRestoreRowId,
@@ -23,7 +25,9 @@ const {
   getLatestTodoContinuationAttempt,
   getRunToolEvidence,
   getHarnessQAEventByRowId,
+  listAgentEventPage,
   listAgentEvents,
+  MAX_AGENT_EVENT_PAGE_SIZE,
   recordAgentEvent,
 } = await import("./agent-event-store");
 const { getSessionCodeGraphDiscoveries } = await import("./agent-event-store");
@@ -2256,5 +2260,203 @@ fs.renameSync("original-manifest-link", "package.json");
         }),
       ]),
     );
+  });
+
+  it("pages events by stable insertion cursor and excludes events after the page snapshot", () => {
+    const sessionId = `paged-events-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const first = recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "paged-run",
+      delivery: "normal",
+    });
+    const second = recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "paged-message",
+      role: "assistant",
+    });
+    const third = recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "paged-message",
+      delta: "part one",
+    });
+    getDatabase()
+      .prepare(
+        "update agent_events set created_at = case rowid when ? then ? when ? then ? when ? then ? end where session_id = ?",
+      )
+      .run(first, "2030-01-03", second, "2030-01-02", third, "2030-01-01", sessionId);
+
+    const page1 = listAgentEventPage(sessionId, { limit: 2 });
+    expect(page1.events.map(({ event }) => event.type)).toEqual(["run.started", "message.started"]);
+    expect(page1.events.map(({ event }) => event.eventCursor)).toEqual([first, second]);
+    expect(page1.hasMore).toBe(true);
+    if (page1.nextCursor === undefined) throw new Error("Expected page to expose its last cursor.");
+    expect(listAgentEvents(sessionId).map(({ event }) => event.eventCursor)).toEqual([
+      first,
+      second,
+      third,
+    ]);
+
+    recordAgentEvent({
+      type: "run.completed",
+      sessionId,
+      runId: "late-run",
+    });
+    const page2 = listAgentEventPage(sessionId, {
+      afterCursor: page1.nextCursor,
+      snapshotCursor: page1.snapshotCursor,
+      limit: 2,
+    });
+    expect(page2.events.map(({ event }) => event.type)).toEqual(["message.delta"]);
+    expect(page2.events[0]?.event.eventCursor).toBe(third);
+    expect(page2.snapshotCursor).toBe(page1.snapshotCursor);
+    expect(page2.hasMore).toBe(false);
+  });
+
+  it("folds delta records across bounded database pages", () => {
+    const sessionId = `folded-pages-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "folded-message",
+      role: "assistant",
+    });
+    for (let index = 0; index < MAX_AGENT_EVENT_PAGE_SIZE - 2; index += 1) {
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `fold-page-${index}`,
+        delivery: "normal",
+      });
+    }
+    for (const delta of ["alpha", "beta", "gamma"]) {
+      recordAgentEvent({ type: "message.delta", sessionId, messageId: "folded-message", delta });
+    }
+
+    const folded = listAgentEvents(sessionId);
+    expect(folded.filter(({ event }) => event.type === "message.delta")).toHaveLength(1);
+    expect(folded.find(({ event }) => event.type === "message.delta")?.event).toMatchObject({
+      delta: "alphabetagamma",
+    });
+    const plan = getDatabase()
+      .prepare(
+        "explain query plan select rowid from agent_events where session_id = ? and rowid > ? order by rowid asc limit ?",
+      )
+      .all(sessionId, 0, 2) as Array<{ detail: string }>;
+    expect(plan.map(({ detail }) => detail).join(" ")).toContain("idx_agent_events_session_id");
+  });
+
+  it("bounds individual page reads and rejects malformed payloads without echoing them", () => {
+    const sessionId = `bounded-pages-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    for (let index = 0; index < MAX_AGENT_EVENT_PAGE_SIZE + 2; index += 1) {
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `run-${index}`,
+        delivery: "normal",
+      });
+    }
+
+    const page = listAgentEventPage(sessionId, { limit: Number.MAX_SAFE_INTEGER });
+    expect(page.events).toHaveLength(MAX_AGENT_EVENT_PAGE_SIZE);
+    expect(page.hasMore).toBe(true);
+
+    const sensitivePayload = "private event payload";
+    getDatabase()
+      .prepare(
+        "insert into agent_events (id, session_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)",
+      )
+      .run(
+        `malformed-${crypto.randomUUID()}`,
+        sessionId,
+        "run.started",
+        sensitivePayload,
+        new Date().toISOString(),
+      );
+    expect(() => listAgentEventPage(sessionId, { afterCursor: page.snapshotCursor })).toThrow(
+      /Invalid persisted agent event payload/,
+    );
+    try {
+      listAgentEventPage(sessionId, { afterCursor: page.snapshotCursor });
+    } catch (error) {
+      expect(String(error)).not.toContain(sensitivePayload);
+    }
+  });
+
+  it("migrates legacy event rows to a non-reusing cursor while preserving row identities", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec("pragma foreign_keys = on");
+    db.exec(`
+      create table workspaces (
+        id text primary key, root_path text not null unique, display_name text not null,
+        is_git_repository integer not null default 0, last_opened_at text not null, created_at text not null
+      );
+      insert into workspaces (id, root_path, display_name, last_opened_at, created_at)
+        values ('legacy-workspace', 'legacy-root', 'legacy', '2026-01-01', '2026-01-01');
+      create table agent_sessions (
+        id text primary key, workspace_id text not null references workspaces(id) on delete cascade,
+        title text not null, cwd text not null, status text not null, created_at text not null, updated_at text not null
+      );
+      insert into agent_sessions (id, workspace_id, title, cwd, status, created_at, updated_at)
+        values ('legacy-session', 'legacy-workspace', 'legacy', '/', 'idle', '2026-01-01', '2026-01-01');
+      create table agent_events (
+        id text primary key,
+        session_id text not null references agent_sessions(id) on delete cascade,
+        type text not null,
+        payload_json text not null,
+        created_at text not null
+      );
+      insert into agent_events (rowid, id, session_id, type, payload_json, created_at)
+        values (7, 'legacy-7', 'legacy-session', 'run.started', '{"type":"run.started","runId":"r7"}', '2026-01-01');
+      insert into agent_events (rowid, id, session_id, type, payload_json, created_at)
+        values (12, 'legacy-12', 'legacy-session', 'run.completed', '{"type":"run.completed","runId":"r12"}', '2026-01-02');
+    `);
+
+    try {
+      migrateDatabase(db);
+      const migrated = db
+        .prepare(
+          "select rowid as rowid, id, payload_json, created_at from agent_events order by rowid",
+        )
+        .all() as Array<{ rowid: number; id: string; payload_json: string; created_at: string }>;
+      expect(migrated).toEqual([
+        {
+          rowid: 7,
+          id: "legacy-7",
+          payload_json: '{"type":"run.started","runId":"r7"}',
+          created_at: "2026-01-01",
+        },
+        {
+          rowid: 12,
+          id: "legacy-12",
+          payload_json: '{"type":"run.completed","runId":"r12"}',
+          created_at: "2026-01-02",
+        },
+      ]);
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("pragma foreign_key_list(agent_events)").all()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ table: "agent_sessions", on_delete: "CASCADE" }),
+        ]),
+      );
+      db.prepare("delete from agent_events where rowid = 12").run();
+      db.prepare(
+        "insert into agent_events (id, session_id, type, payload_json, created_at) values ('new', 'legacy-session', 'run.started', '{}', '2026-01-03')",
+      ).run();
+      expect(
+        (
+          db.prepare("select rowid as rowid from agent_events where id = 'new'").get() as {
+            rowid: number;
+          }
+        ).rowid,
+      ).toBeGreaterThan(12);
+    } finally {
+      db.close();
+    }
   });
 });

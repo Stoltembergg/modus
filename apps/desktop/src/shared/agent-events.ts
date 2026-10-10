@@ -85,7 +85,14 @@ function foldInto<T extends AgentEventItem>(previous: T, next: T): T {
  * folded list, which is bounded by part count, not chunk count.
  */
 export function appendAgentEvents<T extends AgentEventItem>(events: T[], nextItems: T[]): T[] {
-  const result = events.slice();
+  const accumulator = createAgentEventAccumulator(events);
+  accumulator.append(nextItems);
+  return accumulator.items();
+}
+
+/** Fold pages into one history without rebuilding the event index per page. */
+export function createAgentEventAccumulator<T extends AgentEventItem>(initial: readonly T[] = []) {
+  const result = [...initial];
   const indexByKey = new Map<string, number>();
   result.forEach((entry, i) => {
     const key = foldKey(entry.event);
@@ -93,20 +100,26 @@ export function appendAgentEvents<T extends AgentEventItem>(events: T[], nextIte
       indexByKey.set(key, i);
     }
   });
-  for (const item of nextItems) {
-    const key = foldKey(item.event);
-    if (key !== undefined) {
-      const at = indexByKey.get(key);
-      const existing = at === undefined ? undefined : result[at];
-      if (at !== undefined && existing !== undefined) {
-        result[at] = foldInto(existing, item);
-        continue;
+  return {
+    append(nextItems: readonly T[]): void {
+      for (const item of nextItems) {
+        const key = foldKey(item.event);
+        if (key !== undefined) {
+          const at = indexByKey.get(key);
+          const existing = at === undefined ? undefined : result[at];
+          if (at !== undefined && existing !== undefined) {
+            result[at] = foldInto(existing, item);
+            continue;
+          }
+          indexByKey.set(key, result.length);
+        }
+        result.push(item);
       }
-      indexByKey.set(key, result.length);
-    }
-    result.push(item);
-  }
-  return result;
+    },
+    items(): T[] {
+      return result;
+    },
+  };
 }
 
 /** Fold a complete event list (e.g. a session's persisted history) in one pass. */

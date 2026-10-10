@@ -61,7 +61,8 @@ export function migrateDatabase(db: DatabaseSync): void {
     );
 
     create table if not exists agent_events (
-      id text primary key,
+      event_cursor integer primary key autoincrement,
+      id text not null unique,
       session_id text not null references agent_sessions(id) on delete cascade,
       type text not null,
       payload_json text not null,
@@ -204,6 +205,9 @@ export function migrateDatabase(db: DatabaseSync): void {
     create index if not exists idx_browser_recents_workspace_recent
       on browser_recents(workspace_id, last_opened_at desc);
   `);
+
+  migrateAgentEventCursor(db);
+  db.exec("create index if not exists idx_agent_events_session_id on agent_events(session_id)");
 
   // Workspace approvals are matched against durable workspace and tool identity.
   // Legacy rows stay NULL scoped because their original workspace cannot be proven.
@@ -669,6 +673,34 @@ export function migrateDatabase(db: DatabaseSync): void {
   `);
   migrateGroupTaskState(db);
   migrateGroupIntegrationState(db);
+}
+
+/** Preserve existing rowids while making event cursors monotonic after deletion. */
+function migrateAgentEventCursor(db: DatabaseSync): void {
+  if (hasColumn(db, "agent_events", "event_cursor")) return;
+
+  db.exec("begin immediate");
+  try {
+    db.exec(`
+      create table agent_events_cursor_migration (
+        event_cursor integer primary key autoincrement,
+        id text not null unique,
+        session_id text not null references agent_sessions(id) on delete cascade,
+        type text not null,
+        payload_json text not null,
+        created_at text not null
+      );
+      insert into agent_events_cursor_migration (event_cursor, id, session_id, type, payload_json, created_at)
+        select rowid, id, session_id, type, payload_json, created_at
+        from agent_events order by rowid asc;
+      drop table agent_events;
+      alter table agent_events_cursor_migration rename to agent_events;
+    `);
+    db.exec("commit");
+  } catch (error) {
+    db.exec("rollback");
+    throw error;
+  }
 }
 
 /** Durable, versioned previews and append-only integration state transitions. */

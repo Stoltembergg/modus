@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { foldAgentEvents } from "../../shared/agent-events";
+import { createAgentEventAccumulator, foldAgentEvents } from "../../shared/agent-events";
 import type {
   AgentEvent,
   CodeGraphDiscoveryRef,
@@ -40,6 +40,8 @@ type AgentRunPromptRow = {
 };
 
 type AgentEventItem = { id: string; event: AgentEvent; createdAt: string };
+export const MAX_AGENT_EVENT_PAGE_SIZE = 256;
+const DEFAULT_AGENT_EVENT_PAGE_SIZE = 128;
 const MAX_RUN_TOOL_EVENTS = 500;
 // Main-owned fields stored beside durable events; listAgentEvents strips them before IPC.
 const QA_CHECK_SNAPSHOT_FIELD = "__qaCheckSnapshot";
@@ -553,7 +555,7 @@ function existingToolLifecycleEvent(
   }
   const row = db
     .prepare(
-      `select rowid, payload_json from agent_events
+      `select rowid as rowid, payload_json from agent_events
      where session_id = ? and type = ?
        and json_extract(payload_json, '$.runId') = ?
        and json_extract(payload_json, '$.toolCallId') = ?
@@ -581,7 +583,9 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
     const db = getDatabase();
     const eventIdentity = JSON.stringify(eventWithoutQACheckSnapshot(event));
     const existingBeforeInsert = db
-      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .prepare(
+        "select rowid as rowid, session_id, type, payload_json from agent_events where id = ?",
+      )
       .get(id) as
       | { rowid: number; session_id: string; type: string; payload_json: string }
       | undefined;
@@ -612,7 +616,9 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
        on conflict(id) do nothing`,
     ).run(id, event.sessionId, event.type, payload, new Date().toISOString());
     const existing = db
-      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .prepare(
+        "select rowid as rowid, session_id, type, payload_json from agent_events where id = ?",
+      )
       .get(id) as
       | { rowid: number; session_id: string; type: string; payload_json: string }
       | undefined;
@@ -1094,7 +1100,7 @@ export function getLatestCheckpointRestoreRowId(
   }
   const row = getDatabase()
     .prepare(
-      `select rowid
+      `select rowid as rowid
      from agent_events
      where session_id = ? and type = 'checkpoint.restored' and rowid > ?
      order by rowid desc
@@ -1569,32 +1575,28 @@ export function listAgentEvents(
   sessionId: string,
 ): Array<{ id: string; event: AgentEvent; createdAt: string }> {
   const db = getDatabase();
-  const rows = db
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ?
-       order by created_at asc, rowid asc`,
-    )
-    .all(sessionId) as AgentEventRow[];
-  const events = rows.map((row) => {
-    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
-    delete payload[QA_CHECK_SNAPSHOT_FIELD];
-    delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
-    delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
-    delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
-    return {
-      id: row.id,
-      event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,
-      createdAt: row.created_at,
-    };
-  });
+  let cursor = 0;
+  let snapshotCursor: number | undefined;
+  const eventAccumulator = createAgentEventAccumulator<AgentEventItem>();
+  // Event timestamps can regress, so cursor order keeps pagination and replay consistent.
+  while (true) {
+    const page = listAgentEventPage(sessionId, {
+      afterCursor: cursor,
+      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+    });
+    snapshotCursor = page.snapshotCursor;
+    eventAccumulator.append(page.events);
+    if (!page.hasMore || page.nextCursor === undefined) break;
+    cursor = page.nextCursor;
+  }
+  const events = eventAccumulator.items();
   const runs = db
     .prepare(
       `select id, user_message_id, prompt, started_at
        from agent_runs
        where session_id = ?
-       order by started_at asc, rowid asc`,
+       order by rowid asc`,
     )
     .all(sessionId) as AgentRunPromptRow[];
 
@@ -1602,6 +1604,84 @@ export function listAgentEvents(
   // IPC, so opening a long session ships O(parts) rows, not O(deltas) — the
   // renderer parses and builds blocks over the bounded set.
   return foldAgentEvents(backfillUserPromptEvents(sessionId, events, runs));
+}
+
+export type AgentEventPage = {
+  events: AgentEventItem[];
+  snapshotCursor: number;
+  nextCursor?: number;
+  hasMore: boolean;
+};
+
+/** Read one bounded keyset page in the same order as the persisted event cursor. */
+export function listAgentEventPage(
+  sessionId: string,
+  options: { afterCursor?: number; snapshotCursor?: number; limit?: number } = {},
+): AgentEventPage {
+  const afterCursor = options.afterCursor ?? 0;
+  const requestedLimit = options.limit ?? DEFAULT_AGENT_EVENT_PAGE_SIZE;
+  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+    throw new RangeError("Agent event page size must be a positive safe integer.");
+  }
+  const limit = Math.min(requestedLimit, MAX_AGENT_EVENT_PAGE_SIZE);
+  const db = getDatabase();
+  let snapshotCursor = options.snapshotCursor;
+  if (snapshotCursor === undefined) {
+    const snapshot = db
+      .prepare("select coalesce(max(rowid), 0) as cursor from agent_events where session_id = ?")
+      .get(sessionId) as { cursor: number };
+    snapshotCursor = Number(snapshot.cursor);
+  }
+  if (!Number.isSafeInteger(snapshotCursor) || snapshotCursor < 0) {
+    throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
+  }
+
+  const rows = db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid > ? and rowid <= ?
+       order by rowid asc
+       limit ?`,
+    )
+    .all(sessionId, afterCursor, snapshotCursor, limit + 1) as AgentEventRow[];
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const events = pageRows.map(parseAgentEventRow);
+  const nextCursor = pageRows.at(-1)?.event_cursor;
+  return {
+    events,
+    snapshotCursor,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    hasMore,
+  };
+}
+
+function parseAgentEventRow(row: AgentEventRow): AgentEventItem {
+  let payload: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(row.payload_json);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("not an event object");
+    }
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `Invalid persisted agent event payload (event ${row.id}, cursor ${row.event_cursor}).`,
+    );
+  }
+  delete payload[QA_CHECK_SNAPSHOT_FIELD];
+  delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
+  return {
+    id: row.id,
+    event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,
+    createdAt: row.created_at,
+  };
 }
 
 function backfillUserPromptEvents(

@@ -6746,7 +6746,7 @@ describe("PiSdkRuntime", () => {
     await turnEndStarted;
     const startedRow = getDatabase()
       .prepare(
-        "select rowid from agent_events where session_id = ? and type = 'run.started' order by rowid desc limit 1",
+        "select rowid as rowid from agent_events where session_id = ? and type = 'run.started' order by rowid desc limit 1",
       )
       .get(sessionId) as { rowid: number };
     const restoreEvent = {

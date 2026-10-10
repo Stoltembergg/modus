@@ -771,7 +771,7 @@ acknowledged.
 
 ## Milestone 9 — A23 truthful built-in capability availability
 
-**Status: implementation and focused regressions pass; independent review passed; remote CI is pending.**
+**Status: implementation and focused regressions pass; independent review passed; desktop CI and packaging passed; the global workflow still has an unresolved pgTAP failure.**
 
 Several built-in capability adapters returned plausible success-shaped values
 without performing their advertised work: an in-memory sample was presented as
@@ -836,17 +836,78 @@ are unchanged.
   capability IDs; the real runtime services remain separate and intact. This
   is source evidence, not proof that every downstream consumer avoids direct
   registry use.
+- Remote workflow `38033646784` on commit `4fa6894` passed
+  `typecheck · test · biome` (**402/402 files, 4,545 passed, 8 skipped of
+  4,553 tests**), plugin-containment on Ubuntu/macOS/Windows, Verifier-First
+  runtime regressions, and compile-only sandbox checks. Biome reported 325
+  warnings and 50 infos, with no errors; TypeScript passed. Windows x64
+  packaging (`38033646769`) and macOS x64/arm64 packaging (`38033646794`)
+  passed. No probes or enforcement scenarios ran.
+- The global workflow remains red because Supabase pgTAP test 22 in
+  `17_free_monthly_renewal.test.sql` expected `2026-10-31` and received
+  `2026-10-30` for the second monthly period. This remains unresolved and is
+  not classified as pre-existing.
 
 ### Limits
 
 These built-in capability IDs now report their unavailable state honestly; this
 milestone does not create new implementations for them. A caller that directly
 uses a capability plugin must handle `CapabilityUnavailableError`. The focused
-runtime test proves that the productive runtime registry returns that error,
-but remote CI is still required before publishing. Permission metadata
-reconciliation requires exact host plugin ID
+runtime test proves that the productive runtime registry returns that error.
+Permission metadata reconciliation requires exact host plugin ID
 and version identity; unsupported persisted versions remain quarantined under
 the existing startup rules and are not rewritten from a different manifest.
+
+## Milestone 10 — A22 durable event cursor and bounded page reads
+
+**Status: partially mitigated; independent review found no migration blocker. The renderer/IPC still materialize a session's complete folded history.**
+
+The `agent_events` table now has a monotonic `INTEGER PRIMARY KEY AUTOINCREMENT`
+cursor while retaining the existing public event identity. Existing databases
+are migrated transactionally by copying rowids and all payload fields, then
+recreating the session foreign key. A session index supports keyset reads.
+`listAgentEventPage` validates cursor inputs, captures a fixed upper cursor on
+the first read, and returns at most 256 parsed events in cursor order. This
+keeps each SQLite result allocation and JSON parse batch bounded and prevents
+timestamps that move backward from reordering replay. The complete-list
+compatibility API folds page results through one accumulator, so deltas that
+cross page boundaries still fold correctly.
+
+### Evidence
+
+- RED: four focused regressions failed before the change: page API missing,
+  session index absent from the query plan, page-size bound unavailable, and
+  SQLite reused rowid 8 after deleting the prior maximum rowid 12. During
+  integration, four existing event-store checks also caught Node SQLite's
+  result-column name behavior for `rowid`; aliasing those selected columns
+  restored the rowid consumers. The A17 runtime test that reads a `run.started`
+  row also now guards the corrected alias.
+- GREEN: `agent-event-store.test.ts` plus `agent-events.test.ts`: **55/55**.
+  Coverage includes inverted timestamps, fixed-snapshot paging, inserts after
+  page one, a session-index query plan, deltas folded across a page boundary,
+  maximum page size, sanitized malformed-payload errors, row/payload/timestamp
+  preservation, foreign-key integrity, and cursor non-reuse after deletion.
+  The exact A17 runtime restore test passed (**1 passed, 229 skipped by exact
+  name filter**). Related context, rollback and group runtime suites passed
+  **40/40** in the same validation cycle.
+- Desktop typecheck passed (exit 0). Targeted Biome passed (exit 0), with eight
+  warnings in the large runtime test file and no formatting errors; their
+  origins were not baseline-classified. `git diff --check` passed.
+- Independent static review found no concrete migration or foreign-key
+  blocker. It confirmed bounded SQL batches and preservation of A17 fields,
+  while identifying the remaining unbounded aggregate response below. Review
+  did not execute tests.
+
+### Limits
+
+`listAgentEvents` still drains every page into one array and the existing IPC
+handler returns that entire result to the renderer. Total work, folded-history
+memory, and IPC response size therefore still grow with unique events/parts.
+The page API is not yet consumed by the UI. Cursor order also changes the
+observable order from `created_at, rowid` to insertion cursor order; this is
+the intended durable replay order but needs explicit presentation compatibility
+coverage. A22 is not marked complete. Remote CI for the current A22 diff is
+pending publication.
 
 ## Current matrix
 
@@ -869,12 +930,12 @@ the existing startup rules and are not rewritten from a different manifest.
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
-| A18 | Implemented and independently reviewed; remote CI partially failed | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Global CI has a WASM benchmark timing failure and pgTAP date assertion failure; Windows x64 and macOS arm64/x64 packaging passed. |
+| A18 | Implemented and independently reviewed; latest desktop CI passed, pgTAP still fails | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. The latest desktop test/Biome/typecheck, containment jobs and Windows/macOS packaging passed; pgTAP date assertion remains unresolved. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Pending | Bounded event-history reads. |
-| A23 | Mitigated; remote CI pending | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. |
+| A22 | Partially mitigated | AUTOINCREMENT event cursor, session index, fixed-snapshot pages capped at 256, cross-page folds, and migration checks are implemented. `listAgentEvents` and IPC still materialize complete session history; renderer pagination and ordering compatibility coverage remain. |
+| A23 | Mitigated; desktop CI and packages passed, pgTAP unresolved | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38033646784` passed the desktop/global feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging jobs; pgTAP test 22 failed with Oct 30 versus Oct 31. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
