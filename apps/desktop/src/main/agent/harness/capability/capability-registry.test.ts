@@ -114,6 +114,44 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       expect(called).toHaveBeenCalledOnce();
     });
 
+    it("passes the caller AbortSignal through the registered provider wrapper", async () => {
+      const signalSeen = vi.fn();
+      registry.registerCapability({
+        id: "cancel.propagation",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: {},
+      });
+      registry.registerProvider(
+        {
+          providerId: "@host/cancel-probe",
+          providerVersion: "1.0.0",
+          capabilityId: "cancel.propagation",
+          capabilityApiVersion: "1.0",
+          trustLevel: "core",
+          permissions: {},
+          implementation: {
+            execute: (_context, signal) => {
+              signalSeen(signal);
+              return "completed";
+            },
+          },
+          registeredAt: new Date(),
+          metadata: {},
+        },
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+
+      const controller = new AbortController();
+      await expect(registry.execute("cancel.propagation", {}, controller.signal)).resolves.toBe(
+        "completed",
+      );
+
+      expect(signalSeen).toHaveBeenCalledOnce();
+      expect(signalSeen).toHaveBeenCalledWith(controller.signal);
+    });
+
     it.each([
       true,
       false,

@@ -326,7 +326,9 @@ aborted the Pi session and descendant sessions but did not clean root-run
 processes; process records had session identity but no owning run identity; the
 process facade requires a session scope when listing agent processes; and
 `terminal_run` omitted the Pi cancellation signal for background launches.
-`launch_app` and capability instrumentation also did not accept the signal.
+`launch_app` and capability instrumentation also did not accept the signal;
+after those APIs accepted it, the immutable provider wrapper in the capability
+registry still discarded it.
 
 The runtime now queries and terminates managed agent processes with both the
 active `sessionId` and `runId`, leaving older runs, other sessions, and user
@@ -335,11 +337,11 @@ the existing managed-process facade. Terminal foreground/background readiness,
 port/HTTP waits, and app launch verification observe the tool signal; cancellation
 requests termination of only the process owned by that call and avoids recording
 an app launch as successful. Pi's signal now reaches these productive tool
-paths. Capability implementations receive a cooperative `AbortSignal`; a
-timeout aborts and drains cooperative work before returning, and traces record
-cancelled separately from failure. Observer events and aggregates now retain a
-separate cancellation event/count instead of counting cancellation as a plugin
-failure.
+paths. Capability implementations receive the cooperative `AbortSignal` through
+the registry wrapper; a timeout aborts and drains cooperative work before
+returning, and traces record cancelled separately from failure. Observer events
+and aggregates now retain a separate cancellation event/count instead of
+counting cancellation as a plugin failure.
 
 ### Evidence
 
@@ -356,25 +358,34 @@ failure.
   process after abort; it now rejects with `AbortError` and leaves no app record.
   This test runs only a benign local Node timer fixture and cleans it in `finally`.
 - RED/GREEN: cooperative capability timeout tests show the callback receives
-  an aborted signal and settles before timeout returns. A separate cancellation
-  regression initially recorded `harness.plugin.failed`; it now emits
-  `harness.plugin.cancelled`, increments `cancellationCount`, and leaves
-  `failureCount` unchanged.
+  an aborted signal and settles before timeout returns. The registry-wrapper
+  regression first reproduced that an explicitly supplied signal arrived as
+  `undefined`; forwarding it through the immutable wrapper made the test pass.
+  A separate cancellation regression initially recorded
+  `harness.plugin.failed`; it now emits `harness.plugin.cancelled`, increments
+  `cancellationCount`, and leaves `failureCount` unchanged.
 - Targeted Vitest: runtime cancellation and replacement-run race **2 passed**
   (220 name-filtered tests skipped); terminal tools **7 passed**; synthetic
   terminal service **1 passed**; plugin tracing **20 passed**; observer metrics
   **27 passed**; app-process cancellation/cleanup **3 passed** (1 skipped);
-  process-map tests **16 passed**. No adversarial probe or external plugin code
-  was run.
-- Desktop TypeScript typecheck: passed, exit 0. Targeted Biome: exit 0 with
-  **19 warnings and 1 info** remaining; no errors, rules disabled, or
+  process-map tests **16 passed**; registry signal propagation **1 passed**
+  (23 name-filtered tests skipped). No adversarial probe or external plugin
+  code was run.
+- Desktop TypeScript typecheck: passed, exit 0. Targeted Biome on the original
+  A15 patch exited 0 with **19 warnings and 1 info**; the follow-up registry
+  files exited 0 with **14 warnings and 1 info**; no errors, rules disabled, or
   indiscriminate formatting. `git diff --check`: passed.
 - Independent review first identified the run replacement race, early detached
   app cancellation path, and non-cooperative timeout limitation. The first two
   were fixed with RED/GREEN regressions; a second pass found no remaining
   concrete blocker. The reviewer confirmed that non-cooperative in-process
-  callbacks remain a limitation, as documented above. Remote CI for this A15
-  patch is pending publication.
+  callbacks remain a limitation, as documented above. CI run `38021481027` on
+  `881b974` passed `verifier-first runtime regressions`, plugin containment on
+  Linux/macOS/Windows, sandbox compile-only, and the main typecheck/Biome/Test
+  job. The Supabase SQL job failed test 22 in
+  `17_free_monthly_renewal.test.sql` (expected 2026-10-31, got 2026-10-30); the
+  same failure appeared in CI at `ed00347` and remains unresolved. The follow-up
+  registry-signal patch requires its own remote CI run.
 
 ### Limits
 

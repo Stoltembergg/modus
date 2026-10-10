@@ -50,7 +50,7 @@ export class CapabilityRegistry {
     // for state, never rely on the source object's receiver or later property changes.
     const execute = this.implementationExecutors.get(provider) ?? provider.implementation.execute;
     const implementation = Object.freeze({
-      execute: (context: unknown) => execute.call(undefined, context),
+      execute: (context: unknown, signal?: AbortSignal) => execute.call(undefined, context, signal),
     });
     const cloned: CapabilityProvider = {
       ...provider,
