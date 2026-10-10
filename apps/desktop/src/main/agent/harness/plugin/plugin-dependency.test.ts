@@ -903,7 +903,7 @@ describe("Fase 14 — Dependency Intelligence", () => {
       );
     });
 
-    it("accesses live dependency graph through PiSdkRuntime", async () => {
+    it("does not expose the mutable dependency graph through PiSdkRuntime", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
@@ -918,10 +918,9 @@ describe("Fase 14 — Dependency Intelligence", () => {
       try {
         runtime = new PiSdkRuntime();
         await runtime.waitForPlugins();
-        const graph = runtime.getDependencyGraph();
-        expect(graph).toBeInstanceOf(DependencyGraph);
+        expect("getDependencyGraph" in runtime).toBe(false);
       } finally {
-        runtime?.getPluginStateStore().close();
+        await runtime?.closePluginLifecycleStore();
         rmSync(userData, { recursive: true, force: true });
       }
     });

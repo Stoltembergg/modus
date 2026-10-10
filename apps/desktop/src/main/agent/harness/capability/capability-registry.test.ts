@@ -3,11 +3,7 @@ import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { CapabilityDiscovery } from "./capability-discovery";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "./capability-registration-authority";
-import {
-  CapabilityRegistry,
-  getCapabilityRegistry,
-  resetCapabilityRegistry,
-} from "./capability-registry";
+import { CapabilityRegistry, resetCapabilityRegistry } from "./capability-registry";
 import type { Capability, CapabilityProvider } from "./capability-types";
 import {
   CapabilityConflictError,
@@ -898,19 +894,14 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   });
 
   describe("9.6 — PiSdkRuntime Integration & Feature Flags", () => {
-    it("exposes CapabilityRegistry via PiSdkRuntime with feature flag enabled", () => {
+    it("keeps the mutable CapabilityRegistry private to PiSdkRuntime", () => {
       setFeatureFlagOverrides({
         MODUS_CAPABILITY_REGISTRY: true,
       });
 
       const runtime = new PiSdkRuntime();
-      const capReg = runtime.getCapabilityRegistry();
-      expect(capReg).toBeDefined();
-
-      const memoryCap = capReg.getCapability("memory.retrieve");
-      expect(memoryCap).toBeDefined();
-      expect(memoryCap?.apiVersion).toBe("1.0");
-      expect(capReg.getActiveProvider("memory.retrieve")?.providerId).toBe("@modus/memory");
+      expect("getCapabilityRegistry" in runtime).toBe(false);
+      expect("capabilityRegistry" in runtime).toBe(false);
     });
   });
 });

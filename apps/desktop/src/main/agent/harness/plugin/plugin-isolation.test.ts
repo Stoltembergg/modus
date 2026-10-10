@@ -897,7 +897,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       );
     });
 
-    it("initializes PluginIsolationHost and SecurityAuditLogger in PiSdkRuntime when flag enabled", () => {
+    it("does not expose a same-process isolation facade through PiSdkRuntime", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
@@ -907,43 +907,13 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       });
 
       const runtime = new PiSdkRuntime();
-      expect(runtime.getPluginIsolationHost()).toBeDefined();
-    });
-
-    it("persists a productive runtime denial through the shared audit logger", async () => {
-      setFeatureFlagOverrides({
-        MODUS_USE_KERNEL: true,
-        MODUS_CAPABILITY_REGISTRY: true,
-        MODUS_PLUGINS: true,
-        MODUS_PLUGIN_LIFECYCLE: true,
-        MODUS_PLUGIN_ISOLATION: true,
-      });
-      const runtime = new PiSdkRuntime();
-      const host = runtime.getPluginIsolationHost();
-      const implementation = vi.fn(() => "must not execute");
-      if (!host) throw new Error("Expected the feature-flagged denial facade.");
-
-      const result = await host.executeIsolated({
-        pluginId: "@external/synthetic-audit-fixture",
-        capability: "audit.synthetic",
-        context: {},
-        implementation,
-      });
-
-      expect(result.success).toBe(false);
-      expect(implementation).not.toHaveBeenCalled();
-      expect(SecurityAuditLogger.getInstance().getEntries()).toMatchObject([
-        {
-          pluginId: "@external/synthetic-audit-fixture",
-          action: "capability.execute.audit.synthetic",
-          decision: "deny",
-        },
-      ]);
-
-      SecurityAuditLogger.resetInstance();
-      const restored = SecurityAuditLogger.getInstance({ database: auditDatabase });
-      expect(restored.verifyChain()).toEqual({ valid: true });
-      expect(restored.getEntries()).toHaveLength(1);
+      try {
+        await runtime.waitForPlugins();
+        expect("getPluginIsolationHost" in runtime).toBe(false);
+        expect("pluginIsolationHost" in runtime).toBe(false);
+      } finally {
+        await runtime.closePluginLifecycleStore();
+      }
     });
   });
 

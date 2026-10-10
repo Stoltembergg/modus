@@ -157,19 +157,11 @@ import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controlle
 import { HarnessObserver } from "./harness/observability/harness-observer";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
-  type AutoRollbackManager,
   bootstrapModusPlugins,
-  type DependencyGraph,
-  PluginFailureCorrelation,
-  PluginHealthMonitor,
   PluginInstrumentation,
-  PluginIsolationHost,
   PluginLifecycleService,
   PluginLoader,
-  type PluginRecoveryManager,
-  type PluginSafeModeManager,
   PluginStateStore,
-  type PluginVersionManager,
   SecurityAuditLogger,
 } from "./harness/plugin";
 import {
@@ -909,17 +901,12 @@ type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
   private harnessKernel = new HarnessKernel();
-  private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
-  private pluginLoader: PluginLoader = new PluginLoader(this.capabilityRegistry);
-  private pluginStateStore?: PluginStateStore | undefined;
-  private pluginLifecycleService?: PluginLifecycleService | undefined;
-  private pluginInstrumentation?: PluginInstrumentation | undefined;
-  private pluginHealthMonitor?: PluginHealthMonitor | undefined;
-  private pluginFailureCorrelation?: PluginFailureCorrelation | undefined;
-  private pluginIsolationHost?: PluginIsolationHost | undefined;
-  private securityAuditLogger?: SecurityAuditLogger | undefined;
-  private bootstrapPromise?: Promise<void> | undefined;
-  private pluginSyncPromise?: Promise<string[]> | undefined;
+  #capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
+  #pluginLoader: PluginLoader = new PluginLoader(this.#capabilityRegistry);
+  #pluginStateStore?: PluginStateStore | undefined;
+  #pluginLifecycleService?: PluginLifecycleService | undefined;
+  #bootstrapPromise?: Promise<void> | undefined;
+  #pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
@@ -991,18 +978,17 @@ export class PiSdkRuntime implements AgentRuntime {
     registerGroupMailboxTools();
 
     if (isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")) {
-      registerCoreCapabilities(this.capabilityRegistry);
+      registerCoreCapabilities(this.#capabilityRegistry);
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGIN_TRACING")) {
-      this.pluginInstrumentation = new PluginInstrumentation();
-      this.pluginHealthMonitor = new PluginHealthMonitor(this.pluginInstrumentation);
-      this.pluginFailureCorrelation = new PluginFailureCorrelation(this.pluginInstrumentation);
+      this.#capabilityRegistry.setInstrumentation(new PluginInstrumentation());
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")) {
-      this.securityAuditLogger = SecurityAuditLogger.getInstance();
-      this.pluginIsolationHost = new PluginIsolationHost({ auditLogger: this.securityAuditLogger });
+      // Keep the durable audit service ready for host broker decisions. The
+      // isolation facade is deliberately not exposed or wired as an executor.
+      SecurityAuditLogger.getInstance();
     }
 
     const pluginsEnabled = isFeatureFlagEnabled("MODUS_PLUGINS");
@@ -1012,11 +998,11 @@ export class PiSdkRuntime implements AgentRuntime {
         // Open durable lifecycle state before any plugin is loaded. If the
         // store is unavailable, keep this optional subsystem inactive while
         // the rest of the agent runtime remains available.
-        const service = this.getPluginLifecycleService();
+        const service = this.#getPluginLifecycleService();
         if (pluginsEnabled) {
-          this.bootstrapPromise = bootstrapModusPlugins(
-            this.capabilityRegistry,
-            this.pluginLoader,
+          this.#bootstrapPromise = bootstrapModusPlugins(
+            this.#capabilityRegistry,
+            this.#pluginLoader,
             {
               deferActivation: true,
             },
@@ -1026,7 +1012,7 @@ export class PiSdkRuntime implements AgentRuntime {
               console.error("[modus] Failed to prepare plugins for lifecycle sync:", err);
             });
         }
-        this.pluginSyncPromise = (this.bootstrapPromise ?? Promise.resolve())
+        this.#pluginSyncPromise = (this.#bootstrapPromise ?? Promise.resolve())
           .then(() => service.syncOnStartup())
           .catch((err) => {
             console.error("[modus] Failed to sync plugins on startup:", err);
@@ -1041,32 +1027,23 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
-  /** Active tool names for routing, using the same filter as prompt construction. */
-  getCapabilityRegistry(): CapabilityRegistry {
-    return this.capabilityRegistry;
-  }
-
-  getPluginLoader(): PluginLoader {
-    return this.pluginLoader;
-  }
-
-  getPluginStateStore(): PluginStateStore {
-    if (!this.pluginStateStore) {
+  #getPluginStateStore(): PluginStateStore {
+    if (!this.#pluginStateStore) {
       const userData = app.getPath("userData");
-      this.pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
+      this.#pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
     }
-    return this.pluginStateStore;
+    return this.#pluginStateStore;
   }
 
-  getPluginLifecycleService(): PluginLifecycleService {
-    if (!this.pluginLifecycleService) {
-      this.pluginLifecycleService = new PluginLifecycleService(
-        this.getPluginStateStore(),
-        this.pluginLoader,
-        this.capabilityRegistry,
+  #getPluginLifecycleService(): PluginLifecycleService {
+    if (!this.#pluginLifecycleService) {
+      this.#pluginLifecycleService = new PluginLifecycleService(
+        this.#getPluginStateStore(),
+        this.#pluginLoader,
+        this.#capabilityRegistry,
       );
     }
-    return this.pluginLifecycleService;
+    return this.#pluginLifecycleService;
   }
 
   getSubagentRegistry(): SubagentProviderRegistry {
@@ -1192,49 +1169,21 @@ export class PiSdkRuntime implements AgentRuntime {
     return registry;
   }
 
-  getDependencyGraph(): DependencyGraph {
-    return this.getPluginLifecycleService().getDependencyGraph();
-  }
-
-  getPluginInstrumentation(): PluginInstrumentation | undefined {
-    return this.pluginInstrumentation;
-  }
-
-  getPluginHealthMonitor(): PluginHealthMonitor | undefined {
-    return this.pluginHealthMonitor;
-  }
-
-  getPluginFailureCorrelation(): PluginFailureCorrelation | undefined {
-    return this.pluginFailureCorrelation;
-  }
-
-  getPluginIsolationHost(): PluginIsolationHost | undefined {
-    return this.pluginIsolationHost;
-  }
-
-  getPluginVersionManager(): PluginVersionManager {
-    return this.getPluginLifecycleService().getVersionManager();
-  }
-
-  getPluginSafeModeManager(): PluginSafeModeManager {
-    return this.getPluginLifecycleService().getSafeModeManager();
-  }
-
-  getPluginRecoveryManager(): PluginRecoveryManager {
-    return this.getPluginLifecycleService().getRecoveryManager();
-  }
-
-  getAutoRollbackManager(): AutoRollbackManager {
-    return this.getPluginLifecycleService().getAutoRollbackManager();
-  }
-
   async waitForPlugins(): Promise<void> {
-    if (this.bootstrapPromise) {
-      await this.bootstrapPromise;
+    if (this.#bootstrapPromise) {
+      await this.#bootstrapPromise;
     }
-    if (this.pluginSyncPromise) {
-      await this.pluginSyncPromise;
+    if (this.#pluginSyncPromise) {
+      await this.#pluginSyncPromise;
     }
+  }
+
+  /** Release the runtime-owned lifecycle database handle without changing durable plugin state. */
+  async closePluginLifecycleStore(): Promise<void> {
+    await this.waitForPlugins();
+    this.#pluginStateStore?.close();
+    this.#pluginStateStore = undefined;
+    this.#pluginLifecycleService = undefined;
   }
 
   getActiveToolNames(sessionId: string, profile: ToolProfileName): readonly string[] {

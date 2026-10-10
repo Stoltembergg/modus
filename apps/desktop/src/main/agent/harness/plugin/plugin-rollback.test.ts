@@ -4,11 +4,7 @@
  * Self-Healing Recovery, CLI Commands, Feature Flags and PiSdkRuntime integration.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import {
@@ -17,7 +13,6 @@ import {
   validateFeatureFlags,
 } from "../feature-flags";
 import { AutoRollbackManager } from "./auto-rollback";
-import { DependencyGraph } from "./dependency-graph";
 import { executePluginCli } from "./plugin-cli";
 import { PluginHealthMonitor } from "./plugin-health-monitor";
 import { PluginInstrumentation } from "./plugin-instrumentation";
@@ -29,10 +24,7 @@ import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
 import { PluginSafeModeManager } from "./safe-mode";
-import { PluginVersionManager } from "./version-manager";
-
-const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
-vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));
+import type { PluginVersionManager } from "./version-manager";
 
 describe("Fase 15 — Rollback e Safe Mode", () => {
   let store: PluginStateStore;
@@ -46,7 +38,6 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
   let autoRollbackManager: AutoRollbackManager;
   let recoveryManager: PluginRecoveryManager;
   let catalog: TestPluginCatalog;
-  let runtimeUserData: string;
 
   const pluginV1: PluginManifest = {
     id: "@modus/test-plugin",
@@ -89,8 +80,6 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
   };
 
   beforeEach(() => {
-    runtimeUserData = mkdtempSync(join(tmpdir(), "modus-plugin-rollback-runtime-"));
-    runtimeElectronState.userData = runtimeUserData;
     resetFeatureFlagOverrides();
     store = new PluginStateStore(":memory:");
     registry = new CapabilityRegistry();
@@ -126,7 +115,6 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       await loader.unload(p.manifest.id).catch(() => undefined);
     }
     store.close();
-    rmSync(runtimeUserData, { recursive: true, force: true });
   });
 
   describe("15.1 — Version Preservation & Version Manager", () => {
@@ -972,28 +960,6 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       expect(errors).toContain(
         "MODUS_PLUGIN_ROLLBACK_SAFE_MODE requires MODUS_USE_KERNEL to be enabled",
       );
-    });
-
-    it("accesses versionManager, safeModeManager, recoveryManager and autoRollbackManager through PiSdkRuntime", async () => {
-      setFeatureFlagOverrides({
-        MODUS_USE_KERNEL: true,
-        MODUS_CAPABILITY_REGISTRY: true,
-        MODUS_PLUGINS: true,
-        MODUS_PLUGIN_LIFECYCLE: true,
-        MODUS_PLUGIN_ROLLBACK_SAFE_MODE: true,
-      });
-
-      const runtime = new PiSdkRuntime();
-      try {
-        await runtime.waitForPlugins();
-        expect(runtime.getPluginVersionManager()).toBeInstanceOf(PluginVersionManager);
-        expect(runtime.getPluginSafeModeManager()).toBeInstanceOf(PluginSafeModeManager);
-        expect(runtime.getPluginRecoveryManager()).toBeInstanceOf(PluginRecoveryManager);
-        expect(runtime.getAutoRollbackManager()).toBeInstanceOf(AutoRollbackManager);
-      } finally {
-        await runtime.waitForPlugins();
-        runtime.getPluginStateStore().close();
-      }
     });
   });
 });

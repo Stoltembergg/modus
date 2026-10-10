@@ -14,6 +14,7 @@ import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-f
 import { bootstrapModusPlugins } from "./bootstrap";
 import { BUILT_IN_PLUGIN_ENTRIES } from "./plugin-catalog";
 import { PluginLoader } from "./plugin-loader";
+import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
 import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
@@ -427,7 +428,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.9 — PiSdkRuntime Integration & Feature Flags", () => {
-    it("exposes PluginLoader and executes bootstrap with MODUS_PLUGINS enabled", async () => {
+    it("bootstraps built-in plugins after opening durable state", async () => {
       setFeatureFlagOverrides({
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
@@ -436,53 +437,26 @@ describe("Fase 10 — Modus Internal Plugins", () => {
 
       const userData = mkdtempSync(join(tmpdir(), "modus-plugin-capabilities-"));
       runtimeElectronState.userData = userData;
+      const loadPlugin = vi.spyOn(PluginLoader.prototype, "load");
       const runtime = new PiSdkRuntime();
+      let store: PluginStateStore | undefined;
       try {
         await runtime.waitForPlugins();
+        const loaded = await Promise.all(loadPlugin.mock.results.map(({ value }) => value));
+        expect(loaded.map((plugin) => plugin.manifest.id).sort()).toEqual(
+          BUILT_IN_PLUGIN_ENTRIES.map(({ manifest }) => manifest.id).sort(),
+        );
 
-        const pLoader = runtime.getPluginLoader();
-        expect(pLoader).toBeDefined();
-
-        // Bootstrap was triggered in constructor only after its durable state opened.
-        const plugins = pLoader.listPlugins();
-        expect(plugins.length).toBe(6);
-        expect(plugins.every((plugin) => plugin.status === "enabled")).toBe(true);
-        expect(
-          runtime
-            .getPluginLifecycleService()
-            .getStore()
-            .listPlugins()
-            .every((plugin) => plugin.state === "enabled"),
-        ).toBe(true);
-
-        const capReg = runtime.getCapabilityRegistry();
-        const selectResult = await capReg.execute<any, any>("model.select", {
-          task: "quick query",
-          complexity: "simple",
-        });
-        expect(selectResult.selectedModel).toBeUndefined();
-        expect(selectResult.fallbackModel).toBeUndefined();
-        await expect(
-          capReg.execute("model.route", {
-            task: "plan a change",
-            preferredModel: "byok/explicit-model",
-          }),
-        ).rejects.toThrow(CapabilityUnavailableError);
-        await expect(
-          capReg.execute("memory.retrieve", { query: "runtime memory" }),
-        ).rejects.toThrow(CapabilityUnavailableError);
-        await expect(
-          capReg.execute("context.resolve", { query: "runtime context" }),
-        ).rejects.toThrow(CapabilityUnavailableError);
-        await expect(
-          capReg.execute("groups.mailbox", { action: "post", body: "fixture" }),
-        ).rejects.toThrow(CapabilityUnavailableError);
-        const verification = await capReg.execute("verification.run", {
-          checks: [{ name: "tests", command: "npm test" }],
-        });
-        expect(verification).toMatchObject([{ status: "unavailable" }]);
+        // Read the durable host state through a separately owned store. The runtime
+        // deliberately exposes no mutable loader, registry, or store accessor.
+        store = new PluginStateStore(join(userData, "plugins.db"));
+        const plugins = store.listPlugins();
+        expect(plugins).toHaveLength(6);
+        expect(plugins.every((plugin) => plugin.state === "enabled")).toBe(true);
       } finally {
-        runtime.getPluginStateStore().close();
+        loadPlugin.mockRestore();
+        store?.close();
+        await runtime.closePluginLifecycleStore();
         rmSync(userData, { recursive: true, force: true });
       }
     });

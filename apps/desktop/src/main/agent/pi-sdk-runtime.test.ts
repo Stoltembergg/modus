@@ -25,7 +25,6 @@ import type {
   TurnSettleOutput,
 } from "./harness/kernel/harness-hooks";
 import type { HarnessKernel } from "./harness/kernel/harness-kernel";
-import type { PluginManifest } from "./harness/plugin/plugin-types";
 
 let userData: string;
 let cwd: string;
@@ -744,6 +743,65 @@ describe("PiSdkRuntime", () => {
     resetFeatureFlagOverrides();
   });
 
+  it("does not expose mutable plugin control objects through the runtime instance", () => {
+    const runtime = new PiSdkRuntime();
+    const internalApis = [
+      "getCapabilityRegistry",
+      "getPluginLoader",
+      "getPluginStateStore",
+      "getPluginLifecycleService",
+      "getDependencyGraph",
+      "getPluginInstrumentation",
+      "getPluginHealthMonitor",
+      "getPluginFailureCorrelation",
+      "getPluginIsolationHost",
+      "getPluginVersionManager",
+      "getPluginSafeModeManager",
+      "getPluginRecoveryManager",
+      "getAutoRollbackManager",
+      "capabilityRegistry",
+      "pluginLoader",
+      "pluginStateStore",
+      "pluginLifecycleService",
+      "bootstrapPromise",
+      "pluginSyncPromise",
+      "pluginInstrumentation",
+      "pluginHealthMonitor",
+      "pluginFailureCorrelation",
+      "pluginIsolationHost",
+      "securityAuditLogger",
+    ];
+
+    expect(internalApis.filter((key) => key in runtime)).toEqual([]);
+    expect(Object.keys(runtime).filter((key) => internalApis.includes(key))).toEqual([]);
+  });
+
+  it("connects plugin tracing to the private capability registry only when enabled", async () => {
+    const capabilityModule = await import("./harness/capability/capability-registry");
+    const setInstrumentation = vi.spyOn(
+      capabilityModule.CapabilityRegistry.prototype,
+      "setInstrumentation",
+    );
+
+    const tracingPrerequisites = {
+      MODUS_USE_KERNEL: true,
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    } as const;
+    setFeatureFlagOverrides({ ...tracingPrerequisites, MODUS_PLUGIN_TRACING: false });
+    const disabledRuntime = new PiSdkRuntime();
+    await disabledRuntime.waitForPlugins();
+    expect(setInstrumentation).not.toHaveBeenCalled();
+    await disabledRuntime.closePluginLifecycleStore();
+
+    setFeatureFlagOverrides({ ...tracingPrerequisites, MODUS_PLUGIN_TRACING: true });
+    const enabledRuntime = new PiSdkRuntime();
+    await enabledRuntime.waitForPlugins();
+    expect(setInstrumentation).toHaveBeenCalledOnce();
+    await enabledRuntime.closePluginLifecycleStore();
+  });
+
   it("registers group mailbox tools into the Pi tool registry when enabled", async () => {
     setFeatureFlagOverrides({
       MODUS_USE_KERNEL: true,
@@ -1403,30 +1461,44 @@ describe("PiSdkRuntime", () => {
         await bootstrapGate;
         return originalBootstrap(...args);
       });
+    const lifecycleModule = await import("./harness/plugin/plugin-lifecycle-service");
     const sync = vi.fn(async () => [] as string[]);
     const lifecycleSpy = vi
-      .spyOn(PiSdkRuntime.prototype, "getPluginLifecycleService")
-      .mockReturnValue({
-        syncOnStartup: sync,
-      } as never);
+      .spyOn(lifecycleModule.PluginLifecycleService.prototype, "syncOnStartup")
+      .mockImplementation(sync);
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: true,
       MODUS_PLUGIN_LIFECYCLE: true,
     });
-    const runtime = new PiSdkRuntime();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(sync).not.toHaveBeenCalled();
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
+    try {
+      runtime = new PiSdkRuntime();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(sync).not.toHaveBeenCalled();
 
-    releaseBootstrap();
-    await runtime.waitForPlugins();
-    expect(sync).toHaveBeenCalledOnce();
-    bootstrapSpy.mockRestore();
-    lifecycleSpy.mockRestore();
+      releaseBootstrap();
+      await runtime.waitForPlugins();
+      expect(sync).toHaveBeenCalledOnce();
+    } finally {
+      releaseBootstrap();
+      await runtime?.closePluginLifecycleStore();
+      bootstrapSpy.mockRestore();
+      lifecycleSpy.mockRestore();
+    }
   });
 
   it("keeps plugin code unloaded when persistent lifecycle state cannot be opened", async () => {
+    const memoryEntry = (
+      await import("./harness/plugin/plugin-catalog")
+    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
+    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
+    const lifecycle = memoryEntry.manifest.lifecycle;
+    const originalOnLoad = lifecycle?.onLoad;
+    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
+    const onLoad = vi.fn(originalOnLoad);
+    lifecycle.onLoad = onLoad;
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: true,
@@ -1435,24 +1507,40 @@ describe("PiSdkRuntime", () => {
     await rm(userData, { recursive: true, force: true });
     await writeFile(userData, "not a directory");
 
-    const runtime = new PiSdkRuntime();
-    await runtime.waitForPlugins();
+    try {
+      const runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
 
-    expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
-    expect(() => runtime.getPluginStateStore()).toThrow();
+      expect(onLoad).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.onLoad = originalOnLoad;
+      await rm(userData, { recursive: true, force: true });
+    }
   });
 
   it("does not use legacy plugin activation when lifecycle reconciliation is disabled", async () => {
+    const memoryEntry = (
+      await import("./harness/plugin/plugin-catalog")
+    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
+    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
+    const lifecycle = memoryEntry.manifest.lifecycle;
+    const originalOnLoad = lifecycle?.onLoad;
+    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
+    const onLoad = vi.fn(originalOnLoad);
+    lifecycle.onLoad = onLoad;
     setFeatureFlagOverrides({
       MODUS_CAPABILITY_REGISTRY: true,
       MODUS_PLUGINS: true,
       MODUS_PLUGIN_LIFECYCLE: false,
     });
 
-    const runtime = new PiSdkRuntime();
-    await runtime.waitForPlugins();
-
-    expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
+    try {
+      const runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
+      expect(onLoad).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.onLoad = originalOnLoad;
+    }
   });
 
   it("does not let lifecycle startup activate plugins when MODUS_PLUGINS is disabled", async () => {
@@ -1474,30 +1562,10 @@ describe("PiSdkRuntime", () => {
     try {
       const runtime = new PiSdkRuntime();
       await runtime.waitForPlugins();
-      expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
       expect(onLoad).not.toHaveBeenCalled();
     } finally {
       lifecycle.onLoad = originalOnLoad;
     }
-  });
-
-  it("production runtime loader rejects a forged core manifest before running its hooks", async () => {
-    setFeatureFlagOverrides({ MODUS_PLUGINS: false });
-    const runtime = new PiSdkRuntime();
-    const { memoryPluginManifest } = await import("./harness/plugin/plugins/memory-plugin");
-    const onLoad = vi.fn();
-    const forgedManifest: PluginManifest = {
-      ...memoryPluginManifest,
-      id: `@untrusted/runtime-${crypto.randomUUID()}`,
-      trustLevel: "core",
-      lifecycle: { onLoad },
-    };
-
-    await expect(runtime.getPluginLoader().load(forgedManifest)).rejects.toThrow(
-      "is not authorized by the host catalog",
-    );
-    expect(onLoad).not.toHaveBeenCalled();
-    expect(runtime.getCapabilityRegistry().listProviders("memory.retrieve")).toHaveLength(0);
   });
 
   it("restrictive extension loader", async () => {

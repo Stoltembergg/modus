@@ -1,10 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import type { Capability, CapabilityProvider } from "../capability/capability-types";
 import {
-  getFeatureFlags,
   resetFeatureFlagOverrides,
   setFeatureFlagOverrides,
   validateFeatureFlags,
@@ -471,7 +470,7 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
       );
     });
 
-    it("initializes tracing, health monitor, and failure correlation in PiSdkRuntime when flag enabled", () => {
+    it("wires enabled tracing to the private registry without exposing trace managers", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
@@ -480,10 +479,18 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
         MODUS_PLUGIN_TRACING: true,
       });
 
+      const setInstrumentation = vi.spyOn(CapabilityRegistry.prototype, "setInstrumentation");
       const runtime = new PiSdkRuntime();
-      expect(runtime.getPluginInstrumentation()).toBeDefined();
-      expect(runtime.getPluginHealthMonitor()).toBeDefined();
-      expect(runtime.getPluginFailureCorrelation()).toBeDefined();
+      try {
+        expect(setInstrumentation).toHaveBeenCalledOnce();
+        expect(setInstrumentation.mock.calls[0]?.[0]).toBeInstanceOf(PluginInstrumentation);
+        expect("getPluginInstrumentation" in runtime).toBe(false);
+        expect("getPluginHealthMonitor" in runtime).toBe(false);
+        expect("getPluginFailureCorrelation" in runtime).toBe(false);
+      } finally {
+        await runtime.closePluginLifecycleStore();
+        setInstrumentation.mockRestore();
+      }
     });
   });
 
