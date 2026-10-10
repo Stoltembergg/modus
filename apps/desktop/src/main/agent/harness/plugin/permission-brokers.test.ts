@@ -87,6 +87,9 @@ describe("ShellBroker nested package execution policy", () => {
           "wsl npm test",
           "parallel npm test",
           "runuser -u nobody npm test",
+          "gmake test",
+          "sem npm test",
+          "doas npm test",
         ],
       },
     };
@@ -125,8 +128,21 @@ describe("ShellBroker nested package execution policy", () => {
       "wsl npm test",
       "parallel npm test",
       "runuser -u nobody npm test",
+      "gmake test",
+      "sem npm test",
+      "doas npm test",
     ]) {
       expect(broker.canExecute(command, permissions, "synthetic-plugin"), command).toBe(false);
     }
+  });
+
+  it.each([
+    "pkexec npm test",
+    "run0 npm test",
+  ])("denies privileged launcher %s under an exact grant", (command) => {
+    const broker = createShellBroker();
+    const permissions: ExtendedPluginPermissions = { shell: { allow: [command] } };
+
+    expect(broker.canExecute(command, permissions, "synthetic-plugin")).toBe(false);
   });
 });
