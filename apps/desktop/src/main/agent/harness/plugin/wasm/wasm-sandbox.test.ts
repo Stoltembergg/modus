@@ -296,7 +296,7 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   });
 
   describe("19.7 — PluginIsolationHost & Feature Flags Integration", () => {
-    it("executes WASM capabilities through PluginIsolationHost with audit logs", async () => {
+    it("blocks WASM through PluginIsolationHost until OS-backed isolation exists", async () => {
       const audit = SecurityAuditLogger.getInstance();
       audit.clear();
 
@@ -307,16 +307,15 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         pluginId: "@external/fast-math",
         wasmBytes: bytes,
         functionName: "add",
-        args: [77, 33],
       });
 
-      expect(res.success).toBe(true);
-      expect(res.result).toBe(110);
+      expect(res.success).toBe(false);
+      expect(res.error).toContain("OS-backed plugin isolation is unavailable");
       expect(res.latencyMs).toBeDefined();
 
       const entries = audit.getEntries({ pluginId: "@external/fast-math" });
       expect(entries.length).toBeGreaterThan(0);
-      expect(entries[0]?.decision).toBe("allow");
+      expect(entries[0]?.decision).toBe("deny");
       expect(entries[0]?.action).toBe("wasm.execute.add");
     });
 

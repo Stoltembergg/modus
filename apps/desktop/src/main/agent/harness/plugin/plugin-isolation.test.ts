@@ -273,74 +273,86 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
     });
   });
 
-  describe("13.4 — Plugin Isolation Host & Sandboxed Execution", () => {
-    it("classifies trust levels into direct vs sandboxed execution modes", () => {
+  describe("13.4 — Plugin Isolation Host", () => {
+    it("fails closed when OS-backed isolation is unavailable", async () => {
       const host = new PluginIsolationHost();
-      expect(host.determineIsolationMode("core")).toBe("direct");
-      expect(host.determineIsolationMode("official")).toBe("direct");
-      expect(host.determineIsolationMode("community")).toBe("sandboxed");
-      expect(host.determineIsolationMode("local")).toBe("sandboxed");
-    });
-
-    it("executes community capability inside sandboxed boundary with brokers", async () => {
-      const host = new PluginIsolationHost();
+      let implementationCalled = false;
 
       const response = await host.executeIsolated({
         pluginId: "@community/text-helper",
         capability: "text.reverse",
-        trustLevel: "community",
         context: { text: "hello" },
-        implementation: (ctx) => {
-          return { reversed: (ctx as { text: string }).text.split("").reverse().join("") };
+        implementation: () => {
+          implementationCalled = true;
+          return "must not execute in the host process";
         },
       });
 
-      expect(response.success).toBe(true);
-      expect(response.result).toEqual({ reversed: "olleh" });
+      expect(response.success).toBe(false);
+      expect(response.error).toContain("OS-backed plugin isolation is unavailable");
       expect(response.latencyMs).toBeGreaterThanOrEqual(0);
-      expect(response.latencyMs).toBeLessThan(100);
+      expect(implementationCalled).toBe(false);
+
+      const auditEntries = host.getAuditLogger().getEntries({ pluginId: "@community/text-helper" });
+      expect(auditEntries).toHaveLength(1);
+      expect(auditEntries[0]?.decision).toBe("deny");
     });
 
-    it("isolates community plugin crashes without taking down the Modus host process", async () => {
+    it("does not call an untrusted implementation when returning a denial", async () => {
       const host = new PluginIsolationHost();
+      let implementationCalled = false;
 
       const response = await host.executeIsolated({
         pluginId: "@community/flaky",
         capability: "data.process",
-        trustLevel: "community",
         context: {},
         implementation: () => {
-          throw new Error("Fatal internal segmentation fault in plugin");
+          implementationCalled = true;
+          return "must not execute";
         },
       });
 
-      // Modus host did not throw/crash; response captured cleanly
       expect(response.success).toBe(false);
-      expect(response.error).toContain("Fatal internal segmentation fault in plugin");
+      expect(response.error).toContain("OS-backed plugin isolation is unavailable");
+      expect(implementationCalled).toBe(false);
 
-      // Audit logger recorded the failure
       const auditEntries = host.getAuditLogger().getEntries({ pluginId: "@community/flaky" });
       expect(auditEntries.length).toBe(1);
       expect(auditEntries[0]?.decision).toBe("deny");
     });
 
-    it("enforces timeout for hanging or infinite-looping community plugins", async () => {
+    it("does not treat caller-supplied core trust as execution authority", async () => {
       const host = new PluginIsolationHost();
-
+      let implementationCalled = false;
       const response = await host.executeIsolated({
-        pluginId: "@community/hang-forever",
-        capability: "calc.infinite",
-        trustLevel: "community",
-        timeoutMs: 20,
+        pluginId: "@community/forged-core",
+        capability: "core.replace",
+        trustLevel: "core",
         context: {},
-        implementation: async () => {
-          await new Promise((resolve) => setTimeout(resolve, 100));
-          return "should-not-reach";
+        implementation: () => {
+          implementationCalled = true;
+          return "must not execute";
         },
+      } as Parameters<typeof host.executeIsolated>[0]);
+
+      expect(response.success).toBe(false);
+      expect(response.error).toContain("OS-backed plugin isolation is unavailable");
+      expect(implementationCalled).toBe(false);
+    });
+
+    it("does not instantiate WASM through the unisolated plugin facade", async () => {
+      const host = new PluginIsolationHost();
+      const response = await host.executeWasm({
+        pluginId: "@community/wasm-helper",
+        wasmBytes: new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
+        functionName: "unused",
       });
 
       expect(response.success).toBe(false);
-      expect(response.error).toContain("timed out after 20ms");
+      expect(response.error).toContain("OS-backed plugin isolation is unavailable");
+      expect(
+        host.getAuditLogger().getEntries({ pluginId: "@community/wasm-helper" }),
+      ).toMatchObject([{ action: "wasm.execute.unused", decision: "deny" }]);
     });
   });
 

@@ -20,7 +20,6 @@ import type {
 import { PluginLifecycleError, type PluginManifest, type PluginStatus } from "./plugin-types";
 import { PluginSafeModeManager } from "./safe-mode";
 import { PluginVersionManager } from "./version-manager";
-import { WasmCapabilityHost } from "./wasm/wasm-capability-host";
 
 export interface PluginStatusReport {
   id: string;
@@ -46,7 +45,6 @@ export class PluginLifecycleService {
   private safeModeManager?: PluginSafeModeManager | undefined;
   private recoveryManager?: PluginRecoveryManager | undefined;
   private autoRollbackManager?: AutoRollbackManager | undefined;
-  private wasmHost?: WasmCapabilityHost | undefined;
 
   constructor(store: PluginStateStore, loader: PluginLoader, registry: CapabilityRegistry) {
     this.store = store;
@@ -101,13 +99,6 @@ export class PluginLifecycleService {
       this.autoRollbackManager = new AutoRollbackManager(this, this.getVersionManager());
     }
     return this.autoRollbackManager;
-  }
-
-  public getWasmHost(): WasmCapabilityHost {
-    if (!this.wasmHost) {
-      this.wasmHost = new WasmCapabilityHost();
-    }
-    return this.wasmHost;
   }
 
   /**

@@ -103,14 +103,11 @@ export interface ExtendedPluginPermissions {
     | undefined;
 }
 
-export type IsolationMode = "direct" | "sandboxed" | "wasm";
-
 export interface PluginRpcRequest {
   id: string;
   pluginId: string;
   capability: string;
   payload: unknown;
-  timeoutMs?: number | undefined;
 }
 
 export interface PluginRpcResponse<T = unknown> {

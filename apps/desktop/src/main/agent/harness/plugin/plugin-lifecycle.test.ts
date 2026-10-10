@@ -188,6 +188,10 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
   });
 
   describe("11.2 - Plugin Lifecycle Service Transitions", () => {
+    it("does not expose an in-process WASM executor through the lifecycle service", () => {
+      expect("getWasmHost" in service).toBe(false);
+    });
+
     it("rejects an uncatalogued core manifest before install side effects", async () => {
       const onLoad = vi.fn();
       const forged = { ...sampleManifestV1, trustLevel: "core" as const, lifecycle: { onLoad } };
