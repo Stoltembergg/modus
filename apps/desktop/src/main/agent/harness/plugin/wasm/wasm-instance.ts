@@ -7,48 +7,80 @@ import type { WasmFuelMeter } from "./wasm-fuel-meter";
 import { type WasmExecutionMetrics, WasmMemoryOutOfBoundsError } from "./wasm-types";
 
 export class WasmPluginInstance {
-  public readonly instance: WebAssembly.Instance;
+  #wasmInstance: WebAssembly.Instance | null;
   public readonly fuelMeter: WasmFuelMeter;
   public readonly pluginId?: string | undefined;
-  private readonly memory: WebAssembly.Memory | null;
+  #memory: WebAssembly.Memory | null;
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
+  #disposed = false;
+  #releaseMemoryReservation: (() => void) | null;
 
   constructor(
     instance: WebAssembly.Instance,
     fuelMeter: WasmFuelMeter,
     pluginId?: string,
     importedMemory?: WebAssembly.Memory,
+    memoryExportName?: string,
+    releaseMemoryReservation: () => void = () => {},
   ) {
-    this.instance = instance;
+    this.#wasmInstance = instance;
     this.fuelMeter = fuelMeter;
+    this.#releaseMemoryReservation = releaseMemoryReservation;
     if (pluginId) {
       this.pluginId = pluginId;
     }
 
     if (importedMemory) {
-      this.memory = importedMemory;
-    } else if (instance.exports.memory instanceof WebAssembly.Memory) {
-      this.memory = instance.exports.memory;
+      this.#memory = importedMemory;
+    } else if (
+      memoryExportName &&
+      instance.exports[memoryExportName] instanceof WebAssembly.Memory
+    ) {
+      this.#memory = instance.exports[memoryExportName] as WebAssembly.Memory;
     } else {
-      this.memory = null;
+      this.#memory = null;
     }
   }
 
-  public getMemory(): WebAssembly.Memory | null {
-    return this.memory;
-  }
-
   public getMemoryBytesUsed(): number {
-    return this.memory ? this.memory.buffer.byteLength : 0;
+    return this.#memory?.buffer.byteLength ?? 0;
   }
 
   public getMemoryPagesUsed(): number {
-    return this.memory ? this.memory.buffer.byteLength / 65536 : 0;
+    return this.#memory ? this.#memory.buffer.byteLength / 65536 : 0;
+  }
+
+  public growMemory(additionalPages: number): number {
+    this.assertActive();
+    if (!this.#memory) {
+      throw new Error("No linear memory available for this WASM instance");
+    }
+    if (!Number.isSafeInteger(additionalPages) || additionalPages < 0) {
+      throw new RangeError("Memory growth must be a non-negative safe integer");
+    }
+    return this.#memory.grow(additionalPages);
+  }
+
+  public dispose(): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
+    this.#wasmInstance = null;
+    this.#memory = null;
+    const releaseMemoryReservation = this.#releaseMemoryReservation;
+    this.#releaseMemoryReservation = null;
+    releaseMemoryReservation?.();
+  }
+
+  private assertActive(): void {
+    if (this.#disposed) {
+      throw new Error("WASM plugin instance has been disposed");
+    }
   }
 
   public invoke(functionName: string, ...args: (number | bigint)[]): unknown {
-    const fn = this.instance.exports[functionName];
+    this.assertActive();
+    const fn = this.#wasmInstance?.exports[functionName];
     if (typeof fn !== "function") {
       throw new Error(
         `Function "${functionName}" is not exported by WASM module${
@@ -64,26 +96,28 @@ export class WasmPluginInstance {
   }
 
   public writeBytes(offset: number, bytes: Uint8Array): void {
-    if (!this.memory) {
+    this.assertActive();
+    if (!this.#memory) {
       throw new Error("No linear memory available for this WASM instance");
     }
-    const totalBytes = this.memory.buffer.byteLength;
+    const totalBytes = this.#memory.buffer.byteLength;
     if (offset + bytes.length > totalBytes) {
       throw new WasmMemoryOutOfBoundsError(offset + bytes.length, totalBytes, this.pluginId);
     }
-    const memView = new Uint8Array(this.memory.buffer);
+    const memView = new Uint8Array(this.#memory.buffer);
     memView.set(bytes, offset);
   }
 
   public readBytes(offset: number, length: number): Uint8Array {
-    if (!this.memory) {
+    this.assertActive();
+    if (!this.#memory) {
       throw new Error("No linear memory available for this WASM instance");
     }
-    const totalBytes = this.memory.buffer.byteLength;
+    const totalBytes = this.#memory.buffer.byteLength;
     if (offset + length > totalBytes) {
       throw new WasmMemoryOutOfBoundsError(offset + length, totalBytes, this.pluginId);
     }
-    return new Uint8Array(this.memory.buffer.slice(offset, offset + length));
+    return new Uint8Array(this.#memory.buffer.slice(offset, offset + length));
   }
 
   public writeString(offset: number, text: string): number {
@@ -98,8 +132,13 @@ export class WasmPluginInstance {
   }
 
   public invokeJson<TIn = unknown, TOut = unknown>(functionName: string, input: TIn): TOut {
-    const allocFn = this.instance.exports.alloc;
-    const deallocFn = this.instance.exports.dealloc;
+    this.assertActive();
+    const instance = this.#wasmInstance;
+    if (!instance) {
+      throw new Error("WASM plugin instance has been disposed");
+    }
+    const allocFn = instance.exports.alloc;
+    const deallocFn = instance.exports.dealloc;
 
     const jsonString = JSON.stringify(input);
     const bytes = this.textEncoder.encode(jsonString);
@@ -136,12 +175,14 @@ export class WasmPluginInstance {
   }
 
   public getMetrics(startTime: number): WasmExecutionMetrics {
+    this.assertActive();
     return {
       latencyMs: performance.now() - startTime,
       fuelConsumed: this.fuelMeter.getConsumedFuel(),
       fuelRemaining: this.fuelMeter.getRemainingFuel(),
       memoryPagesUsed: this.getMemoryPagesUsed(),
       memoryBytesUsed: this.getMemoryBytesUsed(),
+      memoryUsageAvailable: true,
     };
   }
 }

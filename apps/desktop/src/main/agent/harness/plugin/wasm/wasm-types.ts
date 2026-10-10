@@ -33,6 +33,16 @@ export class WasmMemoryOutOfBoundsError extends Error {
   }
 }
 
+export class WasmMemoryPolicyError extends Error {
+  constructor(
+    message: string,
+    public readonly pluginId?: string,
+  ) {
+    super(`${message}${pluginId ? ` for plugin "${pluginId}"` : ""}`);
+    this.name = "WasmMemoryPolicyError";
+  }
+}
+
 export class WasmExecutionTimeoutError extends Error {
   constructor(
     public readonly timeoutMs: number,
@@ -65,7 +75,13 @@ export interface WasmFuelConfig {
 }
 
 export interface WasmMemoryConfig {
+  /**
+   * Initial pages for a host-created imported memory. Module-defined memory
+   * uses the initial size declared by the module binary.
+   */
   initialPages: number;
+  /** Maximum pages allowed by this instance. Defined memories must declare a
+   * maximum no greater than this value; imported memories are created at this cap. */
   maxPages: number;
 }
 
@@ -87,12 +103,21 @@ export interface WasmInstanceOptions {
   hostImports?: Record<string, Record<string, WebAssembly.ImportValue>> | undefined;
 }
 
+export interface WasmCapabilityHostOptions {
+  /** Maximum memory pages reserved by one instance. Defaults to 256 (16 MiB). */
+  maxMemoryPagesPerInstance?: number | undefined;
+  /** Maximum simultaneously reserved memory pages. Defaults to 1024 (64 MiB). */
+  maxAggregateMemoryPages?: number | undefined;
+}
+
 export interface WasmExecutionMetrics {
   latencyMs: number;
   fuelConsumed: bigint;
   fuelRemaining: bigint;
   memoryPagesUsed: number;
   memoryBytesUsed: number;
+  /** False when instantiation failed before the host could observe a defined memory. */
+  memoryUsageAvailable: boolean;
 }
 
 export interface WasmExecutionResult<T = unknown> {

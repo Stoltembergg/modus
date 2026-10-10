@@ -235,6 +235,83 @@ for this patch are pending.**
   Safe Mode is persisted in the existing plugin state database; full corruption
   and power-loss behavior beyond the injected restart fixtures is not proven.
 
+## Milestone 4 — A05 WASM memory accounting
+
+**Status: host-side limits and accounting implemented; the external-plugin
+execution boundary remains unavailable and adversarial enforcement proof is
+blocked.**
+
+`WasmCapabilityHost` now parses memory declarations from the already compiled
+module bytes and rejects modules with no maximum, multiple memories, hidden
+module-defined memory, unsupported memory64/shared memory, or an imported
+memory outside the host-managed `env.memory` path. A defined memory's declared
+maximum must fit the per-instance policy. Imported memory is created by the
+host at the lesser of the configured cap and the module import maximum. The
+host reserves the maximum possible page count before instantiation and enforces
+an aggregate limit across live instances (defaults: 256 pages / 16 MiB per
+instance and 1024 pages / 64 MiB aggregate). This is capacity reservation, not
+an estimate of current resident memory.
+
+`WasmPluginInstance` reports the actual currently allocated pages/bytes from
+the tracked module memory. It no longer exposes the raw `WebAssembly.Instance`
+or `WebAssembly.Memory`; runtime-private fields keep those references and the
+reservation callback inaccessible even to JavaScript reflection. `dispose()`
+clears the private references, disables wrapper operations and releases its
+reservation. `executeWasm()` disposes in `finally`, and the CLI benchmark
+releases its instance after use. Callers that use `createInstance()` directly
+must call `dispose()` when done. The host currently has no production
+external-plugin execution callsite: the isolation facade continues to deny
+external execution, while the CLI uses the host for inspection/benchmarking.
+The change therefore repairs the host's limits and metrics without claiming an
+external execution boundary.
+
+The input bytes are copied synchronously before the first await. Compilation,
+memory inspection and policy checks therefore use one stable snapshot even if
+the caller later mutates its original buffer. Failed calls report the live
+instance's measured memory and fuel before `finally` disposes it. When a start
+function traps before a module-defined memory can be observed, the result marks
+`memoryUsageAvailable=false` instead of presenting zero as a measured value;
+host-imported memory remains measurable after a failed start.
+
+### Evidence
+
+- RED: a synthetic module with one page of module-defined memory was paired
+  with a two-page configured host memory. The test failed because the instance
+  reported a different memory object than the module actually used.
+- Independent review found that caller mutation between async compilation and
+  inspection could make the checked bytes differ from the compiled module, and
+  that failed calls lost real memory metrics. Both regressions were reproduced
+  RED and fixed; a delayed compile fixture changes the original input after
+  compilation starts and confirms the host still rejects the over-cap module.
+- A second review found runtime-accessible TypeScript-private references could
+  release a reservation early, and start-function traps lost imported-memory
+  measurements. Memory, instance and release callback now use JavaScript
+  private fields; a bounded synthetic start fixture reproduces the missing
+  measurement RED and passes after the failure metric is carried to the result.
+- GREEN: the regression now observes the module's actual one-page initial
+  footprint and growth to two pages. Additional tests cover per-module cap
+  rejection, missing maximum rejection, imported memory, aggregate reservation,
+  disposal, snapshot integrity, failure metrics, and `executeWasm()` release
+  after an invocation failure.
+- Safe targeted Vitest: **1 file, 15 passed, 16 skipped** using the `19.1`,
+  `19.2`, and `Linear Memory Bounds & Isolation` name filter. The skipped tests
+  include the explicit fuel-enforcement cases; no blocked probe ran.
+- Desktop TypeScript typecheck: passed, exit 0.
+- Targeted Biome: exit 0 with **5 warnings**, all at existing diagnostics in
+  `plugin-cli.ts`, `wasm-capability-host.ts`, and the legacy sandbox test import;
+  no new errors. No rule was disabled.
+- `git diff --check`: passed.
+- Independent review: three read-only passes found the mutable-buffer
+  mismatch, failed-call metrics, runtime-accessible references, failed-start
+  metrics, and a retained reservation callback after disposal. These were
+  fixed before the final pass, which found no blocking defect and confirmed
+  direct test instances and the CLI benchmark release their reservations.
+  Remote CI remains before publication.
+- Residual limits: only core 32-bit, non-shared memories with a maximum and an
+  observable export are accepted; current memory metrics do not report process
+  RSS. No external plugin, enforcement probe, or blocked hostile scenario was
+  run, so A05 is not a proof of isolation or whole-process memory containment.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -243,7 +320,7 @@ for this patch are pending.**
 | A02 | Partially mitigated | Facade no longer claims a timeout is containment; preemption/budgets remain absent. Do not run blocked loop probes. |
 | A03 | Partially mitigated | Production loader uses exact host-catalog identity and host-derived trust; runtime test rejects forged manifests before hooks. Same-process provenance is not an isolation boundary. |
 | A04 | Partially mitigated | Direct dispatch and hooks remain for catalogued built-ins; production loader blocks external manifests. A single OS-backed dispatcher and lifecycle boundary remain open. |
-| A05 | Pending | WASM memory accounting and aggregate limits. |
+| A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, and reports actual live memory; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |

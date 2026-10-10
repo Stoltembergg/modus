@@ -539,7 +539,7 @@ export async function executePluginCli(
 
           const wasmHost = new WasmCapabilityHost();
           const module = await wasmHost.compileModule(bytes, target);
-          const inspection = wasmHost.inspectModule(module);
+          const inspection = wasmHost.inspectModule(module, bytes);
 
           let output = "";
           if (asJson) {
@@ -619,18 +619,22 @@ export async function executePluginCli(
             const wasmHost = new WasmCapabilityHost();
             const bytes = buildAddModule();
             const { instance } = await wasmHost.createInstance(bytes);
-            const start = performance.now();
-            for (let i = 0; i < runs; i++) {
-              instance.invoke("add", 10, 20);
+            try {
+              const start = performance.now();
+              for (let i = 0; i < runs; i++) {
+                instance.invoke("add", 10, 20);
+              }
+              const totalMs = performance.now() - start;
+              avgLatencyMs = totalMs / runs;
+              details = {
+                target: "WASM add(10, 20)",
+                runs,
+                avgLatencyMs,
+                opsPerSec: Math.round(runs / (totalMs / 1000)),
+              };
+            } finally {
+              instance.dispose();
             }
-            const totalMs = performance.now() - start;
-            avgLatencyMs = totalMs / runs;
-            details = {
-              target: "WASM add(10, 20)",
-              runs,
-              avgLatencyMs,
-              opsPerSec: Math.round(runs / (totalMs / 1000)),
-            };
           }
 
           let output = "";

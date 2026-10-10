@@ -186,7 +186,7 @@ export function buildFuelLoopModule(): Uint8Array {
 /**
  * Generates a WASM module with exported memory and vector math / tokenizer functions.
  */
-export function buildMemoryModule(initialPages = 1): Uint8Array {
+export function buildMemoryModule(initialPages = 1, maxPages: number | null = 256): Uint8Array {
   const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
 
   // Type section:
@@ -200,11 +200,12 @@ export function buildMemoryModule(initialPages = 1): Uint8Array {
   // Function section: func 0 has type 0, func 1 has type 1
   const funcSection = createSection(0x03, [0x02, 0x00, 0x01]);
 
-  // Memory section: 1 memory with initial pages
+  // Memory section: one memory with an explicit maximum unless a test asks for an invalid fixture.
   const memorySection = createSection(0x05, [
     0x01,
-    0x00, // flags: only min
+    maxPages === null ? 0x00 : 0x01,
     ...encodeUleb128(initialPages),
+    ...(maxPages === null ? [] : encodeUleb128(maxPages)),
   ]);
 
   // Export section: 'memory', 'count_tokens', 'alloc'
@@ -275,6 +276,63 @@ export function buildMemoryModule(initialPages = 1): Uint8Array {
     ...funcSection,
     ...memorySection,
     ...exportSection,
+    ...codeSection,
+  ]);
+}
+
+/** Generates a memory-only module importing and re-exporting env.memory. */
+export function buildImportedMemoryModule(initialPages = 1, maxPages = 256): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const importSection = createSection(0x02, [
+    0x01,
+    0x03,
+    0x65,
+    0x6e,
+    0x76,
+    0x06,
+    0x6d,
+    0x65,
+    0x6d,
+    0x6f,
+    0x72,
+    0x79,
+    0x02,
+    0x01,
+    ...encodeUleb128(initialPages),
+    ...encodeUleb128(maxPages),
+  ]);
+  const exportSection = createSection(
+    0x07,
+    [0x01, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00],
+  );
+  return new Uint8Array([...header, ...importSection, ...exportSection]);
+}
+
+/** Builds a bounded start function that grows imported memory once and then traps. */
+export function buildImportedMemoryStartTrapModule(): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [0x01, 0x60, 0x00, 0x00]);
+  const importSection = createSection(
+    0x02,
+    [
+      0x01, 0x03, 0x65, 0x6e, 0x76, 0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x01, 0x01,
+      0x02,
+    ],
+  );
+  const functionSection = createSection(0x03, [0x01, 0x00]);
+  const startSection = createSection(0x08, [0x00]);
+  const functionBody = [0x00, 0x41, 0x01, 0x40, 0x00, 0x1a, 0x00, 0x0b];
+  const codeSection = createSection(0x0a, [
+    0x01,
+    ...encodeUleb128(functionBody.length),
+    ...functionBody,
+  ]);
+  return new Uint8Array([
+    ...header,
+    ...typeSection,
+    ...importSection,
+    ...functionSection,
+    ...startSection,
     ...codeSection,
   ]);
 }

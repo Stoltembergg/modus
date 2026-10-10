@@ -20,6 +20,8 @@ import { SecurityAuditLogger } from "../security-audit-logger";
 import {
   buildAddModule,
   buildFuelLoopModule,
+  buildImportedMemoryModule,
+  buildImportedMemoryStartTrapModule,
   buildMemoryModule,
   FastAstTokenizer,
   FastContextCompactor,
@@ -30,6 +32,7 @@ import {
   WasmFuelExhaustedError,
   WasmFuelMeter,
   WasmMemoryOutOfBoundsError,
+  WasmMemoryPolicyError,
 } from "./index";
 
 describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
@@ -74,20 +77,24 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       const bytes = buildAddModule();
       const { instance } = await wasmHost.createInstance(bytes);
 
-      const result = instance.invoke("add", 15, 27);
-      expect(result).toBe(42);
+      try {
+        const result = instance.invoke("add", 15, 27);
+        expect(result).toBe(42);
 
-      // Microbenchmark: 1,000 runs
-      const runs = 1000;
-      const start = performance.now();
-      for (let i = 0; i < runs; i++) {
-        instance.invoke("add", i, i + 1);
+        // Microbenchmark: 1,000 runs
+        const runs = 1000;
+        const start = performance.now();
+        for (let i = 0; i < runs; i++) {
+          instance.invoke("add", i, i + 1);
+        }
+        const totalMs = performance.now() - start;
+        const avgLatencyMs = totalMs / runs;
+
+        // Must be well below 0.2ms (typically < 0.001ms)
+        expect(avgLatencyMs).toBeLessThan(0.2);
+      } finally {
+        instance.dispose();
       }
-      const totalMs = performance.now() - start;
-      const avgLatencyMs = totalMs / runs;
-
-      // Must be well below 0.2ms (typically < 0.001ms)
-      expect(avgLatencyMs).toBeLessThan(0.2);
     });
 
     it("executes via executeWasm returning typed metrics and latency", async () => {
@@ -108,10 +115,14 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         fuel: { initialFuel: 50n },
       });
 
-      // run 10 iterations (needs 10 fuel)
-      const res = instance.invoke("run_loop", 10);
-      expect(res).toBe(0);
-      expect(instance.fuelMeter.getConsumedFuel()).toBeGreaterThanOrEqual(10n);
+      try {
+        // run 10 iterations (needs 10 fuel)
+        const res = instance.invoke("run_loop", 10);
+        expect(res).toBe(0);
+        expect(instance.fuelMeter.getConsumedFuel()).toBeGreaterThanOrEqual(10n);
+      } finally {
+        instance.dispose();
+      }
     });
 
     it("throws WasmFuelExhaustedError and cleanly interrupts infinite/runaway loop", async () => {
@@ -123,11 +134,15 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         fuel: { initialFuel: 25n },
       });
 
-      expect(() => {
-        instance.invoke("run_loop", 1000);
-      }).toThrow(WasmFuelExhaustedError);
+      try {
+        expect(() => {
+          instance.invoke("run_loop", 1000);
+        }).toThrow(WasmFuelExhaustedError);
 
-      expect(instance.fuelMeter.getRemainingFuel()).toBe(0n);
+        expect(instance.fuelMeter.getRemainingFuel()).toBe(0n);
+      } finally {
+        instance.dispose();
+      }
     });
 
     it("captures fuel exhaustion gracefully in executeWasm without crashing host", async () => {
@@ -144,16 +159,35 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   });
 
   describe("19.4 — Linear Memory Bounds & Isolation", () => {
+    it("reports the module-owned memory instead of an unused host allocation", async () => {
+      const bytes = buildMemoryModule(1, 2);
+      const { instance } = await wasmHost.createInstance(bytes, {
+        memory: { initialPages: 2, maxPages: 2 },
+      });
+
+      try {
+        expect(instance.getMemoryPagesUsed()).toBe(1);
+        expect(instance.growMemory(1)).toBe(1);
+        expect(instance.getMemoryPagesUsed()).toBe(2);
+      } finally {
+        instance.dispose();
+      }
+    });
+
     it("manages linear memory with allocation, string write, and string read", async () => {
       const bytes = buildMemoryModule(2); // 2 pages = 128KB
       const { instance } = await wasmHost.createInstance(bytes);
 
-      expect(instance.getMemoryPagesUsed()).toBe(2);
-      expect(instance.getMemoryBytesUsed()).toBe(131072);
+      try {
+        expect(instance.getMemoryPagesUsed()).toBe(2);
+        expect(instance.getMemoryBytesUsed()).toBe(131072);
 
-      const writtenLen = instance.writeString(100, "Hello from Modus WASM Sandbox!");
-      const readBack = instance.readString(100, writtenLen);
-      expect(readBack).toBe("Hello from Modus WASM Sandbox!");
+        const writtenLen = instance.writeString(100, "Hello from Modus WASM Sandbox!");
+        const readBack = instance.readString(100, writtenLen);
+        expect(readBack).toBe("Hello from Modus WASM Sandbox!");
+      } finally {
+        instance.dispose();
+      }
     });
 
     it("throws WasmMemoryOutOfBoundsError when accessing beyond allocated pages", async () => {
@@ -162,10 +196,132 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
         pluginId: "@test/memory-plugin",
       });
 
-      expect(() => {
-        // Attempt to write beyond 65536
-        instance.writeBytes(65500, new Uint8Array(100));
-      }).toThrow(WasmMemoryOutOfBoundsError);
+      try {
+        expect(() => {
+          // Attempt to write beyond 65536
+          instance.writeBytes(65500, new Uint8Array(100));
+        }).toThrow(WasmMemoryOutOfBoundsError);
+      } finally {
+        instance.dispose();
+      }
+    });
+
+    it("rejects a module whose declared maximum exceeds the configured per-instance cap", async () => {
+      await expect(
+        wasmHost.createInstance(buildMemoryModule(1, 3), {
+          memory: { initialPages: 1, maxPages: 2 },
+        }),
+      ).rejects.toThrow(WasmMemoryPolicyError);
+    });
+
+    it("rejects a linear memory without an enforceable maximum", async () => {
+      await expect(wasmHost.createInstance(buildMemoryModule(1, null))).rejects.toThrow(
+        /must declare a maximum page count/,
+      );
+    });
+
+    it("validates the same byte snapshot that was compiled", async () => {
+      const host = new WasmCapabilityHost({ maxMemoryPagesPerInstance: 2 });
+      const bytes = buildMemoryModule(1, 3);
+      const originalCompile = host.compileModule.bind(host);
+      let signalCompiled: () => void = () => {};
+      let continueCompile: () => void = () => {};
+      const compiled = new Promise<void>((resolve) => {
+        signalCompiled = resolve;
+      });
+      const continueCompilation = new Promise<void>((resolve) => {
+        continueCompile = resolve;
+      });
+
+      vi.spyOn(host, "compileModule").mockImplementation(async (input, cacheKey) => {
+        const module = await originalCompile(input, cacheKey);
+        signalCompiled();
+        await continueCompilation;
+        return module;
+      });
+
+      const pendingInstance = host.createInstance(bytes);
+      await compiled;
+      const memorySection = bytes.findIndex(
+        (_, index) =>
+          bytes[index] === 0x05 &&
+          bytes[index + 1] === 0x04 &&
+          bytes[index + 2] === 0x01 &&
+          bytes[index + 3] === 0x01 &&
+          bytes[index + 4] === 0x01 &&
+          bytes[index + 5] === 0x03,
+      );
+      expect(memorySection).toBeGreaterThanOrEqual(0);
+      bytes[memorySection + 5] = 0x02;
+      continueCompile();
+
+      try {
+        await expect(pendingInstance).rejects.toThrow(WasmMemoryPolicyError);
+      } finally {
+        const created = await pendingInstance.catch(() => undefined);
+        created?.instance.dispose();
+      }
+    });
+
+    it("accounts imported memory against the aggregate cap and releases it on dispose", async () => {
+      const host = new WasmCapabilityHost({
+        maxMemoryPagesPerInstance: 2,
+        maxAggregateMemoryPages: 2,
+      });
+      const bytes = buildImportedMemoryModule(1, 2);
+      const { instance } = await host.createInstance(bytes, {
+        memory: { initialPages: 1, maxPages: 2 },
+      });
+
+      const ownProperties = Object.getOwnPropertyNames(instance);
+      expect(ownProperties).not.toContain("wasmInstance");
+      expect(ownProperties).not.toContain("memory");
+      expect(ownProperties).not.toContain("releaseMemoryReservation");
+      expect(host.getReservedMemoryPages()).toBe(2);
+      await expect(
+        host.createInstance(bytes, { memory: { initialPages: 1, maxPages: 2 } }),
+      ).rejects.toThrow(/Aggregate linear memory limit/);
+
+      instance.dispose();
+      expect(host.getReservedMemoryPages()).toBe(0);
+      expect(instance.getMemoryPagesUsed()).toBe(0);
+      expect(() => instance.growMemory(1)).toThrow(/disposed/);
+      const replacement = await host.createInstance(bytes, {
+        memory: { initialPages: 1, maxPages: 2 },
+      });
+      replacement.instance.dispose();
+    });
+
+    it("releases reserved memory after executeWasm returns", async () => {
+      const host = new WasmCapabilityHost({ maxMemoryPagesPerInstance: 2 });
+      const result = await host.executeWasm(buildMemoryModule(1, 2), "missing_function");
+
+      expect(result.success).toBe(false);
+      expect(host.getReservedMemoryPages()).toBe(0);
+    });
+
+    it("preserves actual memory metrics when a call fails after instantiation", async () => {
+      const result = await wasmHost.executeWasm(buildMemoryModule(1, 2), "missing_function");
+
+      expect(result.success).toBe(false);
+      expect(result.metrics.memoryPagesUsed).toBe(1);
+      expect(result.metrics.memoryBytesUsed).toBe(65536);
+      expect(wasmHost.getReservedMemoryPages()).toBe(0);
+    });
+
+    it("reports available imported memory after a bounded start function traps", async () => {
+      const result = await wasmHost.executeWasm(
+        buildImportedMemoryStartTrapModule(),
+        "never_called",
+        [],
+        { memory: { initialPages: 1, maxPages: 2 } },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.metrics.memoryUsageAvailable).toBe(true);
+      expect(result.metrics.memoryPagesUsed).toBe(2);
+      expect(result.metrics.memoryBytesUsed).toBe(131072);
+      expect(wasmHost.getReservedMemoryPages()).toBe(0);
     });
   });
 
