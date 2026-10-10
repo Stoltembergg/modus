@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import fs, { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import path, { join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
@@ -459,7 +459,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canRead(".ssh/id_rsa", perms, "community-plugin")).toBe(false);
       });
 
-      it("permits reading within declared read scopes and blocks out-of-scope files", () => {
+      it("denies in-scope and out-of-scope access until a handle-bound backend exists", () => {
         const broker = new FilesystemBroker();
         const perms: ExtendedPluginPermissions = {
           filesystem: {
@@ -468,11 +468,11 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
           },
         };
 
-        expect(broker.canRead("src/index.ts", perms, "plugin-a")).toBe(true);
-        expect(broker.canRead("public/logo.png", perms, "plugin-a")).toBe(true);
+        expect(broker.canRead("src/index.ts", perms, "plugin-a")).toBe(false);
+        expect(broker.canRead("public/logo.png", perms, "plugin-a")).toBe(false);
         expect(broker.canRead("secrets/config.json", perms, "plugin-a")).toBe(false);
 
-        expect(broker.canWrite("temp/output.txt", perms, "plugin-a")).toBe(true);
+        expect(broker.canWrite("temp/output.txt", perms, "plugin-a")).toBe(false);
         expect(broker.canWrite("src/index.ts", perms, "plugin-a")).toBe(false);
       });
 
@@ -490,53 +490,17 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         );
       });
 
-      it("denies a missing target when its nearest existing parent resolves outside scope", () => {
-        const scope = path.resolve(process.cwd(), "synthetic-workspace");
-        const redirectedParent = path.join(scope, "redirected-parent");
-        const outside = path.resolve(process.cwd(), "synthetic-outside");
-        const missing = Object.assign(new Error("synthetic missing path"), { code: "ENOENT" });
-        const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
-          const candidatePath = path.resolve(candidate.toString());
-          if (candidatePath === scope) return scope;
-          if (candidatePath === redirectedParent) return outside;
-          throw missing;
-        });
+      it("denies missing and link-shaped paths before filesystem metadata lookup", () => {
+        const broker = new FilesystemBroker();
+        const permissions: ExtendedPluginPermissions = { filesystem: { write: ["."] } };
+        const realpath = vi.spyOn(fs, "realpathSync");
+        const lstat = vi.spyOn(fs, "lstatSync");
 
         try {
-          const broker = new FilesystemBroker(undefined, scope);
-          const permissions: ExtendedPluginPermissions = {
-            filesystem: { write: ["."] },
-          };
-
           expect(broker.canWrite("redirected-parent/new-file.txt", permissions, "p1")).toBe(false);
-        } finally {
-          realpath.mockRestore();
-        }
-      });
-
-      it("denies a missing target below a dangling symbolic link", () => {
-        const scope = path.resolve(process.cwd(), "synthetic-workspace");
-        const linkPath = path.join(scope, "dangling-link");
-        const missing = Object.assign(new Error("synthetic missing path"), { code: "ENOENT" });
-        const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
-          const candidatePath = path.resolve(candidate.toString());
-          if (candidatePath === scope) return scope;
-          throw missing;
-        });
-        const lstat = vi.spyOn(fs, "lstatSync").mockImplementation((candidate) => {
-          if (path.resolve(candidate.toString()) === linkPath) {
-            return { isSymbolicLink: () => true } as never;
-          }
-          throw missing;
-        });
-
-        try {
-          const broker = new FilesystemBroker(undefined, scope);
-          const permissions: ExtendedPluginPermissions = {
-            filesystem: { write: ["."] },
-          };
-
           expect(broker.canWrite("dangling-link/new-file.txt", permissions, "p1")).toBe(false);
+          expect(realpath).not.toHaveBeenCalled();
+          expect(lstat).not.toHaveBeenCalled();
         } finally {
           realpath.mockRestore();
           lstat.mockRestore();
@@ -544,8 +508,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       });
 
       it("does not perform filesystem IO when no race-free host backend is available", async () => {
-        const scope = path.resolve(process.cwd(), "synthetic-workspace");
-        const broker = new FilesystemBroker(undefined, scope);
+        const broker = new FilesystemBroker();
         const permissions: ExtendedPluginPermissions = {
           filesystem: { read: ["."], write: ["."] },
         };
@@ -554,21 +517,27 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
           .mockResolvedValue("synthetic content" as never);
         const writeFile = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
         const mkdir = vi.spyOn(fs.promises, "mkdir").mockResolvedValue(undefined);
+        const realpath = vi.spyOn(fs, "realpathSync");
+        const lstat = vi.spyOn(fs, "lstatSync");
 
         try {
           await expect(broker.readFile("document.txt", permissions, "p1")).rejects.toThrow(
-            "race-free filesystem backend is unavailable",
+            "Handle-bound filesystem executor is unavailable",
           );
           await expect(
             broker.writeFile("document.txt", "content", permissions, "p1"),
-          ).rejects.toThrow("race-free filesystem backend is unavailable");
+          ).rejects.toThrow("Handle-bound filesystem executor is unavailable");
           expect(readFile).not.toHaveBeenCalled();
           expect(writeFile).not.toHaveBeenCalled();
           expect(mkdir).not.toHaveBeenCalled();
+          expect(realpath).not.toHaveBeenCalled();
+          expect(lstat).not.toHaveBeenCalled();
         } finally {
           readFile.mockRestore();
           writeFile.mockRestore();
           mkdir.mockRestore();
+          realpath.mockRestore();
+          lstat.mockRestore();
         }
       });
     });
@@ -586,7 +555,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         );
       });
 
-      it("blocks localhost unless allowLocalhost is enabled", () => {
+      it("keeps network denied even when localhost is explicitly granted", () => {
         const broker = new NetworkBroker();
         const permsNoLocalhost: ExtendedPluginPermissions = {
           network: { domains: ["localhost", "127.0.0.1"] },
@@ -597,7 +566,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
 
         expect(broker.canConnect("http://localhost:8080/api", permsNoLocalhost)).toBe(false);
         expect(broker.canConnect("http://127.0.0.1:3000", permsNoLocalhost)).toBe(false);
-        expect(broker.canConnect("http://localhost:8080/api", permsWithLocalhost)).toBe(true);
+        expect(broker.canConnect("http://localhost:8080/api", permsWithLocalhost)).toBe(false);
       });
 
       it("blocks bracketed and mapped IPv6 loopback literals", () => {
@@ -651,28 +620,28 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         }
       });
 
-      it("allows globally reachable protocol anycast addresses with exact grants", () => {
+      it("denies globally reachable protocol anycast addresses without a pinned executor", () => {
         const broker = new NetworkBroker();
 
         for (const address of ["192.0.0.9", "192.0.0.10"]) {
           expect(
             broker.canConnect(`https://${address}/`, { network: { domains: [address] } }),
             address,
-          ).toBe(true);
+          ).toBe(false);
         }
       });
 
-      it("validates destination domain against domain whitelist and wildcards", () => {
+      it("does not authorize public domains based only on a whitelist", () => {
         const broker = new NetworkBroker();
         const perms: ExtendedPluginPermissions = {
           network: { domains: ["api.modus.org", "*.service.io"] },
         };
 
-        expect(broker.canConnect("https://api.modus.org/v1", perms)).toBe(true);
-        expect(broker.canConnect("https://sub.service.io/data", perms)).toBe(true);
+        expect(broker.canConnect("https://api.modus.org/v1", perms)).toBe(false);
+        expect(broker.canConnect("https://sub.service.io/data", perms)).toBe(false);
         expect(broker.canConnect("https://evil.attacker.com", perms)).toBe(false);
         expect(broker.canConnect("https://8.8.8.8/", { network: { domains: ["8.8.8.8"] } })).toBe(
-          true,
+          false,
         );
       });
 
@@ -929,20 +898,19 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(CredentialGuard.isSensitivePath("src/main.ts")).toBe(false);
     });
 
-    it("denies symlink escapes planted inside the declared scope", () => {
-      const root = mkdtempSync(join(tmpdir(), "modus-fsprobe-"));
+    it("denies link-shaped paths without inspecting filesystem metadata", () => {
+      const broker = new FilesystemBroker();
+      const realpath = vi.spyOn(fs, "realpathSync");
+      const lstat = vi.spyOn(fs, "lstatSync");
+      const perms: ExtendedPluginPermissions = { filesystem: { read: ["."] } };
+
       try {
-        const outside = join(root, "outside");
-        const scope = join(root, "scope");
-        mkdirSync(outside, { recursive: true });
-        mkdirSync(scope, { recursive: true });
-        writeFileSync(join(outside, "secret.txt"), "x");
-        symlinkSync(outside, join(scope, "linkdir"), "junction");
-        const broker = new FilesystemBroker(undefined as any, scope);
-        const perms: ExtendedPluginPermissions = { filesystem: { read: ["."] } };
         expect(broker.canRead("linkdir/secret.txt", perms, "p1")).toBe(false);
+        expect(realpath).not.toHaveBeenCalled();
+        expect(lstat).not.toHaveBeenCalled();
       } finally {
-        rmSync(root, { recursive: true, force: true });
+        realpath.mockRestore();
+        lstat.mockRestore();
       }
     });
 

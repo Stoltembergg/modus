@@ -5,9 +5,6 @@
  * in the cryptographic security audit log.
  */
 
-import fs from "fs";
-import path from "path";
-import { CredentialGuard } from "./credential-guard";
 import { type ExtendedPluginPermissions, PermissionDeniedError } from "./plugin-isolation-types";
 import { SecurityAuditLogger } from "./security-audit-logger";
 
@@ -16,177 +13,67 @@ import { SecurityAuditLogger } from "./security-audit-logger";
 // -----------------------------------------------------------------------------
 
 export class FilesystemBroker {
-  constructor(
-    private audit = SecurityAuditLogger.getInstance(),
-    private workspaceRoot: string = process.cwd(),
-  ) {}
-
-  /**
-   * Resolves a path through its nearest existing ancestor. This catches a
-   * symlink/junction in a parent even when the final file does not exist.
-   */
-  private resolveWithinRoot(targetPath: string): string | undefined {
-    const unresolvedParts: string[] = [];
-    let candidate = path.resolve(this.workspaceRoot, targetPath);
-
-    while (true) {
-      try {
-        return path.resolve(fs.realpathSync(candidate), ...unresolvedParts.reverse());
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
-
-        try {
-          if (fs.lstatSync(candidate).isSymbolicLink()) return undefined;
-        } catch (lstatError) {
-          const lstatCode = (lstatError as NodeJS.ErrnoException).code;
-          if (lstatCode !== "ENOENT" && lstatCode !== "ENOTDIR") return undefined;
-        }
-
-        const parent = path.dirname(candidate);
-        if (parent === candidate) return undefined;
-        unresolvedParts.push(path.basename(candidate));
-        candidate = parent;
-      }
-    }
-  }
-
-  private pathIsAllowed(targetPath: string, scopes: string[]): boolean {
-    const resolved = this.resolveWithinRoot(targetPath);
-    if (!resolved) return false;
-
-    return scopes.some((scope) => {
-      const resolvedScope = this.resolveWithinRoot(scope);
-      return (
-        resolvedScope !== undefined &&
-        (resolved === resolvedScope || resolved.startsWith(resolvedScope + path.sep))
-      );
-    });
-  }
+  constructor(private audit = SecurityAuditLogger.getInstance()) {}
 
   private denyIoWithoutSafeBackend(
     action: "filesystem.read" | "filesystem.write",
     targetPath: string,
     pluginId: string,
   ): never {
-    const reason = "race-free filesystem backend is unavailable";
+    const reason = "Handle-bound filesystem executor is unavailable";
     this.audit.log({ pluginId, action, resource: targetPath, decision: "deny", reason });
     throw new PermissionDeniedError(action, targetPath, pluginId, reason);
   }
 
   public canRead(
     targetPath: string,
-    permissions: ExtendedPluginPermissions = {},
+    _permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
   ): boolean {
     const action = "filesystem.read";
-
-    // 1. Never allow sensitive credentials or secret keys
-    if (CredentialGuard.isSensitivePath(targetPath)) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "deny",
-        reason: "Target is a protected credential or secret file",
-      });
-      return false;
-    }
-
-    const readScopes = permissions.filesystem?.read ?? [];
-
-    if (readScopes.length === 0) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "deny",
-        reason: "No filesystem read permissions declared",
-      });
-      return false;
-    }
-
-    const allowed = this.pathIsAllowed(targetPath, readScopes);
-
     this.audit.log({
       pluginId,
       action,
       resource: targetPath,
-      decision: allowed ? "allow" : "deny",
-      reason: allowed ? "Path matches declared read scope" : "Path outside declared read scopes",
+      decision: "deny",
+      reason: "Handle-bound filesystem executor is unavailable",
     });
 
-    return allowed;
+    return false;
   }
 
   public canWrite(
     targetPath: string,
-    permissions: ExtendedPluginPermissions = {},
+    _permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
   ): boolean {
     const action = "filesystem.write";
-
-    // 1. Never allow writing to sensitive credentials or secret keys
-    if (CredentialGuard.isSensitivePath(targetPath)) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "deny",
-        reason: "Target is a protected credential or secret file",
-      });
-      return false;
-    }
-
-    const writeScopes = permissions.filesystem?.write ?? [];
-
-    if (writeScopes.length === 0) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "deny",
-        reason: "No filesystem write permissions declared",
-      });
-      return false;
-    }
-
-    const allowed = this.pathIsAllowed(targetPath, writeScopes);
-
     this.audit.log({
       pluginId,
       action,
       resource: targetPath,
-      decision: allowed ? "allow" : "deny",
-      reason: allowed ? "Path matches declared write scope" : "Path outside declared write scopes",
+      decision: "deny",
+      reason: "Handle-bound filesystem executor is unavailable",
     });
 
-    return allowed;
+    return false;
   }
 
   public async readFile(
     targetPath: string,
-    permissions: ExtendedPluginPermissions = {},
+    _permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    encoding: BufferEncoding = "utf-8",
+    _encoding: BufferEncoding = "utf-8",
   ): Promise<string> {
-    if (!this.canRead(targetPath, permissions, pluginId)) {
-      throw new PermissionDeniedError("filesystem.read", targetPath, pluginId);
-    }
-    void encoding;
     return this.denyIoWithoutSafeBackend("filesystem.read", targetPath, pluginId);
   }
 
   public async writeFile(
     targetPath: string,
-    content: string | Uint8Array,
-    permissions: ExtendedPluginPermissions = {},
+    _content: string | Uint8Array,
+    _permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
   ): Promise<void> {
-    if (!this.canWrite(targetPath, permissions, pluginId)) {
-      throw new PermissionDeniedError("filesystem.write", targetPath, pluginId);
-    }
-    void content;
     return this.denyIoWithoutSafeBackend("filesystem.write", targetPath, pluginId);
   }
 }
@@ -480,11 +367,11 @@ export class NetworkBroker {
       pluginId,
       action,
       resource: urlString,
-      decision: "allow",
-      reason: "Network destination matches whitelist",
+      decision: "deny",
+      reason: "DNS-pinned network executor is unavailable",
     });
 
-    return true;
+    return false;
   }
 }
 

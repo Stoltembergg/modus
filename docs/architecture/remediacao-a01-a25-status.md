@@ -1831,8 +1831,8 @@ cancellation follow-up above.
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
-| A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
-| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::1` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
+| A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
+| A08 | Partially mitigated; NetworkBroker now fails closed | Exact public-domain/IP grants no longer return allow without DNS-pinned connection enforcement. Audit reasons still distinguish protected ranges from ordinary public destinations denied for absent I/O. The broker has no production caller. DNS pinning, redirect enforcement, actual connection control, and production wiring remain open. |
 | A09 | Partially mitigated; ShellBroker now fails closed | `ShellBroker.canExecute` always denies and audits until a platform-isolated executor is integrated, so exact grants cannot authorize known or unknown command strings. Static search found no production caller; trusted Harness and separate `GitBroker` remain independent. A production dispatcher, scoped argv authority, and OS execution boundary are still absent. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
@@ -2138,6 +2138,58 @@ answers whether a Git operation grant exists, but has no production caller and
 does not execute Git. A future OS executor must add a host-owned, scoped
 dispatcher before either permission result can be used to authorize a child
 process.
+
+### A07/A08 broker fail-closed follow-up pending remote CI
+
+Static search found no productive constructors or callers for
+`FilesystemBroker` or `NetworkBroker`; the only internal calls are the
+filesystem class's own read/write wrappers. The filesystem broker now denies
+before path canonicalization, metadata lookup, or content I/O, avoiding the
+check/open race and avoiding metadata-dependent decisions altogether. It does
+not prove which paths would be safe if I/O were re-enabled. The network
+predicate can match an exact domain and port, but it cannot pin the resolved
+address or enforce redirect policy. Both brokers therefore return an audited
+denial even when metadata permissions match. Actual read, write, and network
+operations remain unavailable. This does not change built-in Harness tools,
+which use their existing trusted path, and no network request or file-content
+I/O was performed.
+
+- RED: synthetic exact grants for `package.json` and
+  `https://api.example.com/v1` returned `true` without a safe backend.
+- GREEN: the broker regressions now deny both grants and assert the audit
+  reasons, and `canRead`/`canWrite` deny without calling `realpathSync` or
+  `lstatSync`. `permission-brokers.test.ts` passed **12/12**; the filtered
+  `FilesystemBroker|NetworkBroker` cases in `plugin-isolation.test.ts` passed
+  **14/14**, with 35 unrelated cases skipped. The test-name filter excluded
+  the former synthetic symlink/junction fixture, which was replaced with
+  assertions that link-shaped paths are denied before metadata lookup. No
+  probe or hostile code ran.
+- Independent review of the adjusted diff found no productive bypass and
+  confirmed there are no runtime callers. It noted that
+  `scripts/audit-phase19/probes.ts` still uses the old two-argument broker
+  constructor and expects successful file operations. This non-production
+  probe was not executed and is not valid evidence for the new fail-closed
+  contract; it is outside the desktop typecheck. The review also confirmed the
+  no-content/no-socket paths and the audit-reason assertions below.
+- Desktop typecheck passed after the final no-metadata change. Targeted Biome
+  exits 0 with 6 informational diagnostics (5 in
+  `plugin-isolation.test.ts`, 1 in `permission-brokers.ts`); these lines were
+  not compared against base and are not classified as pre-existing. No
+  warnings or errors remain in the touched-file check. `git diff --check`
+  passed.
+- Remote CI is pending for the change. The prior workflow `38092837910` on
+  `9df3e23` (before this A07/A08 patch) completed with **4,638 passed, 8
+  skipped, 1 failed** across 413 files. Its only failure was
+  `FastVectorDistance` at **0.118112 ms** against `<0.1 ms`; the benchmark and
+  filters were unchanged. No baseline or instability classification is
+  claimed. Its other jobs, including pgTAP, safe IPC, safe-filtered
+  containment, A17/A21 and PTY, passed. This workflow is not evidence for the
+  current patch.
+
+The APIs remain exported, so future callers fail closed until they are
+replaced by host-owned operations that bind permission evaluation to the
+actual filesystem handle or network socket. This is not a certified
+containment boundary.
 
 #### Remote CI on `a1a4e35` before the `pkexec`/`run0` follow-up
 
