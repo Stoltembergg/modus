@@ -48,6 +48,7 @@ import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
 import { ReviewPlanCard } from "../plan/ReviewPlanCard";
+import { ProcessStopNotices } from "../process/ProcessStopNotices";
 import { RunningProcessBar } from "../process/RunningProcessBar";
 import { useManagedProcesses } from "../process/useManagedProcesses";
 import { ProviderLogo } from "../settings/ProviderLogo";
@@ -1594,15 +1595,10 @@ export function ChatPane({
           {promptError}
         </div>
       ) : null}
-      {processStopErrors.map(([processId, message]) => (
-        <div
-          className="mx-4 mt-2 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger"
-          key={processId}
-          role="alert"
-        >
-          {message}
-        </div>
-      ))}
+      <ProcessStopNotices
+        notices={processStopErrors}
+        onDismiss={(processId) => updateProcessStopNotice(processStopScope, processId, undefined)}
+      />
 
       {isRunning ? (
         <div

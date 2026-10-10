@@ -972,15 +972,28 @@ of being swallowed.
   now returns an explicit error explaining that descendant cleanup was not
   confirmed. The stop UI suppresses duplicate in-flight requests and keeps
   notices scoped to the current workspace/session and process id. Current
-  targeted tests pass **32/32 across six files**; Biome passes on all 11
-  changed source/test files, `git diff --check` passes, and desktop typecheck
-  passes. No hostile process or plugin code was executed.
+  A15's targeted tests pass **33/33 across seven files**; the combined A15/A09
+  set passes **36/36 across eight files**. Desktop typecheck passed. Biome
+  passed for the combined 15-file source/test set with four existing info
+  diagnostics in `permission-brokers.ts`; `git diff --check` passed. No hostile
+  process or plugin code was executed.
 - Independent review identified Windows leader-only confirmation, stale app
   IDs, and POSIX descendants that escape the original process group. The
   stale-ID case is guarded when Node has delivered the original leader's exit
   status. Platform API documentation now limits its confirmation scope to the
   original POSIX process group or Windows leader PID; it does not claim proof
   that escaped descendants are absent.
+- Follow-up independent review found that an unconfirmed-stop notice could
+  outlive its process row without a dismissal action. `ProcessStopNotices`
+  now exposes an accessible per-process Dismiss button; this removes only the
+  current session's local UI notice, not any durable audit or process record.
+  RED: the UI regression failed when the button was removed because no
+  accessible dismissal action existed. GREEN: the dismissal component test
+  passes. Independent re-review found no blocker and verified that the
+  workspace/session scope is retained; it noted that the added test exercises
+  the component with a local state harness rather than switching scopes in a
+  full `ChatPane` integration test. PID reuse and escaped-descendant risks
+  remain unchanged.
 
 Remaining limits: without retained OS process handles/Windows Job Objects or a
 containment boundary, a narrow exit/reuse race cannot be eliminated between
@@ -988,6 +1001,20 @@ the identity check and signal; Windows does not independently verify
 descendants; and POSIX cannot observe descendants that create a new process
 group/session. These are not proven hard-preemption or whole-tree-reap
 guarantees. A15 remains partially mitigated.
+
+#### Remote CI on `2629044`
+
+Workflow `38091496656` passed Biome/typecheck, Supabase pgTAP/integration,
+PTY cancellation, Verifier-First, safe IPC fixtures, sandbox compile-only,
+and Windows/macOS plugin-containment. The global Vitest job reported **4,630
+passed, 8 skipped, 1 failed across 412 files**; only
+`FastVectorDistance` exceeded its unchanged `<0.1 ms` assertion at
+`0.104275 ms`. Safe-filtered Ubuntu containment failed the same assertion at
+`0.105949 ms` (289 passed, 7 skipped); Windows and macOS containment passed.
+The threshold and tests were not changed. Similar failures have appeared on
+earlier PR runs, but no main-base comparison was performed, so this is not
+classified as pre-existing or solely environmental. Windows/macOS package
+workflows were still running at the time of this record.
 
 ### Limits
 
@@ -1812,7 +1839,7 @@ cancellation follow-up above.
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, startup promises, and HarnessKernel are ECMAScript-private; no in-repository production caller used the removed getters. This does not create a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
-| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
+| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. UI reports unconfirmed stop outcomes in workspace/session/process scope with an explicit dismiss action. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Latest recorded workflow `38081920060` passed Biome/typecheck, Supabase pgTAP (20 files/1,041 tests), PTY/protocol/security regression jobs and platform packaging. Its global Vitest job had one `FastVectorDistance` timing failure; it is not classified as pre-existing or solely environmental. |
