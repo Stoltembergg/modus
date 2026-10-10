@@ -136,6 +136,16 @@ export class NoProviderError extends Error {
   }
 }
 
+export class CapabilityUnavailableError extends Error {
+  constructor(
+    public readonly capabilityId: string,
+    reason: string,
+  ) {
+    super(`Capability "${capabilityId}" is unavailable: ${reason}`);
+    this.name = "CapabilityUnavailableError";
+  }
+}
+
 export class CapabilityConflictError extends Error {
   constructor(message: string) {
     super(message);

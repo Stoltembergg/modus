@@ -488,6 +488,44 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(await freshRegistry.execute("cache.query", {})).toEqual({ hit: true });
     });
 
+    it("reconciles stored built-in permissions without changing the user's disabled state", async () => {
+      const memoryEntry = BUILT_IN_PLUGIN_ENTRIES.find(
+        (entry) => entry.manifest.id === "@modus/memory",
+      );
+      if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
+      catalog.add(memoryEntry.manifest, memoryEntry.trustLevel);
+
+      const now = new Date().toISOString();
+      store.savePlugin({
+        id: memoryEntry.manifest.id,
+        version: memoryEntry.manifest.version,
+        state: "disabled",
+        trust_level: memoryEntry.trustLevel,
+        installed_at: now,
+        last_enabled: now,
+        config: { selectedByUser: true },
+      });
+      store.savePermissions(memoryEntry.manifest.id, {
+        required: {
+          filesystem: { read: ["*"], write: ["*"] },
+          memory: { read: true, write: true },
+        },
+      });
+
+      await service.syncOnStartup();
+
+      expect(store.getPermissions(memoryEntry.manifest.id)).toEqual(
+        memoryEntry.manifest.permissions,
+      );
+      expect(store.getPlugin(memoryEntry.manifest.id)?.state).toBe("disabled");
+      expect(store.getPlugin(memoryEntry.manifest.id)?.config).toEqual({ selectedByUser: true });
+      expect(
+        store
+          .getEvents(memoryEntry.manifest.id, 10)
+          .some((event) => event.event_type === "permissions_reconciled"),
+      ).toBe(true);
+    });
+
     it("does not load a durably disabled built-in during deferred startup bootstrap", async () => {
       const memoryEntry = BUILT_IN_PLUGIN_ENTRIES.find(
         (entry) => entry.manifest.id === "@modus/memory",

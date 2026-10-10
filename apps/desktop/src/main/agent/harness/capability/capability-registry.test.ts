@@ -11,6 +11,7 @@ import {
 import type { Capability, CapabilityProvider } from "./capability-types";
 import {
   CapabilityConflictError,
+  CapabilityUnavailableError,
   IncompatibleApiVersionError,
   NoProviderError,
 } from "./capability-types";
@@ -886,13 +887,13 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       }
     });
 
-    it("can execute default implementations for core capabilities", async () => {
+    it("reports core capabilities without a productive implementation as unavailable", async () => {
       registerCoreCapabilities(registry);
 
-      const result = await registry.execute<any, any>("memory.retrieve", { query: "test query" });
-      expect(result.status).toBe("ok");
-      expect(result.capabilityId).toBe("memory.retrieve");
-      expect(result.handledBy).toBe("@modus/core");
+      expect(registry.getActiveProvider("memory.retrieve")?.permissions).toEqual({});
+      await expect(registry.execute("memory.retrieve", { query: "test query" })).rejects.toThrow(
+        CapabilityUnavailableError,
+      );
     });
   });
 

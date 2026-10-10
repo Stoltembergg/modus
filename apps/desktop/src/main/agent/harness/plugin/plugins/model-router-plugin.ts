@@ -3,7 +3,10 @@
  * Preserves explicit model selection and routes execution targets without choosing replacements.
  */
 
-import type { CapabilityImplementation } from "../../capability/capability-types";
+import {
+  type CapabilityImplementation,
+  CapabilityUnavailableError,
+} from "../../capability/capability-types";
 import type { PluginManifest } from "../plugin-types";
 
 export interface ModelRouteContext {
@@ -46,14 +49,11 @@ const modelSelectImpl: CapabilityImplementation<ModelRouteContext, ModelSelectio
 };
 
 const modelRouteImpl: CapabilityImplementation<ModelRouteContext, RoutingDecision> = {
-  execute: (ctx) => {
-    const isMultiTurnSpec =
-      ctx.task.toLowerCase().includes("spec") || ctx.task.toLowerCase().includes("plan");
-    return {
-      target: isMultiTurnSpec ? "subagent_mesh" : "cloud",
-      ...(ctx.preferredModel ? { model: ctx.preferredModel } : {}),
-      speculativeVerification: isMultiTurnSpec,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "model.route",
+      "routing targets are not connected to the user's session/provider selection",
+    );
   },
 };
 
@@ -62,7 +62,8 @@ export const modelRouterPluginManifest: PluginManifest = {
   name: "Modus Model Router",
   version: "1.0.0",
   author: "Modus Core Team",
-  description: "Preserves explicit model identity and routes execution targets",
+  description:
+    "Preserves explicit model selection; routing targets are unavailable and never choose a provider",
   trustLevel: "core",
 
   provides: [
@@ -83,12 +84,7 @@ export const modelRouterPluginManifest: PluginManifest = {
   },
 
   permissions: {
-    required: {
-      network: { domains: ["*"] },
-    },
-    reason: {
-      network: "Route requests to model inference endpoints",
-    },
+    required: {},
   },
 
   lifecycle: {

@@ -3,66 +3,33 @@
  * Core capability for durable group mailboxes, inter-agent message routing, and team coordination.
  */
 
-import type { CapabilityImplementation } from "../../capability/capability-types";
+import {
+  type CapabilityImplementation,
+  CapabilityUnavailableError,
+} from "../../capability/capability-types";
 import type { PluginManifest } from "../plugin-types";
-
-export interface GroupMessage {
-  id: string;
-  sender: string;
-  recipient: string;
-  body: string;
-  timestamp: number;
-}
-
-class GroupMailbox {
-  private messages: GroupMessage[] = [];
-
-  public post(msg: Omit<GroupMessage, "id" | "timestamp">): GroupMessage {
-    const full: GroupMessage = {
-      ...msg,
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      timestamp: Date.now(),
-    };
-    this.messages.push(full);
-    return full;
-  }
-
-  public read(recipient: string): GroupMessage[] {
-    return this.messages.filter((m) => m.recipient === recipient || m.recipient === "*");
-  }
-
-  public clear(): void {
-    this.messages = [];
-  }
-}
-
-export const groupMailboxInstance = new GroupMailbox();
 
 const groupsMailboxImpl: CapabilityImplementation<
   { action: "post" | "read"; recipient?: string; body?: string; sender?: string },
-  any
+  never
 > = {
-  execute: (ctx) => {
-    if (ctx.action === "post") {
-      return groupMailboxInstance.post({
-        sender: ctx.sender ?? "agent",
-        recipient: ctx.recipient ?? "*",
-        body: ctx.body ?? "",
-      });
-    }
-    return groupMailboxInstance.read(ctx.recipient ?? "*");
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "groups.mailbox",
+      "use the runtime's durable, group-scoped mailbox tools",
+    );
   },
 };
 
 const groupsCoordinateImpl: CapabilityImplementation<
   { groupId: string; members: string[] },
-  { status: string; activeMembers: string[] }
+  never
 > = {
-  execute: (ctx) => {
-    return {
-      status: "coordinated",
-      activeMembers: ctx.members,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "groups.coordinate",
+      "coordination is performed by the runtime group service",
+    );
   },
 };
 
@@ -71,7 +38,8 @@ export const groupsPluginManifest: PluginManifest = {
   name: "Modus Agent Groups & Durable Mailbox",
   version: "1.0.0",
   author: "Modus Core Team",
-  description: "Core capability providing team coordination and durable mailbox communication",
+  description:
+    "Legacy capability markers; group coordination and mailbox operations use runtime-owned services",
   trustLevel: "core",
 
   provides: [
@@ -89,12 +57,6 @@ export const groupsPluginManifest: PluginManifest = {
 
   requires: {
     modus: ">=0.8.0",
-    capabilities: [
-      {
-        capability: "context.resolve",
-        version: "^1.0",
-      },
-    ],
   },
 
   permissions: {

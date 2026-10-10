@@ -1,8 +1,14 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry, resetCapabilityRegistry } from "../capability/capability-registry";
-import { CapabilityConflictError } from "../capability/capability-types";
+import {
+  CapabilityConflictError,
+  CapabilityUnavailableError,
+} from "../capability/capability-types";
 import { registerCoreCapabilities } from "../capability/core-capabilities";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { bootstrapModusPlugins } from "./bootstrap";
@@ -11,12 +17,15 @@ import { PluginLoader } from "./plugin-loader";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
 import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
-import { contextEnginePluginManifest } from "./plugins/context-engine-plugin";
+import { type ContextItem, contextEnginePluginManifest } from "./plugins/context-engine-plugin";
 import { failureIntelPluginManifest } from "./plugins/failure-intel-plugin";
 import { groupsPluginManifest } from "./plugins/groups-plugin";
 import { memoryPluginManifest, memoryStore } from "./plugins/memory-plugin";
 import { modelRouterPluginManifest } from "./plugins/model-router-plugin";
 import { verifierPluginManifest } from "./plugins/verifier-plugin";
+
+const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
+vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));
 
 describe("Fase 10 — Modus Internal Plugins", () => {
   let registry: CapabilityRegistry;
@@ -35,6 +44,26 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.1 — Plugin Manifest & Descriptor Validation", () => {
+    it("does not request unused permissions or dependencies from built-in adapters", () => {
+      for (const manifest of [
+        memoryPluginManifest,
+        modelRouterPluginManifest,
+        verifierPluginManifest,
+        contextEnginePluginManifest,
+      ]) {
+        expect(manifest.permissions.required, manifest.id).toEqual({});
+      }
+
+      for (const manifest of [
+        contextEnginePluginManifest,
+        failureIntelPluginManifest,
+        groupsPluginManifest,
+        verifierPluginManifest,
+      ]) {
+        expect(manifest.requires.capabilities ?? [], manifest.id).toEqual([]);
+      }
+    });
+
     it("validates a correct manifest without error", () => {
       expect(() => loader.validateManifest(memoryPluginManifest)).not.toThrow();
     });
@@ -90,18 +119,22 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.2 — Dependency Checking & Resolution", () => {
-    it("succeeds when all capability dependencies are satisfied", () => {
-      // verifier requires context.resolve which is already registered in registry
+    it("succeeds when a plugin has no capability dependencies", () => {
       expect(() => loader.checkDependencies(verifierPluginManifest)).not.toThrow();
     });
 
     it("throws PluginDependencyError if a required capability is missing from the registry", () => {
       const emptyRegistry = new CapabilityRegistry();
       const emptyLoader = new PluginLoader(emptyRegistry);
+      const dependentPlugin: PluginManifest = {
+        ...verifierPluginManifest,
+        requires: {
+          ...verifierPluginManifest.requires,
+          capabilities: [{ capability: "missing.capability", version: "^1.0" }],
+        },
+      };
 
-      expect(() => emptyLoader.checkDependencies(verifierPluginManifest)).toThrow(
-        PluginDependencyError,
-      );
+      expect(() => emptyLoader.checkDependencies(dependentPlugin)).toThrow(PluginDependencyError);
     });
 
     it("throws PluginDependencyError if a required plugin is missing or inactive", () => {
@@ -130,47 +163,22 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     });
   });
 
-  describe("10.3 — Phase 10A Piloto 1: @modus/memory (Stateful Capability)", () => {
-    it("loads @modus/memory, stores, retrieves and compacts memories", async () => {
+  describe("10.3 — Phase 10A Piloto 1: @modus/memory (Unavailable synthetic provider)", () => {
+    it("does not present an in-memory map as durable project memory", async () => {
       await loader.load(memoryPluginManifest);
       const loaded = loader.getPlugin("@modus/memory");
       expect(loaded).toBeDefined();
       expect(loaded?.status).toBe("loaded");
 
-      // Test memory.store
-      const storeRes = await registry.execute<any, any>("memory.store", {
-        id: "mem-1",
-        category: "architecture",
-        content: "Use atomic file writes for stores",
-        tags: ["storage", "safety"],
-      });
-      expect(storeRes.id).toBe("mem-1");
-
-      await registry.execute<any, any>("memory.store", {
-        id: "mem-2",
-        category: "performance",
-        content: "Cache bounded summaries across turns",
-        tags: ["caching"],
-      });
-
-      // Test memory.retrieve by keyword
-      const results = await registry.execute<any, any>("memory.retrieve", {
-        query: "atomic",
-      });
-      expect(results.length).toBe(1);
-      expect(results[0].id).toBe("mem-1");
-
-      // Test memory.compact
-      const compactRes = await registry.execute<any, any>("memory.compact", {
-        maxRetain: 1,
-      });
-      expect(compactRes.prunedCount).toBe(1);
-      expect(compactRes.remainingCount).toBe(1);
-
-      // Verify execution provenance
-      const provenance = registry.getProvenance("memory.store");
-      expect(provenance.usageCount).toBe(2);
-      expect(provenance.activeProvider.id).toBe("@modus/memory");
+      await expect(registry.execute("memory.store", {})).rejects.toThrow(
+        CapabilityUnavailableError,
+      );
+      await expect(registry.execute("memory.retrieve", {})).rejects.toThrow(
+        CapabilityUnavailableError,
+      );
+      await expect(registry.execute("memory.compact", {})).rejects.toThrow(
+        CapabilityUnavailableError,
+      );
     });
   });
 
@@ -202,21 +210,13 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       expect(customSelect.selectedModel).toBe("deepseek-v3");
       expect(customSelect.fallbackModel).toBe("deepseek-v3");
 
-      // 4. Model routing strategy
-      const routeDecision = await registry.execute<any, any>("model.route", {
-        task: "Build plan and spec verification",
-        complexity: "complex",
-      });
-      expect(routeDecision.target).toBe("subagent_mesh");
-      expect(routeDecision.model).toBeUndefined();
-      expect(routeDecision.speculativeVerification).toBe(true);
-
-      const selectedRoute = await registry.execute<any, any>("model.route", {
-        task: "Continue the selected provider session",
-        preferredModel: "byok/claude-opus-5-5",
-        complexity: "complex",
-      });
-      expect(selectedRoute.model).toBe("byok/claude-opus-5-5");
+      // Routing targets are not wired to the user's session/provider selection.
+      await expect(
+        registry.execute("model.route", {
+          task: "Build plan and spec verification",
+          complexity: "complex",
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
     });
   });
 
@@ -274,52 +274,64 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     it("loads and executes @modus/context-engine", async () => {
       await loader.load(contextEnginePluginManifest);
 
-      const resolved = await registry.execute<any, any>("context.resolve", {
-        query: "authentication security flow",
-      });
-      expect(resolved.items.length).toBeGreaterThan(0);
+      await expect(
+        registry.execute("context.resolve", {
+          query: "authentication security flow",
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
 
-      const filtered = await registry.execute<any, any>("context.filter", {
-        items: resolved.items,
-        maxTokens: 50, // lower than item size (150)
+      const filtered = await registry.execute<
+        { items: ContextItem[]; maxTokens: number },
+        { filtered: ContextItem[]; droppedCount: number }
+      >("context.filter", {
+        items: [
+          {
+            key: "fixture",
+            source: "test",
+            content: "small synthetic fixture",
+            tokenCount: 150,
+            priority: 1,
+          },
+        ],
+        maxTokens: 50,
       });
       expect(filtered.droppedCount).toBe(1);
       expect(filtered.filtered.length).toBe(0);
     });
 
-    it("loads and executes @modus/failure-intelligence", async () => {
+    it("does not present heuristic failure examples as runtime intelligence", async () => {
       await loader.load(failureIntelPluginManifest);
 
-      const syntaxDiag = await registry.execute<any, any>("failure.classify", {
-        error: "SyntaxError: Unexpected token in JSON at position 42",
-      });
-      expect(syntaxDiag.category).toBe("syntax");
-      expect(syntaxDiag.recoverable).toBe(true);
-
-      const recovery = await registry.execute<any, any>("failure.recover", {
-        error: "SyntaxError",
-        attempts: 1,
-      });
-      expect(recovery.shouldContinue).toBe(true);
+      await expect(
+        registry.execute("failure.classify", {
+          error: "SyntaxError: Unexpected token in JSON at position 42",
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
+      await expect(
+        registry.execute("failure.recover", {
+          error: "SyntaxError",
+          attempts: 1,
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
     });
 
-    it("loads and executes @modus/groups", async () => {
+    it("does not return success from the in-memory group mailbox or coordinator", async () => {
       await loader.load(groupsPluginManifest);
 
-      const posted = await registry.execute<any, any>("groups.mailbox", {
-        action: "post",
-        sender: "architect",
-        recipient: "coder",
-        body: "Implement auth module",
-      });
-      expect(posted.id).toBeDefined();
-
-      const messages = await registry.execute<any, any>("groups.mailbox", {
-        action: "read",
-        recipient: "coder",
-      });
-      expect(messages.length).toBe(1);
-      expect(messages[0].body).toBe("Implement auth module");
+      await expect(
+        registry.execute("groups.mailbox", {
+          action: "post",
+          sender: "architect",
+          recipient: "coder",
+          body: "Implement auth module",
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
+      await expect(
+        registry.execute("groups.coordinate", {
+          groupId: "fixture",
+          members: ["agent-a", "agent-b"],
+        }),
+      ).rejects.toThrow(CapabilityUnavailableError);
     });
   });
 
@@ -380,8 +392,8 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     });
   });
 
-  describe("10.8 — Full Topological Bootstrap Sequence", () => {
-    it("bootstraps all 6 Modus internal plugins in strict dependency order", async () => {
+  describe("10.8 — Built-in Bootstrap Sequence", () => {
+    it("loads all 6 Modus internal plugins in catalog order", async () => {
       const freshRegistry = new CapabilityRegistry();
       const result = await bootstrapModusPlugins(freshRegistry);
 
@@ -422,31 +434,57 @@ describe("Fase 10 — Modus Internal Plugins", () => {
         MODUS_PLUGIN_LIFECYCLE: true,
       });
 
+      const userData = mkdtempSync(join(tmpdir(), "modus-plugin-capabilities-"));
+      runtimeElectronState.userData = userData;
       const runtime = new PiSdkRuntime();
-      await runtime.waitForPlugins();
+      try {
+        await runtime.waitForPlugins();
 
-      const pLoader = runtime.getPluginLoader();
-      expect(pLoader).toBeDefined();
+        const pLoader = runtime.getPluginLoader();
+        expect(pLoader).toBeDefined();
 
-      // Bootstrap was triggered in constructor
-      const plugins = pLoader.listPlugins();
-      expect(plugins.length).toBe(6);
-      expect(plugins.every((plugin) => plugin.status === "enabled")).toBe(true);
-      expect(
-        runtime
-          .getPluginLifecycleService()
-          .getStore()
-          .listPlugins()
-          .every((plugin) => plugin.state === "enabled"),
-      ).toBe(true);
+        // Bootstrap was triggered in constructor only after its durable state opened.
+        const plugins = pLoader.listPlugins();
+        expect(plugins.length).toBe(6);
+        expect(plugins.every((plugin) => plugin.status === "enabled")).toBe(true);
+        expect(
+          runtime
+            .getPluginLifecycleService()
+            .getStore()
+            .listPlugins()
+            .every((plugin) => plugin.state === "enabled"),
+        ).toBe(true);
 
-      const capReg = runtime.getCapabilityRegistry();
-      const selectResult = await capReg.execute<any, any>("model.select", {
-        task: "quick query",
-        complexity: "simple",
-      });
-      expect(selectResult.selectedModel).toBeUndefined();
-      expect(selectResult.fallbackModel).toBeUndefined();
+        const capReg = runtime.getCapabilityRegistry();
+        const selectResult = await capReg.execute<any, any>("model.select", {
+          task: "quick query",
+          complexity: "simple",
+        });
+        expect(selectResult.selectedModel).toBeUndefined();
+        expect(selectResult.fallbackModel).toBeUndefined();
+        await expect(
+          capReg.execute("model.route", {
+            task: "plan a change",
+            preferredModel: "byok/explicit-model",
+          }),
+        ).rejects.toThrow(CapabilityUnavailableError);
+        await expect(
+          capReg.execute("memory.retrieve", { query: "runtime memory" }),
+        ).rejects.toThrow(CapabilityUnavailableError);
+        await expect(
+          capReg.execute("context.resolve", { query: "runtime context" }),
+        ).rejects.toThrow(CapabilityUnavailableError);
+        await expect(
+          capReg.execute("groups.mailbox", { action: "post", body: "fixture" }),
+        ).rejects.toThrow(CapabilityUnavailableError);
+        const verification = await capReg.execute("verification.run", {
+          checks: [{ name: "tests", command: "npm test" }],
+        });
+        expect(verification).toMatchObject([{ status: "unavailable" }]);
+      } finally {
+        runtime.getPluginStateStore().close();
+        rmSync(userData, { recursive: true, force: true });
+      }
     });
   });
 
@@ -469,7 +507,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       permissions: { required: {} },
     };
 
-    it("unload removes providers and falls back to remaining ones", async () => {
+    it("unload removes providers and falls back to an explicit unavailable provider", async () => {
       catalog.add(echoPlugin);
       await loader.load(echoPlugin);
       await loader.enable("@test/echo");
@@ -479,9 +517,10 @@ describe("Fase 10 — Modus Internal Plugins", () => {
 
       expect(registry.listProviders("memory.retrieve").length).toBe(1);
       expect(registry.getActiveProvider("memory.retrieve")?.providerId).toBe("@modus/memory");
-      // Core stub serves again instead of the unloaded plugin.
-      const out = await registry.execute<any, any>("memory.retrieve", { query: "x" });
-      expect(out.status).toBe("ok");
+      // The core placeholder must not turn the missing implementation into success.
+      await expect(registry.execute("memory.retrieve", { query: "x" })).rejects.toThrow(
+        CapabilityUnavailableError,
+      );
     });
 
     it("disable steps the provider down and enable reactivates it", async () => {

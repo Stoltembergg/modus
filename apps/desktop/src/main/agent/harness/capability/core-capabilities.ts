@@ -5,7 +5,12 @@
 
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "./capability-registration-authority";
 import type { CapabilityRegistry } from "./capability-registry";
-import type { Capability, CapabilityImplementation, CapabilityProvider } from "./capability-types";
+import {
+  type Capability,
+  type CapabilityImplementation,
+  type CapabilityProvider,
+  CapabilityUnavailableError,
+} from "./capability-types";
 
 export const CORE_CAPABILITIES: Capability[] = [
   // Memory capabilities
@@ -263,14 +268,11 @@ export const CORE_CAPABILITIES: Capability[] = [
  */
 function createDefaultImplementation(capabilityId: string): CapabilityImplementation {
   return {
-    execute: async (context: unknown) => {
-      return {
-        status: "ok",
+    execute: () => {
+      throw new CapabilityUnavailableError(
         capabilityId,
-        handledBy: "@modus/core",
-        timestamp: Date.now(),
-        contextEcho: context,
-      };
+        "no productive provider is registered for this capability",
+      );
     },
   };
 }
@@ -295,10 +297,7 @@ export function registerCoreCapabilities(
       capabilityId: capability.id,
       capabilityApiVersion: capability.apiVersion,
       trustLevel: "core",
-      permissions: {
-        filesystem: { read: ["*"], write: ["*"] },
-        memory: { read: true, write: true },
-      },
+      permissions: {},
       implementation,
       registeredAt: new Date(),
       metadata: {

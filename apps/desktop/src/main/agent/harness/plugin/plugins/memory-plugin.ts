@@ -3,7 +3,10 @@
  * Stateful capability providing persistent storage, retrieval, and compaction of project memories.
  */
 
-import type { CapabilityImplementation } from "../../capability/capability-types";
+import {
+  type CapabilityImplementation,
+  CapabilityUnavailableError,
+} from "../../capability/capability-types";
 import type { PluginManifest } from "../plugin-types";
 
 export interface MemoryRecord {
@@ -69,8 +72,11 @@ const memoryRetrieveImpl: CapabilityImplementation<
   { query: string; tag?: string },
   MemoryRecord[]
 > = {
-  execute: (ctx) => {
-    return memoryStore.retrieve(ctx.query, ctx.tag);
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "memory.retrieve",
+      "the in-memory sample store is not the persisted project-memory service",
+    );
   },
 };
 
@@ -78,8 +84,11 @@ const memoryStoreImpl: CapabilityImplementation<
   { id: string; category: string; content: string; tags?: string[] },
   MemoryRecord
 > = {
-  execute: (ctx) => {
-    return memoryStore.store(ctx);
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "memory.store",
+      "the in-memory sample store is not the persisted project-memory service",
+    );
   },
 };
 
@@ -87,12 +96,11 @@ const memoryCompactImpl: CapabilityImplementation<
   { maxRetain?: number },
   { prunedCount: number; remainingCount: number }
 > = {
-  execute: (ctx) => {
-    const pruned = memoryStore.compact(ctx.maxRetain ?? 100);
-    return {
-      prunedCount: pruned,
-      remainingCount: memoryStore.getAll().length,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "memory.compact",
+      "the in-memory sample store is not the persisted project-memory service",
+    );
   },
 };
 
@@ -102,7 +110,7 @@ export const memoryPluginManifest: PluginManifest = {
   version: "1.0.0",
   author: "Modus Core Team",
   description:
-    "Stateful capability providing memory persistence, semantic retrieval, and compaction",
+    "Legacy in-memory sample; project-memory capabilities are unavailable here because this store is not durable",
   trustLevel: "core",
 
   provides: [
@@ -128,14 +136,7 @@ export const memoryPluginManifest: PluginManifest = {
   },
 
   permissions: {
-    required: {
-      filesystem: { read: ["*"], write: ["*"] },
-      memory: { read: true, write: true },
-    },
-    reason: {
-      filesystem: "Access project memory persistence store on disk",
-      memory: "Cache active working memories across turns",
-    },
+    required: {},
   },
 
   lifecycle: {

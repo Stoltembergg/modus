@@ -1013,6 +1013,33 @@ export class PluginLifecycleService {
     }
 
     const records = this.store.listPlugins();
+    for (const record of records) {
+      const builtInEntry = BUILT_IN_PLUGIN_ENTRIES.find(
+        (entry) => entry.manifest.id === record.id && entry.manifest.version === record.version,
+      );
+      if (
+        !builtInEntry ||
+        this.resolveManifest(record.id, record.version) !== builtInEntry.manifest
+      ) {
+        continue;
+      }
+
+      const storedPermissions = this.store.getPermissions(record.id);
+      if (JSON.stringify(storedPermissions) === JSON.stringify(builtInEntry.manifest.permissions)) {
+        continue;
+      }
+
+      // The row stores the host manifest's declared permission metadata, not
+      // user grants. Reconcile it only for an exact host-catalog identity and
+      // version; leave plugin state, configuration, and external plugins alone.
+      this.store.transaction(() => {
+        this.store.savePermissions(record.id, builtInEntry.manifest.permissions);
+        this.store.recordEvent(record.id, "permissions_reconciled", {
+          version: record.version,
+        });
+      });
+    }
+
     const startupManifestsById = new Map<string, PluginManifest>();
     for (const record of records) {
       const manifest = this.resolveManifest(record.id, record.version);

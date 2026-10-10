@@ -20,7 +20,7 @@ export interface BootstrapOptions {
 }
 
 /**
- * Bootstraps all Modus internal plugins in strict dependency order.
+ * Bootstraps built-in plugins in the host catalog's declared order.
  */
 export async function bootstrapModusPlugins(
   registry: CapabilityRegistry = new CapabilityRegistry(),
@@ -36,14 +36,7 @@ export async function bootstrapModusPlugins(
     registerCoreCapabilities(registry);
   }
 
-  // 2. Load internal plugins in topological dependency order
-  // Order:
-  // - Memory (no deps)
-  // - Model Router (no deps)
-  // - Context Engine (requires memory)
-  // - Verifier (requires context)
-  // - Failure Intelligence (requires verifier)
-  // - Groups (requires context)
+  // 2. Load internal plugins in the host catalog's declared order.
   const orderedManifests = BUILT_IN_PLUGIN_ENTRIES.map((entry) => entry.manifest);
 
   const loadedPlugins: string[] = [];

@@ -3,7 +3,10 @@
  * Core capability managing context window assembly, selective filtering, and project context.
  */
 
-import type { CapabilityImplementation } from "../../capability/capability-types";
+import {
+  type CapabilityImplementation,
+  CapabilityUnavailableError,
+} from "../../capability/capability-types";
 import type { PluginManifest } from "../plugin-types";
 
 export interface ContextItem {
@@ -18,21 +21,11 @@ const contextResolveImpl: CapabilityImplementation<
   { query: string; tokenBudget?: number },
   { items: ContextItem[]; totalTokens: number }
 > = {
-  execute: (ctx) => {
-    const defaultBudget = ctx.tokenBudget ?? 8000;
-    const items: ContextItem[] = [
-      {
-        key: "project-summary",
-        source: "workspace",
-        content: `Resolved context for: ${ctx.query}`,
-        tokenCount: 150,
-        priority: 1,
-      },
-    ];
-    return {
-      items,
-      totalTokens: 150,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "context.resolve",
+      "use the runtime context service; this plugin does not read workspace context",
+    );
   },
 };
 
@@ -63,7 +56,8 @@ export const contextEnginePluginManifest: PluginManifest = {
   name: "Modus Context Engine",
   version: "1.0.0",
   author: "Modus Core Team",
-  description: "Core capability for selective context building and token budgeting",
+  description:
+    "Context filtering is available; workspace context resolution belongs to the runtime context service",
   trustLevel: "core",
 
   provides: [
@@ -81,20 +75,9 @@ export const contextEnginePluginManifest: PluginManifest = {
 
   requires: {
     modus: ">=0.8.0",
-    capabilities: [
-      {
-        capability: "memory.retrieve",
-        version: "^1.0",
-      },
-    ],
   },
 
   permissions: {
-    required: {
-      memory: { read: true },
-    },
-    reason: {
-      memory: "Read project memory digests for contextual planning",
-    },
+    required: {},
   },
 };

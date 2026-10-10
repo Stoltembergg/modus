@@ -85,7 +85,7 @@ export const verifierPluginManifest: PluginManifest = {
   version: "1.0.0",
   author: "Modus Core Team",
   description:
-    "Complex capability orchestrating QA checks, verification criteria, and evidence synthesis",
+    "Legacy adapter reports checks as unavailable; productive QA execution and evidence assessment use the runtime QA service",
   trustLevel: "core",
 
   provides: [
@@ -103,23 +103,10 @@ export const verifierPluginManifest: PluginManifest = {
 
   requires: {
     modus: ">=0.8.0",
-    capabilities: [
-      {
-        capability: "context.resolve",
-        version: "^1.0",
-      },
-    ],
   },
 
   permissions: {
-    required: {
-      tools: {
-        allow: ["run_command", "test_runner"],
-      },
-    },
-    reason: {
-      tools: "Execute project verification test suites and linters",
-    },
+    required: {},
   },
 
   lifecycle: {

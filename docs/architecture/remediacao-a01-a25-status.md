@@ -769,6 +769,85 @@ the existing 30-day unacknowledged retention because the mailbox has no
 durable recipient roster with which to determine when every group member has
 acknowledged.
 
+## Milestone 9 — A23 truthful built-in capability availability
+
+**Status: implementation and focused regressions pass; independent review passed; remote CI is pending.**
+
+Several built-in capability adapters returned plausible success-shaped values
+without performing their advertised work: an in-memory sample was presented as
+project memory, context resolution returned a fabricated workspace item,
+failure intelligence returned heuristic classifications, group coordination
+claimed to be coordinated, and model routing invented a target. The generic
+core provider also returned `status: "ok"` for capabilities with no productive
+provider. Those outputs could mislead callers even though the Pi runtime has
+separate session-owned memory, context, failure, group, and model-selection
+services.
+
+The adapters now throw a typed `CapabilityUnavailableError` with a
+capability-specific reason when there is no productive implementation. The
+pure context filtering utility remains available. Model selection continues to
+preserve only the user's explicit selection; the unconnected route-target
+capability cannot select a model or provider. Verifier-First's existing
+session/run evidence path and the Pi runtime's productive services were not
+replaced. The verifier plugin's run adapter continues to return explicit
+`unavailable` outcomes and does not execute caller-supplied commands. These
+adapters no longer request filesystem, network, memory, or command permissions
+they do not use, and no longer declare capability dependencies their handlers
+do not consume. The generic core fallback also declares no filesystem or
+memory permissions.
+
+For existing installations, startup reconciliation now refreshes the stored
+declared-permission metadata only when plugin ID and version match the exact
+host built-in catalog entry. The update is transactional and emits a
+`permissions_reconciled` event with the version, but no permission contents.
+Enabled/disabled state, configuration, external plugins, and version history
+are unchanged.
+
+### Evidence
+
+- RED: before changing implementations, seven assertions across the plugin and
+  core capability suites failed because the adapters still returned the
+  synthetic success values. The previous runtime test also lacked the
+  temporary Electron user-data setup required by A10's fail-closed startup;
+  the integration fixture now supplies an isolated temporary directory and
+  closes the durable store. Independent review also added a manifest
+  regression: before removing stale grants, it failed on the memory adapter's
+  blanket filesystem and memory permissions. Lifecycle and core-provider RED
+  fixtures also proved that old SQLite permission metadata remained stale and
+  the fallback provider retained broad grants.
+- GREEN: four focused suites pass **329/329**: 99 plugin/capability/lifecycle
+  tests and 230 Pi runtime tests. They cover unavailable results through the
+  `PiSdkRuntime` registry, A16 model-selection checks, core-provider fallback,
+  each affected adapter, and the absence of unused permission grants and
+  dependency declarations. The SQLite migration test preserves a durably
+  disabled state while replacing only the exact built-in permission metadata,
+  and retains the saved user configuration.
+  Desktop TypeScript typecheck passed. Targeted Biome check exits 0 with
+  **36 warnings** and no errors; warnings in the checked files predate this
+  patch. Two formatting corrections were limited to the changed test and
+  lifecycle code. No rule suppression or broad formatting was applied.
+- Independent review found no blocker in fail-closed adapters, manifest
+  permission/dependency cleanup, or exact-version startup metadata
+  reconciliation. It noted that there are no production callers of the core
+  fallback's `customImplementations` parameter; such a consumer now receives
+  no implicit broker permission metadata and would need an explicit permission
+  API if that extension point becomes productive.
+- Product callsite search found no non-test execution callsites for these
+  capability IDs; the real runtime services remain separate and intact. This
+  is source evidence, not proof that every downstream consumer avoids direct
+  registry use.
+
+### Limits
+
+These built-in capability IDs now report their unavailable state honestly; this
+milestone does not create new implementations for them. A caller that directly
+uses a capability plugin must handle `CapabilityUnavailableError`. The focused
+runtime test proves that the productive runtime registry returns that error,
+but remote CI is still required before publishing. Permission metadata
+reconciliation requires exact host plugin ID
+and version identity; unsupported persisted versions remain quarantined under
+the existing startup rules and are not rewritten from a different manifest.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -795,7 +874,7 @@ acknowledged.
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Pending | Bounded event-history reads. |
-| A23 | Pending | Synthetic built-in plugin services and their production claims. |
+| A23 | Mitigated; remote CI pending | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 

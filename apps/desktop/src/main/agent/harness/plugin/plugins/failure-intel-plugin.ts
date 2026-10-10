@@ -3,7 +3,10 @@
  * Core capability for failure classification, loop prevention, and recovery strategy recommendation.
  */
 
-import type { CapabilityImplementation } from "../../capability/capability-types";
+import {
+  type CapabilityImplementation,
+  CapabilityUnavailableError,
+} from "../../capability/capability-types";
 import type { PluginManifest } from "../plugin-types";
 
 export interface FailureClassificationResult {
@@ -17,30 +20,11 @@ const failureClassifyImpl: CapabilityImplementation<
   { error: string; command?: string },
   FailureClassificationResult
 > = {
-  execute: (ctx) => {
-    const err = ctx.error.toLowerCase();
-    if (err.includes("syntaxerror") || err.includes("cannot find module")) {
-      return {
-        category: "syntax",
-        recoverable: true,
-        strategy: "retry_with_fix",
-        confidence: 0.95,
-      };
-    }
-    if (err.includes("timed out") || err.includes("timeout")) {
-      return {
-        category: "timeout",
-        recoverable: true,
-        strategy: "retry_with_fix",
-        confidence: 0.85,
-      };
-    }
-    return {
-      category: "runtime",
-      recoverable: true,
-      strategy: "retry_with_fix",
-      confidence: 0.7,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "failure.classify",
+      "the sample classifier is not connected to runtime failure evidence",
+    );
   },
 };
 
@@ -48,17 +32,11 @@ const failureRecoverImpl: CapabilityImplementation<
   { error: string; attempts: number },
   { shouldContinue: boolean; advice: string }
 > = {
-  execute: (ctx) => {
-    if (ctx.attempts >= 3) {
-      return {
-        shouldContinue: false,
-        advice: "Maximum failure recovery attempts reached; pausing execution for user input",
-      };
-    }
-    return {
-      shouldContinue: true,
-      advice: `Attempt ${ctx.attempts + 1}: Suggesting targeted corrective patch`,
-    };
+  execute: () => {
+    throw new CapabilityUnavailableError(
+      "failure.recover",
+      "the sample recovery policy is not connected to runtime failure state",
+    );
   },
 };
 
@@ -68,7 +46,7 @@ export const failureIntelPluginManifest: PluginManifest = {
   version: "1.0.0",
   author: "Modus Core Team",
   description:
-    "Core capability providing automated failure diagnosis and self-healing recommendations",
+    "Legacy sample capability; runtime failure intelligence is implemented separately and this adapter is unavailable",
   trustLevel: "core",
 
   provides: [
@@ -86,12 +64,6 @@ export const failureIntelPluginManifest: PluginManifest = {
 
   requires: {
     modus: ">=0.8.0",
-    capabilities: [
-      {
-        capability: "verification.run",
-        version: "^1.0",
-      },
-    ],
   },
 
   permissions: {
