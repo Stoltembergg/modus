@@ -510,6 +510,82 @@ isolation facade still denies untrusted plugin execution, and this patch does
 not claim tamper resistance against host-process compromise or establish an OS
 boundary.
 
+## Milestone 7 — A24 WASM cache bounds and measurement truthfulness
+
+**Status: cache retention is bounded and cache counters are explicit; WASI
+output capture remains unavailable while the host denies WASI imports.**
+
+The compiled-module cache was an unbounded `Map`. `WasmCapabilityHost` now
+maintains it as an LRU with a default cap of 64 compiled modules and 16 MiB of
+aggregate source-WASM byte accounting. An individual source larger than the
+configured byte budget is compiled for the current call but is not retained;
+setting either cache limit to zero disables retention. `clearCache()` releases
+all entries and resets the counters. The counters report cache entries and the
+source byte sizes represented by those entries. They do not report V8's native
+compiled-module footprint, which Node does not expose, and the byte accounting
+is an admission/retention bound rather than a heap measurement.
+
+A05's preceding memory work also corrected failure metrics: consumed fuel is
+read from the live instance on invocation failures, measured memory is retained
+when available, and unavailable memory is marked as unavailable instead of
+being reported as measured zero.
+
+Caller-provided cache namespaces are SHA-256 hashed before entering the map, so
+long plugin identifiers do not bypass the fixed-length cache-key bound.
+
+`WasiSandbox` still has output arrays that are not connected to WASI
+`fd_write`. The production host rejects all WASI imports before instantiation
+because there is no grant-backed policy for WASI capabilities, and no
+non-test production callsite constructs `WasiSandbox`. I left this capability
+disabled and did not present empty buffers as captured output. Integrating
+stdio requires an authorized host policy and a bounded, verified descriptor
+implementation; A24 remains partial until that work is safe to enable.
+
+### Evidence
+
+- RED: before the cache change, two bounded-cache tests failed because
+  repeated compilation returned the same retained modules after the entry or
+  byte limits should have prevented retention. A temporary mutation removing
+  aggregate-byte eviction also failed with 136 represented bytes against a
+  135-byte cap.
+- GREEN: the targeted WASM Vitest selection passed **4/4** for LRU eviction,
+  oversized module non-retention, aggregate byte eviction, hashed cache-key
+  storage and their reported counters. These use the repository's small
+  generated WASM fixtures; no external plugin, WASI module, enforcement probe,
+  or adversarial fixture ran.
+- At the pre-A24 commit `7645530`, remote CI Biome and TypeScript steps passed,
+  while Vitest reported **4,505 passed, 8 skipped, 1 failed**: the unchanged
+  `FastVectorDistance` `< 0.1ms` timing assertion measured
+  `0.105466999999976ms`. Running that test alone locally measured
+  `0.11810399999990295ms` and failed the same assertion. Its implementation,
+  assertion and threshold match the initial reference commit; this is an
+  unresolved test/implementation issue and is not attributed to A24.
+  The separate pgTAP run reported **1,021 passed and 1 failed** of 1,022: test
+  22 expected `2026-10-31` and received `2026-10-30`. That billing test is
+  outside A24 and was not modified. macOS x64/arm64 and Windows x64 packaging,
+  plugin-containment on Linux/macOS/Windows, Verifier-First regressions, and
+  compile-only sandbox targets passed on that commit. CI for this A24 patch will
+  be recorded after push.
+- The post-namespace-hash `npm run check` completed successfully: Biome checked
+  1,136 files with **0 errors, 363 warnings, and 50 informational diagnostics**,
+  then all configured workspace TypeScript checks exited 0. No diagnostics were
+  auto-fixed. The focused Vitest selection passed **4/4** (43 unrelated tests
+  skipped).
+- Independent review found that an unbounded caller-supplied namespace string
+  could remain in a cache key. A 64 KiB synthetic namespace test failed first;
+  hashing the namespace made it pass. The final independent review found no
+  blocker in the bounded cache change. Hashing a very long namespace still
+  takes transient time proportional to its input length, but that input is not
+  retained by the cache.
+
+### Limits
+
+The cache entry count and source-byte accounting bound retained module count
+and the sum of source sizes represented by those entries, not the compiled
+machine-code memory V8 retains. A too-large input is still compiled once for
+the current request, so this does not cap transient compile memory. WASI output
+is not captured or made available; the grantless host denial remains intact.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -537,7 +613,7 @@ boundary.
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
 | A22 | Pending | Bounded event-history reads. |
 | A23 | Pending | Synthetic built-in plugin services and their production claims. |
-| A24 | Pending | WASM cache/resource bounds and truthful failure metrics. |
+| A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Prior fix preserved | Workspace-scoped permissions. |
 
 This matrix will be updated as each independent remediation is completed and

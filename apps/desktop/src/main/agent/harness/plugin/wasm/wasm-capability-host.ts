@@ -48,26 +48,56 @@ function readWebAssemblyGlobalValue(
 }
 
 export class WasmCapabilityHost {
-  private readonly moduleCache = new Map<string, WebAssembly.Module>();
+  private readonly moduleCache = new Map<
+    string,
+    { module: WebAssembly.Module; sourceBytes: number }
+  >();
   private readonly maxMemoryPagesPerInstance: number;
   private readonly maxAggregateMemoryPages: number;
+  private readonly maxCachedModules: number;
+  private readonly maxCachedModuleSourceBytes: number;
+  private cachedModuleSourceBytes = 0;
   private reservedMemoryPages = 0;
 
   constructor(options: WasmCapabilityHostOptions = {}) {
     this.maxMemoryPagesPerInstance = options.maxMemoryPagesPerInstance ?? 256;
     this.maxAggregateMemoryPages = options.maxAggregateMemoryPages ?? 1024;
+    this.maxCachedModules = options.maxCachedModules ?? 64;
+    this.maxCachedModuleSourceBytes = options.maxCachedModuleSourceBytes ?? 16 * 1024 * 1024;
     if (
       !Number.isSafeInteger(this.maxMemoryPagesPerInstance) ||
       this.maxMemoryPagesPerInstance <= 0 ||
       !Number.isSafeInteger(this.maxAggregateMemoryPages) ||
-      this.maxAggregateMemoryPages <= 0
+      this.maxAggregateMemoryPages <= 0 ||
+      !Number.isSafeInteger(this.maxCachedModules) ||
+      this.maxCachedModules < 0 ||
+      !Number.isSafeInteger(this.maxCachedModuleSourceBytes) ||
+      this.maxCachedModuleSourceBytes < 0
     ) {
-      throw new RangeError("WASM memory page limits must be positive safe integers");
+      throw new RangeError("WASM memory limits and module-cache bounds must be safe integers");
     }
   }
 
   public getReservedMemoryPages(): number {
     return this.reservedMemoryPages;
+  }
+
+  /**
+   * Reports source-WASM bytes represented by cache entries. Node does not expose
+   * the native memory retained by compiled WebAssembly.Module objects.
+   */
+  public getModuleCacheStats(): Readonly<{
+    entries: number;
+    sourceBytes: number;
+    maxEntries: number;
+    maxSourceBytes: number;
+  }> {
+    return Object.freeze({
+      entries: this.moduleCache.size,
+      sourceBytes: this.cachedModuleSourceBytes,
+      maxEntries: this.maxCachedModules,
+      maxSourceBytes: this.maxCachedModuleSourceBytes,
+    });
   }
 
   /**
@@ -78,15 +108,18 @@ export class WasmCapabilityHost {
     cacheKey?: string,
   ): Promise<WebAssembly.Module> {
     const hash = createHash("sha256").update(wasmBytes).digest("hex");
-    const key = cacheKey ? `${cacheKey}:${hash}` : hash;
+    const namespace = cacheKey ? `${createHash("sha256").update(cacheKey).digest("hex")}:` : "";
+    const key = `${namespace}${hash}`;
     const cached = this.moduleCache.get(key);
     if (cached) {
-      return cached;
+      this.moduleCache.delete(key);
+      this.moduleCache.set(key, cached);
+      return cached.module;
     }
 
     try {
       const module = await WebAssembly.compile(wasmBytes as unknown as BufferSource);
-      this.moduleCache.set(key, module);
+      this.cacheCompiledModule(key, module, wasmBytes.byteLength);
       return module;
     } catch (err) {
       throw new WasmCompilationError(err instanceof Error ? err.message : String(err), cacheKey);
@@ -503,5 +536,35 @@ export class WasmCapabilityHost {
    */
   public clearCache(): void {
     this.moduleCache.clear();
+    this.cachedModuleSourceBytes = 0;
+  }
+
+  private cacheCompiledModule(key: string, module: WebAssembly.Module, sourceBytes: number): void {
+    if (
+      this.maxCachedModules === 0 ||
+      this.maxCachedModuleSourceBytes === 0 ||
+      sourceBytes > this.maxCachedModuleSourceBytes
+    ) {
+      return;
+    }
+
+    const previous = this.moduleCache.get(key);
+    if (previous) {
+      this.moduleCache.delete(key);
+      this.cachedModuleSourceBytes -= previous.sourceBytes;
+    }
+    this.moduleCache.set(key, { module, sourceBytes });
+    this.cachedModuleSourceBytes += sourceBytes;
+
+    while (
+      this.moduleCache.size > this.maxCachedModules ||
+      this.cachedModuleSourceBytes > this.maxCachedModuleSourceBytes
+    ) {
+      const oldestKey = this.moduleCache.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = this.moduleCache.get(oldestKey);
+      this.moduleCache.delete(oldestKey);
+      this.cachedModuleSourceBytes -= oldest?.sourceBytes ?? 0;
+    }
   }
 }

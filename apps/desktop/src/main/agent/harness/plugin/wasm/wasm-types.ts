@@ -108,6 +108,10 @@ export interface WasmCapabilityHostOptions {
   maxMemoryPagesPerInstance?: number | undefined;
   /** Maximum simultaneously reserved memory pages. Defaults to 1024 (64 MiB). */
   maxAggregateMemoryPages?: number | undefined;
+  /** Maximum number of compiled modules retained in the LRU cache. Defaults to 64. */
+  maxCachedModules?: number | undefined;
+  /** Maximum source-WASM bytes represented by cached modules. Defaults to 16 MiB. */
+  maxCachedModuleSourceBytes?: number | undefined;
 }
 
 export interface WasmExecutionMetrics {

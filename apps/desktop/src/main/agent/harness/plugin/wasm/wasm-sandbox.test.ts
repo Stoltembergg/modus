@@ -406,6 +406,79 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       expect(mod1).toBe(mod2); // Reused from cache
     });
 
+    it("evicts least recently used compiled modules when the cache is bounded", async () => {
+      const host = new WasmCapabilityHost({ maxCachedModules: 2 });
+      const addBytes = buildAddModule();
+      const loopBytes = buildFuelLoopModule();
+      const memoryBytes = buildMemoryModule(1, 3);
+
+      const add = await host.compileModule(addBytes);
+      const loop = await host.compileModule(loopBytes);
+      expect(await host.compileModule(addBytes)).toBe(add);
+
+      await host.compileModule(memoryBytes);
+
+      expect(await host.compileModule(addBytes)).toBe(add);
+      expect(await host.compileModule(loopBytes)).not.toBe(loop);
+      expect(host.getModuleCacheStats()).toEqual({
+        entries: 2,
+        sourceBytes: addBytes.byteLength + loopBytes.byteLength,
+        maxEntries: 2,
+        maxSourceBytes: 16 * 1024 * 1024,
+      });
+
+      host.clearCache();
+      expect(host.getModuleCacheStats().entries).toBe(0);
+      expect(host.getModuleCacheStats().sourceBytes).toBe(0);
+    });
+
+    it("does not retain a compiled module when its source exceeds the cache byte budget", async () => {
+      const host = new WasmCapabilityHost({ maxCachedModuleSourceBytes: 1 });
+      const bytes = buildAddModule();
+
+      const first = await host.compileModule(bytes);
+      const second = await host.compileModule(bytes);
+
+      expect(second).not.toBe(first);
+      expect(host.getModuleCacheStats()).toEqual({
+        entries: 0,
+        sourceBytes: 0,
+        maxEntries: 64,
+        maxSourceBytes: 1,
+      });
+    });
+
+    it("evicts entries until the aggregate cached source-byte budget is respected", async () => {
+      const addBytes = buildAddModule();
+      const loopBytes = buildFuelLoopModule();
+      const host = new WasmCapabilityHost({
+        maxCachedModules: 4,
+        maxCachedModuleSourceBytes: addBytes.byteLength + loopBytes.byteLength - 1,
+      });
+
+      await host.compileModule(addBytes);
+      await host.compileModule(loopBytes);
+
+      expect(host.getModuleCacheStats()).toEqual({
+        entries: 1,
+        sourceBytes: loopBytes.byteLength,
+        maxEntries: 4,
+        maxSourceBytes: addBytes.byteLength + loopBytes.byteLength - 1,
+      });
+    });
+
+    it("does not retain caller-controlled cache namespace strings", async () => {
+      const host = new WasmCapabilityHost();
+      const cacheKey = "plugin/" + "x".repeat(64 * 1024);
+
+      await host.compileModule(buildAddModule(), cacheKey);
+
+      const moduleKeys = (
+        host as unknown as { moduleCache: Map<string, unknown> }
+      ).moduleCache.keys();
+      expect([...moduleKeys].every((key) => key.length <= 129)).toBe(true);
+    });
+
     it("rejects malformed WASM bytecode with WasmCompilationError", async () => {
       const corruptBytes = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x99, 0x99]);
 
