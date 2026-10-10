@@ -23,6 +23,63 @@ blocked hostile-plugin or enforcement scenarios remains explicitly pending.
   `adversarial bypass hardening` group, and the junction test was absent from
   its test output. That test will not be rerun under this authorization.
 
+## Mission CI prerequisite — Free monthly renewal calendar
+
+**Status: implemented, locally verified, and independently reviewed; remote CI pending.** This is the
+incremental Supabase quality-gate fix requested for the mission, outside the
+A01–A25 finding matrix.
+
+The failure was a real month-end drift. Renewal used an already-clipped monthly
+boundary as the next anchor; for a Jan 31 grant, February clips to Feb 28/29,
+and adding another month from that clipped boundary can move the anniversary
+away from the 31st. The new private `free_renewal_period` derives each window
+from a stable anchor. Free-only wallets use the original grant timestamp;
+wallets still paid use their paid period end. For a wallet already returned to
+Free, Mercado Pago can retain the prior paid boundary only when a credited
+payment is linked to that exact preapproval. Stripe ledger rows do not retain a
+subscription id, so the migration does not attribute an invoice to a canceled
+subscription; when a paid Stripe invoice exists, it preserves the wallet's
+current deadline as the stable migration anchor. A canceled but uncredited
+preapproval does not change a Free-only wallet's anchor. Legacy Free deadlines
+shifted by the old calculation are moved forward to the next canonical
+boundary when their anchor is known, without editing balances, transactions,
+or ledger keys. `renew_free_credits_for_user` keeps the existing due gate, row
+lock, idempotency key, grant amount rules, and atomic wallet/ledger behavior.
+The schedule and inference helpers are not executable by `PUBLIC`, `anon`,
+`authenticated`, or `service_role`.
+
+RED/GREEN evidence:
+
+- RED: the remote run `38054966410` failed pgTAP test 22 with `2026-10-30`
+  received and `2026-10-31` expected. The new anchor-backfill regression tests
+  also failed before implementation because the inference helper was absent.
+  The independent review found and drove fixes for an already-Free former-paid
+  wallet being reset to its signup cadence, old shifted deadlines receiving a
+  second renewal soon after rollout, canceled-but-unpaid preapprovals being
+  mistaken for a paid cycle, and an invoice being attributed to an unrelated
+  Stripe subscription. A RED run of the uncredited case selected Feb 28 from
+  an uncredited canceled row instead of the Free-only Jan 31 grant anchor.
+- GREEN: on a disposable Postgres 17 container with the repository shim and
+  all migrations applied, `17_free_monthly_renewal.test.sql` passed **91/91**.
+  Fixed fixtures cover Jan 31 → leap-day → Mar 31, Dec 31 → Jan 31 in leap
+  year, Jan 31 → Feb 28 → Mar 31 in a non-leap year, former-paid cadence, and
+  existing Free-only cadence; provider fixtures cover a Stripe invoice with
+  unknown subscription attribution, linked Mercado Pago credit, and an
+  uncredited canceled preapproval. Existing renewal, idempotency, ledger,
+  grace, and batch tests also passed. The independent review was static; it
+  found no remaining security finding in helper privileges/search paths,
+  trigger qualification, or Mercado Pago attribution. Remote CI remains
+  pending before this gate is considered complete.
+
+Known legacy limitation: Stripe's historical credit ledger stores invoice
+ids but not their subscription ids. For former Stripe subscribers already on
+Free, the migration preserves the currently stored `period_end` rather than
+guessing which canceled subscription set the schedule. This protects the
+current due date and stops future repeated month clipping, but cannot restore
+the original day-of-month for a legacy Stripe wallet whose deadline had
+already drifted. A future transaction-to-subscription relation can improve
+provenance for cycles recorded after that schema change.
+
 ## Milestone 1 — A01/A02 in-process facade
 
 **Status: implemented and locally checked; full boundary proof remains open.**
