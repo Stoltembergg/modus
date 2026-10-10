@@ -71,6 +71,16 @@ RED/GREEN evidence:
   trigger qualification, or Mercado Pago attribution. Remote CI remains
   pending before this gate is considered complete.
 
+Remote CI follow-up: run `38076269061` applied the migration and the renewal
+suite passed **113/113**, but failed `01_rpc_privileges.test.sql` tests 28–30.
+The new migration adds four private helpers: total private-function inventory
+is now 37; 35 are `SECURITY DEFINER`, while the two pure calendar helpers are
+`SECURITY INVOKER`, both with `search_path=""`. The old inventory asserted 33
+functions and required every private helper to be `SECURITY DEFINER`. The
+inventory test now records the actual set and separately asserts empty
+`search_path` for all invoker helpers. The two affected pgTAP files pass
+locally after all migrations: **127/127**. Remote CI rerun is pending.
+
 Known legacy limitation: Stripe's historical credit ledger stores invoice
 ids but not their subscription ids. For former Stripe subscribers already on
 Free, the migration preserves the currently stored `period_end` rather than
