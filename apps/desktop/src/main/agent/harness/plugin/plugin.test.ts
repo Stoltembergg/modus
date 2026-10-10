@@ -419,6 +419,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       setFeatureFlagOverrides({
         MODUS_CAPABILITY_REGISTRY: true,
         MODUS_PLUGINS: true,
+        MODUS_PLUGIN_LIFECYCLE: true,
       });
 
       const runtime = new PiSdkRuntime();
@@ -430,6 +431,14 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       // Bootstrap was triggered in constructor
       const plugins = pLoader.listPlugins();
       expect(plugins.length).toBe(6);
+      expect(plugins.every((plugin) => plugin.status === "enabled")).toBe(true);
+      expect(
+        runtime
+          .getPluginLifecycleService()
+          .getStore()
+          .listPlugins()
+          .every((plugin) => plugin.state === "enabled"),
+      ).toBe(true);
 
       const capReg = runtime.getCapabilityRegistry();
       const selectResult = await capReg.execute<any, any>("model.select", {

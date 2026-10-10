@@ -5,9 +5,22 @@
 
 import { DatabaseSync } from "node:sqlite";
 import type { TrustLevel } from "../capability/capability-types";
+import type { SafeModeLevel } from "./plugin-rollback-types";
 import type { PluginManifest } from "./plugin-types";
 
 export type PersistentPluginState = "installed" | "enabled" | "disabled" | "error";
+
+export interface PersistedSafeModeState {
+  level: SafeModeLevel | null;
+  previouslyEnabled: string[];
+  disabledPlugins: string[];
+}
+
+export interface PluginUninstallTombstone {
+  pluginId: string;
+  version: string;
+  uninstalledAt: string;
+}
 
 export interface PluginRecord {
   id: string;
@@ -106,12 +119,125 @@ export class PluginStateStore {
         FOREIGN KEY (plugin_id) REFERENCES plugins(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS plugin_safe_mode (
+        singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+        level TEXT CHECK(level IS NULL OR level IN ('core', 'official', 'verified')),
+        previously_enabled_json TEXT NOT NULL,
+        disabled_plugins_json TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS plugin_uninstall_tombstones (
+        plugin_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        uninstalled_at TEXT NOT NULL
+      );
+
+      INSERT OR IGNORE INTO plugin_safe_mode (
+        singleton, level, previously_enabled_json, disabled_plugins_json
+      ) VALUES (1, NULL, '[]', '[]');
+
       CREATE INDEX IF NOT EXISTS idx_plugin_events_plugin_id ON plugin_events(plugin_id);
     `);
   }
 
   public getDatabase(): DatabaseSync {
     return this.db;
+  }
+
+  public getSafeModeState(): PersistedSafeModeState {
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT level, previously_enabled_json, disabled_plugins_json FROM plugin_safe_mode WHERE singleton = 1",
+        )
+        .get() as Record<string, unknown> | undefined;
+      if (!row) return { level: "core", previouslyEnabled: [], disabledPlugins: [] };
+
+      const level = row.level;
+      const validLevel =
+        level === null || level === "core" || level === "official" || level === "verified";
+      const previouslyEnabled = JSON.parse(String(row.previously_enabled_json));
+      const disabledPlugins = JSON.parse(String(row.disabled_plugins_json));
+      if (
+        !validLevel ||
+        !Array.isArray(previouslyEnabled) ||
+        !previouslyEnabled.every((id) => typeof id === "string") ||
+        !Array.isArray(disabledPlugins) ||
+        !disabledPlugins.every((id) => typeof id === "string")
+      ) {
+        return { level: "core", previouslyEnabled: [], disabledPlugins: [] };
+      }
+
+      return {
+        level: level as SafeModeLevel | null,
+        previouslyEnabled,
+        disabledPlugins,
+      };
+    } catch {
+      // Corrupt safety state must not prevent a restrictive startup mode.
+      return { level: "core", previouslyEnabled: [], disabledPlugins: [] };
+    }
+  }
+
+  public setSafeModeState(state: PersistedSafeModeState): void {
+    this.db
+      .prepare(
+        `INSERT INTO plugin_safe_mode (
+          singleton, level, previously_enabled_json, disabled_plugins_json
+        ) VALUES (1, ?, ?, ?)
+        ON CONFLICT(singleton) DO UPDATE SET
+          level = excluded.level,
+          previously_enabled_json = excluded.previously_enabled_json,
+          disabled_plugins_json = excluded.disabled_plugins_json`,
+      )
+      .run(
+        state.level,
+        JSON.stringify([...new Set(state.previouslyEnabled)]),
+        JSON.stringify([...new Set(state.disabledPlugins)]),
+      );
+  }
+
+  public getPluginUninstallTombstone(pluginId: string): PluginUninstallTombstone | null {
+    const row = this.db
+      .prepare(
+        "SELECT plugin_id, version, uninstalled_at FROM plugin_uninstall_tombstones WHERE plugin_id = ?",
+      )
+      .get(pluginId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return {
+      pluginId: row.plugin_id as string,
+      version: row.version as string,
+      uninstalledAt: row.uninstalled_at as string,
+    };
+  }
+
+  public listPluginUninstallTombstones(): PluginUninstallTombstone[] {
+    const rows = this.db
+      .prepare(
+        "SELECT plugin_id, version, uninstalled_at FROM plugin_uninstall_tombstones ORDER BY plugin_id",
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      pluginId: row.plugin_id as string,
+      version: row.version as string,
+      uninstalledAt: row.uninstalled_at as string,
+    }));
+  }
+
+  public savePluginUninstallTombstone(tombstone: PluginUninstallTombstone): void {
+    this.db
+      .prepare(
+        `INSERT INTO plugin_uninstall_tombstones (plugin_id, version, uninstalled_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(plugin_id) DO UPDATE SET
+          version = excluded.version,
+          uninstalled_at = excluded.uninstalled_at`,
+      )
+      .run(tombstone.pluginId, tombstone.version, tombstone.uninstalledAt);
+  }
+
+  public deletePluginUninstallTombstone(pluginId: string): void {
+    this.db.prepare("DELETE FROM plugin_uninstall_tombstones WHERE plugin_id = ?").run(pluginId);
   }
 
   public close(): void {

@@ -3,6 +3,7 @@
  * Plugin Loader & Lifecycle Manager.
  */
 
+import semver from "semver";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import type { CapabilityRegistry } from "../capability/capability-registry";
 import type { Capability, CapabilityProvider, TrustLevel } from "../capability/capability-types";
@@ -11,20 +12,24 @@ import { BUILT_IN_PLUGIN_CATALOG } from "./plugin-catalog";
 import type { LoadedPlugin, PluginManifest } from "./plugin-types";
 import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
 
-/**
- * Major-match compatibility, mirroring CapabilityRegistry's provider rule.
- * Unparseable ranges are treated as unverifiable and do not block loading.
- */
-function apiMajorOf(version: string): string | undefined {
-  const match = version.match(/(\d+)(?:\.|$)/);
-  return match?.[1];
+function normalizeApiVersion(version: string): string | undefined {
+  const partial = version.match(/^(\d+)\.(\d+)$/);
+  const shorthand = version.match(/^(\d+)$/);
+  const normalized = partial
+    ? `${partial[1]}.${partial[2]}.0`
+    : shorthand
+      ? `${shorthand[1]}.0.0`
+      : version;
+  return semver.valid(normalized, { loose: true }) ?? undefined;
 }
 
 function isApiVersionSatisfied(registered: string, requiredRange: string): boolean {
-  const registeredMajor = apiMajorOf(registered);
-  const requiredMajor = apiMajorOf(requiredRange);
-  if (registeredMajor === undefined || requiredMajor === undefined) return true;
-  return registeredMajor === requiredMajor;
+  const normalized = normalizeApiVersion(registered);
+  return (
+    normalized !== undefined &&
+    semver.validRange(requiredRange, { loose: true }) !== null &&
+    semver.satisfies(normalized, requiredRange, { loose: true })
+  );
 }
 
 interface RegistryPluginLoaderState {
@@ -99,6 +104,11 @@ export class PluginLoader {
     if (!manifest.version || typeof manifest.version !== "string") {
       throw new PluginValidationError(`Plugin "${manifest.id}" must specify a valid "version"`);
     }
+    if (!semver.valid(manifest.version, { loose: true })) {
+      throw new PluginValidationError(
+        `Plugin "${manifest.id}" specifies invalid semantic version "${manifest.version}"`,
+      );
+    }
     if (!manifest.provides || !Array.isArray(manifest.provides) || manifest.provides.length === 0) {
       throw new PluginValidationError(
         `Plugin "${manifest.id}" must provide at least one capability in "provides"`,
@@ -112,10 +122,29 @@ export class PluginLoader {
       );
     }
 
+    if (!semver.validRange(manifest.requires.modus, { loose: true })) {
+      throw new PluginValidationError(
+        `Plugin "${manifest.id}" specifies invalid Modus version constraint "${manifest.requires.modus}"`,
+      );
+    }
+
+    for (const requirement of manifest.requires.capabilities ?? []) {
+      if (!semver.validRange(requirement.version, { loose: true })) {
+        throw new PluginValidationError(
+          `Plugin "${manifest.id}" specifies invalid capability version constraint "${requirement.version}" for "${requirement.capability}"`,
+        );
+      }
+    }
+
     for (const provision of manifest.provides) {
       if (!provision.capability || !provision.apiVersion) {
         throw new PluginValidationError(
           `Plugin "${manifest.id}" contains invalid provision entry with missing capability or apiVersion`,
+        );
+      }
+      if (!normalizeApiVersion(provision.apiVersion)) {
+        throw new PluginValidationError(
+          `Plugin "${manifest.id}" specifies invalid API version "${provision.apiVersion}" for "${provision.capability}"`,
         );
       }
       if (!provision.implementation) {
@@ -126,11 +155,20 @@ export class PluginLoader {
     }
   }
 
+  public isApiVersionSatisfied(registered: string, requiredRange: string): boolean {
+    return isApiVersionSatisfied(registered, requiredRange);
+  }
+
   public checkDependencies(manifest: PluginManifest): void {
     if (!manifest.requires) return;
 
     if (manifest.requires.capabilities) {
       for (const req of manifest.requires.capabilities) {
+        if (!semver.validRange(req.version, { loose: true })) {
+          throw new PluginDependencyError(
+            `Plugin "${manifest.id}" has invalid capability version constraint "${req.version}" for "${req.capability}"`,
+          );
+        }
         const capability = this.registry.getCapability(req.capability);
         if (!capability) {
           throw new PluginDependencyError(
@@ -140,6 +178,11 @@ export class PluginLoader {
         if (!isApiVersionSatisfied(capability.apiVersion, req.version)) {
           throw new PluginDependencyError(
             `Plugin "${manifest.id}" requires ${req.capability}@${req.version} but registry provides ${capability.apiVersion}`,
+          );
+        }
+        if (!this.registry.getActiveProvider(req.capability)) {
+          throw new PluginDependencyError(
+            `Plugin "${manifest.id}" requires ${req.capability}@${req.version}, but the capability has no active provider`,
           );
         }
       }
@@ -404,6 +447,23 @@ export class PluginLoader {
     this.reserveLifecycle(pluginId, "disabling");
     try {
       await this.disablePlugin(pluginId, plugin);
+    } finally {
+      this.releaseLifecycle(pluginId);
+    }
+  }
+
+  /** Host safety gate that removes dispatch without running plugin callbacks. */
+  public disableForHostSafety(pluginId: string): void {
+    this.registry.quarantineProvider(pluginId, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    const plugin = this.plugins.get(pluginId);
+    if (!plugin || plugin.status === "disabled") return;
+
+    this.reserveLifecycle(pluginId, "safety disabling");
+    try {
+      for (const provision of plugin.manifest.provides) {
+        this.registry.deactivateProvider(provision.capability, pluginId);
+      }
+      plugin.status = "disabled";
     } finally {
       this.releaseLifecycle(pluginId);
     }

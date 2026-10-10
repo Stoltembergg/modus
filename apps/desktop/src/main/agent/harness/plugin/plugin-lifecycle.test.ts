@@ -7,6 +7,8 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
+import { bootstrapModusPlugins } from "./bootstrap";
+import { BUILT_IN_PLUGIN_ENTRIES } from "./plugin-catalog";
 import { executePluginCli } from "./plugin-cli";
 import { PluginLifecycleService } from "./plugin-lifecycle-service";
 import { PluginLoader } from "./plugin-loader";
@@ -342,6 +344,21 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(loaded?.status).toBe("disabled");
     });
 
+    it("restores the enabled runtime when the durable disable transaction fails", async () => {
+      await service.install(sampleManifestV1);
+      await service.enable(sampleManifestV1.id);
+      vi.spyOn(store, "transaction").mockImplementationOnce(() => {
+        throw new Error("disable commit failed");
+      });
+
+      await expect(service.disable(sampleManifestV1.id)).rejects.toThrow("disable commit failed");
+
+      expect(store.getPlugin(sampleManifestV1.id)?.state).toBe("enabled");
+      expect(loader.getPlugin(sampleManifestV1.id)?.status).toBe("enabled");
+      expect(registry.isProviderQuarantined(sampleManifestV1.id)).toBe(false);
+      expect(await registry.execute("cache.query", {})).toEqual({ hit: true });
+    });
+
     it("upgrades a plugin atomically and hot-reloads it when active", async () => {
       await service.install(sampleManifestV1);
       await service.enable("@modus/smart-cache");
@@ -370,6 +387,21 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(loaded?.status).toBe("enabled");
       expect(registry.isProviderQuarantined("@modus/smart-cache")).toBe(false);
       expect(await registry.execute("cache.query", {})).toEqual({ hit: true, version: 2 });
+    });
+
+    it("serializes concurrent upgrade and downgrade transitions for the same plugin", async () => {
+      await service.install(sampleManifestV1);
+      await service.enable(sampleManifestV1.id);
+
+      const results = await Promise.allSettled([
+        service.upgrade(sampleManifestV2),
+        service.downgrade(sampleManifestV1.id, sampleManifestV1.version),
+      ]);
+
+      expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+      expect(store.getPlugin(sampleManifestV1.id)?.version).toBe("1.0.0");
+      expect(loader.getPlugin(sampleManifestV1.id)?.manifest).toBe(sampleManifestV1);
+      expect(await registry.execute("cache.query", {})).toEqual({ hit: true });
     });
 
     it("downgrades a plugin to a previously preserved version", async () => {
@@ -453,6 +485,269 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(loaded?.status).toBe("enabled");
       expect(freshRegistry.getCapability("cache.query")).toBeDefined();
       expect(freshRegistry.getActiveProvider("cache.query")).toBeDefined();
+      expect(await freshRegistry.execute("cache.query", {})).toEqual({ hit: true });
+    });
+
+    it("keeps a durably disabled built-in inactive after runtime bootstrap", async () => {
+      const bootstrapRegistry = new CapabilityRegistry();
+      const bootstrapResult = await bootstrapModusPlugins(bootstrapRegistry);
+      const memoryEntry = BUILT_IN_PLUGIN_ENTRIES.find(
+        (entry) => entry.manifest.id === "@modus/memory",
+      );
+      if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
+      const manifest = memoryEntry.manifest;
+      const memoryProvision = manifest.provides[0];
+      if (!memoryProvision) throw new Error("Built-in memory plugin has no capability provision");
+      const capabilityId = memoryProvision.capability;
+      const now = new Date().toISOString();
+      store.savePlugin({
+        id: manifest.id,
+        version: manifest.version,
+        state: "disabled",
+        trust_level: memoryEntry.trustLevel,
+        installed_at: now,
+        last_enabled: now,
+        config: null,
+      });
+      store.setSafeModeState({
+        level: "core",
+        previouslyEnabled: [manifest.id],
+        disabledPlugins: [manifest.id],
+      });
+      expect(bootstrapResult.loader.getPlugin(manifest.id)?.status).toBe("enabled");
+
+      const restartedService = new PluginLifecycleService(
+        store,
+        bootstrapResult.loader,
+        bootstrapRegistry,
+      );
+      try {
+        await restartedService.syncOnStartup();
+
+        expect(bootstrapResult.loader.getPlugin(manifest.id)?.status).toBe("disabled");
+        expect(bootstrapRegistry.isProviderQuarantined(manifest.id)).toBe(true);
+        expect(bootstrapRegistry.getActiveProvider(capabilityId)?.providerId).not.toBe(manifest.id);
+      } finally {
+        for (const pluginId of bootstrapResult.loadedPlugins) {
+          await bootstrapResult.loader.unload(pluginId).catch(() => undefined);
+        }
+      }
+    });
+
+    it("reconciles a disabled provider before checking a preloaded dependent", async () => {
+      const provider: PluginManifest = {
+        ...sampleManifestV1,
+        id: "@test/z-startup-provider",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "startup.provider",
+            apiVersion: "1.0",
+            implementation: { execute: async () => "provider" },
+          },
+        ],
+      };
+      const dependent: PluginManifest = {
+        ...sampleManifestV1,
+        id: "@test/a-startup-dependent",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "startup.dependent",
+            apiVersion: "1.0",
+            implementation: { execute: async () => "dependent" },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [provider.id] },
+      };
+      catalog.add(provider, "official");
+      catalog.add(dependent, "official");
+      await service.install(provider);
+      await service.install(dependent);
+      store.updatePluginState(provider.id, "disabled");
+      store.updatePluginState(dependent.id, "enabled");
+      await loader.load(provider);
+      await loader.enable(provider.id);
+      await loader.load(dependent);
+      await loader.enable(dependent.id);
+
+      await service.syncOnStartup();
+
+      expect(loader.getPlugin(provider.id)?.status).toBe("disabled");
+      expect(store.getPlugin(dependent.id)?.state).toBe("error");
+      expect(loader.getPlugin(dependent.id)?.status).toBe("disabled");
+      expect(registry.isProviderQuarantined(dependent.id)).toBe(true);
+      await expect(registry.execute("startup.dependent", {})).rejects.toThrow();
+    });
+
+    it("restores fresh-loader enabled dependency chains in dependency order", async () => {
+      const provider: PluginManifest = {
+        ...sampleManifestV1,
+        id: "@test/z-fresh-startup-provider",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "fresh-startup.provider",
+            apiVersion: "1.0",
+            implementation: { execute: async () => "provider" },
+          },
+        ],
+      };
+      const dependent: PluginManifest = {
+        ...sampleManifestV1,
+        id: "@test/a-fresh-startup-dependent",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "fresh-startup.dependent",
+            apiVersion: "1.0",
+            implementation: { execute: async () => "dependent" },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [provider.id] },
+      };
+      catalog.add(provider, "official");
+      catalog.add(dependent, "official");
+      await service.install(provider);
+      await service.install(dependent);
+      await service.enable(provider.id);
+      await service.enable(dependent.id);
+
+      const freshRegistry = new CapabilityRegistry();
+      const freshCatalog = new TestPluginCatalog();
+      freshCatalog.add(provider, "official");
+      freshCatalog.add(dependent, "official");
+      const freshLoader = new PluginLoader(freshRegistry, freshCatalog);
+      const freshService = new PluginLifecycleService(store, freshLoader, freshRegistry);
+
+      const restored = await freshService.syncOnStartup();
+
+      expect(restored.indexOf(provider.id)).toBeLessThan(restored.indexOf(dependent.id));
+      expect(freshLoader.getPlugin(provider.id)?.status).toBe("enabled");
+      expect(freshLoader.getPlugin(dependent.id)?.status).toBe("enabled");
+      expect(store.getPlugin(dependent.id)?.state).toBe("enabled");
+    });
+
+    it("keeps an explicitly uninstalled built-in suppressed after restart", async () => {
+      const durableStore = new PluginStateStore(":memory:");
+      const firstRegistry = new CapabilityRegistry();
+      const firstLoader = new PluginLoader(firstRegistry);
+      let firstBootstrap: Awaited<ReturnType<typeof bootstrapModusPlugins>> | undefined;
+      let secondBootstrap: Awaited<ReturnType<typeof bootstrapModusPlugins>> | undefined;
+      try {
+        firstBootstrap = await bootstrapModusPlugins(firstRegistry, firstLoader, {
+          deferActivation: true,
+        });
+        expect(firstLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
+        expect(firstRegistry.isProviderQuarantined("@modus/memory")).toBe(true);
+        const firstService = new PluginLifecycleService(durableStore, firstLoader, firstRegistry);
+        const restored = await firstService.syncOnStartup();
+        expect(restored).toContain("@modus/memory");
+        expect(durableStore.getPlugin("@modus/memory")?.state).toBe("enabled");
+        const memoryVersion = durableStore.getPlugin("@modus/memory")?.version;
+
+        await firstService.uninstall("@modus/memory", { force: true });
+        expect(durableStore.getPlugin("@modus/memory")).toBeNull();
+        expect(durableStore.getPluginUninstallTombstone("@modus/memory")?.version).toBe(
+          memoryVersion,
+        );
+
+        const secondRegistry = new CapabilityRegistry();
+        const secondLoader = new PluginLoader(secondRegistry);
+        secondBootstrap = await bootstrapModusPlugins(secondRegistry, secondLoader, {
+          deferActivation: true,
+        });
+        expect(secondLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
+        const secondService = new PluginLifecycleService(
+          durableStore,
+          secondLoader,
+          secondRegistry,
+        );
+        await secondService.syncOnStartup();
+
+        expect(durableStore.getPlugin("@modus/memory")).toBeNull();
+        expect(secondLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
+        expect(secondRegistry.isProviderQuarantined("@modus/memory")).toBe(true);
+        expect(secondRegistry.getActiveProvider("memory.retrieve")?.providerId).not.toBe(
+          "@modus/memory",
+        );
+        await expect(
+          secondRegistry.execute("memory.retrieve", { query: "private" }),
+        ).rejects.toThrow();
+      } finally {
+        for (const pluginId of firstBootstrap?.loadedPlugins ?? []) {
+          await firstLoader.unload(pluginId).catch(() => undefined);
+        }
+        if (secondBootstrap) {
+          for (const pluginId of secondBootstrap.loadedPlugins) {
+            await secondBootstrap.loader.unload(pluginId).catch(() => undefined);
+          }
+        }
+        durableStore.close();
+      }
+    });
+
+    it("host-safety disables a preloaded Safe Mode plugin without lifecycle callbacks", async () => {
+      const onDisable = vi.fn();
+      const manifest: PluginManifest = {
+        ...sampleManifestV1,
+        id: "@test/official-startup-disabled",
+        version: "1.0.0",
+        lifecycle: { onDisable },
+      };
+      catalog.add(manifest, "official");
+      await service.install(manifest);
+      store.updatePluginState(manifest.id, "disabled");
+      await loader.load(manifest);
+      await loader.enable(manifest.id);
+      store.setSafeModeState({
+        level: "core",
+        previouslyEnabled: [manifest.id],
+        disabledPlugins: [manifest.id],
+      });
+      expect(loader.getPlugin(manifest.id)?.status).toBe("enabled");
+
+      await service.syncOnStartup();
+
+      expect(loader.getPlugin(manifest.id)?.status).toBe("disabled");
+      expect(registry.isProviderQuarantined(manifest.id)).toBe(true);
+      expect(onDisable).not.toHaveBeenCalled();
+    });
+
+    it("does not rerun onEnable for an already active exact catalog instance", async () => {
+      const onEnable = vi.fn();
+      const manifest: PluginManifest = {
+        ...sampleManifestV1,
+        version: "1.0.1",
+        lifecycle: { onEnable },
+      };
+      catalog.add(manifest);
+      await service.install(manifest);
+      await service.enable(manifest.id);
+      expect(onEnable).toHaveBeenCalledTimes(1);
+
+      await service.syncOnStartup();
+
+      expect(onEnable).toHaveBeenCalledTimes(1);
+      expect(registry.isProviderQuarantined(manifest.id)).toBe(false);
+    });
+
+    it("does not rerun onEnable when an enabled plugin is enabled again", async () => {
+      const onEnable = vi.fn();
+      const manifest: PluginManifest = {
+        ...sampleManifestV1,
+        version: "1.0.2",
+        lifecycle: { onEnable },
+      };
+      catalog.add(manifest);
+      await service.install(manifest);
+
+      await service.enable(manifest.id);
+      await service.enable(manifest.id);
+
+      expect(onEnable).toHaveBeenCalledTimes(1);
+      expect(registry.isProviderQuarantined(manifest.id)).toBe(false);
+      expect(registry.getActiveProvider("cache.query")?.providerId).toBe(manifest.id);
     });
 
     it("reconciles an already-loaded same-ID plugin to the exact persisted host-catalog version", async () => {

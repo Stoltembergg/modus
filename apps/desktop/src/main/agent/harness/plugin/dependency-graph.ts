@@ -24,6 +24,18 @@ export class DependencyGraph {
    * Adds or updates a plugin node in the graph, linking dependencies and dependents.
    */
   public addPlugin(manifest: PluginManifest): void {
+    const previousNode = this.nodes.get(manifest.id);
+    const previousNodeSnapshot = previousNode
+      ? {
+          ...previousNode,
+          provides: [...previousNode.provides],
+          requiresCapabilities: [...previousNode.requiresCapabilities],
+          requiresPlugins: [...previousNode.requiresPlugins],
+          dependencies: [...previousNode.dependencies],
+          dependents: [...previousNode.dependents],
+        }
+      : undefined;
+    const previousCapabilityProviders = new Map(this.capabilityProviders);
     const provides = manifest.provides.map((p) => p.capability);
     const requiresCaps = (manifest.requires.capabilities ?? []).map((c) => c.capability);
     const requiresPlugins = manifest.requires.plugins ?? [];
@@ -45,6 +57,34 @@ export class DependencyGraph {
 
     this.nodes.set(manifest.id, node);
     this.recomputeAllLinks();
+
+    const cycle = this.findCycles()[0];
+    if (cycle) {
+      if (previousNodeSnapshot) this.nodes.set(manifest.id, previousNodeSnapshot);
+      else this.nodes.delete(manifest.id);
+      this.capabilityProviders = previousCapabilityProviders;
+      this.recomputeAllLinks();
+      throw new CircularDependencyError(cycle);
+    }
+  }
+
+  public assertCanAddPlugin(manifest: PluginManifest): void {
+    const candidate = new DependencyGraph();
+    candidate.nodes = new Map(
+      Array.from(this.nodes, ([id, node]) => [
+        id,
+        {
+          ...node,
+          provides: [...node.provides],
+          requiresCapabilities: [...node.requiresCapabilities],
+          requiresPlugins: [...node.requiresPlugins],
+          dependencies: [...node.dependencies],
+          dependents: [...node.dependents],
+        },
+      ]),
+    );
+    candidate.capabilityProviders = new Map(this.capabilityProviders);
+    candidate.addPlugin(manifest);
   }
 
   /**
@@ -113,7 +153,7 @@ export class DependencyGraph {
 
       // Direct plugin requirements
       for (const reqPlugin of node.requiresPlugins) {
-        if (this.nodes.has(reqPlugin) && reqPlugin !== id) {
+        if (this.nodes.has(reqPlugin)) {
           deps.add(reqPlugin);
         }
       }
@@ -121,7 +161,7 @@ export class DependencyGraph {
       // Capability requirements mapped to provider plugins
       for (const reqCap of node.requiresCapabilities) {
         const providerId = this.capabilityProviders.get(reqCap);
-        if (providerId && providerId !== id && this.nodes.has(providerId)) {
+        if (providerId && this.nodes.has(providerId)) {
           deps.add(providerId);
         }
       }
@@ -298,6 +338,34 @@ export class DependencyGraph {
       }
     }
 
+    return order;
+  }
+
+  /**
+   * Sorts the acyclic portion of the graph while excluding known quarantined
+   * nodes. A cycle entirely inside the excluded set does not block unrelated
+   * dependency chains from restoring or shutting down in order.
+   */
+  public topologicalSortExcluding(excludedPluginIds: ReadonlySet<string>): string[] {
+    const remainingCycle = this.findCycles().find((cycle) =>
+      cycle.every((pluginId) => !excludedPluginIds.has(pluginId)),
+    );
+    if (remainingCycle) throw new CircularDependencyError(remainingCycle);
+
+    const order: string[] = [];
+    const visited = new Set<string>();
+
+    const visit = (pluginId: string): void => {
+      if (visited.has(pluginId) || excludedPluginIds.has(pluginId)) return;
+      visited.add(pluginId);
+      const node = this.nodes.get(pluginId);
+      for (const dependencyId of node?.dependencies ?? []) {
+        visit(dependencyId);
+      }
+      order.push(pluginId);
+    };
+
+    for (const pluginId of this.nodes.keys()) visit(pluginId);
     return order;
   }
 

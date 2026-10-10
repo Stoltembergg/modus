@@ -3,6 +3,7 @@
  * Bootstraps core capabilities and loads internal plugins in topological dependency order.
  */
 
+import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import { CORE_CAPABILITIES, registerCoreCapabilities } from "../capability/core-capabilities";
 import { BUILT_IN_PLUGIN_ENTRIES } from "./plugin-catalog";
@@ -14,12 +15,18 @@ export interface BootstrapResult {
   loadedPlugins: string[];
 }
 
+export interface BootstrapOptions {
+  /** Load and quarantine built-ins so the lifecycle store decides activation. */
+  deferActivation?: boolean;
+}
+
 /**
  * Bootstraps all Modus internal plugins in strict dependency order.
  */
 export async function bootstrapModusPlugins(
   registry: CapabilityRegistry = new CapabilityRegistry(),
   loader?: PluginLoader,
+  options: BootstrapOptions = {},
 ): Promise<BootstrapResult> {
   const pluginLoader = loader ?? new PluginLoader(registry);
 
@@ -43,8 +50,15 @@ export async function bootstrapModusPlugins(
   const loadedPlugins: string[] = [];
   for (const manifest of orderedManifests) {
     await pluginLoader.load(manifest);
-    await pluginLoader.enable(manifest.id);
     loadedPlugins.push(manifest.id);
+    if (!options.deferActivation) await pluginLoader.enable(manifest.id);
+  }
+
+  if (options.deferActivation) {
+    for (const manifest of orderedManifests) {
+      registry.quarantineProvider(manifest.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+      pluginLoader.disableForHostSafety(manifest.id);
+    }
   }
 
   return {

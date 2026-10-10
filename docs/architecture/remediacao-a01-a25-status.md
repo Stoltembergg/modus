@@ -97,9 +97,9 @@ authorization wiring and OS-level enforcement remain open.**
   as `sh`, `bash`, `cmd`, `powershell`, `node`, and `python` are denied; this
   cannot identify arbitrary user-defined wrappers or aliases. An allowed
   executable may itself launch child processes or evaluate project scripts,
-  so the launcher list is not an execution boundary. The brokers have no
-  production callsites; the shell API still accepts a command string, does not
-  parse structured argv, and does not constrain the Git repository/resource.
+  so the launcher list is not a general execution boundary. The brokers have
+  no production callsites; the shell API still accepts a command string, does
+  not parse structured argv, and does not constrain the Git repository/resource.
   A09 is partially mitigated, not complete.
 
 ### Evidence
@@ -158,8 +158,82 @@ dispatcher can be introduced and safely validated.
   expected `2026-10-31` but received `2026-10-30` for the second monthly
   period end. The same failure was observed on the prior CI run at `fdefe34`;
   the test is outside the changed files and is not classified as pre-existing
-  or unrelated without further evidence. Windows and macOS package jobs were
-  still running when this status was recorded.
+  or unrelated without further evidence. On the subsequent `7cf22eb` run,
+  Windows and macOS packaging passed, as did `typecheck · test · biome`,
+  Verifier-First regressions, plugin containment on all three OSes, and the
+  compile-only sandbox job. The Supabase pgTAP test 22 failed again with the
+  same expected/actual dates. No blocked probe was run.
+
+## Milestone 3 — A10–A14 lifecycle and dependency integrity
+
+**Status: implemented and locally checked; independent review and remote CI
+for this patch are pending.**
+
+- A10 startup reconciliation now resolves the exact installed version from
+  the host catalog, includes exact authorized preloaded manifests in the
+  dependency graph, applies persisted non-enabled decisions before enabling
+  plugins, and restores enabled records in dependency order. It validates
+  dependencies even for an already active exact manifest and does not rerun
+  `onEnable`. Missing or mismatched catalog artifacts are not silently treated
+  as the installed executable version.
+- A11 durable disable updates are serialized. If the database transaction
+  fails after runtime deactivation, the old runtime is restored; if that
+  restoration fails, the provider remains quarantined instead of appearing
+  available with inconsistent durable state.
+- A12 lifecycle operations share a queue keyed by their state-store instance,
+  preventing concurrent updates to different plugin IDs from racing shared
+  SQLite and dependency-graph state.
+- A13 Safe Mode level and restore baseline are persisted. The gate is written
+  before provider shutdown; disallowed providers are quarantined and disabled
+  without invoking plugin callbacks. Manual disable removes a plugin from the
+  restore baseline. Exit retains per-plugin pending restoration state, and
+  startup resumes it in dependency order after interrupted restoration.
+- A14 plugin and capability versions/ranges are validated with SemVer. Invalid
+  ranges and unavailable providers fail closed. Install/upgrade preflight
+  dependency graph cycles and direct dependent compatibility before changing
+  durable state. Forced provider removal suspends transitive dependents before
+  deleting the provider; a forced removal of a persisted cycle participant
+  quarantines the cycle and preserves the remaining participants as errors.
+  Re-enable remains blocked until an active compatible provider exists.
+
+### Evidence
+
+- RED/GREEN: regressions first failed for incompatible provider changes after
+  restart, cycle-forming installs, malformed capability constraints, repeated
+  `onEnable`, manual disable being undone by Safe Mode exit, interrupted Safe
+  Mode entry/restore, competing lifecycle updates, and forced provider removal
+  leaving active dependents. Startup regressions also reproduced preloaded
+  disabled plugins remaining enabled and runtime-only dependency edges
+  disappearing after graph rebuild. A restart test also reproduced an
+  explicitly uninstalled built-in being recreated as enabled; adding the
+  tombstone guard changed that test from failing to passing. Independent review
+  then identified that force removal could not break an already persisted
+  dependency cycle; the new synthetic restart test failed with that rejection
+  and now passes after cycle-wide quarantine and explicit forced removal.
+  Targeted fixes also cover disabled-provider/preloaded-dependent reconciliation
+  and fresh-loader dependency restoration order.
+- Targeted Vitest: **4 files, 137 tests passed** (`plugin.test.ts`,
+  `plugin-lifecycle.test.ts`, `plugin-dependency.test.ts`, and
+  `plugin-rollback.test.ts`). Tests use only synthetic in-process fixtures; no
+  external plugin or adversarial probe ran.
+- Desktop TypeScript typecheck: passed, exit 0.
+- Targeted Biome on 11 changed TypeScript files: exit 0 with 57 warnings and 1
+  info, and no errors after correcting one formatting diagnostic. Warning
+  origins were not baseline-classified; no lint rule was disabled and no bulk
+  formatting was applied.
+- `git diff --check`: passed.
+- Independent review: the initial pass identified startup dependency-order
+  gaps and a forced-removal dead end for persisted cycles. The startup ordering
+  and cycle-recovery fixes were reviewed again; the reviewer found no remaining
+  concrete blocker. This was a static review and did not execute tests.
+- Remote CI for the preceding published `7cf22eb` does not include this local
+  lifecycle patch. Its core job and Windows/macOS packaging passed, while the
+  Supabase pgTAP job failed test 22 as described above. This patch needs its
+  own CI run after publication.
+- Remaining limits: this does not create an OS execution boundary, prove
+  crash-consistent external artifact deployment, or enable external plugins.
+  Safe Mode is persisted in the existing plugin state database; full corruption
+  and power-loss behavior beyond the injected restart fixtures is not proven.
 
 ## Current matrix
 
@@ -174,11 +248,11 @@ dispatcher can be introduced and safely validated.
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
 | A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
-| A10 | Pending | Restart state versus executable artifact identity. |
-| A11 | Pending | Atomic lifecycle rollback and runtime/database consistency. |
-| A12 | Pending | Serialization and concurrent lifecycle operations. |
-| A13 | Pending | Safe Mode independence and startup failure handling. |
-| A14 | Pending | Dependency graph cycles, constraints, and dependent state. |
+| A10 | Mitigated | Startup uses exact host-catalog versions, reconciles disabled state before activation, and orders dependency restoration; external artifact identity remains unavailable. |
+| A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
+| A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
+| A13 | Mitigated | Safe Mode state and restoration are durable and restartable; storage corruption/power-loss proof remains open. |
+| A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
 | A15 | Pending | Cancellation and child-resource cleanup. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |

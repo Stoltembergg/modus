@@ -16,6 +16,11 @@ export class PluginSafeModeManager {
 
   constructor(service: PluginLifecycleService) {
     this.service = service;
+    const persisted = service.getSafeModeState();
+    this.active = persisted.level !== null;
+    this.currentLevel = persisted.level;
+    this.previouslyEnabledPlugins = persisted.previouslyEnabled;
+    this.safeModeDisabledPlugins = persisted.disabledPlugins;
   }
 
   /**
@@ -42,38 +47,28 @@ export class PluginSafeModeManager {
     level: SafeModeLevel = "core",
   ): Promise<{ level: SafeModeLevel; enabledPlugins: string[]; disabledPlugins: string[] }> {
     const allowedTrusts = this.getTrustLevelsForMode(level);
-    const allPlugins = await this.service.list();
-
-    const currentlyEnabled = allPlugins.filter((p) => p.state === "enabled");
-
-    // Only record previous enabled baseline if not already in safe mode
-    if (!this.active) {
-      this.previouslyEnabledPlugins = currentlyEnabled.map((p) => p.id);
-      this.safeModeDisabledPlugins = [];
+    let result: Awaited<ReturnType<PluginLifecycleService["enterSafeMode"]>>;
+    try {
+      result = await this.service.enterSafeMode(level, allowedTrusts);
+    } catch (error) {
+      // The durable gate is written before providers are disabled. If a later
+      // shutdown step fails, report the persisted restrictive state accurately.
+      const persisted = this.service.getSafeModeState();
+      this.active = persisted.level !== null;
+      this.currentLevel = persisted.level;
+      this.previouslyEnabledPlugins = persisted.previouslyEnabled;
+      this.safeModeDisabledPlugins = persisted.disabledPlugins;
+      throw error;
     }
-
-    const enabledPlugins: string[] = [];
-    const disabledPlugins: string[] = [];
-
-    for (const plugin of currentlyEnabled) {
-      if (!allowedTrusts.includes(plugin.trust_level)) {
-        await this.service.disable(plugin.id);
-        disabledPlugins.push(plugin.id);
-        if (!this.safeModeDisabledPlugins.includes(plugin.id)) {
-          this.safeModeDisabledPlugins.push(plugin.id);
-        }
-      } else {
-        enabledPlugins.push(plugin.id);
-      }
-    }
-
     this.active = true;
     this.currentLevel = level;
+    this.previouslyEnabledPlugins = result.previouslyEnabled;
+    this.safeModeDisabledPlugins = result.disabledPlugins;
 
     return {
       level,
-      enabledPlugins,
-      disabledPlugins,
+      enabledPlugins: result.enabledPlugins,
+      disabledPlugins: result.disabledPlugins,
     };
   }
 
@@ -81,28 +76,44 @@ export class PluginSafeModeManager {
    * Exits Safe Mode, restoring previously active plugins.
    */
   public async exit(): Promise<{ restoredPlugins: string[] }> {
-    if (!this.active) {
+    const persisted = this.service.getSafeModeState();
+    if (!this.active && persisted.level === null && persisted.previouslyEnabled.length === 0) {
       return { restoredPlugins: [] };
     }
 
     const restoredPlugins: string[] = [];
+    const previouslyEnabled = await this.service.clearSafeMode();
+    let restoreOrder = previouslyEnabled;
+    try {
+      const graph = this.service.getDependencyGraph();
+      const cyclicIds = new Set(graph.findCycles().flat());
+      const topologicalOrder = graph.topologicalSortExcluding(cyclicIds);
+      restoreOrder = [...previouslyEnabled].sort(
+        (left, right) => topologicalOrder.indexOf(left) - topologicalOrder.indexOf(right),
+      );
+    } catch {
+      // Individual dependency checks below keep each restore fail-closed.
+    }
 
-    for (const pluginId of this.previouslyEnabledPlugins) {
-      const plugin = this.service.getStore().getPlugin(pluginId);
-      if (plugin && plugin.state !== "enabled") {
-        try {
-          await this.service.enable(pluginId);
+    for (const pluginId of restoreOrder) {
+      try {
+        if (await this.service.restoreAfterSafeMode(pluginId)) {
           restoredPlugins.push(pluginId);
-        } catch {
-          // If enabling fails (e.g. broken plugin), skip
         }
+        await this.service.markSafeModePluginRestored(pluginId);
+      } catch {
+        // Keep failed restores durable so a recreated manager can retry them.
       }
     }
 
-    this.active = false;
-    this.currentLevel = null;
-    this.previouslyEnabledPlugins = [];
-    this.safeModeDisabledPlugins = [];
+    const remaining = this.service.getSafeModeState();
+    if (remaining.level === null && remaining.previouslyEnabled.length === 0) {
+      await this.service.finishSafeModeExit();
+    }
+    this.active = remaining.level !== null;
+    this.currentLevel = remaining.level;
+    this.previouslyEnabledPlugins = remaining.previouslyEnabled;
+    this.safeModeDisabledPlugins = remaining.disabledPlugins;
 
     return { restoredPlugins };
   }

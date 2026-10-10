@@ -969,7 +969,9 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     if (isFeatureFlagEnabled("MODUS_PLUGINS")) {
-      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader)
+      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader, {
+        deferActivation: isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE"),
+      })
         .then(() => {})
         .catch((err) => {
           console.error("[modus] Failed to bootstrap plugins:", err);

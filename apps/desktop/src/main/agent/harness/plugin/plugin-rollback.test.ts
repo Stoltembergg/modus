@@ -269,6 +269,8 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
   });
 
   describe("15.3 — Safe Mode (Staged Degradation)", () => {
+    const onDisable = vi.fn();
+
     const corePlugin: PluginManifest = {
       id: "@test/core",
       name: "Core Svc",
@@ -303,6 +305,7 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       ],
       requires: { modus: ">=0.8.0" },
       permissions: { required: {} },
+      lifecycle: { onDisable },
     };
 
     const communityPlugin: PluginManifest = {
@@ -398,6 +401,220 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       expect(commStatus?.state).toBe("enabled");
     });
 
+    it("resumes interrupted safe-mode restoration during startup", async () => {
+      await safeModeManager.enter("core");
+      const restore = service.restoreAfterSafeMode.bind(service);
+      const restoreSpy = vi
+        .spyOn(service, "restoreAfterSafeMode")
+        .mockImplementation((pluginId) => {
+          if (pluginId === "@test/official")
+            return Promise.reject(new Error("temporary restore failure"));
+          return restore(pluginId);
+        });
+
+      await safeModeManager.exit();
+      expect(store.getSafeModeState().previouslyEnabled).toContain("@test/official");
+
+      restoreSpy.mockRestore();
+      const restartedRegistry = new CapabilityRegistry();
+      const restartedService = new PluginLifecycleService(
+        store,
+        new PluginLoader(restartedRegistry, catalog),
+        restartedRegistry,
+      );
+      await restartedService.syncOnStartup();
+
+      expect(store.getPlugin("@test/official")?.state).toBe("enabled");
+      expect(store.getSafeModeState()).toEqual({
+        level: null,
+        previouslyEnabled: [],
+        disabledPlugins: [],
+      });
+    });
+
+    it("preserves pending restore IDs when Safe Mode is entered again", async () => {
+      await safeModeManager.enter("core");
+      const restore = service.restoreAfterSafeMode.bind(service);
+      const restoreSpy = vi
+        .spyOn(service, "restoreAfterSafeMode")
+        .mockImplementation((pluginId) =>
+          pluginId === "@test/official"
+            ? Promise.reject(new Error("temporary restore failure"))
+            : restore(pluginId),
+        );
+
+      await safeModeManager.exit();
+      expect(store.getSafeModeState().previouslyEnabled).toContain("@test/official");
+
+      restoreSpy.mockRestore();
+      await safeModeManager.enter("core");
+
+      expect(store.getSafeModeState().previouslyEnabled).toContain("@test/official");
+      expect((await safeModeManager.exit()).restoredPlugins).toContain("@test/official");
+      expect(store.getPlugin("@test/official")?.state).toBe("enabled");
+    });
+
+    it("removes a pending restore ID after the user explicitly disables that plugin", async () => {
+      await safeModeManager.enter("core");
+      const restoreSpy = vi
+        .spyOn(service, "restoreAfterSafeMode")
+        .mockRejectedValue(new Error("temporary restore failure"));
+
+      await safeModeManager.exit();
+      expect(store.getSafeModeState().previouslyEnabled).toContain("@test/official");
+
+      restoreSpy.mockRestore();
+      await service.disable("@test/official");
+
+      expect(store.getSafeModeState().previouslyEnabled).not.toContain("@test/official");
+      expect(store.getPlugin("@test/official")?.state).toBe("disabled");
+    });
+
+    it("restores Safe Mode plugins in dependency order rather than ID order", async () => {
+      const core: PluginManifest = {
+        id: "@test/order-base",
+        name: "Order Base",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic Safe Mode dependency fixture",
+        trustLevel: "core",
+        provides: [
+          {
+            capability: "safe-order.base",
+            apiVersion: "1.0",
+            implementation: { execute: async () => ({}) },
+          },
+        ],
+        requires: { modus: ">=0.8.0" },
+        permissions: { required: {} },
+      };
+      const dependent: PluginManifest = {
+        id: "@test/order-deep",
+        name: "Order Deep",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic Safe Mode dependency fixture",
+        trustLevel: "verified",
+        provides: [
+          {
+            capability: "safe-order.deep",
+            apiVersion: "1.0",
+            implementation: { execute: async () => ({}) },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/order-middle"] },
+        permissions: { required: {} },
+      };
+      const dependency: PluginManifest = {
+        id: "@test/order-middle",
+        name: "Order Middle",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic Safe Mode dependency fixture",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "safe-order.middle",
+            apiVersion: "1.0",
+            implementation: { execute: async () => ({}) },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [core.id] },
+        permissions: { required: {} },
+      };
+      catalog.add(core, "core");
+      catalog.add(dependent, "official");
+      catalog.add(dependency, "official");
+      for (const id of ["safe-order.base", "safe-order.deep", "safe-order.middle"]) {
+        registry.registerCapability({
+          id,
+          apiVersion: "1.0",
+          replaceable: true,
+          dependencies: [],
+          metadata: { description: "Synthetic Safe Mode ordering fixture" },
+        });
+      }
+      await service.install(core);
+      await service.install(dependent);
+      await service.install(dependency);
+      await service.enable(core.id);
+      await service.enable(dependency.id);
+      await service.enable(dependent.id);
+
+      await safeModeManager.enter("core");
+      const pendingRestore = store.getSafeModeState().previouslyEnabled;
+      expect(pendingRestore).toContain(core.id);
+      expect(pendingRestore).toContain(dependent.id);
+      expect(pendingRestore).toContain(dependency.id);
+      expect(pendingRestore.indexOf(dependent.id)).toBeLessThan(
+        pendingRestore.indexOf(dependency.id),
+      );
+      const cycleA: PluginManifest = {
+        ...core,
+        id: "@test/unrelated-safe-mode-cycle-a",
+        provides: [
+          {
+            capability: "safe-mode-cycle.a",
+            apiVersion: "1.0",
+            implementation: { execute: async () => ({}) },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/unrelated-safe-mode-cycle-b"] },
+      };
+      const cycleB: PluginManifest = {
+        ...cycleA,
+        id: "@test/unrelated-safe-mode-cycle-b",
+        provides: [
+          {
+            capability: "safe-mode-cycle.b",
+            apiVersion: "1.0",
+            implementation: { execute: async () => ({}) },
+          },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [cycleA.id] },
+      };
+      service.getDependencyGraph().rebuild([core, dependent, dependency, cycleA, cycleB]);
+      const topology = service
+        .getDependencyGraph()
+        .topologicalSortExcluding(new Set(service.getDependencyGraph().findCycles().flat()));
+      expect(topology.indexOf(dependency.id)).toBeLessThan(topology.indexOf(dependent.id));
+      const restoreSequence: string[] = [];
+      const restoreFailures: string[] = [];
+      const restore = service.restoreAfterSafeMode.bind(service);
+      vi.spyOn(service, "restoreAfterSafeMode").mockImplementation(async (pluginId) => {
+        restoreSequence.push(pluginId);
+        try {
+          return await restore(pluginId);
+        } catch (error) {
+          restoreFailures.push(
+            `${pluginId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          throw error;
+        }
+      });
+
+      const result = await safeModeManager.exit();
+
+      expect(restoreSequence.indexOf(dependency.id)).toBeLessThan(
+        restoreSequence.indexOf(dependent.id),
+      );
+      expect(restoreFailures).toEqual([]);
+      expect(result.restoredPlugins).toContain(dependency.id);
+      expect(result.restoredPlugins).toContain(dependent.id);
+      expect(store.getPlugin(dependent.id)?.state).toBe("enabled");
+      expect(store.getSafeModeState().previouslyEnabled).toEqual([]);
+    });
+
+    it("does not restore a plugin explicitly disabled while safe mode is active", async () => {
+      await safeModeManager.enter("core");
+
+      await service.disable("@test/official");
+      const exitRes = await safeModeManager.exit();
+
+      expect(exitRes.restoredPlugins).not.toContain("@test/official");
+      expect((await service.status("@test/official"))?.state).toBe("disabled");
+    });
+
     it("tracks status accurately", async () => {
       expect(safeModeManager.getStatus().active).toBe(false);
 
@@ -406,6 +623,66 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       expect(status.active).toBe(true);
       expect(status.level).toBe("core");
       expect(status.disabledPlugins.length).toBe(2);
+    });
+
+    it("persists the safe-mode gate and disables without invoking plugin callbacks", async () => {
+      onDisable.mockClear();
+
+      await safeModeManager.enter("core");
+
+      expect(onDisable).not.toHaveBeenCalled();
+      expect(store.getSafeModeState()).toMatchObject({ level: "core" });
+      const recreatedManager = new PluginSafeModeManager(service);
+      expect(recreatedManager.isActive()).toBe(true);
+      expect(recreatedManager.getLevel()).toBe("core");
+      await expect(service.enable("@test/official")).rejects.toThrow(/Safe Mode 'core'/);
+    });
+
+    it("reports persisted safe mode when disabling a plugin is interrupted", async () => {
+      vi.spyOn(loader, "disableForHostSafety").mockImplementation(() => {
+        throw new Error("host lifecycle busy");
+      });
+
+      await expect(safeModeManager.enter("core")).rejects.toThrow("host lifecycle busy");
+
+      expect(store.getSafeModeState().level).toBe("core");
+      expect(safeModeManager.isActive()).toBe(true);
+      expect(safeModeManager.getLevel()).toBe("core");
+    });
+
+    it("applies a persisted safe-mode gate before startup re-enables stored plugins", async () => {
+      store.setSafeModeState({
+        level: "core",
+        previouslyEnabled: ["@test/core", "@test/official", "@test/community"],
+        disabledPlugins: [],
+      });
+      store.updatePluginState("@test/official", "enabled");
+
+      const freshRegistry = new CapabilityRegistry();
+      const freshLoader = new PluginLoader(freshRegistry, catalog);
+      const freshService = new PluginLifecycleService(store, freshLoader, freshRegistry);
+      const restored = await freshService.syncOnStartup();
+
+      expect(restored).toContain("@test/core");
+      expect(restored).not.toContain("@test/official");
+      expect(store.getPlugin("@test/official")?.state).toBe("disabled");
+      expect(freshLoader.getPlugin("@test/official")).toBeUndefined();
+    });
+
+    it("defaults malformed persisted safety state to restrictive core mode", () => {
+      store.getDatabase().exec("PRAGMA ignore_check_constraints = ON");
+      store
+        .getDatabase()
+        .prepare(
+          "UPDATE plugin_safe_mode SET level = ?, previously_enabled_json = ?, disabled_plugins_json = ? WHERE singleton = 1",
+        )
+        .run("invalid", "{", "[]");
+
+      expect(store.getSafeModeState()).toEqual({
+        level: "core",
+        previouslyEnabled: [],
+        disabledPlugins: [],
+      });
     });
   });
 

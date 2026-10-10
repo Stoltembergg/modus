@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import { CapabilityRegistry } from "../capability/capability-registry";
 import {
@@ -14,7 +14,7 @@ import { PluginLifecycleService } from "./plugin-lifecycle-service";
 import { PluginLoader } from "./plugin-loader";
 import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
-import { PluginLifecycleError, type PluginManifest } from "./plugin-types";
+import { PluginDependencyError, PluginLifecycleError, type PluginManifest } from "./plugin-types";
 import { UpdatePlanner } from "./update-planner";
 
 describe("Fase 14 — Dependency Intelligence", () => {
@@ -256,6 +256,249 @@ describe("Fase 14 — Dependency Intelligence", () => {
       expect(memIndex).toBeLessThan(ctxIndex);
       expect(ctxIndex).toBeLessThan(verIndex);
     });
+
+    it("sorts unrelated dependency chains while excluding quarantined cycles", () => {
+      const cycleA: PluginManifest = {
+        ...baseMemoryPlugin,
+        id: "@test/quarantined-cycle-a",
+        requires: { modus: ">=0.8.0", plugins: ["@test/quarantined-cycle-b"] },
+      };
+      const cycleB: PluginManifest = {
+        ...modelRouterPlugin,
+        id: "@test/quarantined-cycle-b",
+        requires: { modus: ">=0.8.0", plugins: [cycleA.id] },
+      };
+      const provider: PluginManifest = {
+        ...baseMemoryPlugin,
+        id: "@test/unrelated-provider",
+        requires: { modus: ">=0.8.0" },
+      };
+      const dependent: PluginManifest = {
+        ...contextEnginePlugin,
+        id: "@test/unrelated-dependent",
+        requires: { modus: ">=0.8.0", plugins: [provider.id] },
+      };
+      const graph = new DependencyGraph();
+      graph.rebuild([dependent, cycleA, cycleB, provider]);
+      const cyclicIds = new Set(graph.findCycles().flat());
+
+      const order = graph.topologicalSortExcluding(cyclicIds);
+
+      expect(order).not.toContain(cycleA.id);
+      expect(order).not.toContain(cycleB.id);
+      expect(order.indexOf(provider.id)).toBeLessThan(order.indexOf(dependent.id));
+    });
+
+    it("rejects lifecycle installation that would introduce a dependency cycle", async () => {
+      const pluginA: PluginManifest = {
+        id: "@test/lifecycle-cycle-a",
+        name: "Cycle A",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic lifecycle graph fixture",
+        trustLevel: "core",
+        provides: [{ capability: "cycle.a", apiVersion: "1.0", implementation: mockImpl }],
+        requires: { modus: ">=0.8.0", plugins: ["@test/lifecycle-cycle-b"] },
+        permissions: mockPerms,
+      };
+      const pluginB: PluginManifest = {
+        ...pluginA,
+        id: "@test/lifecycle-cycle-b",
+        name: "Cycle B",
+        provides: [{ capability: "cycle.b", apiVersion: "1.0", implementation: mockImpl }],
+        requires: { modus: ">=0.8.0", plugins: ["@test/lifecycle-cycle-a"] },
+      };
+      catalog.add(pluginA);
+      catalog.add(pluginB);
+
+      await service.install(pluginA);
+      await expect(service.install(pluginB)).rejects.toThrow(CircularDependencyError);
+
+      expect(store.getPlugin(pluginB.id)).toBeNull();
+      expect(service.getDependencyGraph().hasCycles()).toBe(false);
+    });
+
+    it("allows forced removal of a quarantined participant from a persisted dependency cycle", async () => {
+      const cycleA: PluginManifest = {
+        id: "@test/persisted-cycle-a",
+        name: "Persisted Cycle A",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic persisted cycle recovery fixture",
+        trustLevel: "core",
+        provides: [
+          { capability: "persisted-cycle.a", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/persisted-cycle-b"] },
+        permissions: mockPerms,
+      };
+      const cycleB: PluginManifest = {
+        ...cycleA,
+        id: "@test/persisted-cycle-b",
+        name: "Persisted Cycle B",
+        provides: [
+          { capability: "persisted-cycle.b", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [cycleA.id] },
+      };
+      catalog.add(cycleA);
+      catalog.add(cycleB);
+      const now = new Date().toISOString();
+      for (const manifest of [cycleA, cycleB]) {
+        store.savePlugin({
+          id: manifest.id,
+          version: manifest.version,
+          state: "enabled",
+          trust_level: "core",
+          installed_at: now,
+          last_enabled: now,
+          config: null,
+        });
+      }
+
+      await service.syncOnStartup();
+      expect(store.getPlugin(cycleA.id)?.state).toBe("error");
+      expect(store.getPlugin(cycleB.id)?.state).toBe("error");
+      expect(loader.getPlugin(cycleA.id)).toBeUndefined();
+
+      await service.uninstall(cycleA.id, { force: true });
+
+      expect(store.getPlugin(cycleA.id)).toBeNull();
+      expect(store.getPluginUninstallTombstone(cycleA.id)?.version).toBe(cycleA.version);
+      expect(store.getPlugin(cycleB.id)?.state).toBe("error");
+      expect(service.getDependencyGraph().hasCycles()).toBe(false);
+      expect(loader.getPlugin(cycleB.id)).toBeUndefined();
+    });
+
+    it("rejects a plugin that directly requires itself", async () => {
+      const selfDependent: PluginManifest = {
+        id: "@test/self-dependent",
+        name: "Self dependent",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic direct self-cycle fixture",
+        trustLevel: "core",
+        provides: [{ capability: "self.dependent", apiVersion: "1.0", implementation: mockImpl }],
+        requires: { modus: ">=0.8.0", plugins: ["@test/self-dependent"] },
+        permissions: mockPerms,
+      };
+      catalog.add(selfDependent);
+
+      await expect(service.install(selfDependent)).rejects.toThrow(CircularDependencyError);
+
+      expect(store.getPlugin(selfDependent.id)).toBeNull();
+      expect(service.getDependencyGraph().getPlugin(selfDependent.id)).toBeUndefined();
+    });
+
+    it("rejects malformed capability version constraints before registering a provider", async () => {
+      registry.registerCapability({
+        id: "dependency.range.base",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: { description: "Synthetic dependency version fixture" },
+      });
+      const invalidRangePlugin: PluginManifest = {
+        id: "@test/invalid-capability-range",
+        name: "Invalid range",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic version validation fixture",
+        trustLevel: "core",
+        provides: [
+          { capability: "dependency.range.output", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: {
+          modus: ">=0.8.0",
+          capabilities: [{ capability: "dependency.range.base", version: "not a range" }],
+        },
+        permissions: mockPerms,
+      };
+      catalog.add(invalidRangePlugin);
+
+      await expect(service.install(invalidRangePlugin)).rejects.toThrow(
+        /invalid capability version constraint/i,
+      );
+      expect(store.getPlugin(invalidRangePlugin.id)).toBeNull();
+      await expect(loader.load(invalidRangePlugin)).rejects.toThrow(
+        /invalid capability version constraint/i,
+      );
+      expect(registry.listProviders("dependency.range.output")).toHaveLength(0);
+    });
+
+    it("rejects provider upgrades that break a dependent capability range", async () => {
+      await service.install(baseMemoryPlugin);
+      await service.install(contextEnginePlugin);
+      const incompatibleMemory: PluginManifest = {
+        ...baseMemoryPlugin,
+        version: "2.0.0",
+        provides: [{ capability: "memory.query", apiVersion: "2.0", implementation: mockImpl }],
+      };
+      catalog.add(incompatibleMemory);
+
+      await expect(service.upgrade(incompatibleMemory)).rejects.toThrow(PluginDependencyError);
+      expect(store.getPlugin(baseMemoryPlugin.id)?.version).toBe("1.0.0");
+      expect(service.getDependencyGraph().getPlugin(baseMemoryPlugin.id)?.version).toBe("1.0.0");
+    });
+
+    it("rehydrates dependency links before lifecycle changes after restart", async () => {
+      await service.install(baseMemoryPlugin);
+      await service.install(contextEnginePlugin);
+
+      const restartedRegistry = new CapabilityRegistry();
+      const restartedService = new PluginLifecycleService(
+        store,
+        new PluginLoader(restartedRegistry, catalog),
+        restartedRegistry,
+      );
+      await restartedService.syncOnStartup();
+
+      const incompatibleMemory: PluginManifest = {
+        ...baseMemoryPlugin,
+        version: "2.0.0",
+        provides: [{ capability: "memory.query", apiVersion: "2.0", implementation: mockImpl }],
+      };
+      catalog.add(incompatibleMemory);
+
+      await expect(restartedService.upgrade(incompatibleMemory)).rejects.toThrow(
+        PluginDependencyError,
+      );
+      expect(store.getPlugin(baseMemoryPlugin.id)?.version).toBe("1.0.0");
+    });
+
+    it("rejects a cycle-forming install against dependency links restored after restart", async () => {
+      const pluginA: PluginManifest = {
+        id: "@test/restarted-cycle-a",
+        name: "Restarted cycle A",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Persisted graph fixture",
+        trustLevel: "core",
+        provides: [
+          { capability: "restarted-cycle.a", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/restarted-cycle-b"] },
+        permissions: mockPerms,
+      };
+      const pluginB: PluginManifest = {
+        ...pluginA,
+        id: "@test/restarted-cycle-b",
+        name: "Restarted cycle B",
+        provides: [
+          { capability: "restarted-cycle.b", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/restarted-cycle-a"] },
+      };
+      catalog.add(pluginA);
+      catalog.add(pluginB);
+      await service.install(pluginA);
+
+      const restartedService = new PluginLifecycleService(store, loader, registry);
+      await restartedService.syncOnStartup();
+
+      await expect(restartedService.install(pluginB)).rejects.toThrow(CircularDependencyError);
+      expect(store.getPlugin(pluginB.id)).toBeNull();
+    });
   });
 
   describe("14.4 — Topological Update Planner & Phase Parallelization", () => {
@@ -292,7 +535,13 @@ describe("Fase 14 — Dependency Intelligence", () => {
   describe("14.5 — Accidental Uninstall Prevention & CLI Commands", () => {
     it("blocks uninstall of a plugin that has active dependents unless forced", async () => {
       await service.install(baseMemoryPlugin);
+      await service.install(modelRouterPlugin);
       await service.install(contextEnginePlugin);
+      await service.install(verifierPlugin);
+      await service.enable(baseMemoryPlugin.id);
+      await service.enable(modelRouterPlugin.id);
+      await service.enable(contextEnginePlugin.id);
+      await service.enable(verifierPlugin.id);
 
       // Attempting to uninstall memory without force must throw
       await expect(service.uninstall("@modus/memory")).rejects.toThrow(PluginLifecycleError);
@@ -303,9 +552,187 @@ describe("Fase 14 — Dependency Intelligence", () => {
       // Still installed
       expect(store.getPlugin("@modus/memory")).not.toBeNull();
 
-      // Forcing uninstall succeeds
+      const unrelatedCycleA: PluginManifest = {
+        id: "@test/unrelated-cycle-a",
+        name: "Unrelated cycle A",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic unrelated cycle fixture",
+        trustLevel: "core",
+        provides: [
+          { capability: "unrelated-cycle.a", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: ["@test/unrelated-cycle-b"] },
+        permissions: mockPerms,
+      };
+      const unrelatedCycleB: PluginManifest = {
+        ...unrelatedCycleA,
+        id: "@test/unrelated-cycle-b",
+        name: "Unrelated cycle B",
+        provides: [
+          { capability: "unrelated-cycle.b", apiVersion: "1.0", implementation: mockImpl },
+        ],
+        requires: { modus: ">=0.8.0", plugins: [unrelatedCycleA.id] },
+      };
+      service
+        .getDependencyGraph()
+        .rebuild([
+          baseMemoryPlugin,
+          modelRouterPlugin,
+          contextEnginePlugin,
+          verifierPlugin,
+          unrelatedCycleA,
+          unrelatedCycleB,
+        ]);
+
       await service.uninstall("@modus/memory", { force: true });
       expect(store.getPlugin("@modus/memory")).toBeNull();
+      expect(store.getPlugin("@modus/context-engine")?.state).toBe("disabled");
+      expect(store.getPlugin("@modus/verifier")?.state).toBe("disabled");
+      await expect(service.enable("@modus/context-engine")).rejects.toThrow(/no active provider/i);
+    });
+
+    it("restores the provider and its dependents when forced uninstall cannot commit deletion", async () => {
+      await service.install(baseMemoryPlugin);
+      await service.install(modelRouterPlugin);
+      await service.install(contextEnginePlugin);
+      await service.install(verifierPlugin);
+      await service.enable(baseMemoryPlugin.id);
+      await service.enable(modelRouterPlugin.id);
+      await service.enable(contextEnginePlugin.id);
+      await service.enable(verifierPlugin.id);
+      const deletePlugin = store.deletePlugin.bind(store);
+      const deleteSpy = vi.spyOn(store, "deletePlugin").mockImplementation((pluginId) => {
+        if (pluginId === baseMemoryPlugin.id) throw new Error("durable uninstall failed");
+        deletePlugin(pluginId);
+      });
+
+      await expect(service.uninstall(baseMemoryPlugin.id, { force: true })).rejects.toThrow(
+        "durable uninstall failed",
+      );
+
+      expect(store.getPlugin(baseMemoryPlugin.id)?.state).toBe("enabled");
+      expect(loader.getPlugin(baseMemoryPlugin.id)?.status).toBe("enabled");
+      expect(registry.isProviderQuarantined(baseMemoryPlugin.id)).toBe(false);
+      expect((await service.status(contextEnginePlugin.id))?.state).toBe("enabled");
+      expect((await service.status(verifierPlugin.id))?.state).toBe("enabled");
+      await expect(registry.execute("memory.query", {})).resolves.toBeDefined();
+      deleteSpy.mockRestore();
+    });
+
+    it("restores forced-uninstall dependents in topological order", async () => {
+      const providerA = baseMemoryPlugin;
+      const providerB: PluginManifest = {
+        id: "@test/order-b",
+        name: "Order B",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic dependent ordering fixture",
+        trustLevel: "core",
+        provides: [{ capability: "order.b", apiVersion: "1.0", implementation: mockImpl }],
+        requires: {
+          modus: ">=0.8.0",
+          capabilities: [{ capability: "memory.query", version: "^1.0" }],
+        },
+        permissions: mockPerms,
+      };
+      const dependentC: PluginManifest = {
+        id: "@test/order-c",
+        name: "Order C",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic dependent ordering fixture",
+        trustLevel: "core",
+        provides: [{ capability: "order.c", apiVersion: "1.0", implementation: mockImpl }],
+        requires: {
+          modus: ">=0.8.0",
+          capabilities: [{ capability: "memory.query", version: "^1.0" }],
+          plugins: [providerB.id],
+        },
+        permissions: mockPerms,
+      };
+      catalog.add(providerB);
+      catalog.add(dependentC);
+
+      await service.install(providerA);
+      await service.install(dependentC);
+      await service.install(providerB);
+      await service.enable(providerA.id);
+      await service.enable(providerB.id);
+      await service.enable(dependentC.id);
+      expect(
+        service.getDependencyGraph().calculateBlastRadius(providerA.id).directDependents,
+      ).toEqual([dependentC.id, providerB.id]);
+
+      const deletePlugin = store.deletePlugin.bind(store);
+      const deleteSpy = vi.spyOn(store, "deletePlugin").mockImplementation((pluginId) => {
+        if (pluginId === providerA.id) throw new Error("durable uninstall failed");
+        deletePlugin(pluginId);
+      });
+
+      await expect(service.uninstall(providerA.id, { force: true })).rejects.toThrow(
+        "durable uninstall failed",
+      );
+
+      expect((await service.status(providerB.id))?.state).toBe("enabled");
+      expect((await service.status(dependentC.id))?.state).toBe("enabled");
+      deleteSpy.mockRestore();
+    });
+
+    it("restores loaded runtime-only dependents after forced uninstall fails", async () => {
+      const runtimeDependent: PluginManifest = {
+        id: "@test/runtime-only-dependent",
+        name: "Runtime only dependent",
+        version: "1.0.0",
+        author: "Tests",
+        description: "Synthetic loaded dependent without a persisted plugin row",
+        trustLevel: "core",
+        provides: [
+          {
+            capability: "runtime.only.dependent",
+            apiVersion: "1.0",
+            implementation: { execute: async () => "active" },
+          },
+        ],
+        requires: {
+          modus: ">=0.8.0",
+          capabilities: [{ capability: "memory.query", version: "^1.0" }],
+        },
+        permissions: mockPerms,
+      };
+      catalog.add(runtimeDependent);
+      registry.registerCapability({
+        id: "runtime.only.dependent",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: { description: "Synthetic runtime-only dependent fixture" },
+      });
+      await service.install(baseMemoryPlugin);
+      await service.enable(baseMemoryPlugin.id);
+      await loader.load(runtimeDependent);
+      await loader.enable(runtimeDependent.id);
+      expect(store.getPlugin(runtimeDependent.id)).toBeNull();
+
+      await service.syncOnStartup();
+      expect(
+        service.getDependencyGraph().calculateBlastRadius(baseMemoryPlugin.id).directDependents,
+      ).toContain(runtimeDependent.id);
+
+      const deletePlugin = store.deletePlugin.bind(store);
+      const deleteSpy = vi.spyOn(store, "deletePlugin").mockImplementation((pluginId) => {
+        if (pluginId === baseMemoryPlugin.id) throw new Error("durable uninstall failed");
+        deletePlugin(pluginId);
+      });
+
+      await expect(service.uninstall(baseMemoryPlugin.id, { force: true })).rejects.toThrow(
+        "durable uninstall failed",
+      );
+
+      expect(loader.getPlugin(runtimeDependent.id)?.status).toBe("enabled");
+      expect(registry.isProviderQuarantined(runtimeDependent.id)).toBe(false);
+      await expect(registry.execute("runtime.only.dependent", {})).resolves.toBe("active");
+      deleteSpy.mockRestore();
     });
 
     it("executes blast-radius CLI command and outputs structured report", async () => {
