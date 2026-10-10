@@ -422,7 +422,7 @@ mod tests {
             pid_file.display().to_string().replace('\'', "'\\''")
         );
         let script = format!(
-            "trap '' TERM; (trap '' TERM; exec sleep 30) & child=$!; printf '%s' \"$child\" > {quoted_pid_file}; wait"
+            "trap '' TERM HUP; (trap '' TERM HUP; exec sleep 30) & child=$!; printf '%s' \"$child\" > {quoted_pid_file}; wait"
         );
 
         spawn_session(
