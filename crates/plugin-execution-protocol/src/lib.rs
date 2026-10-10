@@ -17,7 +17,9 @@ use serde_json::Value;
 
 pub mod resource_policy;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+/// Version 2 adds an explicit cancellation response so a worker can distinguish
+/// cancellation from failure. Version 1 is rejected during handshake.
+pub const PROTOCOL_VERSION: u16 = 2;
 /// Maximum on-wire frame size, including the four-byte length prefix.
 pub const MAX_IPC_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024;
@@ -82,6 +84,10 @@ pub enum HostFrame {
         protocol_version: u16,
         sequence: u64,
         error: String,
+    },
+    InvocationCancelled {
+        protocol_version: u16,
+        sequence: u64,
     },
 }
 
@@ -276,6 +282,7 @@ pub enum DispatchEvent {
 pub enum InvocationOutcome {
     Success(Value),
     Failure(String),
+    Cancelled,
 }
 
 /// A stream reader whose implementation enforces the supplied absolute
@@ -484,6 +491,10 @@ impl Dispatcher {
                     error,
                 }
             }
+            InvocationOutcome::Cancelled => HostFrame::InvocationCancelled {
+                protocol_version: PROTOCOL_VERSION,
+                sequence,
+            },
         };
         let frame = encode_host_frame(&response)?;
         if let Some(generation_active) = self.pending.remove(&sequence) {
@@ -539,6 +550,24 @@ fn decode_worker_frame(frame: &[u8]) -> Result<InboundWorkerFrame, ProtocolError
 
 pub fn decode_host_frame(frame: &[u8]) -> Result<HostFrame, ProtocolError> {
     let message: HostFrame = decode_message(frame)?;
+    let protocol_version = match &message {
+        HostFrame::Ready {
+            protocol_version, ..
+        }
+        | HostFrame::InvocationSucceeded {
+            protocol_version, ..
+        }
+        | HostFrame::InvocationFailed {
+            protocol_version, ..
+        }
+        | HostFrame::InvocationCancelled {
+            protocol_version, ..
+        } => *protocol_version,
+    };
+    if protocol_version != PROTOCOL_VERSION {
+        return Err(ProtocolError::UnsupportedVersion);
+    }
+
     match &message {
         HostFrame::InvocationSucceeded { result, .. } => {
             serialize_bounded(result, MAX_RESULT_BYTES, ProtocolError::ResultTooLarge)?;
@@ -1025,7 +1054,7 @@ mod tests {
 
     #[test]
     fn rejects_guest_supplied_host_identity_fields() {
-        let json = br#"{"type":"invoke","protocol_version":1,"sequence":1,"capability":"memory.read","payload":{},"plugin_id":"forged","plugin_version":"9.9.9","artifact_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_origin":"host://bundled","trust_level":"core","session_id":"other-session","workspace_id":"other-workspace","run_id":"other-run","generation":99}"#;
+        let json = br#"{"type":"invoke","protocol_version":2,"sequence":1,"capability":"memory.read","payload":{},"plugin_id":"forged","plugin_version":"9.9.9","artifact_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_origin":"host://bundled","trust_level":"core","session_id":"other-session","workspace_id":"other-workspace","run_id":"other-run","generation":99}"#;
 
         assert_eq!(
             decode_worker_frame(&raw_frame(json)),
@@ -1110,6 +1139,35 @@ mod tests {
             Err(ProtocolError::ChallengeMismatch),
         );
         assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn rejects_v1_worker_before_negotiating_the_v2_cancellation_frame() {
+        let mut dispatcher = new_dispatcher();
+        let v1_hello = encode_worker_frame(&WorkerFrame::Hello {
+            protocol_version: 1,
+            challenge: CHALLENGE.to_string(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            dispatcher.receive(&v1_hello),
+            Err(ProtocolError::UnsupportedVersion),
+        );
+        assert!(dispatcher.is_closed());
+    }
+
+    #[test]
+    fn rejects_v1_host_responses_after_the_v2_protocol_upgrade() {
+        let v1_response = encode_message(&HostFrame::Ready {
+            protocol_version: 1,
+        })
+        .unwrap();
+
+        assert_eq!(
+            decode_host_frame(&v1_response),
+            Err(ProtocolError::UnsupportedVersion),
+        );
     }
 
     #[test]
@@ -1222,6 +1280,36 @@ mod tests {
         assert_eq!(first.payload(), None);
         assert!(second.is_current());
         assert_eq!(second.capability(), Some("memory.read"));
+    }
+
+    #[test]
+    fn cancelled_invocation_has_a_distinct_result_and_revokes_only_its_authority() {
+        let mut dispatcher = new_dispatcher();
+        dispatcher.receive(&hello()).unwrap();
+        let cancelled = invocation(
+            dispatcher
+                .receive(&invoke(1, "memory.read", json!({})))
+                .unwrap(),
+        );
+        let active = invocation(
+            dispatcher
+                .receive(&invoke(2, "memory.read", json!({})))
+                .unwrap(),
+        );
+
+        let response = dispatcher
+            .complete(1, InvocationOutcome::Cancelled)
+            .unwrap();
+
+        assert_eq!(
+            decode_host_frame(&response),
+            Ok(HostFrame::InvocationCancelled {
+                protocol_version: PROTOCOL_VERSION,
+                sequence: 1,
+            }),
+        );
+        assert!(!cancelled.is_current());
+        assert!(active.is_current());
     }
 
     #[test]

@@ -118,6 +118,29 @@ cancellation, process supervision, policy enforcement, and process-tree reap
 remain pending. A future host must revoke on timeout/cancel and recheck the
 invocation immediately before each permission-dispatched side effect.
 
+### IPC v2 cancellation compatibility follow-up
+
+The shared contract now uses protocol version 2 because cancellation has a
+distinct `InvocationCancelled` host response. The dispatcher rejects a v1
+worker during handshake; public `decode_host_frame` also rejects v1 responses
+for every host-frame variant. It revokes only the matching pending invocation
+when cancellation completes. This is message-level cancellation: it does not
+terminate a process or prove that an in-flight OS operation was preempted.
+
+- RED: a fixed v1 hello was incorrectly accepted as `Ready`; after the version
+  bump, a fixed v1 `HostFrame::Ready` was also returned by the public response
+  decoder. Both regressions failed before their corresponding version checks.
+- GREEN: Rust 1.85.1 formatting checks and
+  `cargo test --locked -p modus-plugin-execution-protocol` passed **26/26 unit
+  tests plus 1 compile-fail doctest**. The cancellation fixture confirms that
+  only the canceled sequence loses its authority while another pending
+  sequence remains current.
+- Independent review approved the v2 negotiation and cancellation semantics,
+  found the v1 host-response decoder gap, and then confirmed the decoder fix
+  rejects v1 on all response variants. No production caller or OS process
+  supervisor exists, so runtime wiring, deadline enforcement, preemption, and
+  reap remain unproven.
+
 ## Mission CI prerequisite — Free monthly renewal calendar
 
 **Status: implemented, locally verified, independently reviewed, and CI-green.** This is the
@@ -1702,14 +1725,27 @@ again failed with `2026-10-30` received and `2026-10-31` expected. The
 run; no baseline comparison or instability classification is claimed. Windows
 and macOS packaging runs for this commit remain in progress at this update.
 
+## Remote CI on IPC stream commit `54031ce`
+
+On remote head `54031ce9`, Biome and desktop typecheck passed. Global Vitest
+reported **4,607 passed, 8 skipped, 1 failed across 408 files**; the sole
+failure was `FastVectorDistance` at **0.12641000000002123 ms** against the
+unchanged `<0.1 ms` assertion in `wasm-sandbox.test.ts:989`. No base comparison
+was performed, so the failure is not classified as pre-existing or solely
+unstable. Supabase pgTAP/Deno, Verifier-First regressions, safe protocol tests,
+PTY cancellation, sandbox compile-only, and containment on Ubuntu/macOS/Windows
+passed; no probes ran. Windows x64 and macOS x64/arm64 packaging and artifact
+uploads completed successfully. This run predates the local protocol-v2
+cancellation follow-up above.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
-| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. Commit `f0e41d3` adds shared bounded IPC framing and strict worker schemas; real OS isolation and host-runtime integration remain absent. Hostile execution proof remains blocked. |
-| A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The shared IPC contract now carries host-only version, digest, origin, trust, session/workspace/run and generation provenance, but it has no production caller and does not establish trust on its own. |
-| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. The shared IPC dispatcher enforces exact grants in synthetic fixtures, but direct dispatch/hooks remain for catalogued built-ins and no OS-backed dispatcher/lifecycle boundary is integrated. |
+| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
+| A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but it has no production caller and does not establish trust on its own. |
+| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but direct dispatch/hooks remain for catalogued built-ins and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
