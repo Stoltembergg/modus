@@ -643,9 +643,16 @@ accepting an append. Existing databases gain the revision column additively.
 - Independent review caught reprocessing the retained chain on every append and
   missing record IDs in the hash; the implementation was bounded with SQLite
   `data_version`, the ID regression went RED/GREEN, and final follow-up found no
-  remaining blocker. The integrated workflow on `effa4ee` passed the desktop
-  typecheck/test/Biome job and all three plugin-containment jobs; pgTAP's
-  unrelated monthly-renewal test remains the sole CI failure.
+  remaining blocker. On commit `ff57f72`, workflow `38046697377` passed Biome
+  and typecheck but the global Vitest job failed only the `FastVectorDistance`
+  timing assertion (`0.113352 ms` against `<0.1 ms`): **4,596 passed, 8
+  skipped, 1 failed** across 406 files. macOS plugin-containment also failed
+  only that assertion (`0.167249 ms`; 280 passed, 7 skipped); Ubuntu and
+  Windows containment passed. Verifier-First regressions and the compile-only
+  sandbox job passed. pgTAP test 22 still expected `2026-10-31` and received
+  `2026-10-30`. Windows x64, macOS x64 and arm64 packaging passed. These timing
+  failures are not classified as pre-existing or solely unstable without a
+  successful base comparison.
 
 ### Limits
 
@@ -974,6 +981,13 @@ references use scoped page queries. Main-chat sources load the full run through
 run-scoped pages; partial page-local references are suppressed while lookup is
 pending or unavailable, and the UI reports that state.
 
+The Pi runtime's last-assistant and run-assistant output readers now use the
+bounded page APIs instead of materializing `listAgentEvents`. Past-chat context
+uses raw cursor pages so each persisted delta is consumed once; the ordinary
+expanded page API can repeat a complete stream when that stream crosses a page
+boundary. Transcript assembly retains only the configured 60 KiB output cap
+while preserving legacy prompt backfill and message trimming.
+
 ### Evidence
 
 - RED: four focused regressions failed before the change: page API missing,
@@ -1044,16 +1058,32 @@ pending or unavailable, and the UI reports that state.
   in stream expansion. A later review found and drove two run-association fixes;
   final review found no blocker in the session/snapshot/terminal/overlap guards.
   The review did not run tests.
+- Reader follow-up RED/GREEN: a focused past-chat regression first returned
+  the same expanded `hello world` message twice when it appeared on both sides
+  of a page boundary. A real SQLite fixture reproduces this behavior in
+  `listAgentEventPage`; the raw-page API returns the persisted deltas once and
+  retains legacy prompt backfill. A separate regression showed that
+  `lastAssistantOutput` could append an expanded answer twice when the assistant
+  start was the last row of a page. It now uses raw pages; an actual store-backed
+  helper fixture places the start at cursor 256 and confirms the answer is
+  exactly `complete answer`. Focused event-store/helper/context suites passed
+  **89/89**, and the full offline Pi runtime test file passed **232/232** with
+  no probe execution. Desktop typecheck passed. Targeted Biome exits 0 with one
+  existing unused-import warning in `pi-sdk-runtime.ts`, unchanged from the
+  parent revision. Independent re-review found no blocker and verified both
+  duplicate-stream fixes. The raw-page API explicitly documents legacy prompt
+  backfill; those synthetic prompt items still have no byte cap.
 
 ### Limits
 
-`listAgentEvents` still drains every page into one array for legacy consumers,
-and the Pi SDK runtime plus subagent context helpers still reconstruct session
-history through it. Run-source loading accumulates all selected-run events
-while a lookup is in flight, but completed event arrays are no longer kept in
-the renderer cache after the lookup settles. Inactive EventHub buffers are
-released after the short subscriber handoff window; live subscribers and
-prepared handoffs retain their events.
+`listAgentEvents` still drains every page into one array for compatibility
+consumers, including the legacy session IPC result. Run-source loading
+accumulates all selected-run events while a lookup is in flight, but completed
+event arrays are no longer kept in the renderer cache after the lookup settles.
+The final assistant-output helpers retain the complete selected message, and a
+single raw event row can still contain an arbitrarily large payload. Inactive
+EventHub buffers are released after the short subscriber handoff window; live
+subscribers and prepared handoffs retain their events.
 Base row count is capped, but companion stream expansion and individual
 serialized payloads have no byte cap, so memory and IPC size can still be large
 for unusually long results. A volatile partial `tool.delta` can be unavailable
@@ -1242,7 +1272,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; renderer and run-response paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, exact-run assistant-output pages, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub RED/GREEN: hub/timeline/chat-history integration 30/30, including active-run buffer release after the handoff window and prepared handoff retention. Run-response RED/GREEN: bounded per-run message pages, 130 deltas across the default page boundary, and an offline Pi runtime ResponsePolicy evaluation preserving the exact text. Parent CI `87e6466`: 4,588 passed/8 skipped/1 benchmark failure (`FastVectorDistance` 0.135374ms vs <0.1ms), plus the recurring pgTAP date assertion; typecheck/Biome, containment on all three OSes, Verifier-First, compile-only sandbox, and both package workflows passed. Independent reviewers found no blocker. Legacy `lastAssistantOutput`, past-chat transcript, and `listAgentEvents` compatibility paths still materialize broad history; individual event/result byte caps, volatile partial tool previews before durable `tool.started`, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
+| A22 | Partially mitigated; productive reader paging added and independently re-reviewed | Durable cursor, fixed-snapshot pages, page-driven timeline/history, run-scoped sources, and productive Pi output readers use bounded row pages. Raw cursor reads fixed duplicate expanded streams in past-chat and subagent output; focused event-store/helper/context tests passed 89/89, the full offline Pi runtime test file passed 232/232, desktop typecheck passed, and targeted Biome passed with one existing warning. Independent re-review found no blocker. On parent workflow `38046697377` at `ff57f72`, 4,596 tests passed, 8 skipped, and `FastVectorDistance` failed at 0.113352ms against <0.1ms; macOS containment failed the same benchmark. Ubuntu/Windows containment, Verifier-First, compile-only sandbox, and Windows/macOS packages passed; pgTAP date assertion remains failed. Timing failures are not classified as pre-existing or solely unstable. Legacy `listAgentEvents` compatibility/IPC still materializes all history; in-flight selected-run reads, synthetic prompt backfill and event payloads have no byte cap, and volatile partial tool previews/early local prompt failure retention remain. A previously canceled broad local suite may have started a restricted sandbox test; that run was not counted as validation and was not repeated. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |

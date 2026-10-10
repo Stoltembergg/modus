@@ -1621,6 +1621,25 @@ export function listAgentEventPage(
   sessionId: string,
   options: AgentEventPageOptions = {},
 ): AgentEventPageResult {
+  return listAgentEventPageInternal(sessionId, options, true);
+}
+
+/**
+ * Read unexpanded and unfolded cursor rows. Legacy user prompts may be
+ * backfilled before their run.started row; `limit` caps persisted rows only.
+ */
+export function listAgentEventRawPage(
+  sessionId: string,
+  options: AgentEventPageOptions = {},
+): AgentEventPageResult {
+  return listAgentEventPageInternal(sessionId, options, false);
+}
+
+function listAgentEventPageInternal(
+  sessionId: string,
+  options: AgentEventPageOptions,
+  expandStreams: boolean,
+): AgentEventPageResult {
   const direction = options.direction ?? "forward";
   const runId = "runId" in options ? options.runId : undefined;
   const afterCursor = options.direction === "backward" ? undefined : (options.afterCursor ?? 0);
@@ -1689,14 +1708,17 @@ export function listAgentEventPage(
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
   if (direction === "backward") pageRows.reverse();
   const parsedEvents = pageRows.map(parseAgentEventRow);
-  const expandedStreamEvents = runId
-    ? undefined
-    : expandAgentEventPageStreams(sessionId, pageRows, parsedEvents, snapshotCursor);
+  const expandedStreamEvents =
+    runId || !expandStreams
+      ? undefined
+      : expandAgentEventPageStreams(sessionId, pageRows, parsedEvents, snapshotCursor);
   const events = runId
     ? parsedEvents
     : backfillUserPromptEventsForPage(
         sessionId,
-        expandedStreamEvents ? foldAgentEvents(expandedStreamEvents) : parsedEvents,
+        expandStreams && expandedStreamEvents
+          ? foldAgentEvents(expandedStreamEvents)
+          : parsedEvents,
         snapshotCursor,
       );
   const summaryEvents =

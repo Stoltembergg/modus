@@ -19,6 +19,7 @@ vi.mock("electron", () => ({
 const { getDatabase } = await import("../db/database");
 const { migrateDatabase } = await import("../db/database");
 const { createAgentRun } = await import("./agent-run-store");
+const { lastAssistantOutput } = await import("./runtime-subagent-helper");
 const {
   getLatestCheckpointRestoreRowId,
   getLatestHarnessTaskState,
@@ -26,6 +27,7 @@ const {
   getRunToolEvidence,
   getHarnessQAEventByRowId,
   listAgentEventPage,
+  listAgentEventRawPage,
   listAgentRunMessagePage,
   listAgentEvents,
   MAX_AGENT_EVENT_PAGE_SIZE,
@@ -2280,8 +2282,21 @@ fs.renameSync("original-manifest-link", "package.json");
     });
 
     const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+    const rawPage = listAgentEventRawPage(sessionId, { limit: 1 });
 
     expect(page.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: {
+            type: "message.delta",
+            sessionId,
+            messageId: "legacy-user-message",
+            delta: "legacy prompt only stored with the run",
+          },
+        }),
+      ]),
+    );
+    expect(rawPage.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           event: {
@@ -2393,6 +2408,100 @@ fs.renameSync("original-manifest-link", "package.json");
     expect(page2.nextCursor).toBe(third);
     expect(page2.snapshotCursor).toBe(page1.snapshotCursor);
     expect(page2.hasMore).toBe(false);
+  });
+
+  it("returns raw streamed deltas once when a message crosses a page boundary", () => {
+    const sessionId = `raw-stream-page-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    for (let index = 0; index < 254; index += 1) {
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `padding-run-${index}`,
+        delivery: "normal",
+      });
+    }
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "cross-page-message",
+      role: "user",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "cross-page-message",
+      delta: "first ",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "cross-page-message",
+      delta: "second",
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "cross-page-message",
+    });
+
+    const expandedFirstPage = listAgentEventPage(sessionId, { limit: MAX_AGENT_EVENT_PAGE_SIZE });
+    const expandedSecondPage = listAgentEventPage(sessionId, {
+      afterCursor: expandedFirstPage.nextCursor,
+      snapshotCursor: expandedFirstPage.snapshotCursor,
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+    });
+    expect(
+      [...expandedFirstPage.events, ...expandedSecondPage.events]
+        .filter(({ event }) => event.type === "message.delta")
+        .map(({ event }) => (event.type === "message.delta" ? event.delta : "")),
+    ).toEqual(["first second", "first second"]);
+
+    const rawFirstPage = listAgentEventRawPage(sessionId, {
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+    });
+    const rawSecondPage = listAgentEventRawPage(sessionId, {
+      afterCursor: rawFirstPage.nextCursor,
+      snapshotCursor: rawFirstPage.snapshotCursor,
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+    });
+    expect(
+      [...rawFirstPage.events, ...rawSecondPage.events]
+        .filter(({ event }) => event.type === "message.delta")
+        .map(({ event }) => (event.type === "message.delta" ? event.delta : "")),
+    ).toEqual(["first ", "second"]);
+  });
+
+  it("reconstructs one assistant answer when its start is the last row of a page", () => {
+    const sessionId = `assistant-output-boundary-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    for (let index = 0; index < MAX_AGENT_EVENT_PAGE_SIZE - 1; index += 1) {
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `padding-run-${index}`,
+        delivery: "normal",
+      });
+    }
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "assistant-answer",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "assistant-answer",
+      delta: "complete answer",
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "assistant-answer",
+    });
+
+    expect(lastAssistantOutput(sessionId)).toBe("complete answer");
   });
 
   it("pages only tool events attributed to the requested run", () => {

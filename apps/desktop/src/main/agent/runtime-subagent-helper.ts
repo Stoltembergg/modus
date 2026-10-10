@@ -1,5 +1,9 @@
 import type { AgentSessionInfo } from "../../shared/contracts";
-import { listAgentEvents } from "./agent-event-store";
+import {
+  listAgentEventRawPage,
+  listAgentRunMessagePage,
+  MAX_AGENT_EVENT_PAGE_SIZE,
+} from "./agent-event-store";
 
 export const MAX_SUBAGENTS_PER_SESSION = 6;
 export const MAX_WAIT_MEMORY_CANDIDATES = 8;
@@ -30,64 +34,59 @@ export function composeSubagentPrompt(input: {
 }
 
 export function lastAssistantOutput(sessionId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
   let lastAssistantMessageId: string | undefined;
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "message.started") {
-      roles.set(event.messageId, event.role);
-      if (event.role === "assistant") {
-        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
+  let lastAssistantText = "";
+  let afterCursor = 0;
+  let snapshotCursor: number | undefined;
+  while (true) {
+    const page = listAgentEventRawPage(sessionId, {
+      afterCursor,
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+    });
+    snapshotCursor = page.snapshotCursor;
+    for (const { event } of page.events) {
+      if (event.type === "message.started" && event.role === "assistant") {
         lastAssistantMessageId = event.messageId;
+        lastAssistantText = "";
+      } else if (event.type === "message.delta" && event.messageId === lastAssistantMessageId) {
+        lastAssistantText += event.delta;
       }
-      continue;
     }
-    if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-      textByMessage.set(
-        event.messageId,
-        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-      );
-      lastAssistantMessageId = event.messageId;
-      continue;
-    }
-    if (event.type === "message.completed" && roles.get(event.messageId) === "assistant") {
-      lastAssistantMessageId = event.messageId;
-    }
+    if (!page.hasMore || page.nextCursor === undefined) break;
+    afterCursor = page.nextCursor;
   }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
+  const output = lastAssistantMessageId ? lastAssistantText.trim() : "";
   return output || undefined;
 }
 
 /**
- * The last assistant text produced by one run: only events after that run's
- * `run.started` count, so a run with no text never reports an earlier turn's.
+ * Reconstruct one run's final assistant message from bounded, run-scoped pages.
  */
 export function runAssistantOutput(sessionId: string, runId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
-  let inRun = false;
   let lastAssistantMessageId: string | undefined;
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "run.started") {
-      inRun = event.runId === runId;
-      continue;
-    }
-    if (!inRun) continue;
-    if (event.type === "message.started") {
-      roles.set(event.messageId, event.role);
-      if (event.role === "assistant") {
-        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
+  let lastAssistantText = "";
+  let afterCursor = 0;
+  let snapshotCursor: number | undefined;
+  while (true) {
+    const page = listAgentRunMessagePage(sessionId, runId, {
+      afterCursor,
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+    });
+    snapshotCursor = page.snapshotCursor;
+    for (const { event } of page.events) {
+      if (event.type === "message.started" && event.role === "assistant") {
         lastAssistantMessageId = event.messageId;
+        lastAssistantText = "";
+      } else if (event.type === "message.delta" && event.messageId === lastAssistantMessageId) {
+        lastAssistantText += event.delta;
       }
-    } else if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-      textByMessage.set(
-        event.messageId,
-        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-      );
-      lastAssistantMessageId = event.messageId;
     }
+    if (!page.hasMore || page.nextCursor === undefined) break;
+    afterCursor = page.nextCursor;
   }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
+  const output = lastAssistantMessageId ? lastAssistantText.trim() : "";
   return output || undefined;
 }
 

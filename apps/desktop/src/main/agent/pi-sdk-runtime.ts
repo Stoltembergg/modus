@@ -92,8 +92,6 @@ import {
   getRunToolEvidence,
   getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
-  listAgentEvents,
-  listAgentRunMessagePage,
   recordAgentEvent,
 } from "./agent-event-store";
 import {
@@ -242,6 +240,7 @@ import type {
   TurnSettledEvent,
   WaitMemoryCandidateSummary,
 } from "./runtime";
+import { lastAssistantOutput, runAssistantOutput } from "./runtime-subagent-helper";
 import {
   branchContextLine,
   type RunBranchSnapshot,
@@ -5718,73 +5717,6 @@ function shouldPersistSubagentUpdate(event: AgentEvent): boolean {
     event.type === "run.cancelled" ||
     event.type === "tool.started"
   );
-}
-
-/**
- * The last assistant text produced by one run: only events after that run's
- * `run.started` count, so a run with no text never reports an earlier turn's.
- */
-function runAssistantOutput(sessionId: string, runId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
-  let lastAssistantMessageId: string | undefined;
-  let afterCursor = 0;
-  let snapshotCursor: number | undefined;
-  while (true) {
-    const page = listAgentRunMessagePage(sessionId, runId, {
-      afterCursor,
-      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
-    });
-    snapshotCursor = page.snapshotCursor;
-    for (const { event } of page.events) {
-      if (event.type === "message.started") {
-        roles.set(event.messageId, event.role);
-        if (event.role === "assistant") {
-          textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
-          lastAssistantMessageId = event.messageId;
-        }
-      } else if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-        textByMessage.set(
-          event.messageId,
-          `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-        );
-        lastAssistantMessageId = event.messageId;
-      }
-    }
-    if (!page.hasMore || page.nextCursor === undefined) break;
-    afterCursor = page.nextCursor;
-  }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
-  return output || undefined;
-}
-
-function lastAssistantOutput(sessionId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
-  let lastAssistantMessageId: string | undefined;
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "message.started") {
-      roles.set(event.messageId, event.role);
-      if (event.role === "assistant") {
-        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
-        lastAssistantMessageId = event.messageId;
-      }
-      continue;
-    }
-    if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-      textByMessage.set(
-        event.messageId,
-        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-      );
-      lastAssistantMessageId = event.messageId;
-      continue;
-    }
-    if (event.type === "message.completed" && roles.get(event.messageId) === "assistant") {
-      lastAssistantMessageId = event.messageId;
-    }
-  }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
-  return output || undefined;
 }
 
 function isSubagentBusy(status: AgentSessionInfo["status"]): boolean {
