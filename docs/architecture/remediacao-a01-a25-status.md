@@ -85,11 +85,16 @@ authorization wiring and OS-level enforcement remain open.**
 - A08 no longer accepts a caller-supplied `trustLevel: "core"` as network
   authority. The predicate canonicalizes bracketed and IPv4-mapped IPv6
   literals, identifies the IPv4 loopback range, blocks unspecified IPv4 and
-  link-local IPv4 ranges, and retains explicit localhost/domain grants. Other
-  private ranges and IPv6 metadata destinations are not comprehensively
-  classified. These are predicate-only checks. DNS resolution/pinning, redirect
-  validation, connection-level enforcement, and production wiring are absent;
-  A08 remains open.
+  link-local IPv4 ranges, and retains explicit localhost/domain grants. It now
+  also blocks selected RFC1918, carrier-grade NAT, reserved/documentation IPv4,
+  IPv6 ULA, link-local, multicast, documentation/tunnel ranges, mapped private
+  IPv4 literals, and the well-known NAT64 prefix when it embeds a non-public
+  IPv4 address, even when an explicit domain list contains `*`. Globally
+  reachable `192.0.0.9` and `.10` remain usable with exact grants. This is not
+  an exhaustive special-purpose address registry. The checks remain
+  predicate-only: DNS resolution/pinning, redirect validation,
+  connection-level enforcement, and production wiring are absent; A08 remains
+  open.
 - A09 shell checks reject the tested shell-composition metacharacters and no
   longer accept caller-supplied core trust. When the shell allow-list includes
   `git`, direct recognized Git commands also require the matching explicit Git
@@ -110,14 +115,25 @@ authorization wiring and OS-level enforcement remain open.**
   composition and forged trust, interpreter/Git executable wrapper bypass,
   Git grant bypass through shell, and missing/forged Git operation grants.
 - GREEN: thirteen selected tests passed (the twelve regressions plus the existing
-  shell whitelist behavior check); only exact safe test names were selected,
-  and the `adversarial bypass hardening` group was not executed.
+  shell whitelist behavior check); exact test names were selected and the full
+  `adversarial bypass hardening` describe group was not run. A later A08
+  follow-up selected its pure in-memory `blocks obfuscated loopback IPs`
+  predicate test by exact name; it called no network and ran no plugin,
+  filesystem, shell, or process code. The group was not run as a suite.
 - Desktop typecheck: passed, exit 0.
 - Targeted Biome: passed with existing warnings/infos; no rules were disabled
   and no bulk formatting was applied.
 - `git diff --check`: passed.
 - Static callsite search found no production use of `FilesystemBroker`,
   `NetworkBroker`, `ShellBroker`, or `GitBroker` outside their definitions.
+- A08 follow-up RED/GREEN: synthetic address tests failed before the change
+  (`10.20.30.40`, `[fc00::1]`, NAT64-encoded `169.254.169.254`, and exact
+  grants for `192.0.0.9/.10`) and passed after it. The selected network-policy
+  regressions passed **10/10**; they called only `canConnect` on in-memory
+  strings and made no network connection. DNS rebinding, redirects, other
+  translation prefixes, and productive connection enforcement remain
+  untested and unimplemented. Independent review flagged NAT64 and anycast;
+  those two gaps were covered before the reviewer was asked to re-review.
 
 ## A03/A04 boundary check — host-catalog ingress
 
@@ -558,14 +574,24 @@ implementation; A24 remains partial until that work is safe to enable.
   `FastVectorDistance` `< 0.1ms` timing assertion measured
   `0.105466999999976ms`. Running that test alone locally measured
   `0.11810399999990295ms` and failed the same assertion. Its implementation,
-  assertion and threshold match the initial reference commit; this is an
-  unresolved test/implementation issue and is not attributed to A24.
+  assertion and threshold match the initial reference commit; this remains an
+  unresolved timing failure and is not attributed to A24.
   The separate pgTAP run reported **1,021 passed and 1 failed** of 1,022: test
   22 expected `2026-10-31` and received `2026-10-30`. That billing test is
   outside A24 and was not modified. macOS x64/arm64 and Windows x64 packaging,
   plugin-containment on Linux/macOS/Windows, Verifier-First regressions, and
-  compile-only sandbox targets passed on that commit. CI for this A24 patch will
-  be recorded after push.
+  compile-only sandbox targets passed on that earlier commit.
+- CI run `38026077119` on A24 commit `177d01d`: Biome/typecheck passed; Vitest
+  reported **4,509 passed, 8 skipped, 1 failed** across 402 files. The only
+  failure was the same `FastVectorDistance` assertion, measuring
+  `0.10673900000000458ms` against `< 0.1ms`. The Linux plugin-containment job
+  also failed only on that benchmark after **268 passed, 7 skipped, 1 failed**;
+  Windows and macOS plugin-containment, Verifier-First regressions, and
+  compile-only sandbox targets passed. The pgTAP job again had **1,021/1,022**
+  pass with test 22 expecting `2026-10-31` and receiving `2026-10-30`. On the
+  packaging workflows, macOS x64 and arm64 package jobs passed; Windows x64
+  package creation passed and artifact upload was still running at the last
+  status check.
 - The post-namespace-hash `npm run check` completed successfully: Biome checked
   1,136 files with **0 errors, 363 warnings, and 50 informational diagnostics**,
   then all configured workspace TypeScript checks exited 0. No diagnostics were

@@ -283,13 +283,83 @@ export class NetworkBroker {
     return address.length === 4 && address.every(Number.isInteger) && address[0] === 127;
   }
 
+  private static parseIpv6Groups(host: string): number[] | undefined {
+    let address = host.toLowerCase();
+    if (address.includes(".")) {
+      const separator = address.lastIndexOf(":");
+      if (separator === -1) return undefined;
+      const ipv4 = NetworkBroker.parseObscuredIpv4(address.slice(separator + 1));
+      if (!ipv4) return undefined;
+      const octets = ipv4.split(".").map(Number);
+      const [first, second, third, fourth] = octets;
+      if ([first, second, third, fourth].some((octet) => octet === undefined)) return undefined;
+      address = `${address.slice(0, separator + 1)}${(((first ?? 0) << 8) | (second ?? 0)).toString(16)}:${(((third ?? 0) << 8) | (fourth ?? 0)).toString(16)}`;
+    }
+
+    const compression = address.indexOf("::");
+    if (compression !== -1 && address.indexOf("::", compression + 2) !== -1) return undefined;
+    const left = (compression === -1 ? address : address.slice(0, compression))
+      .split(":")
+      .filter(Boolean);
+    const right =
+      compression === -1
+        ? []
+        : address
+            .slice(compression + 2)
+            .split(":")
+            .filter(Boolean);
+    const missingGroups = 8 - left.length - right.length;
+    if (compression === -1 ? missingGroups !== 0 : missingGroups < 1) return undefined;
+
+    const groups = [...left, ...Array.from({ length: missingGroups }, () => "0"), ...right];
+    if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/u.test(group))) {
+      return undefined;
+    }
+
+    return groups.map((group) => Number.parseInt(group, 16));
+  }
+
   private static isBlockedHost(host: string): boolean {
     if (NetworkBroker.BLOCKED_HOSTS.has(host)) return true;
     const address = host.split(".").map((part) => Number(part));
+    if (address.length === 4 && address.every(Number.isInteger)) {
+      const [first, second, third] = address;
+      return (
+        first === 0 ||
+        (first === 10 && second !== undefined) ||
+        (first === 100 && second !== undefined && second >= 64 && second <= 127) ||
+        (first === 169 && second === 254) ||
+        (first === 172 && second !== undefined && second >= 16 && second <= 31) ||
+        (first === 192 && second === 0 && third === 0 && address[3] !== 9 && address[3] !== 10) ||
+        (first === 192 && second === 0 && third === 2) ||
+        (first === 192 && second === 168) ||
+        (first === 198 && second !== undefined && (second === 18 || second === 19)) ||
+        (first === 198 && second === 51 && third === 100) ||
+        (first === 203 && second === 0 && third === 113) ||
+        (first !== undefined && first >= 224)
+      );
+    }
+
+    const groups = NetworkBroker.parseIpv6Groups(host);
+    if (!groups) return false;
+    const [first, second] = groups;
+    if (first === 0x0064 && second === 0xff9b && groups.slice(2, 6).every((group) => group === 0)) {
+      const [high, low] = groups.slice(6, 8);
+      if (high === undefined || low === undefined) return true;
+      const embeddedIpv4 = [high >>> 8, high & 255, low >>> 8, low & 255].join(".");
+      return (
+        NetworkBroker.isBlockedHost(embeddedIpv4) || NetworkBroker.isLoopbackHost(embeddedIpv4)
+      );
+    }
+
     return (
-      address.length === 4 &&
-      address.every(Number.isInteger) &&
-      (address[0] === 0 || (address[0] === 169 && address[1] === 254))
+      (first !== undefined && (first & 0xfe00) === 0xfc00) ||
+      (first !== undefined && (first & 0xffc0) === 0xfe80) ||
+      (first !== undefined && (first & 0xff00) === 0xff00) ||
+      groups.slice(0, 6).every((group) => group === 0) ||
+      (first === 0x2001 && second === 0x0db8) ||
+      (first === 0x2001 && second === 0x0000) ||
+      first === 0x2002
     );
   }
 

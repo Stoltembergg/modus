@@ -475,6 +475,50 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canConnect("http://169.254.0.1/", openDomain)).toBe(false);
       });
 
+      it("blocks non-public IPv4 ranges despite an open domain whitelist", () => {
+        const broker = new NetworkBroker();
+        const openDomain: ExtendedPluginPermissions = { network: { domains: ["*"] } };
+
+        for (const address of [
+          "10.20.30.40",
+          "172.16.0.1",
+          "172.31.255.254",
+          "192.168.1.1",
+          "100.64.0.1",
+          "100.127.255.254",
+        ]) {
+          expect(broker.canConnect(`http://${address}/`, openDomain), address).toBe(false);
+        }
+      });
+
+      it("blocks non-public IPv6 ranges and mapped private IPv4 literals", () => {
+        const broker = new NetworkBroker();
+        const openDomain: ExtendedPluginPermissions = { network: { domains: ["*"] } };
+
+        for (const address of [
+          "[fc00::1]",
+          "[fd12:3456::1]",
+          "[fe80::1]",
+          "[ff02::1]",
+          "[::10.20.30.40]",
+          "[::ffff:192.168.1.10]",
+          "[64:ff9b::a9fe:a9fe]",
+        ]) {
+          expect(broker.canConnect(`http://${address}/`, openDomain), address).toBe(false);
+        }
+      });
+
+      it("allows globally reachable protocol anycast addresses with exact grants", () => {
+        const broker = new NetworkBroker();
+
+        for (const address of ["192.0.0.9", "192.0.0.10"]) {
+          expect(
+            broker.canConnect(`https://${address}/`, { network: { domains: [address] } }),
+            address,
+          ).toBe(true);
+        }
+      });
+
       it("validates destination domain against domain whitelist and wildcards", () => {
         const broker = new NetworkBroker();
         const perms: ExtendedPluginPermissions = {
@@ -484,6 +528,9 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canConnect("https://api.modus.org/v1", perms)).toBe(true);
         expect(broker.canConnect("https://sub.service.io/data", perms)).toBe(true);
         expect(broker.canConnect("https://evil.attacker.com", perms)).toBe(false);
+        expect(broker.canConnect("https://8.8.8.8/", { network: { domains: ["8.8.8.8"] } })).toBe(
+          true,
+        );
       });
 
       it("does not accept a caller-supplied core trust label as network authority", () => {
