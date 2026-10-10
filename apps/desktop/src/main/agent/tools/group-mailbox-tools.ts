@@ -1,9 +1,6 @@
-import {
-  type AgentToolResult,
-  defineTool,
-  type ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import { type Static, Type } from "typebox";
+import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { getAgentGroupForSession } from "../../groups/group-store";
 import { isFeatureFlagEnabled } from "../harness/feature-flags";
 import { GroupMailbox, type GroupMessage } from "../harness/groups/group-mailbox";
 import { detectConflict, GroupRevisionRegistry } from "../harness/groups/group-revision";
@@ -32,7 +29,6 @@ export interface GroupMailboxAckArgs {
 
 export interface GroupRevisionCheckArgs {
   files: Record<string, string>;
-  groupId?: string | undefined;
   baseRevision?: number | undefined;
 }
 
@@ -49,10 +45,11 @@ function resolveSenderIdentity(ctx: { cwd?: string }): {
 } | null {
   try {
     const context = resolveAgentToolContext(ctx.cwd ?? "");
-    if (!context.sessionId) return null;
+    if (!context.sessionId || !context.groupId) return null;
+    if (getAgentGroupForSession(context.sessionId)?.id !== context.groupId) return null;
     return {
       fromAgent: context.sessionId,
-      groupId: context.groupId || "default",
+      groupId: context.groupId,
     };
   } catch {
     return null;
@@ -67,7 +64,7 @@ function noSessionResult(details: unknown): {
     content: [
       {
         type: "text",
-        text: "Error: group mailbox has no owning Modus session for this call.",
+        text: "Error: mailbox access requires a current host-assigned Agent Group membership.",
       },
     ],
     details,
@@ -77,7 +74,7 @@ function noSessionResult(details: unknown): {
 export function handleGroupMailboxSend(
   args: GroupMailboxSendArgs,
   fromAgent: string,
-  fallbackGroupId: string = "default",
+  fallbackGroupId?: string,
 ): {
   success: boolean;
   messageId?: string | undefined;
@@ -89,11 +86,17 @@ export function handleGroupMailboxSend(
   if (!args.content || typeof args.content !== "string") {
     return { success: false, error: "Missing required parameter 'content'." };
   }
+  if (typeof fallbackGroupId !== "string" || !fallbackGroupId.trim()) {
+    return { success: false, error: "Mailbox access requires a host-assigned agent group." };
+  }
+  if (args.groupId !== undefined && args.groupId !== fallbackGroupId) {
+    return { success: false, error: "The requested group does not match this session's group." };
+  }
 
   try {
     const mailbox = GroupMailbox.getInstance();
     const id = mailbox.send({
-      groupId: args.groupId || fallbackGroupId,
+      groupId: fallbackGroupId,
       from: fromAgent,
       to: args.to,
       content: args.content,
@@ -113,15 +116,19 @@ export function handleGroupMailboxSend(
 export function handleGroupMailboxReceive(
   args: GroupMailboxReceiveArgs,
   agentId: string,
+  groupId?: string,
 ): {
   success: boolean;
   messages?: GroupMessage[] | undefined;
   count?: number | undefined;
   error?: string | undefined;
 } {
+  if (!groupId) {
+    return { success: false, error: "Mailbox access requires a host-assigned agent group." };
+  }
   try {
     const mailbox = GroupMailbox.getInstance();
-    const messages = mailbox.receive(agentId, args.limit ?? 50);
+    const messages = mailbox.receive(agentId, args.limit ?? 50, groupId);
     return {
       success: true,
       messages,
@@ -138,6 +145,7 @@ export function handleGroupMailboxReceive(
 export function handleGroupMailboxAck(
   args: GroupMailboxAckArgs,
   agentId: string,
+  groupId?: string,
 ): {
   success: boolean;
   ackedCount?: number | undefined;
@@ -149,20 +157,30 @@ export function handleGroupMailboxAck(
       error: "Parameter 'messageIds' must be an array of string IDs.",
     };
   }
+  if (!groupId) {
+    return {
+      success: false,
+      ackedCount: 0,
+      error: "Mailbox access requires a host-assigned agent group.",
+    };
+  }
 
   try {
     const mailbox = GroupMailbox.getInstance();
-    let ackedCount = 0;
-    for (const id of args.messageIds) {
-      if (mailbox.ack(id, agentId)) {
-        ackedCount++;
-      }
+    const result = mailbox.ackMany(args.messageIds, agentId, groupId);
+    if (!result.success) {
+      return {
+        success: false,
+        ackedCount: result.ackedCount,
+        error: "One or more message IDs are unavailable to this session or group.",
+      };
     }
 
-    return { success: true, ackedCount };
+    return { success: true, ackedCount: result.ackedCount };
   } catch (err) {
     return {
       success: false,
+      ackedCount: 0,
       error: err instanceof Error ? err.message : String(err),
     };
   }
@@ -170,13 +188,16 @@ export function handleGroupMailboxAck(
 
 export function handleGroupRevisionCheck(
   args: GroupRevisionCheckArgs,
-  fallbackGroupId: string = "default",
+  fallbackGroupId?: string,
 ): {
   conflict: boolean;
   conflicts: string[];
   currentRevision?: number | undefined;
 } {
-  const groupId = args.groupId || fallbackGroupId;
+  if (typeof fallbackGroupId !== "string" || !fallbackGroupId.trim()) {
+    throw new Error("Group revision checks require a host-assigned agent group.");
+  }
+  const groupId = fallbackGroupId;
   const registry = GroupRevisionRegistry.getInstance();
   const current = registry.getRevision(groupId);
 
@@ -206,7 +227,6 @@ const sendParams = Type.Object({
   to: Type.String({ description: "Recipient agent ID or '*' for broadcast." }),
   content: Type.String({ description: "Message content body to send." }),
   revision: Type.Optional(Type.Number({ description: "Current workspace revision number." })),
-  group_id: Type.Optional(Type.String({ description: "Optional group ID override." })),
 });
 
 export const groupMailboxSendTool: ToolDefinition<typeof sendParams> = defineTool({
@@ -220,12 +240,19 @@ export const groupMailboxSendTool: ToolDefinition<typeof sendParams> = defineToo
     if (!identity) {
       return noSessionResult({ success: false });
     }
+    if (params.to !== "*" && getAgentGroupForSession(params.to)?.id !== identity.groupId) {
+      return {
+        content: [
+          { type: "text", text: "Error: recipient must be a current member of this group." },
+        ],
+        details: { success: false, error: "recipient-not-in-group" },
+      };
+    }
     const result = handleGroupMailboxSend(
       {
         to: params.to,
         content: params.content,
         revision: params.revision,
-        groupId: params.group_id ?? identity.groupId,
       },
       identity.fromAgent,
       identity.groupId,
@@ -267,7 +294,11 @@ export const groupMailboxReceiveTool: ToolDefinition<typeof receiveParams> = def
     if (!identity) {
       return noSessionResult({ success: false });
     }
-    const result = handleGroupMailboxReceive({ limit: params.limit }, identity.fromAgent);
+    const result = handleGroupMailboxReceive(
+      { limit: params.limit },
+      identity.fromAgent,
+      identity.groupId,
+    );
 
     if (!result.success) {
       return {
@@ -304,7 +335,11 @@ export const groupMailboxAckTool: ToolDefinition<typeof ackParams> = defineTool(
     if (!identity) {
       return noSessionResult({ success: false });
     }
-    const result = handleGroupMailboxAck({ messageIds: params.message_ids }, identity.fromAgent);
+    const result = handleGroupMailboxAck(
+      { messageIds: params.message_ids },
+      identity.fromAgent,
+      identity.groupId,
+    );
 
     if (!result.success) {
       return {
@@ -330,7 +365,6 @@ const checkParams = Type.Object({
     description: "Map of file relative paths to their content hashes.",
   }),
   base_revision: Type.Optional(Type.Number({ description: "Base revision number checked out." })),
-  group_id: Type.Optional(Type.String({ description: "Group ID." })),
 });
 
 export const groupRevisionCheckTool: ToolDefinition<typeof checkParams> = defineTool({
@@ -340,14 +374,14 @@ export const groupRevisionCheckTool: ToolDefinition<typeof checkParams> = define
     "Check proposed file changes against the latest group revision to detect optimistic concurrency conflicts.",
   parameters: checkParams,
   execute: async (_callId, params, _sig, _onUp, ctx) => {
-    const groupId = params.group_id ?? resolveSenderIdentity(ctx)?.groupId ?? "default";
+    const identity = resolveSenderIdentity(ctx);
+    if (!identity) return noSessionResult({ success: false });
     const result = handleGroupRevisionCheck(
       {
         files: params.files,
         baseRevision: params.base_revision,
-        groupId,
       },
-      groupId,
+      identity.groupId,
     );
 
     if (result.conflict) {
@@ -393,7 +427,7 @@ export function registerGroupMailboxTools(): void {
   toolRegistry.registerTool({
     entry: {
       name: GROUP_MAILBOX_SEND_TOOL,
-      profiles: ["chat", "plan"],
+      profiles: ["chat"],
       permission: { danger: "safe" },
       capabilities: ["write"],
       ui: { verb: "Send Group Mailbox Message" },
@@ -416,7 +450,7 @@ export function registerGroupMailboxTools(): void {
   toolRegistry.registerTool({
     entry: {
       name: GROUP_MAILBOX_ACK_TOOL,
-      profiles: ["chat", "plan"],
+      profiles: ["chat"],
       permission: { danger: "safe" },
       capabilities: ["write"],
       ui: { verb: "Acknowledge Group Mailbox Messages" },

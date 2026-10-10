@@ -21,6 +21,8 @@ export type HarnessContext = {
   /** False after the session or run that owns this hook execution is no longer current. */
   isCurrent?: (() => boolean) | undefined;
   workspaceId?: string | undefined;
+  /** Host-derived Agent Group scope for mailbox and group tool hooks. */
+  groupId?: string | undefined;
   cwd?: string | undefined;
   mode: "build" | "plan" | "spec";
   state: Map<string, any>;

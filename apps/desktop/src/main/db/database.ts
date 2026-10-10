@@ -491,10 +491,26 @@ export function migrateDatabase(db: DatabaseSync): void {
       acked_at text,
       dedupe_hash text not null
     );
+    create table if not exists harness_group_message_acks (
+      message_id text not null references harness_group_messages(id) on delete cascade,
+      agent_id text not null,
+      acked_at text not null,
+      primary key (message_id, agent_id)
+    );
+    create index if not exists idx_harness_group_message_acks_agent
+      on harness_group_message_acks(agent_id, message_id);
     create index if not exists idx_harness_group_messages_to_ack
       on harness_group_messages(to_agent, acked_at, sent_at);
     create index if not exists idx_harness_group_messages_group
       on harness_group_messages(group_id, sent_at);
+    create index if not exists idx_harness_group_messages_recipient_capacity
+      on harness_group_messages(group_id, to_agent, sent_at);
+    create index if not exists idx_harness_group_messages_group_ack
+      on harness_group_messages(group_id, acked_at);
+    create index if not exists idx_harness_group_messages_ack_expiry
+      on harness_group_messages(acked_at) where acked_at is not null;
+    create index if not exists idx_harness_group_messages_unack_expiry
+      on harness_group_messages(sent_at) where acked_at is null;
     create index if not exists idx_harness_group_messages_dedupe
       on harness_group_messages(dedupe_hash, sent_at);
   `);

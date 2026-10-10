@@ -741,6 +741,325 @@ describe("PiSdkRuntime", () => {
     resetFeatureFlagOverrides();
   });
 
+  it("registers group mailbox tools into the Pi tool registry when enabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_GROUPS_MAILBOX: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: false,
+    });
+
+    const runtime = new PiSdkRuntime() as unknown as { harnessKernel: HarnessKernel };
+
+    const registeredNames = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .map((definition) => definition.name);
+    expect(registeredNames).toContain("group_mailbox_send");
+    expect(registeredNames).toContain("group_mailbox_receive");
+    expect(registeredNames).toContain("group_mailbox_ack");
+    expect(
+      runtime.harnessKernel.getHooksForPhase("turn_settle").map((hook) => hook.name),
+    ).toContain("harness_group_mailbox_turn_settle");
+    const runId = `mailbox-settle-${crypto.randomUUID()}`;
+    const settled = await runtime.harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+      "turn_settle",
+      {
+        runId,
+        completed: true,
+        hasActiveTodos: false,
+        turnTokens: 0,
+      },
+      {
+        sessionId: "mailbox-settle-session",
+        runId,
+        mode: "build",
+        state: new Map(),
+      } as HarnessContext,
+    );
+    expect(settled).toMatchObject({ settled: true, triggerContinuation: false });
+
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+    expect(
+      toolRegistry.getCustomToolDefinitions("chat").map((definition) => definition.name),
+    ).not.toContain("group_mailbox_send");
+  });
+
+  it("passes enabled mailbox definitions through Pi session assembly", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const info = await runtime.create(window, {
+      workspaceId,
+      cwd,
+      title: "Mailbox registration",
+    });
+    await runtime.ensure(window, info.id);
+
+    const options = mocks.createAgentSession.mock.calls.at(-1)?.[0] as {
+      tools: string[];
+      customTools: Array<{ name: string }>;
+    };
+    expect(options.tools).toContain("group_mailbox_receive");
+    expect(options.customTools.map(({ name }) => name)).toContain("group_mailbox_receive");
+
+    await runtime.releaseRuntime(info.id);
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+  });
+
+  it("sends, receives, and acknowledges mail through the productive Pi tool path", async () => {
+    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const senderId = `mailbox-sender-${crypto.randomUUID()}`;
+    const recipientId = `mailbox-recipient-${crypto.randomUUID()}`;
+    insertSession(senderId, workspaceId, join(userData, "sender.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox recipient', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        recipientId,
+        workspaceId,
+        cwd,
+        `pi-${recipientId}`,
+        join(userData, "recipient.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox runtime fixture",
+      workspaceId,
+      members: [{ sessionId: senderId }, { sessionId: recipientId }],
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestTool("group_mailbox_send", { to: recipientId, content: "runtime mailbox payload" });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Send the group message.",
+        sessionId: senderId,
+      });
+      const sent = messagesFor(sessionAt(0)).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
+      );
+      expect(JSON.stringify(sent?.content)).toContain("Message sent successfully");
+      const messageId = JSON.stringify(sent?.content).match(/[0-9a-f]{8}-(?:[0-9a-f-]{27})/i)?.[0];
+      expect(messageId).toBeDefined();
+      if (!messageId) throw new Error("The productive mailbox send did not return a message ID.");
+
+      requestTool("group_mailbox_receive");
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Receive the group message.",
+        sessionId: recipientId,
+      });
+      const received = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_receive",
+      );
+      expect(JSON.stringify(received?.content)).toContain("runtime mailbox payload");
+
+      requestTool("group_mailbox_ack", { message_ids: [messageId] });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Acknowledge the group message.",
+        sessionId: recipientId,
+      });
+      const acknowledged = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_ack",
+      );
+      expect(JSON.stringify(acknowledged?.content)).toContain("Acknowledged 1 message");
+
+      const mailbox = GroupMailbox.getInstance();
+      expect(mailbox.receive(recipientId, 50, group.id)).toHaveLength(0);
+    } finally {
+      await runtime.releaseRuntime(senderId);
+      await runtime.releaseRuntime(recipientId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("rejects direct mailbox recipients outside the current group through Pi", async () => {
+    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const senderId = `mailbox-quota-sender-${crypto.randomUUID()}`;
+    const recipientId = `mailbox-quota-member-${crypto.randomUUID()}`;
+    const strangerId = `mailbox-quota-stranger-${crypto.randomUUID()}`;
+    insertSession(senderId, workspaceId, join(userData, "quota-sender.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox quota member', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        recipientId,
+        workspaceId,
+        cwd,
+        `pi-${recipientId}`,
+        join(userData, "quota-member.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox quota fixture",
+      workspaceId,
+      members: [{ sessionId: senderId }, { sessionId: recipientId }],
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestTool("group_mailbox_send", { to: strangerId, content: "must not be stored" });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Send to an unknown recipient.",
+        sessionId: senderId,
+      });
+
+      const result = messagesFor(sessionAt()).findLast(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
+      );
+      expect(JSON.stringify(result?.content)).toMatch(/recipient.*member|not a member/i);
+      const rows = getDatabase()
+        .prepare("select count(*) as count from harness_group_messages where group_id = ?")
+        .get(group.id) as { count: number };
+      expect(rows.count).toBe(0);
+    } finally {
+      await runtime.releaseRuntime(senderId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("rechecks Agent Group membership before mailbox reads during an active turn", async () => {
+    const { requestToolSequence, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberId = `mailbox-revoked-member-${crypto.randomUUID()}`;
+    const secondMemberId = `mailbox-revoked-peer-${crypto.randomUUID()}`;
+    insertSession(memberId, workspaceId, join(userData, "revoked-member.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox peer', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        secondMemberId,
+        workspaceId,
+        cwd,
+        `pi-${secondMemberId}`,
+        join(userData, "revoked-peer.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox revoke fixture",
+      workspaceId,
+      members: [{ sessionId: memberId }, { sessionId: secondMemberId }],
+    });
+    const privateMessageId = GroupMailbox.getInstance().send({
+      groupId: group.id,
+      from: "other-session",
+      to: "*",
+      content: "private after removal",
+      revision: 1,
+    });
+
+    const revokeToolName = `revoke_mailbox_member_${crypto.randomUUID().replaceAll("-", "")}`;
+    toolRegistry.registerTool({
+      entry: {
+        name: revokeToolName,
+        profiles: ["chat"],
+        permission: { danger: "safe" },
+        capabilities: ["write"],
+        ui: { verb: "Remove group member" },
+      },
+      definition: {
+        name: revokeToolName,
+        label: "Remove group member fixture",
+        description: "Removes the current session from its fixture group.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          groupStore.removeAgentGroupMember(group.id, memberId);
+          return { content: [{ type: "text", text: "Member removed." }], details: {} };
+        },
+      },
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestToolSequence([
+        { name: revokeToolName, input: {} },
+        { name: "group_mailbox_send", input: { to: secondMemberId, content: "must not send" } },
+        { name: "group_mailbox_receive", input: {} },
+        { name: "group_mailbox_ack", input: { message_ids: [privateMessageId] } },
+      ]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Remove membership, then try to read the mailbox.",
+        sessionId: memberId,
+      });
+
+      const results = messagesFor(sessionAt()).filter((message) => message.role === "toolResult");
+      for (const toolName of ["group_mailbox_send", "group_mailbox_receive", "group_mailbox_ack"]) {
+        const result = results.findLast((message) => message.toolName === toolName);
+        expect(JSON.stringify(result?.content)).toContain(
+          "current host-assigned Agent Group membership",
+        );
+      }
+      expect(JSON.stringify(results)).not.toContain("private after removal");
+      const ackCount = getDatabase()
+        .prepare("select count(*) as count from harness_group_message_acks where message_id = ?")
+        .get(privateMessageId) as { count: number };
+      expect(ackCount.count).toBe(0);
+    } finally {
+      toolRegistry.unregisterTool(revokeToolName);
+      await runtime.releaseRuntime(memberId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("keeps group mailbox tools inactive for sessions outside Agent Groups", () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    new PiSdkRuntime();
+
+    const activeNames = activeToolNamesForSession(
+      { id: "ordinary-session", cwd, status: "idle" } as never,
+      "chat",
+    );
+
+    expect(activeNames).not.toContain("group_mailbox_send");
+    expect(activeNames).not.toContain("group_mailbox_receive");
+    expect(activeNames).not.toContain("group_mailbox_ack");
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+  });
+
   it("refuses a removed explicit model before creating a session", async () => {
     vi.mocked(modelService.findModel).mockImplementation((modelId) =>
       modelId === "openai/removed-model" ? undefined : (mocks.model as never),
@@ -2191,6 +2510,7 @@ describe("PiSdkRuntime", () => {
   it("activates the group member tools only for group members; the tool context carries groupId", async () => {
     const { createAgentGroupWithMembers } = await import("../groups/group-store");
     const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
     const member = `group-member-${crypto.randomUUID()}`;
     const loner = `group-loner-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -2226,7 +2546,12 @@ describe("PiSdkRuntime", () => {
     });
 
     expect(activeToolNamesForSession(info(member), "chat")).toEqual(
-      expect.arrayContaining([...GROUP_TOOL_NAMES]),
+      expect.arrayContaining([
+        ...GROUP_TOOL_NAMES,
+        "group_mailbox_send",
+        "group_mailbox_receive",
+        "group_mailbox_ack",
+      ]),
     );
     const getActiveToolNames = (
       runtime as unknown as {
@@ -2239,7 +2564,13 @@ describe("PiSdkRuntime", () => {
     // Plan mode keeps only the read-only ones.
     expect(
       activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
-    ).toEqual(["group_read_messages", "group_list_tasks", "group_get_work_state"]);
+    ).toEqual([
+      "group_read_messages",
+      "group_list_tasks",
+      "group_get_work_state",
+      "group_mailbox_receive",
+      "group_revision_check",
+    ]);
     for (const profile of ["chat", "plan"] as const) {
       expect(
         activeToolNamesForSession(info(loner), profile).filter((name) =>
@@ -2247,6 +2578,7 @@ describe("PiSdkRuntime", () => {
         ),
       ).toEqual([]);
     }
+    expect(activeToolNamesForSession(info(loner), "chat")).not.toContain("group_mailbox_send");
 
     const toolContextFor = (
       runtime as unknown as {
@@ -2261,6 +2593,8 @@ describe("PiSdkRuntime", () => {
     expect(toolContextFor({ info: info(loner), emit: vi.fn() }, window, "chat")).not.toHaveProperty(
       "groupId",
     );
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
   });
 
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {

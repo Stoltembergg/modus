@@ -128,6 +128,7 @@ import {
   isDuplicateFailedAttempt,
 } from "./harness/failure-intelligence";
 import { isFeatureFlagEnabled } from "./harness/feature-flags";
+import { defaultTurnSettleGroupMailboxHook } from "./harness/groups/group-hooks";
 import {
   defaultToolCallRepeatGuardHook,
   defaultToolResultRepeatGuardHook,
@@ -157,7 +158,7 @@ import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controlle
 import { HarnessObserver } from "./harness/observability/harness-observer";
 import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
 import {
-  AutoRollbackManager,
+  type AutoRollbackManager,
   bootstrapModusPlugins,
   type DependencyGraph,
   PluginFailureCorrelation,
@@ -166,10 +167,10 @@ import {
   PluginIsolationHost,
   PluginLifecycleService,
   PluginLoader,
-  PluginRecoveryManager,
-  PluginSafeModeManager,
+  type PluginRecoveryManager,
+  type PluginSafeModeManager,
   PluginStateStore,
-  PluginVersionManager,
+  type PluginVersionManager,
   SecurityAuditLogger,
 } from "./harness/plugin";
 import {
@@ -253,6 +254,13 @@ import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-co
 import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
+import {
+  GROUP_MAILBOX_ACK_TOOL,
+  GROUP_MAILBOX_RECEIVE_TOOL,
+  GROUP_MAILBOX_SEND_TOOL,
+  GROUP_REVISION_CHECK_TOOL,
+  registerGroupMailboxTools,
+} from "./tools/group-mailbox-tools";
 import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
@@ -837,7 +845,14 @@ export function activeToolNamesForSession(
   const disabled = new Set<string>();
   // Agent Groups member tools exist only for sessions that are group members.
   if (!groupIdFor(info.id).groupId) {
-    for (const name of active) if (isGroupToolName(name)) disabled.add(name);
+    for (const name of active) {
+      if (isGroupToolName(name) || isGroupMailboxToolName(name)) disabled.add(name);
+    }
+  }
+  if (!isFeatureFlagEnabled("MODUS_GROUPS_MAILBOX")) {
+    for (const name of active) {
+      if (isGroupMailboxToolName(name)) disabled.add(name);
+    }
   }
   if (info.parentSessionId) {
     // Parent-only orchestration: children neither spawn peers nor wait on them.
@@ -859,6 +874,15 @@ export function activeToolNamesForSession(
     }
   }
   return active.filter((name) => !disabled.has(name));
+}
+
+function isGroupMailboxToolName(name: string): boolean {
+  return (
+    name === GROUP_MAILBOX_SEND_TOOL ||
+    name === GROUP_MAILBOX_RECEIVE_TOOL ||
+    name === GROUP_MAILBOX_ACK_TOOL ||
+    name === GROUP_REVISION_CHECK_TOOL
+  );
 }
 
 function composeSubagentPrompt(input: {
@@ -945,6 +969,7 @@ export class PiSdkRuntime implements AgentRuntime {
     this.harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
     this.harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
     this.harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
+    this.harnessKernel.registerHook(defaultTurnSettleGroupMailboxHook);
 
     // Make the agent terminal tools (run/read/list/write/kill), the built-in
     // web tools (search/fetch), and the live to-do tool available to the chat
@@ -963,6 +988,7 @@ export class PiSdkRuntime implements AgentRuntime {
     registerSubagentTools(this);
     registerWaitTools(this);
     registerGroupTools();
+    registerGroupMailboxTools();
 
     if (isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")) {
       registerCoreCapabilities(this.capabilityRegistry);
@@ -1743,6 +1769,7 @@ export class PiSdkRuntime implements AgentRuntime {
       },
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
+      ...groupIdFor(runtimeSession.info.id),
       mode: tracker.mode ?? "build",
       state: new Map([["harness.failure_attempts", tracker.failureAttempts]]),
       startedAt: tracker.startedAt,
@@ -2673,6 +2700,7 @@ export class PiSdkRuntime implements AgentRuntime {
         sessionId,
         runId: sessionId,
         workspaceId: getAgentSession(sessionId)?.workspaceId,
+        ...groupIdFor(sessionId),
         cwd,
         mode: "build",
         state: new Map(),
@@ -2857,6 +2885,7 @@ export class PiSdkRuntime implements AgentRuntime {
       sessionId,
       runId: runId ?? sessionId,
       ...(runtimeSession.info.workspaceId ? { workspaceId: runtimeSession.info.workspaceId } : {}),
+      ...groupIdFor(sessionId),
       cwd: runtimeSession.info.cwd,
       mode: "build",
       sessionToken: runtimeSession.observerSessionToken,
@@ -2994,6 +3023,7 @@ export class PiSdkRuntime implements AgentRuntime {
         );
       },
       workspaceId: runtimeSession.info.workspaceId,
+      ...groupIdFor(input.sessionId),
       cwd: runtimeSession.info.cwd,
       mode: input.mode ?? "build",
       state,

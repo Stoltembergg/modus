@@ -612,6 +612,117 @@ machine-code memory V8 retains. A too-large input is still compiled once for
 the current request, so this does not cap transient compile memory. WASI output
 is not captured or made available; the grantless host denial remains intact.
 
+## Milestone 8 — A18 durable, paged and group-scoped mailbox
+
+**Status: implemented locally; independent review passed; remote CI is pending.**
+
+The mailbox previously treated SQLite as a best-effort mirror. Direct ACKs
+updated memory before ignoring persistence failure, broadcast ACKs existed only
+in a process-local map, writes reported success after database errors, and the
+restart hydration query silently omitted all but 20,000 rows. Broadcast inbox
+reads also lacked a host-derived group filter, while the send tool accepted a
+model-provided group override.
+
+SQLite is now the mailbox source of truth. Sends insert and apply FIFO capacity
+in one immediate transaction before reporting success. Direct-message capacity
+is per `(group, recipient)` and broadcast capacity is per group. Read, dedupe,
+ACK, and expiration failures surface as errors to the tool handlers. Before
+scoped reads or counts, one immediate transaction removes expired entries and
+normalizes legacy inboxes to the configured FIFO capacity; this prevents
+expired data from being delivered before the scheduled settle cleanup and
+brings pre-existing over-cap storage under the same bound. Unused
+turn-start and tools-register hooks were removed; explicit receive is the
+consumer, while retention cleanup runs from PiSdkRuntime's turn-settle phase
+after ResponsePolicy and Observer. Direct ACKs are only reported after the
+durable row update, and a new
+`harness_group_message_acks` table stores each broadcast recipient's ACK
+independently. Inbox reads query the requested recipient and required group
+directly with a bounded page size instead of hydrating a global 20,000-row
+cache. Pending counts use SQL `count(*)`, remain independent of the receive
+page size, and reflect the enforced per-recipient capacity.
+Persistence statements are prepared once per database handle, and the
+production schema indexes `(group_id, recipient, sent_at)` for capacity
+enforcement.
+
+Production send/receive/ACK tools use session identity from the host's
+AsyncLocalStorage context and re-check that the session remains in the same
+group at each operation. Direct recipients must be current group members;
+broadcasts remain group scoped. The public send schema no longer offers an
+override, revision checks ignore model-supplied group IDs, and receive/ACK SQL
+requires the host group. Runtime registration activates tools only behind
+`MODUS_GROUPS_MAILBOX`; non-members cannot activate them, and
+send/ACK are unavailable in Plan Mode. This prevents mailbox reads, broadcasts,
+and acknowledgements from crossing Agent Groups. The migration stores
+per-recipient broadcast ACKs with the existing database; no new service or
+in-memory mirror was added.
+
+### Evidence
+
+- RED: the initial SQLite regressions failed before implementation: a broadcast
+  ACK replayed after mailbox reconstruction, a direct ACK returned success
+  after the database rejected its write, a mailbox with 20,005 rows reported
+  only 20,000 pending messages, and a send reported success with no database.
+- RED: later review regressions reproduced cross-group reads for a session
+  without group identity, unbounded broadcasts, partial batch ACKs, a model
+  overriding the group for revision checks, and mailbox tools missing from the
+  runtime/Pi SDK session. A Plan Mode regression also reproduced send/ACK write
+  tools being exposed in a read-only profile.
+- RED: review tests reproduced expired persisted entries being returned before
+  settle cleanup and legacy inboxes exceeding configured capacity. Reads and
+  counts now expire old entries and normalize FIFO capacity atomically first.
+- RED: a late ACK also changed an expired unacknowledged message into a newly
+  acknowledged one, extending its retention; clean scoped reads also opened a
+  write transaction and normalized the entire table. ACK now checks retention
+  under its write lock, while scoped reads preflight only their group's indexed
+  expiration/capacity and open a transaction only when cleanup is needed.
+- RED: the per-turn global settle sweep also opened a write transaction and
+  normalized all groups when no entry had expired. It now uses indexed global
+  TTL preflight and returns without a write transaction on a clean store;
+  capacity normalization remains scoped to a group's read/count.
+- GREEN: the complete synthetic group-mailbox suite passed **46/46**. It covers
+  restart hydration, recipient-specific broadcast ACKs, SQLite ACK failure,
+  legacy 20,005-row capacity normalization, expiry before reads, per-recipient
+  capacity, storage failure, host
+  group mismatch, host-owned revision scoping, cross-group rejection, bounded
+  broadcast retention, and atomic batch ACK rollback. Pi runtime tests also
+  passed the send → receive → ACK flow through the offline Pi SDK stream,
+  runtime tool registration/session assembly, feature-flag handling,
+  non-member filtering, and Plan Mode read-only filtering. Independent review
+  regressions also reproduced an ambiguous dedupe tuple (RED) and stale
+  membership allowing reads after removal (RED); the tuple now uses canonical
+  JSON serialization, and the runtime rechecks membership for send, receive,
+  and ACK (GREEN targeted regressions). Direct messages to a non-member now
+  fail before storage. The settle cleanup hook now returns the phase contract's
+  valid completion shape even after ResponsePolicy/Observer project their
+  outputs; an integrated HarnessKernel test had reproduced `settled: undefined`
+  before this correction.
+- The full Pi runtime suite initially exposed five A21.6 response/observer
+  failures because the cleanup hook replaced the turn-settle input. Moving
+  cleanup after those consumers made all five targeted regressions pass; the
+  complete runtime suite previously passed **226/226** and is being rerun after
+  the final performance/type fixes. The complete Pi runtime suite now passes
+  **228/228**, including removal of membership during an active turn and
+  attempted send/receive/ACK after revocation. The original 100 ms mailbox benchmark
+  regressed to 115–143 ms after durable transactions; the threshold is
+  unchanged. Cached statements and a production-equivalent compound index
+  restore the exact benchmark and complete group suite to green. Targeted
+  Targeted Biome exits successfully with 18 warnings and no errors; Typecheck
+  passes. Independent re-review found no blocker; remote CI is pending.
+- No external plugin, network, process, or enforcement scenario ran.
+
+### Limits
+
+The database schema and existing group membership are trusted host state; this
+does not add new authorization for creating groups or selecting members.
+Direct recipients are checked against current group membership before a send;
+historical rows remain scoped to their persisted group and are subject to the
+same expiration and FIFO normalization before reads.
+Cross-process simultaneous writes are serialized by SQLite's immediate
+transaction for sends, but no multi-process stress test was run. Broadcasts use
+the existing 30-day unacknowledged retention because the mailbox has no
+durable recipient roster with which to determine when every group member has
+acknowledged.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -633,7 +744,7 @@ is not captured or made available; the grantless host denial remains intact.
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
-| A18 | Pending | Group mailbox replay/ack consistency; keep distinct from the active group runtime. |
+| A18 | Implemented locally; remote CI pending | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup; independent review found no blocker. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
