@@ -190,10 +190,11 @@ const runTool: ToolDefinition = defineTool({
       sessionId: context.sessionId,
       command: params.command,
       background: params.background ?? false,
+      ...(context.runId ? { runId: context.runId } : {}),
       ...(params.yield_time_ms !== undefined ? { yieldMs: params.yield_time_ms } : {}),
       ...(readyWhen ? { readyWhen } : {}),
       ...(params.reuse !== undefined ? { reuse: params.reuse } : {}),
-      ...(!params.background && signal ? { signal } : {}),
+      ...(signal ? { signal } : {}),
       ...(context.window ? { window: context.window } : {}),
     });
     return toResult(formatRun(result, params.command), result);
@@ -352,7 +353,12 @@ const killTool: ToolDefinition = defineTool({
     // OS process tree) or a PTY terminal (signal the shell). One tool, both
     // kinds — the agent never needs to know which registry owns the id.
     if (isAppId(params.terminal_id)) {
-      await killApp(params.terminal_id);
+      const stopped = await killApp(params.terminal_id);
+      if (!stopped) {
+        throw new Error(
+          `The original app process ${params.terminal_id} has already exited. Modus did not signal its PID, so descendant termination was not confirmed.`,
+        );
+      }
       return toResult(`Stopped app process ${params.terminal_id}.`, {
         terminalId: params.terminal_id,
       });

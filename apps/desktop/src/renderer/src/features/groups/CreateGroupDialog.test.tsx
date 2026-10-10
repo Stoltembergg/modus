@@ -98,6 +98,10 @@ describe("CreateGroupDialog in edit mode (Manage members)", () => {
     await user.type(within(dialog).getByRole("textbox", { name: "Agent 1 name" }), "Cy");
     await user.click(within(dialog).getByRole("button", { name: "Add agent" }));
     await user.type(within(dialog).getByRole("textbox", { name: "Agent 2 name" }), "Di");
+    await user.selectOptions(
+      within(dialog).getByRole("combobox", { name: "Model for new agents" }),
+      "m-1",
+    );
     await user.click(within(dialog).getByRole("button", { name: "Remove Ana" }));
     await user.click(within(dialog).getByRole("button", { name: "Remove Bo" }));
     const lead = within(dialog).getByRole("combobox", { name: /Lead/ }) as HTMLSelectElement;

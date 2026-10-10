@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { foldAgentEvents } from "../../shared/agent-events";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  type AgentEventPageOptions,
+  type AgentEventPage as AgentEventPageResult,
+  createAgentEventAccumulator,
+  foldAgentEvents,
+  MAX_AGENT_EVENT_PAGE_SIZE,
+  type AgentEventItem as SharedAgentEventItem,
+} from "../../shared/agent-events";
 import type {
   AgentEvent,
   CodeGraphDiscoveryRef,
@@ -22,6 +30,9 @@ import {
   MAX_TASK_STATE_SCAN,
   SAFE_TASK_STATE_ID,
 } from "./harness/task-state";
+import { getWorkspaceSourceRevision } from "./workspace-source-revision";
+
+export { MAX_AGENT_EVENT_PAGE_SIZE };
 
 type AgentEventRow = {
   event_cursor: number;
@@ -37,11 +48,16 @@ type AgentRunPromptRow = {
   started_at: string;
 };
 
-type AgentEventItem = { id: string; event: AgentEvent; createdAt: string };
+type AgentEventItem = SharedAgentEventItem & { createdAt: string };
+const DEFAULT_AGENT_EVENT_PAGE_SIZE = 128;
+const MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND = 512;
+const MAX_AGENT_GROUP_ACTIVITY_EVENTS = 512;
 const MAX_RUN_TOOL_EVENTS = 500;
 // Main-owned fields stored beside durable events; listAgentEvents strips them before IPC.
 const QA_CHECK_SNAPSHOT_FIELD = "__qaCheckSnapshot";
 const QA_CHECK_CONFIG_STABLE_FIELD = "__qaCheckConfigStable";
+const QA_CHECK_SOURCE_STABLE_FIELD = "__qaCheckSourceStable";
+const QA_CHECK_SOURCE_REVISION_FIELD = "__qaCheckSourceRevision";
 type PersistedQACheckSnapshot = {
   version: 1;
   checkName?: HarnessTaskCheckKind;
@@ -49,6 +65,7 @@ type PersistedQACheckSnapshot = {
   fullProject?: true;
   mutatesSource?: true;
   packageConfigDigest?: string;
+  workspaceRevision?: string;
 };
 const MAX_CODEGRAPH_DISCOVERY_EVENTS = 200;
 const MAX_CODEGRAPH_DISCOVERY_REFS = 200;
@@ -83,6 +100,8 @@ const TASK_STATE_CRITERION_STATUSES = [
 const TASK_STATE_EVIDENCE_STATUSES: VerificationEvidenceStatus[] = [
   "passed",
   "failed",
+  "timed_out",
+  "cancelled",
   "skipped",
   "missing",
   "unavailable",
@@ -127,6 +146,7 @@ export type HarnessInsightEventEvidence = {
   isError?: boolean;
   exitCode?: number;
   aborted?: boolean;
+  timedOut?: boolean;
   skipped?: boolean;
   tokenTotal?: number;
   contextTokens?: number;
@@ -162,7 +182,163 @@ function eventWithoutQACheckSnapshot(event: AgentEvent): Record<string, unknown>
   const payload = { ...event } as Record<string, unknown>;
   delete payload[QA_CHECK_SNAPSHOT_FIELD];
   delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
   return payload;
+}
+
+function workspaceRevisionForRun(
+  db: ReturnType<typeof getDatabase>,
+  sessionId: string,
+  runId: string,
+): string | undefined {
+  const row = db
+    .prepare(
+      `select c.cwd, s.cwd as current_cwd, c.commit_hash
+       from agent_checkpoints c
+       join agent_sessions s on s.id = c.session_id
+       where c.session_id = ? and c.run_id = ? and c.kind = 'auto'
+       order by c.rowid asc limit 1`,
+    )
+    .get(sessionId, runId) as
+    | { cwd?: string; current_cwd?: string; commit_hash?: string }
+    | undefined;
+  if (
+    !row?.cwd ||
+    !row.current_cwd ||
+    !row.commit_hash ||
+    !sameWorkspacePath(row.cwd, row.current_cwd)
+  ) {
+    return undefined;
+  }
+  return getWorkspaceSourceRevision(row.cwd, row.commit_hash);
+}
+
+/** Content revision of the active run's current Git workspace, when bounded reads are safe. */
+export function getRunWorkspaceRevision(sessionId: string, runId: string): string | undefined {
+  if (!sessionId || !runId) return undefined;
+  try {
+    return workspaceRevisionForRun(getDatabase(), sessionId, runId);
+  } catch {
+    return undefined;
+  }
+}
+
+function workspaceRelativeToolPath(cwd: string, value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim() || value.length > 1024 || value.includes("\0")) {
+    return undefined;
+  }
+  try {
+    const root = resolve(cwd);
+    const target = resolve(root, value);
+    const relativePath = relative(root, target);
+    if (
+      !relativePath ||
+      relativePath === "." ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath)
+    ) {
+      return undefined;
+    }
+    return relativePath.split(sep).join("/");
+  } catch {
+    return undefined;
+  }
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  return process.platform === "win32"
+    ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+    : resolvedLeft === resolvedRight;
+}
+
+/** Source paths written by successful direct file tools in exactly one run. */
+export function getRunSourceWritePaths(sessionId: string, runId: string): string[] {
+  if (!SAFE_TASK_STATE_ID.test(sessionId) || !SAFE_TASK_STATE_ID.test(runId)) return [];
+  try {
+    const db = getDatabase();
+    const owner = db
+      .prepare(
+        `select c.cwd, s.cwd as current_cwd from agent_runs r
+         join agent_sessions s on s.id = r.session_id
+       join agent_checkpoints c on c.session_id = r.session_id and c.run_id = r.id
+       where r.id = ? and r.session_id = ? and c.kind = 'auto'
+       order by c.rowid asc limit 1`,
+      )
+      .get(runId, sessionId) as { cwd?: string; current_cwd?: string } | undefined;
+    if (!owner?.cwd || !owner.current_cwd || !sameWorkspacePath(owner.cwd, owner.current_cwd)) {
+      return [];
+    }
+    const rows = db
+      .prepare(
+        `select type, payload_json from agent_events
+         where session_id = ? and type in ('tool.started', 'tool.ended')
+           and json_extract(payload_json, '$.runId') = ?
+         order by rowid asc limit ?`,
+      )
+      .all(sessionId, runId, MAX_RUN_TOOL_EVENTS + 1) as Array<{
+      type: string;
+      payload_json: string;
+    }>;
+    if (rows.length > MAX_RUN_TOOL_EVENTS) return [];
+
+    const started = new Map<string, { toolName: string; path: string }>();
+    const paths: string[] = [];
+    for (const row of rows) {
+      let payload: unknown;
+      try {
+        payload = JSON.parse(row.payload_json);
+      } catch {
+        return [];
+      }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+      const event = payload as AgentEvent;
+      if (
+        event.sessionId !== sessionId ||
+        !("runId" in event) ||
+        event.runId !== runId ||
+        event.type !== row.type
+      ) {
+        return [];
+      }
+      if (event.type === "tool.started") {
+        if (event.toolName !== "write" && event.toolName !== "edit") continue;
+        if (
+          typeof event.toolCallId !== "string" ||
+          !event.toolCallId ||
+          event.toolCallId.length > 256
+        ) {
+          return [];
+        }
+        const path = workspaceRelativeToolPath(owner.cwd, toolArgs(event).path);
+        if (!path || started.has(event.toolCallId)) return [];
+        started.set(event.toolCallId, { toolName: event.toolName, path });
+        continue;
+      }
+      if (event.type !== "tool.ended") continue;
+      if (typeof event.toolCallId !== "string" || !event.toolCallId) continue;
+      const call = started.get(event.toolCallId);
+      if (!call) continue;
+      started.delete(event.toolCallId);
+      if (
+        (event.toolName !== undefined && event.toolName !== call.toolName) ||
+        event.isError !== false ||
+        (event.exitCode !== undefined && event.exitCode !== 0) ||
+        event.aborted === true ||
+        event.timedOut === true ||
+        event.skipped === true
+      ) {
+        continue;
+      }
+      paths.push(call.path);
+    }
+    return [...new Set(paths)];
+  } catch {
+    return [];
+  }
 }
 
 /** Capture only typed recognition metadata from the event's owning session at start time. */
@@ -186,6 +362,10 @@ function createQACheckSnapshot(
   const paths = invocation?.paths ?? (checkName ? safeToolPaths(args) : undefined);
   const fullProject = checkName && !paths ? invocation?.fullProject : false;
   const mutatesSource = invocation?.mutatesSource;
+  const workspaceRevision =
+    checkName && !mutatesSource && event.runId
+      ? workspaceRevisionForRun(db, event.sessionId, event.runId)
+      : undefined;
   return {
     version: 1,
     ...(checkName ? { checkName } : {}),
@@ -195,7 +375,52 @@ function createQACheckSnapshot(
     ...(invocation?.packageConfigDigest
       ? { packageConfigDigest: invocation.packageConfigDigest }
       : {}),
+    ...(workspaceRevision ? { workspaceRevision } : {}),
   };
+}
+
+/** Recheck the source content synchronously at the durable tool completion boundary. */
+function qaCheckWorkspaceSourceAtEnd(
+  event: Extract<AgentEvent, { type: "tool.ended" }>,
+  db: ReturnType<typeof getDatabase>,
+): { stable: boolean; revision?: string } | undefined {
+  if (!event.runId) return undefined;
+  const row = db
+    .prepare(
+      `select payload_json from agent_events
+       where session_id = ? and type = 'tool.started'
+         and json_extract(payload_json, '$.runId') = ?
+         and json_extract(payload_json, '$.toolCallId') = ?
+       order by rowid asc limit 1`,
+    )
+    .get(event.sessionId, event.runId, event.toolCallId) as { payload_json: string } | undefined;
+  if (!row) return undefined;
+  try {
+    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+    const started = payload as unknown as Extract<AgentEvent, { type: "tool.started" }>;
+    if (
+      started.type !== "tool.started" ||
+      started.sessionId !== event.sessionId ||
+      started.runId !== event.runId ||
+      started.toolCallId !== event.toolCallId ||
+      (event.toolName !== undefined && started.toolName !== event.toolName)
+    ) {
+      return undefined;
+    }
+    const snapshot = readQACheckSnapshot(payload);
+    if (snapshot.state !== "valid" || !snapshot.snapshot.checkName) return undefined;
+    const revision = workspaceRevisionForRun(db, event.sessionId, event.runId);
+    return {
+      stable: Boolean(
+        snapshot.snapshot.workspaceRevision &&
+          revision &&
+          revision === snapshot.snapshot.workspaceRevision,
+      ),
+      ...(revision ? { revision } : {}),
+    };
+  } catch {
+    return { stable: false };
+  }
 }
 
 /** Revalidate package-script identity against the owning session before storing the end event. */
@@ -253,6 +478,11 @@ function serializeAgentEvent(event: AgentEvent, db: ReturnType<typeof getDatabas
   } else if (event.type === "tool.ended") {
     const stable = packageCheckConfigIsStableAtEnd(event, db);
     if (stable !== undefined) payload[QA_CHECK_CONFIG_STABLE_FIELD] = stable;
+    const source = qaCheckWorkspaceSourceAtEnd(event, db);
+    if (source) {
+      payload[QA_CHECK_SOURCE_STABLE_FIELD] = source.stable;
+      if (source.revision) payload[QA_CHECK_SOURCE_REVISION_FIELD] = source.revision;
+    }
   }
   return JSON.stringify(payload);
 }
@@ -267,6 +497,7 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
       "fullProject",
       "mutatesSource",
       "packageConfigDigest",
+      "workspaceRevision",
     ]) ||
     value.version !== 1 ||
     (value.checkName !== undefined &&
@@ -288,11 +519,15 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
     (value.packageConfigDigest !== undefined &&
       (typeof value.packageConfigDigest !== "string" ||
         !/^[a-f0-9]{64}$/.test(value.packageConfigDigest))) ||
+    (value.workspaceRevision !== undefined &&
+      (typeof value.workspaceRevision !== "string" ||
+        !/^[a-f0-9]{64}$/.test(value.workspaceRevision))) ||
     (value.checkName === undefined &&
       (value.paths !== undefined ||
         value.fullProject !== undefined ||
         value.mutatesSource !== undefined ||
-        value.packageConfigDigest !== undefined))
+        value.packageConfigDigest !== undefined ||
+        value.workspaceRevision !== undefined))
   ) {
     return undefined;
   }
@@ -305,6 +540,7 @@ function validQACheckSnapshot(value: unknown): PersistedQACheckSnapshot | undefi
     ...(value.packageConfigDigest
       ? { packageConfigDigest: value.packageConfigDigest as string }
       : {}),
+    ...(value.workspaceRevision ? { workspaceRevision: value.workspaceRevision as string } : {}),
   };
 }
 
@@ -329,7 +565,7 @@ function existingToolLifecycleEvent(
   }
   const row = db
     .prepare(
-      `select rowid, payload_json from agent_events
+      `select rowid as rowid, payload_json from agent_events
      where session_id = ? and type = ?
        and json_extract(payload_json, '$.runId') = ?
        and json_extract(payload_json, '$.toolCallId') = ?
@@ -357,7 +593,9 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
     const db = getDatabase();
     const eventIdentity = JSON.stringify(eventWithoutQACheckSnapshot(event));
     const existingBeforeInsert = db
-      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .prepare(
+        "select rowid as rowid, session_id, type, payload_json from agent_events where id = ?",
+      )
       .get(id) as
       | { rowid: number; session_id: string; type: string; payload_json: string }
       | undefined;
@@ -368,6 +606,8 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
       >;
       delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
       delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
+      delete existingEvent[QA_CHECK_SOURCE_STABLE_FIELD];
+      delete existingEvent[QA_CHECK_SOURCE_REVISION_FIELD];
       if (
         existingBeforeInsert.session_id !== event.sessionId ||
         existingBeforeInsert.type !== event.type ||
@@ -386,7 +626,9 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
        on conflict(id) do nothing`,
     ).run(id, event.sessionId, event.type, payload, new Date().toISOString());
     const existing = db
-      .prepare("select rowid, session_id, type, payload_json from agent_events where id = ?")
+      .prepare(
+        "select rowid as rowid, session_id, type, payload_json from agent_events where id = ?",
+      )
       .get(id) as
       | { rowid: number; session_id: string; type: string; payload_json: string }
       | undefined;
@@ -394,6 +636,8 @@ export function recordAgentEvent(event: AgentEvent, options?: { idempotencyKey?:
     const existingEvent = JSON.parse(existing.payload_json) as Record<string, unknown>;
     delete existingEvent[QA_CHECK_SNAPSHOT_FIELD];
     delete existingEvent[QA_CHECK_CONFIG_STABLE_FIELD];
+    delete existingEvent[QA_CHECK_SOURCE_STABLE_FIELD];
+    delete existingEvent[QA_CHECK_SOURCE_REVISION_FIELD];
     if (
       existing.session_id !== event.sessionId ||
       existing.type !== event.type ||
@@ -669,6 +913,115 @@ function reconstructTaskState(value: unknown): HarnessTaskState | undefined {
   };
 }
 
+function hasCurrentVerifiedTaskEvidence(
+  db: ReturnType<typeof getDatabase>,
+  stateRowId: number,
+  state: HarnessTaskState,
+): boolean {
+  const currentRevision = workspaceRevisionForRun(db, state.sessionId, state.runId);
+  if (!currentRevision || state.revision !== currentRevision) return false;
+
+  const toolEvents = getRunToolEvidence(state.sessionId, state.runId);
+  const starts = new Map<string, Extract<RunQAEvent, { type: "tool.started" }>>();
+  const ends = new Map<string, Extract<RunQAEvent, { type: "tool.ended" }>>();
+  for (const event of toolEvents) {
+    if (event.type === "tool.started") starts.set(event.toolCallId, event);
+    else if (event.type === "tool.ended" && event.eventId) ends.set(event.eventId, event);
+  }
+
+  const row = db
+    .prepare(
+      `select rowid as event_rowid, payload_json from agent_events
+       where session_id = ? and type = 'harness.qa'
+         and json_extract(payload_json, '$.runId') = ?
+       order by rowid desc limit 1`,
+    )
+    .get(state.sessionId, state.runId) as { event_rowid: number; payload_json: string } | undefined;
+  if (!row || !Number.isSafeInteger(row.event_rowid) || row.event_rowid >= stateRowId) {
+    return false;
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(row.payload_json);
+  } catch {
+    return false;
+  }
+  if (
+    !isRecord(payload) ||
+    payload.type !== "harness.qa" ||
+    payload.sessionId !== state.sessionId ||
+    payload.runId !== state.runId ||
+    !isRecord(payload.result) ||
+    payload.result.required !== true ||
+    payload.result.status !== "passed" ||
+    !Array.isArray(payload.result.evidence)
+  ) {
+    return false;
+  }
+
+  const evidenceByEventId = new Map<string, Record<string, unknown>>();
+  for (const item of payload.result.evidence) {
+    if (
+      !isRecord(item) ||
+      item.kind !== "check" ||
+      item.status !== "passed" ||
+      item.runId !== state.runId ||
+      typeof item.eventId !== "string" ||
+      item.id !== item.eventId ||
+      typeof item.checkName !== "string" ||
+      item.revision !== currentRevision ||
+      evidenceByEventId.has(item.eventId)
+    ) {
+      continue;
+    }
+    evidenceByEventId.set(item.eventId, item);
+  }
+
+  const referenceByEventId = new Map(
+    state.evidenceRefs.map((reference) => [reference.eventId, reference]),
+  );
+  if (referenceByEventId.size !== state.evidenceRefs.length) return false;
+  const eventIdsAreRealPasses = [...referenceByEventId].every(([eventId, reference]) => {
+    const evidence = evidenceByEventId.get(eventId);
+    const ended = ends.get(eventId);
+    const started = ended ? starts.get(ended.toolCallId) : undefined;
+    return Boolean(
+      evidence &&
+        reference.kind === "check" &&
+        reference.status === "passed" &&
+        reference.revision === currentRevision &&
+        evidence.checkName === ended?.checkName &&
+        started?.checkName === ended?.checkName &&
+        (started?.toolName === "bash" || started?.toolName === "terminal_run") &&
+        ended?.toolName === started.toolName &&
+        ended.exitCode === 0 &&
+        ended.error === false &&
+        ended.aborted !== true &&
+        ended.timedOut !== true &&
+        ended.skipped !== true &&
+        ended.checkConfigStable !== false &&
+        started.workspaceRevision === currentRevision &&
+        ended.workspaceRevision === currentRevision &&
+        ended.sourceStable === true,
+    );
+  });
+  if (!eventIdsAreRealPasses) return false;
+
+  return state.criteria.every((criterion) => {
+    const remaining = new Set(criterion.evidenceEventIds);
+    if (remaining.size !== criterion.evidenceEventIds.length) return false;
+    for (const kind of criterion.requiredCheckKinds ?? []) {
+      const matching = [...remaining].find(
+        (eventId) => evidenceByEventId.get(eventId)?.checkName === kind,
+      );
+      if (!matching) return false;
+      remaining.delete(matching);
+    }
+    return remaining.size === 0;
+  });
+}
+
 /** Returns the newest valid snapshot for exactly one run, failing closed on malformed newer data. */
 export function getLatestHarnessTaskState(
   sessionId: string,
@@ -732,6 +1085,12 @@ export function getLatestHarnessTaskState(
       .prepare("select 1 from agent_runs where id = ? and session_id = ? limit 1")
       .get(runId, sessionId);
     if (!ownedRun) return undefined;
+    if (
+      state.verificationStatus === "verified" &&
+      !hasCurrentVerifiedTaskEvidence(db, candidate.event_rowid, state)
+    ) {
+      return undefined;
+    }
     return state;
   }
   return undefined;
@@ -751,7 +1110,7 @@ export function getLatestCheckpointRestoreRowId(
   }
   const row = getDatabase()
     .prepare(
-      `select rowid
+      `select rowid as rowid
      from agent_events
      where session_id = ? and type = 'checkpoint.restored' and rowid > ?
      order by rowid desc
@@ -837,6 +1196,7 @@ export function getRunToolEvidence(
       fullProject?: boolean;
       mutatesSource?: boolean;
       packageConfigDigest?: string;
+      workspaceRevision?: string;
     }
   >();
   const evidence: RunQAEvent[] = [];
@@ -893,6 +1253,9 @@ export function getRunToolEvidence(
         ...(snapshot.state === "valid" && snapshot.snapshot.packageConfigDigest
           ? { packageConfigDigest: snapshot.snapshot.packageConfigDigest }
           : {}),
+        ...(snapshot.state === "valid" && snapshot.snapshot.workspaceRevision
+          ? { workspaceRevision: snapshot.snapshot.workspaceRevision }
+          : {}),
       });
       evidence.push({
         type: "tool.started",
@@ -905,6 +1268,9 @@ export function getRunToolEvidence(
         ...(paths ? { paths } : {}),
         ...(fullProject ? { fullProject: true } : {}),
         ...(mutatesSource ? { mutatesSource: true } : {}),
+        ...(snapshot.state === "valid" && snapshot.snapshot.workspaceRevision
+          ? { workspaceRevision: snapshot.snapshot.workspaceRevision }
+          : {}),
       });
       continue;
     }
@@ -915,15 +1281,8 @@ export function getRunToolEvidence(
       started.packageConfigDigest !== undefined
         ? payload[QA_CHECK_CONFIG_STABLE_FIELD] === true
         : undefined;
-    const exitCode =
-      event.exitCode ??
-      (started.toolName === "bash" &&
-      !event.isError &&
-      !event.aborted &&
-      !event.skipped &&
-      started.checkName
-        ? 0
-        : undefined);
+    const sourceStable = payload[QA_CHECK_SOURCE_STABLE_FIELD];
+    const sourceRevision = payload[QA_CHECK_SOURCE_REVISION_FIELD];
     evidence.push({
       type: "tool.ended",
       sessionId,
@@ -935,10 +1294,14 @@ export function getRunToolEvidence(
       ...(started.paths ? { paths: started.paths } : {}),
       ...(started.fullProject ? { fullProject: true } : {}),
       ...(started.mutatesSource ? { mutatesSource: true } : {}),
+      ...(started.workspaceRevision ? { workspaceRevision: started.workspaceRevision } : {}),
       ...(checkConfigStable !== undefined ? { checkConfigStable } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(typeof sourceStable === "boolean" ? { sourceStable } : {}),
+      ...(typeof sourceRevision === "string" ? { workspaceRevision: sourceRevision } : {}),
+      ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
       error: event.isError,
       ...(event.aborted ? { aborted: true } : {}),
+      ...(event.timedOut ? { timedOut: true } : {}),
       ...(event.skipped ? { skipped: true } : {}),
     });
   }
@@ -1077,6 +1440,8 @@ export function getWorkspaceHarnessInsightEvidence(
               json_extract(e.payload_json, '$.exitCode') as exit_code,
               json_extract(e.payload_json, '$.aborted') as aborted,
               json_type(e.payload_json, '$.aborted') as aborted_type,
+              json_extract(e.payload_json, '$.timedOut') as timed_out,
+              json_type(e.payload_json, '$.timedOut') as timed_out_type,
               json_extract(e.payload_json, '$.skipped') as skipped,
               json_type(e.payload_json, '$.skipped') as skipped_type,
               json_extract(e.payload_json, '$.tokenUsage.totalTokens') as token_total,
@@ -1155,6 +1520,8 @@ export function getWorkspaceHarnessInsightEvidence(
     }
     const aborted = sqliteBoolean(row.aborted, row.aborted_type);
     if (aborted !== undefined) result.aborted = aborted;
+    const timedOut = sqliteBoolean(row.timed_out, row.timed_out_type);
+    if (timedOut !== undefined) result.timedOut = timedOut;
     const skipped = sqliteBoolean(row.skipped, row.skipped_type);
     if (skipped !== undefined) result.skipped = skipped;
     if (typeof row.token_total === "number" && Number.isFinite(row.token_total)) {
@@ -1218,30 +1585,28 @@ export function listAgentEvents(
   sessionId: string,
 ): Array<{ id: string; event: AgentEvent; createdAt: string }> {
   const db = getDatabase();
-  const rows = db
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ?
-       order by created_at asc, rowid asc`,
-    )
-    .all(sessionId) as AgentEventRow[];
-  const events = rows.map((row) => {
-    const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
-    delete payload[QA_CHECK_SNAPSHOT_FIELD];
-    delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
-    return {
-      id: row.id,
-      event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,
-      createdAt: row.created_at,
-    };
-  });
+  let cursor = 0;
+  let snapshotCursor: number | undefined;
+  const eventAccumulator = createAgentEventAccumulator<AgentEventItem>();
+  // Event timestamps can regress, so cursor order keeps pagination and replay consistent.
+  while (true) {
+    const page = listAgentEventPage(sessionId, {
+      afterCursor: cursor,
+      ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+      limit: MAX_AGENT_EVENT_PAGE_SIZE,
+    });
+    snapshotCursor = page.snapshotCursor;
+    eventAccumulator.append(page.events);
+    if (!page.hasMore || page.nextCursor === undefined) break;
+    cursor = page.nextCursor;
+  }
+  const events = eventAccumulator.items();
   const runs = db
     .prepare(
       `select id, user_message_id, prompt, started_at
        from agent_runs
        where session_id = ?
-       order by started_at asc, rowid asc`,
+       order by rowid asc`,
     )
     .all(sessionId) as AgentRunPromptRow[];
 
@@ -1249,6 +1614,736 @@ export function listAgentEvents(
   // IPC, so opening a long session ships O(parts) rows, not O(deltas) — the
   // renderer parses and builds blocks over the bounded set.
   return foldAgentEvents(backfillUserPromptEvents(sessionId, events, runs));
+}
+
+/** Read one bounded keyset page in the same order as the persisted event cursor. */
+export function listAgentEventPage(
+  sessionId: string,
+  options: AgentEventPageOptions = {},
+): AgentEventPageResult {
+  return listAgentEventPageInternal(sessionId, options, true);
+}
+
+/**
+ * Read unexpanded and unfolded cursor rows. Legacy user prompts may be
+ * backfilled before their run.started row; `limit` caps persisted rows only.
+ */
+export function listAgentEventRawPage(
+  sessionId: string,
+  options: AgentEventPageOptions = {},
+): AgentEventPageResult {
+  return listAgentEventPageInternal(sessionId, options, false);
+}
+
+function listAgentEventPageInternal(
+  sessionId: string,
+  options: AgentEventPageOptions,
+  expandStreams: boolean,
+): AgentEventPageResult {
+  const direction = options.direction ?? "forward";
+  const runId = "runId" in options ? options.runId : undefined;
+  const afterCursor = options.direction === "backward" ? undefined : (options.afterCursor ?? 0);
+  const beforeCursor = options.direction === "backward" ? options.beforeCursor : undefined;
+  const requestedLimit = options.limit ?? DEFAULT_AGENT_EVENT_PAGE_SIZE;
+  if (runId !== undefined && (!runId.trim() || runId.length > 128)) {
+    throw new RangeError("Agent run ID must be a non-empty string of at most 128 characters.");
+  }
+  if (runId !== undefined && direction === "backward") {
+    throw new RangeError("Run-scoped agent event pages only support forward traversal.");
+  }
+  if (afterCursor !== undefined && (!Number.isSafeInteger(afterCursor) || afterCursor < 0)) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  if (beforeCursor !== undefined && (!Number.isSafeInteger(beforeCursor) || beforeCursor < 0)) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+    throw new RangeError("Agent event page size must be a positive safe integer.");
+  }
+  const limit = Math.min(requestedLimit, MAX_AGENT_EVENT_PAGE_SIZE);
+  const db = getDatabase();
+  let snapshotCursor = options.snapshotCursor;
+  if (snapshotCursor === undefined) {
+    const snapshot = db
+      .prepare("select coalesce(max(rowid), 0) as cursor from agent_events where session_id = ?")
+      .get(sessionId) as { cursor: number };
+    snapshotCursor = Number(snapshot.cursor);
+  }
+  if (!Number.isSafeInteger(snapshotCursor) || snapshotCursor < 0) {
+    throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
+  }
+
+  const rows = runId
+    ? listAgentRunToolEventRows(sessionId, runId, afterCursor ?? 0, snapshotCursor, limit + 1)
+    : direction === "forward"
+      ? (db
+          .prepare(
+            `select id, payload_json, created_at, rowid as event_cursor
+             from agent_events
+             where session_id = ? and rowid > ? and rowid <= ?
+             order by rowid asc
+             limit ?`,
+          )
+          .all(sessionId, afterCursor ?? 0, snapshotCursor, limit + 1) as AgentEventRow[])
+      : beforeCursor === undefined
+        ? (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid <= ?
+               order by rowid desc
+               limit ?`,
+            )
+            .all(sessionId, snapshotCursor, limit + 1) as AgentEventRow[])
+        : (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid < ? and rowid <= ?
+               order by rowid desc
+               limit ?`,
+            )
+            .all(sessionId, beforeCursor, snapshotCursor, limit + 1) as AgentEventRow[]);
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  if (direction === "backward") pageRows.reverse();
+  const parsedEvents = pageRows.map(parseAgentEventRow);
+  const expandedStreamEvents =
+    runId || !expandStreams
+      ? undefined
+      : expandAgentEventPageStreams(sessionId, pageRows, parsedEvents, snapshotCursor);
+  const events = runId
+    ? parsedEvents
+    : backfillUserPromptEventsForPage(
+        sessionId,
+        expandStreams && expandedStreamEvents
+          ? foldAgentEvents(expandedStreamEvents)
+          : parsedEvents,
+        snapshotCursor,
+      );
+  const summaryEvents =
+    !runId && options.includeSummary ? listAgentEventSummary(sessionId, snapshotCursor) : [];
+  const activityEvents =
+    !runId && options.includeActivity
+      ? listAgentGroupActivityEvents(sessionId, snapshotCursor)
+      : [];
+  const nextCursor =
+    direction === "backward" ? pageRows[0]?.event_cursor : pageRows.at(-1)?.event_cursor;
+  return {
+    events,
+    summaryEvents,
+    activityEvents,
+    snapshotCursor,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    hasMore,
+  };
+}
+
+/** Read one bounded page of message events for exactly one assistant run. */
+export function listAgentRunMessagePage(
+  sessionId: string,
+  runId: string,
+  options: { afterCursor?: number; snapshotCursor?: number; limit?: number } = {},
+): AgentEventPageResult {
+  if (!runId.trim() || runId.length > 128) {
+    throw new RangeError("Agent run ID must be a non-empty string of at most 128 characters.");
+  }
+  const afterCursor = options.afterCursor ?? 0;
+  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  const requestedLimit = options.limit ?? DEFAULT_AGENT_EVENT_PAGE_SIZE;
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+    throw new RangeError("Agent event page size must be a positive safe integer.");
+  }
+  const limit = Math.min(requestedLimit, MAX_AGENT_EVENT_PAGE_SIZE);
+  const db = getDatabase();
+  const snapshotCursor =
+    options.snapshotCursor ??
+    Number(
+      (
+        db
+          .prepare(
+            "select coalesce(max(rowid), 0) as cursor from agent_events where session_id = ?",
+          )
+          .get(sessionId) as { cursor: number }
+      ).cursor,
+    );
+  if (!Number.isSafeInteger(snapshotCursor) || snapshotCursor < 0) {
+    throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
+  }
+
+  const rows = listAgentRunAssistantMessageRows(
+    sessionId,
+    runId,
+    afterCursor,
+    snapshotCursor,
+    limit + 1,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const events = pageRows.map(parseAgentEventRow);
+  const nextCursor = pageRows.at(-1)?.event_cursor;
+  return {
+    events,
+    summaryEvents: [],
+    activityEvents: [],
+    snapshotCursor,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    hasMore,
+  };
+}
+
+/**
+ * A page can cut through one streamed message or tool result. Expand only those
+ * streams that have matching deltas outside the page's cursor range, so callers
+ * never render a suffix as a complete result. The cursor used to fetch the next
+ * page remains based on the bounded page rows.
+ */
+function expandAgentEventPageStreams(
+  sessionId: string,
+  pageRows: AgentEventRow[],
+  pageEvents: AgentEventItem[],
+  snapshotCursor: number,
+): AgentEventItem[] | undefined {
+  if (pageRows.length === 0) return undefined;
+  const firstCursor = pageRows[0]?.event_cursor;
+  const lastCursor = pageRows.at(-1)?.event_cursor;
+  if (firstCursor === undefined || lastCursor === undefined) return undefined;
+
+  const messageIds = new Set<string>();
+  const toolCallIds = new Set<string>();
+  const messageDeltaTypes = ["message.delta", "thinking.delta"] as const;
+  const toolDeltaTypes = ["tool.output"] as const;
+  const pageMessageIds = new Set<string>();
+  const pageToolCallIds = new Set<string>();
+  for (const { event } of pageEvents) {
+    if (
+      (event.type === "message.started" ||
+        event.type === "message.completed" ||
+        event.type === "thinking.completed" ||
+        event.type === "message.delta" ||
+        event.type === "thinking.delta") &&
+      typeof event.messageId === "string"
+    ) {
+      pageMessageIds.add(event.messageId);
+    } else if (
+      (event.type === "tool.started" ||
+        event.type === "tool.output" ||
+        event.type === "tool.ended") &&
+      typeof event.toolCallId === "string"
+    ) {
+      pageToolCallIds.add(event.toolCallId);
+    }
+  }
+
+  const db = getDatabase();
+  const findCrossBoundaryIds = (
+    types: readonly string[],
+    identityField: "messageId" | "toolCallId",
+    ids: Set<string>,
+  ): Set<string> => {
+    if (ids.size === 0) return new Set();
+    const typePlaceholders = types.map(() => "?").join(", ");
+    const idPlaceholders = [...ids].map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `select payload_json from agent_events
+         where session_id = ? and rowid <= ? and type in (${typePlaceholders})
+           and (rowid < ? or rowid > ?) and json_valid(payload_json)
+           and json_extract(payload_json, '$.${identityField}') in (${idPlaceholders})`,
+      )
+      .all(sessionId, snapshotCursor, ...types, firstCursor, lastCursor, ...ids) as Array<{
+      payload_json: string;
+    }>;
+    const crossed = new Set<string>();
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+        const identity = payload[identityField];
+        if (typeof identity === "string") crossed.add(identity);
+      } catch {
+        // Invalid records are surfaced when their cursor is read as a page.
+      }
+    }
+    return crossed;
+  };
+
+  for (const id of findCrossBoundaryIds(messageDeltaTypes, "messageId", pageMessageIds)) {
+    messageIds.add(id);
+  }
+  for (const id of findCrossBoundaryIds(toolDeltaTypes, "toolCallId", pageToolCallIds)) {
+    toolCallIds.add(id);
+  }
+  if (messageIds.size === 0 && toolCallIds.size === 0 && pageMessageIds.size === 0) {
+    return undefined;
+  }
+
+  const expandedRows = new Map<number, AgentEventRow>(
+    pageRows.map((row) => [row.event_cursor, row]),
+  );
+  const loadRows = (
+    types: readonly string[],
+    identityField: "messageId" | "toolCallId",
+    ids: Set<string>,
+  ): void => {
+    if (ids.size === 0) return;
+    const typePlaceholders = types.map(() => "?").join(", ");
+    const idPlaceholders = [...ids].map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `select id, payload_json, created_at, rowid as event_cursor
+         from agent_events
+         where session_id = ? and rowid <= ? and type in (${typePlaceholders})
+           and json_valid(payload_json)
+           and json_extract(payload_json, '$.${identityField}') in (${idPlaceholders})
+         order by rowid asc`,
+      )
+      .all(sessionId, snapshotCursor, ...types, ...ids) as AgentEventRow[];
+    for (const row of rows) expandedRows.set(row.event_cursor, row);
+  };
+
+  loadRows(
+    [
+      "message.started",
+      "message.delta",
+      "message.completed",
+      "thinking.delta",
+      "thinking.completed",
+    ],
+    "messageId",
+    messageIds,
+  );
+  loadRows(["tool.started", "tool.output", "tool.delta", "tool.ended"], "toolCallId", toolCallIds);
+  if (pageMessageIds.size > 0) {
+    const ids = [...pageMessageIds];
+    const placeholders = ids.map(() => "?").join(", ");
+    const runRows = db
+      .prepare(
+        `select r.id, r.payload_json, r.created_at, r.rowid as event_cursor
+         from agent_events as message
+         join agent_events as r
+           on r.session_id = message.session_id
+          and r.type = 'run.started'
+          and r.rowid = (
+            select max(previous.rowid)
+            from agent_events as previous
+            where previous.session_id = message.session_id
+              and previous.type = 'run.started'
+              and previous.rowid < message.rowid
+          )
+          and not exists (
+            select 1
+            from agent_events as terminal
+            where terminal.session_id = message.session_id
+              and terminal.rowid > r.rowid
+              and terminal.rowid < message.rowid
+              and terminal.type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+              and json_valid(terminal.payload_json)
+              and json_extract(terminal.payload_json, '$.runId') =
+                json_extract(r.payload_json, '$.runId')
+          )
+          and not exists (
+            select 1
+            from agent_events as earlier_run
+            where earlier_run.session_id = message.session_id
+              and earlier_run.type = 'run.started'
+              and earlier_run.rowid < r.rowid
+              and json_valid(earlier_run.payload_json)
+              and not exists (
+                select 1
+                from agent_events as earlier_terminal
+                where earlier_terminal.session_id = message.session_id
+                  and earlier_terminal.rowid > earlier_run.rowid
+                  and earlier_terminal.rowid < message.rowid
+                  and earlier_terminal.type in (
+                    'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
+                  )
+                  and json_valid(earlier_terminal.payload_json)
+                  and json_extract(earlier_terminal.payload_json, '$.runId') =
+                    json_extract(earlier_run.payload_json, '$.runId')
+              )
+          )
+         where message.session_id = ? and message.rowid <= ?
+           and message.type = 'message.started' and json_valid(message.payload_json)
+           and json_extract(message.payload_json, '$.role') = 'assistant'
+           and json_extract(message.payload_json, '$.messageId') in (${placeholders})
+           and (
+             message.rowid between ? and ?
+             or message.rowid = (
+               select max(previous.rowid)
+               from agent_events as previous
+               where previous.session_id = message.session_id
+                 and previous.type = 'message.started'
+                 and json_valid(previous.payload_json)
+                 and json_extract(previous.payload_json, '$.role') = 'assistant'
+                 and json_extract(previous.payload_json, '$.messageId') =
+                   json_extract(message.payload_json, '$.messageId')
+                 and previous.rowid < ?
+             )
+           )
+         order by r.rowid asc`,
+      )
+      .all(
+        sessionId,
+        snapshotCursor,
+        ...ids,
+        firstCursor,
+        lastCursor,
+        firstCursor,
+      ) as AgentEventRow[];
+    for (const row of runRows) expandedRows.set(row.event_cursor, row);
+  }
+  return [...expandedRows.values()]
+    .sort((left, right) => left.event_cursor - right.event_cursor)
+    .map(parseAgentEventRow);
+}
+
+function listAgentRunToolEventRows(
+  sessionId: string,
+  runId: string,
+  afterCursor: number,
+  snapshotCursor: number,
+  limit: number,
+): AgentEventRow[] {
+  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+  const db = getDatabase();
+  return db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+         and type in (
+           'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+           'tool.started', 'tool.output', 'tool.ended'
+         )
+       order by rowid asc limit ?`,
+    )
+    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+}
+
+function listAgentRunAssistantMessageRows(
+  sessionId: string,
+  runId: string,
+  afterCursor: number,
+  snapshotCursor: number,
+  limit: number,
+): AgentEventRow[] {
+  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+  return getDatabase()
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+         and type in ('message.started', 'message.delta', 'message.completed')
+       order by rowid asc limit ?`,
+    )
+    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+}
+
+function getAgentRunEventRange(
+  sessionId: string,
+  runId: string,
+  snapshotCursor: number,
+): { startCursor: number; endCursor: number } {
+  const db = getDatabase();
+  const start = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid <= ? and type = 'run.started'
+         and json_valid(payload_json) and json_extract(payload_json, '$.runId') = ?
+       order by rowid desc limit 1`,
+    )
+    .get(sessionId, snapshotCursor, runId) as { event_cursor: number } | undefined;
+  if (!start) {
+    throw new Error("Run-scoped event history is unavailable: run start was not found.");
+  }
+
+  const overlappingPriorRun = db
+    .prepare(
+      `select 1 as found
+       from agent_events as previous
+       where previous.session_id = ? and previous.rowid < ?
+         and previous.type = 'run.started' and json_valid(previous.payload_json)
+         and coalesce(json_extract(previous.payload_json, '$.runId'), '') <> ?
+         and not exists (
+           select 1
+           from agent_events as terminal
+           where terminal.session_id = previous.session_id
+             and terminal.rowid > previous.rowid and terminal.rowid < ?
+             and terminal.type in (
+               'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
+             )
+             and json_valid(terminal.payload_json)
+             and json_extract(terminal.payload_json, '$.runId') =
+               json_extract(previous.payload_json, '$.runId')
+         )
+       limit 1`,
+    )
+    .get(sessionId, start.event_cursor, runId, start.event_cursor) as { found: number } | undefined;
+  if (overlappingPriorRun) {
+    throw new Error("Run-scoped event history is unavailable because run boundaries overlap.");
+  }
+
+  const terminal = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid > ? and rowid <= ?
+         and type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+         and json_valid(payload_json) and json_extract(payload_json, '$.runId') = ?
+       order by rowid asc limit 1`,
+    )
+    .get(sessionId, start.event_cursor, snapshotCursor, runId) as
+    | { event_cursor: number }
+    | undefined;
+  const endCursor = terminal?.event_cursor ?? snapshotCursor;
+  const overlapEndCursor = terminal ? terminal.event_cursor - 1 : snapshotCursor;
+  const overlappingRun = db
+    .prepare(
+      `select 1 as found
+       from agent_events
+       where session_id = ? and rowid > ? and rowid <= ? and type = 'run.started'
+         and json_valid(payload_json)
+         and coalesce(json_extract(payload_json, '$.runId'), '') <> ?
+       limit 1`,
+    )
+    .get(sessionId, start.event_cursor, overlapEndCursor, runId) as { found: number } | undefined;
+  // A session is single-run. If that invariant is violated, do not mix events
+  // from overlapping runs into another run's result.
+  if (overlappingRun) {
+    throw new Error("Run-scoped event history is unavailable because run boundaries overlap.");
+  }
+  return { startCursor: start.event_cursor, endCursor };
+}
+
+function listAgentEventSummary(sessionId: string, snapshotCursor: number): AgentEventItem[] {
+  const db = getDatabase();
+  const queries: Array<{ types: string[]; limit: number }> = [
+    { types: ["plan.updated"], limit: 1 },
+    { types: ["session.status"], limit: 1 },
+    {
+      types: ["subagent.started", "subagent.updated"],
+      limit: MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND,
+    },
+  ];
+  const rows: AgentEventRow[] = [];
+  for (const query of queries) {
+    const placeholders = query.types.map(() => "?").join(", ");
+    const groupRows = db
+      .prepare(
+        `select id, payload_json, created_at, rowid as event_cursor
+         from agent_events
+         where session_id = ? and rowid <= ? and type in (${placeholders})
+         order by rowid desc
+         limit ?`,
+      )
+      .all(sessionId, snapshotCursor, ...query.types, query.limit) as AgentEventRow[];
+    rows.push(...groupRows);
+  }
+  rows.push(
+    ...listLatestPendingRequest(
+      sessionId,
+      snapshotCursor,
+      "permission.requested",
+      "permission.resolved",
+    ),
+    ...listLatestPendingRequest(
+      sessionId,
+      snapshotCursor,
+      "question.requested",
+      "question.resolved",
+    ),
+  );
+  return rows.sort((left, right) => left.event_cursor - right.event_cursor).map(parseAgentEventRow);
+}
+
+function listLatestPendingRequest(
+  sessionId: string,
+  snapshotCursor: number,
+  requestType: "permission.requested" | "question.requested",
+  resolutionType: "permission.resolved" | "question.resolved",
+): AgentEventRow[] {
+  return getDatabase()
+    .prepare(
+      `select request.id, request.payload_json, request.created_at, request.rowid as event_cursor
+       from agent_events request
+       where request.session_id = ?
+         and request.rowid <= ?
+         and request.type = ?
+         and json_valid(request.payload_json)
+         and json_type(request.payload_json, '$.request.id') = 'text'
+         and not exists (
+           select 1 from agent_events resolution
+           where resolution.session_id = request.session_id
+             and resolution.rowid > request.rowid
+             and resolution.rowid <= ?
+             and resolution.type = ?
+             and json_valid(resolution.payload_json)
+             and json_type(resolution.payload_json, '$.requestId') = 'text'
+             and json_extract(resolution.payload_json, '$.requestId') =
+               json_extract(request.payload_json, '$.request.id')
+         )
+       order by request.rowid desc
+       limit 1`,
+    )
+    .all(sessionId, snapshotCursor, requestType, snapshotCursor, resolutionType) as AgentEventRow[];
+}
+
+function backfillUserPromptEventsForPage(
+  sessionId: string,
+  events: AgentEventItem[],
+  snapshotCursor: number,
+): AgentEventItem[] {
+  const runIds = events.flatMap(({ event }) => (event.type === "run.started" ? [event.runId] : []));
+  if (runIds.length === 0) return events;
+
+  const placeholders = runIds.map(() => "?").join(", ");
+  const runs = getDatabase()
+    .prepare(
+      `select id, user_message_id, prompt, started_at
+       from agent_runs
+       where session_id = ? and id in (${placeholders})`,
+    )
+    .all(sessionId, ...runIds) as AgentRunPromptRow[];
+  if (runs.length === 0) return events;
+
+  const messageIds = [...new Set(runs.map((run) => run.user_message_id ?? `user:${run.id}`))];
+  const messagePlaceholders = messageIds.map(() => "?").join(", ");
+  const persistedPromptRows = getDatabase()
+    .prepare(
+      `select distinct json_extract(delta.payload_json, '$.messageId') as message_id
+       from agent_events delta
+       where delta.session_id = ?
+         and delta.rowid <= ?
+         and delta.type = 'message.delta'
+         and json_valid(delta.payload_json)
+         and json_type(delta.payload_json, '$.messageId') = 'text'
+         and trim(coalesce(json_extract(delta.payload_json, '$.delta'), '')) <> ''
+         and json_extract(delta.payload_json, '$.messageId') in (${messagePlaceholders})
+         and exists (
+           select 1 from agent_events started
+           where started.session_id = delta.session_id
+             and started.rowid <= ?
+             and started.type = 'message.started'
+             and json_valid(started.payload_json)
+             and json_extract(started.payload_json, '$.role') = 'user'
+             and json_extract(started.payload_json, '$.messageId') =
+               json_extract(delta.payload_json, '$.messageId')
+         )`,
+    )
+    .all(sessionId, snapshotCursor, ...messageIds, snapshotCursor) as Array<{ message_id: string }>;
+  const persistedPromptIds = new Set(persistedPromptRows.map(({ message_id }) => message_id));
+  const missingPrompts = new Map<string, AgentEventItem[]>();
+  for (const run of runs) {
+    const messageId = run.user_message_id ?? `user:${run.id}`;
+    if (persistedPromptIds.has(messageId)) continue;
+    missingPrompts.set(run.id, [
+      {
+        id: `backfill:${run.id}:user:start`,
+        event: { type: "message.started", sessionId, messageId, role: "user" },
+        createdAt: run.started_at,
+      },
+      {
+        id: `backfill:${run.id}:user:delta`,
+        event: { type: "message.delta", sessionId, messageId, delta: run.prompt },
+        createdAt: run.started_at,
+      },
+      {
+        id: `backfill:${run.id}:user:completed`,
+        event: { type: "message.completed", sessionId, messageId },
+        createdAt: run.started_at,
+      },
+    ]);
+  }
+  if (missingPrompts.size === 0) return events;
+
+  return events.flatMap((item) => {
+    if (item.event.type !== "run.started") return [item];
+    const backfill = missingPrompts.get(item.event.runId);
+    if (!backfill) return [item];
+    missingPrompts.delete(item.event.runId);
+    return [...backfill, item];
+  });
+}
+
+function listAgentGroupActivityEvents(sessionId: string, snapshotCursor: number): AgentEventItem[] {
+  const db = getDatabase();
+  const latestRun = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid <= ? and type = 'run.started'
+       order by rowid desc limit 1`,
+    )
+    .get(sessionId, snapshotCursor) as { event_cursor: number } | undefined;
+  if (!latestRun) return [];
+  const startRow = db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events where session_id = ? and rowid = ? and rowid <= ?`,
+    )
+    .get(sessionId, latestRun.event_cursor, snapshotCursor) as AgentEventRow | undefined;
+  const eventTypes = [
+    "run.started",
+    "run.completed",
+    "run.failed",
+    "run.blocked",
+    "run.cancelled",
+    "message.started",
+    "message.delta",
+    "message.completed",
+    "thinking.delta",
+    "thinking.completed",
+    "tool.started",
+    "tool.delta",
+    "tool.ended",
+  ];
+  const recentRows = db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and type in (${eventTypes.map(() => "?").join(", ")})
+       order by rowid desc limit ?`,
+    )
+    .all(
+      sessionId,
+      latestRun.event_cursor,
+      snapshotCursor,
+      ...eventTypes,
+      MAX_AGENT_GROUP_ACTIVITY_EVENTS - 1,
+    ) as AgentEventRow[];
+  const byCursor = new Map<number, AgentEventRow>();
+  if (startRow) byCursor.set(startRow.event_cursor, startRow);
+  for (const row of recentRows) byCursor.set(row.event_cursor, row);
+  return [...byCursor.values()]
+    .sort((left, right) => left.event_cursor - right.event_cursor)
+    .map(parseAgentEventRow);
+}
+
+function parseAgentEventRow(row: AgentEventRow): AgentEventItem {
+  let payload: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(row.payload_json);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("not an event object");
+    }
+    payload = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `Invalid persisted agent event payload (event ${row.id}, cursor ${row.event_cursor}).`,
+    );
+  }
+  delete payload[QA_CHECK_SNAPSHOT_FIELD];
+  delete payload[QA_CHECK_CONFIG_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_STABLE_FIELD];
+  delete payload[QA_CHECK_SOURCE_REVISION_FIELD];
+  return {
+    id: row.id,
+    event: { ...payload, eventCursor: row.event_cursor } as AgentEvent,
+    createdAt: row.created_at,
+  };
 }
 
 function backfillUserPromptEvents(

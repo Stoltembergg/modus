@@ -16,6 +16,8 @@ export type AgentToolContext = {
   workspaceId: string;
   cwd: string;
   sessionId: string;
+  /** Host-assigned run currently owning this tool invocation. */
+  runId?: string;
   profile?: ToolProfileName;
   mode?: AgentMode;
   parentSessionId?: string;

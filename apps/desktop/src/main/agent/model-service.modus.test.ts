@@ -219,6 +219,64 @@ describe("Modus provider in the model service", () => {
     expect(onCallSettled).not.toHaveBeenCalled();
   });
 
+  it("does not replace a stale explicit Settings default with an available provider", () => {
+    const selected = "byok-relay/removed-model";
+    getDatabase()
+      .prepare(
+        `insert into app_settings (key, value, updated_at) values ('model.default', ?, ?)
+         on conflict(key) do update set value = excluded.value, updated_at = excluded.updated_at`,
+      )
+      .run(selected, new Date().toISOString());
+
+    try {
+      expect(ms.getDefaultModelId()).toBe(selected);
+      expect(ms.getModelSettings().defaultModel).toBe(selected);
+      expect(() => ms.getDefaultModel()).toThrow(`Selected model is unavailable: ${selected}`);
+    } finally {
+      ms.setDefaultModel(undefined);
+    }
+  });
+
+  it("rejects a removed explicit provider model without making a provider request", async () => {
+    const globalFetch = vi.spyOn(globalThis, "fetch");
+    const selected = "byok-relay/removed-model";
+
+    await expect(
+      ms.completeWithModel({ modelId: selected, systemPrompt: "s", prompt: "must not send" }),
+    ).rejects.toThrow(`Selected model is unavailable: ${selected}`);
+
+    expect(globalFetch).not.toHaveBeenCalled();
+    expect(routerFetch).not.toHaveBeenCalled();
+    expect(onCallSettled).not.toHaveBeenCalled();
+  });
+
+  it("preserves a selected model when its provider is disconnected and sends no request", async () => {
+    const selected = "byok-relay/relay-model";
+    const globalFetch = vi.spyOn(globalThis, "fetch");
+    ms.setDefaultModel(selected);
+
+    try {
+      await ms.disconnectProvider("byok-relay");
+
+      expect(ms.getDefaultModelId()).toBe(selected);
+      await expect(
+        ms.completeWithModel({ modelId: selected, systemPrompt: "s", prompt: "must not send" }),
+      ).rejects.toThrow(`Selected model is unavailable: ${selected}`);
+      expect(globalFetch).not.toHaveBeenCalled();
+      expect(routerFetch).not.toHaveBeenCalled();
+    } finally {
+      await ms.upsertCustomProvider({
+        provider: "byok-relay",
+        name: "BYOK Relay",
+        baseUrl: "https://relay.example.test/v1",
+        apiKey: RELAY_KEY,
+        api: "openai-completions",
+        models: [{ id: "relay-model", name: "Relay Model" }],
+      });
+      ms.setDefaultModel(undefined);
+    }
+  });
+
   it("Modus calls go to the router with the stripped model id and refresh credits", async () => {
     const auth = authSource("signed-in");
     const modus = installModus(auth, () => READY);
@@ -305,7 +363,7 @@ describe("Modus provider in the model service", () => {
     ms.setDefaultModel(undefined);
   });
 
-  it("L3b0 fallback default: signed out, or Modus unavailable → the user's own provider", async () => {
+  it("uses a derived default only when no default is explicitly saved", async () => {
     ms.setDefaultModel(undefined);
     const auth = authSource("signed-out");
     let result: ModusModelsResult = READY;
@@ -322,17 +380,19 @@ describe("Modus provider in the model service", () => {
     expect(unavailable).toBeDefined();
     expect(unavailable?.startsWith("modus/")).toBe(false);
 
-    // A Settings default that is no longer usable (Modus went away) falls back the same way.
+    // A saved choice remains the same identity when its provider signs out.
     result = READY;
     modus.retryIfUnavailable();
     await vi.waitFor(() => expect(modus.status()).toBe("ready"));
-    ms.setDefaultModel("modus/deepseek/deepseek-flash");
+    const selected = "modus/deepseek/deepseek-flash";
+    ms.setDefaultModel(selected);
     auth.set("signed-out");
-    expect(ms.getDefaultModelId()?.startsWith("modus/")).toBe(false);
+    expect(ms.getDefaultModelId()).toBe(selected);
+    expect(() => ms.getDefaultModel()).toThrow(`Selected model is unavailable: ${selected}`);
     ms.setDefaultModel(undefined);
   });
 
-  it("L3b: Modus turn model = an allowed Settings pick, else the plan default; unlock_pack reaches ModelInfo", async () => {
+  it("exposes the current Modus default for settings and includes unlock_pack in ModelInfo", async () => {
     ms.setDefaultModel(undefined);
     const STARTER: ModusModelsResult = {
       ok: true,
@@ -358,7 +418,7 @@ describe("Modus provider in the model service", () => {
     expect(ms.getModusTurnModelId()).toBe("modus/zai/glm-4.6");
     expect(ms.getDefaultModelId()).toBe("modus/zai/glm-4.6");
     expect(ms.getModelSettings().modusDefaultModel).toBe("modus/zai/glm-4.6");
-    // Starter picks Opus in Settings: Modus turns run on it.
+    // A Modus Settings pick is available for display without changing saved session models.
     ms.setDefaultModel("modus/anthropic/claude-opus-5-5");
     expect(ms.getModusTurnModelId()).toBe("modus/anthropic/claude-opus-5-5");
     // An own-provider Settings default does not change the Modus turn model.

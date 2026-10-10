@@ -1,6 +1,15 @@
 import { IconArrowDown } from "@tabler/icons-react";
 import { m } from "motion/react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import type { AgentEventPage } from "../../../../shared/agent-events";
 import type {
   AgentMode,
   AgentSessionInfo,
@@ -25,7 +34,6 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../../../shared/contracts";
 import { VortexMark } from "../../components/ui/VortexMark";
 import { lookupModel } from "../../lib/modelIdentity";
-import { isModusModelId } from "../../lib/modusModels";
 import {
   Composer,
   type ComposerDraft,
@@ -40,16 +48,20 @@ import { SessionBranchPicker } from "../git/SessionBranchPicker";
 import { buildPlanMessage, effectiveBuildStatus, normalizePlan } from "../plan/planState";
 import { QuestionsCard } from "../plan/QuestionsCard";
 import { ReviewPlanCard } from "../plan/ReviewPlanCard";
+import { ProcessStopNotices } from "../process/ProcessStopNotices";
 import { RunningProcessBar } from "../process/RunningProcessBar";
 import { useManagedProcesses } from "../process/useManagedProcesses";
 import { ProviderLogo } from "../settings/ProviderLogo";
+import { useRunSourcesForRuns } from "../sources/useRunSources";
 import { ApprovalPanel } from "./ApprovalPanel";
 import {
   type AgentEventHub,
   type AgentEventItem,
   appendAgentEvents,
+  appendUniqueAgentEvents,
   foldAgentEvents,
   optimisticUserPromptEvents,
+  prependAgentEventPage,
 } from "./agentEventHub";
 import { ConversationTimeline } from "./ConversationTimeline";
 import { ChangesStrip } from "./changes/ChangesStrip";
@@ -75,21 +87,10 @@ import { WorkingSubagentBar } from "./WorkingSubagentBar";
  */
 
 /**
- * L3b: what the pane shows / sends, mirroring main's resolveTurnModel (main is the
- * authority): a Modus session (or a session on a Modus Settings default) → the Modus turn
- * model; an own-provider session keeps its stored model while it is listed; otherwise the
- * Settings default.
+ * Keep the exact saved session identity; only sessions without one use the app default.
  */
-export function turnModelForPane(
-  defaultModel: string,
-  sessionModel?: string | undefined,
-  models: readonly { id: string }[] = [],
-  modusDefaultModel?: string | undefined,
-): string {
-  const base = sessionModel || defaultModel;
-  if (isModusModelId(base)) return modusDefaultModel ?? defaultModel;
-  if (sessionModel && models.some((model) => model.id === sessionModel)) return sessionModel;
-  return isModusModelId(defaultModel) ? (modusDefaultModel ?? defaultModel) : defaultModel;
+export function turnModelForPane(defaultModel: string, sessionModel?: string | undefined): string {
+  return sessionModel || defaultModel;
 }
 
 export function canSubmitPromptForSession(
@@ -101,6 +102,17 @@ export function canSubmitPromptForSession(
 }
 
 type HyperPlanPreview = { draftId: string; revision: HyperPlanRevision };
+type ChatEventHistoryPageState = {
+  snapshotCursor?: number;
+  beforeCursor?: number;
+  hasOlder: boolean;
+  loadingOlder: boolean;
+  error?: boolean | undefined;
+};
+const EMPTY_CHAT_EVENT_HISTORY_PAGE: ChatEventHistoryPageState = {
+  hasOlder: false,
+  loadingOlder: false,
+};
 type HyperPlanChoice = "revision" | "original";
 type HyperPlanAgentApi = Pick<
   Window["modus"]["agent"],
@@ -388,8 +400,6 @@ type ChatPaneProps = {
   defaultModel: string;
   /** L3b0: Modus provider state (ModelSettingsState.modus) for the inline unavailable notice. */
   modusStatus?: ModusModelsStatus | undefined;
-  /** L3b: ModelSettingsState.modusDefaultModel (the Modus turn model). */
-  modusDefaultModel?: string | undefined;
   contextUsage?: ContextUsageInfo | undefined;
   workspace: WorkspaceInfo | null;
   initialEvents?: AgentEventItem[] | undefined;
@@ -687,7 +697,6 @@ export function ChatPane({
   models,
   defaultModel,
   modusStatus,
-  modusDefaultModel,
   contextUsage,
   workspace,
   initialEvents,
@@ -714,10 +723,45 @@ export function ChatPane({
   const isLite = lite ?? hideComposer;
   const sessionId = session.id;
   const [agentEvents, setAgentEvents] = useState<AgentEventItem[]>([]);
+  const [eventSummaryEvents, setEventSummaryEvents] = useState<AgentEventItem[]>([]);
+  const [eventHistoryPage, setEventHistoryPage] = useState(EMPTY_CHAT_EVENT_HISTORY_PAGE);
+  const eventHistoryPageRef = useRef(eventHistoryPage);
+  const eventHistoryGenerationRef = useRef(0);
+  const [prependRevision, setPrependRevision] = useState(0);
+  const updateEventHistoryPage = useCallback((state: ChatEventHistoryPageState): void => {
+    eventHistoryPageRef.current = state;
+    setEventHistoryPage(state);
+  }, []);
   const [localComposerDraft, setLocalComposerDraft] = useState<ChatComposerDraft>(
     createEmptyChatComposerDraft,
   );
   const [promptError, setPromptError] = useState<string | undefined>();
+  const processStopScope = JSON.stringify([workspace?.id ?? null, sessionId]);
+  const processStopScopeRef = useRef(processStopScope);
+  processStopScopeRef.current = processStopScope;
+  const [processStopErrorState, setProcessStopErrorState] = useState<{
+    scope: string;
+    notices: ReadonlyMap<string, string>;
+  }>(() => ({ scope: processStopScope, notices: new Map() }));
+  const processStopErrors =
+    processStopErrorState.scope === processStopScope ? [...processStopErrorState.notices] : [];
+  const updateProcessStopNotice = (
+    scope: string,
+    processId: string,
+    message: string | undefined,
+  ): void => {
+    if (processStopScopeRef.current !== scope) return;
+    setProcessStopErrorState((previous) => {
+      if (processStopScopeRef.current !== scope) return previous;
+      const notices = new Map(previous.scope === scope ? previous.notices : []);
+      if (message) {
+        notices.set(processId, message);
+      } else {
+        notices.delete(processId);
+      }
+      return { scope, notices };
+    });
+  };
   // L2: the session's saved branch no longer exists -> sending is blocked until replaced.
   const [branchBlocked, setBranchBlocked] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState(false);
@@ -737,9 +781,18 @@ export function ChatPane({
     () => managedProcesses.processes.filter((process) => process.status === "running"),
     [managedProcesses.processes],
   );
+  const stateAgentEvents = useMemo(() => {
+    const byId = new Map<string, AgentEventItem>();
+    for (const item of [...eventSummaryEvents, ...agentEvents]) byId.set(item.id, item);
+    return [...byId.values()].sort((left, right) => {
+      const leftCursor = (left.event as { eventCursor?: number }).eventCursor;
+      const rightCursor = (right.event as { eventCursor?: number }).eventCursor;
+      return leftCursor !== undefined && rightCursor !== undefined ? leftCursor - rightCursor : 0;
+    });
+  }, [agentEvents, eventSummaryEvents]);
   const subagentActivityByChild = useMemo(() => {
     const map = new Map<string, { status: SubagentStatus; activity?: SubagentActivity }>();
-    for (const item of agentEvents) {
+    for (const item of stateAgentEvents) {
       const event = item.event;
       if (event.type === "subagent.started") {
         map.set(event.childSessionId, { status: "running" });
@@ -756,7 +809,7 @@ export function ChatPane({
       }
     }
     return map;
-  }, [agentEvents]);
+  }, [stateAgentEvents]);
   const workingSubagents = useMemo(() => {
     if (!subagentSessions?.length) {
       return [];
@@ -845,7 +898,7 @@ export function ChatPane({
   // runtime's `session.status` events. The composer locks while the session is
   // working (anything but idle), so a transient error never unlocks input
   // mid-turn. `pendingPrompt` is the optimistic bridge until the first status.
-  const sessionStatus = useMemo(() => latestSessionStatus(agentEvents), [agentEvents]);
+  const sessionStatus = useMemo(() => latestSessionStatus(stateAgentEvents), [stateAgentEvents]);
   const isRunning = !aborting && (sessionStatus.type !== "idle" || pendingPrompt);
   // Authoritative: keep SDK hot only while a turn is live (DB status or stream).
   const keepRuntimeHotRef = useRef(false);
@@ -858,6 +911,7 @@ export function ChatPane({
   autoScrollResumeRef.current = autoScroll.resume;
   const [scrollContainer, setScrollContainer] = useState<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const prependScrollAnchorRef = useRef<{ height: number; top: number } | undefined>(undefined);
   const setChatScrollRef = useCallback(
     (el: HTMLDivElement | null): void => {
       scrollContainerRef.current = el;
@@ -867,13 +921,91 @@ export function ChatPane({
     [autoScroll.scrollRef],
   );
 
+  const seedEventPage = useCallback(
+    (page: AgentEventPage, optimisticEvents: AgentEventItem[] = []): AgentEventItem[] => {
+      const events = foldAgentEvents([...optimisticEvents, ...page.events]);
+      setEventSummaryEvents(page.summaryEvents);
+      updateEventHistoryPage({
+        snapshotCursor: page.snapshotCursor,
+        ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
+        hasOlder: page.hasMore,
+        loadingOlder: false,
+      });
+      hub.seedHistory(sessionId, events, page.snapshotCursor);
+      return hub.getHistory(sessionId);
+    },
+    [hub, sessionId, updateEventHistoryPage],
+  );
+
+  const loadOlderEventPage = useCallback(
+    async (force = false): Promise<void> => {
+      const state = eventHistoryPageRef.current;
+      const requestGeneration = eventHistoryGenerationRef.current;
+      if (
+        !state.hasOlder ||
+        state.loadingOlder ||
+        (state.error && !force) ||
+        state.snapshotCursor === undefined
+      ) {
+        return;
+      }
+      updateEventHistoryPage({ ...state, loadingOlder: true, error: undefined });
+      try {
+        const page = await window.modus.agent.listEventPage(sessionId, {
+          direction: "backward",
+          ...(state.beforeCursor === undefined ? {} : { beforeCursor: state.beforeCursor }),
+          snapshotCursor: state.snapshotCursor,
+        });
+        if (eventHistoryGenerationRef.current !== requestGeneration) return;
+        const current = hub.getHistory(sessionId);
+        const merged = prependAgentEventPage(current, page.events);
+        const viewport = scrollContainerRef.current;
+        if (viewport) {
+          prependScrollAnchorRef.current = {
+            height: viewport.scrollHeight,
+            top: viewport.scrollTop,
+          };
+        }
+        hub.seedHistory(sessionId, merged, page.snapshotCursor);
+        setAgentEvents(hub.getHistory(sessionId));
+        setPrependRevision((revision) => revision + 1);
+        updateEventHistoryPage({
+          snapshotCursor: page.snapshotCursor,
+          ...(page.nextCursor === undefined ? {} : { beforeCursor: page.nextCursor }),
+          hasOlder:
+            page.hasMore && page.nextCursor !== undefined && page.nextCursor !== state.beforeCursor,
+          loadingOlder: false,
+        });
+      } catch {
+        if (eventHistoryGenerationRef.current === requestGeneration) {
+          updateEventHistoryPage({
+            ...eventHistoryPageRef.current,
+            loadingOlder: false,
+            error: true,
+          });
+        }
+      }
+    },
+    [hub, sessionId, updateEventHistoryPage],
+  );
+
+  useLayoutEffect(() => {
+    void prependRevision;
+    const anchor = prependScrollAnchorRef.current;
+    const viewport = scrollContainerRef.current;
+    if (!anchor || !viewport) return;
+    prependScrollAnchorRef.current = undefined;
+    viewport.scrollTop = anchor.top + Math.max(0, viewport.scrollHeight - anchor.height);
+  }, [prependRevision]);
+
   const handleChatScroll = useCallback((): void => {
     autoScroll.handleScroll();
     const el = scrollContainerRef.current;
     if (el) {
       rememberSessionScroll(sessionId, el.scrollTop);
+      if (el.scrollTop < 40) void loadOlderEventPage();
     }
-  }, [autoScroll, sessionId]);
+  }, [autoScroll, loadOlderEventPage, sessionId]);
 
   /** After events paint, restore the user's place or pin to the latest turn. */
   const settleSessionViewport = useCallback((savedTop: number | undefined): void => {
@@ -899,7 +1031,26 @@ export function ChatPane({
       });
     });
   }, []);
-  const visibleBlocks = useMemo(() => buildVisibleTimelineBlocks(agentEvents), [agentEvents]);
+  const sourceRunIds = useMemo(() => {
+    const runIds = new Set<string>();
+    for (const { event } of agentEvents) {
+      if (
+        (event.type === "run.completed" ||
+          event.type === "run.failed" ||
+          event.type === "run.blocked" ||
+          event.type === "run.cancelled") &&
+        typeof event.runId === "string"
+      ) {
+        runIds.add(event.runId);
+      }
+    }
+    return [...runIds].sort();
+  }, [agentEvents]);
+  const completeRunSources = useRunSourcesForRuns(sessionId, sourceRunIds);
+  const visibleBlocks = useMemo(
+    () => buildVisibleTimelineBlocks(agentEvents, completeRunSources),
+    [agentEvents, completeRunSources],
+  );
   const transcriptBlocks = useMemo(
     () => splitTimelinePresentation(visibleBlocks).transcriptBlocks,
     [visibleBlocks],
@@ -909,7 +1060,7 @@ export function ChatPane({
   // current without opening it; only the timeline card's expand action opens it.
   const latestPlan = useMemo<PlanRef | undefined>(() => {
     let latest: PlanRef | undefined;
-    for (const item of agentEvents) {
+    for (const item of stateAgentEvents) {
       if (item.event.type === "plan.updated") {
         latest = item.event.plan;
       }
@@ -917,7 +1068,7 @@ export function ChatPane({
     // Old sessions recorded plan.updated before todos/overview/buildStatus
     // existed; normalize so the Plan panel and Review card can trust the shape.
     return latest ? normalizePlan(latest) : undefined;
-  }, [agentEvents]);
+  }, [stateAgentEvents]);
 
   useEffect(() => {
     if (latestPlan) {
@@ -995,7 +1146,7 @@ export function ChatPane({
       return;
     }
     queuedRef.current = [];
-    setAgentEvents((events) => appendAgentEvents(events, queued));
+    setAgentEvents((events) => appendUniqueAgentEvents(events, queued));
   }, []);
 
   const clearQueued = useCallback((): void => {
@@ -1012,6 +1163,11 @@ export function ChatPane({
   // biome-ignore lint/correctness/useExhaustiveDependencies: see above.
   useEffect(() => {
     let cancelled = false;
+    eventHistoryGenerationRef.current += 1;
+    eventHistoryPageRef.current = EMPTY_CHAT_EVENT_HISTORY_PAGE;
+    setEventHistoryPage(EMPTY_CHAT_EVENT_HISTORY_PAGE);
+    setEventSummaryEvents([]);
+    prependScrollAnchorRef.current = undefined;
     const optimisticEvents = initialEvents ?? [];
     setAgentEvents(optimisticEvents);
     hub.seedHistory(sessionId, optimisticEvents);
@@ -1052,28 +1208,33 @@ export function ChatPane({
       }
     });
 
-    // Seed from the store. Events recorded to the DB are sent to the renderer
-    // afterwards, so anything that streamed in while the fetch was in flight is
-    // already part of a SECOND fetch — re-pull once and drop the live queue to
-    // avoid double-applying deltas that exist in both.
+    // Seed the newest bounded page. A second snapshot covers events queued
+    // before the first read; later live echoes are de-duplicated by event ID.
     void (async () => {
-      let items = await window.modus.agent.listEvents(sessionId);
+      let page = await window.modus.agent.listEventPage(sessionId, {
+        direction: "backward",
+        includeSummary: true,
+      });
       if (queuedRef.current.length > 0) {
         queuedRef.current = [];
-        items = await window.modus.agent.listEvents(sessionId);
-        queuedRef.current = [];
+        page = await window.modus.agent.listEventPage(sessionId, {
+          direction: "backward",
+          includeSummary: true,
+        });
       }
       if (!cancelled) {
-        const seededEvents = foldAgentEvents([...optimisticEvents, ...items]);
-        hub.seedHistory(sessionId, seededEvents);
+        const seededEvents = seedEventPage(page, optimisticEvents);
         setAgentEvents(seededEvents);
         // Prefer the scroll offset from the last visit; otherwise land on latest.
         settleSessionViewport(readSessionScroll(sessionId));
       }
-    })();
+    })().catch(() => {
+      if (!cancelled) setPromptError("Unable to load this session's history.");
+    });
 
     return () => {
       cancelled = true;
+      eventHistoryGenerationRef.current += 1;
       hyperPlanRequestId.current += 1;
       hyperPlanOperations.current.reset();
       const el = scrollContainerRef.current;
@@ -1088,13 +1249,13 @@ export function ChatPane({
         void window.modus.agent.releaseRuntime(sessionId);
       }
     };
-  }, [sessionId, hub, flushQueued, clearQueued, settleSessionViewport]);
+  }, [sessionId, hub, flushQueued, clearQueued, seedEventPage, settleSessionViewport]);
 
   /* ── Conversation actions ──────────────────────────────────────────── */
 
-  // L2: no model picker, so the pane always shows / sends the CURRENT Settings default; a
-  // model stored on an old session is ignored (main enforces the same on agent:prompt).
-  const paneModel = turnModelForPane(defaultModel, session.model, models, modusDefaultModel);
+  // A saved session model stays selected across Settings/catalog changes; only a session
+  // without a saved model inherits the app default.
+  const paneModel = turnModelForPane(defaultModel, session.model);
   const activeCwd = session.cwd;
   const retryStatus = sessionStatus.type === "retry" ? sessionStatus : undefined;
   // The decision card shows only while the plan is unbuilt and not dismissed.
@@ -1205,10 +1366,13 @@ export function ChatPane({
     }
   }
   const pendingPermission = useMemo(
-    () => latestPendingPermissionRequest(agentEvents),
-    [agentEvents],
+    () => latestPendingPermissionRequest(stateAgentEvents),
+    [stateAgentEvents],
   );
-  const pendingQuestion = useMemo(() => latestPendingQuestionRequest(agentEvents), [agentEvents]);
+  const pendingQuestion = useMemo(
+    () => latestPendingQuestionRequest(stateAgentEvents),
+    [stateAgentEvents],
+  );
 
   function submitPrompt(
     message: string,
@@ -1237,8 +1401,8 @@ export function ChatPane({
       }
       return item;
     });
-    // L2: the model sent is the Settings default; main ignores it anyway and forces the
-    // current default (and that model's own thinking config) on every user turn.
+    // Main ignores the renderer's model as authority and resolves the stored session or agent
+    // selection; the payload remains advisory UI state only.
     const userMessageId = `local-user:${crypto.randomUUID()}`;
     setAgentEvents((events) =>
       appendAgentEvents(
@@ -1373,7 +1537,11 @@ export function ChatPane({
     }
     await window.modus.agent.rollback({ sessionId, userMessageId: messageId });
     clearQueued();
-    setAgentEvents(await window.modus.agent.listEvents(sessionId));
+    const page = await window.modus.agent.listEventPage(sessionId, {
+      direction: "backward",
+      includeSummary: true,
+    });
+    setAgentEvents(seedEventPage(page));
     onSessionsChanged();
     refreshStats();
     // Resend under the composer's CURRENT mode (plan/build); submitPrompt also
@@ -1427,6 +1595,10 @@ export function ChatPane({
           {promptError}
         </div>
       ) : null}
+      <ProcessStopNotices
+        notices={processStopErrors}
+        onDismiss={(processId) => updateProcessStopNotice(processStopScope, processId, undefined)}
+      />
 
       {isRunning ? (
         <div
@@ -1455,6 +1627,23 @@ export function ChatPane({
           onScroll={handleChatScroll}
           scrollRef={setChatScrollRef}
         >
+          {eventHistoryPage.hasOlder || eventHistoryPage.loadingOlder || eventHistoryPage.error ? (
+            <div className="flex justify-center px-4 pt-3">
+              <button
+                className="rounded-md border border-hairline px-2.5 py-1 text-xs text-fg-muted transition-colors hover:bg-hover hover:text-fg"
+                data-testid="chat-load-older-events"
+                disabled={eventHistoryPage.loadingOlder}
+                onClick={() => void loadOlderEventPage(true)}
+                type="button"
+              >
+                {eventHistoryPage.loadingOlder
+                  ? "Loading earlier activity…"
+                  : eventHistoryPage.error
+                    ? "Could not load earlier activity · Retry"
+                    : "Load earlier activity"}
+              </button>
+            </div>
+          ) : null}
           <Timeline
             blocks={transcriptBlocks}
             cwd={activeCwd}
@@ -1602,6 +1791,12 @@ export function ChatPane({
                               <RunningProcessBar
                                 nowMs={managedProcesses.nowMs}
                                 onStop={managedProcesses.kill}
+                                onStopError={(processId, message) =>
+                                  updateProcessStopNotice(processStopScope, processId, message)
+                                }
+                                onStopSuccess={(processId) =>
+                                  updateProcessStopNotice(processStopScope, processId, undefined)
+                                }
                                 processes={runningProcesses}
                                 {...(onOpenTerminal ? { onOpenTerminal } : {})}
                               />

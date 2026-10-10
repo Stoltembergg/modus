@@ -1,0 +1,68 @@
+name: Plugin sandbox feasibility probe (Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      authorization:
+        description: "Explicitly authorize Windows workers and scenarios by entering RUN_WINDOWS_PROBE."
+        required: true
+        type: string
+
+jobs:
+  windows-diagnostic:
+    if: github.event_name == 'workflow_dispatch' && inputs.authorization == 'RUN_WINDOWS_PROBE'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Compile and test diagnostic
+        shell: pwsh
+        run: |
+          cargo test --locked -p plugin-sandbox-probe --all-targets
+
+      - name: Capture diagnostic evidence
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force evidence | Out-Null
+          $env:OS | Out-File -Encoding utf8 evidence/os.txt
+          $env:PROCESSOR_ARCHITECTURE | Out-File -Encoding utf8 evidence/runner-architecture.txt
+          rustc -vV | Out-File -Encoding utf8 evidence/rustc.txt
+          $binaryPath = 'target/debug/plugin-sandbox-probe.exe'
+          if (Test-Path $binaryPath) {
+            Get-FileHash -Algorithm SHA256 $binaryPath | Format-List | Out-File -Encoding utf8 evidence/binary-sha256.txt
+          }
+
+      - name: Run and validate live diagnostic probe
+        if: github.event_name == 'workflow_dispatch' && success()
+        shell: pwsh
+        run: |
+          cargo run --locked -p plugin-sandbox-probe -- --probe > evidence/probe.json 2> evidence/probe.stderr
+          $probeStatus = $LASTEXITCODE
+          "probe_exit_code=$probeStatus" | Out-File -Encoding utf8 evidence/probe-exit.txt
+          if ($probeStatus -ne 0) { throw "Probe executable failed with exit code $probeStatus" }
+          $report = Get-Content evidence/probe.json -Raw | ConvertFrom-Json
+          if ($report.verdict -ne 'NO_GO' -or $report.audit_findings_closed -ne $false -or $report.plugin_bytes_received -ne $false) {
+            throw 'Probe report violated mandatory NO_GO invariants'
+          }
+          $expected = @('cpu_loop','memory_bomb','wall_clock_timeout','child_process_tree','hard_kill','reap_deadline','handle_limit','process_limit')
+          if ($report.schema_version -ne 2 -or $report.scenarios.Count -ne 8) { throw 'Expected version 2 report with exactly eight scenario results' }
+          $names = @($report.scenarios | ForEach-Object { $_.scenario })
+          if (@($names | Select-Object -Unique).Count -ne 8 -or @($expected | Where-Object { $_ -notin $names }).Count -ne 0) { throw 'Scenario results are missing or duplicated' }
+          if ($report.platform_probe_status -eq 'passed' -and @($report.scenarios | Where-Object { $_.status -ne 'passed' }).Count -ne 0) { throw 'Platform passed without all eight scenario passes' }
+          foreach ($scenario in $report.scenarios) {
+            if ($scenario.status -eq 'passed' -and (!$scenario.challenge_observed -or !$scenario.effective_policy_verified -or $scenario.enforcement -ne 'verified' -or !$scenario.enforcement_attributed -or !$scenario.worker_terminated -or !$scenario.job_empty -or !$scenario.worker_wait_completed -or !$scenario.tree_wait_completed -or $null -eq $scenario.kill_to_reap_ms -or $scenario.kill_to_reap_ms -gt 2000 -or !$scenario.launch.created_suspended -or !$scenario.launch.job_assigned_before_resume -or !$scenario.launch.membership_verified -or !$scenario.policy.effective_verified -or $null -eq $scenario.policy.configured -or $null -eq $scenario.policy.queried -or !$scenario.challenge.observed -or !$scenario.termination.requested -or !$scenario.exit.worker_wait_completed -or !$scenario.exit.tree_wait_completed -or $null -eq $scenario.exit.worker_exit_code -or $null -eq $scenario.duration_ms -or $null -eq $scenario.process_count.active_before -or $scenario.process_count.active_after -ne 0 -or !$scenario.reap.tree_wait_completed -or $null -eq $scenario.reap.stop_to_reap_ms -or $scenario.reap.stop_to_reap_ms -gt 2000 -or $null -eq $scenario.reap.kill_to_reap_ms -or $scenario.reap.kill_to_reap_ms -gt 2000)) { throw "False pass in $($scenario.scenario)" }
+           if ($scenario.scenario -eq 'child_process_tree' -and $scenario.status -eq 'passed' -and (!$scenario.child.ready -or $null -eq $scenario.child.pid -or $scenario.child.pid -eq $scenario.child.root_pid -or !$scenario.child.membership_verified -or !$scenario.child.process_handle_retained -or !$scenario.exit.child_wait_completed -or $scenario.exit.child_exit_code -ne $scenario.termination.requested_exit_code -or $scenario.exit.worker_exit_code -ne $scenario.termination.requested_exit_code -or $scenario.termination.raw_os_error -ne $null -or $scenario.process_count.active_before -ne 2 -or $scenario.reap.deadline_ms -ne 2000 -or !$scenario.reap.all_handles_closed -or !$scenario.reap.job_handle_closed -or $scenario.reap.stop_to_reap_ms -ne $scenario.stop_to_reap_ms -or $scenario.reap.kill_to_reap_ms -ne $scenario.kill_to_reap_ms -or $scenario.stop_to_reap_ms -ne $scenario.kill_to_reap_ms)) { throw 'False child_process_tree pass: missing child identity, exit, or cleanup evidence' }
+            if ($scenario.scenario -eq 'memory_bomb' -and $scenario.status -eq 'passed' -and !$scenario.rss_enforced) { throw 'memory_bomb passed without RSS enforcement' }
+          }
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plugin-sandbox-probe-windows
+          path: evidence/
+          if-no-files-found: warn
+          retention-days: 14

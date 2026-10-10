@@ -123,7 +123,7 @@ export const subagentsCreateSchema = z.object({
   scope: z.enum(["user", "workspace"]).optional(),
   name: nonEmptyString.max(64),
   description: z.string().trim().max(280),
-  model: z.string().trim().max(120).optional(),
+  model: z.string().max(120).optional(),
   readOnly: z.boolean(),
   tools: z.array(z.string().trim().min(1).max(80)).optional(),
   disallowedTools: z.array(z.string().trim().min(1).max(80)).optional(),
@@ -205,7 +205,7 @@ export const gitCheckoutSchema = z.object({
 });
 
 export const permissionDecideSchema = z.object({
-  requestId: optionalNonEmptyString,
+  requestId: nonEmptyString,
   sessionId: optionalNonEmptyString,
   action: z.enum([
     "shell.execute",

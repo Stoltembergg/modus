@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import {
   type AssistantMessage,
+  type Context,
   createAssistantMessageEventStream,
   Type,
 } from "@earendil-works/pi-ai";
@@ -17,9 +18,17 @@ import type {
 import type { BrowserWindow as BrowserWindowType } from "electron";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent, PlanRef } from "../../shared/contracts";
+import type {
+  HarnessContext,
+  HarnessHook,
+  TurnSettleInput,
+  TurnSettleOutput,
+} from "./harness/kernel/harness-hooks";
+import type { HarnessKernel } from "./harness/kernel/harness-kernel";
 
 let userData: string;
 let cwd: string;
+let fixtureRoot: string;
 const execFileAsync = promisify(execFile);
 
 const mocks = vi.hoisted(() => {
@@ -29,11 +38,12 @@ const mocks = vi.hoisted(() => {
   return {
     createAgentSession: vi.fn(),
     killManagedProcess: vi.fn(async () => true),
-    listManagedProcesses: vi.fn((query: { sessionId?: string; origin?: string }) =>
+    listManagedProcesses: vi.fn((query: { sessionId?: string; runId?: string; origin?: string }) =>
       processState.processes.filter((process) => {
-        const item = process as { sessionId?: string; origin?: string };
+        const item = process as { sessionId?: string; runId?: string; origin?: string };
         return (
           (query.sessionId === undefined || item.sessionId === query.sessionId) &&
+          (query.runId === undefined || item.runId === query.runId) &&
           (query.origin === undefined || item.origin === query.origin)
         );
       }),
@@ -46,8 +56,14 @@ const mocks = vi.hoisted(() => {
     setPiSubscriber: (next: ((event: unknown) => void) | undefined) => {
       subscriber = next;
     },
-    sessionManagerCreate: vi.fn(() => ({ kind: "create" })),
-    sessionManagerOpen: vi.fn(() => ({ kind: "open" })),
+    sessionManagerCreate: vi.fn(() => ({
+      kind: "create",
+      buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+    })),
+    sessionManagerOpen: vi.fn(() => ({
+      kind: "open",
+      buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+    })),
     settingsManagerInMemory: vi.fn(
       (_settings?: Parameters<typeof SettingsManager.inMemory>[0]) => ({}),
     ),
@@ -125,6 +141,7 @@ vi.mock("./model-service", () => ({
     thinkingLevels: ["off", "low", "medium", "high"],
   })),
   findModel: vi.fn(() => mocks.model),
+  isUsableModelId: vi.fn(() => true),
   getDefaultModel: vi.fn(() => mocks.model),
   getModelInfo: vi.fn(() => ({
     id: "mock/model",
@@ -148,20 +165,22 @@ vi.mock("./model-service", () => ({
     thinkingLevel: variant === "high" ? "high" : "off",
     variant: variant ?? "off",
   })),
-  setDefaultModel: vi.fn(),
 }));
 
 const { getDatabase } = await import("../db/database");
 const { PiSdkRuntime, activeToolNamesForSession, removeRunOutputTrackerIfOwned } = await import(
   "./pi-sdk-runtime"
 );
+const agentEventStore = await import("./agent-event-store");
+const modelService = await import("./model-service");
 const { toolRegistry } = await import("./tools/registry");
+const { registerSpillTools, RETRIEVE_SPILL_TOOL_NAME } = await import("./tools/spill-tools");
 const { deleteAgentSessionTree, setAgentSessionArchivedTree } = await import("./session-lifecycle");
 const contextPlanner = await import("../context/context-planner");
 const gitMemoryContext = await import("../git/git-service");
-const { getLatestHarnessTaskState, listAgentEvents, recordAgentEvent } = await import(
-  "./agent-event-store"
-);
+const { getLatestHarnessTaskState, getRunToolEvidence, listAgentEvents, recordAgentEvent } =
+  await import("./agent-event-store");
+const { summarizeRunQA } = await import("./harness/qa-evidence");
 const { getAgentSession, updateAgentSessionWorktree } = await import("./agent-store");
 const { getActiveAgentRun, getAgentRun, createAgentRun, updateAgentRunStatus } = await import(
   "./agent-run-store"
@@ -174,7 +193,44 @@ const { resolveAgentToolContext, setAgentToolContext } = await import("./tools/t
 const { resolveQuestionRequest } = await import("../interaction/question-broker");
 const todoToolRuntime = await import("./tools/todo-tools");
 const permissionExtension = await import("./pi-permission-extension");
+const permissionStore = await import("../permissions/permission-store");
+const permissionBroker = await import("../permissions/permission-broker");
 const hyperPlanDraftStore = await import("./harness/hyperplan-draft-store");
+const { setFeatureFlagOverrides, resetFeatureFlagOverrides } = await import(
+  "./harness/feature-flags"
+);
+const { ResponsePolicyRegistry } = await import("./harness/response");
+const { HarnessObserver } = await import("./harness/observability");
+const groupStore = await import("../groups/group-store");
+const groupTaskStore = await import("../groups/group-task-store");
+const { resolveGroupTaskEvidence } = await import("../groups/group-task-evidence");
+
+async function createRuntimeWithHarnessKernel(): Promise<{
+  runtime: InstanceType<typeof PiSdkRuntime>;
+  kernel: HarnessKernel;
+}> {
+  const { HarnessKernel: HarnessKernelClass } = await import("./harness/kernel/harness-kernel");
+  let kernel: HarnessKernel | undefined;
+  const originalRegisterHook = HarnessKernelClass.prototype.registerHook;
+  const registerHookSpy = vi
+    .spyOn(HarnessKernelClass.prototype, "registerHook")
+    .mockImplementation(function (this: HarnessKernel, hook) {
+      kernel ??= this;
+      return originalRegisterHook.call(this, hook);
+    });
+
+  let runtime: InstanceType<typeof PiSdkRuntime>;
+  try {
+    runtime = new PiSdkRuntime();
+  } finally {
+    registerHookSpy.mockRestore();
+  }
+
+  if (!kernel) {
+    throw new Error("PiSdkRuntime did not register its HarnessKernel hooks");
+  }
+  return { runtime, kernel };
+}
 
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
@@ -228,7 +284,22 @@ function createMockPiSession(overrides: Record<string, unknown> = {}): Record<st
 }
 
 /** Real PI tool registration/execution, with only the provider stream replaced. */
-async function useOfflinePiToolSessions() {
+async function useOfflinePiToolSessions(
+  offlineOptions: {
+    contextWindow?: number;
+    assistantUsageTotalTokens?: number;
+    assistantText?: string;
+    assistantTextChunks?: string[];
+    assistantStopReason?: AssistantMessage["stopReason"];
+    responseGate?: Promise<void>;
+    captureContextHandlers?: boolean;
+    onStream?: (
+      session: AgentSession,
+      context: Context,
+      contextHandlers?: Array<(event: unknown, context: unknown) => unknown>,
+    ) => void;
+  } = {},
+) {
   const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
     "@earendil-works/pi-coding-agent",
   );
@@ -237,7 +308,16 @@ async function useOfflinePiToolSessions() {
   });
   const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
   const sessions: AgentSession[] = [];
+  const contextHandlersBySession = new Map<
+    AgentSession,
+    Array<(event: unknown, context: unknown) => unknown>
+  >();
+  const deliveredSystemPrompts: Array<{ session: AgentSession; prompt: string }> = [];
+  const deliveredMessages: Array<{ session: AgentSession; messages: Context["messages"] }> = [];
   let requestedTool: string | undefined;
+  let requestedToolInput: Record<string, unknown> = {};
+  let scriptedToolCalls: Array<{ name: string; input: Record<string, unknown> }> | undefined;
+  let scriptedToolCallIndex = 0;
   mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
   mocks.settingsManagerInMemory.mockImplementation((settings) =>
     sdk.SettingsManager.inMemory(settings),
@@ -246,8 +326,38 @@ async function useOfflinePiToolSessions() {
     const loaderOptions = mocks.resourceLoaderOptions.at(-1) as ConstructorParameters<
       typeof sdk.DefaultResourceLoader
     >[0];
-    const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
+    const capturedContextHandlers: Array<(event: unknown, context: unknown) => unknown> = [];
+    const extensionFactories = offlineOptions.captureContextHandlers
+      ? loaderOptions.extensionFactories?.map(
+          (factory) =>
+            ((api: object) => {
+              const instrumentedApi = new Proxy(api, {
+                get(target, property, receiver) {
+                  if (property !== "on") return Reflect.get(target, property, receiver);
+                  const register = Reflect.get(target, property, target);
+                  return (event: string, handler: unknown, ...args: unknown[]) => {
+                    if (event === "context") {
+                      capturedContextHandlers.push(
+                        handler as (event: unknown, context: unknown) => unknown,
+                      );
+                    }
+                    return Reflect.apply(register, target, [event, handler, ...args]);
+                  };
+                },
+              });
+              return (factory as (api: object) => unknown)(instrumentedApi);
+            }) as (typeof loaderOptions.extensionFactories)[number],
+        )
+      : loaderOptions.extensionFactories;
+    const resourceLoader = new sdk.DefaultResourceLoader({
+      ...loaderOptions,
+      ...(extensionFactories ? { extensionFactories } : {}),
+    });
     await resourceLoader.reload();
+    const runtimeResourceLoader = options.resourceLoader as {
+      reload: () => Promise<void>;
+    };
+    runtimeResourceLoader.reload = () => resourceLoader.reload();
     const { session } = await sdk.createAgentSession({
       ...options,
       authStorage,
@@ -259,35 +369,140 @@ async function useOfflinePiToolSessions() {
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 100_000,
+        contextWindow: offlineOptions.contextWindow ?? 100_000,
         maxTokens: 1000,
         ...options.model,
+        ...(offlineOptions.contextWindow !== undefined
+          ? { contextWindow: offlineOptions.contextWindow }
+          : {}),
       },
     });
-    session.agent.streamFn = (model, context) => {
+    contextHandlersBySession.set(session, capturedContextHandlers);
+    session.agent.streamFn = (model, context, options) => {
+      offlineOptions.onStream?.(session, context, capturedContextHandlers);
+      deliveredSystemPrompts.push({ session, prompt: session.systemPrompt });
+      deliveredMessages.push({ session, messages: [...context.messages] });
       const stream = createAssistantMessageEventStream();
-      const toolName = context.messages.at(-1)?.role !== "toolResult" ? requestedTool : undefined;
+      const scriptedCall = scriptedToolCalls?.[scriptedToolCallIndex];
+      if (scriptedToolCalls) scriptedToolCallIndex += 1;
+      const toolName = scriptedToolCalls
+        ? scriptedCall?.name
+        : context.messages.at(-1)?.role !== "toolResult"
+          ? requestedTool
+          : undefined;
       const callTool = Boolean(toolName);
+      const stopReason = callTool ? "toolUse" : (offlineOptions.assistantStopReason ?? "stop");
+      const reportedTotalTokens = offlineOptions.assistantUsageTotalTokens ?? 2;
       const message: AssistantMessage = {
         role: "assistant",
         api: model.api,
         provider: model.provider,
         model: model.id,
         content: toolName
-          ? [{ type: "toolCall", id: crypto.randomUUID(), name: toolName, arguments: {} }]
-          : [{ type: "text", text: "Done." }],
-        stopReason: callTool ? "toolUse" : "stop",
+          ? [
+              {
+                type: "toolCall",
+                id: crypto.randomUUID(),
+                name: toolName,
+                arguments: scriptedCall?.input ?? requestedToolInput,
+              },
+            ]
+          : [{ type: "text", text: offlineOptions.assistantText ?? "Done." }],
+        stopReason,
         usage: {
-          input: 1,
+          input: Math.max(0, reportedTotalTokens - 1),
           output: 1,
           cacheRead: 0,
           cacheWrite: 0,
-          totalTokens: 2,
+          totalTokens: reportedTotalTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         },
         timestamp: Date.now(),
       };
-      stream.push({ type: "done", reason: callTool ? "toolUse" : "stop", message });
+      let terminalEventPushed = false;
+      const pushAbortedEvent = () => {
+        if (terminalEventPushed) return;
+        terminalEventPushed = true;
+        try {
+          stream.push({
+            type: "error",
+            reason: "aborted",
+            error: {
+              ...message,
+              content: [],
+              stopReason: "aborted",
+              errorMessage: "Offline stream aborted.",
+            },
+          });
+        } catch {
+          // The SDK may close this stream when the runtime cancels its session.
+        }
+      };
+      const pushResponseEvents = () => {
+        if (terminalEventPushed) return;
+        terminalEventPushed = true;
+        options?.signal?.removeEventListener("abort", pushAbortedEvent);
+        try {
+          const textBlock = message.content.find((block) => block.type === "text");
+          const responseText = textBlock?.type === "text" ? textBlock.text : "";
+          const emptyPartial: AssistantMessage = {
+            ...message,
+            content: responseText.length > 0 ? [{ type: "text", text: "" }] : [],
+            stopReason: "stop",
+          };
+          stream.push({ type: "start", partial: emptyPartial });
+
+          const splitAt = Math.ceil(responseText.length / 2);
+          const chunks =
+            offlineOptions.assistantTextChunks ??
+            [responseText.slice(0, splitAt), responseText.slice(splitAt)].filter(
+              (chunk) => chunk.length > 0,
+            );
+          let accumulatedText = "";
+          for (const chunk of chunks) {
+            accumulatedText += chunk;
+            stream.push({
+              type: "text_delta",
+              contentIndex: 0,
+              delta: chunk,
+              partial: {
+                ...message,
+                content: [{ type: "text", text: accumulatedText }],
+                stopReason: "stop",
+              },
+            });
+          }
+
+          if (stopReason === "error" || stopReason === "aborted") {
+            stream.push({
+              type: "error",
+              reason: stopReason,
+              error: {
+                ...message,
+                stopReason,
+                errorMessage: `Offline stream ${stopReason}.`,
+              },
+            });
+          } else {
+            stream.push({ type: "done", reason: stopReason, message });
+          }
+        } catch {
+          // The SDK may close this stream when the runtime cancels its session.
+        }
+      };
+      if (options?.signal?.aborted) {
+        pushAbortedEvent();
+      } else {
+        options?.signal?.addEventListener("abort", pushAbortedEvent, { once: true });
+      }
+      if (offlineOptions.responseGate) {
+        void offlineOptions.responseGate.then(() => {
+          if (options?.signal?.aborted) pushAbortedEvent();
+          else pushResponseEvents();
+        });
+      } else {
+        pushResponseEvents();
+      }
       // The installed SDK and app resolve different pi-ai patch versions.
       return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
     };
@@ -300,11 +515,33 @@ async function useOfflinePiToolSessions() {
       if (!session) throw new Error("Expected an offline PI session.");
       return session;
     },
-    requestTool: (name: string) => {
+    contextHandlersFor: (session: AgentSession) => contextHandlersBySession.get(session) ?? [],
+    systemPromptsFor: (session: AgentSession) =>
+      deliveredSystemPrompts
+        .filter((entry) => entry.session === session)
+        .map((entry) => entry.prompt),
+    messagesFor: (session: AgentSession) =>
+      deliveredMessages
+        .filter((entry) => entry.session === session)
+        .flatMap((entry) => entry.messages),
+    contextsFor: (session: AgentSession) =>
+      deliveredMessages.filter((entry) => entry.session === session).map((entry) => entry.messages),
+    requestTool: (name: string, input: Record<string, unknown> = {}) => {
       requestedTool = name;
+      requestedToolInput = input;
+      scriptedToolCalls = undefined;
+      scriptedToolCallIndex = 0;
+    },
+    requestToolSequence: (calls: Array<{ name: string; input: Record<string, unknown> }>) => {
+      requestedTool = undefined;
+      requestedToolInput = {};
+      scriptedToolCalls = calls;
+      scriptedToolCallIndex = 0;
     },
   };
 }
+
+const createOfflinePiToolSessions = useOfflinePiToolSessions;
 
 function registerOfflineMcpTool(name: string, output: string, dangerous = false): void {
   const definition: ToolDefinition = {
@@ -326,6 +563,38 @@ function registerOfflineMcpTool(name: string, output: string, dangerous = false)
   });
 }
 
+function registerOfflineRepeatGuardTool(name: string, execute: ToolDefinition["execute"]): void {
+  toolRegistry.registerTool({
+    entry: {
+      name,
+      profiles: ["chat", "plan"],
+      permission: { danger: "safe", action: "mcp.call" },
+      capabilities: ["read"],
+      ui: { verb: "Lookup" },
+    },
+    definition: {
+      name,
+      label: "Offline repeat guard fixture",
+      description: "Execute a deterministic local repeat guard fixture.",
+      parameters: Type.Object({
+        target: Type.String(),
+        options: Type.Optional(Type.Object({ mode: Type.String() })),
+      }),
+      execute,
+    },
+  });
+}
+
+function insertWorkspace(workspaceId: string): void {
+  const now = new Date().toISOString();
+  getDatabase()
+    .prepare(
+      `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
+       values (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(workspaceId, cwd, "repo", 1, now, now);
+}
+
 function insertSession(
   sessionId: string,
   workspaceId: string,
@@ -333,30 +602,28 @@ function insertSession(
   title = "session",
 ): void {
   const now = new Date().toISOString();
-  const db = getDatabase();
-  db.prepare(
-    `insert into workspaces (id, root_path, display_name, is_git_repository, last_opened_at, created_at)
-     values (?, ?, ?, ?, ?, ?)`,
-  ).run(workspaceId, cwd, "repo", 1, now, now);
-  db.prepare(
-    `insert into agent_sessions (
+  insertWorkspace(workspaceId);
+  getDatabase()
+    .prepare(
+      `insert into agent_sessions (
       id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
       created_at, updated_at
      )
      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    sessionId,
-    workspaceId,
-    title,
-    cwd,
-    "idle",
-    "pi-sdk",
-    "mock/model",
-    "old-pi-session",
-    missingSessionFile,
-    now,
-    now,
-  );
+    )
+    .run(
+      sessionId,
+      workspaceId,
+      title,
+      cwd,
+      "idle",
+      "pi-sdk",
+      "mock/model",
+      "old-pi-session",
+      missingSessionFile,
+      now,
+      now,
+    );
 }
 
 function setTaskToolContext(workspaceId: string, sessionId: string, window: unknown): void {
@@ -458,12 +725,25 @@ async function initGitRepoWithKnownEmptyScope(): Promise<void> {
 }
 
 beforeEach(async () => {
-  userData = await mkdtemp(join(tmpdir(), "modus-pi-runtime-test-"));
-  cwd = await mkdtemp(join(tmpdir(), "modus-pi-runtime-cwd-"));
+  fixtureRoot = await mkdtemp(join(tmpdir(), "modus-pi-runtime-test-"));
+  userData = join(fixtureRoot, "data");
+  cwd = join(fixtureRoot, "cwd");
+  await mkdir(userData, { recursive: true });
+  await mkdir(cwd, { recursive: true });
   await writeFile(join(cwd, "package.json"), JSON.stringify({ scripts: { test: "vitest run" } }));
   mocks.createAgentSession.mockReset();
+  vi.mocked(modelService.findModel)
+    .mockReset()
+    .mockReturnValue(mocks.model as never);
+  vi.mocked(modelService.isUsableModelId).mockReset().mockReturnValue(true);
+  vi.mocked(modelService.getDefaultModel)
+    .mockReset()
+    .mockReturnValue(mocks.model as never);
   mocks.setPiSubscriber(undefined);
-  mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({ kind: "create" }));
+  mocks.sessionManagerCreate.mockReset().mockImplementation(() => ({
+    kind: "create",
+    buildSessionContext: () => ({ messages: [], thinkingLevel: "off", model: null }),
+  }));
   mocks.sessionManagerOpen.mockClear();
   mocks.settingsManagerInMemory.mockReset().mockImplementation(() => ({}));
   mocks.resourceLoaderOptions = [];
@@ -482,11 +762,856 @@ afterEach(() => {
 });
 
 afterAll(async () => {
-  await rm(userData, { recursive: true, force: true }).catch(() => undefined);
-  await rm(cwd, { recursive: true, force: true }).catch(() => undefined);
+  await rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
 });
 
 describe("PiSdkRuntime", () => {
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+  });
+
+  it("does not expose mutable plugin control objects through the runtime instance", () => {
+    const runtime = new PiSdkRuntime();
+    const internalApis = [
+      "getCapabilityRegistry",
+      "getPluginLoader",
+      "getPluginStateStore",
+      "getPluginLifecycleService",
+      "getDependencyGraph",
+      "getPluginInstrumentation",
+      "getPluginHealthMonitor",
+      "getPluginFailureCorrelation",
+      "getPluginIsolationHost",
+      "getPluginVersionManager",
+      "getPluginSafeModeManager",
+      "getPluginRecoveryManager",
+      "getAutoRollbackManager",
+      "capabilityRegistry",
+      "pluginLoader",
+      "pluginStateStore",
+      "pluginLifecycleService",
+      "bootstrapPromise",
+      "pluginSyncPromise",
+      "harnessKernel",
+      "pluginInstrumentation",
+      "pluginHealthMonitor",
+      "pluginFailureCorrelation",
+      "pluginIsolationHost",
+      "securityAuditLogger",
+    ];
+
+    expect(internalApis.filter((key) => key in runtime)).toEqual([]);
+    expect(Object.keys(runtime).filter((key) => internalApis.includes(key))).toEqual([]);
+  });
+
+  it("connects plugin tracing to the private capability registry only when enabled", async () => {
+    const capabilityModule = await import("./harness/capability/capability-registry");
+    const setInstrumentation = vi.spyOn(
+      capabilityModule.CapabilityRegistry.prototype,
+      "setInstrumentation",
+    );
+
+    const tracingPrerequisites = {
+      MODUS_USE_KERNEL: true,
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    } as const;
+    setFeatureFlagOverrides({ ...tracingPrerequisites, MODUS_PLUGIN_TRACING: false });
+    const disabledRuntime = new PiSdkRuntime();
+    await disabledRuntime.waitForPlugins();
+    expect(setInstrumentation).not.toHaveBeenCalled();
+    await disabledRuntime.closePluginLifecycleStore();
+
+    setFeatureFlagOverrides({ ...tracingPrerequisites, MODUS_PLUGIN_TRACING: true });
+    const enabledRuntime = new PiSdkRuntime();
+    await enabledRuntime.waitForPlugins();
+    expect(setInstrumentation).toHaveBeenCalledOnce();
+    await enabledRuntime.closePluginLifecycleStore();
+  });
+
+  it("registers group mailbox tools into the Pi tool registry when enabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_GROUPS_MAILBOX: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: false,
+    });
+
+    const { kernel } = await createRuntimeWithHarnessKernel();
+
+    const registeredNames = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .map((definition) => definition.name);
+    expect(registeredNames).toContain("group_mailbox_send");
+    expect(registeredNames).toContain("group_mailbox_receive");
+    expect(registeredNames).toContain("group_mailbox_ack");
+    expect(kernel.getHooksForPhase("turn_settle").map((hook) => hook.name)).toContain(
+      "harness_group_mailbox_turn_settle",
+    );
+    const runId = `mailbox-settle-${crypto.randomUUID()}`;
+    const settled = await kernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+      "turn_settle",
+      {
+        runId,
+        completed: true,
+        hasActiveTodos: false,
+        turnTokens: 0,
+      },
+      {
+        sessionId: "mailbox-settle-session",
+        runId,
+        mode: "build",
+        state: new Map(),
+      } as HarnessContext,
+    );
+    expect(settled).toMatchObject({ settled: true, triggerContinuation: false });
+
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+    expect(
+      toolRegistry.getCustomToolDefinitions("chat").map((definition) => definition.name),
+    ).not.toContain("group_mailbox_send");
+  });
+
+  it("passes enabled mailbox definitions through Pi session assembly", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const info = await runtime.create(window, {
+      workspaceId,
+      cwd,
+      title: "Mailbox registration",
+    });
+    await runtime.ensure(window, info.id);
+
+    const options = mocks.createAgentSession.mock.calls.at(-1)?.[0] as {
+      tools: string[];
+      customTools: Array<{ name: string }>;
+    };
+    expect(options.tools).toContain("group_mailbox_receive");
+    expect(options.customTools.map(({ name }) => name)).toContain("group_mailbox_receive");
+
+    await runtime.releaseRuntime(info.id);
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+  });
+
+  it("sends, receives, and acknowledges mail through the productive Pi tool path", async () => {
+    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const senderId = `mailbox-sender-${crypto.randomUUID()}`;
+    const recipientId = `mailbox-recipient-${crypto.randomUUID()}`;
+    insertSession(senderId, workspaceId, join(userData, "sender.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox recipient', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        recipientId,
+        workspaceId,
+        cwd,
+        `pi-${recipientId}`,
+        join(userData, "recipient.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox runtime fixture",
+      workspaceId,
+      members: [{ sessionId: senderId }, { sessionId: recipientId }],
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestTool("group_mailbox_send", { to: recipientId, content: "runtime mailbox payload" });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Send the group message.",
+        sessionId: senderId,
+      });
+      const sent = messagesFor(sessionAt(0)).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
+      );
+      expect(JSON.stringify(sent?.content)).toContain("Message sent successfully");
+      const messageId = JSON.stringify(sent?.content).match(/[0-9a-f]{8}-(?:[0-9a-f-]{27})/i)?.[0];
+      expect(messageId).toBeDefined();
+      if (!messageId) throw new Error("The productive mailbox send did not return a message ID.");
+
+      requestTool("group_mailbox_receive");
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Receive the group message.",
+        sessionId: recipientId,
+      });
+      const received = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_receive",
+      );
+      expect(JSON.stringify(received?.content)).toContain("runtime mailbox payload");
+
+      requestTool("group_mailbox_ack", { message_ids: [messageId] });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Acknowledge the group message.",
+        sessionId: recipientId,
+      });
+      const acknowledged = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_ack",
+      );
+      expect(JSON.stringify(acknowledged?.content)).toContain("Acknowledged 1 message");
+
+      const mailbox = GroupMailbox.getInstance();
+      expect(mailbox.receive(recipientId, 50, group.id)).toHaveLength(0);
+    } finally {
+      await runtime.releaseRuntime(senderId);
+      await runtime.releaseRuntime(recipientId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("rejects direct mailbox recipients outside the current group through Pi", async () => {
+    const { requestTool, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const senderId = `mailbox-quota-sender-${crypto.randomUUID()}`;
+    const recipientId = `mailbox-quota-member-${crypto.randomUUID()}`;
+    const strangerId = `mailbox-quota-stranger-${crypto.randomUUID()}`;
+    insertSession(senderId, workspaceId, join(userData, "quota-sender.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox quota member', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        recipientId,
+        workspaceId,
+        cwd,
+        `pi-${recipientId}`,
+        join(userData, "quota-member.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox quota fixture",
+      workspaceId,
+      members: [{ sessionId: senderId }, { sessionId: recipientId }],
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestTool("group_mailbox_send", { to: strangerId, content: "must not be stored" });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Send to an unknown recipient.",
+        sessionId: senderId,
+      });
+
+      const result = messagesFor(sessionAt()).findLast(
+        (message) => message.role === "toolResult" && message.toolName === "group_mailbox_send",
+      );
+      expect(JSON.stringify(result?.content)).toMatch(/recipient.*member|not a member/i);
+      const rows = getDatabase()
+        .prepare("select count(*) as count from harness_group_messages where group_id = ?")
+        .get(group.id) as { count: number };
+      expect(rows.count).toBe(0);
+    } finally {
+      await runtime.releaseRuntime(senderId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("rechecks Agent Group membership before mailbox reads during an active turn", async () => {
+    const { requestToolSequence, sessionAt, messagesFor } = await useOfflinePiToolSessions();
+    const { GroupMailbox } = await import("./harness/groups/group-mailbox");
+    GroupMailbox.resetInstance();
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberId = `mailbox-revoked-member-${crypto.randomUUID()}`;
+    const secondMemberId = `mailbox-revoked-peer-${crypto.randomUUID()}`;
+    insertSession(memberId, workspaceId, join(userData, "revoked-member.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Mailbox peer', ?, 'idle', 'pi-sdk', 'mock/model', ?, ?, ?, ?)`,
+      )
+      .run(
+        secondMemberId,
+        workspaceId,
+        cwd,
+        `pi-${secondMemberId}`,
+        join(userData, "revoked-peer.jsonl"),
+        now,
+        now,
+      );
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Mailbox revoke fixture",
+      workspaceId,
+      members: [{ sessionId: memberId }, { sessionId: secondMemberId }],
+    });
+    const privateMessageId = GroupMailbox.getInstance().send({
+      groupId: group.id,
+      from: "other-session",
+      to: "*",
+      content: "private after removal",
+      revision: 1,
+    });
+
+    const revokeToolName = `revoke_mailbox_member_${crypto.randomUUID().replaceAll("-", "")}`;
+    toolRegistry.registerTool({
+      entry: {
+        name: revokeToolName,
+        profiles: ["chat"],
+        permission: { danger: "safe" },
+        capabilities: ["write"],
+        ui: { verb: "Remove group member" },
+      },
+      definition: {
+        name: revokeToolName,
+        label: "Remove group member fixture",
+        description: "Removes the current session from its fixture group.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          groupStore.removeAgentGroupMember(group.id, memberId);
+          return { content: [{ type: "text", text: "Member removed." }], details: {} };
+        },
+      },
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestToolSequence([
+        { name: revokeToolName, input: {} },
+        { name: "group_mailbox_send", input: { to: secondMemberId, content: "must not send" } },
+        { name: "group_mailbox_receive", input: {} },
+        { name: "group_mailbox_ack", input: { message_ids: [privateMessageId] } },
+      ]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Remove membership, then try to read the mailbox.",
+        sessionId: memberId,
+      });
+
+      const results = messagesFor(sessionAt()).filter((message) => message.role === "toolResult");
+      for (const toolName of ["group_mailbox_send", "group_mailbox_receive", "group_mailbox_ack"]) {
+        const result = results.findLast((message) => message.toolName === toolName);
+        expect(JSON.stringify(result?.content)).toContain(
+          "current host-assigned Agent Group membership",
+        );
+      }
+      expect(JSON.stringify(results)).not.toContain("private after removal");
+      const ackCount = getDatabase()
+        .prepare("select count(*) as count from harness_group_message_acks where message_id = ?")
+        .get(privateMessageId) as { count: number };
+      expect(ackCount.count).toBe(0);
+    } finally {
+      toolRegistry.unregisterTool(revokeToolName);
+      await runtime.releaseRuntime(memberId);
+      GroupMailbox.resetInstance();
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+      new PiSdkRuntime();
+    }
+  });
+
+  it("keeps group mailbox tools inactive for sessions outside Agent Groups", () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
+    new PiSdkRuntime();
+
+    const activeNames = activeToolNamesForSession(
+      { id: "ordinary-session", cwd, status: "idle" } as never,
+      "chat",
+    );
+
+    expect(activeNames).not.toContain("group_mailbox_send");
+    expect(activeNames).not.toContain("group_mailbox_receive");
+    expect(activeNames).not.toContain("group_mailbox_ack");
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
+  });
+
+  it("refuses a removed explicit model before creating a session", async () => {
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+
+    await expect(
+      new PiSdkRuntime().create(createWindowStub(), {
+        workspaceId,
+        cwd,
+        title: "Selected model",
+        model: "openai/removed-model",
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/removed-model");
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("uses the persisted workspace identity for permission grants across worktree cwd changes", async () => {
+    const sessionId = `permission-worktree-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const worktreeCwd = join(cwd, ".modus", "worktrees", sessionId);
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(worktreeCwd, sessionId);
+    const command = "rm -rf build-output";
+    permissionStore.recordPermissionDecision("shell.execute", command, "allow-workspace", {
+      workspaceId,
+      toolName: "bash",
+    });
+    const runtime = new PiSdkRuntime();
+    const unexpectedPrompt = vi
+      .spyOn(permissionBroker, "requestPermission")
+      .mockRejectedValue(new Error("A matching workspace grant should bypass the prompt."));
+
+    try {
+      await runtime.ensure(createWindowStub(), sessionId);
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories: Array<(api: object) => void>;
+      };
+      let toolCallHandler: ((event: unknown) => Promise<unknown>) | undefined;
+      options.extensionFactories[0]?.({
+        on(event: string, handler: unknown) {
+          if (event === "tool_call") {
+            toolCallHandler = handler as (event: unknown) => Promise<unknown>;
+          }
+        },
+      });
+
+      await expect(
+        toolCallHandler?.({
+          type: "tool_call",
+          toolCallId: "workspace-grant-call",
+          toolName: "bash",
+          input: { command },
+        }),
+      ).resolves.toBeUndefined();
+      expect(unexpectedPrompt).not.toHaveBeenCalled();
+    } finally {
+      unexpectedPrompt.mockRestore();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("refuses an unavailable model with a registry entry", async () => {
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+
+    await expect(
+      new PiSdkRuntime().create(createWindowStub(), {
+        workspaceId,
+        cwd,
+        title: "Unavailable provider",
+        model: "mock/model",
+      }),
+    ).rejects.toThrow("Selected model is unavailable: mock/model");
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("refuses a cold resume when the stored model was removed", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase()
+      .prepare("update agent_sessions set model = ? where id = ?")
+      .run("byok/removed-model", sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "byok/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      "Selected model is unavailable: byok/removed-model",
+    );
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+    const row = getDatabase()
+      .prepare("select model from agent_sessions where id = ?")
+      .get(sessionId) as { model: string };
+    expect(row.model).toBe("byok/removed-model");
+  });
+
+  it("restores the selected model from a legacy PI branch when the database model is missing", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    const selectedModel = {
+      id: "remembered-model",
+      name: "Remembered Model",
+      provider: "provider-legacy",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "provider-legacy/remembered-model"
+        ? (selectedModel as never)
+        : (mocks.model as never),
+    );
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-legacy", modelId: "remembered-model" },
+      }),
+    } as never);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await new PiSdkRuntime().ensure(createWindowStub(), sessionId);
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: selectedModel }),
+    );
+  });
+
+  it("uses a legacy PI branch selection for a prompt before consulting the default", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    const selectedModel = {
+      id: "remembered-model",
+      name: "Remembered Model",
+      provider: "provider-legacy",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "provider-legacy/remembered-model"
+        ? (selectedModel as never)
+        : (mocks.model as never),
+    );
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-legacy", modelId: "remembered-model" },
+      }),
+    } as never);
+    const session = createMockPiSession({ model: selectedModel as never });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "Continue with the saved model",
+      sessionId,
+    });
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: selectedModel }),
+    );
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a legacy PI branch model when that exact provider model is unavailable", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    vi.mocked(modelService.findModel).mockReturnValue(undefined as never);
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "provider-removed", modelId: "retired-model" },
+      }),
+    } as never);
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      "Selected model is unavailable: provider-removed/retired-model",
+    );
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("does not default a legacy session when its PI branch cannot be restored", async () => {
+    const sessionId = `legacy-session-${crypto.randomUUID()}`;
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, piSessionFile);
+    getDatabase().prepare("update agent_sessions set model = null where id = ?").run(sessionId);
+    mocks.sessionManagerOpen.mockImplementationOnce(() => {
+      throw new Error("invalid PI session file");
+    });
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+
+    await expect(new PiSdkRuntime().ensure(createWindowStub(), sessionId)).rejects.toThrow(
+      `Unable to restore the saved model selection for session ${sessionId}.`,
+    );
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("rejects a removed per-turn model before the cached session prompt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "modus/removed-model" ? undefined : (mocks.model as never),
+    );
+
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send this to another model",
+        model: "modus/removed-model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: modus/removed-model");
+
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(session.setModel).not.toHaveBeenCalled();
+    expect(window.webContents.send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        type: "runtime.error",
+        message: "Selected model is unavailable: modus/removed-model",
+      }),
+    );
+  });
+
+  it("rejects an unavailable per-turn model before the session prompt", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+
+    await expect(
+      runtime.prompt(window, {
+        context: [],
+        message: "Do not send while the selected provider is unavailable",
+        model: "mock/model",
+        sessionId,
+      }),
+    ).rejects.toThrow("Selected model is unavailable: mock/model");
+
+    expect(session.prompt).not.toHaveBeenCalled();
+    expect(session.setModel).not.toHaveBeenCalled();
+    expect(window.webContents.send).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        type: "runtime.error",
+        message: "Selected model is unavailable: mock/model",
+      }),
+    );
+  });
+
+  it("lets an explicit model replace a removed model during cold resume", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    getDatabase()
+      .prepare("update agent_sessions set model = ? where id = ?")
+      .run("openai/removed-model", sessionId);
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const getDefaultModel = vi.mocked(modelService.getDefaultModel);
+    getDefaultModel.mockClear();
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    await runtime.prompt(window, {
+      context: [],
+      message: "Use the replacement explicitly",
+      model: "mock/model",
+      sessionId,
+    });
+
+    expect(getDefaultModel).not.toHaveBeenCalled();
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+    expect(session.setModel).toHaveBeenCalledWith(mocks.model);
+    const row = getDatabase()
+      .prepare("select model from agent_sessions where id = ?")
+      .get(sessionId) as { model: string };
+    expect(row.model).toBe("mock/model");
+  });
+
+  it("waits for plugin bootstrap to settle before startup lifecycle sync", async () => {
+    let releaseBootstrap!: () => void;
+    const bootstrapGate = new Promise<void>((resolve) => {
+      releaseBootstrap = resolve;
+    });
+    const bootstrapModule = await import("./harness/plugin/bootstrap");
+    const originalBootstrap = bootstrapModule.bootstrapModusPlugins;
+    const bootstrapSpy = vi
+      .spyOn(bootstrapModule, "bootstrapModusPlugins")
+      .mockImplementation(async (...args) => {
+        await bootstrapGate;
+        return originalBootstrap(...args);
+      });
+    const lifecycleModule = await import("./harness/plugin/plugin-lifecycle-service");
+    const sync = vi.fn(async () => [] as string[]);
+    const lifecycleSpy = vi
+      .spyOn(lifecycleModule.PluginLifecycleService.prototype, "syncOnStartup")
+      .mockImplementation(sync);
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
+    try {
+      runtime = new PiSdkRuntime();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(sync).not.toHaveBeenCalled();
+
+      releaseBootstrap();
+      await runtime.waitForPlugins();
+      expect(sync).toHaveBeenCalledOnce();
+    } finally {
+      releaseBootstrap();
+      await runtime?.closePluginLifecycleStore();
+      bootstrapSpy.mockRestore();
+      lifecycleSpy.mockRestore();
+    }
+  });
+
+  it("keeps plugin code unloaded when persistent lifecycle state cannot be opened", async () => {
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
+
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
+    try {
+      await rm(userData, { recursive: true, force: true });
+      await writeFile(userData, "not a directory");
+      runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
+
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+        await rm(userData, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not use legacy plugin activation when lifecycle reconciliation is disabled", async () => {
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: false,
+    });
+
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
+    try {
+      runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+      }
+    }
+  });
+
+  it("does not let lifecycle startup activate plugins when MODUS_PLUGINS is disabled", async () => {
+    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
+    const load = vi.spyOn(PluginLoader.prototype, "load");
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: false,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
+
+    let runtime: InstanceType<typeof PiSdkRuntime> | undefined;
+    try {
+      runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
+      expect(load).not.toHaveBeenCalled();
+    } finally {
+      try {
+        await runtime?.closePluginLifecycleStore();
+      } finally {
+        load.mockRestore();
+      }
+    }
+  });
+
+  it("restrictive extension loader", async () => {
+    const sessionId = `extension-containment-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "hello",
+      sessionId,
+    });
+
+    const options = mocks.resourceLoaderOptions.at(-1) as {
+      noExtensions?: boolean;
+      additionalExtensionPaths?: unknown[];
+      cliEnabledExtensions?: unknown[];
+      extensionFactories?: unknown[];
+    };
+    expect(options.noExtensions).toBe(true);
+    expect(options.additionalExtensionPaths).toBeUndefined();
+    expect(options.cliEnabledExtensions).toBeUndefined();
+    expect(options.extensionFactories).toHaveLength(1);
+  });
+
   it.each([
     "selected",
     "original",
@@ -1537,6 +2662,7 @@ describe("PiSdkRuntime", () => {
   it("activates the group member tools only for group members; the tool context carries groupId", async () => {
     const { createAgentGroupWithMembers } = await import("../groups/group-store");
     const { GROUP_TOOL_NAMES } = await import("./tools/group-tools");
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: true });
     const member = `group-member-${crypto.randomUUID()}`;
     const loner = `group-loner-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -1572,7 +2698,12 @@ describe("PiSdkRuntime", () => {
     });
 
     expect(activeToolNamesForSession(info(member), "chat")).toEqual(
-      expect.arrayContaining([...GROUP_TOOL_NAMES]),
+      expect.arrayContaining([
+        ...GROUP_TOOL_NAMES,
+        "group_mailbox_send",
+        "group_mailbox_receive",
+        "group_mailbox_ack",
+      ]),
     );
     const getActiveToolNames = (
       runtime as unknown as {
@@ -1585,7 +2716,13 @@ describe("PiSdkRuntime", () => {
     // Plan mode keeps only the read-only ones.
     expect(
       activeToolNamesForSession(info(member), "plan").filter((name) => name.startsWith("group_")),
-    ).toEqual(["group_read_messages", "group_list_tasks", "group_get_work_state"]);
+    ).toEqual([
+      "group_read_messages",
+      "group_list_tasks",
+      "group_get_work_state",
+      "group_mailbox_receive",
+      "group_revision_check",
+    ]);
     for (const profile of ["chat", "plan"] as const) {
       expect(
         activeToolNamesForSession(info(loner), profile).filter((name) =>
@@ -1593,6 +2730,7 @@ describe("PiSdkRuntime", () => {
         ),
       ).toEqual([]);
     }
+    expect(activeToolNamesForSession(info(loner), "chat")).not.toContain("group_mailbox_send");
 
     const toolContextFor = (
       runtime as unknown as {
@@ -1607,6 +2745,8 @@ describe("PiSdkRuntime", () => {
     expect(toolContextFor({ info: info(loner), emit: vi.fn() }, window, "chat")).not.toHaveProperty(
       "groupId",
     );
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_GROUPS_MAILBOX: false });
+    new PiSdkRuntime();
   });
 
   it("adds allowlisted MCP tools only to librarian sessions selecting the sentinel", async () => {
@@ -1921,8 +3061,10 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     await initGitRepoWithKnownEmptyScope();
+    let runId = "";
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "qa-terminal-call",
@@ -2160,7 +3302,7 @@ describe("PiSdkRuntime", () => {
             .get(sessionId) as { payload_json: string }
         ).payload_json,
       ),
-    ).toMatchObject({ result: { status: "unavailable", required: true } });
+    ).toMatchObject({ result: { status: "missing", required: true } });
   });
 
   it.each([
@@ -2317,6 +3459,7 @@ describe("PiSdkRuntime", () => {
   it("records not_required for a simple run without requested checks", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const workspaceRevisionSpy = vi.spyOn(agentEventStore, "getRunWorkspaceRevision");
     mocks.createAgentSession.mockImplementationOnce(async () => ({
       session: createMockPiSession({
         prompt: vi.fn(async () => {
@@ -2347,6 +3490,7 @@ describe("PiSdkRuntime", () => {
         ).payload_json,
       ),
     ).toMatchObject({ result: { required: false, status: "not_required", evidence: [] } });
+    expect(workspaceRevisionSpy).not.toHaveBeenCalled();
   });
 
   it("does not require or retry a check explicitly negated in the Build request", async () => {
@@ -2472,7 +3616,7 @@ describe("PiSdkRuntime", () => {
     expect(prompts[1]).not.toContain(prohibited);
   });
 
-  it("marks a started check unavailable when its run is aborted before the tool ends", async () => {
+  it("marks a started check cancelled when its run is aborted before the tool ends", async () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
     let rejectPrompt: ((error: Error) => void) | undefined;
@@ -2486,9 +3630,22 @@ describe("PiSdkRuntime", () => {
       prompt: vi.fn(() => {
         mocks.emitPiEvent({
           type: "tool_execution_start",
-          toolCallId: "aborted-check-call",
+          toolCallId: "completed-tests-call",
           toolName: "terminal_run",
           args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "completed-tests-call",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "aborted-check-call",
+          toolName: "terminal_run",
+          args: { command: "tsc --noEmit" },
         });
         notifyCheckStarted?.();
         return new Promise<void>((_resolve, reject) => {
@@ -2501,7 +3658,7 @@ describe("PiSdkRuntime", () => {
     const prompt = runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
-      message: "Run tests",
+      message: "Run tests and typecheck",
       sessionId,
     });
     await checkStarted;
@@ -2516,9 +3673,590 @@ describe("PiSdkRuntime", () => {
           )
           .get(sessionId) as { payload_json: string }
       ).payload_json,
-    ) as { result: { required: boolean; status: string } };
-    expect(result.result).toMatchObject({ required: true, status: "unavailable" });
+    ) as {
+      result: {
+        required: boolean;
+        status: string;
+        evidence: Array<{ id?: string; eventId?: string; label: string; status: string }>;
+      };
+    };
+    const completedEvent = getDatabase()
+      .prepare(
+        "select id from agent_events where session_id = ? and type = 'tool.ended' and json_extract(payload_json, '$.toolCallId') = ?",
+      )
+      .get(sessionId, "completed-tests-call") as { id: string } | undefined;
+
+    expect(result.result).toMatchObject({ required: true, status: "cancelled" });
     expect(result.result.status).not.toBe("passed");
+    expect(completedEvent).toBeDefined();
+    expect(result.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Tests",
+          status: "unavailable",
+          eventId: completedEvent?.id,
+        }),
+        expect.objectContaining({ label: "Typecheck", status: "cancelled" }),
+      ]),
+    );
+    const cancelledEvidence = result.result.evidence.find((item) => item.label === "Typecheck");
+    expect(cancelledEvidence).not.toHaveProperty("eventId");
+    expect(cancelledEvidence).not.toHaveProperty("id");
+  });
+
+  it("keeps passed check results when the run is cancelled afterward", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyChecksCompleted: (() => void) | undefined;
+    const checksCompleted = new Promise<void>((resolve) => {
+      notifyChecksCompleted = resolve;
+    });
+    const abort = vi.fn(async () => rejectPrompt?.(new Error("Aborted")));
+    let runId: string | undefined;
+    const session = createMockPiSession({
+      abort,
+      prompt: vi.fn(() => {
+        runId = getActiveAgentRun(sessionId)?.id;
+        for (const [index, command] of ["npm test", "tsc --noEmit"].entries()) {
+          const toolCallId = `completed-check-${index}`;
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId,
+            toolName: "terminal_run",
+            args: { command },
+          });
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName: "terminal_run",
+            isError: false,
+            result: { details: { exitCode: 0 } },
+          });
+        }
+        notifyChecksCompleted?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and typecheck",
+      sessionId,
+    });
+
+    await checksCompleted;
+    await runtime.abort(sessionId);
+    await prompt;
+
+    const qaPayload = (
+      getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa'",
+        )
+        .get(sessionId) as { payload_json: string }
+    ).payload_json;
+    const qa = JSON.parse(qaPayload) as {
+      result: {
+        status: string;
+        evidence: Array<{ label: string; status: string; eventId?: string; id?: string }>;
+      };
+    };
+
+    expect(qa.result.status).toBe("cancelled");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Tests", status: "passed" }),
+        expect.objectContaining({ label: "Typecheck", status: "passed" }),
+      ]),
+    );
+    expect(getLatestHarnessTaskState(sessionId, runId ?? "")?.verificationStatus).toBe("unknown");
+  });
+
+  it("does not verify a passed criterion when cancellation leaves another required check unrun", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "Spec build");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "Partial cancellation",
+      overview: "Keep completed checks distinct from an aborted run.",
+      content: "# Partial cancellation",
+      todos: [
+        { id: "todo-tests", content: "Run tests", acceptanceCriterionIds: ["ac-tests"] },
+        {
+          id: "todo-typecheck",
+          content: "Run typecheck",
+          acceptanceCriterionIds: ["ac-typecheck"],
+        },
+        { id: "todo-lint", content: "Run lint", acceptanceCriterionIds: ["ac-lint"] },
+      ],
+      spec: {
+        requirements: [{ id: "req", text: "Verify each requested check." }],
+        acceptanceCriteria: [
+          {
+            id: "ac-tests",
+            requirementId: "req",
+            description: "Tests pass.",
+            todoIds: ["todo-tests"],
+            requiredCheckKinds: ["tests"],
+            status: "pending",
+          },
+          {
+            id: "ac-typecheck",
+            requirementId: "req",
+            description: "Typecheck passes.",
+            todoIds: ["todo-typecheck"],
+            requiredCheckKinds: ["typecheck"],
+            status: "pending",
+          },
+          {
+            id: "ac-lint",
+            requirementId: "req",
+            description: "Lint passes.",
+            todoIds: ["todo-lint"],
+            requiredCheckKinds: ["lint"],
+            status: "pending",
+          },
+        ],
+        assumptions: [],
+        openQuestions: [],
+      },
+    });
+    let rejectPrompt: ((error: Error) => void) | undefined;
+    let notifyCheckCompleted: (() => void) | undefined;
+    const checkCompleted = new Promise<void>((resolve) => {
+      notifyCheckCompleted = resolve;
+    });
+    let runId = "";
+    const session = createMockPiSession({
+      abort: vi.fn(async () => rejectPrompt?.(new Error("Aborted"))),
+      prompt: vi.fn(() => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "partial-cancel-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "partial-cancel-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "partial-cancel-typecheck",
+          toolName: "terminal_run",
+          args: { command: "tsc --noEmit" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "partial-cancel-typecheck",
+          toolName: "terminal_run",
+          isError: true,
+          result: { details: { exitCode: 1 } },
+        });
+        notifyCheckCompleted?.();
+        return new Promise<void>((_resolve, reject) => {
+          rejectPrompt = reject;
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Build this plan",
+      planId: plan.id,
+      sessionId,
+    });
+
+    await checkCompleted;
+    await runtime.abort(sessionId);
+    await prompt;
+
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as {
+      result: {
+        status: string;
+        evidence: Array<{ label: string; status: string }>;
+      };
+    };
+    const persistedPlan = readPlanById(join(userData, "plans"), plan.id);
+    const state = getLatestHarnessTaskState(sessionId, runId);
+
+    expect(qa.result.status).toBe("cancelled");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Tests", status: "passed" }),
+        expect.objectContaining({ label: "Typecheck", status: "failed" }),
+        expect.objectContaining({ label: "Lint", status: "missing" }),
+      ]),
+    );
+    expect(
+      persistedPlan?.spec?.acceptanceCriteria.find(({ id }) => id === "ac-tests")?.status,
+    ).toBe("blocked");
+    expect(state?.criteria).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "plan",
+          status: "unknown",
+          requiredCheckKinds: ["tests"],
+        }),
+      ]),
+    );
+  });
+
+  it("invalidates completed QA when an unallowlisted MCP tool changes source afterward", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    const baseline = (
+      await execFileAsync("git", ["rev-parse", "HEAD"], { cwd, windowsHide: true })
+    ).stdout.trim();
+    let qaBeforeMcp: ReturnType<typeof summarizeRunQA> | undefined;
+    let qaAfterMcp: ReturnType<typeof summarizeRunQA> | undefined;
+    let promptCount = 0;
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        promptCount += 1;
+        if (promptCount > 1) return;
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "mcp-stale-qa-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "mcp-stale-qa-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        const runId = getActiveAgentRun(sessionId)?.id ?? "";
+        const scopeBeforeMcp = await gitMemoryContext.getChangeStatsSinceStrict(cwd, baseline);
+        if (!scopeBeforeMcp) throw new Error("Expected a verifiable pre-MCP workspace scope.");
+        qaBeforeMcp = summarizeRunQA({
+          sessionId,
+          runId,
+          changedPaths: scopeBeforeMcp.files.map((file) => file.path),
+          requiredChecks: ["tests"],
+          events: getRunToolEvidence(sessionId, runId),
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "mcp-source-write",
+          toolName: "mcp_v1_dangerous_1_64_1_77",
+          args: { path: "mcp-changed.ts" },
+        });
+        await writeFile(join(cwd, "mcp-changed.ts"), "export const changed = true;\n");
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "mcp-source-write",
+          toolName: "mcp_v1_dangerous_1_64_1_77",
+          isError: false,
+          result: { details: {} },
+        });
+        const scopeAfterMcp = await gitMemoryContext.getChangeStatsSinceStrict(cwd, baseline);
+        if (!scopeAfterMcp) throw new Error("Expected a verifiable post-MCP workspace scope.");
+        qaAfterMcp = summarizeRunQA({
+          sessionId,
+          runId,
+          changedPaths: scopeAfterMcp.files.map((file) => file.path),
+          requiredChecks: ["tests"],
+          events: getRunToolEvidence(sessionId, runId),
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The tool updated the source." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const outcome = await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and report the result.",
+      sessionId,
+    });
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
+
+    expect(outcome.outcome).toBe("ok");
+    expect(qaBeforeMcp?.status).toBe("passed");
+    expect(qaAfterMcp?.status).toBe("missing");
+    expect(qa.result.status).toBe("missing");
+    expect(qa.result.evidence).toEqual(
+      expect.arrayContaining([expect.objectContaining({ checkName: "tests", status: "missing" })]),
+    );
+  });
+
+  it("invalidates completed QA when the workspace changes after a check without a tool event", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    let runId = "";
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "external-edit-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "external-edit-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        await writeFile(join(cwd, "edited-after-check.ts"), "export const changed = true;\n");
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The check completed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    const outcome = await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests for this change and report the result.",
+      sessionId,
+    });
+    const qa = JSON.parse(
+      (
+        getDatabase()
+          .prepare(
+            "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+          )
+          .get(sessionId) as { payload_json: string }
+      ).payload_json,
+    ) as { result: { status: string; evidence: Array<{ checkName?: string; status: string }> } };
+
+    expect(outcome.outcome).toBe("ok");
+    expect(getAgentRun(runId)?.status).toBe("completed");
+    expect(
+      listAgentEvents(sessionId).some(
+        ({ event }) => "runId" in event && event.runId === runId && event.type === "run.completed",
+      ),
+    ).toBe(true);
+    expect(qa.result).toMatchObject({
+      required: true,
+      status: "unavailable",
+      evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+    });
+  });
+
+  it("does not bind Agent Group QA to a source edit made during final fingerprint collection", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const reviewerSessionId = `reviewer-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(
+        reviewerSessionId,
+        workspaceId,
+        "Reviewer",
+        cwd,
+        join(userData, "reviewer.jsonl"),
+        now,
+        now,
+      );
+    await initGitRepoWithKnownEmptyScope();
+    const group = groupStore.createAgentGroupWithMembers({
+      name: "Verifier First QA race",
+      workspaceId,
+      members: [{ sessionId }, { sessionId: reviewerSessionId }],
+    });
+    const execution = groupStore.appendGroupMessage({
+      groupId: group.id,
+      authorKind: "user",
+      body: "Run the task checks.",
+    });
+    const task = groupStore.createGroupTask({
+      groupId: group.id,
+      title: "Keep QA tied to checked source",
+      status: "in_progress",
+      ownerSessionId: sessionId,
+      executionId: execution.id,
+      kind: "code",
+      priority: "normal",
+      dependencyIds: [],
+      criteria: [{ id: "tests", description: "Tests pass", requiredCheckKinds: ["tests"] }],
+      verificationPolicy: { mode: "required", requireReview: false },
+    });
+    const getFingerprint = gitMemoryContext.getGroupSourceFingerprint;
+    let fingerprintCalls = 0;
+    vi.spyOn(gitMemoryContext, "getGroupSourceFingerprint").mockImplementation(async (source) => {
+      fingerprintCalls += 1;
+      if (fingerprintCalls === 2) {
+        await writeFile(
+          join(cwd, "changed-during-fingerprint.ts"),
+          "export const changed = true;\n",
+        );
+      }
+      return getFingerprint(source);
+    });
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({
+          type: "tool_execution_start",
+          toolCallId: "group-tests",
+          toolName: "terminal_run",
+          args: { command: "npm test" },
+        });
+        mocks.emitPiEvent({
+          type: "tool_execution_end",
+          toolCallId: "group-tests",
+          toolName: "terminal_run",
+          isError: false,
+          result: { details: { exitCode: 0 } },
+        });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The requested test check passed." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and report the result.",
+      sessionId,
+      groupTask: {
+        taskId: task.id,
+        groupId: group.id,
+        executionId: execution.id,
+        role: "owner",
+      },
+    });
+
+    const qaRow = getDatabase()
+      .prepare(
+        "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+      )
+      .get(sessionId) as { payload_json: string };
+    const qa = JSON.parse(qaRow.payload_json) as {
+      result: { status: string; evidence: Array<{ checkName?: string; status: string }> };
+    };
+    const qaFingerprintCalls = fingerprintCalls;
+    const currentFingerprint = await getFingerprint(cwd);
+    const gate = resolveGroupTaskEvidence(groupTaskStore.getGroupTask(task.id), currentFingerprint);
+
+    expect(qaFingerprintCalls).toBe(2);
+    expect(gate.criterionOutcomes).toEqual([
+      expect.objectContaining({ criterionId: "tests", status: "missing" }),
+    ]);
+    expect(qa.result).toMatchObject({
+      status: "unavailable",
+      evidence: [expect.objectContaining({ checkName: "tests", status: "unavailable" })],
+    });
+  });
+
+  it("keeps a run cancelled when abort arrives during final workspace scope collection", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    await initGitRepoWithKnownEmptyScope();
+    const realScope = gitMemoryContext.getChangeStatsSinceStrict;
+    let notifyScopeStarted!: () => void;
+    let releaseScope!: () => void;
+    const scopeStarted = new Promise<void>((resolve) => {
+      notifyScopeStarted = resolve;
+    });
+    const scopeGate = new Promise<void>((resolve) => {
+      releaseScope = resolve;
+    });
+    let runId = "";
+    let pauseNextScope = true;
+    vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockImplementation(
+      async (workspace, base) => {
+        if (pauseNextScope) {
+          pauseNextScope = false;
+          notifyScopeStarted();
+          await scopeGate;
+        }
+        return realScope(workspace, base);
+      },
+    );
+    const session = createMockPiSession({
+      prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: "The requested work is complete." },
+        });
+      }),
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const prompt = runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Run tests and typecheck for this change.",
+      sessionId,
+    });
+
+    await scopeStarted;
+    await runtime.abort(sessionId);
+    releaseScope();
+    await prompt;
+
+    const eventTypes = listAgentEvents(sessionId).map(({ event }) => event.type);
+    const qaEvent = listAgentEvents(sessionId)
+      .map(({ event }) => event)
+      .filter((event) => event.type === "harness.qa")
+      .at(-1);
+    const run = getAgentRun(runId);
+
+    expect(run?.status).toBe("cancelled");
+    expect(eventTypes).toContain("run.cancelled");
+    expect(eventTypes).not.toContain("run.completed");
+    expect(qaEvent).toMatchObject({ type: "harness.qa", result: { status: "cancelled" } });
+    expect(getLatestHarnessTaskState(sessionId, runId)?.verificationStatus).toBe("unknown");
   });
 
   it("does not continue todos after input is queued into the current run", async () => {
@@ -4330,7 +6068,9 @@ describe("PiSdkRuntime", () => {
   });
 
   it("uses an MCP tool added after the first chat turn and preserves the live history", async () => {
-    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions({
+      assistantUsageTotalTokens: 30_000,
+    });
     const sessionId = `session-${crypto.randomUUID()}`;
     const name = "mcp_added_after_turn";
     insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
@@ -4349,6 +6089,10 @@ describe("PiSdkRuntime", () => {
       requestTool(name);
       await Promise.all([runtime.ensure(window, sessionId), runtime.ensure(window, sessionId)]);
       expect(clearTodos).not.toHaveBeenCalledWith(sessionId);
+      expect(mocks.createAgentSession).toHaveBeenLastCalledWith(
+        expect.objectContaining({ thinkingLevel: "high" }),
+      );
+      expect(sessionAt().thinkingLevel).toBe("high");
 
       await turn();
 
@@ -4514,7 +6258,19 @@ describe("PiSdkRuntime", () => {
     };
     expect(loader.cwd).toBe(moved);
     expect(loader.appendSystemPrompt.join("\n")).toContain("Worktree rule marker 4b.");
-    expect(permission).toHaveBeenCalledWith(sessionId, expect.any(Function), moved);
+    expect(permission).toHaveBeenCalledWith(
+      sessionId,
+      expect.any(Function),
+      moved,
+      expect.objectContaining({
+        beforeToolCall: expect.any(Function),
+        cancelToolCall: expect.any(Function),
+        afterToolCall: expect.any(Function),
+      }),
+      undefined,
+      expect.any(Function),
+      workspaceId,
+    );
     // Unlike releaseRuntime, the rebuild keeps the in-memory to-dos.
     expect(clearCache).not.toHaveBeenCalledWith(sessionId);
     permission.mockRestore();
@@ -4567,6 +6323,128 @@ describe("PiSdkRuntime", () => {
     expect(lastSystemPrompt()).not.toContain("Persona marker one.");
   });
 
+  it("uses the Settings default after clearing an agent model on a live session", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const previousModel = {
+      id: "previous",
+      name: "Previous model",
+      provider: "previous-provider",
+    };
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "previous-provider/previous"
+        ? (previousModel as never)
+        : modelId === "default-provider/current-default"
+          ? (defaultModel as never)
+          : (mocks.model as never),
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: "previous-provider/previous" });
+
+    const session = createMockPiSession({ model: previousModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    updateAgent(agentId, { modelId: null });
+
+    await runtime.prompt(window, {
+      context: [],
+      message: "Continue with the app default",
+      model: null,
+      sessionId,
+    });
+
+    expect(session.setModel).toHaveBeenLastCalledWith(defaultModel);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies the Settings default during restore after clearing a linked agent model", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    const findModel = vi.mocked(modelService.findModel);
+    findModel.mockImplementation((modelId) =>
+      modelId === "default-provider/current-default" ? (defaultModel as never) : undefined,
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: null });
+    getDatabase()
+      .prepare("update agent_sessions set pi_session_file = ? where id = ?")
+      .run(piSessionFile, sessionId);
+    const buildSessionContext = vi.fn(() => ({
+      messages: [{ role: "assistant" }],
+      model: { provider: "removed-provider", modelId: "retired-model" },
+    }));
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext,
+    } as never);
+    const session = createMockPiSession({ model: defaultModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    const runtime = new PiSdkRuntime();
+    const info = await runtime.ensure(createWindowStub(), sessionId, null);
+
+    expect(buildSessionContext).not.toHaveBeenCalled();
+    expect(findModel).not.toHaveBeenCalledWith("removed-provider/retired-model");
+    expect(session.setModel).toHaveBeenCalledWith(defaultModel);
+    expect(info.model).toBe("default-provider/current-default");
+    expect(getAgentSession(sessionId)?.model).toBe("default-provider/current-default");
+  });
+
+  it("uses the Settings default after clearing an agent model with a removed PI branch", async () => {
+    const { updateAgent } = await import("../agents/agents-store");
+    const { sessionId, agentId } = await agentChatSession("Use the agent model.");
+    const piSessionFile = join(userData, `${sessionId}.jsonl`);
+    await writeFile(piSessionFile, "\n");
+    const defaultModel = {
+      id: "current-default",
+      name: "Current default",
+      provider: "default-provider",
+    };
+    const findModel = vi.mocked(modelService.findModel);
+    findModel.mockImplementation((modelId) =>
+      modelId === "default-provider/current-default" ? (defaultModel as never) : undefined,
+    );
+    vi.mocked(modelService.getDefaultModel).mockReturnValue(defaultModel as never);
+    updateAgent(agentId, { modelId: null });
+    getDatabase()
+      .prepare("update agent_sessions set pi_session_file = ? where id = ?")
+      .run(piSessionFile, sessionId);
+    mocks.sessionManagerOpen.mockReturnValueOnce({
+      kind: "open",
+      buildSessionContext: () => ({
+        messages: [{ role: "assistant" }],
+        model: { provider: "removed-provider", modelId: "retired-model" },
+      }),
+    } as never);
+    const session = createMockPiSession({ model: defaultModel });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      message: "Use the current default",
+      model: null,
+      sessionId,
+    });
+
+    expect(findModel).not.toHaveBeenCalledWith("removed-provider/retired-model");
+    expect(session.setModel).toHaveBeenCalledWith(defaultModel);
+    expect(session.prompt).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses a turn in a 1:1 chat whose group is blocked (no Project), before any session work (A3)", async () => {
     const { sessionId, group } = await agentChatSession("Be terse.");
     getDatabase().prepare("update agent_groups set workspace_id = null where id = ?").run(group.id);
@@ -4607,6 +6485,112 @@ describe("PiSdkRuntime", () => {
       .prepare("select status from agent_sessions where id = ?")
       .get(childSessionId) as { status: string };
     expect(child.status).toBe("idle");
+  });
+
+  it("aborting a session stops only its own managed agent processes", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const run = createAgentRun({ sessionId, prompt: "Start managed work" });
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    await runtime.ensure(createWindowStub(), sessionId);
+    mocks.setManagedProcesses([
+      {
+        id: "owned-agent-terminal",
+        origin: "agent",
+        sessionId,
+        runId: run.id,
+        status: "running",
+      },
+      {
+        id: "older-agent-terminal",
+        origin: "agent",
+        sessionId,
+        runId: "older-run",
+        status: "running",
+      },
+      {
+        id: "other-session-terminal",
+        origin: "agent",
+        sessionId: "another-session",
+        status: "running",
+      },
+      {
+        id: "user-terminal",
+        origin: "user",
+        sessionId,
+        status: "running",
+      },
+    ]);
+
+    await runtime.abort(sessionId);
+
+    expect(mocks.listManagedProcesses).toHaveBeenCalledWith({
+      sessionId,
+      runId: run.id,
+      origin: "agent",
+    });
+    expect(mocks.killManagedProcess).toHaveBeenCalledExactlyOnceWith("owned-agent-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("older-agent-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("other-session-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("user-terminal");
+  });
+
+  it("does not abort a replacement run while waiting for the old child tree", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    const childSessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(parentSessionId, workspaceId, join(userData, "missing-parent.jsonl"), "Parent");
+    insertSubagentSession(childSessionId, parentSessionId, workspaceId);
+
+    let releaseChildAbort!: () => void;
+    const childAbort = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseChildAbort = resolve;
+        }),
+    );
+    const parentPi = createMockPiSession();
+    const childPi = createMockPiSession({ abort: childAbort });
+    mocks.createAgentSession
+      .mockImplementationOnce(async () => ({ session: parentPi }))
+      .mockImplementationOnce(async () => ({ session: childPi }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, parentSessionId);
+    await runtime.ensure(window, childSessionId);
+
+    const oldRun = createAgentRun({ sessionId: parentSessionId, prompt: "Old run" });
+    const aborting = runtime.abort(parentSessionId);
+    await vi.waitFor(() => expect(childAbort).toHaveBeenCalledOnce());
+
+    updateAgentRunStatus(oldRun.id, "completed");
+    const replacementRun = createAgentRun({ sessionId: parentSessionId, prompt: "New run" });
+    mocks.setManagedProcesses([
+      {
+        id: "old-run-process",
+        origin: "agent",
+        sessionId: parentSessionId,
+        runId: oldRun.id,
+        status: "running",
+      },
+      {
+        id: "replacement-run-process",
+        origin: "agent",
+        sessionId: parentSessionId,
+        runId: replacementRun.id,
+        status: "running",
+      },
+    ]);
+
+    releaseChildAbort();
+    await aborting;
+
+    expect(parentPi.abort).not.toHaveBeenCalled();
+    expect(getActiveAgentRun(parentSessionId)?.id).toBe(replacementRun.id);
+    expect(mocks.killManagedProcess).toHaveBeenCalledExactlyOnceWith("old-run-process");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("replacement-run-process");
   });
 
   it("records the user prompt as persisted message events before running PI", async () => {
@@ -4746,7 +6730,8 @@ describe("PiSdkRuntime", () => {
       },
     });
     mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
-    await new PiSdkRuntime().prompt(createWindowStub(), {
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
       context: [],
       delivery: "normal",
       message: "Fix a typo",
@@ -4782,9 +6767,20 @@ describe("PiSdkRuntime", () => {
       "verifying",
       "terminal",
     ]);
+
+    await runtime.releaseRuntime(sessionId);
+    expect(getLatestHarnessTaskState(sessionId, runId)).toEqual(state);
+    expect(
+      getDatabase()
+        .prepare(
+          "select count(*) as count from agent_events where session_id = ? and type = 'harness.task_state'",
+        )
+        .get(sessionId),
+    ).toEqual({ count: 4 });
   });
 
   it("rechecks QA after a restore during deferred turn-end capture", async () => {
+    await initGitRepo();
     const sessionId = `task-state-restore-race-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing-session.jsonl"));
@@ -4808,22 +6804,13 @@ describe("PiSdkRuntime", () => {
       fileCount: 0,
       truncated: false,
     });
+    const createCheckpoint = checkpointService.createCheckpoint;
     vi.spyOn(checkpointService, "createCheckpoint").mockImplementation(async (checkpointInput) => {
-      const checkpoint = {
-        id: checkpointInput.kind === "turn-end" ? "turn-end-checkpoint" : "run-checkpoint",
-        sessionId: checkpointInput.sessionId,
-        cwd: checkpointInput.cwd,
-        commitHash: "abc123",
-        kind: checkpointInput.kind ?? "auto",
-        createdAt: new Date().toISOString(),
-        ...(checkpointInput.runId ? { runId: checkpointInput.runId } : {}),
-        ...(checkpointInput.userMessageId ? { userMessageId: checkpointInput.userMessageId } : {}),
-      } as const;
       if (checkpointInput.kind === "turn-end") {
         notifyTurnEnd();
         return await turnEndGate;
       }
-      return checkpoint;
+      return await createCheckpoint(checkpointInput);
     });
     const session = createMockPiSession({
       prompt: () => {
@@ -4865,7 +6852,7 @@ describe("PiSdkRuntime", () => {
     await turnEndStarted;
     const startedRow = getDatabase()
       .prepare(
-        "select rowid from agent_events where session_id = ? and type = 'run.started' order by rowid desc limit 1",
+        "select rowid as rowid from agent_events where session_id = ? and type = 'run.started' order by rowid desc limit 1",
       )
       .get(sessionId) as { rowid: number };
     const restoreEvent = {
@@ -5700,6 +7687,36 @@ describe("PiSdkRuntime", () => {
     }
   });
 
+  it("does not substitute an unavailable explicit subagent model", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+      "Parent chat",
+    );
+    const selectedModel = "openai/removed-subagent-model";
+    vi.mocked(modelService.isUsableModelId).mockReturnValue(false);
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
+        parentSessionId,
+        task: "Audit model selection",
+        prompt: "Use only the chosen model.",
+        subagentType: "reviewer",
+        subagent: {
+          name: "reviewer",
+          body: "Review the change.",
+          model: selectedModel,
+          readOnly: true,
+        },
+      }),
+    ).rejects.toThrow(`Selected model is unavailable: ${selectedModel}`);
+
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
   it("applies configured subagent tool allow and deny lists", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -5799,6 +7816,91 @@ describe("PiSdkRuntime", () => {
     );
   });
 
+  it("rejects an unavailable explicit worktree subagent model without leaving a checkout", async () => {
+    await initGitRepo();
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    vi.mocked(modelService.findModel).mockImplementation((modelId) =>
+      modelId === "openai/removed-model" ? undefined : (mocks.model as never),
+    );
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
+        parentSessionId,
+        task: "Use the selected model",
+        prompt: "Do not switch models.",
+        subagentType: "writer",
+        subagent: {
+          name: "writer",
+          body: "Write code.",
+          model: "openai/removed-model",
+          readOnly: false,
+          isolation: "worktree",
+        },
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/removed-model");
+
+    const worktrees = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      windowsHide: true,
+    });
+    expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
+    expect(worktrees.stdout).not.toContain("modus/subagent/");
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("cleans up a worktree if the explicit subagent model becomes unavailable before creation", async () => {
+    await initGitRepo();
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    insertSession(
+      parentSessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    const selectedModel = {
+      id: "race-model",
+      name: "Race Model",
+      provider: "openai",
+    };
+    let lookups = 0;
+    vi.mocked(modelService.findModel).mockImplementation((modelId) => {
+      if (modelId !== "openai/race-model") return mocks.model as never;
+      lookups += 1;
+      return lookups === 1 ? (selectedModel as never) : undefined;
+    });
+    const runtime = new PiSdkRuntime();
+
+    await expect(
+      runtime.runSubagent(createWindowStub(), {
+        parentSessionId,
+        task: "Keep the requested model",
+        prompt: "Do not switch models.",
+        subagentType: "writer",
+        subagent: {
+          name: "writer",
+          body: "Write code.",
+          model: "openai/race-model",
+          readOnly: false,
+          isolation: "worktree",
+        },
+      }),
+    ).rejects.toThrow("Selected model is unavailable: openai/race-model");
+
+    const worktrees = await execFileAsync("git", ["worktree", "list", "--porcelain"], {
+      cwd,
+      windowsHide: true,
+    });
+    expect(lookups).toBe(2);
+    expect(worktrees.stdout).not.toContain("/.modus/worktrees/");
+    expect(worktrees.stdout).not.toContain("modus/subagent/");
+    expect(mocks.createAgentSession).not.toHaveBeenCalled();
+  });
+
   it("does not inject subagent run status into root prompts", async () => {
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const childSessionId = `session-${crypto.randomUUID()}`;
@@ -5852,9 +7954,26 @@ describe("PiSdkRuntime", () => {
   });
 
   it("aborts active subagents when the parent session is aborted", async () => {
+    await initGitRepo();
     const parentSessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(parentSessionId, workspaceId, join(userData, "missing.jsonl"), "Parent chat");
+    let releaseScope!: (
+      value: Awaited<ReturnType<typeof gitMemoryContext.getChangeStatsSinceStrict>>,
+    ) => void;
+    let notifyScopeStarted!: () => void;
+    const scopeGate = new Promise<
+      Awaited<ReturnType<typeof gitMemoryContext.getChangeStatsSinceStrict>>
+    >((resolve) => {
+      releaseScope = resolve;
+    });
+    const scopeStarted = new Promise<void>((resolve) => {
+      notifyScopeStarted = resolve;
+    });
+    vi.spyOn(gitMemoryContext, "getChangeStatsSinceStrict").mockImplementation(async () => {
+      notifyScopeStarted();
+      return await scopeGate;
+    });
     let rejectPrompt: ((error: Error) => void) | undefined;
     const childPrompt = vi.fn(
       () =>
@@ -5875,6 +7994,8 @@ describe("PiSdkRuntime", () => {
       subagentType: "worker",
     });
     await vi.waitFor(() => expect(childPrompt).toHaveBeenCalled());
+    const childRun = getActiveAgentRun(started.session.id);
+    if (!childRun) throw new Error("expected an active child run before abort");
     mocks.setManagedProcesses([
       {
         id: "app-child",
@@ -5888,15 +8009,36 @@ describe("PiSdkRuntime", () => {
     ]);
 
     await runtime.abort(parentSessionId);
+    await scopeStarted;
+    await vi.waitFor(() =>
+      expect(
+        getDatabase()
+          .prepare("select status from agent_sessions where id = ?")
+          .get(started.session.id),
+      ).toEqual({ status: "cancelled" }),
+    );
+    releaseScope({ files: [], added: 0, removed: 0, fileCount: 0, truncated: false });
+    await vi.waitFor(() => {
+      expect(getAgentRun(childRun.id)?.status).toBe("cancelled");
+      expect(
+        getDatabase()
+          .prepare("select status from agent_sessions where id = ?")
+          .get(started.session.id),
+      ).toEqual({ status: "cancelled" });
+    });
 
     expect(childAbort).toHaveBeenCalledOnce();
     expect(childPiSession.dispose).toHaveBeenCalled();
     expect(mocks.killManagedProcess).toHaveBeenCalledWith("app-child");
     expect(
-      getDatabase()
-        .prepare("select status from agent_sessions where id = ?")
-        .get(started.session.id),
-    ).toEqual({ status: "cancelled" });
+      (window.webContents.send as ReturnType<typeof vi.fn>).mock.calls.some(
+        ([, event]) =>
+          (event as AgentEvent).type === "session.status" &&
+          (event as Extract<AgentEvent, { type: "session.status" }>).sessionId ===
+            started.session.id &&
+          (event as Extract<AgentEvent, { type: "session.status" }>).status.type === "idle",
+      ),
+    ).toBe(true);
   });
 
   it("does not count completed subagents against the active subagent limit", async () => {
@@ -6167,6 +8309,7 @@ describe("PiSdkRuntime", () => {
     const sessionId = `session-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
     insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
+    await initGitRepoWithKnownEmptyScope();
     const plansRoot = join(userData, "plans");
     const plan = writePlan(plansRoot, {
       workspaceId,
@@ -6182,6 +8325,20 @@ describe("PiSdkRuntime", () => {
     mocks.createAgentSession.mockImplementationOnce(async () => ({
       session: createMockPiSession({
         prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "build-write",
+            toolName: "write",
+            args: { path: "implementation.ts", content: "export const implemented = true;\n" },
+          });
+          await writeFile(join(cwd, "implementation.ts"), "export const implemented = true;\n");
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: "build-write",
+            toolName: "write",
+            isError: false,
+            result: { details: {} },
+          });
           mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
           mocks.emitPiEvent({
             type: "message_update",
@@ -6204,7 +8361,7 @@ describe("PiSdkRuntime", () => {
       planId: plan.id,
     });
 
-    // Completed build turn → plan is built.
+    // A current run with a concrete workspace diff → plan is built.
     expect(readPlanById(plansRoot, plan.id)?.buildStatus).toBe("built");
 
     const rows = getDatabase()
@@ -6221,6 +8378,88 @@ describe("PiSdkRuntime", () => {
     });
     // Status transitions are broadcast so the Plan panel + Review card react.
     expect(rows.filter((row) => row.type === "plan.updated").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not mark an external workspace edit as built by this run", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "External edit");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "External edit",
+      overview: "Build only from run-attributed changes.",
+      content: "# External edit",
+      todos: [{ content: "Implement the change" }],
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          // The workspace changes, but this run has no successful source-write event.
+          await writeFile(join(cwd, "external-change.ts"), "export const external = true;\n");
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "Build finished." },
+          });
+        }),
+      }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: `Build the approved plan "${plan.title}".`,
+      sessionId,
+      planId: plan.id,
+    });
+
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+  });
+
+  it("does not call a completed no-change turn built and keeps optional QA not required", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"), "New chat");
+    await initGitRepoWithKnownEmptyScope();
+    const plan = writePlan(join(userData, "plans"), {
+      workspaceId,
+      sessionId,
+      title: "No change",
+      overview: "Describe the requested work.",
+      content: "# No change\n",
+      todos: [{ content: "Step one" }],
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({
+        prompt: vi.fn(async () => {
+          mocks.emitPiEvent({
+            type: "message_update",
+            message: { role: "assistant" },
+            assistantMessageEvent: { type: "text_delta", delta: "I explained the plan." },
+          });
+        }),
+      }),
+    }));
+
+    await new PiSdkRuntime().prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: `Build the approved plan "${plan.title}".`,
+      sessionId,
+      planId: plan.id,
+    });
+
+    expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("not_built");
+    const rows = getDatabase()
+      .prepare("select type, payload_json from agent_events where session_id = ?")
+      .all(sessionId) as Array<{ type: string; payload_json: string }>;
+    expect(rows.map(({ type }) => type)).toContain("run.completed");
+    const qaRow = rows.find(({ type }) => type === "harness.qa");
+    expect(JSON.parse(qaRow?.payload_json ?? "{}")).toMatchObject({
+      result: { required: false, status: "not_required" },
+    });
   });
 
   it("derives and persists checks for a todo-side-only linked criterion", async () => {
@@ -6258,8 +8497,11 @@ describe("PiSdkRuntime", () => {
         openQuestions: [],
       },
     });
+    let runId = "";
     const session = createMockPiSession({
       prompt: vi.fn(async () => {
+        runId = getActiveAgentRun(sessionId)?.id ?? "";
+        if (!runId) throw new Error("Expected an active run for workspace-bound QA evidence.");
         mocks.emitPiEvent({
           type: "tool_execution_start",
           toolCallId: "reciprocal-typecheck",
@@ -6305,13 +8547,33 @@ describe("PiSdkRuntime", () => {
     });
     const updated = readPlanById(plansRoot, plan.id);
     expect(updated?.spec?.acceptanceCriteria[0]?.status).toBe("passed");
-    expect(updated?.spec?.evidence).toEqual([
-      expect.objectContaining({
-        criterionId: "ac-reciprocal",
-        label: "Typecheck",
-        status: "passed",
-      }),
-    ]);
+    const evidence = updated?.spec?.evidence[0];
+    expect(evidence).toMatchObject({
+      criterionId: "ac-reciprocal",
+      label: "Typecheck",
+      runId,
+      status: "passed",
+    });
+    expect(evidence?.eventId).toBeTruthy();
+    const evidenceEvent = evidence?.eventId
+      ? (getDatabase()
+          .prepare("select payload_json from agent_events where id = ? and session_id = ?")
+          .get(evidence.eventId, sessionId) as { payload_json: string } | undefined)
+      : undefined;
+    expect(JSON.parse(evidenceEvent?.payload_json ?? "{}")).toMatchObject({
+      runId,
+      type: "tool.ended",
+    });
+    const currentRevision = agentEventStore.getRunWorkspaceRevision(sessionId, runId);
+    expect(currentRevision).toBe(evidence?.revision);
+
+    await writeFile(join(cwd, "changed-after-qa.ts"), "export const changed = true;\n");
+    expect(agentEventStore.getRunWorkspaceRevision(sessionId, runId)).not.toBe(evidence?.revision);
+
+    getDatabase()
+      .prepare("update agent_sessions set cwd = ? where id = ?")
+      .run(join(cwd, "another-workspace"), sessionId);
+    expect(agentEventStore.getRunWorkspaceRevision(sessionId, runId)).toBeUndefined();
   });
 
   it("harvests discoveries only for selected completed children owned by the parent", async () => {
@@ -6502,6 +8764,8 @@ describe("PiSdkRuntime", () => {
     ["only foreign-run checks pass", "foreign", "unknown"],
     ["the strict scope lookup is unavailable", "scope-unavailable", "unknown"],
     ["the strict scope result is truncated", "scope-truncated", "unknown"],
+    ["a terminal check has no exit result", "terminal-missing-exit", "unknown"],
+    ["a required terminal check times out", "terminal-timed-out", "unknown"],
   ] as const)("persists Spec Build Task State correctly when %s", async (_scenario, evidenceCase, expectedVerification) => {
     const sessionId = `task-state-spec-${crypto.randomUUID()}`;
     const workspaceId = `workspace-${crypto.randomUUID()}`;
@@ -6539,7 +8803,10 @@ describe("PiSdkRuntime", () => {
             requirementId: "req-verify",
             description: "Tests and typecheck pass.",
             todoIds: ["todo-verify"],
-            requiredCheckKinds: ["tests", "typecheck"],
+            requiredCheckKinds:
+              evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out"
+                ? ["tests"]
+                : ["tests", "typecheck"],
             status: "pending",
           },
         ],
@@ -6574,29 +8841,57 @@ describe("PiSdkRuntime", () => {
             });
           }
         }
-        const checks =
+        let checks: string[] = [];
+        if (
           evidenceCase === "all" ||
           evidenceCase === "failed" ||
           evidenceCase === "scope-unavailable" ||
           evidenceCase === "scope-truncated"
-            ? ["npm test", "tsc --noEmit"]
-            : evidenceCase === "partial"
-              ? ["npm test"]
-              : [];
+        ) {
+          checks = ["npm test", "tsc --noEmit"];
+        } else if (
+          evidenceCase === "partial" ||
+          evidenceCase === "terminal-missing-exit" ||
+          evidenceCase === "terminal-timed-out"
+        ) {
+          checks = ["npm test"];
+        }
+        if (evidenceCase === "failed") {
+          mocks.emitPiEvent({
+            type: "tool_execution_start",
+            toolCallId: "implementation-write",
+            toolName: "write",
+            args: { path: "implementation.ts", content: "export const implemented = true;\n" },
+          });
+          await writeFile(join(cwd, "implementation.ts"), "export const implemented = true;\n");
+          mocks.emitPiEvent({
+            type: "tool_execution_end",
+            toolCallId: "implementation-write",
+            toolName: "write",
+            isError: false,
+            result: { details: {} },
+          });
+        }
         checks.forEach((command, index) => {
           const isError = evidenceCase === "failed" && index === 1;
+          const toolName = "terminal_run";
           mocks.emitPiEvent({
             type: "tool_execution_start",
             toolCallId: `current-check-${index}`,
-            toolName: "terminal_run",
+            toolName,
             args: { command },
           });
           mocks.emitPiEvent({
             type: "tool_execution_end",
             toolCallId: `current-check-${index}`,
-            toolName: "terminal_run",
+            toolName,
             isError,
-            result: { details: { exitCode: isError ? 1 : 0 } },
+            result:
+              evidenceCase === "terminal-missing-exit"
+                ? { details: {} }
+                : evidenceCase === "terminal-timed-out"
+                  ? { details: { timedOut: true } }
+                  : { details: { exitCode: isError ? 1 : 0 } },
           });
         });
         mocks.emitPiEvent({
@@ -6619,13 +8914,67 @@ describe("PiSdkRuntime", () => {
     const persistedState = getLatestHarnessTaskState(sessionId, runId);
     expect(persistedState?.phase).toBe("terminal");
     expect(persistedState?.verificationStatus).toBe(expectedVerification);
+    if (evidenceCase === "failed") {
+      // Implementation and QA are separate claims: real same-run source writes
+      // establish `built`, while the failed required check remains unverified.
+      expect(readPlanById(join(userData, "plans"), plan.id)?.buildStatus).toBe("built");
+    }
     expect(persistedState?.criteria).toContainEqual(
       expect.objectContaining({
         source: "plan",
         status: expectedVerification,
-        requiredCheckKinds: ["tests", "typecheck"],
+        requiredCheckKinds:
+          evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out"
+            ? ["tests"]
+            : ["tests", "typecheck"],
       }),
     );
+    if (evidenceCase === "terminal-missing-exit" || evidenceCase === "terminal-timed-out") {
+      const qaRow = getDatabase()
+        .prepare(
+          "select payload_json from agent_events where session_id = ? and type = 'harness.qa' order by rowid desc limit 1",
+        )
+        .get(sessionId) as { payload_json: string };
+      expect(JSON.parse(qaRow.payload_json)).toMatchObject({
+        result: {
+          status: evidenceCase === "terminal-timed-out" ? "timed_out" : "unavailable",
+          reasonCode:
+            evidenceCase === "terminal-timed-out"
+              ? "required_check_timed_out"
+              : "required_check_unavailable",
+          evidence: [
+            expect.objectContaining({
+              checkName: "tests",
+              status: evidenceCase === "terminal-timed-out" ? "timed_out" : "unavailable",
+            }),
+          ],
+        },
+      });
+    }
+    if (evidenceCase === "missing") {
+      const persistedPlan = readPlanById(join(userData, "plans"), plan.id);
+      expect(persistedPlan?.spec?.evidence).toEqual([]);
+      expect(persistedPlan?.spec?.acceptanceCriteria[0]?.status).toBe("blocked");
+    }
+    if (evidenceCase === "all") {
+      if (!persistedState) throw new Error("Expected verified Task State from the runtime.");
+      recordAgentEvent({
+        type: "harness.qa",
+        sessionId,
+        runId,
+        result: {
+          required: true,
+          status: "failed",
+          reasonCode: "newer_check_failed",
+          evidence: [],
+        },
+      });
+      // A crash after persisting the new QA row but before the Task State
+      // transition must not leave the earlier verified snapshot visible.
+      expect(getLatestHarnessTaskState(sessionId, runId)).toBeUndefined();
+      recordAgentEvent({ type: "harness.task_state", sessionId, runId, state: persistedState });
+      expect(getLatestHarnessTaskState(sessionId, runId)).toBeUndefined();
+    }
   });
 
   it("derives Spec Build checks and updates linked criteria only from current QA evidence", async () => {
@@ -6758,7 +9107,6 @@ describe("PiSdkRuntime", () => {
       "ac-pass",
       "ac-fail",
       "ac-skip",
-      "ac-block",
     ]);
   });
 
@@ -7049,5 +9397,2455 @@ describe("L2: run branch snapshot + context line", () => {
     ).rejects.toThrow('A branch "deleted-branch" não existe mais');
     expect(prompt).not.toHaveBeenCalled();
     expect(getActiveAgentRun(sessionId)).toBeUndefined();
+  });
+});
+
+describe("PiSdkRuntime Phase 7 response policy wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  async function runTurnWithAssistantText(text: string): Promise<string> {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const offline = await createOfflinePiToolSessions({ assistantText: text });
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "hello",
+      sessionId,
+    });
+    const systemPrompt = offline.sessionAt().systemPrompt;
+    await runtime.releaseRuntime(sessionId);
+    return systemPrompt;
+  }
+
+  it("appends the response policy directive and evaluates the settled response when enabled", async () => {
+    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: true, MODUS_OBSERVABILITY: true });
+
+    const systemPrompt = await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6");
+
+    expect(systemPrompt).toContain('<response_policy level="standard">');
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(1);
+  });
+
+  it("omits the directive and skips evaluation when the flag is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_RESPONSE_POLICY: false });
+
+    const systemPrompt = await runTurnWithAssistantText("done");
+
+    expect(systemPrompt).not.toContain("<response_policy");
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
+  });
+});
+
+describe("PiSdkRuntime Phase 8 observability wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+    HarnessObserver.resetInstance();
+  });
+
+  function createAssistantPiSession(text: string): Record<string, unknown> {
+    return createMockPiSession({
+      prompt: vi.fn(async () => {
+        mocks.emitPiEvent({ type: "message_start", message: { role: "assistant" } });
+        mocks.emitPiEvent({
+          type: "message_update",
+          message: { role: "assistant" },
+          assistantMessageEvent: { type: "text_delta", delta: text },
+        });
+        mocks.emitPiEvent({ type: "message_end", message: { role: "assistant" } });
+      }),
+    });
+  }
+
+  async function runTurnWithAssistantText(
+    text: string,
+    options: { runtime?: InstanceType<typeof PiSdkRuntime>; sessionId?: string } = {},
+  ): Promise<string> {
+    const sessionId = options.sessionId ?? `session-${crypto.randomUUID()}`;
+    if (!getAgentSession(sessionId)) {
+      insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    }
+    const session = createAssistantPiSession(text);
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = options.runtime ?? new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "hello",
+      sessionId,
+    });
+    return sessionId;
+  }
+
+  async function runOfflinePiTurn(input: {
+    sessionId: string;
+    text: string;
+    assistantTextChunks?: string[];
+    stopReason?: AssistantMessage["stopReason"];
+  }): Promise<{ sessionId: string; systemPrompt: string }> {
+    insertSession(
+      input.sessionId,
+      `workspace-${crypto.randomUUID()}`,
+      join(userData, "missing.jsonl"),
+    );
+    const offline = await createOfflinePiToolSessions({
+      assistantText: input.text,
+      ...(input.assistantTextChunks ? { assistantTextChunks: input.assistantTextChunks } : {}),
+      ...(input.stopReason ? { assistantStopReason: input.stopReason } : {}),
+    });
+    const runtime = new PiSdkRuntime();
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Return the complete result.",
+      sessionId: input.sessionId,
+    });
+    const systemPrompt = offline.sessionAt().systemPrompt;
+    await runtime.releaseRuntime(input.sessionId);
+    return { sessionId: input.sessionId, systemPrompt };
+  }
+
+  it("records a session turn with a real duration when enabled", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true });
+
+    const sessionId = await runTurnWithAssistantText("done");
+
+    const metrics = HarnessObserver.getInstance().getSessionMetrics(sessionId);
+    expect(metrics).toBeDefined();
+    expect(metrics?.turnCount).toBeGreaterThan(0);
+    expect(metrics?.totalDurationMs).toBeGreaterThan(0);
+  });
+
+  it("records nothing when the flag is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: false });
+
+    const sessionId = await runTurnWithAssistantText("done");
+
+    expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+  });
+
+  it("evaluates a completed response without reporting an unused formatting transformation", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-integrity-${crypto.randomUUID()}`;
+    const response = [
+      "Summary: complete.",
+      "Error: the first check failed.",
+      "Warning: the second check was skipped.",
+      "Blocker: a required dependency is unavailable.",
+      "Diff: src/example.ts changed.",
+      "Evidence: check output recorded for this run.",
+    ].join("\n\n");
+    ResponsePolicyRegistry.getInstance().setSessionPolicy(sessionId, {
+      maxParagraphs: 1,
+      enforcementMode: "strict",
+    });
+
+    await runOfflinePiTurn({ sessionId, text: response });
+
+    const rows = listAgentEvents(sessionId).map(({ event }) => event);
+    const assistantMessageIds = new Set(
+      rows
+        .filter((event) => event.type === "message.started" && event.role === "assistant")
+        .map((event) => (event.type === "message.started" ? event.messageId : "")),
+    );
+    const deliveredResponse = rows
+      .filter((event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId))
+      .map((event) => (event.type === "message.delta" ? event.delta : ""))
+      .join("");
+    const responseMetrics = HarnessObserver.getInstance().snapshot().response;
+
+    expect(deliveredResponse).toBe(response);
+    expect(responseMetrics.violationsDetected).toBe(1);
+  });
+
+  it("evaluates the complete streamed assistant response across event pages", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-paged-${crypto.randomUUID()}`;
+    const paragraphs = Array.from({ length: 130 }, (_, index) => `Paragraph ${index + 1}.`);
+    const response = paragraphs.join("\n\n");
+    const chunks = paragraphs.map((paragraph, index) =>
+      index === paragraphs.length - 1 ? paragraph : `${paragraph}\n\n`,
+    );
+    ResponsePolicyRegistry.getInstance().setSessionPolicy(sessionId, {
+      maxParagraphs: 129,
+      enforcementMode: "strict",
+    });
+
+    await runOfflinePiTurn({ sessionId, text: response, assistantTextChunks: chunks });
+
+    const rows = listAgentEvents(sessionId).map(({ event }) => event);
+    const assistantMessageIds = new Set(
+      rows
+        .filter((event) => event.type === "message.started" && event.role === "assistant")
+        .map((event) => (event.type === "message.started" ? event.messageId : "")),
+    );
+    const deliveredResponse = rows
+      .filter((event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId))
+      .map((event) => (event.type === "message.delta" ? event.delta : ""))
+      .join("");
+
+    expect(deliveredResponse).toBe(response);
+    expect(HarnessObserver.getInstance().snapshot().response).toMatchObject({
+      evaluatedCount: 1,
+      violationsDetected: 1,
+    });
+  });
+
+  it("does not evaluate a partial assistant message from a failed Pi SDK turn as a final response", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-failure-${crypto.randomUUID()}`;
+    const partial = "Partial output.\n\nError: the provider stopped before completing.";
+    ResponsePolicyRegistry.getInstance().setSessionPolicy(sessionId, {
+      maxParagraphs: 1,
+      enforcementMode: "strict",
+    });
+
+    await runOfflinePiTurn({ sessionId, text: partial, stopReason: "error" });
+
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
+    expect(HarnessObserver.getInstance().snapshot().turns.failed).toBe(1);
+    expect(HarnessObserver.getInstance().snapshot().turns.cancelled).toBe(0);
+    const streamedPartial = listAgentEvents(sessionId)
+      .map(({ event }) => event)
+      .filter((event) => event.type === "message.delta")
+      .map((event) => (event.type === "message.delta" ? event.delta : ""))
+      .join("");
+    expect(streamedPartial).toContain(partial);
+    expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.failed")).toBe(true);
+  });
+
+  it("records cancellation from a pending real Pi SDK stream without evaluating partial output", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-cancelled-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    let announceStreamStarted!: () => void;
+    let resolveResponse!: () => void;
+    const streamStarted = new Promise<void>((resolve) => {
+      announceStreamStarted = resolve;
+    });
+    const responseGate = new Promise<void>((resolve) => {
+      resolveResponse = resolve;
+    });
+    const runtime = new PiSdkRuntime();
+    const { sessionAt } = await createOfflinePiToolSessions({
+      assistantText: "This output must remain partial.",
+      responseGate,
+      onStream: () => announceStreamStarted(),
+    });
+
+    try {
+      const promptTask = runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Cancel the pending response.",
+        sessionId,
+      });
+      await streamStarted;
+      await runtime.abort(sessionId);
+      resolveResponse();
+      await promptTask;
+
+      expect(sessionAt()).toBeDefined();
+      expect(HarnessObserver.getInstance().snapshot().turns).toMatchObject({
+        total: 1,
+        cancelled: 1,
+        failed: 0,
+        noResponse: 1,
+      });
+      expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.outcomes.cancelled).toBe(
+        1,
+      );
+      expect(listAgentEvents(sessionId).some(({ event }) => event.type === "run.cancelled")).toBe(
+        true,
+      );
+    } finally {
+      resolveResponse();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("counts a no-output Pi SDK turn as failed without a policy pass", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-empty-${crypto.randomUUID()}`;
+
+    await runOfflinePiTurn({ sessionId, text: "" });
+
+    expect(HarnessObserver.getInstance().snapshot().turns).toMatchObject({
+      failed: 1,
+      noResponse: 1,
+    });
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(0);
+  });
+
+  it("keeps the ResponsePolicy prompt active without enabling Observer metrics", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: false,
+    });
+    const sessionId = `response-no-observer-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).toContain('<response_policy level="standard">');
+    expect(metrics.turns.total).toBe(0);
+    expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("records Observer outcomes without enabling ResponsePolicy", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `observer-no-response-policy-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).not.toContain("<response_policy");
+    expect(metrics.turns).toMatchObject({ total: 1, completed: 1, noResponse: 0 });
+    expect(metrics.turns.providerTotalTokens).toBe(2);
+    expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("records a successful manual native compaction without inventing a run id", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const sessionId = `observer-manual-compaction-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const compact = vi.fn(async () => {
+      mocks.emitPiEvent({ type: "compaction_start", reason: "manual" });
+      mocks.emitPiEvent({
+        type: "compaction_end",
+        reason: "manual",
+        aborted: false,
+        willRetry: false,
+      });
+    });
+    mocks.createAgentSession.mockImplementationOnce(async () => ({
+      session: createMockPiSession({ compact, isIdle: true }),
+    }));
+    const runtime = new PiSdkRuntime();
+    const observer = HarnessObserver.getInstance();
+
+    try {
+      await runtime.compact(createWindowStub(), sessionId);
+
+      expect(observer.snapshot().compaction.nativeCompactionsObserved).toBe(1);
+      const nativeCompactionEvent = observer
+        .getRecentEvents()
+        .find(
+          (event) => event.type === "harness.compaction.native" && event.sessionId === sessionId,
+        );
+      expect(nativeCompactionEvent).toBeDefined();
+      expect(nativeCompactionEvent).not.toHaveProperty("runId");
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps both ResponsePolicy and Observer inactive when both flags are disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: false,
+      MODUS_OBSERVABILITY: false,
+    });
+    const sessionId = `no-response-no-observer-${crypto.randomUUID()}`;
+
+    const result = await runOfflinePiTurn({ sessionId, text: "A complete response." });
+    const metrics = HarnessObserver.getInstance().snapshot();
+
+    expect(result.systemPrompt).not.toContain("<response_policy");
+    expect(metrics.turns.total).toBe(0);
+    expect(metrics.response.evaluatedCount).toBe(0);
+  });
+
+  it("releases only one Agent Group member's temporary metrics and retains global totals", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberA = `observer-group-a-${crypto.randomUUID()}`;
+    const memberB = `observer-group-b-${crypto.randomUUID()}`;
+    const child = `observer-subagent-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const { createAgentSessionRecord } = await import("./agent-store");
+    const sessions: Array<[string, string]> = [
+      [memberA, "Member A"],
+      [memberB, "Member B"],
+      [child, "Member A child"],
+    ];
+    for (const [id, title] of sessions) {
+      createAgentSessionRecord({
+        id,
+        workspaceId,
+        title,
+        cwd,
+        piSessionFile: join(userData, `${id}.jsonl`),
+        ...(id === child ? { parentSessionId: memberA } : {}),
+      });
+    }
+    groupStore.createAgentGroupWithMembers({
+      name: "Observer lifecycle group",
+      workspaceId,
+      members: [{ sessionId: memberA }, { sessionId: memberB }],
+      leadSessionId: memberA,
+    });
+    const runtime = new PiSdkRuntime();
+    const observer = HarnessObserver.getInstance();
+    const response = "Group response complete.\n\nThe second paragraph remains intact.";
+
+    try {
+      await createOfflinePiToolSessions({ assistantText: response });
+      const window = createWindowStub();
+      // Construct the real Pi SDK sessions one at a time; run their streams
+      // concurrently below to exercise attribution under simultaneous turns.
+      for (const sessionId of [memberA, memberB, child]) {
+        await runtime.ensure(window, sessionId);
+      }
+      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberA, { maxParagraphs: 1 });
+      ResponsePolicyRegistry.getInstance().setSessionPolicy(memberB, { maxParagraphs: 10 });
+
+      await Promise.all(
+        [memberA, memberB, child].map((sessionId) =>
+          runtime.prompt(window, {
+            context: [],
+            delivery: "normal",
+            message: "Return the full group response.",
+            sessionId,
+          }),
+        ),
+      );
+      const globalTurnCount = observer.snapshot().turns.total;
+
+      expect(globalTurnCount).toBe(3);
+      expect(observer.snapshot().response.evaluatedCount).toBe(3);
+      expect(observer.snapshot().response.violationsDetected).toBe(1);
+      expect(observer.getSessionMetrics(memberA)?.policyViolations).toBe(1);
+      expect(observer.getSessionMetrics(memberB)?.policyViolations).toBe(0);
+      expect(observer.getSessionMetrics(child)?.policyViolations).toBe(0);
+      expect(observer.getSessionMetrics(memberA)?.policyEvaluations).toBe(1);
+      expect(observer.getSessionMetrics(memberB)?.policyEvaluations).toBe(1);
+      expect(observer.getSessionMetrics(child)?.policyEvaluations).toBe(1);
+      for (const sessionId of [memberA, memberB, child]) {
+        const events = listAgentEvents(sessionId).map(({ event }) => event);
+        const assistantMessageIds = new Set(
+          events
+            .filter((event) => event.type === "message.started" && event.role === "assistant")
+            .map((event) => (event.type === "message.started" ? event.messageId : "")),
+        );
+        const responseDeltas = events
+          .filter(
+            (event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId),
+          )
+          .map((event) => (event.type === "message.delta" ? event.delta : ""))
+          .join("");
+        expect(responseDeltas).toBe(response);
+      }
+      const responseEvents = observer
+        .getRecentEvents(50)
+        .filter((event) => event.type === "harness.response.evaluated");
+      expect(responseEvents).toHaveLength(3);
+      expect(responseEvents.map((event) => event.sessionId).sort()).toEqual(
+        [memberA, memberB, child].sort(),
+      );
+      expect(responseEvents.every((event) => Boolean(event.runId))).toBe(true);
+      expect(observer.getSessionMetrics(memberA)).toBeDefined();
+      expect(observer.getSessionMetrics(memberB)).toBeDefined();
+      expect(observer.getSessionMetrics(child)).toBeDefined();
+
+      await runtime.releaseRuntime(memberA);
+
+      expect(observer.getSessionMetrics(memberA)).toBeUndefined();
+      expect(observer.getSessionMetrics(memberB)).toBeDefined();
+      expect(observer.getSessionMetrics(child)).toBeDefined();
+      expect(observer.snapshot().turns.total).toBe(globalTurnCount);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberA)).toBe(false);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === memberB)).toBe(true);
+      expect(observer.getRecentEvents(20).some((event) => event.sessionId === child)).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(memberA);
+      await runtime.releaseRuntime(memberB);
+      await runtime.releaseRuntime(child);
+    }
+  });
+
+  it("starts a fresh observer lifetime when the same session is recreated", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const runtime = new PiSdkRuntime();
+    const sessionId = `observer-recreated-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+
+    try {
+      await createOfflinePiToolSessions({ assistantText: "First turn." });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "First turn.",
+        sessionId,
+      });
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+
+      await runtime.releaseRuntime(sessionId);
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+
+      await createOfflinePiToolSessions({ assistantText: "Second turn." });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Second turn.",
+        sessionId,
+      });
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+      expect(HarnessObserver.getInstance().snapshot().turns.total).toBe(2);
+      const deltas = listAgentEvents(sessionId)
+        .map(({ event }) => event)
+        .filter((event) => event.type === "message.delta")
+        .map((event) => (event.type === "message.delta" ? event.delta : ""));
+      expect(deltas.join(" ")).toContain("First turn.");
+      expect(deltas.join(" ")).toContain("Second turn.");
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("discards a pending stale turn-settle hook after release and recreation", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const { runtime, kernel } = await createRuntimeWithHarnessKernel();
+    const sessionId = `observer-pending-${crypto.randomUUID()}`;
+    let notifyPending!: () => void;
+    let resumePending!: () => void;
+    const pendingStarted = new Promise<void>((resolve) => {
+      notifyPending = resolve;
+    });
+    const pendingGate = new Promise<void>((resolve) => {
+      resumePending = resolve;
+    });
+    let shouldPause = true;
+    const laterHook = vi.fn();
+    kernel.registerHook({
+      name: "test-pending-session-release",
+      phase: "turn_settle",
+      priority: 50,
+      isCritical: false,
+      execute: async (input) => {
+        if (shouldPause) {
+          shouldPause = false;
+          notifyPending();
+          await pendingGate;
+        }
+        return input;
+      },
+    });
+    kernel.registerHook({
+      name: "test-session-release-later-hook",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input) => {
+        laterHook();
+        return input;
+      },
+    });
+
+    try {
+      const oldTurn = runTurnWithAssistantText("Old turn.", { runtime, sessionId });
+      await pendingStarted;
+      await runtime.releaseRuntime(sessionId);
+
+      mocks.createAgentSession.mockImplementationOnce(async () => ({
+        session: createAssistantPiSession("New turn."),
+      }));
+      await runtime.ensure(createWindowStub(), sessionId);
+      resumePending();
+      await oldTurn;
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+      expect(laterHook).not.toHaveBeenCalled();
+
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "New turn.",
+        sessionId,
+      });
+
+      expect(laterHook).toHaveBeenCalledTimes(1);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+    } finally {
+      resumePending();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("invalidates pending turn-settle hooks on cancellation and starts a fresh observer lifetime", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+    const { runtime, kernel } = await createRuntimeWithHarnessKernel();
+    const sessionId = `observer-cancelled-${crypto.randomUUID()}`;
+    let notifyPending!: () => void;
+    let resumePending!: () => void;
+    const pendingStarted = new Promise<void>((resolve) => {
+      notifyPending = resolve;
+    });
+    const pendingGate = new Promise<void>((resolve) => {
+      resumePending = resolve;
+    });
+    let shouldPause = true;
+    const laterHook = vi.fn();
+    kernel.registerHook({
+      name: "test-pending-session-cancel",
+      phase: "turn_settle",
+      priority: 50,
+      isCritical: false,
+      execute: async (input) => {
+        if (shouldPause) {
+          shouldPause = false;
+          notifyPending();
+          await pendingGate;
+        }
+        return input;
+      },
+    });
+    kernel.registerHook({
+      name: "test-session-cancel-later-hook",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input) => {
+        laterHook();
+        return input;
+      },
+    });
+
+    try {
+      const oldTurn = runTurnWithAssistantText("Cancelled turn.", { runtime, sessionId });
+      await pendingStarted;
+      await runtime.abort(sessionId);
+      resumePending();
+      await oldTurn;
+
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)).toBeUndefined();
+      expect(laterHook).not.toHaveBeenCalled();
+
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        delivery: "normal",
+        message: "Continue after cancellation.",
+        sessionId,
+      });
+
+      expect(laterHook).toHaveBeenCalledTimes(1);
+      expect(HarnessObserver.getInstance().getSessionMetrics(sessionId)?.turnCount).toBe(1);
+    } finally {
+      resumePending();
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("records response evaluations once into the observer end to end", async () => {
+    setFeatureFlagOverrides({ MODUS_OBSERVABILITY: true, MODUS_RESPONSE_POLICY: true });
+
+    const workspaceId = `response-policy-${crypto.randomUUID()}`;
+    const sessionA = `response-policy-a-${crypto.randomUUID()}`;
+    const sessionB = `response-policy-b-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const { createAgentSessionRecord } = await import("./agent-store");
+    const sessions: Array<[string, string]> = [
+      [sessionA, "Response policy A"],
+      [sessionB, "Response policy B"],
+    ];
+    for (const [id, title] of sessions) {
+      createAgentSessionRecord({
+        id,
+        workspaceId,
+        title,
+        cwd,
+        piSessionFile: join(userData, `${id}.jsonl`),
+      });
+    }
+    const runtime = new PiSdkRuntime();
+    await runTurnWithAssistantText("P1\n\nP2\n\nP3\n\nP4\n\nP5\n\nP6", {
+      runtime,
+      sessionId: sessionA,
+    });
+    await runTurnWithAssistantText("Q1\n\nQ2\n\nQ3\n\nQ4\n\nQ5\n\nQ6", {
+      runtime,
+      sessionId: sessionB,
+    });
+
+    expect(HarnessObserver.getInstance().snapshot().response.evaluatedCount).toBe(2);
+    expect(HarnessObserver.getInstance().snapshot().response.violationsDetected).toBeGreaterThan(0);
+    expect(
+      HarnessObserver.getInstance().getSessionMetrics(sessionA)?.policyViolations,
+    ).toBeGreaterThan(0);
+    expect(
+      HarnessObserver.getInstance().getSessionMetrics(sessionB)?.policyViolations,
+    ).toBeGreaterThan(0);
+  });
+
+  it("attributes interleaved policy outcomes to their owning runtime sessions", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_OBSERVABILITY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    const observer = HarnessObserver.getInstance();
+    const responsePolicyRegistry = ResponsePolicyRegistry.getInstance();
+    responsePolicyRegistry.setSessionPolicy("policy-session-a", {
+      maxParagraphs: 1,
+      enforcementMode: "strict",
+    });
+    responsePolicyRegistry.setSessionPolicy("policy-session-b", {
+      maxParagraphs: 5,
+      enforcementMode: "strict",
+    });
+
+    const { kernel } = await createRuntimeWithHarnessKernel();
+    let arrivals = 0;
+    let releaseObservers!: () => void;
+    const bothEvaluated = new Promise<void>((resolve) => {
+      releaseObservers = resolve;
+    });
+    const interleaveHook: HarnessHook<TurnSettleInput, TurnSettleOutput> = {
+      name: "test-response-policy-observer-interleave",
+      phase: "turn_settle",
+      priority: 45,
+      isCritical: false,
+      execute: async (input) => {
+        arrivals++;
+        if (arrivals === 2) releaseObservers();
+        await bothEvaluated;
+        return { settled: true, triggerContinuation: false };
+      },
+    };
+    kernel.registerHook(interleaveHook);
+    const observedEvaluations: Array<{
+      sessionId: string;
+      evaluation: unknown;
+      observed: unknown;
+    }> = [];
+    kernel.registerHook({
+      name: "test-capture-response-policy-observation",
+      phase: "turn_settle",
+      priority: 60,
+      isCritical: false,
+      execute: (input, context) => {
+        observedEvaluations.push({
+          sessionId: context.sessionId,
+          evaluation: context.state.get("harness.response_policy_evaluation"),
+          observed: context.state.get("harness.response_policy_observed"),
+        });
+        return input;
+      },
+    });
+
+    const contextFor = (sessionId: string, runId: string, response: string): HarnessContext => {
+      const sessionToken = observer.beginSession(sessionId);
+      return {
+        sessionId,
+        runId,
+        sessionToken,
+        isCurrent: () => observer.isSessionCurrent(sessionId, sessionToken),
+        workspaceId: `workspace-${sessionId}`,
+        cwd,
+        mode: "build",
+        state: new Map([["harness.assistant_response", response]]),
+      };
+    };
+    const contexts = [
+      contextFor("policy-session-a", "policy-run-a", "P1\n\nP2\n\nP3"),
+      contextFor("policy-session-b", "policy-run-b", "Q1\n\nQ2\n\nQ3"),
+    ];
+
+    await Promise.all(
+      contexts.map((context) =>
+        kernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+          "turn_settle",
+          {
+            runId: context.runId,
+            completed: true,
+            hasActiveTodos: false,
+            turnTokens: 0,
+          },
+          context,
+        ),
+      ),
+    );
+
+    expect(observedEvaluations).toEqual(
+      expect.arrayContaining([
+        {
+          sessionId: "policy-session-a",
+          evaluation: expect.objectContaining({ runId: "policy-run-a", violated: true }),
+          observed: true,
+        },
+        {
+          sessionId: "policy-session-b",
+          evaluation: expect.objectContaining({ runId: "policy-run-b", violated: false }),
+          observed: true,
+        },
+      ]),
+    );
+    expect(observer.snapshot().response.violationsDetected).toBe(1);
+    expect(observer.snapshot().response.evaluatedCount).toBe(2);
+    expect(observer.getSessionMetrics("policy-session-a")?.policyViolations).toBe(1);
+    expect(observer.getSessionMetrics("policy-session-b")?.policyViolations).toBe(0);
+  });
+});
+
+describe("PiSdkRuntime PromptRegistry production wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    ResponsePolicyRegistry.resetInstance();
+  });
+
+  async function createSession(
+    runtime: InstanceType<typeof PiSdkRuntime>,
+    sessionId = `prompt-registry-${crypto.randomUUID()}`,
+  ) {
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    return { sessionId, runtime };
+  }
+
+  it("assembles current Modus instructions through a session registry and sends that exact prompt to Pi", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    mocks.globalGuidance = "<global_guidance>registry global marker</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "registry workspace marker", "utf8");
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Use the current project instructions.",
+      sessionId,
+    });
+
+    const piSession = sessionAt();
+    const deliveredPrompt = systemPromptsFor(piSession).at(-1);
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          {
+            promptRegistry?: {
+              assemblePrompt(sessionId: string): Promise<{ prompt: string }>;
+              getAllSections(): Array<{ id: string }>;
+            };
+          }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    const assembly = await registry?.assemblePrompt(sessionId);
+
+    expect(deliveredPrompt).toBe(assembly?.prompt);
+    expect(deliveredPrompt).toContain("registry global marker");
+    expect(deliveredPrompt).toContain("registry workspace marker");
+    expect(deliveredPrompt?.match(/registry workspace marker/g)).toHaveLength(1);
+    // Pi already includes AGENTS.md in its base prompt, so the registry avoids
+    // registering a duplicate workspace_rules section for the same content.
+    expect(registry?.getAllSections().map((section) => section.id)).toEqual(
+      expect.arrayContaining(["pi_sdk_system_prompt", "global_guidance"]),
+    );
+    expect(registry?.getAllSections().map((section) => section.id)).not.toEqual(
+      expect.arrayContaining(["persona", "rules", "skills", "memory", "context", "policy"]),
+    );
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("chains ResponsePolicy after Registry exactly once in the real Pi SDK prompt", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Check prompt hook composition.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    expect(deliveredPrompt.match(/<response_policy level="standard">/g)).toHaveLength(1);
+    expect(deliveredPrompt).toContain("You are an expert coding assistant operating inside pi");
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          { promptRegistry?: { assemblePrompt(sessionId: string): Promise<{ prompt: string }> } }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registryAssembly = await runtimeSession?.promptRegistry?.assemblePrompt(sessionId);
+    const { DEFAULT_RESPONSE_LEVEL, RESPONSE_POLICY_PROMPTS } = await import(
+      "./harness/response/response-policy"
+    );
+    expect(registryAssembly).toBeDefined();
+    expect(deliveredPrompt).toBe(
+      `${registryAssembly?.prompt}\n\n${RESPONSE_POLICY_PROMPTS[DEFAULT_RESPONSE_LEVEL]}`,
+    );
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("refreshes global and project instructions between turns without duplicating Pi context files", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    mocks.globalGuidance = "<global_guidance>global version one</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "workspace version one", "utf8");
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+    const window = createWindowStub();
+
+    const turn = (message: string) =>
+      runtime.prompt(window, { context: [], delivery: "normal", message, sessionId });
+    await turn("first prompt");
+    const firstSession = sessionAt();
+    expect(systemPromptsFor(firstSession).at(-1)).toContain("global version one");
+    expect(systemPromptsFor(firstSession).at(-1)).toContain("workspace version one");
+    const runtimeSessions = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          {
+            promptRegistry?: {
+              getSection(id: string): { fingerprint: string } | undefined;
+              getChangedSections(sessionId: string): Array<{ id: string }>;
+            };
+          }
+        >;
+      }
+    ).sessions;
+    const firstRegistry = runtimeSessions.get(sessionId)?.promptRegistry;
+    const firstGlobalFingerprint = firstRegistry?.getSection("global_guidance")?.fingerprint;
+    expect(firstRegistry?.getChangedSections(sessionId)).toEqual([]);
+
+    mocks.globalGuidance = "<global_guidance>global version two</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "workspace version two", "utf8");
+    await turn("second prompt");
+    const currentSession = sessionAt();
+    const currentPrompt = systemPromptsFor(currentSession).at(-1) ?? "";
+
+    expect(currentPrompt).toContain("global version two");
+    expect(currentPrompt).toContain("workspace version two");
+    expect(currentPrompt).not.toContain("global version one");
+    expect(currentPrompt).not.toContain("workspace version one");
+    expect(currentPrompt.match(/workspace version two/g)).toHaveLength(1);
+    const currentRegistry = runtimeSessions.get(sessionId)?.promptRegistry;
+    expect(currentRegistry).toBe(firstRegistry);
+    expect(currentRegistry?.getSection("global_guidance")?.fingerprint).not.toBe(
+      firstGlobalFingerprint,
+    );
+    expect(currentRegistry?.getChangedSections(sessionId)).toEqual([]);
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("keeps the existing Pi system prompt when PromptRegistry is disabled", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: false,
+      MODUS_RESPONSE_POLICY: false,
+    });
+    mocks.globalGuidance = "<global_guidance>legacy global marker</global_guidance>";
+    await writeFile(join(cwd, "AGENTS.md"), "legacy workspace marker", "utf8");
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const { sessionId } = await createSession(runtime);
+
+    await runtime.prompt(createWindowStub(), {
+      context: [],
+      delivery: "normal",
+      message: "Keep the legacy prompt path.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: unknown }>;
+      }
+    ).sessions.get(sessionId);
+    expect(runtimeSession?.promptRegistry).toBeUndefined();
+    expect(deliveredPrompt).toContain("legacy global marker");
+    expect(deliveredPrompt).toContain("legacy workspace marker");
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("keeps all resolved Modus instructions when PromptRegistry assembly fails", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_PROMPT_REGISTRY: true,
+      MODUS_RESPONSE_POLICY: true,
+    });
+    mocks.globalGuidance = "<global_guidance>fallback global marker</global_guidance>";
+    const sessionId = `prompt-registry-fallback-${crypto.randomUUID()}`;
+    const workspaceId = `prompt-registry-fallback-workspace-${crypto.randomUUID()}`;
+    insertSession(sessionId, workspaceId, join(userData, "missing-fallback.jsonl"));
+    await writeFile(join(cwd, "AGENTS.md"), "fallback workspace marker", "utf8");
+    const { createAgent } = await import("../agents/agents-store");
+    const agent = createAgent({
+      name: `Prompt fallback ${crypto.randomUUID()}`,
+      role: "Builder",
+      instructions: "fallback persona marker",
+    });
+    getDatabase()
+      .prepare("update agent_sessions set agent_id = ?, kind = 'chat' where id = ?")
+      .run(agent.id, sessionId);
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, sessionId);
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<
+          string,
+          {
+            promptRegistry?: {
+              assemblePrompt: (id: string, options?: unknown) => Promise<unknown>;
+            };
+          }
+        >;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    if (!registry) throw new Error("Expected a session-owned PromptRegistry.");
+    vi.spyOn(registry, "assemblePrompt").mockRejectedValue(
+      new Error("registry assembly unavailable"),
+    );
+
+    await runtime.prompt(window, {
+      context: [],
+      delivery: "normal",
+      message: "Keep required instructions during registry failure.",
+      sessionId,
+    });
+
+    const deliveredPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    expect(deliveredPrompt).toContain("fallback global marker");
+    expect(deliveredPrompt).toContain("fallback workspace marker");
+    expect(deliveredPrompt).toContain("fallback persona marker");
+    expect(deliveredPrompt.match(/<response_policy level="standard">/g)).toHaveLength(1);
+    await runtime.releaseRuntime(sessionId);
+  });
+
+  it("isolates Agent Group member registries and clears one when that session is recreated", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const { createGroupWithNewAgents, updateAgent } = await import("../agents/agents-store");
+    const workspaceId = `prompt-registry-group-${crypto.randomUUID()}`;
+    insertWorkspace(workspaceId);
+    const group = createGroupWithNewAgents({
+      name: `Prompt Registry Group ${crypto.randomUUID()}`,
+      workspaceId,
+      members: [
+        {
+          name: "Registry A",
+          role: "Builder",
+          instructions: "Member A persona marker.",
+          modelId: "mock/model",
+        },
+        {
+          name: "Registry B",
+          role: "Reviewer",
+          instructions: "Member B persona marker.",
+          modelId: "mock/model",
+        },
+      ],
+    });
+    const firstSessionId = `prompt-registry-member-a-${crypto.randomUUID()}`;
+    const secondSessionId = `prompt-registry-member-b-${crypto.randomUUID()}`;
+    const insertGroupMemberSession = (sessionId: string, agentId: string, title: string) => {
+      const now = new Date().toISOString();
+      getDatabase()
+        .prepare(
+          `insert into agent_sessions (
+            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+            agent_id, kind, created_at, updated_at
+          ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sessionId,
+          workspaceId,
+          title,
+          cwd,
+          "idle",
+          "pi-sdk",
+          "mock/model",
+          null,
+          join(userData, `${sessionId}.jsonl`),
+          agentId,
+          "chat",
+          now,
+          now,
+        );
+    };
+    insertGroupMemberSession(firstSessionId, group.members[0]?.agentId ?? "", "Registry A");
+    insertGroupMemberSession(secondSessionId, group.members[1]?.agentId ?? "", "Registry B");
+
+    const { sessionAt, systemPromptsFor } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const promptMember = (sessionId: string) =>
+      runtime.prompt(window, {
+        context: [],
+        delivery: "normal",
+        message: "Use this member's instructions.",
+        sessionId,
+      });
+    await promptMember(firstSessionId);
+    const firstPiSession = sessionAt();
+    const firstPrompt = systemPromptsFor(firstPiSession).at(-1) ?? "";
+    await promptMember(secondSessionId);
+    const secondPiSession = sessionAt();
+    const secondPrompt = systemPromptsFor(secondPiSession).at(-1) ?? "";
+    const runtimeSessions = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: object }>;
+      }
+    ).sessions;
+    const firstRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    const secondRegistry = runtimeSessions.get(secondSessionId)?.promptRegistry;
+
+    expect(firstRegistry).toBeDefined();
+    expect(secondRegistry).toBeDefined();
+    expect(firstRegistry).not.toBe(secondRegistry);
+    expect(firstPrompt).toContain("Member A persona marker.");
+    expect(firstPrompt).not.toContain("Member B persona marker.");
+    expect(secondPrompt).toContain("Member B persona marker.");
+    expect(secondPrompt).not.toContain("Member A persona marker.");
+
+    const firstAgentId = group.members[0]?.agentId ?? "";
+    updateAgent(firstAgentId, { instructions: "Member A persona updated during the session." });
+    await promptMember(firstSessionId);
+    const updatedPrompt = systemPromptsFor(sessionAt()).at(-1) ?? "";
+    const updatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    expect(updatedPrompt).toContain("Member A persona updated during the session.");
+    expect(updatedPrompt).not.toContain("Member A persona marker.");
+    expect(updatedRegistry).toBeDefined();
+    expect(updatedRegistry).not.toBe(firstRegistry);
+
+    await runtime.releaseRuntime(firstSessionId);
+    await promptMember(firstSessionId);
+    const recreatedRegistry = runtimeSessions.get(firstSessionId)?.promptRegistry;
+    expect(recreatedRegistry).toBeDefined();
+    expect(recreatedRegistry).not.toBe(updatedRegistry);
+    await runtime.releaseRuntime(firstSessionId);
+    await runtime.releaseRuntime(secondSessionId);
+  });
+
+  it("discards a pending registry callback when its session is released", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_PROMPT_REGISTRY: true });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const { sessionId } = await createSession(runtime);
+    await runtime.ensure(window, sessionId);
+
+    type PromptRegistryLike = {
+      assemblePrompt: (
+        sessionId: string,
+        options?: { context?: HarnessContext },
+      ) => Promise<unknown>;
+      getAllSections: () => Array<{ id: string }>;
+      getTrackedSessionCount: () => number;
+    };
+    const runtimeSession = (
+      runtime as unknown as {
+        sessions: Map<string, { promptRegistry?: PromptRegistryLike }>;
+      }
+    ).sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    expect(registry).toBeDefined();
+    if (!registry) throw new Error("Expected a session-owned PromptRegistry.");
+
+    const factories = (
+      mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories: Array<
+          (pi: { on: (event: string, handler: (event: unknown) => unknown) => void }) => void
+        >;
+      }
+    ).extensionFactories;
+    let beforeAgentStart: ((event: unknown) => unknown) | undefined;
+    factories[0]?.({
+      on: (event, handler) => {
+        if (event === "before_agent_start") beforeAgentStart = handler;
+      },
+    });
+    expect(beforeAgentStart).toBeDefined();
+
+    let notifyAssemblyStarted!: () => void;
+    const assemblyStarted = new Promise<void>((resolve) => {
+      notifyAssemblyStarted = resolve;
+    });
+    let releaseAssembly!: () => void;
+    const assemblyGate = new Promise<void>((resolve) => {
+      releaseAssembly = resolve;
+    });
+    const originalAssemble = registry.assemblePrompt.bind(registry);
+    vi.spyOn(registry, "assemblePrompt").mockImplementation(async (id, options) => {
+      notifyAssemblyStarted();
+      await assemblyGate;
+      return originalAssemble(id, options as never);
+    });
+    const pendingCallback = beforeAgentStart?.({
+      systemPrompt: "Pi base prompt",
+      systemPromptOptions: { cwd, contextFiles: [] },
+    });
+    await assemblyStarted;
+    await runtime.releaseRuntime(sessionId);
+    releaseAssembly();
+
+    await expect(pendingCallback).resolves.toBeUndefined();
+    expect(registry.getTrackedSessionCount()).toBe(0);
+    expect(registry.getAllSections()).toEqual([]);
+  });
+});
+
+describe("PiSdkRuntime compaction pruning production wiring", () => {
+  beforeEach(() => {
+    resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
+  });
+
+  it("does not register pruning when MODUS_USE_KERNEL disables its dependency", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: false, MODUS_COMPACTION_PRUNING: true });
+    const sessionId = `compaction-disabled-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Keep native compaction behavior.",
+        sessionId,
+      });
+
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories?: unknown[];
+      };
+      expect(options.extensionFactories).toHaveLength(1);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("does not register the compaction extension when pruning is disabled", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: false });
+    const sessionId = `compaction-flag-off-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Keep pruning disabled for this session.",
+        sessionId,
+      });
+
+      const options = mocks.resourceLoaderOptions.at(-1) as {
+        extensionFactories?: unknown[];
+      };
+      expect(options.extensionFactories).toHaveLength(1);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("prunes only a later duplicate in the real Pi context hook and leaves session history intact", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_TOOL_RESULT_SPILL: false,
+      MODUS_OBSERVABILITY: true,
+    });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-pruning-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "repeatable-read-result.txt");
+    const source = "export interface StableItem { readonly key: string; }\n".repeat(1200);
+    await writeFile(fixturePath, source, "utf8");
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read the same informational file twice and compare the results.",
+        sessionId,
+      });
+
+      const piSession = sessionAt();
+      const contexts = contextsFor(piSession);
+      const modelBoundContext = contexts.at(-1) ?? [];
+      const modelBoundResults = modelBoundContext.filter(
+        (message) => message.role === "toolResult",
+      );
+      const lastText = modelBoundResults.at(-1)?.content.find((block) => block.type === "text");
+      const firstText = modelBoundResults[0]?.content.find((block) => block.type === "text");
+      const storedResults = piSession.agent.state.messages.filter(
+        (message) => message.role === "toolResult" && message.toolName === "read",
+      );
+
+      expect(modelBoundResults).toHaveLength(2);
+      expect(firstText?.type === "text" && /identical later result/i.test(firstText.text)).toBe(
+        true,
+      );
+      expect(lastText?.type === "text" ? lastText.text : "").toContain("StableItem");
+      expect(storedResults).toHaveLength(2);
+      expect(
+        storedResults.every(
+          (message) =>
+            "content" in message &&
+            Array.isArray(message.content) &&
+            message.content.some(
+              (block) => block.type === "text" && block.text.includes("StableItem"),
+            ),
+        ),
+      ).toBe(true);
+      expect(piSession.model?.id).toBe("model");
+      expect(piSession.model?.provider).toBe("mock");
+      expect(piSession.extensionRunner.hasHandlers("context")).toBe(true);
+      expect(piSession.extensionRunner.hasHandlers("session_before_compact")).toBe(false);
+      expect(recordPruning).toHaveBeenCalledWith(
+        expect.any(Number),
+        expect.any(Number),
+        sessionId,
+        expect.any(Symbol),
+        expect.any(String),
+      );
+      const event = observer
+        .getRecentEvents()
+        .find((candidate) => candidate.type === "harness.compaction.pruned");
+      expect(event?.data).toMatchObject({
+        measuredContextBytesRemoved: expect.any(Number),
+        estimatedTokensSaved: expect.any(Number),
+      });
+      expect(JSON.stringify(event?.data)).not.toContain("StableItem");
+      expect(event?.runId).toEqual(expect.any(String));
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("uses the selected model's real context window before pruning", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 100_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-large-window-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "large-window-result.txt");
+    await writeFile(
+      fixturePath,
+      "export interface StableWindowItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read the same informational file twice.",
+        sessionId,
+      });
+
+      const piSession = sessionAt();
+      const results = (contextsFor(piSession).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const texts = results.map((message) =>
+        message.content.find((block) => block.type === "text"),
+      );
+
+      expect(piSession.model?.contextWindow).toBe(100_000);
+      expect(results).toHaveLength(2);
+      expect(
+        texts.every((block) => block?.type === "text" && block.text.includes("StableWindowItem")),
+      ).toBe(true);
+      expect(recordPruning).not.toHaveBeenCalled();
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps duplicate QA evidence intact in the productive Pi context", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_COMPACTION_PRUNING: true,
+      MODUS_TOOL_RESULT_SPILL: false,
+    });
+    const { sessionAt, contextsFor, requestToolSequence } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const sessionId = `compaction-qa-evidence-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "qa-evidence.txt");
+    await writeFile(
+      fixturePath,
+      `${JSON.stringify({
+        type: "harness.task_state",
+        buildStatus: "built",
+        verificationStatus: "verified",
+        checksRun: 0,
+      })}\nVitest check passed for the verified fixture row\n`.repeat(1200),
+      "utf8",
+    );
+    requestToolSequence([
+      { name: "read", input: { path: fixturePath } },
+      { name: "read", input: { path: fixturePath } },
+    ]);
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Preserve the QA evidence from both reads.",
+        sessionId,
+      });
+
+      const results = (contextsFor(sessionAt()).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const texts = results.map((message) =>
+        message.content.find((block) => block.type === "text"),
+      );
+
+      expect(results).toHaveLength(2);
+      expect(
+        texts.every(
+          (block) =>
+            block?.type === "text" &&
+            block.text.includes("Vitest check passed") &&
+            block.text.includes('"buildStatus":"built"') &&
+            block.text.includes('"checksRun":0'),
+        ),
+      ).toBe(true);
+      expect(recordPruning).not.toHaveBeenCalled();
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("ignores a captured Pi context callback after releasing and recreating the same session", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    let phase: "initial" | "recreated" = "initial";
+    let oldContextHandler: ((event: unknown, context: unknown) => unknown) | undefined;
+    let staleHandlerResult: unknown;
+    const duplicateText = "export interface StaleSessionItem { readonly key: string; }\n".repeat(
+      100,
+    );
+    const staleEvent = {
+      type: "context",
+      messages: [
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "old-session-first",
+          content: [{ type: "text", text: duplicateText }],
+          isError: false,
+        },
+        {
+          role: "toolResult",
+          toolName: "read",
+          toolCallId: "old-session-later",
+          content: [{ type: "text", text: duplicateText }],
+          isError: false,
+        },
+      ],
+    };
+    const { sessionAt, contextHandlersFor } = await useOfflinePiToolSessions({
+      contextWindow: 20_000,
+      captureContextHandlers: true,
+      onStream: (session, _context, contextHandlers = []) => {
+        if (phase === "initial") {
+          // Capture the handler registered by the real Pi runtime without invoking it.
+          oldContextHandler = contextHandlers[0];
+          return;
+        }
+        staleHandlerResult = oldContextHandler?.(staleEvent, {
+          model: session.model,
+          signal: undefined,
+          getContextUsage: () => ({ tokens: 15_000, contextWindow: 20_000, percent: 75 }),
+        });
+      },
+    });
+    const observer = HarnessObserver.getInstance();
+    const recordPruning = vi.spyOn(observer, "recordCompactionPruning");
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const sessionId = `compaction-recreated-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+
+    try {
+      await runtime.prompt(window, {
+        context: [],
+        message: "Start the session before its first release.",
+        sessionId,
+      });
+      const releasedSession = sessionAt();
+      expect(releasedSession.extensionRunner.hasHandlers("context")).toBe(true);
+      expect(contextHandlersFor(releasedSession)).toHaveLength(1);
+      expect(oldContextHandler).toEqual(expect.any(Function));
+
+      await runtime.releaseRuntime(sessionId);
+      phase = "recreated";
+      await runtime.ensure(window, sessionId);
+      expect(sessionAt()).not.toBe(releasedSession);
+
+      await runtime.prompt(window, {
+        context: [],
+        message: "Start the recreated session.",
+        sessionId,
+      });
+
+      expect(staleHandlerResult).toBeUndefined();
+      expect(recordPruning).not.toHaveBeenCalled();
+      expect(
+        staleEvent.messages[0]?.content[0]?.type === "text" &&
+          staleEvent.messages[0].content[0].text,
+      ).toBe(duplicateText);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("isolates repeat pruning between Agent Group member sessions", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, contextsFor, requestTool, requestToolSequence } =
+      await useOfflinePiToolSessions({ contextWindow: 20_000 });
+    const runtime = new PiSdkRuntime();
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const firstSessionId = `group-member-a-${crypto.randomUUID()}`;
+    const secondSessionId = `group-member-b-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    insertWorkspace(workspaceId);
+    for (const [sessionId, title] of [
+      [firstSessionId, "Member A"],
+      [secondSessionId, "Member B"],
+    ] as const) {
+      getDatabase()
+        .prepare(
+          `insert into agent_sessions (
+            id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+            created_at, updated_at
+          ) values (?, ?, ?, ?, 'idle', 'pi-sdk', 'mock/model', null, ?, ?, ?)`,
+        )
+        .run(sessionId, workspaceId, title, cwd, join(userData, `${sessionId}.jsonl`), now, now);
+    }
+    groupStore.createAgentGroupWithMembers({
+      name: "Compaction isolation",
+      workspaceId,
+      members: [{ sessionId: firstSessionId }, { sessionId: secondSessionId }],
+      leadSessionId: firstSessionId,
+    });
+    const fixturePath = join(cwd, "group-member-result.txt");
+    await writeFile(
+      fixturePath,
+      "export interface GroupItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+
+    try {
+      requestToolSequence([
+        { name: "read", input: { path: fixturePath } },
+        { name: "read", input: { path: fixturePath } },
+      ]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read this file twice.",
+        sessionId: firstSessionId,
+      });
+      const firstResults = (contextsFor(sessionAt(0)).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+
+      requestTool("read", { path: fixturePath });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Read this file once in the other group member session.",
+        sessionId: secondSessionId,
+      });
+      const secondResults = (contextsFor(sessionAt(1)).at(-1) ?? []).filter(
+        (message) => message.role === "toolResult",
+      );
+      const firstText = firstResults[0]?.content.find((block) => block.type === "text");
+      const secondText = secondResults[0]?.content.find((block) => block.type === "text");
+
+      expect(firstText?.type === "text" && /identical later result/i.test(firstText.text)).toBe(
+        true,
+      );
+      expect(secondResults).toHaveLength(1);
+      expect(secondText?.type === "text" && secondText.text.includes("GroupItem")).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(firstSessionId);
+      await runtime.releaseRuntime(secondSessionId);
+    }
+  });
+
+  it("keeps manual compaction on the Pi SDK native path", async () => {
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_COMPACTION_PRUNING: true });
+    const { sessionAt, requestTool } = await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const sessionId = `compaction-native-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const fixturePath = join(cwd, "native-compaction-input.txt");
+    await writeFile(
+      fixturePath,
+      "export interface NativeHistoryItem { readonly key: string; }\n".repeat(1200),
+      "utf8",
+    );
+
+    try {
+      for (const turn of ["first turn", "second turn", "third turn"]) {
+        requestTool("read", { path: fixturePath });
+        await runtime.prompt(window, { context: [], message: turn, sessionId });
+      }
+
+      const piSession = sessionAt();
+      expect(piSession.extensionRunner.hasHandlers("session_before_compact")).toBe(false);
+      expect(piSession.sessionManager.getBranch().length).toBeGreaterThan(10);
+      await runtime.compact(window, sessionId);
+      expect(
+        piSession.sessionManager.getBranch().some((entry) => entry.type === "compaction"),
+      ).toBe(true);
+    } finally {
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+});
+
+describe("PiSdkRuntime Phase 9 subagent provider delegation", () => {
+  /**
+   * Offline PI sessions whose mocked model stream pushes a real text delta
+   * (the shared helper only pushes `done`, which yields no assistant text
+   * and would make every child fail with "no assistant output").
+   */
+  async function useOfflineDeltaSessions(): Promise<void> {
+    const sdk = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+      "@earendil-works/pi-coding-agent",
+    );
+    const authStorage = sdk.AuthStorage.inMemory({
+      mock: { type: "api_key", key: "offline-test-only" },
+    });
+    const modelRegistry = sdk.ModelRegistry.inMemory(authStorage);
+    mocks.sessionManagerCreate.mockImplementation(() => sdk.SessionManager.inMemory(cwd) as never);
+    mocks.settingsManagerInMemory.mockImplementation((settings) =>
+      sdk.SettingsManager.inMemory(settings),
+    );
+    mocks.createAgentSession.mockImplementation(async (options) => {
+      const loaderOptions = mocks.resourceLoaderOptions.at(-1) as ConstructorParameters<
+        typeof sdk.DefaultResourceLoader
+      >[0];
+      const resourceLoader = new sdk.DefaultResourceLoader(loaderOptions);
+      await resourceLoader.reload();
+      const { session } = await sdk.createAgentSession({
+        ...options,
+        authStorage,
+        modelRegistry,
+        resourceLoader,
+        model: {
+          api: "openai-completions",
+          baseUrl: "https://offline.invalid",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 100_000,
+          maxTokens: 1000,
+          ...options.model,
+        },
+      });
+      session.agent.streamFn = (model, context) => {
+        const stream = createAssistantMessageEventStream();
+        const message: AssistantMessage = {
+          role: "assistant",
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          content: [{ type: "text", text: "Done." }],
+          stopReason: "stop",
+          usage: {
+            input: 1,
+            output: 1,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          timestamp: Date.now(),
+        };
+        stream.push({ type: "start", partial: message });
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "Done.", partial: message });
+        stream.push({ type: "done", reason: "stop", message });
+        return stream as unknown as ReturnType<AgentSession["agent"]["streamFn"]>;
+      };
+      return { session };
+    });
+  }
+
+  it("spawns a real headless child through the provider and harvests output via wait", async () => {
+    await useOfflineDeltaSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi", sessionId });
+    expect(spawnRes.status).toBe("spawned");
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+    expect(waitRes.output).toContain("Done.");
+  });
+
+  it("honors worktree isolation requested through the provider", async () => {
+    await useOfflineDeltaSessions();
+    await initGitRepo();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({
+      role: "builder",
+      task: "build it",
+      sessionId,
+      isolation: "worktree",
+    });
+    expect(spawnRes.status).toBe("spawned");
+    const { getAgentSession: getSession } = await import("./agent-store");
+    expect(getSession(spawnRes.subagentId)?.subagentWorktree).toBeDefined();
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+  });
+
+  it("returns failed (does not throw) when the parent session does not exist", async () => {
+    await useOfflinePiToolSessions();
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi" });
+    expect(spawnRes.status).toBe("failed");
+    expect(spawnRes.errorMessage).toContain("sessionId");
+  });
+
+  it("reports harvested child status from the session instead of failed", async () => {
+    await useOfflineDeltaSessions();
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const runtime = new PiSdkRuntime();
+    const provider = runtime.getSubagentRegistry().getDefaultProvider();
+    const spawnRes = await provider.spawn({ role: "researcher", task: "say hi", sessionId });
+    expect(spawnRes.status).toBe("spawned");
+    const waitRes = await provider.wait(spawnRes.subagentId, 30000);
+    expect(waitRes.success).toBe(true);
+    const status = await provider.status(spawnRes.subagentId);
+    expect(status.state).toBe("completed");
+  });
+});
+
+describe("PiSdkRuntime Tool Result Spill integration", () => {
+  beforeEach(() => {
+    HarnessObserver.resetInstance();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    registerSpillTools();
+    HarnessObserver.resetInstance();
+  });
+
+  it("keeps large Pi tool results inline when spill is disabled", async () => {
+    const { messagesFor, requestTool, sessionAt } = await useOfflinePiToolSessions();
+    const sessionId = `tool-spill-disabled-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const toolName = `mcp_spill_off_${crypto.randomUUID().replaceAll("-", "")}`;
+    const originalOutput = "offline output remains inline\n".repeat(900);
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_TOOL_RESULT_SPILL: false });
+    registerSpillTools();
+    expect(
+      toolRegistry
+        .getCustomToolDefinitions("chat")
+        .some((tool) => tool.name === RETRIEVE_SPILL_TOOL_NAME),
+    ).toBe(false);
+    registerOfflineMcpTool(toolName, originalOutput);
+    requestTool(toolName);
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Run the offline lookup.",
+        sessionId,
+      });
+
+      const toolResult = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === toolName,
+      );
+      expect(toolResult?.content).toEqual([{ type: "text", text: originalOutput }]);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("sends a bounded spill preview after a large Pi tool result", async () => {
+    const { messagesFor, requestTool, sessionAt } = await useOfflinePiToolSessions();
+    const sessionId = `tool-spill-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const toolName = `mcp_spill_${crypto.randomUUID().replaceAll("-", "")}`;
+    const originalOutput = Array.from(
+      { length: 900 },
+      (_, index) => `offline output line ${index}: ${"result".repeat(8)}`,
+    ).join("\n");
+    insertSession(sessionId, workspaceId, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_TOOL_RESULT_SPILL: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    registerOfflineMcpTool(toolName, originalOutput);
+    requestTool(toolName);
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Run the offline lookup and summarize its output.",
+        sessionId,
+      });
+
+      const toolResult = messagesFor(sessionAt()).find(
+        (message) => message.role === "toolResult" && message.toolName === toolName,
+      );
+      expect(toolResult).toBeDefined();
+      const preview = JSON.stringify(toolResult?.content) ?? "";
+      expect(Buffer.byteLength(preview, "utf8")).toBeLessThan(
+        Buffer.byteLength(originalOutput, "utf8"),
+      );
+      const spillId = preview.match(/spill-[0-9a-f-]+/)?.[0];
+      expect(spillId).toBeDefined();
+
+      requestTool(RETRIEVE_SPILL_TOOL_NAME, {
+        spill_id: spillId,
+        offset_line: 0,
+        limit_lines: 3,
+        max_bytes: 2048,
+      });
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retrieve the first section of the stored output.",
+        sessionId,
+      });
+
+      const recovered = messagesFor(sessionAt())
+        .filter(
+          (message) =>
+            message.role === "toolResult" && message.toolName === RETRIEVE_SPILL_TOOL_NAME,
+        )
+        .at(-1);
+      expect(JSON.stringify(recovered?.content)).toContain("offline output line 0:");
+      expect(JSON.stringify(recovered?.content)).toContain("offline output line 2:");
+      expect(JSON.stringify(recovered?.content)).not.toContain("offline output line 3:");
+      const observer = HarnessObserver.getInstance();
+      const metrics = observer.snapshot();
+      expect(metrics.toolResults.spilledResults).toBe(1);
+      expect(metrics.toolResults.successfulRetrievals).toBe(1);
+      expect(metrics.toolResults.spilledBytes).toBeGreaterThan(0);
+      expect(metrics.toolResults.modelContextBytesReduced).toBeGreaterThan(0);
+      expect(metrics.toolResults.estimatedTokensSaved).toBeGreaterThan(0);
+      expect(metrics.promptSections.estimatedTokensSaved).toBeNull();
+      expect(metrics.turns.providerUsageReports).toBeGreaterThan(0);
+      const spillEvents = observer
+        .getRecentEvents(100)
+        .filter((event) => event.type === "harness.tool.spilled");
+      const retrievalEvents = observer
+        .getRecentEvents(100)
+        .filter((event) => event.type === "harness.tool.retrieved");
+      expect(spillEvents).toHaveLength(1);
+      expect(retrievalEvents).toHaveLength(1);
+      expect(spillEvents[0]?.sessionId).toBe(sessionId);
+      expect(retrievalEvents[0]?.sessionId).toBe(sessionId);
+      expect(spillEvents[0]?.runId).toEqual(expect.any(String));
+      expect(retrievalEvents[0]?.runId).toEqual(expect.any(String));
+      expect(JSON.stringify(observer.getRecentEvents(100))).not.toContain("offline output line 0:");
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+});
+
+describe("PiSdkRuntime Repeat Guard tool-call integration", () => {
+  beforeEach(async () => {
+    HarnessObserver.resetInstance();
+    const { resetRepeatGuardConfig } = await import("./harness/guards/repeat-guard-config");
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    resetRepeatGuardConfig();
+    ToolInvocationTracker.getInstance().clearAll();
+  });
+
+  afterEach(() => {
+    resetFeatureFlagOverrides();
+    HarnessObserver.resetInstance();
+  });
+
+  it("blocks the next identical call before the Pi SDK executes it and records a decision", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { setRepeatGuardConfig, resetRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const sessionId = `repeat-guard-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_REPEAT_GUARDS: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+    const events: AgentEvent[] = [];
+    runtime.onEvent((event) => events.push(event));
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the same lookup until you have the answer.",
+        sessionId,
+      });
+
+      expect(executions).toBe(3);
+      expect(events).toEqual(
+        expect.arrayContaining([expect.objectContaining({ type: "harness.failure", sessionId })]),
+      );
+      const observer = HarnessObserver.getInstance();
+      expect(observer.snapshot().repeatGuards).toMatchObject({
+        evaluatedToolCalls: 4,
+        blockedLoopCount: 1,
+        falsePositiveCount: null,
+        circuitBreakerTrips: null,
+      });
+      const guardEvents = observer
+        .getRecentEvents(50)
+        .filter((event) => event.type === "harness.guard.evaluated");
+      expect(guardEvents).toHaveLength(4);
+      expect(guardEvents.every((event) => event.sessionId === sessionId && event.runId)).toBe(true);
+      expect(
+        events.some(
+          (event) =>
+            event.type === "harness.decision" &&
+            JSON.stringify(event).includes("repeat_guard_tool_loop"),
+        ),
+      ).toBe(true);
+    } finally {
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("stops recurrent failed tool calls before another failing execution", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-failure-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_failure_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      throw new Error("fixture failure");
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retry the lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(3);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("allows identical calls when their results show progress", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-progress-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_progress_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return {
+        content: [{ type: "text", text: `progress-${executions}` }],
+        details: { revision: executions },
+      };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Continue checking until the state changes.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("allows the same tool when its arguments change", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-args-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_args_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, (_, index) => ({
+        name: toolName,
+        input: { target: "same", options: { mode: `variant-${index}` } },
+      })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Try the lookup with different modes.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("allows repeated calls to a configured read-only tool", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { setRepeatGuardConfig } = await import("./harness/guards/repeat-guard-config");
+    const sessionId = `repeat-readonly-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_readonly_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3, whitelistedTools: [toolName] });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat a safe lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("clears an in-flight invocation when the Pi SDK run is cancelled", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const sessionId = `repeat-cancel-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_cancel_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    let signalToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      signalToolStarted = resolve;
+    });
+    registerOfflineRepeatGuardTool(toolName, async (_toolCallId, _params, signal) => {
+      executions += 1;
+      if (executions === 1) {
+        signalToolStarted();
+        await new Promise<void>((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(new Error("cancelled"));
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(new Error("cancelled")), {
+            once: true,
+          });
+        });
+      }
+      return { content: [{ type: "text", text: "completed" }], details: {} };
+    });
+    const runtime = new PiSdkRuntime();
+
+    try {
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      const cancelledPrompt = runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Start then cancel the lookup.",
+        sessionId,
+      });
+      await toolStarted;
+      await runtime.abort(sessionId);
+      await cancelledPrompt;
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Retry after cancellation.",
+        sessionId,
+      });
+
+      expect(executions).toBe(2);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps histories isolated between runs and Agent Group members", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    const memberA = `repeat-group-a-${crypto.randomUUID()}`;
+    const memberB = `repeat-group-b-${crypto.randomUUID()}`;
+    insertSession(memberA, workspaceId, join(userData, "missing-a.jsonl"));
+    const now = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(memberB, workspaceId, cwd, join(userData, "missing-b.jsonl"), now, now);
+    createAgentGroupWithMembers({
+      name: "Repeat Guard isolation",
+      workspaceId,
+      members: [{ sessionId: memberA }, { sessionId: memberB }],
+    });
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+    const toolName = `mcp_repeat_group_${crypto.randomUUID().replaceAll("-", "")}`;
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+
+    try {
+      requestToolSequence(
+        Array.from({ length: 3 }, () => ({ name: toolName, input: { target: "same" } })),
+      );
+      await runtime.prompt(window, { context: [], message: "Repeat lookup.", sessionId: memberA });
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(window, {
+        context: [],
+        message: "Repeat lookup again.",
+        sessionId: memberA,
+      });
+
+      requestToolSequence([{ name: toolName, input: { target: "same" } }]);
+      await runtime.prompt(window, {
+        context: [],
+        message: "Repeat lookup as member B.",
+        sessionId: memberB,
+      });
+
+      expect(executions).toBe(5);
+    } finally {
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(memberA);
+      await runtime.releaseRuntime(memberB);
+    }
+  });
+
+  it("enforces repeat guards when Agent Groups dispatch a member turn", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { createAgentGroupWithMembers } = await import("../groups/group-store");
+    const { GroupRuntime } = await import("../groups/group-runtime");
+    const { resetRepeatGuardConfig, setRepeatGuardConfig } = await import(
+      "./harness/guards/repeat-guard-config"
+    );
+    const sessionId = `repeat-group-dispatch-${crypto.randomUUID()}`;
+    const secondMemberId = `repeat-group-dispatch-b-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(
+      sessionId,
+      workspaceId,
+      join(userData, "missing-group-dispatch.jsonl"),
+      "Member A",
+    );
+    const createdAt = new Date().toISOString();
+    getDatabase()
+      .prepare(
+        `insert into agent_sessions (
+          id, workspace_id, title, cwd, status, runtime, model, pi_session_id, pi_session_file,
+          created_at, updated_at
+        ) values (?, ?, 'Member B', ?, 'idle', 'pi-sdk', 'mock/model', 'old-pi-session', ?, ?, ?)`,
+      )
+      .run(
+        secondMemberId,
+        workspaceId,
+        cwd,
+        join(userData, "missing-group-dispatch-b.jsonl"),
+        createdAt,
+        createdAt,
+      );
+    const group = createAgentGroupWithMembers({
+      name: "Repeat Guard dispatch",
+      mode: "free",
+      workspaceId,
+      members: [{ sessionId }, { sessionId: secondMemberId }],
+      leadSessionId: sessionId,
+    });
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: true });
+    setRepeatGuardConfig({ toolRepeatThreshold: 3 });
+
+    const toolName = `mcp_repeat_group_dispatch_${crypto.randomUUID().replaceAll("-", "")}`;
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    const observedEvents: AgentEvent[] = [];
+    const removeEventListener = runtime.onEvent((event) => observedEvents.push(event));
+    let dispatchedTurn: ReturnType<typeof runtime.prompt> | undefined;
+    const groupAgentRuntime: import("../groups/group-runtime-lib").GroupAgentRuntime = {
+      prompt: (targetWindow, input) => {
+        dispatchedTurn = runtime.prompt(targetWindow, input);
+        return dispatchedTurn;
+      },
+      abort: (targetSessionId) => runtime.abort(targetSessionId),
+      isSessionStreaming: (targetSessionId) => runtime.isSessionStreaming(targetSessionId),
+      onTurnSettled: (listener) => runtime.onTurnSettled(listener),
+      onQuestionPending: (listener) => runtime.onQuestionPending(listener),
+      onEvent: (listener) => runtime.onEvent(listener),
+    };
+    const groups = new GroupRuntime({
+      runtime: groupAgentRuntime,
+      host: {
+        getWindow: () => window as never,
+        isUpdatePending: () => false,
+        emit: vi.fn(),
+      },
+    });
+
+    try {
+      requestToolSequence(
+        Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+      );
+      groups.postUserMessage({ groupId: group.id, body: "@Member A repeat lookup." });
+      await vi.waitFor(() => expect(dispatchedTurn).toBeDefined());
+      const turn = dispatchedTurn;
+      if (!turn) throw new Error("Agent Group did not dispatch a member turn.");
+      const result = await turn;
+
+      expect(result.outcome).toBe("ok");
+      expect(executions).toBe(3);
+      expect(observedEvents).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "harness.decision",
+            boundary: "tool_guard",
+            decision: expect.objectContaining({
+              action: "avoid_retry",
+              reasonCodes: expect.arrayContaining(["repeat_guard_tool_loop"]),
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      groups.dispose();
+      removeEventListener();
+      resetRepeatGuardConfig();
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("does not track or block repeated calls while the feature flag is off", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    const sessionId = `repeat-off-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_off_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_REPEAT_GUARDS: false });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the lookup.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+      expect(ToolInvocationTracker.getInstance().getInvocations(sessionId)).toHaveLength(0);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
+  });
+
+  it("keeps repeated calls usable when Repeat Guards are requested without the kernel", async () => {
+    const { requestToolSequence } = await useOfflinePiToolSessions();
+    const { ToolInvocationTracker } = await import("./harness/guards/repeat-tool-guard");
+    const sessionId = `repeat-invalid-flags-${crypto.randomUUID()}`;
+    const toolName = `mcp_repeat_invalid_flags_${crypto.randomUUID().replaceAll("-", "")}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    setFeatureFlagOverrides({ MODUS_USE_KERNEL: false, MODUS_REPEAT_GUARDS: true });
+    let executions = 0;
+    registerOfflineRepeatGuardTool(toolName, async () => {
+      executions += 1;
+      return { content: [{ type: "text", text: "same result" }], details: {} };
+    });
+    requestToolSequence(
+      Array.from({ length: 4 }, () => ({ name: toolName, input: { target: "same" } })),
+    );
+    const runtime = new PiSdkRuntime();
+
+    try {
+      await runtime.prompt(createWindowStub(), {
+        context: [],
+        message: "Repeat the lookup with the kernel disabled.",
+        sessionId,
+      });
+
+      expect(executions).toBe(4);
+      expect(ToolInvocationTracker.getInstance().getInvocations(sessionId)).toHaveLength(0);
+    } finally {
+      toolRegistry.unregisterTool(toolName);
+      await runtime.releaseRuntime(sessionId);
+    }
   });
 });

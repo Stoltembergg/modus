@@ -427,6 +427,39 @@ describe("transitionHarnessTaskState", () => {
     expect(afterRevisionlessQA).not.toHaveProperty("revision");
   });
 
+  it("does not verify completed checks when the run itself was cancelled", () => {
+    const cancelled = transitionHarnessTaskState(
+      taskStateWithTests(),
+      {
+        type: "harness.qa",
+        sessionId: "session-1",
+        runId: "run-1",
+        result: {
+          required: true,
+          status: "cancelled",
+          reasonCode: "required_check_cancelled",
+          evidence: [
+            {
+              id: "tests-1",
+              kind: "check",
+              status: "passed",
+              runId: "run-1",
+              eventId: "event-tests-1",
+              label: "Tests",
+            },
+          ],
+        },
+      },
+      now,
+    );
+
+    expect(cancelled.criteria[0]?.status).toBe("unknown");
+    expect(cancelled.verificationStatus).toBe("unknown");
+    expect(cancelled.evidenceRefs).toContainEqual(
+      expect.objectContaining({ eventId: "event-tests-1", status: "passed" }),
+    );
+  });
+
   it("requires every PlanSpec check kind to pass for the criterion", () => {
     const state = createHarnessTaskState(
       {

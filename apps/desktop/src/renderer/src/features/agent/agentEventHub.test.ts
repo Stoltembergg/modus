@@ -5,9 +5,11 @@ import {
   type AgentEventItem,
   affectsActivity,
   appendAgentEvents,
+  appendUniqueAgentEvents,
   foldAgentEvents,
   IDLE_ACTIVITY,
   optimisticUserPromptEvents,
+  prependAgentEventPage,
   reduceActivity,
 } from "./agentEventHub";
 
@@ -249,6 +251,57 @@ describe("appendAgentEvents", () => {
 });
 
 describe("AgentEventHub", () => {
+  it("replaces persisted history through its snapshot cursor and retains only newer live events", () => {
+    const hub = new AgentEventHub();
+    const old = {
+      ...item(runStarted, "old"),
+      event: { ...runStarted, eventCursor: 20 } as AgentEvent,
+      createdAt: "2030-01-01T00:00:00.000Z",
+    };
+    const newest = {
+      ...item(runCompleted, "newest"),
+      event: { ...runCompleted, eventCursor: 100 } as AgentEvent,
+      createdAt: "2020-01-01T00:00:00.000Z",
+    };
+    const live = {
+      ...item(runStarted, "live"),
+      event: { ...runStarted, eventCursor: 101 } as AgentEvent,
+      createdAt: "2020-01-01T00:00:01.000Z",
+    };
+    hub.seedHistory("s", [old]);
+    hub.publish(live);
+    hub.seedHistory("s", [newest], 100);
+
+    expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["newest", "live"]);
+  });
+
+  it("folds older-page deltas before the current page and de-duplicates live echoes", () => {
+    const older = item(
+      {
+        type: "message.delta",
+        sessionId: "s",
+        messageId: "m",
+        delta: "older ",
+        eventCursor: 10,
+      } as AgentEvent,
+      "chunk-older",
+    );
+    const newer = item(
+      {
+        type: "message.delta",
+        sessionId: "s",
+        messageId: "m",
+        delta: "newer",
+        eventCursor: 11,
+      } as AgentEvent,
+      "chunk-newer",
+    );
+    const merged = prependAgentEventPage([newer], [older]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.event).toMatchObject({ type: "message.delta", delta: "older newer" });
+    expect(appendUniqueAgentEvents(merged, [newer])).toEqual(merged);
+  });
+
   it("seeds full session history and notifies Activity subscribers about live changes", async () => {
     const hub = new AgentEventHub();
     const subscriber = vi.fn<(items: AgentEventItem[]) => void>();
@@ -265,6 +318,50 @@ describe("AgentEventHub", () => {
       "run.started",
       "run.completed",
     ]);
+  });
+
+  it("releases a completed session's transient history after its last subscriber leaves", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const unsubscribeSession = hub.subscribe("s", vi.fn());
+      const unsubscribeOther = hub.subscribe("other", vi.fn());
+      hub.publish(item(runStarted, "run-start"));
+      hub.publish(item(runCompleted, "run-completed"));
+      hub.publish(
+        item(
+          { type: "run.started", sessionId: "other", runId: "other-run", delivery: "normal" },
+          "other-run",
+        ),
+      );
+      vi.advanceTimersByTime(16);
+
+      expect(hub.getHistory("s").map((entry) => entry.event.type)).toEqual([
+        "run.started",
+        "run.completed",
+      ]);
+      unsubscribeSession();
+      expect(hub.getHistory("s")).toEqual([]);
+      expect(hub.getHistory("other").map((entry) => entry.id)).toEqual(["other-run"]);
+
+      unsubscribeOther();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("releases inactive active-run history after the buffered handoff window", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const unsubscribe = hub.subscribe("s", vi.fn());
+      hub.publish(item(runStarted, "run-start"));
+      unsubscribe();
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps live events concurrent with a persisted snapshot that ends in the same millisecond", () => {
@@ -314,18 +411,30 @@ describe("AgentEventHub", () => {
   });
 
   it("hands prepared events to the first subscriber exactly once", () => {
-    const hub = new AgentEventHub();
-    const event = item({ type: "run.started", sessionId: "s", runId: "r", delivery: "normal" });
-    hub.prepare("s");
-    hub.publish(event);
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const event = item({
+        type: "run.started",
+        sessionId: "s",
+        runId: "r",
+        delivery: "normal",
+      });
+      hub.prepare("s");
+      hub.publish(event);
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s")).toEqual([event]);
 
-    const first = vi.fn();
-    hub.subscribe("s", first);
-    expect(first).toHaveBeenCalledWith(event);
+      const first = vi.fn();
+      hub.subscribe("s", first);
+      expect(first).toHaveBeenCalledWith(event);
 
-    const second = vi.fn();
-    hub.subscribe("s", second);
-    expect(second).not.toHaveBeenCalled();
+      const second = vi.fn();
+      hub.subscribe("s", second);
+      expect(second).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops events after a prepared handoff is cancelled", () => {

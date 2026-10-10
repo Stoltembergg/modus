@@ -257,7 +257,7 @@ export function Composer({
   const hasSelectedSkills = selectedSkills.length > 0;
   const hasInlineTokens = contextItems.length > 0 || hasSelectedSkills;
   const hasContent = hasText || hasImages || contextItems.length > 0 || hasSelectedSkills;
-  const currentModel = models.find((item) => item.id === model) ?? models[0];
+  const currentModel = models.find((item) => item.id === model);
   const {
     activeIndex,
     isOpen,
@@ -293,7 +293,7 @@ export function Composer({
   const slash = useComposerSlash({ actions: slashActions, cwd, value: textBeforeCaret });
 
   function send(delivery: PromptDelivery = isRunning ? "follow-up" : "normal"): void {
-    if (!hasContent || !canSubmit || submitting || models.length === 0 || !model) {
+    if (!hasContent || !canSubmit || submitting || !model) {
       return;
     }
     // Providers reject empty text blocks, so image-only sends get a stub line.
@@ -779,11 +779,7 @@ export function Composer({
             <button
               aria-label={isRunning ? "Stop" : "Send"}
               className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-fg text-canvas transition-colors hover:bg-fg-muted active:scale-[0.94] disabled:bg-chip-strong disabled:text-fg-faint"
-              disabled={
-                isRunning
-                  ? !onAbort
-                  : !hasContent || !canSubmit || submitting || models.length === 0 || !model
-              }
+              disabled={isRunning ? !onAbort : !hasContent || !canSubmit || submitting || !model}
               onClick={() => {
                 if (isRunning) onAbort?.();
                 else send();

@@ -1,8 +1,10 @@
 import {
   type AgentEventItem,
   appendAgentEvents,
+  appendUniqueAgentEvents,
   foldAgentEvents,
   optimisticUserPromptEvents,
+  prependAgentEventPage,
 } from "../../../../shared/agent-events";
 import type { AgentEvent } from "../../../../shared/contracts";
 
@@ -19,7 +21,14 @@ import type { AgentEvent } from "../../../../shared/contracts";
  * renderer and the main-process event store fold identically.
  */
 
-export { type AgentEventItem, appendAgentEvents, foldAgentEvents, optimisticUserPromptEvents };
+export {
+  type AgentEventItem,
+  appendAgentEvents,
+  appendUniqueAgentEvents,
+  foldAgentEvents,
+  optimisticUserPromptEvents,
+  prependAgentEventPage,
+};
 
 export type SessionActivity = {
   /** A run is currently executing. */
@@ -119,9 +128,9 @@ export class AgentEventHub {
   }
 
   /** Seed persisted events, then retain any newer events streamed during the fetch. */
-  seedHistory(sessionId: string, items: AgentEventItem[]): void {
+  seedHistory(sessionId: string, items: AgentEventItem[], snapshotCursor?: number): void {
     this.flushHistory(sessionId, false);
-    if (items.length === 0) {
+    if (items.length === 0 && snapshotCursor === undefined) {
       this.notifyHistory(sessionId);
       return;
     }
@@ -142,6 +151,9 @@ export class AgentEventHub {
     const seededIds = new Set(mergedSeed.map((item) => item.id));
     const newerLiveItems = current.filter((item) => {
       if (seededIds.has(item.id)) return false;
+      const cursor = (item.event as AgentEvent & { eventCursor?: number }).eventCursor;
+      if (snapshotCursor !== undefined && cursor !== undefined) return cursor > snapshotCursor;
+      if (item.optimistic) return true;
       const timestamp = Date.parse(item.updatedAt ?? item.createdAt ?? "");
       return !Number.isFinite(timestamp) || timestamp >= seededThrough;
     });
@@ -160,6 +172,7 @@ export class AgentEventHub {
     return () => {
       set.delete(subscriber);
       if (set.size === 0) this.historySubscribers.delete(sessionId);
+      this.releaseInactiveHistory(sessionId);
     };
   }
 
@@ -194,6 +207,29 @@ export class AgentEventHub {
       this.pendingHistoryBySession.delete(sessionId);
     }
     if (notify && this.historySubscribers.has(sessionId)) this.notifyHistory(sessionId);
+    if (notify) this.releaseInactiveHistory(sessionId);
+  }
+
+  private releaseInactiveHistory(sessionId: string): void {
+    if (
+      (this.subscribers.get(sessionId)?.size ?? 0) > 0 ||
+      (this.historySubscribers.get(sessionId)?.size ?? 0) > 0 ||
+      this.prepared.has(sessionId)
+    ) {
+      return;
+    }
+    const pending = this.pendingHistoryBySession.get(sessionId);
+    const timer = this.historyFlushTimers.get(sessionId);
+    // Keep events only for the short pending-to-subscriber handoff window.
+    // Persisted events are reloaded from the durable page API, while the
+    // explicit `prepared` map protects prompts dispatched before a pane mounts.
+    if (pending?.length && timer !== undefined) return;
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.historyFlushTimers.delete(sessionId);
+    }
+    this.pendingHistoryBySession.delete(sessionId);
+    this.historyBySession.delete(sessionId);
   }
 
   prepare(sessionId: string): void {
@@ -204,6 +240,7 @@ export class AgentEventHub {
 
   cancelPrepare(sessionId: string): void {
     this.prepared.delete(sessionId);
+    this.releaseInactiveHistory(sessionId);
   }
 
   subscribe(sessionId: string, subscriber: Subscriber): () => void {
@@ -220,6 +257,7 @@ export class AgentEventHub {
       if (set.size === 0) {
         this.subscribers.delete(sessionId);
       }
+      this.releaseInactiveHistory(sessionId);
     };
   }
 

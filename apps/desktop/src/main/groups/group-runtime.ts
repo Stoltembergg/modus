@@ -956,6 +956,8 @@ export class GroupRuntime {
                   : criterion.status === "passed"
                     ? "ready"
                     : criterion.status === "failed" ||
+                        criterion.status === "timed_out" ||
+                        criterion.status === "cancelled" ||
                         criterion.status === "stale" ||
                         criterion.status === "unavailable"
                       ? criterion.status
@@ -2538,7 +2540,7 @@ export class GroupRuntime {
         delivery: "normal",
         userMessageId: wake.promptUserMessageId,
         ...(groupTask ? { groupTask } : {}),
-        ...(model ? { model } : {}),
+        ...(model !== undefined ? { model } : {}),
         ...(attachments && attachments.length > 0 ? { attachments } : {}),
       });
     } catch (error) {

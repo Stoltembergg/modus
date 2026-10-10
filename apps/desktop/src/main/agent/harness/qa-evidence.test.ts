@@ -1,4 +1,4 @@
-import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -7,7 +7,12 @@ import {
   controlledAgentCommand,
   parseControlledNpmCheck,
 } from "../../terminal/agent-command-policy";
-import { type RunQAEvent, recognizeCheckInvocation, summarizeRunQA } from "./qa-evidence";
+import {
+  bindRunQAtoWorkspaceRevision,
+  type RunQAEvent,
+  recognizeCheckInvocation,
+  summarizeRunQA,
+} from "./qa-evidence";
 
 const sessionId = "session-safe-1";
 const runId = "run-safe-1";
@@ -15,9 +20,20 @@ const manifestReadHook = vi.hoisted(() => ({
   afterRead: undefined as (() => void) | undefined,
   beforeAccess: undefined as ((path: unknown) => void) | undefined,
   statOwner: undefined as { path: string; uid: number } | undefined,
+  stableDirectory: undefined as
+    | { path: string; size: bigint; mtimeNs: bigint; ctimeNs: bigint }
+    | undefined,
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
+  const preserveStableDirectoryMetadata = (value: unknown, path: unknown): void => {
+    const stable = manifestReadHook.stableDirectory;
+    if (!stable || String(path) !== stable.path) return;
+    const stats = value as { size: bigint; mtimeNs: bigint; ctimeNs: bigint };
+    stats.size = stable.size;
+    stats.mtimeNs = stable.mtimeNs;
+    stats.ctimeNs = stable.ctimeNs;
+  };
   return {
     ...actual,
     accessSync: (...args: Parameters<typeof actual.accessSync>) => {
@@ -30,6 +46,12 @@ vi.mock("node:fs", async (importOriginal) => {
       if (value && owner && args[0] === owner.path) {
         value.uid = typeof value.uid === "bigint" ? BigInt(owner.uid) : owner.uid;
       }
+      preserveStableDirectoryMetadata(value, args[0]);
+      return value;
+    },
+    lstatSync: (...args: Parameters<typeof actual.lstatSync>) => {
+      const value = actual.lstatSync(...args);
+      preserveStableDirectoryMetadata(value, args[0]);
       return value;
     },
     readFileSync: (...args: Parameters<typeof actual.readFileSync>) => {
@@ -39,6 +61,17 @@ vi.mock("node:fs", async (importOriginal) => {
     },
   };
 });
+
+function stabilizeSharedTempDirectoryMetadata(): void {
+  const path = realpathSync(tmpdir());
+  const stats = statSync(path, { bigint: true });
+  manifestReadHook.stableDirectory = {
+    path,
+    size: stats.size,
+    mtimeNs: stats.mtimeNs,
+    ctimeNs: stats.ctimeNs,
+  };
+}
 
 describe("controlled package execution", () => {
   it.each(["bash", "terminal_run"])("does not certify npx/npm exec through %s", (tool) => {
@@ -125,6 +158,7 @@ describe("manifest read consistency", () => {
         join(cwd, "package.json"),
         JSON.stringify({ scripts: { test: "vitest run" } }),
       );
+      stabilizeSharedTempDirectoryMetadata();
       const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(undefined as unknown as number);
       manifestReadHook.beforeAccess = () => {
         const error = new Error(
@@ -142,6 +176,7 @@ describe("manifest read consistency", () => {
         expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
       } finally {
         manifestReadHook.beforeAccess = undefined;
+        manifestReadHook.stableDirectory = undefined;
         uidSpy.mockRestore();
         await rm(sandbox, { recursive: true, force: true });
       }
@@ -150,7 +185,9 @@ describe("manifest read consistency", () => {
   it.skipIf(!process.getuid)(
     "observes sibling churn for a leaf directly inside the sticky temporary directory",
     async () => {
-      const cwd = await mkdtemp(join(tmpdir(), "modus-direct-leaf-churn-"));
+      const temporaryRoot = await mkdtemp(join(tmpdir(), "modus-direct-leaf-root-"));
+      chmodSync(temporaryRoot, 0o1777);
+      const cwd = await mkdtemp(join(temporaryRoot, "modus-direct-leaf-churn-"));
       let sibling: string | undefined;
       await writeFile(
         join(cwd, "package.json"),
@@ -159,7 +196,7 @@ describe("manifest read consistency", () => {
       const uid = 2 ** 31 - 1;
       const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(uid);
       manifestReadHook.statOwner = { path: realpathSync(cwd), uid };
-      const protectedParent = dirname(realpathSync(tmpdir()));
+      const protectedParent = dirname(realpathSync(temporaryRoot));
       manifestReadHook.beforeAccess = (path) => {
         if (path === protectedParent) {
           const error = new Error(
@@ -172,7 +209,7 @@ describe("manifest read consistency", () => {
       try {
         const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(before?.checkName).toBe("tests");
-        sibling = await mkdtemp(join(tmpdir(), "modus-direct-leaf-sibling-"));
+        sibling = await mkdtemp(join(temporaryRoot, "modus-direct-leaf-sibling-"));
         const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(after?.checkName).toBe("tests");
         expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
@@ -181,12 +218,12 @@ describe("manifest read consistency", () => {
         manifestReadHook.statOwner = undefined;
         uidSpy.mockRestore();
         if (sibling) await rm(sibling, { recursive: true, force: true });
-        await rm(cwd, { recursive: true, force: true });
+        await rm(temporaryRoot, { recursive: true, force: true });
       }
     },
   );
   it.skipIf(!process.getuid)(
-    "fails closed on global temporary churn when running as root",
+    "fails closed on temporary ancestor churn when running as root",
     async () => {
       const sandbox = await mkdtemp(join(tmpdir(), "modus-root-ancestor-"));
       const cwd = join(sandbox, "container", "project");
@@ -196,15 +233,17 @@ describe("manifest read consistency", () => {
         JSON.stringify({ scripts: { test: "vitest run" } }),
       );
       let sibling: string | undefined;
+      stabilizeSharedTempDirectoryMetadata();
       const uidSpy = vi.spyOn(process, "getuid").mockReturnValue(0);
       try {
         const before = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(before?.checkName).toBe("tests");
-        sibling = await mkdtemp(join(tmpdir(), "modus-root-sibling-"));
+        sibling = await mkdtemp(join(sandbox, "modus-root-sibling-"));
         const after = recognizeCheckInvocation("terminal_run", "npm test", cwd);
         expect(after?.checkName).toBe("tests");
         expect(after?.packageConfigDigest).not.toBe(before?.packageConfigDigest);
       } finally {
+        manifestReadHook.stableDirectory = undefined;
         uidSpy.mockRestore();
         if (sibling) await rm(sibling, { recursive: true, force: true });
         await rm(sandbox, { recursive: true, force: true });
@@ -359,6 +398,46 @@ function pair(overrides: Partial<Extract<RunQAEvent, { type: "tool.ended" }>> = 
 const summarize = (events: RunQAEvent[], changedPaths = ["src/a.ts"], requiredChecks = ["tests"]) =>
   summarizeRunQA({ sessionId, runId, changedPaths, requiredChecks, events });
 
+describe("workspace-bound QA", () => {
+  it("keeps a pass only while its start, end, and current source revisions match", () => {
+    const revision = "a".repeat(64);
+    const events = pair({ sourceStable: true, workspaceRevision: revision });
+    const started = events[0];
+    if (started?.type === "tool.started") started.workspaceRevision = revision;
+    const result = summarize(events);
+
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: revision }),
+    ).toMatchObject({ status: "passed", evidence: [expect.objectContaining({ revision })] });
+    expect(
+      bindRunQAtoWorkspaceRevision({
+        result,
+        events,
+        workspaceRevision: "b".repeat(64),
+      }),
+    ).toMatchObject({
+      status: "unavailable",
+      reasonCode: "required_check_unavailable",
+      evidence: [expect.objectContaining({ status: "unavailable" })],
+    });
+  });
+
+  it("rejects a pass when source content changed during the check or has no revision", () => {
+    const revision = "c".repeat(64);
+    const events = pair({ sourceStable: false, workspaceRevision: revision });
+    const started = events[0];
+    if (started?.type === "tool.started") started.workspaceRevision = revision;
+    const result = summarize(events);
+
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: revision }),
+    ).toMatchObject({ status: "unavailable" });
+    expect(
+      bindRunQAtoWorkspaceRevision({ result, events, workspaceRevision: undefined }),
+    ).toMatchObject({ status: "unavailable" });
+  });
+});
+
 function commandPair(command: string, toolName = "terminal_run", paths?: string[]): RunQAEvent[] {
   const base = {
     sessionId,
@@ -400,6 +479,49 @@ describe("summarizeRunQA", () => {
       required: true,
       status: "unavailable",
       reasonCode: "required_check_unavailable",
+    });
+  });
+
+  it("does not infer a bash check passed when its exit code is missing", () => {
+    const events = pair();
+    for (const event of events) {
+      if (event.type === "tool.started" || event.type === "tool.ended") {
+        event.toolName = "bash";
+      }
+    }
+    const ended = events[1];
+    if (ended?.type === "tool.ended") delete ended.exitCode;
+
+    expect(summarize(events)).toMatchObject({
+      required: true,
+      status: "unavailable",
+      reasonCode: "required_check_unavailable",
+      evidence: [expect.objectContaining({ status: "unavailable" })],
+    });
+  });
+
+  it("keeps a timed-out check distinct from a failed or unavailable check", () => {
+    const events = pair();
+    const ended = events[1];
+    if (ended?.type === "tool.ended") {
+      (ended as typeof ended & { timedOut: boolean }).timedOut = true;
+      delete ended.exitCode;
+    }
+
+    expect(summarize(events)).toMatchObject({
+      required: true,
+      status: "timed_out",
+      reasonCode: "required_check_timed_out",
+      evidence: [expect.objectContaining({ status: "timed_out" })],
+    });
+  });
+
+  it("keeps cancellation distinct from an unavailable check", () => {
+    expect(summarize(pair({ aborted: true }))).toMatchObject({
+      required: true,
+      status: "cancelled",
+      reasonCode: "required_check_cancelled",
+      evidence: [expect.objectContaining({ status: "cancelled" })],
     });
   });
 
@@ -638,7 +760,7 @@ describe("summarizeRunQA", () => {
 
   it("does not treat missing scope as blanket coverage for scoped checks", () => {
     expect(summarize(commandPair("vitest run src/one.test.ts"), ["src/a.ts"])).toMatchObject({
-      status: "missing",
+      status: "unavailable",
     });
     expect(
       summarize(commandPair("vitest run src/one.test.ts", "terminal_run", ["src/a.ts"]), [
@@ -686,6 +808,24 @@ describe("summarizeRunQA", () => {
     expect(result.evidence).toEqual([expect.objectContaining({ status: "missing" })]);
   });
 
+  it.each([
+    "vitest run -u",
+    "vitest run --update",
+    "jest -u",
+    "jest --updateSnapshot",
+    "npx vitest run -u",
+  ])("does not certify a test invocation that updates snapshots: %s", (command) => {
+    expect(recognizeCheckInvocation("terminal_run", command)).toMatchObject({
+      checkName: "tests",
+      mutatesSource: true,
+    });
+    expect(summarize([...commandPair("npm test"), ...commandPair(command)])).toMatchObject({
+      required: true,
+      status: "missing",
+      evidence: [expect.objectContaining({ status: "missing" })],
+    });
+  });
+
   it("allows a fresh non-mutating check after a source-mutating invocation to pass", () => {
     const result = summarize([
       ...commandPair("vitest run"),
@@ -721,15 +861,25 @@ describe("summarizeRunQA", () => {
 
   it("invalidates evidence when the check did not cover the changed paths", () => {
     const events = pair({ paths: ["src/old.ts"] });
-    expect(summarize(events, ["src/new.ts"])).toMatchObject({ status: "missing" });
+    expect(summarize(events, ["src/new.ts"])).toMatchObject({ status: "unavailable" });
   });
 
   it("keeps missing required checks distinct", () => {
-    expect(summarize([], ["src/a.ts"], ["tests", "typecheck"])).toMatchObject({
+    const result = summarize([], ["src/a.ts"], ["tests", "typecheck"]);
+
+    expect(result).toMatchObject({
       required: true,
       status: "missing",
       reasonCode: "required_check_missing",
     });
+    expect(result.evidence).toEqual([
+      expect.objectContaining({ status: "missing", label: "Tests" }),
+      expect.objectContaining({ status: "missing", label: "Typecheck" }),
+    ]);
+    for (const evidence of result.evidence) {
+      expect(evidence).not.toHaveProperty("id");
+      expect(evidence).not.toHaveProperty("eventId");
+    }
   });
 
   it("keeps an unknown-only required check as an unmet obligation without exposing its name", () => {

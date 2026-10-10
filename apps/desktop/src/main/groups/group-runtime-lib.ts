@@ -286,24 +286,24 @@ export function instructionsOf(groupId: string, sessionId: string): string | und
  * Model change applies on the next turn (the session row may still be stale until
  * Save rebinds it; the prompt path also applies this authoritatively).
  */
-export function modelIdOf(groupId: string, sessionId: string): string | undefined {
+export function modelIdOf(groupId: string, sessionId: string): string | null | undefined {
   const agentId = listAgentGroupMembers(groupId).find(
     (member) => member.sessionId === sessionId,
   )?.agentId;
-  const modelId = agentId ? getAgent(agentId)?.modelId?.trim() : undefined;
+  const modelId = agentId ? getAgent(agentId)?.modelId : undefined;
   return groupTurnModelResolver(modelId || undefined, sessionId);
 }
 
 /**
- * L3b: the model a group-room turn runs on, from the agent's model (undefined = app
- * default) and its session. main/ipc installs the real rule (user-turn-model
- * resolveTurnModel: Modus agents forced to the Modus turn model, own-provider agents keep
- * theirs); without it (unit tests) the agent's model passes through unchanged.
+ * The model a group-room turn runs on. `null` explicitly selects the current app default and
+ * overrides a stale runtime model; `undefined` leaves a restored/legacy session untouched.
+ * main/ipc installs the authoritative availability check; without it, the agent model passes
+ * through unchanged.
  */
 export type GroupTurnModelResolver = (
   agentModelId: string | undefined,
   sessionId: string,
-) => string | undefined;
+) => string | null | undefined;
 
 let groupTurnModelResolver: GroupTurnModelResolver = (agentModelId) => agentModelId;
 

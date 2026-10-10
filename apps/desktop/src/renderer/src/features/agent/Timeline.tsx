@@ -21,7 +21,7 @@ import { RevealOnMount } from "../../components/ui/RevealOnMount";
 import { Tooltip } from "../../components/ui/Tooltip";
 import { formatClock } from "../../lib/formatClock";
 import { formatTokenCount } from "../../lib/tokenUsage";
-import { collectRunSources, type RunSource } from "../sources/runSources";
+import { collectRunSources, type RunSource, type RunSourcesSnapshot } from "../sources/runSources";
 import { WorkActivityRow, WorkFold } from "./ActivityGroup";
 import { MessageBlock } from "./MessageBlock";
 import {
@@ -75,6 +75,7 @@ export type MessageBlockItem = {
   runId?: string;
   /** References used by successful source tools in the same run. */
   sources?: RunSource[];
+  sourceStatus?: "loading" | "unavailable";
   streaming?: boolean;
   /** Epoch ms — user send time, or assistant completion time. */
   createdAt?: number;
@@ -249,7 +250,10 @@ function attachRunMetadata(
   }
 }
 
-export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
+export function buildBlocks(
+  agentEvents: AgentEventItem[],
+  completeRunSources?: RunSourcesSnapshot,
+): TimelineBlock[] {
   const blocks: TimelineBlock[] = [];
   const blockById = new Map<string, TimelineBlock>();
   /** todo_write tool calls render through the TodosCard, not as tool rows. */
@@ -966,8 +970,16 @@ export function buildBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
     }
   }
   for (const [runId, message] of finalAssistantByRun) {
-    const sources = collectRunSources(agentEvents, runId);
+    const isRequested = completeRunSources?.requestedRunIds.has(runId) ?? false;
+    const sources = isRequested
+      ? (completeRunSources?.sourcesByRun.get(runId) ?? [])
+      : collectRunSources(agentEvents, runId);
     if (sources.length > 0) message.sources = sources;
+    if (isRequested && completeRunSources?.loadingRunIds.has(runId)) {
+      message.sourceStatus = "loading";
+    } else if (isRequested && completeRunSources?.failedRunIds.has(runId)) {
+      message.sourceStatus = "unavailable";
+    }
   }
 
   return blocks;
@@ -1200,8 +1212,13 @@ export function visibleTimelineBlocks(blocks: TimelineBlock[]): TimelineBlock[] 
   });
 }
 
-export function buildVisibleTimelineBlocks(agentEvents: AgentEventItem[]): TimelineBlock[] {
-  return visibleTimelineBlocks(groupTurnWork(attachTurnActions(buildBlocks(agentEvents))));
+export function buildVisibleTimelineBlocks(
+  agentEvents: AgentEventItem[],
+  completeRunSources?: RunSourcesSnapshot,
+): TimelineBlock[] {
+  return visibleTimelineBlocks(
+    groupTurnWork(attachTurnActions(buildBlocks(agentEvents, completeRunSources))),
+  );
 }
 
 /**
@@ -1464,6 +1481,7 @@ export function Timeline({
                         {...(onEditResend ? { onEditResend } : {})}
                         messageRole={block.role}
                         {...(block.sources ? { sources: block.sources } : {})}
+                        {...(block.sourceStatus ? { sourceStatus: block.sourceStatus } : {})}
                         streaming={block.streaming ?? false}
                         workspaceId={workspaceId}
                       />

@@ -35,8 +35,8 @@ export function agentDialogError(
   if (context.takenNames.some((taken) => taken.trim().toLocaleLowerCase() === key)) {
     return GROUP_ERROR_MESSAGES["agent-name-taken"];
   }
-  const modelId = draft.modelId.trim();
-  if (context.custom && !modelId) return GROUP_ERROR_MESSAGES["agent-model-required"];
+  const modelId = draft.modelId;
+  if (context.custom && !modelId.trim()) return GROUP_ERROR_MESSAGES["agent-model-required"];
   if (modelId && modelId !== context.savedModelId && !context.availableModelIds.includes(modelId)) {
     return GROUP_ERROR_MESSAGES["agent-model-unavailable"];
   }

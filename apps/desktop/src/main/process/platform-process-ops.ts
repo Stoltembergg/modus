@@ -2,6 +2,9 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
+const TERMINATE_GRACE_MS = 300;
+const TERMINATION_REAP_DEADLINE_MS = 2_000;
+const TERMINATION_POLL_INTERVAL_MS = 25;
 
 /**
  * Cross-platform operations on an OS process by its real pid. This is the one
@@ -14,7 +17,12 @@ export interface PlatformProcessOps {
   isAlive(pid: number): boolean;
   /** Process name and, where the OS exposes it, the main window title. */
   describe(pid: number): Promise<ProcessDescription>;
-  /** Terminate the process and its descendants (frees ports/windows it held). */
+  /**
+   * Request process-tree termination. Completion confirms only the platform's
+   * observable scope: the original process group on POSIX, or the leader PID
+   * after Windows taskkill /T. Descendants that escape that scope are not
+   * independently proven absent.
+   */
   killTree(pid: number): Promise<void>;
 }
 
@@ -36,11 +44,36 @@ export function pidAlive(pid: number): boolean {
   }
 }
 
+function processGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
   });
+}
+
+async function waitForExit(isAlive: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (isAlive()) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await delay(Math.min(TERMINATION_POLL_INTERVAL_MS, remaining));
+  }
+  return true;
+}
+
+function terminationUnconfirmed(pid: number): Error {
+  const error = new Error(`Process tree termination could not be confirmed for PID ${pid}`);
+  error.name = "ProcessTreeTerminationError";
+  return error;
 }
 
 /** Parse `Get-Process` name + MainWindowTitle (one per line). Pure → testable. */
@@ -84,9 +117,15 @@ class WindowsProcessOps implements PlatformProcessOps {
   }
 
   async killTree(pid: number): Promise<void> {
-    await run("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).catch(
-      () => undefined,
-    );
+    if (!pidAlive(pid)) return;
+    try {
+      await run("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
+    } catch (error) {
+      if (pidAlive(pid)) throw error;
+    }
+    if (!(await waitForExit(() => pidAlive(pid), TERMINATION_REAP_DEADLINE_MS))) {
+      throw terminationUnconfirmed(pid);
+    }
   }
 }
 
@@ -105,8 +144,8 @@ class UnixProcessOps implements PlatformProcessOps {
   }
 
   async killTree(pid: number): Promise<void> {
-    // A detached child is its own process-group leader, so the negative pid
-    // signals the whole tree; fall back to the bare pid if the group send fails.
+    // A detached child is its own process-group leader. This signals and
+    // confirms the original group, not descendants that deliberately escaped it.
     const signal = (target: number, sig: NodeJS.Signals): boolean => {
       try {
         process.kill(target, sig);
@@ -115,14 +154,13 @@ class UnixProcessOps implements PlatformProcessOps {
         return false;
       }
     };
-    if (!signal(-pid, "SIGTERM")) {
-      signal(pid, "SIGTERM");
-    }
-    await delay(300);
-    if (pidAlive(pid)) {
-      if (!signal(-pid, "SIGKILL")) {
-        signal(pid, "SIGKILL");
-      }
+    const isAlive = (): boolean => processGroupAlive(pid) || pidAlive(pid);
+    if (!isAlive()) return;
+    if (!signal(-pid, "SIGTERM")) signal(pid, "SIGTERM");
+    if (await waitForExit(isAlive, TERMINATE_GRACE_MS)) return;
+    if (!signal(-pid, "SIGKILL")) signal(pid, "SIGKILL");
+    if (!(await waitForExit(isAlive, TERMINATION_REAP_DEADLINE_MS))) {
+      throw terminationUnconfirmed(pid);
     }
   }
 }

@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { type AgentEventItem, foldAgentEvents } from "../../../../shared/agent-events";
+import {
+  type AgentEventItem,
+  type AgentEventPage,
+  foldAgentEvents,
+} from "../../../../shared/agent-events";
 import type { AgentEvent } from "../../../../shared/contracts";
 
 /** During hydration retain a bounded suffix; a new snapshot covers discarded cursors. */
@@ -88,8 +92,9 @@ export function mergeGroupAgentSeed(
   seed: AgentEventItem[],
   buffer: AgentEventItem[],
   kind: EventKind,
+  snapshotCursor?: number,
 ): AgentEventItem[] {
-  const cursor = maxCursor(seed);
+  const cursor = snapshotCursor ?? maxCursor(seed);
   const suffix = buffer.filter((item) => cursorOf(item) === 0 || cursorOf(item) > cursor);
   return compactGroupAgentEvents([...seed, ...suffix], kind);
 }
@@ -136,12 +141,20 @@ export function useGroupAgentEvents(
         const active = () =>
           !disposed && current.sessions.get(sessionId) === state && state.request === request;
         void agent
-          .listEvents(sessionId)
-          .then((items: AgentEventItem[]) => {
+          .listEventPage(sessionId, {
+            direction: "backward",
+            includeSummary: kind === "questions",
+            includeActivity: kind === "working",
+            limit: 1,
+          })
+          .then((page: AgentEventPage) => {
             if (!active()) return;
-            const seed = items.filter((item) => item.event.sessionId === sessionId);
-            state.items = mergeGroupAgentSeed(seed, state.buffer, kind);
-            state.cursor = Math.max(maxCursor(seed), maxCursor(state.buffer));
+            const source = kind === "questions" ? page.summaryEvents : page.activityEvents;
+            const seed = source.filter(
+              (item: AgentEventItem) => item.event.sessionId === sessionId,
+            );
+            state.items = mergeGroupAgentSeed(seed, state.buffer, kind, page.snapshotCursor);
+            state.cursor = Math.max(page.snapshotCursor, maxCursor(state.buffer));
             state.buffer = [];
             state.hydrated = true;
             current.publish();
@@ -157,7 +170,7 @@ export function useGroupAgentEvents(
     subscription.current = current;
     setSnapshot({ scope, items: new Map() });
     const unsubscribe =
-      agent?.listEvents && agent.onEvent
+      agent?.listEventPage && agent.onEvent
         ? agent.onEvent((event: AgentEvent) => {
             const state = current.sessions.get(event.sessionId);
             if (!state) return;
@@ -201,7 +214,7 @@ export function useGroupAgentEvents(
         request: 0,
       };
       current.sessions.set(id, state);
-      if (agent?.listEvents && agent.onEvent) current.seed(id, state);
+      if (agent?.listEventPage && agent.onEvent) current.seed(id, state);
     }
     current.publish();
   }, [scope, idsKey, kind]);

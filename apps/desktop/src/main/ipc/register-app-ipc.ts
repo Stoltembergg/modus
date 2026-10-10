@@ -13,7 +13,11 @@ import {
   shell,
 } from "electron";
 import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
-import { listAgentEvents, recordAgentEvent } from "../agent/agent-event-store";
+import {
+  getRunWorkspaceRevision,
+  listAgentEventPage,
+  recordAgentEvent,
+} from "../agent/agent-event-store";
 import { listAgentRuns } from "../agent/agent-run-store";
 import {
   getAgentSession,
@@ -39,7 +43,6 @@ import {
   getCustomProviderConfig,
   getDefaultModelId,
   getModelSettings,
-  getModusTurnModelId,
   getProviderAuthState,
   getProviderDetail,
   isUsableModelId,
@@ -79,7 +82,8 @@ import {
 } from "../agent/subagents-config";
 import { setGroupTaskWakeSink, setGroupWorktreeReadySink } from "../agent/tools/group-tools";
 import {
-  resolveTurnModel,
+  resolveAgentTurnModel,
+  resolveExplicitTurnModel,
   type TurnModelDeps,
   userTurnPromptInput,
 } from "../agent/user-turn-model";
@@ -126,7 +130,12 @@ import { getComposioService } from "../composio/composio-service-instance";
 import { resolveContext, searchContext } from "../context/context-service";
 import { addDocSource, listDocSources, searchDocs } from "../docs/docs-service";
 import { listDirectory, readWorkspaceFile, writeWorkspaceFile } from "../files/files-service";
-import { emitFilesEvent, unwatchWorkspace, watchWorkspace } from "../files/files-watcher";
+import {
+  emitFilesEvent,
+  isWorkspaceWatched,
+  unwatchWorkspace,
+  watchWorkspace,
+} from "../files/files-watcher";
 import { readWorkspacePreview } from "../files/preview-kind";
 import {
   abortSubagentWorktreeApply,
@@ -207,7 +216,6 @@ import {
   clearProjectApprovalMode,
   getApprovalModeState,
   listPermissionDecisions,
-  recordPermissionDecision,
   setGlobalApprovalMode,
   setProjectApprovalMode,
 } from "../permissions/permission-store";
@@ -255,9 +263,11 @@ import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
   agentCreateSchema,
   agentCycleModelSchema,
+  agentEventPageRequestSchema,
   agentListSchema,
   agentPromptSchema,
   agentRollbackSchema,
+  agentRunWorkspaceRevisionSchema,
   agentSetBranchSchema,
   agentSetModelSchema,
   approvalModeClearProjectSchema,
@@ -386,17 +396,21 @@ export function registerAppIpc({
 } = {}): void {
   if (appearance) registerAppearanceIpcHandlers(ipcMain, assertTrustedSender, appearance);
 
-  // L3b: one turn-model rule for 1:1 (agent:prompt) and group-room turns.
+  // Validate explicit 1:1/group choices here. Agent App-default selection is sent as `null` so
+  // the runtime can bypass stale hot/PI branch models; unlinked legacy rows stay unset to restore.
   const turnModelDeps: TurnModelDeps = {
     defaultModelId: () => getDefaultModelId(),
-    modusTurnModelId: () => getModusTurnModelId(),
     isUsable: (modelId) => isUsableModelId(modelId),
   };
-  setGroupTurnModelResolver((agentModelId, sessionId) =>
-    resolveTurnModel(agentModelId ?? getAgentSession(sessionId)?.model, turnModelDeps, {
-      keepUnusable: agentModelId !== undefined,
-    }),
-  );
+  setGroupTurnModelResolver((agentModelId, sessionId) => {
+    const session = getAgentSession(sessionId);
+    return resolveAgentTurnModel(
+      agentModelId,
+      session?.model,
+      session?.agentId !== undefined,
+      turnModelDeps,
+    );
+  });
 
   ipcMain.handle(IPC_CHANNELS.appVersion, (event) => {
     assertTrustedSender(event);
@@ -515,9 +529,14 @@ export function registerAppIpc({
     return listArchivedAgentSessions(id);
   });
 
-  ipcMain.handle(IPC_CHANNELS.agentListEvents, (event, sessionId: string) => {
+  ipcMain.handle(IPC_CHANNELS.agentListEventPage, (event, input) => {
     assertTrustedSender(event);
-    return listAgentEvents(parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentListEvents));
+    const { sessionId, options } = parseIpcInput(
+      agentEventPageRequestSchema,
+      input,
+      IPC_CHANNELS.agentListEventPage,
+    );
+    return listAgentEventPage(sessionId, options);
   });
 
   ipcMain.handle(IPC_CHANNELS.agentListRuns, (event, sessionId: string) => {
@@ -525,11 +544,33 @@ export function registerAppIpc({
     return listAgentRuns(parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentListRuns));
   });
 
+  ipcMain.handle(IPC_CHANNELS.agentRunWorkspaceRevision, (event, input) => {
+    assertTrustedSender(event);
+    const parsed = parseIpcInput(
+      agentRunWorkspaceRevisionSchema,
+      input,
+      IPC_CHANNELS.agentRunWorkspaceRevision,
+    );
+    return getRunWorkspaceRevision(parsed.sessionId, parsed.runId);
+  });
+
   ipcMain.handle(IPC_CHANNELS.agentEnsure, async (event, sessionId: string) => {
     assertTrustedSender(event);
+    const parsedSessionId = parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentEnsure);
+    const session = getAgentSession(parsedSessionId);
+    const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+    const requestedModelId = session
+      ? resolveAgentTurnModel(
+          agentModelId,
+          session.model,
+          session.agentId !== undefined,
+          turnModelDeps,
+        )
+      : undefined;
     return await getAgentRuntime().ensure(
       getSenderWindow(event),
-      parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentEnsure),
+      parsedSessionId,
+      requestedModelId,
     );
   });
 
@@ -549,15 +590,20 @@ export function registerAppIpc({
     } catch (error) {
       throw toGroupIpcError(error);
     }
-    // L3b: a Modus session runs on the Modus turn model (Settings pick if allowed, else the
-    // plan default); an own-provider session keeps its stored model. Never the renderer's
-    // model or thinking (the model's own config applies).
+    // The linked agent's choice is authoritative for its chat. Never trust renderer model/thinking;
+    // an unavailable explicit model is rejected here. Unlinked legacy rows remain unset so the
+    // runtime can restore their PI branch; a linked agent without a model explicitly uses default.
+    const session = getAgentSession(parsed.sessionId);
+    const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+    const turnModelId = resolveAgentTurnModel(
+      agentModelId,
+      session?.model,
+      session?.agentId !== undefined,
+      turnModelDeps,
+    );
     await getAgentRuntime().prompt(
       getSenderWindow(event),
-      userTurnPromptInput(
-        parsed,
-        resolveTurnModel(getAgentSession(parsed.sessionId)?.model, turnModelDeps),
-      ),
+      userTurnPromptInput(parsed, turnModelId),
     );
   });
 
@@ -1076,6 +1122,11 @@ export function registerAppIpc({
     return watchWorkspace(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatch));
   });
 
+  ipcMain.handle(IPC_CHANNELS.filesWatchStatus, (event, cwd: string) => {
+    assertTrustedSender(event);
+    return isWorkspaceWatched(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesWatchStatus));
+  });
+
   ipcMain.handle(IPC_CHANNELS.filesUnwatch, (event, cwd: string) => {
     assertTrustedSender(event);
     unwatchWorkspace(parseIpcInput(cwdSchema, cwd, IPC_CHANNELS.filesUnwatch));
@@ -1130,13 +1181,11 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.permissionDecide, (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(permissionDecideSchema, input, IPC_CHANNELS.permissionDecide);
-    if (parsed.requestId) {
-      const resolved = resolvePermissionRequest(parsed.requestId, parsed.decision);
-      if (resolved) {
-        return resolved;
-      }
+    const resolved = resolvePermissionRequest(parsed.requestId, parsed.decision);
+    if (!resolved) {
+      throw new Error("Permission request is no longer active.");
     }
-    return recordPermissionDecision(parsed.action, parsed.target, parsed.decision);
+    return resolved;
   });
 
   ipcMain.handle(IPC_CHANNELS.permissionList, (event) => {
@@ -1234,6 +1283,7 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.reviewStart, async (event, input) => {
     assertTrustedSender(event);
     const parsed = parseIpcInput(reviewStartSchema, input, IPC_CHANNELS.reviewStart);
+    const session = parsed.sessionId ? getAgentSession(parsed.sessionId) : undefined;
     if (parsed.sessionId) {
       const startedEvent = {
         type: "review.started",
@@ -1244,11 +1294,25 @@ export function registerAppIpc({
       getSenderWindow(event).webContents.send(IPC_CHANNELS.agentEvent, startedEvent);
     }
     try {
+      const agentModelId = session?.agentId ? getAgent(session.agentId)?.modelId : undefined;
+      let reviewModelId = session
+        ? resolveAgentTurnModel(
+            agentModelId,
+            session.model,
+            session.agentId !== undefined,
+            turnModelDeps,
+          )
+        : undefined;
+      if (session && reviewModelId === undefined) {
+        const restored = await getAgentRuntime().ensure(getSenderWindow(event), session.id);
+        reviewModelId = resolveExplicitTurnModel(restored.model, turnModelDeps);
+      }
       const review = await startAgentReview({
         cwd: parsed.cwd,
         ...(parsed.sessionId !== undefined ? { sessionId: parsed.sessionId } : {}),
         ...(parsed.workspaceId !== undefined ? { workspaceId: parsed.workspaceId } : {}),
         ...(parsed.depth !== undefined ? { depth: parsed.depth } : {}),
+        ...(reviewModelId !== undefined ? { modelId: reviewModelId } : {}),
       });
       if (parsed.sessionId) {
         const completedEvent = {

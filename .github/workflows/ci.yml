@@ -23,16 +23,194 @@ jobs:
           node-version: "24.21.0"
           cache: npm
 
+      - name: Verify probe workflows require manual authorization
+        run: node --test scripts/probe-workflow-gates.test.mjs
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Install Electron runtime for desktop tests
+        run: npm exec -- install-electron
 
       - name: Biome + typecheck
         # `npm run check` = `biome check .` then workspace typecheck
         run: npm run check
 
       - name: Test
-        # Vitest unit suite; does not require Rust PTY sidecar or electron-builder packaging
-        run: npm run test
+        # Keep adversarial and runaway security scenarios behind manual authorization.
+        run: >
+          npm run test --workspace @modus/desktop -- --testNamePattern='^(?!.*(?:adversarial bypass hardening|enforces timeout for hanging or infinite-looping community plugins|throws WasmFuelExhaustedError and cleanly interrupts infinite/runaway loop|captures fuel exhaustion gracefully in executeWasm without crashing host))'
+          && npm run test:site
+
+  verifier-first-regressions:
+    name: verifier-first runtime regressions
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check A17, A21.2 and repeat-guard runtime files with Biome
+        run: >
+          npx biome check --max-diagnostics=100
+          apps/desktop/src/main/agent/harness/feature-flags.ts
+          apps/desktop/src/main/agent/harness/feature-flags.test.ts
+          apps/desktop/src/main/agent/runtime-registry.ts
+          apps/desktop/src/main/agent/runtime-registry.test.ts
+          apps/desktop/src/main/agent/harness/observability/harness-observer.ts
+          apps/desktop/src/main/agent/harness/observability/observability-hooks.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-kernel.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-hooks.ts
+          apps/desktop/src/main/agent/agent-event-store.ts
+          apps/desktop/src/main/agent/agent-event-store.test.ts
+          apps/desktop/src/main/agent/harness/guards/guards.test.ts
+          apps/desktop/src/main/agent/harness/guards/repeat-guard-hook.ts
+          apps/desktop/src/main/agent/harness/guards/repeat-tool-guard.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-hooks.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-kernel.ts
+          apps/desktop/src/main/agent/harness/meta-controller.ts
+          apps/desktop/src/main/agent/pi-permission-extension.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          apps/desktop/src/main/agent/harness/qa-evidence.test.ts
+          apps/desktop/src/main/agent/harness/qa-evidence.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-01.ts
+          apps/desktop/src/shared/contracts-parts/contracts-part-03.ts
+          apps/desktop/src/main/agent/runtime-qa-helper.ts
+          apps/desktop/src/main/agent/workspace-source-revision.test.ts
+          apps/desktop/src/main/agent/workspace-source-revision.ts
+          apps/desktop/src/main/files/files-watcher.test.ts
+          apps/desktop/src/main/files/files-watcher.ts
+          apps/desktop/src/main/ipc/channels.ts
+          apps/desktop/src/main/ipc/register-app-ipc.test.ts
+          apps/desktop/src/main/ipc/register-app-ipc.ts
+          apps/desktop/src/main/ipc/schemas.ts
+          apps/desktop/src/preload/index.ts
+          apps/desktop/src/preload/types.ts
+          apps/desktop/src/renderer/src/features/inspector/Inspector.tsx
+          apps/desktop/src/renderer/src/app/App.tsx
+          apps/desktop/src/renderer/src/features/plan/PlanPanel.test.tsx
+          apps/desktop/src/renderer/src/features/plan/PlanPanel.tsx
+          apps/desktop/src/renderer/src/features/plan/SpecAcceptanceCriteria.test.tsx
+          apps/desktop/src/renderer/src/features/plan/SpecAcceptanceCriteria.tsx
+          apps/desktop/src/shared/contracts-parts/contracts-part-06.ts
+
+      - name: Install Electron runtime for desktop tests
+        run: npm exec -- install-electron
+
+      - name: Run A17 runtime and evidence regressions
+        run: >
+          npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          apps/desktop/src/main/agent/agent-event-store.test.ts
+          apps/desktop/src/main/ipc/register-app-ipc.test.ts
+          apps/desktop/src/main/agent/harness/qa-evidence.test.ts
+          apps/desktop/src/main/agent/harness/kernel/harness-kernel.test.ts
+          apps/desktop/src/main/agent/workspace-source-revision.test.ts
+          apps/desktop/src/main/files/files-watcher.test.ts
+          apps/desktop/src/renderer/src/features/plan/PlanPanel.test.tsx
+          apps/desktop/src/renderer/src/features/plan/SpecAcceptanceCriteria.test.tsx
+          -t 'records not_required for a simple run without requested checks|invalidates completed QA when the workspace changes|does not bind Agent Group QA to a source edit|keeps a run cancelled when abort arrives during final workspace scope collection|workspace-bound QA|workspace source revision|does not certify a test invocation that updates snapshots|does not call an empty verification hook result verified|build turn lifecycle|external workspace edit|does not call a completed no-change turn built|persists Spec Build Task State correctly|rejects verified state with zero checks and a fabricated passing event ID|revalidates persisted QA against the current source revision|removes a displayed QA pass after the watched workspace changes|revalidates persisted QA when filesystem notifications do not arrive|live workspace watching is unavailable|workspace watcher is unavailable at startup|workspace watcher status|reports whether live workspace watching is active|reads the current workspace revision for one exact session and run|derives and persists checks for a todo-side-only linked criterion|requires linked passing evidence before showing a passed criterion|shows required checks and bounded linked evidence'
+
+      - name: Run A21.2 feature flag and lifecycle regressions
+        run: >
+          npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000
+          apps/desktop/src/main/agent/harness/feature-flags.test.ts
+          apps/desktop/src/main/agent/harness/observability/observability.test.ts
+          apps/desktop/src/main/agent/runtime-registry.test.ts
+          apps/desktop/src/main/agent/pi-sdk-runtime.test.ts
+          apps/desktop/src/main/agent/user-turn-model.test.ts
+          -t 'preserves the established defaults|reports malformed environment values|disables only features whose dependencies are invalid|does not enable dependencies or plugins|keeps valid, explicitly enabled features active|validates valid flags before constructing the singleton|diagnoses invalid dependencies and disables them before constructing the singleton|records per-turn response outcomes against their owning sessions|mirrors response evaluations into the observer end to end|attributes interleaved policy outcomes to their owning runtime sessions|releases only one Agent Group member|starts a fresh observer lifetime|discards a pending stale turn-settle hook|persists a private-data-free Task State|keeps repeated calls usable when Repeat Guards are requested without the kernel|records a session turn with a real duration when enabled|records nothing when the flag is disabled|appends the response policy directive and evaluates the settled response when enabled|omits the directive and skips evaluation when the flag is disabled|does not track or block repeated calls while the feature flag is off|enforces repeat guards when Agent Groups dispatch a member turn|allows repeated calls to a configured read-only tool|rejects an unavailable session model instead of trying the linked agent or default|preserves the selected BYOK model when the Settings default is another provider|group agent selection uses the exact model and refuses a removed member model|refuses a removed explicit model before creating a session|refuses a cold resume when the stored model was removed'
+
+      - name: Typecheck desktop after A21.2 runtime regressions
+        run: npm run typecheck --workspace @modus/desktop
+
+  sandbox-probe-compile:
+    name: sandbox probe compile-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path crates/plugin-sandbox-probe/Cargo.toml -- --check
+
+      - name: Compile sandbox probe targets without running them
+        run: cargo check --locked -p plugin-sandbox-probe --all-targets
+
+  pty-host-tests:
+    name: PTY host cancellation regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Test managed PTY process-tree cancellation
+        run: cargo test --locked -p modus-pty-host
+
+  plugin-execution-protocol-tests:
+    name: plugin execution protocol tests · safe fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check shared protocol formatting
+        run: cargo fmt --manifest-path crates/plugin-execution-protocol/Cargo.toml -- --check
+
+      - name: Test shared protocol using synthetic frames only
+        run: cargo test --locked -p modus-plugin-execution-protocol
+
+  plugin-containment:
+    name: plugin-containment · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24.21.0"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Electron runtime for desktop tests
+        run: npm exec -- install-electron
+
+      - name: Pi SDK extension containment sentinel
+        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/pi-sdk-extension-containment.test.ts
+
+      - name: Restrictive extension loader runtime test
+        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/pi-sdk-runtime.test.ts -t "restrictive extension loader"
+
+      - name: Plugin bootstrap lifecycle ordering regression
+        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/pi-sdk-runtime.test.ts -t "waits for plugin bootstrap to settle before startup lifecycle sync"
+
+      - name: Plugin directory and capability registry tests
+        run: npx vitest run --root . --no-file-parallelism --maxWorkers=1 --testTimeout=20000 apps/desktop/src/main/agent/harness/plugin apps/desktop/src/main/agent/harness/capability/capability-registry.test.ts --testNamePattern='^(?!.*(?:adversarial bypass hardening|enforces timeout for hanging or infinite-looping community plugins|throws WasmFuelExhaustedError and cleanly interrupts infinite/runaway loop|captures fuel exhaustion gracefully in executeWasm without crashing host))'
 
   supabase:
     # Supabase migrations (pgTAP + concurrency) and the Functions' real db.ts

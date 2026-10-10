@@ -27,6 +27,7 @@ export type AppProcessInfo = {
   windowTitle?: string;
   workspaceId?: string;
   sessionId?: string;
+  runId?: string;
   startedAt: string;
   status: "running" | "exited";
 };
@@ -42,11 +43,55 @@ export type LaunchAppResult = AppProcessInfo & {
 const APP_VERIFY_DELAY_MS = 1000;
 
 const apps = new Map<string, AppProcessInfo>();
+const appLeaders = new Map<string, ReturnType<typeof spawn>>();
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
+function identityUnavailable(pid: number): Error {
+  const error = new Error(
+    `Cannot safely terminate PID ${pid}: the original app process has exited.`,
+  );
+  error.name = "ProcessIdentityUnavailableError";
+  return error;
+}
+
+async function terminateLaunchedProcess(
+  pid: number,
+  child: ReturnType<typeof spawn>,
+): Promise<void> {
+  if (child.exitCode !== null || !ops.isAlive(pid)) {
+    throw identityUnavailable(pid);
+  }
+  await ops.killTree(pid);
+}
+
+function abortError(cleanupError?: unknown, cleanupConfirmed = true): Error {
+  const error = new Error(
+    cleanupConfirmed
+      ? "Process launch aborted by user."
+      : "Process launch aborted by user; process termination could not be confirmed.",
+    cleanupConfirmed ? undefined : { cause: cleanupError },
+  ) as Error & { cleanupConfirmed: boolean };
+  error.name = "AbortError";
+  error.cleanupConfirmed = cleanupConfirmed;
+  return error;
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    const timer = setTimeout(finish, ms);
     timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
@@ -57,6 +102,11 @@ function basename(path: string): string {
 /** Resolve liveness for every tracked app, flipping dead ones to "exited". */
 function refresh(): void {
   for (const info of apps.values()) {
+    const leader = appLeaders.get(info.id);
+    if (leader && leader.exitCode !== null) {
+      info.status = "exited";
+      continue;
+    }
     if (info.status === "running" && !ops.isAlive(info.pid)) {
       info.status = "exited";
     }
@@ -75,7 +125,10 @@ export async function launchApp(input: {
   cwd: string;
   workspaceId?: string;
   sessionId?: string;
+  runId?: string;
+  signal?: AbortSignal;
 }): Promise<LaunchAppResult> {
+  if (input.signal?.aborted) throw abortError();
   const start = Date.now();
   const exe = isAbsolute(input.path) ? input.path : resolve(input.cwd, input.path);
 
@@ -107,39 +160,82 @@ export async function launchApp(input: {
   if (pid === undefined) {
     throw new Error(`Failed to launch ${exe}: the OS returned no process id.`);
   }
+  if (input.signal?.aborted) {
+    try {
+      await terminateLaunchedProcess(pid, child);
+    } catch (cleanupError) {
+      throw abortError(cleanupError, false);
+    }
+    throw abortError();
+  }
   // Detach so the app's lifetime is independent of Modus.
   child.unref();
 
-  await delay(APP_VERIFY_DELAY_MS);
-  const alive = ops.isAlive(pid);
-  const description = alive ? await ops.describe(pid) : { pid, name: basename(exe) };
-
-  const info: AppProcessInfo = {
-    id: randomUUID(),
-    pid,
-    command: exe,
-    args: input.args ?? [],
-    cwd: input.cwd,
-    name: description.name,
-    ...(description.windowTitle ? { windowTitle: description.windowTitle } : {}),
-    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    startedAt: new Date().toISOString(),
-    status: alive ? "running" : "exited",
+  let abortCleanup: Promise<void> | undefined;
+  const onAbort = (): void => {
+    abortCleanup ??= terminateLaunchedProcess(pid, child);
+    void abortCleanup.catch(() => undefined);
   };
-  apps.set(info.id, info);
-  publishManagedProcessChange();
-  return { ...info, alive, durationMs: Date.now() - start };
+  input.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    await delay(APP_VERIFY_DELAY_MS, input.signal);
+    if (input.signal?.aborted) throw abortError();
+    const alive = ops.isAlive(pid);
+    const description = alive ? await ops.describe(pid) : { pid, name: basename(exe) };
+    if (input.signal?.aborted) throw abortError();
+
+    const info: AppProcessInfo = {
+      id: randomUUID(),
+      pid,
+      command: exe,
+      args: input.args ?? [],
+      cwd: input.cwd,
+      name: description.name,
+      ...(description.windowTitle ? { windowTitle: description.windowTitle } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.runId ? { runId: input.runId } : {}),
+      startedAt: new Date().toISOString(),
+      status: alive ? "running" : "exited",
+    };
+    apps.set(info.id, info);
+    appLeaders.set(info.id, child);
+    publishManagedProcessChange();
+    return { ...info, alive, durationMs: Date.now() - start };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      try {
+        await (abortCleanup ?? terminateLaunchedProcess(pid, child));
+      } catch (cleanupError) {
+        throw abortError(cleanupError, false);
+      }
+      throw abortError();
+    }
+    throw error;
+  } finally {
+    input.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 export function isAppId(id: string): boolean {
   return apps.has(id);
 }
 
-/** Terminate a tracked app and its tree. Returns false if the id is unknown. */
+/**
+ * Request platform process-tree termination for a tracked app. Returns false
+ * for unknown ids or an app whose original leader has already exited, avoiding
+ * an unsafe signal to a potentially reused PID. A successful request returns
+ * true only after the platform backend confirms termination.
+ */
 export async function killApp(id: string): Promise<boolean> {
   const info = apps.get(id);
   if (!info) {
+    return false;
+  }
+  const leader = appLeaders.get(id);
+  if ((leader && leader.exitCode !== null) || !ops.isAlive(info.pid)) {
+    info.status = "exited";
+    publishManagedProcessChange();
     return false;
   }
   await ops.killTree(info.pid);

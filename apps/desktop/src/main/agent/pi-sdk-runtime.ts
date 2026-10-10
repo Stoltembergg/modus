@@ -3,10 +3,12 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "
 import { isAbsolute, join, relative, resolve, sep, win32 } from "node:path";
 import {
   type AgentSession,
+  type BeforeAgentStartEvent,
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
   SettingsManager,
+  type ToolResultEvent,
 } from "@earendil-works/pi-coding-agent";
 import { app, type BrowserWindow as BrowserWindowType } from "electron";
 import { buildContextChips } from "../../shared/context-chips";
@@ -14,6 +16,7 @@ import type {
   AdaptiveDecision,
   AdaptiveDecisionMode,
   AdaptiveFailureAttempt,
+  AdaptiveFailureLoopAction,
   AgentEvent,
   AgentResponseModel,
   AgentRunInfo,
@@ -34,11 +37,12 @@ import type {
 import { CHATS_WORKSPACE_ID } from "../../shared/contracts";
 import { buildPlanMessage } from "../../shared/plan-message";
 import { SUBAGENT_TOOL_NAMES, type ToolProfileName, WAIT_TOOL_NAME } from "../../shared/tools";
-import { agentChatPersonaPrompt, requireAgentChatWritable } from "../agents/agents-store";
+import { agentChatPersonaPrompt, getAgent, requireAgentChatWritable } from "../agents/agents-store";
 import { releaseAgentBrowserControl } from "../browser/browser-service";
 import { planTurnContext } from "../context/context-planner";
 import { formatResolvedContext, resolveContext } from "../context/context-service";
 import {
+  cleanupSubagentWorktree,
   createSubagentWorktree,
   finishSubagentWorktree,
   getChangeStatsSinceStrict,
@@ -84,9 +88,10 @@ import {
   getLatestCheckpointRestoreRowId,
   getLatestSessionTodos,
   getLatestTodoContinuationAttempt,
+  getRunSourceWritePaths,
   getRunToolEvidence,
+  getRunWorkspaceRevision,
   getSessionCodeGraphDiscoveries,
-  listAgentEvents,
   recordAgentEvent,
 } from "./agent-event-store";
 import {
@@ -108,6 +113,9 @@ import {
   updateAgentSessionWorktree,
 } from "./agent-store";
 import { createCheckpoint } from "./checkpoint-service";
+import { CapabilityRegistry } from "./harness/capability/capability-registry";
+import { registerCoreCapabilities } from "./harness/capability/core-capabilities";
+import { SAFE_DUPLICATE_PRUNE_TOOL_NAMES } from "./harness/compaction/compaction-pruner";
 import {
   listAvoidedStrategyCodesFromBlacklist,
   upsertFailureBlacklistEntry,
@@ -118,30 +126,74 @@ import {
   createFailureLedger,
   isDuplicateFailedAttempt,
 } from "./harness/failure-intelligence";
+import { isFeatureFlagEnabled } from "./harness/feature-flags";
+import { defaultTurnSettleGroupMailboxHook } from "./harness/groups/group-hooks";
+import {
+  defaultToolCallRepeatGuardHook,
+  defaultToolResultRepeatGuardHook,
+} from "./harness/guards/repeat-guard-hook";
+import { fingerprintToolArgs, ToolInvocationTracker } from "./harness/guards/repeat-tool-guard";
 import {
   isHyperPlanSessionReserved,
   ownsHyperPlanStartReservation,
   releaseHyperPlanRunReservation,
 } from "./harness/hyperplan-draft-store";
 import { evaluateIntentGate } from "./harness/intent-gate";
+import type {
+  HarnessContext,
+  PromptBuildInput,
+  PromptBuildOutput,
+  ToolCallInput,
+  ToolCallOutput,
+  ToolResultInput,
+  ToolResultOutput,
+  TurnSettleInput,
+  TurnSettleOutput,
+} from "./harness/kernel/harness-hooks";
+import { HarnessKernel } from "./harness/kernel/harness-kernel";
+import { promptBuildHook } from "./harness/kernel/prompt-hook";
 import { clearRun as clearMcpCitationRun } from "./harness/mcp-citation-registry";
 import { decideNext, formatAdaptiveDecisionHint } from "./harness/meta-controller";
+import { HarnessObserver } from "./harness/observability/harness-observer";
+import { defaultObservabilityTurnSettleHook } from "./harness/observability/observability-hooks";
+import {
+  bootstrapModusPlugins,
+  PluginInstrumentation,
+  PluginLifecycleService,
+  PluginLoader,
+  PluginStateStore,
+  SecurityAuditLogger,
+} from "./harness/plugin";
 import {
   estimateProjectImpactWithStore,
   upsertProjectModelChangedPaths,
   upsertProjectModelDiscoveries,
 } from "./harness/project-model-store";
+import { PromptRegistry } from "./harness/prompt/prompt-registry";
 import {
+  bindRunQAtoWorkspaceRevision,
   type RunQAEvent,
   recognizeCheckInvocation,
   resolvePackageCheckScript,
   summarizeRunQA,
 } from "./harness/qa-evidence";
 import {
+  defaultPromptBuildResponsePolicyHook,
+  defaultTurnSettleResponsePolicyHook,
+} from "./harness/response/response-hooks";
+import {
   isSafeReadonlySpecialistRole,
   planSafeDispatch,
   type SafeDispatchPlan,
 } from "./harness/safe-dispatch";
+import { ModusNativeSubagentProvider } from "./harness/subagents/modus-native-provider";
+import type {
+  SubagentSpawnInput,
+  SubagentSpawnResult,
+  SubagentStatus,
+  SubagentWaitResult,
+} from "./harness/subagents/subagent-provider";
+import { SubagentProviderRegistry } from "./harness/subagents/subagent-provider-registry";
 import { classifyHarnessTask } from "./harness/task-classifier";
 import {
   createHarnessTaskState,
@@ -149,19 +201,23 @@ import {
   transitionHarnessTaskState,
 } from "./harness/task-state";
 import { evaluateTodoContinuation } from "./harness/todo-continuation";
+import type { SpillAuthorizationContext } from "./harness/tools/tool-result-storage";
 import {
   cycleDefaultModel,
   findModel,
   getDefaultModel,
   getModelRegistry,
   getModelThinkingVariant,
+  isUsableModelId,
+  listModels,
   listScopedModels,
   modelToId,
   resolveModelThinking,
-  setDefaultModel,
 } from "./model-service";
+import { createModusCompactionExtension } from "./pi-compaction-extension";
 import { createPiEventNormalizer } from "./pi-event-normalizer";
 import { createModusPermissionExtension } from "./pi-permission-extension";
+import { createModusToolSpillHandler } from "./pi-tool-spill-extension";
 import { planModePreamble, profileForMode } from "./plan-prompt";
 import { PI_ROOT_LEAF } from "./rollback-service";
 import type {
@@ -176,6 +232,7 @@ import type {
   TurnSettledEvent,
   WaitMemoryCandidateSummary,
 } from "./runtime";
+import { lastAssistantOutput, runAssistantOutput } from "./runtime-subagent-helper";
 import {
   branchContextLine,
   type RunBranchSnapshot,
@@ -189,11 +246,19 @@ import { resolveAvailableSubagent, resolveSubagentsPrompt } from "./subagents-co
 import { registerAppTools } from "./tools/app-tools";
 import { registerBrowserTools } from "./tools/browser-tools";
 import { registerFastCodebaseTools } from "./tools/fast-codebase-tools";
+import {
+  GROUP_MAILBOX_ACK_TOOL,
+  GROUP_MAILBOX_RECEIVE_TOOL,
+  GROUP_MAILBOX_SEND_TOOL,
+  GROUP_REVISION_CHECK_TOOL,
+  registerGroupMailboxTools,
+} from "./tools/group-mailbox-tools";
 import { isGroupToolName, registerGroupTools } from "./tools/group-tools";
 import { plansRoot, registerPlanTools } from "./tools/plan-tools";
 import { registerProjectMemoryTools } from "./tools/project-memory-tools";
 import { registerQuestionTools } from "./tools/question-tools";
 import { toolRegistry } from "./tools/registry";
+import { registerSpillTools } from "./tools/spill-tools";
 import { registerSubagentTools } from "./tools/subagent-tools";
 import { registerTerminalTools } from "./tools/terminal-tools";
 import { clearTodoSessionCache, registerTodoTools } from "./tools/todo-tools";
@@ -206,6 +271,14 @@ import {
 import { registerVisualTools, VISUAL_AUTHORING_GUIDELINES } from "./tools/visual-tools";
 import { formatWaitedDuration, registerWaitTools } from "./tools/wait-tools";
 import { registerWebTools } from "./tools/web-tools";
+
+function requireUsableSelectedModel(modelId: string): NonNullable<ReturnType<typeof findModel>> {
+  const model = findModel(modelId);
+  if (!model || !isUsableModelId(modelId)) {
+    throw new Error(`Selected model is unavailable: ${modelId}`);
+  }
+  return model;
+}
 
 /**
  * Appended to the agent's system prompt so responses render well in Modus's
@@ -249,6 +322,11 @@ type SdkRuntimeSession = {
   unsubscribe: () => void;
   emit: EmitAgentEvent;
   emitVolatile: EmitAgentEvent;
+  observerSessionToken: symbol;
+  /** Session-owned registry and resources; never shared between group members. */
+  promptRegistry?: PromptRegistry | undefined;
+  promptLifecycleToken: symbol;
+  resourceLoader: DefaultResourceLoader;
   /** Last compaction.ended seen on this session (for threshold continue). */
   lastCompactionEnd:
     | {
@@ -258,7 +336,20 @@ type SdkRuntimeSession = {
         failed: boolean;
       }
     | undefined;
+  /** True only while the runtime is awaiting an explicitly requested native compaction. */
+  manualCompactionInProgress?: boolean | undefined;
 };
+
+type PreviousSessionSelection = {
+  modelId?: string;
+  thinkingLevel: AgentSession["thinkingLevel"];
+  thinkingBudget?: number;
+};
+
+function normalizeWorkspacePath(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/^(?:\.\/)+/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
 
 function lastCompactionEnd(
   runtimeSession: SdkRuntimeSession,
@@ -276,6 +367,7 @@ const CONTINUE_AFTER_COMPACTION =
 
 type RunOutputTracker = {
   runId: string;
+  mode: PromptAgentInput["mode"];
   hasVisibleOutput: boolean;
   startedAt: number;
   tokenUsage: AgentRunTokenUsage;
@@ -481,13 +573,14 @@ function planEvidenceFromQA(
     for (const checkKind of criterion.requiredCheckKinds) {
       const label = PLAN_CHECK_LABELS[checkKind];
       if (!label) continue;
-      const qaEvidence = qa.evidence.find((item) => item.label === label);
-      const reference = qaEvidence ?? {
-        id: `missing:${plan.id}:${criterion.id}:${checkKind}`,
-        kind: "check",
-        status: "missing" as const,
-        label,
-      };
+      const reference = qa.evidence.find((item) => item.label === label);
+      if (
+        !reference?.id ||
+        !reference.eventId ||
+        (qa.status === "cancelled" && reference.status === "passed")
+      ) {
+        continue;
+      }
       evidence.push({
         ...reference,
         id: hashContent(`${plan.id}:${criterion.id}:${checkKind}:${reference.id}`),
@@ -637,9 +730,7 @@ function summarizeHarnessQA(input: {
   const evidence = hasValidRunStart
     ? getRunToolEvidence(input.sessionId, input.runId, restoreRowId)
     : [];
-  const events: RunQAEvent[] = evidence.map((event) =>
-    input.aborted && event.type === "tool.ended" ? { ...event, aborted: true } : event,
-  );
+  const events: RunQAEvent[] = [...evidence];
   if (input.aborted) {
     const endedCallIds = new Set(
       events.flatMap((event) => (event.type === "tool.ended" ? [event.toolCallId] : [])),
@@ -652,7 +743,6 @@ function summarizeHarnessQA(input: {
         type: "tool.ended",
         sessionId: event.sessionId,
         runId: event.runId,
-        eventId: `aborted:${event.eventId}`.slice(0, 240),
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         checkName: event.checkName,
@@ -662,15 +752,30 @@ function summarizeHarnessQA(input: {
       });
     }
   }
-  const result = summarizeRunQA({ ...input, events });
+  const summarized = summarizeRunQA({ ...input, events });
+  const result = summarized.required
+    ? bindRunQAtoWorkspaceRevision({
+        result: summarized,
+        events,
+        workspaceRevision: hasValidRunStart
+          ? getRunWorkspaceRevision(input.sessionId, input.runId)
+          : undefined,
+      })
+    : summarized;
+  if (input.aborted && result.required) {
+    result.status = "cancelled";
+    result.reasonCode = "required_check_cancelled";
+  }
   if (!input.changedScopeKnown && result.required) {
-    result.status = "unavailable";
-    result.reasonCode = "required_check_unavailable";
     result.evidence = result.evidence.map((item) =>
       item.status === "passed" || item.status === "user_confirmed"
         ? { ...item, status: "unavailable" }
         : item,
     );
+    if (result.status === "passed" || result.status === "user_confirmed") {
+      result.status = "unavailable";
+      result.reasonCode = "required_check_unavailable";
+    }
   }
   return {
     result,
@@ -732,7 +837,14 @@ export function activeToolNamesForSession(
   const disabled = new Set<string>();
   // Agent Groups member tools exist only for sessions that are group members.
   if (!groupIdFor(info.id).groupId) {
-    for (const name of active) if (isGroupToolName(name)) disabled.add(name);
+    for (const name of active) {
+      if (isGroupToolName(name) || isGroupMailboxToolName(name)) disabled.add(name);
+    }
+  }
+  if (!isFeatureFlagEnabled("MODUS_GROUPS_MAILBOX")) {
+    for (const name of active) {
+      if (isGroupMailboxToolName(name)) disabled.add(name);
+    }
   }
   if (info.parentSessionId) {
     // Parent-only orchestration: children neither spawn peers nor wait on them.
@@ -754,6 +866,15 @@ export function activeToolNamesForSession(
     }
   }
   return active.filter((name) => !disabled.has(name));
+}
+
+function isGroupMailboxToolName(name: string): boolean {
+  return (
+    name === GROUP_MAILBOX_SEND_TOOL ||
+    name === GROUP_MAILBOX_RECEIVE_TOOL ||
+    name === GROUP_MAILBOX_ACK_TOOL ||
+    name === GROUP_REVISION_CHECK_TOOL
+  );
 }
 
 function composeSubagentPrompt(input: {
@@ -779,6 +900,13 @@ function composeSubagentPrompt(input: {
 type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
+  #harnessKernel = new HarnessKernel();
+  #capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
+  #pluginLoader: PluginLoader = new PluginLoader(this.#capabilityRegistry);
+  #pluginStateStore?: PluginStateStore | undefined;
+  #pluginLifecycleService?: PluginLifecycleService | undefined;
+  #bootstrapPromise?: Promise<void> | undefined;
+  #pluginSyncPromise?: Promise<string[]> | undefined;
   private sessions = new Map<string, SdkRuntimeSession>();
   /** The persona block each cached 1:1 chat was built with (A3): a change rebuilds it. */
   private personaPrompts = new Map<string, string | undefined>();
@@ -787,6 +915,22 @@ export class PiSdkRuntime implements AgentRuntime {
   private questionPendingListeners = new Set<(sessionId: string) => void>();
   private resumePromises = new Map<string, Promise<SdkRuntimeSession | undefined>>();
   private runOutputTrackers = new Map<string, RunOutputTracker>();
+  private repeatGuardPendingToolCalls = new Map<
+    string,
+    Map<string, { runId: string; toolName: string; input: unknown }>
+  >();
+  private spillPendingToolCalls = new Map<
+    string,
+    Map<
+      string,
+      {
+        runId: string;
+        workspaceId: string;
+        toolName: string;
+        promptLifecycleToken: symbol;
+      }
+    >
+  >();
   private cancellingRuns = new Set<string>();
   private preflightReservations = new Map<string, symbol>();
   private pendingIntentGates = new Map<string, { runId: string; controller: AbortController }>();
@@ -806,6 +950,14 @@ export class PiSdkRuntime implements AgentRuntime {
   >();
 
   constructor() {
+    this.#harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
+    this.#harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
+    this.#harnessKernel.registerHook(promptBuildHook);
+    this.#harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
+    this.#harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
+    this.#harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
+    this.#harnessKernel.registerHook(defaultTurnSettleGroupMailboxHook);
+
     // Make the agent terminal tools (run/read/list/write/kill), the built-in
     // web tools (search/fetch), and the live to-do tool available to the chat
     // profile before any session is assembled.
@@ -819,12 +971,221 @@ export class PiSdkRuntime implements AgentRuntime {
     registerProjectMemoryTools();
     registerPlanTools();
     registerQuestionTools();
+    registerSpillTools();
     registerSubagentTools(this);
     registerWaitTools(this);
     registerGroupTools();
+    registerGroupMailboxTools();
+
+    if (isFeatureFlagEnabled("MODUS_CAPABILITY_REGISTRY")) {
+      registerCoreCapabilities(this.#capabilityRegistry);
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGIN_TRACING")) {
+      this.#capabilityRegistry.setInstrumentation(new PluginInstrumentation());
+    }
+
+    if (isFeatureFlagEnabled("MODUS_PLUGIN_ISOLATION")) {
+      // Keep the durable audit service ready for host broker decisions. The
+      // isolation facade is deliberately not exposed or wired as an executor.
+      SecurityAuditLogger.getInstance();
+    }
+
+    const pluginsEnabled = isFeatureFlagEnabled("MODUS_PLUGINS");
+    const lifecycleEnabled = isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE");
+    if (lifecycleEnabled) {
+      try {
+        // Open durable lifecycle state before any plugin is loaded. If the
+        // store is unavailable, keep this optional subsystem inactive while
+        // the rest of the agent runtime remains available.
+        const service = this.#getPluginLifecycleService();
+        if (pluginsEnabled) {
+          this.#bootstrapPromise = bootstrapModusPlugins(
+            this.#capabilityRegistry,
+            this.#pluginLoader,
+            {
+              deferActivation: true,
+            },
+          )
+            .then(() => {})
+            .catch((err) => {
+              console.error("[modus] Failed to prepare plugins for lifecycle sync:", err);
+            });
+        }
+        this.#pluginSyncPromise = (this.#bootstrapPromise ?? Promise.resolve())
+          .then(() => service.syncOnStartup())
+          .catch((err) => {
+            console.error("[modus] Failed to sync plugins on startup:", err);
+            return [];
+          });
+      } catch (err) {
+        console.error(
+          "[modus] Plugin lifecycle state is unavailable; plugins remain unloaded:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    }
   }
 
-  /** Active tool names for routing, using the same filter as prompt construction. */
+  #getPluginStateStore(): PluginStateStore {
+    if (!this.#pluginStateStore) {
+      const userData = app.getPath("userData");
+      this.#pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
+    }
+    return this.#pluginStateStore;
+  }
+
+  #getPluginLifecycleService(): PluginLifecycleService {
+    if (!this.#pluginLifecycleService) {
+      this.#pluginLifecycleService = new PluginLifecycleService(
+        this.#getPluginStateStore(),
+        this.#pluginLoader,
+        this.#capabilityRegistry,
+      );
+    }
+    return this.#pluginLifecycleService;
+  }
+
+  getSubagentRegistry(): SubagentProviderRegistry {
+    const registry = SubagentProviderRegistry.getInstance();
+    const defaultProvider = registry.getDefaultProvider();
+    if (defaultProvider instanceof ModusNativeSubagentProvider) {
+      defaultProvider.setDelegate({
+        spawnSubagent: async (input: SubagentSpawnInput): Promise<SubagentSpawnResult> => {
+          if (!input.sessionId) {
+            return {
+              subagentId: "unavailable",
+              status: "failed",
+              errorMessage: "Parent sessionId is required to spawn a native subagent",
+            };
+          }
+          const parentSession = getAgentSession(input.sessionId);
+          if (!parentSession) {
+            return {
+              subagentId: "unavailable",
+              sessionId: input.sessionId,
+              status: "failed",
+              errorMessage: `Parent session ${input.sessionId} not found`,
+            };
+          }
+          const stubWindow = {
+            webContents: {
+              send: () => {},
+            },
+            isDestroyed: () => false,
+            isFocused: () => true,
+            isMinimized: () => false,
+          } as unknown as BrowserWindowType;
+          try {
+            const res = await this.runSubagent(stubWindow, {
+              parentSessionId: input.sessionId,
+              task: input.task,
+              prompt: input.task,
+              subagentType: input.role,
+              subagent: {
+                name: input.role,
+                body: "",
+                model: "inherit",
+                readOnly: false,
+                ...(input.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
+              },
+            });
+            return {
+              subagentId: res.session.id,
+              sessionId: input.sessionId,
+              status: "spawned",
+            };
+          } catch (err) {
+            return {
+              subagentId: "unavailable",
+              sessionId: input.sessionId,
+              status: "failed",
+              errorMessage: err instanceof Error ? err.message : String(err),
+            };
+          }
+        },
+        waitSubagent: async (
+          subagentId: string,
+          timeoutMs?: number,
+        ): Promise<SubagentWaitResult> => {
+          const childSession = getAgentSession(subagentId);
+          const parentId = childSession?.parentSessionId;
+          if (!parentId) {
+            return {
+              subagentId,
+              success: false,
+              error: `Subagent ${subagentId} parent session not found`,
+            };
+          }
+          const waitResult = await this.waitBackground({
+            sessionId: parentId,
+            subagentIds: [subagentId],
+            timeoutMs: timeoutMs ?? 30000,
+          });
+          const child = waitResult.subagents.find((item) => item.id === subagentId);
+          return {
+            subagentId,
+            success: child?.status === "completed",
+            ...(child?.output ? { output: child.output } : {}),
+            ...(child?.status === "error" && child?.output ? { error: child.output } : {}),
+          };
+        },
+        stopSubagent: async (subagentId: string): Promise<void> => {
+          await this.abort(subagentId);
+        },
+        getSubagentStatus: async (subagentId: string): Promise<SubagentStatus> => {
+          const session = getAgentSession(subagentId);
+          if (!session) {
+            return {
+              subagentId,
+              state: "failed",
+              error: `Session ${subagentId} not found`,
+            };
+          }
+          const task = this.backgroundChildTasks.get(subagentId);
+          const childRun = listAgentRuns(subagentId).at(-1);
+          let state: SubagentStatus["state"] = "running";
+          if (
+            task?.status === "completed" ||
+            session.status === "completed" ||
+            childRun?.status === "completed"
+          )
+            state = "completed";
+          else if (
+            task?.status === "error" ||
+            session.status === "error" ||
+            childRun?.status === "failed"
+          )
+            state = "failed";
+          else if (session.status === "cancelled" || childRun?.status === "cancelled")
+            state = "aborted";
+          return {
+            subagentId,
+            state,
+          };
+        },
+      });
+    }
+    return registry;
+  }
+
+  async waitForPlugins(): Promise<void> {
+    if (this.#bootstrapPromise) {
+      await this.#bootstrapPromise;
+    }
+    if (this.#pluginSyncPromise) {
+      await this.#pluginSyncPromise;
+    }
+  }
+
+  /** Release the runtime-owned lifecycle database handle without changing durable plugin state. */
+  async closePluginLifecycleStore(): Promise<void> {
+    await this.waitForPlugins();
+    this.#pluginStateStore?.close();
+    this.#pluginStateStore = undefined;
+    this.#pluginLifecycleService = undefined;
+  }
+
   getActiveToolNames(sessionId: string, profile: ToolProfileName): readonly string[] {
     const info = this.sessions.get(sessionId)?.info ?? getAgentSession(sessionId);
     return info ? activeToolNamesForSession(info, profile) : [];
@@ -849,6 +1210,7 @@ export class PiSdkRuntime implements AgentRuntime {
       updateAgentRunStatus(runId, "cancelled");
       runtimeSession.emit({ type: "run.cancelled", sessionId, runId });
     }
+    this.clearRepeatGuardRun(sessionId, runId);
     removeRunOutputTrackerIfOwned(this.runOutputTrackers, sessionId, outputTracker);
     this.releasePromptPreflight(sessionId, preflightReservation);
     if (ownsActiveSession) {
@@ -936,6 +1298,7 @@ export class PiSdkRuntime implements AgentRuntime {
     } finally {
       if (!preserveStartedRun) {
         clearMcpCitationRun(input.sessionId, input.runId);
+        this.clearRepeatGuardRun(input.sessionId, input.runId);
         if (input.outputTracker) {
           removeRunOutputTrackerIfOwned(
             this.runOutputTrackers,
@@ -1145,10 +1508,11 @@ export class PiSdkRuntime implements AgentRuntime {
       workspaceId: string;
       mode: "build" | "plan" | "spec";
       classification: HarnessTaskState["classification"];
-      boundary: "pre_prompt" | "post_qa" | "post_failure";
+      boundary: "pre_prompt" | "post_qa" | "post_failure" | "tool_guard";
       changedPaths?: string[];
       revision?: string;
       qaStatus?: AutoQAStatus;
+      failureLoopAction?: AdaptiveFailureLoopAction;
       remainingContinuationBudget?: number;
     },
   ): Promise<AdaptiveDecision | undefined> {
@@ -1200,6 +1564,7 @@ export class PiSdkRuntime implements AgentRuntime {
             ? { qaStatus: tracker.lastQaStatus }
             : {}),
         failureAttempts: [...tracker.failureAttempts, ...blacklistAttempts],
+        ...(input.failureLoopAction ? { failureLoopAction: input.failureLoopAction } : {}),
         impact,
         remainingContinuationBudget: input.remainingContinuationBudget ?? 1,
         enabledModelIds: listScopedModels().map((entry) => modelToId(entry.model)),
@@ -1210,7 +1575,11 @@ export class PiSdkRuntime implements AgentRuntime {
       tracker.lastAdaptiveDecision = decision;
       const dispatch = planSafeDispatch(decision);
       if (dispatch.kind === "verify_gate") tracker.forceVerifyGate = true;
-      if (dispatch.kind === "retrieve_local" && !tracker.adaptiveRetrievalDigest) {
+      if (
+        input.boundary !== "tool_guard" &&
+        dispatch.kind === "retrieve_local" &&
+        !tracker.adaptiveRetrievalDigest
+      ) {
         try {
           const memoryDigest = await planTurnContext({
             workspaceId: input.workspaceId,
@@ -1233,6 +1602,7 @@ export class PiSdkRuntime implements AgentRuntime {
       // flushed immediately at post_qa/post_failure (gate already cleared).
       if (
         (dispatch.kind === "spawn_readonly_specialist" || dispatch.kind === "mcp_preflight") &&
+        input.boundary !== "tool_guard" &&
         !tracker.adaptiveSpecialistSpawned
       ) {
         tracker.pendingAdaptiveSpawn = dispatch;
@@ -1332,6 +1702,324 @@ export class PiSdkRuntime implements AgentRuntime {
     }
   }
 
+  private createToolGuardContext(
+    runtimeSession: SdkRuntimeSession,
+    tracker: RunOutputTracker,
+  ): HarnessContext {
+    const sessionToken = runtimeSession.observerSessionToken;
+    const context: HarnessContext = {
+      sessionId: runtimeSession.info.id,
+      runId: tracker.runId,
+      sessionToken,
+      isCurrent: () => {
+        const sessionId = runtimeSession.info.id;
+        const observer = HarnessObserver.getInstance();
+        return (
+          this.sessions.get(sessionId) === runtimeSession &&
+          runtimeSession.observerSessionToken === sessionToken &&
+          observer.isSessionCurrent(sessionId, sessionToken) &&
+          this.runOutputTrackers.get(sessionId) === tracker &&
+          !this.cancellingRuns.has(tracker.runId) &&
+          getAgentRun(tracker.runId)?.status !== "cancelled"
+        );
+      },
+      workspaceId: runtimeSession.info.workspaceId,
+      cwd: runtimeSession.info.cwd,
+      ...groupIdFor(runtimeSession.info.id),
+      mode: tracker.mode ?? "build",
+      state: new Map([["harness.failure_attempts", tracker.failureAttempts]]),
+      startedAt: tracker.startedAt,
+    };
+    return context;
+  }
+
+  private async beforeRepeatGuardToolCall(
+    sessionId: string,
+    input: ToolCallInput,
+    promptLifecycleToken: symbol,
+  ): Promise<{ block?: boolean | undefined; reason?: string | undefined } | undefined> {
+    this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
+    this.recordPendingSpillToolCall(sessionId, input, promptLifecycleToken);
+    if (!isFeatureFlagEnabled("MODUS_USE_KERNEL") || !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")) {
+      return undefined;
+    }
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (!runtimeSession || !activeRun || !tracker || activeRun.id !== tracker.runId) {
+      return undefined;
+    }
+
+    const context = this.createToolGuardContext(runtimeSession, tracker);
+    if (!context.isCurrent?.()) {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
+      return { block: true, reason: "The session run is no longer active." };
+    }
+    const output = await this.#harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
+      "tool_call",
+      input,
+      context,
+    );
+    if (!context.isCurrent?.()) {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
+      return { block: true, reason: "The session run is no longer active." };
+    }
+    const decision = output.repeatGuardDecision;
+    if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+      HarnessObserver.getInstance().recordRepeatGuardEvaluation(
+        input.toolName,
+        decision?.action === "block",
+        sessionId,
+        runtimeSession.observerSessionToken,
+        activeRun.id,
+      );
+    }
+    if (decision?.action === "block") {
+      this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
+      this.recordAdaptiveFailure(runtimeSession, tracker, {
+        sessionId,
+        runId: activeRun.id,
+        strategyCode: "repeat_tool_loop",
+        reasonCode: decision.reasonCode ?? "repeat_guard_tool_loop",
+        hypothesisCode: `repeat_${fingerprintToolArgs({
+          toolName: input.toolName,
+          input: input.input,
+        })}`,
+        ...(tracker.taskState?.revision ? { revision: tracker.taskState.revision } : {}),
+        persistToWorkspace: false,
+      });
+      const classification =
+        tracker.taskState?.classification ??
+        classifyHarnessTask({
+          text: "Repeated tool call made no progress.",
+          mode: tracker.mode ?? "build",
+          contextPaths: [],
+          changedPaths: [],
+        });
+      await this.consultAdaptiveController(runtimeSession, tracker, {
+        sessionId,
+        runId: activeRun.id,
+        workspaceId: runtimeSession.info.workspaceId,
+        mode: tracker.mode ?? "build",
+        classification,
+        boundary: "tool_guard",
+        ...(decision.failureLoopAction ? { failureLoopAction: decision.failureLoopAction } : {}),
+        remainingContinuationBudget: 0,
+      });
+      return { block: true, reason: decision.reason };
+    }
+
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId) ?? new Map();
+    pending.set(input.toolCallId, {
+      runId: activeRun.id,
+      toolName: input.toolName,
+      input: input.input,
+    });
+    this.repeatGuardPendingToolCalls.set(sessionId, pending);
+    return undefined;
+  }
+
+  private cancelPendingRepeatGuardToolCall(sessionId: string, toolCallId: string): void {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId);
+    pending?.delete(toolCallId);
+    if (pending?.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
+  }
+
+  private cancelPendingToolCall(sessionId: string, toolCallId: string): void {
+    this.cancelPendingRepeatGuardToolCall(sessionId, toolCallId);
+    this.cancelPendingSpillToolCall(sessionId, toolCallId);
+  }
+
+  private recordPendingSpillToolCall(
+    sessionId: string,
+    input: ToolCallInput,
+    promptLifecycleToken: symbol,
+  ): void {
+    if (!isFeatureFlagEnabled("MODUS_TOOL_RESULT_SPILL")) return;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken ||
+      !activeRun ||
+      !tracker ||
+      activeRun.id !== tracker.runId ||
+      this.cancellingRuns.has(activeRun.id) ||
+      getAgentRun(activeRun.id)?.status === "cancelled"
+    ) {
+      return;
+    }
+
+    const pending = this.spillPendingToolCalls.get(sessionId) ?? new Map();
+    pending.set(input.toolCallId, {
+      runId: activeRun.id,
+      workspaceId: runtimeSession.info.workspaceId,
+      toolName: input.toolName,
+      promptLifecycleToken,
+    });
+    this.spillPendingToolCalls.set(sessionId, pending);
+  }
+
+  private takeSpillAuthorization(
+    sessionId: string,
+    promptLifecycleToken: symbol,
+    event: ToolResultEvent,
+  ): SpillAuthorizationContext | undefined {
+    const pending = this.spillPendingToolCalls.get(sessionId);
+    const invocation = pending?.get(event.toolCallId);
+    this.cancelPendingSpillToolCall(sessionId, event.toolCallId);
+    if (!invocation || invocation.toolName !== event.toolName) return undefined;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken ||
+      invocation.promptLifecycleToken !== promptLifecycleToken ||
+      runtimeSession.info.workspaceId !== invocation.workspaceId ||
+      !activeRun ||
+      activeRun.id !== invocation.runId ||
+      !tracker ||
+      tracker.runId !== invocation.runId ||
+      this.cancellingRuns.has(invocation.runId) ||
+      getAgentRun(invocation.runId)?.status === "cancelled"
+    ) {
+      return undefined;
+    }
+
+    return {
+      sessionId,
+      runId: invocation.runId,
+      workspaceId: invocation.workspaceId,
+    };
+  }
+
+  private cancelPendingSpillToolCall(sessionId: string, toolCallId: string): void {
+    const pending = this.spillPendingToolCalls.get(sessionId);
+    pending?.delete(toolCallId);
+    if (pending?.size === 0) this.spillPendingToolCalls.delete(sessionId);
+  }
+
+  private async afterRepeatGuardToolCall(
+    sessionId: string,
+    event: {
+      toolCallId: string;
+      toolName: string;
+      input: unknown;
+      content: readonly { type: string; text?: string | undefined }[];
+      details: unknown;
+      isError: boolean;
+    },
+  ): Promise<void> {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId)?.get(event.toolCallId);
+    this.cancelPendingRepeatGuardToolCall(sessionId, event.toolCallId);
+    if (!pending || pending.toolName !== event.toolName) return;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const activeRun = getActiveAgentRun(sessionId);
+    const tracker = this.runOutputTrackers.get(sessionId);
+    if (
+      !runtimeSession ||
+      !activeRun ||
+      !tracker ||
+      activeRun.id !== pending.runId ||
+      tracker.runId !== pending.runId ||
+      !isFeatureFlagEnabled("MODUS_USE_KERNEL") ||
+      !isFeatureFlagEnabled("MODUS_REPEAT_GUARDS")
+    ) {
+      return;
+    }
+
+    const outcome =
+      this.cancellingRuns.has(pending.runId) || getAgentRun(pending.runId)?.status === "cancelled"
+        ? "cancelled"
+        : event.isError
+          ? "failed"
+          : "success";
+    const resultFingerprint = fingerprintToolArgs({
+      isError: event.isError,
+      content: event.content.map((item) => {
+        if (item.type === "text") return { type: item.type, text: item.text ?? "" };
+        if ("data" in item) {
+          return {
+            type: item.type,
+            mimeType: "mimeType" in item ? item.mimeType : undefined,
+            dataFingerprint: fingerprintToolArgs(item.data),
+          };
+        }
+        return { type: item.type };
+      }),
+      details: event.details,
+    });
+    const state = tracker.taskState;
+    const progressFingerprint = fingerprintToolArgs({
+      phase: state?.phase,
+      verificationStatus: state?.verificationStatus,
+      criteria: state?.criteria.map((criterion) => [criterion.criterionId, criterion.status]),
+      openQuestionRefs: state?.openQuestionRefs,
+      evidenceRefs: state?.evidenceRefs.map((evidence) => evidence.eventId),
+      revision: state?.revision,
+    });
+    const resultInput: ToolResultInput = {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      input: pending.input,
+      outcome,
+      resultFingerprint,
+      progressFingerprint,
+    };
+    const context = this.createToolGuardContext(runtimeSession, tracker);
+    await this.#harnessKernel.executePhase<ToolResultInput, ToolResultOutput>(
+      "tool_result",
+      resultInput,
+      context,
+    );
+    if (!context.isCurrent?.()) return;
+
+    if (outcome === "failed") {
+      this.recordAdaptiveFailure(runtimeSession, tracker, {
+        sessionId,
+        runId: pending.runId,
+        strategyCode: "tool_execution",
+        reasonCode: "tool_execution_failed",
+        hypothesisCode: `tool_${fingerprintToolArgs({
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+        })}`,
+        ...(tracker.taskState?.revision ? { revision: tracker.taskState.revision } : {}),
+        persistToWorkspace: false,
+      });
+    }
+  }
+
+  private clearRepeatGuardRun(sessionId: string, runId: string): void {
+    const pending = this.repeatGuardPendingToolCalls.get(sessionId);
+    if (pending) {
+      for (const [toolCallId, invocation] of pending) {
+        if (invocation.runId === runId) pending.delete(toolCallId);
+      }
+      if (pending.size === 0) this.repeatGuardPendingToolCalls.delete(sessionId);
+    }
+    const spillPending = this.spillPendingToolCalls.get(sessionId);
+    if (spillPending) {
+      for (const [toolCallId, invocation] of spillPending) {
+        if (invocation.runId === runId) spillPending.delete(toolCallId);
+      }
+      if (spillPending.size === 0) this.spillPendingToolCalls.delete(sessionId);
+    }
+    ToolInvocationTracker.getInstance().clearRun(sessionId, runId);
+  }
+
+  private clearRepeatGuardSession(sessionId: string): void {
+    this.repeatGuardPendingToolCalls.delete(sessionId);
+    this.spillPendingToolCalls.delete(sessionId);
+    ToolInvocationTracker.getInstance().clearSession(sessionId);
+  }
+
   private recordAdaptiveFailure(
     runtimeSession: SdkRuntimeSession,
     tracker: RunOutputTracker,
@@ -1343,6 +2031,7 @@ export class PiSdkRuntime implements AgentRuntime {
       revision?: string;
       evidenceEventIds?: string[];
       hypothesisCode?: string;
+      persistToWorkspace?: boolean;
     },
   ): void {
     try {
@@ -1373,7 +2062,7 @@ export class PiSdkRuntime implements AgentRuntime {
         attempt,
       });
       const workspaceId = runtimeSession.info.workspaceId;
-      if (workspaceId) {
+      if (workspaceId && input.persistToWorkspace !== false) {
         upsertFailureBlacklistEntry({
           workspaceId,
           strategyCode: attempt.strategyCode,
@@ -1468,6 +2157,20 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<void> {
     const runId = tracker.runId;
     const plan = tracker.taskPlan;
+    let groupSourceFingerprint: string | undefined;
+    let groupSourceUnavailable = false;
+    if (input.groupTask) {
+      const binding = getGroupTaskRunBinding(input.sessionId, runId);
+      const task = binding ? getGroupTask(binding.taskId) : undefined;
+      const source = task ? getGroupTaskSourcePath(task) : undefined;
+      try {
+        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
+          throw new Error("Task checks did not run against the task owner's source.");
+        groupSourceFingerprint = await getGroupSourceFingerprint(source);
+      } catch {
+        groupSourceUnavailable = true;
+      }
+    }
     const summary = summarizeHarnessQA({
       sessionId: input.sessionId,
       runId,
@@ -1482,30 +2185,34 @@ export class PiSdkRuntime implements AgentRuntime {
     if (summary.restoreRowId === undefined) delete tracker.lastQaRestoreRowId;
     else tracker.lastQaRestoreRowId = summary.restoreRowId;
     const result = summary.result;
-    if (plan) {
-      const evidence = planEvidenceFromQA(plan, result);
-      if (evidence.length > 0) {
-        const updatedPlan = applyPlanAcceptanceEvidenceById(plansRoot(), plan.id, evidence);
-        if (updatedPlan) {
-          runtimeSession.emit({
-            type: "plan.updated",
-            sessionId: input.sessionId,
-            plan: updatedPlan,
-          });
-        }
-      }
-    }
     if (input.groupTask) {
-      const binding = getGroupTaskRunBinding(input.sessionId, runId);
-      const task = binding ? getGroupTask(binding.taskId) : undefined;
-      const source = task ? getGroupTaskSourcePath(task) : undefined;
-      try {
-        if (!source || !binding || realpathSync(source) !== realpathSync(runtimeSession.info.cwd))
-          throw new Error("Task checks did not run against the task owner's source.");
-        result.sourceFingerprint = await getGroupSourceFingerprint(source);
-      } catch {
+      if (groupSourceFingerprint) result.sourceFingerprint = groupSourceFingerprint;
+      if (groupSourceUnavailable) {
         result.status = "unavailable";
         result.reasonCode = "task_source_unavailable";
+        result.evidence = result.evidence.map((item) =>
+          item.status === "passed" || item.status === "user_confirmed"
+            ? { ...item, status: "unavailable" }
+            : item,
+        );
+      }
+    }
+    if (
+      result.required &&
+      (aborted || this.cancellingRuns.has(runId) || getAgentRun(runId)?.status === "cancelled")
+    ) {
+      result.status = "cancelled";
+      result.reasonCode = "required_check_cancelled";
+    }
+    if (plan?.spec && result.required) {
+      const evidence = planEvidenceFromQA(plan, result);
+      const updatedPlan = applyPlanAcceptanceEvidenceById(plansRoot(), plan.id, evidence);
+      if (updatedPlan) {
+        runtimeSession.emit({
+          type: "plan.updated",
+          sessionId: input.sessionId,
+          plan: updatedPlan,
+        });
       }
     }
     runtimeSession.emit({ type: "harness.qa", sessionId: input.sessionId, runId, result });
@@ -1751,6 +2458,7 @@ export class PiSdkRuntime implements AgentRuntime {
   ): AgentToolContext {
     const sessionId = runtimeSession.info.id;
     const baseEmit = runtimeSession.emit;
+    const activeRunId = getActiveAgentRun(sessionId)?.id;
     // Real ask_user / approval on a group member must surface as Waiting for you
     // (and free the concurrency slot). Intent-gate is skipped for group_member.
     const emit: EmitAgentEvent =
@@ -1766,6 +2474,7 @@ export class PiSdkRuntime implements AgentRuntime {
       workspaceId: runtimeSession.info.workspaceId,
       cwd: runtimeSession.info.cwd,
       sessionId,
+      ...(activeRunId ? { runId: activeRunId } : {}),
       profile,
       ...(mode ? { mode } : {}),
       ...(runtimeSession.info.parentSessionId
@@ -1780,13 +2489,22 @@ export class PiSdkRuntime implements AgentRuntime {
   private async getOrResume(
     window: BrowserWindowType,
     sessionId: string,
+    requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
     const pending = this.resumePromises.get(sessionId);
     if (pending) {
-      return await pending;
+      try {
+        return await pending;
+      } catch (error) {
+        // An explicit prompt/model change can recover a cold session whose saved model has
+        // disappeared. Rebuild with that requested identity instead of inheriting the failed
+        // stored selection.
+        if (requestedModelId === undefined) throw error;
+      }
     }
     const existing = this.sessions.get(sessionId);
     let previousSession: SdkRuntimeSession | undefined;
+    let previousSelection: PreviousSessionSelection | undefined;
     let disposing: Promise<void> | undefined;
     if (existing) {
       const resourcesChanged =
@@ -1803,13 +2521,31 @@ export class PiSdkRuntime implements AgentRuntime {
       // are current for this turn. The in-memory to-dos stay.
       // PI has no public custom-definition setter. A tool-only refresh reuses
       // the live SessionManager: its branch may not have reached disk yet.
-      if (toolsChanged && !resourcesChanged) previousSession = existing;
+      if (toolsChanged && !resourcesChanged) {
+        previousSession = existing;
+        // dispose() aborts the SDK agent and can reset its live thinking state. Snapshot the
+        // selected identity and thinking configuration before awaiting that disposal.
+        previousSelection = {
+          ...(existing.session.model ? { modelId: modelToId(existing.session.model) } : {}),
+          thinkingLevel: existing.session.thinkingLevel,
+          ...(existing.session.agent.thinkingBudgets?.high !== undefined
+            ? { thinkingBudget: existing.session.agent.thinkingBudgets.high }
+            : {}),
+        };
+      }
       // Publish the rebuild promise before yielding so concurrent ensure/prompt
       // calls cannot resume from disk and discard the live branch.
       disposing = this.disposeSessionOnly(sessionId, { keepTodos: true });
     }
 
-    const resume = () => this.createRuntimeSession(window, sessionId, previousSession);
+    const resume = () =>
+      this.createRuntimeSession(
+        window,
+        sessionId,
+        previousSession,
+        previousSelection,
+        requestedModelId,
+      );
     const next = (disposing ? disposing.then(resume) : resume()).finally(() => {
       this.resumePromises.delete(sessionId);
     });
@@ -1854,10 +2590,26 @@ export class PiSdkRuntime implements AgentRuntime {
     );
   }
 
-  async ensure(window: BrowserWindowType, sessionId: string): Promise<AgentSessionInfo> {
-    const runtimeSession = await this.getOrResume(window, sessionId);
+  async ensure(
+    window: BrowserWindowType,
+    sessionId: string,
+    requestedModelId?: string | null,
+  ): Promise<AgentSessionInfo> {
+    const runtimeSession = await this.getOrResume(window, sessionId, requestedModelId);
     if (!runtimeSession) {
       throw new Error(`Agent session not found: ${sessionId}`);
+    }
+    if (requestedModelId !== undefined) {
+      const model =
+        requestedModelId === null
+          ? getDefaultModel()
+          : requireUsableSelectedModel(requestedModelId);
+      if (!model) {
+        throw new Error(
+          "No model is configured. Open Settings and connect a provider before resuming this chat.",
+        );
+      }
+      await this.applyModelSelection(runtimeSession, modelToId(model));
     }
     return runtimeSession.info;
   }
@@ -1868,11 +2620,17 @@ export class PiSdkRuntime implements AgentRuntime {
     emit: EmitAgentEvent,
     agentDir: string,
     previousSettingsManager?: SettingsManager,
-  ): Promise<{ settingsManager: SettingsManager; loader: DefaultResourceLoader }> {
+  ): Promise<{
+    settingsManager: SettingsManager;
+    loader: DefaultResourceLoader;
+    promptLifecycleToken: symbol;
+  }> {
     // Inject a cross-platform-resolved POSIX shell so the bash tool works out of
     // the box (notably on Windows, where PI's default picks the broken WSL stub),
     // and tell the model which shell it's actually driving.
     const shell = resolveAgentShell();
+    const promptLifecycleToken = Symbol(`prompt-session:${sessionId}`);
+    const promptRegistryEnabled = isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY");
     const settingsManager =
       previousSettingsManager ??
       SettingsManager.inMemory({
@@ -1888,21 +2646,361 @@ export class PiSdkRuntime implements AgentRuntime {
     // An agent's 1:1 chat (A3) carries its persona, like its turns in the room.
     const personaPrompt = agentChatPersonaPrompt(sessionId);
     this.personaPrompts.set(sessionId, personaPrompt);
+    let responsePolicyPrompt = "";
+    if (
+      !promptRegistryEnabled &&
+      isFeatureFlagEnabled("MODUS_USE_KERNEL") &&
+      isFeatureFlagEnabled("MODUS_RESPONSE_POLICY")
+    ) {
+      const promptBuildContext: HarnessContext = {
+        sessionId,
+        runId: sessionId,
+        workspaceId: getAgentSession(sessionId)?.workspaceId,
+        ...groupIdFor(sessionId),
+        cwd,
+        mode: "build",
+        state: new Map(),
+      };
+      const promptBuild = await this.#harnessKernel.executePhase<
+        PromptBuildInput,
+        PromptBuildOutput
+      >("prompt_build", { basePrompt: "" }, promptBuildContext);
+      responsePolicyPrompt = promptBuild.finalSystemPrompt;
+    }
     const loader = new DefaultResourceLoader({
       cwd,
       agentDir,
-      extensionFactories: [createModusPermissionExtension(sessionId, emit, cwd)],
+      noExtensions: true,
+      extensionFactories: [
+        createModusPermissionExtension(
+          sessionId,
+          emit,
+          cwd,
+          {
+            beforeToolCall: (event) =>
+              this.beforeRepeatGuardToolCall(sessionId, event, promptLifecycleToken),
+            cancelToolCall: (toolCallId) => this.cancelPendingToolCall(sessionId, toolCallId),
+            afterToolCall: (event) => this.afterRepeatGuardToolCall(sessionId, event),
+          },
+          promptRegistryEnabled
+            ? (event) => this.applyPromptRegistry(sessionId, promptLifecycleToken, event)
+            : undefined,
+          createModusToolSpillHandler(
+            sessionId,
+            (event) => this.takeSpillAuthorization(sessionId, promptLifecycleToken, event),
+            () => {
+              const runtimeSession = this.sessions.get(sessionId);
+              if (runtimeSession?.promptLifecycleToken === promptLifecycleToken) {
+                try {
+                  runtimeSession.emit({
+                    type: "runtime.error",
+                    sessionId,
+                    message:
+                      "Tool result spill could not be stored; the complete tool output was kept inline.",
+                  });
+                } catch {
+                  // A diagnostic failure must not change the original tool result.
+                }
+              }
+            },
+            undefined,
+            ({ authorization, toolName, modelContextBytesReduced, storedBytes, spillId }) => {
+              if (!isFeatureFlagEnabled("MODUS_OBSERVABILITY")) return;
+              const currentSession = this.sessions.get(sessionId);
+              const tracker = this.runOutputTrackers.get(sessionId);
+              const observer = HarnessObserver.getInstance();
+              if (
+                !currentSession ||
+                currentSession.promptLifecycleToken !== promptLifecycleToken ||
+                tracker?.runId !== authorization.runId ||
+                this.cancellingRuns.has(authorization.runId) ||
+                getAgentRun(authorization.runId)?.status !== "running" ||
+                !observer.isSessionCurrent(sessionId, currentSession.observerSessionToken)
+              ) {
+                return;
+              }
+              observer.recordToolResultSpill(
+                toolName,
+                modelContextBytesReduced,
+                storedBytes,
+                spillId,
+                sessionId,
+                currentSession.observerSessionToken,
+                authorization.runId,
+              );
+            },
+          ),
+          getAgentSession(sessionId)?.workspaceId,
+        ),
+        ...(isFeatureFlagEnabled("MODUS_COMPACTION_PRUNING")
+          ? [
+              createModusCompactionExtension(() => {
+                const runtimeSession = this.sessions.get(sessionId);
+                if (runtimeSession?.promptLifecycleToken !== promptLifecycleToken) {
+                  return undefined;
+                }
+
+                const activeRun = getActiveAgentRun(sessionId);
+                if (
+                  !activeRun ||
+                  this.cancellingRuns.has(activeRun.id) ||
+                  getAgentRun(activeRun.id)?.status === "cancelled"
+                ) {
+                  return undefined;
+                }
+
+                const observer = HarnessObserver.getInstance();
+                if (!observer.isSessionCurrent(sessionId, runtimeSession.observerSessionToken)) {
+                  return undefined;
+                }
+
+                const toolNames = SAFE_DUPLICATE_PRUNE_TOOL_NAMES.filter(
+                  (toolName) =>
+                    toolRegistry.getEntry(toolName)?.kind === "builtin" &&
+                    toolRegistry.isReadOnlySafe(toolName),
+                );
+                return {
+                  sessionId,
+                  runId: activeRun.id,
+                  observerSessionToken: runtimeSession.observerSessionToken,
+                  toolNames,
+                };
+              }),
+            ]
+          : []),
+      ],
       settingsManager,
       appendSystemPrompt: [
         describeAgentShellForPrompt(shell),
         RESPONSE_FORMAT_BASE,
-        ...(globalGuidancePrompt ? [globalGuidancePrompt] : []),
-        ...(rulesPrompt ? [rulesPrompt] : []),
-        ...(personaPrompt ? [personaPrompt] : []),
+        ...(responsePolicyPrompt ? [responsePolicyPrompt] : []),
+        ...(!promptRegistryEnabled && globalGuidancePrompt ? [globalGuidancePrompt] : []),
+        ...(!promptRegistryEnabled && rulesPrompt ? [rulesPrompt] : []),
+        ...(!promptRegistryEnabled && personaPrompt ? [personaPrompt] : []),
       ],
     });
     await loader.reload();
-    return { settingsManager, loader };
+    return { settingsManager, loader, promptLifecycleToken };
+  }
+
+  /**
+   * Build the current Pi system prompt through the existing HarnessKernel.
+   * Pi's before_agent_start contract is the supported per-turn replacement
+   * point; the complete prompt is always returned, regardless of fingerprints.
+   */
+  private async applyPromptRegistry(
+    sessionId: string,
+    promptLifecycleToken: symbol,
+    event: BeforeAgentStartEvent,
+  ): Promise<{ systemPrompt: string } | undefined> {
+    if (!isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) return undefined;
+
+    const runtimeSession = this.sessions.get(sessionId);
+    const registry = runtimeSession?.promptRegistry;
+    if (
+      !runtimeSession ||
+      !registry ||
+      runtimeSession.promptLifecycleToken !== promptLifecycleToken
+    ) {
+      return undefined;
+    }
+
+    const runId = getActiveAgentRun(sessionId)?.id;
+    const isCurrent = (): boolean =>
+      this.sessions.get(sessionId) === runtimeSession &&
+      runtimeSession.promptLifecycleToken === promptLifecycleToken &&
+      (!runId || getActiveAgentRun(sessionId)?.id === runId) &&
+      (!runId || !this.cancellingRuns.has(runId));
+    if (!isCurrent()) return undefined;
+
+    const globalGuidancePrompt = resolveGlobalGuidancePrompt();
+    const rulesBudget =
+      RULES_MAX_TOTAL_BYTES - Buffer.byteLength(globalGuidancePrompt ?? "", "utf8");
+    const contextFilePaths = event.systemPromptOptions.contextFiles?.map((file) => file.path) ?? [];
+    const rulesPrompt =
+      rulesBudget > 0
+        ? resolveAlwaysRulesPrompt(runtimeSession.info.cwd, rulesBudget, contextFilePaths)
+        : undefined;
+    const personaPrompt = agentChatPersonaPrompt(sessionId);
+    const systemSections: PromptBuildInput["systemSections"] = [
+      {
+        id: "pi_sdk_system_prompt",
+        priority: 10,
+        content: event.systemPrompt,
+      },
+      ...(globalGuidancePrompt
+        ? [{ id: "global_guidance", priority: 20, content: globalGuidancePrompt }]
+        : []),
+      ...(rulesPrompt ? [{ id: "workspace_rules", priority: 30, content: rulesPrompt }] : []),
+      ...(personaPrompt ? [{ id: "agent_persona", priority: 40, content: personaPrompt }] : []),
+    ];
+    const state: HarnessContext["state"] = new Map();
+    state.set("promptRegistry", registry);
+    state.set("promptRegistryManagedSections", true);
+    const context: HarnessContext = {
+      sessionId,
+      runId: runId ?? sessionId,
+      ...(runtimeSession.info.workspaceId ? { workspaceId: runtimeSession.info.workspaceId } : {}),
+      ...groupIdFor(sessionId),
+      cwd: runtimeSession.info.cwd,
+      mode: "build",
+      sessionToken: runtimeSession.observerSessionToken,
+      isCurrent,
+      state,
+    };
+    try {
+      const assembled = await this.#harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
+        "prompt_build",
+        { basePrompt: "", systemSections },
+        context,
+      );
+      if (!isCurrent()) return undefined;
+      if (typeof assembled?.finalSystemPrompt !== "string") {
+        throw new Error("PromptRegistry returned no complete system prompt.");
+      }
+
+      // Fingerprints record change detection only. Pi still receives the complete
+      // assembly on every turn; no provider-specific cache metadata is forwarded.
+      if (isFeatureFlagEnabled("MODUS_OBSERVABILITY") && runId) {
+        HarnessObserver.getInstance().recordPromptSections(
+          assembled.activePromptSections.map((section) => section.id),
+          [],
+          undefined,
+          sessionId,
+          runtimeSession.observerSessionToken,
+          runId,
+        );
+      }
+      registry.markAsSent(sessionId);
+      return { systemPrompt: assembled.finalSystemPrompt };
+    } catch (error) {
+      if (!isCurrent()) return undefined;
+      console.warn(
+        "[modus] PromptRegistry assembly failed; using the complete resolved prompt sections:",
+        error,
+      );
+
+      const fallbackSections = [...(systemSections ?? [])].sort(
+        (a, b) => (a.priority ?? 250) - (b.priority ?? 250),
+      );
+      const fallbackPrompt = fallbackSections
+        .map((section) => section.content.trim())
+        .filter((content) => content.length > 0)
+        .join("\n\n");
+      const fallbackOutput: PromptBuildOutput = {
+        finalSystemPrompt: fallbackPrompt,
+        activePromptSections: fallbackSections.map((section) => ({
+          id: section.id,
+          content: section.content,
+          volatile: Boolean(section.volatile),
+        })),
+      };
+      try {
+        const responsePolicyOutput = await defaultPromptBuildResponsePolicyHook.execute(
+          fallbackOutput,
+          context,
+        );
+        if (!isCurrent()) return undefined;
+        return { systemPrompt: responsePolicyOutput.finalSystemPrompt };
+      } catch (policyError) {
+        console.warn(
+          "[modus] ResponsePolicy fallback failed; preserving the resolved Modus instructions:",
+          policyError,
+        );
+        return isCurrent() ? { systemPrompt: fallbackPrompt } : undefined;
+      }
+    }
+  }
+
+  private async refreshPromptResources(runtimeSession: SdkRuntimeSession): Promise<void> {
+    if (!isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) return;
+    try {
+      // Pi rebuilds its base prompt from this loader when active tools are set.
+      // Reloading here refreshes project context files and skills through the
+      // SDK's supported resource lifecycle before before_agent_start runs.
+      await runtimeSession.resourceLoader.reload();
+    } catch (error) {
+      console.warn(
+        "[modus] prompt resources could not be refreshed; using the loaded snapshot:",
+        error,
+      );
+    }
+  }
+
+  private async settleHarnessTurn(
+    runtimeSession: SdkRuntimeSession,
+    input: PromptAgentInput,
+    tracker: RunOutputTracker,
+  ): Promise<void> {
+    const state = new Map<string, string | number>([
+      ["harness.turn_start_time", tracker.startedAt],
+    ]);
+    const runStatus = getAgentRun(tracker.runId)?.status;
+    const outcome =
+      runStatus === "completed" ||
+      runStatus === "failed" ||
+      runStatus === "blocked" ||
+      runStatus === "cancelled"
+        ? runStatus
+        : "interrupted";
+    const assistantResponse = runAssistantOutput(input.sessionId, tracker.runId);
+    const hasAssistantResponse = Boolean(assistantResponse?.trim());
+    if (outcome === "completed" && hasAssistantResponse) {
+      state.set("harness.assistant_response", assistantResponse as string);
+    }
+    state.set("harness.turn_outcome", outcome);
+
+    const activeTodos = getLatestSessionTodos(input.sessionId) ?? [];
+    const sessionToken = runtimeSession.observerSessionToken;
+    if (isFeatureFlagEnabled("MODUS_OBSERVABILITY")) {
+      HarnessObserver.getInstance().recordSessionTurn({
+        sessionId: input.sessionId,
+        durationMs: Date.now() - tracker.startedAt,
+        sessionToken,
+        runId: tracker.runId,
+        outcome,
+        hasAssistantResponse,
+        ...(tracker.hasReportedUsage ? { providerTokenUsage: tracker.tokenUsage } : {}),
+      });
+    }
+    const context: HarnessContext = {
+      sessionId: input.sessionId,
+      runId: tracker.runId,
+      sessionToken,
+      isCurrent: () => {
+        const observer = HarnessObserver.getInstance();
+        return (
+          this.sessions.get(input.sessionId) === runtimeSession &&
+          runtimeSession.observerSessionToken === sessionToken &&
+          observer.isSessionCurrent(input.sessionId, sessionToken) &&
+          this.runOutputTrackers.get(input.sessionId) === tracker &&
+          !this.cancellingRuns.has(tracker.runId) &&
+          getAgentRun(tracker.runId)?.status !== "cancelled"
+        );
+      },
+      workspaceId: runtimeSession.info.workspaceId,
+      ...groupIdFor(input.sessionId),
+      cwd: runtimeSession.info.cwd,
+      mode: input.mode ?? "build",
+      state,
+      startedAt: tracker.startedAt,
+    };
+    const turn: TurnSettleInput = {
+      runId: tracker.runId,
+      completed: outcome === "completed",
+      outcome,
+      hasAssistantResponse,
+      hasActiveTodos: activeTodos.some(
+        (todo) => todo.status === "pending" || todo.status === "in_progress",
+      ),
+      turnTokens: tracker.tokenUsage.totalTokens,
+      ...(tracker.hasReportedUsage ? { providerTokenUsage: tracker.tokenUsage } : {}),
+    };
+    await this.#harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+      "turn_settle",
+      turn,
+      context,
+    );
   }
 
   /**
@@ -1916,6 +3014,7 @@ export class PiSdkRuntime implements AgentRuntime {
     emitVolatile: EmitAgentEvent;
     agentDir: string;
     loader: DefaultResourceLoader;
+    promptLifecycleToken: symbol;
     settingsManager: SettingsManager;
     sessionManager: SessionManager;
     model: NonNullable<Parameters<typeof createAgentSession>[0]>["model"];
@@ -2014,6 +3113,37 @@ export class PiSdkRuntime implements AgentRuntime {
             aborted: normalized.aborted,
             failed: normalized.failed ?? false,
           };
+          if (
+            isFeatureFlagEnabled("MODUS_OBSERVABILITY") &&
+            !normalized.aborted &&
+            !normalized.failed
+          ) {
+            const tracker = this.runOutputTrackers.get(params.info.id);
+            const activeRunId =
+              tracker?.runId &&
+              !this.cancellingRuns.has(tracker.runId) &&
+              getAgentRun(tracker.runId)?.status === "running"
+                ? tracker.runId
+                : undefined;
+            const manualCompactionInProgress =
+              runtimeSession.manualCompactionInProgress === true &&
+              !tracker?.runId &&
+              !getActiveAgentRun(params.info.id);
+            const observer = HarnessObserver.getInstance();
+            if (
+              runtimeSession &&
+              this.sessions.get(params.info.id) === runtimeSession &&
+              runtimeSession.promptLifecycleToken === params.promptLifecycleToken &&
+              observer.isSessionCurrent(params.info.id, runtimeSession.observerSessionToken) &&
+              (activeRunId !== undefined || manualCompactionInProgress)
+            ) {
+              observer.recordNativeCompaction(
+                params.info.id,
+                runtimeSession.observerSessionToken,
+                activeRunId,
+              );
+            }
+          }
           this.finalizeProjectMemoryCompactionBestEffort({
             sessionId: normalized.sessionId,
             reason: normalized.reason,
@@ -2082,7 +3212,14 @@ export class PiSdkRuntime implements AgentRuntime {
       unsubscribe,
       emit: params.emit,
       emitVolatile: params.emitVolatile,
+      observerSessionToken: HarnessObserver.getInstance().beginSession(params.info.id),
+      ...(isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")
+        ? { promptRegistry: new PromptRegistry() }
+        : {}),
+      promptLifecycleToken: params.promptLifecycleToken,
+      resourceLoader: params.loader,
       lastCompactionEnd: undefined,
+      manualCompactionInProgress: false,
     };
     this.sessions.set(params.info.id, runtimeSession);
     publishContextUsage();
@@ -2095,13 +3232,14 @@ export class PiSdkRuntime implements AgentRuntime {
   ): Promise<AgentSessionInfo> {
     const emit = this.emitToWindow(window);
     const emitVolatile = this.emitVolatileToWindow(window);
-    const selectedModel = findModel(input.model) ?? getDefaultModel();
+    const selectedModel =
+      input.model === undefined ? getDefaultModel() : requireUsableSelectedModel(input.model);
     if (!selectedModel) {
       throw new Error(
         "No model is configured. Open Settings and connect a provider before starting a chat.",
       );
     }
-    const modelId = selectedModel ? modelToId(selectedModel) : input.model;
+    const modelId = modelToId(selectedModel);
     const recordInput: Parameters<typeof createAgentSessionRecord>[0] = {
       workspaceId: input.workspaceId,
       cwd: input.cwd,
@@ -2126,7 +3264,7 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(sessionDir, { recursive: true });
 
     const warmup = (async () => {
-      const { settingsManager, loader } = await this.createSessionResources(
+      const { settingsManager, loader, promptLifecycleToken } = await this.createSessionResources(
         input.cwd,
         info.id,
         emit,
@@ -2138,6 +3276,7 @@ export class PiSdkRuntime implements AgentRuntime {
         emitVolatile,
         agentDir,
         loader,
+        promptLifecycleToken,
         settingsManager,
         sessionManager: SessionManager.create(input.cwd, sessionDir),
         model: selectedThinking?.model ?? selectedModel,
@@ -2160,6 +3299,8 @@ export class PiSdkRuntime implements AgentRuntime {
     window: BrowserWindowType,
     sessionId: string,
     previousSession?: SdkRuntimeSession,
+    previousSelection?: PreviousSessionSelection,
+    requestedModelId?: string | null,
   ): Promise<SdkRuntimeSession | undefined> {
     const info = getAgentSession(sessionId);
     if (!info) {
@@ -2173,48 +3314,76 @@ export class PiSdkRuntime implements AgentRuntime {
     mkdirSync(agentDir, { recursive: true });
     mkdirSync(sessionDir, { recursive: true });
 
-    const { settingsManager, loader } = await this.createSessionResources(
+    const sessionFile =
+      info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
+    let sessionManager: SessionManager;
+    if (previousSession) {
+      sessionManager = previousSession.session.sessionManager;
+    } else if (sessionFile) {
+      try {
+        sessionManager = SessionManager.open(sessionFile, sessionDir, info.cwd);
+      } catch (error) {
+        throw new Error(`Unable to restore the saved model selection for session ${sessionId}.`, {
+          cause: error,
+        });
+      }
+    } else {
+      sessionManager = SessionManager.create(info.cwd, sessionDir);
+    }
+
+    const shouldRecoverBranchModel =
+      requestedModelId === undefined &&
+      !previousSelection?.modelId &&
+      !previousSession?.session.model &&
+      !info.model;
+    const branchModel = shouldRecoverBranchModel
+      ? sessionManager.buildSessionContext().model
+      : null;
+    const branchModelId = branchModel
+      ? `${branchModel.provider}/${branchModel.modelId}`
+      : undefined;
+    const storedModelId = previousSelection
+      ? (previousSelection.modelId ?? info.model ?? branchModelId)
+      : previousSession?.session.model
+        ? modelToId(previousSession.session.model)
+        : info.model || branchModelId;
+    const selectedModel =
+      requestedModelId === null
+        ? getDefaultModel()
+        : requestedModelId !== undefined
+          ? requireUsableSelectedModel(requestedModelId)
+          : storedModelId !== undefined
+            ? requireUsableSelectedModel(storedModelId)
+            : getDefaultModel();
+    if (!selectedModel) {
+      throw new Error(
+        "No model is configured. Open Settings and connect a provider before resuming this chat.",
+      );
+    }
+    const selectedThinking =
+      previousSession &&
+      previousSelection &&
+      (requestedModelId === undefined || requestedModelId === storedModelId)
+        ? {
+            model: selectedModel,
+            thinkingLevel: previousSelection.thinkingLevel,
+            thinkingBudget: previousSelection.thinkingBudget,
+          }
+        : resolveModelThinking(selectedModel);
+    const { settingsManager, loader, promptLifecycleToken } = await this.createSessionResources(
       info.cwd,
       info.id,
       emit,
       agentDir,
       previousSession?.session.settingsManager,
     );
-
-    const selectedModel =
-      previousSession?.session.model ?? findModel(info.model) ?? getDefaultModel();
-    if (!selectedModel) {
-      throw new Error(
-        "No model is configured. Open Settings and connect a provider before resuming this chat.",
-      );
-    }
-    const selectedThinking = previousSession
-      ? {
-          model: selectedModel,
-          thinkingLevel: previousSession.session.thinkingLevel,
-          thinkingBudget: previousSession.session.agent.thinkingBudgets?.high,
-        }
-      : resolveModelThinking(selectedModel);
-    const sessionFile =
-      info.piSessionFile && existsSync(info.piSessionFile) ? info.piSessionFile : undefined;
-    let sessionManager: SessionManager;
-    if (previousSession) {
-      sessionManager = previousSession.session.sessionManager;
-    } else {
-      try {
-        sessionManager = sessionFile
-          ? SessionManager.open(sessionFile, sessionDir, info.cwd)
-          : SessionManager.create(info.cwd, sessionDir);
-      } catch {
-        sessionManager = SessionManager.create(info.cwd, sessionDir);
-      }
-    }
     const resumed = await this.assembleSession({
       info,
       emit,
       emitVolatile,
       agentDir,
       loader,
+      promptLifecycleToken,
       settingsManager,
       sessionManager,
       model: selectedThinking?.model ?? selectedModel,
@@ -2436,7 +3605,7 @@ export class PiSdkRuntime implements AgentRuntime {
 
     let runtimeSession: SdkRuntimeSession | undefined;
     try {
-      runtimeSession = await this.getOrResume(window, input.sessionId);
+      runtimeSession = await this.getOrResume(window, input.sessionId, input.model);
     } catch (error) {
       throw failEarlyPrompt(error);
     }
@@ -2495,6 +3664,7 @@ export class PiSdkRuntime implements AgentRuntime {
     setAgentToolContext(toolContext);
 
     try {
+      await this.refreshPromptResources(runtimeSession);
       // Per-turn mode: switch the active tool set (plan = read-only research +
       // plan artifacts; build = full chat tools). setActiveToolsByName also rebuilds
       // the system prompt for the new set, and takes effect on this turn.
@@ -2505,10 +3675,25 @@ export class PiSdkRuntime implements AgentRuntime {
       // Per-turn model + thinking: the composer's current selection travels with
       // the prompt and is applied authoritatively here, so the turn never runs
       // with stale model/thinking (mid-session switch, edit-and-resend, resume).
-      if (input.model !== undefined) {
+      // A direct runtime caller may omit `model`; retain and validate the session's exact
+      // identity without reapplying it. IPC callers provide their authoritative choice.
+      const defaultModel = input.model === null ? getDefaultModel() : undefined;
+      const turnModelId =
+        input.model === null
+          ? defaultModel
+            ? modelToId(defaultModel)
+            : undefined
+          : (input.model ??
+            (runtimeSession.session.model ? modelToId(runtimeSession.session.model) : undefined));
+      if (turnModelId === undefined) {
+        throw new Error("No model is selected for this session.");
+      }
+      if (input.model === undefined) {
+        requireUsableSelectedModel(turnModelId);
+      } else {
         await this.applyModelSelection(
           runtimeSession,
-          input.model,
+          turnModelId,
           input.thinkingVariant ?? input.thinkingLevel,
         );
       }
@@ -2629,6 +3814,7 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!run || run.sessionId !== input.sessionId) {
       throw failEarlyPrompt("The HyperPlan run could not be reconciled.");
     }
+    toolContext.runId = run.id;
     if (probe) probe.runId = run.id;
     if (runBranch) {
       try {
@@ -2676,6 +3862,7 @@ export class PiSdkRuntime implements AgentRuntime {
       }
       outputTracker = {
         runId: run.id,
+        mode: input.mode ?? "build",
         hasVisibleOutput: false,
         startedAt: Date.now(),
         tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 },
@@ -2841,7 +4028,9 @@ export class PiSdkRuntime implements AgentRuntime {
             }
           }
           clearMcpCitationRun(input.sessionId, run.id);
+          this.clearRepeatGuardRun(input.sessionId, run.id);
           if (outputTracker) {
+            this.clearRepeatGuardRun(input.sessionId, run.id);
             removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
           }
           releasePreflight();
@@ -2881,6 +4070,8 @@ export class PiSdkRuntime implements AgentRuntime {
     });
     let runCheckpoint: Awaited<ReturnType<typeof createCheckpoint>> | undefined;
     let turnEndAttempted = false;
+    let settledChangedPaths: string[] = [];
+    let settledChangedScopeKnown = false;
     const captureTurnEnd = async (): Promise<void> => {
       if (!runCheckpoint || turnEndAttempted || !getAgentRun(run.id)) return;
       turnEndAttempted = true;
@@ -2895,8 +4086,43 @@ export class PiSdkRuntime implements AgentRuntime {
         return undefined;
       });
     };
-    let settledChangedPaths: string[] = [];
-    let settledChangedScopeKnown = false;
+    const captureCurrentRunScope = async (): Promise<void> => {
+      if (!runCheckpoint) return;
+      const changes = await getChangeStatsSinceStrict(
+        runtimeSession.info.cwd,
+        runCheckpoint.commitHash,
+      ).catch(() => undefined);
+      settledChangedScopeKnown = changes !== undefined && !changes.truncated;
+      settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
+    };
+    const cancellationRequested = (): boolean =>
+      this.cancellingRuns.has(run.id) || getAgentRun(run.id)?.status === "cancelled";
+    const settleCancelledRun = async (): Promise<void> => {
+      await captureCurrentRunScope();
+      await captureTurnEnd();
+      await this.emitHarnessQA(
+        runtimeSession,
+        input,
+        outputTracker,
+        settledChangedPaths,
+        settledChangedScopeKnown,
+        true,
+      );
+      if (getAgentRun(run.id)?.status === "running") {
+        updateAgentRunStatus(run.id, "cancelled");
+        finalizeProjectMemoryRunBestEffort({
+          sessionId: input.sessionId,
+          runId: run.id,
+          outcome: "cancelled",
+        });
+        emitForStart({
+          type: "run.cancelled",
+          sessionId: input.sessionId,
+          runId: run.id,
+          ...this.runResponseMetadata(outputTracker),
+        });
+      }
+    };
     try {
       const intentGate =
         startInput ||
@@ -3215,7 +4441,15 @@ export class PiSdkRuntime implements AgentRuntime {
         break;
       }
       const currentRun = getAgentRun(run.id);
+      if (currentRun?.status === "cancelled") {
+        await settleCancelledRun();
+        return;
+      }
       if (currentRun?.status === "running") {
+        if (cancellationRequested()) {
+          await settleCancelledRun();
+          return;
+        }
         // Authoritative end-of-turn outcome, read from pi's own record: if the
         // last assistant message ended with `stopReason: "error"`, the turn
         // failed after exhausting any auto-retries. This is the SINGLE place a
@@ -3224,7 +4458,7 @@ export class PiSdkRuntime implements AgentRuntime {
         const turnError = lastAssistantTurnError(runtimeSession.session);
         if (turnError) {
           await captureTurnEnd();
-          this.emitHarnessQA(
+          await this.emitHarnessQA(
             runtimeSession,
             input,
             outputTracker,
@@ -3261,13 +4495,21 @@ export class PiSdkRuntime implements AgentRuntime {
           }
           settledChangedScopeKnown = changes !== undefined && !changes.truncated;
           settledChangedPaths = changes?.files.map((file) => file.path) ?? [];
-          this.emitHarnessQA(
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
+          }
+          await this.emitHarnessQA(
             runtimeSession,
             input,
             outputTracker,
             settledChangedPaths,
             settledChangedScopeKnown,
           );
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
+          }
           console.info(
             `[modus-timing] getChangeStatsSince +${Date.now() - outputTracker.startedAt}ms`,
           );
@@ -3277,13 +4519,17 @@ export class PiSdkRuntime implements AgentRuntime {
               ? getLatestCheckpointRestoreRowId(input.sessionId, outputTracker.runStartedRowId)
               : undefined;
           if (latestRestoreRowId !== outputTracker.lastQaRestoreRowId) {
-            this.emitHarnessQA(
+            await this.emitHarnessQA(
               runtimeSession,
               input,
               outputTracker,
               settledChangedPaths,
               settledChangedScopeKnown,
             );
+          }
+          if (cancellationRequested()) {
+            await settleCancelledRun();
+            return;
           }
           updateAgentRunStatus(run.id, "completed");
           finalizeProjectMemoryRunBestEffort({
@@ -3298,9 +4544,26 @@ export class PiSdkRuntime implements AgentRuntime {
             ...(changes && changes.fileCount > 0 ? { changes } : {}),
             ...this.runResponseMetadata(outputTracker),
           });
-          // The build turn completed cleanly → the plan is built.
+          // Mark the plan built only when this run produced a current workspace diff.
           if (buildPlan) {
-            this.transitionPlanBuild(runtimeSession, buildPlan.id, "built");
+            const sourceWritePaths = new Set(
+              getRunSourceWritePaths(input.sessionId, run.id).map(normalizeWorkspacePath),
+            );
+            const changedPaths = new Set(
+              (changes && !changes.truncated ? changes.files : []).map(({ path }) =>
+                normalizeWorkspacePath(path),
+              ),
+            );
+            const attributedSourceChange = [...sourceWritePaths].some((path) =>
+              changedPaths.has(path),
+            );
+            this.transitionPlanBuild(
+              runtimeSession,
+              buildPlan.id,
+              changes && !changes.truncated && changes.fileCount > 0 && attributedSourceChange
+                ? "built"
+                : "not_built",
+            );
           }
         } else {
           const message =
@@ -3361,39 +4624,11 @@ export class PiSdkRuntime implements AgentRuntime {
         return;
       }
       if (currentRun.status === "cancelled") {
-        await captureTurnEnd();
-        this.emitHarnessQA(
-          runtimeSession,
-          input,
-          outputTracker,
-          settledChangedPaths,
-          settledChangedScopeKnown,
-          true,
-        );
+        await settleCancelledRun();
         return;
       }
       if (this.cancellingRuns.has(run.id)) {
-        await captureTurnEnd();
-        this.emitHarnessQA(
-          runtimeSession,
-          input,
-          outputTracker,
-          settledChangedPaths,
-          settledChangedScopeKnown,
-          true,
-        );
-        updateAgentRunStatus(run.id, "cancelled");
-        finalizeProjectMemoryRunBestEffort({
-          sessionId: input.sessionId,
-          runId: run.id,
-          outcome: "cancelled",
-        });
-        emitForStart({
-          type: "run.cancelled",
-          sessionId: input.sessionId,
-          runId: run.id,
-          ...this.runResponseMetadata(outputTracker),
-        });
+        await settleCancelledRun();
         return;
       }
       await captureTurnEnd();
@@ -3432,17 +4667,32 @@ export class PiSdkRuntime implements AgentRuntime {
       clearMcpCitationRun(input.sessionId, run.id);
       releasePreflight();
       await captureTurnEnd();
+      if (
+        runtimeSession &&
+        outputTracker &&
+        isFeatureFlagEnabled("MODUS_USE_KERNEL") &&
+        (isFeatureFlagEnabled("MODUS_RESPONSE_POLICY") ||
+          isFeatureFlagEnabled("MODUS_OBSERVABILITY"))
+      ) {
+        try {
+          await this.settleHarnessTurn(runtimeSession, input, outputTracker);
+        } catch (error) {
+          console.warn("[modus-harness] turn_settle failed open:", error);
+        }
+      }
+      this.cancellingRuns.delete(run.id);
+      this.clearRepeatGuardRun(input.sessionId, run.id);
       removeRunOutputTrackerIfOwned(this.runOutputTrackers, input.sessionId, outputTracker);
       console.info(
         `[modus-timing] turn end (idle emit) +${Date.now() - outputTracker.startedAt}ms`,
       );
       const session = getAgentSession(input.sessionId);
-      if (session?.status !== "error") {
+      const sessionWasCancelled = session?.status === "cancelled";
+      // A late subagent finalizer must preserve the terminal state set by tree abort.
+      if (session?.status !== "error" && !sessionWasCancelled) {
         updateAgentSessionStatus(input.sessionId, "idle");
       }
-      // The turn is over (completed/failed/cancelled all funnel through here):
-      // publish the authoritative `idle` status so the composer unlocks, and
-      // dim the in-app browser's "AI in control" glow + cursor.
+      // `session.status` releases the composer; the run and database retain cancellation.
       emitForStart({
         type: "session.status",
         sessionId: input.sessionId,
@@ -3512,6 +4762,7 @@ export class PiSdkRuntime implements AgentRuntime {
       updateAgentSessionStatus(sessionId, "running");
       runtimeSession.emit({ type: "session.status", sessionId, status: { type: "busy" } });
       runtimeSession.lastCompactionEnd = undefined;
+      runtimeSession.manualCompactionInProgress = true;
       try {
         await runtimeSession.session.compact();
         const compaction = lastCompactionEnd(runtimeSession);
@@ -3523,6 +4774,7 @@ export class PiSdkRuntime implements AgentRuntime {
           failed: compaction?.failed ?? false,
         });
       } finally {
+        runtimeSession.manualCompactionInProgress = false;
         updateAgentSessionStatus(sessionId, "idle");
         runtimeSession.emit({ type: "session.status", sessionId, status: { type: "idle" } });
       }
@@ -3669,6 +4921,12 @@ export class PiSdkRuntime implements AgentRuntime {
     const userMessageId = input.userMessageId ?? `local-user:${randomUUID()}`;
     if (emitUserMessage) this.emitUserMessage(runtimeSession.emit, input, userMessageId);
     try {
+      await this.refreshPromptResources(runtimeSession);
+      if (isFeatureFlagEnabled("MODUS_PROMPT_REGISTRY")) {
+        runtimeSession.session.setActiveToolsByName(
+          activeToolNamesForSession(runtimeSession.info, runtimeSession.profile),
+        );
+      }
       const message = await this.composeTurnMessage(runtimeSession, input, {
         includeProjectMemory: false,
       });
@@ -3739,9 +4997,16 @@ export class PiSdkRuntime implements AgentRuntime {
     }
 
     const emit = this.emitToWindow(window);
-    const requestedModel = input.subagent?.model.trim();
+    const requestedModel = input.subagent?.model;
+    const parentRuntime = this.sessions.get(parent.id);
+    const inheritedModel = parentRuntime?.session.model
+      ? modelToId(parentRuntime.session.model)
+      : parent.model;
     const childModel =
-      requestedModel && requestedModel !== "inherit" ? requestedModel : (parent.model ?? undefined);
+      requestedModel && requestedModel !== "inherit"
+        ? requestedModel
+        : (inheritedModel ?? undefined);
+    if (childModel !== undefined) requireUsableSelectedModel(childModel);
     const childSessionId = randomUUID();
     const worktree =
       input.subagent && !input.subagent.readOnly && input.subagent.isolation === "worktree"
@@ -3750,18 +5015,30 @@ export class PiSdkRuntime implements AgentRuntime {
             name: input.subagent.name || input.subagentType,
           })
         : undefined;
-    const session = await this.create(window, {
-      id: childSessionId,
-      workspaceId: parent.workspaceId,
-      cwd: worktree?.path ?? parent.cwd,
-      title: input.task,
-      ...(childModel ? { model: childModel } : {}),
-      parentSessionId: parent.id,
-      subagentTask: input.task,
-      subagentType: input.subagentType,
-      ...(input.subagent?.readOnly ? { subagentReadOnly: true } : {}),
-      ...(worktree ? { subagentWorktree: worktree } : {}),
-    });
+    let session: AgentSessionInfo;
+    try {
+      session = await this.create(window, {
+        id: childSessionId,
+        workspaceId: parent.workspaceId,
+        cwd: worktree?.path ?? parent.cwd,
+        title: input.task,
+        ...(childModel ? { model: childModel } : {}),
+        parentSessionId: parent.id,
+        subagentTask: input.task,
+        subagentType: input.subagentType,
+        ...(input.subagent?.readOnly ? { subagentReadOnly: true } : {}),
+        ...(worktree ? { subagentWorktree: worktree } : {}),
+      });
+    } catch (error) {
+      if (worktree) {
+        try {
+          await cleanupSubagentWorktree(parent.cwd, worktree);
+        } catch (cleanupError) {
+          console.error("[modus] failed to clean up a rejected subagent worktree", cleanupError);
+        }
+      }
+      throw error;
+    }
     this.parentSessionByChild.set(session.id, parent.id);
     emit({
       type: "subagent.started",
@@ -3798,8 +5075,8 @@ export class PiSdkRuntime implements AgentRuntime {
     },
   ): Promise<void> {
     const childModel =
-      input.subagent?.model.trim() && input.subagent.model.trim() !== "inherit"
-        ? input.subagent.model.trim()
+      input.subagent?.model && input.subagent.model !== "inherit"
+        ? input.subagent.model
         : (session.model ?? undefined);
     let promptError: unknown;
     try {
@@ -4032,10 +5309,18 @@ export class PiSdkRuntime implements AgentRuntime {
   async abort(sessionId: string): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
-    await this.closeSubagentTree(sessionId, "Parent session aborted");
-    this.clearBackgroundTasksForParent(sessionId);
-    this.backgroundChildTasks.delete(sessionId);
-    await this.abortSessionOnly(sessionId);
+    const activeRunId = getActiveAgentRun(sessionId)?.id;
+    try {
+      await this.closeSubagentTree(sessionId, "Parent session aborted");
+      const currentRunId = getActiveAgentRun(sessionId)?.id;
+      if (currentRunId === undefined || currentRunId === activeRunId) {
+        this.clearBackgroundTasksForParent(sessionId);
+        this.backgroundChildTasks.delete(sessionId);
+        await this.abortSessionOnly(sessionId);
+      }
+    } finally {
+      if (activeRunId) await this.cleanupRunProcesses(sessionId, activeRunId);
+    }
   }
 
   private async abortSessionOnly(sessionId: string): Promise<void> {
@@ -4047,16 +5332,20 @@ export class PiSdkRuntime implements AgentRuntime {
     if (!runtimeSession) {
       return;
     }
-    if (activeRun) {
-      this.cancellingRuns.add(activeRun.id);
+    const outputTracker = this.runOutputTrackers.get(sessionId);
+    const runId = outputTracker?.runId ?? activeRun?.id;
+    if (runId) {
+      this.cancellingRuns.add(runId);
+    }
+    if (outputTracker) {
+      // Invalidate old turn hooks while keeping the live SDK session usable.
+      // The next turn receives the new lifetime token; aggregate metrics remain.
+      runtimeSession.observerSessionToken = HarnessObserver.getInstance().beginSession(sessionId);
     }
 
     try {
       await runtimeSession.session.abort();
     } finally {
-      if (activeRun) {
-        this.cancellingRuns.delete(activeRun.id);
-      }
       const activeRunNow = getActiveAgentRun(sessionId);
       const outputTrackerNow = this.runOutputTrackers.get(sessionId);
       const stillOwnsSession = activeRun
@@ -4118,12 +5407,23 @@ export class PiSdkRuntime implements AgentRuntime {
     this.parentSessionByChild.delete(sessionId);
     this.personaPrompts.delete(sessionId);
     if (!runtimeSession) {
+      HarnessObserver.getInstance().releaseSession(sessionId);
+      this.clearRepeatGuardSession(sessionId);
       return;
     }
 
+    if (this.sessions.get(sessionId) === runtimeSession) {
+      this.sessions.delete(sessionId);
+      HarnessObserver.getInstance().releaseSession(sessionId, runtimeSession.observerSessionToken);
+    }
+    runtimeSession.promptRegistry?.cleanSession(sessionId);
+    for (const section of runtimeSession.promptRegistry?.getAllSections() ?? []) {
+      runtimeSession.promptRegistry?.unregisterSection(section.id);
+    }
+    runtimeSession.promptRegistry = undefined;
     runtimeSession.unsubscribe();
     runtimeSession.session.dispose();
-    this.sessions.delete(sessionId);
+    this.clearRepeatGuardSession(sessionId);
   }
 
   private async closeSubagentTree(rootSessionId: string, reason: string): Promise<void> {
@@ -4158,6 +5458,14 @@ export class PiSdkRuntime implements AgentRuntime {
     );
   }
 
+  private async cleanupRunProcesses(sessionId: string, runId: string): Promise<void> {
+    await Promise.all(
+      listManagedProcesses({ sessionId, runId, origin: "agent" }).map((process) =>
+        killManagedProcess(process.id).catch(() => false),
+      ),
+    );
+  }
+
   /**
    * Apply a model + thinking selection to a live session and persist it to the
    * record. The single place model/thinking are bound to a session — reused by
@@ -4169,17 +5477,25 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<ReturnType<typeof findModel>> {
-    const model = findModel(modelId);
-    if (!model) {
-      return undefined;
-    }
+    const model = requireUsableSelectedModel(modelId);
+    const sameModel =
+      runtimeSession.session.model !== undefined &&
+      modelToId(runtimeSession.session.model) === modelId;
+    const preserveThinking = thinkingVariant === undefined && sameModel;
+    const thinkingLevel = preserveThinking ? runtimeSession.session.thinkingLevel : undefined;
+    const thinkingBudget = preserveThinking
+      ? runtimeSession.session.agent.thinkingBudgets?.high
+      : undefined;
     const resolved = resolveModelThinking(
       model,
       thinkingVariant ?? getModelThinkingVariant(modelId),
     );
     await runtimeSession.session.setModel(resolved.model);
-    runtimeSession.session.setThinkingLevel(resolved.thinkingLevel);
-    setSessionThinkingBudget(runtimeSession.session, resolved.thinkingBudget);
+    runtimeSession.session.setThinkingLevel(thinkingLevel ?? resolved.thinkingLevel);
+    setSessionThinkingBudget(
+      runtimeSession.session,
+      preserveThinking ? thinkingBudget : resolved.thinkingBudget,
+    );
     const updated = updateAgentSessionMetadata(runtimeSession.info.id, {
       model: modelToId(model),
     });
@@ -4195,15 +5511,11 @@ export class PiSdkRuntime implements AgentRuntime {
     modelId: string,
     thinkingVariant?: string,
   ): Promise<AgentSessionInfo> {
-    const runtimeSession = await this.getOrResume(window, sessionId);
+    const runtimeSession = await this.getOrResume(window, sessionId, modelId);
     if (!runtimeSession) {
       throw new Error(`Unable to set model: ${modelId}`);
     }
-    const model = await this.applyModelSelection(runtimeSession, modelId, thinkingVariant);
-    if (!model) {
-      throw new Error(`Unable to set model: ${modelId}`);
-    }
-    setDefaultModel(modelToId(model));
+    await this.applyModelSelection(runtimeSession, modelId, thinkingVariant);
     this.emitContextUsage(runtimeSession);
     return runtimeSession.info;
   }
@@ -4217,21 +5529,23 @@ export class PiSdkRuntime implements AgentRuntime {
       return cycleDefaultModel(direction);
     }
 
-    const runtimeSession = await this.getOrResume(window, sessionId);
-    if (!runtimeSession) {
-      return cycleDefaultModel(direction);
-    }
-
-    const next = cycleDefaultModel(direction);
-    const model = findModel(next.id);
-    if (!model) {
-      throw new Error(`Unable to cycle to model: ${next.id}`);
-    }
-    const resolved = resolveModelThinking(model, next.thinkingVariant);
-    await runtimeSession.session.setModel(resolved.model);
-    runtimeSession.session.setThinkingLevel(resolved.thinkingLevel);
-    setSessionThinkingBudget(runtimeSession.session, resolved.thinkingBudget);
-    updateAgentSessionMetadata(sessionId, { model: modelToId(model) });
+    const candidates = listModels().filter((model) => !model.locked);
+    if (candidates.length === 0) throw new Error("No models are available to select.");
+    const cachedSession = this.sessions.get(sessionId);
+    const currentId = cachedSession
+      ? cachedSession.session.model
+        ? modelToId(cachedSession.session.model)
+        : undefined
+      : getAgentSession(sessionId)?.model;
+    const currentIndex = candidates.findIndex((model) => model.id === currentId);
+    const offset = direction === "backward" ? -1 : 1;
+    const nextIndex =
+      currentIndex < 0 ? 0 : (currentIndex + offset + candidates.length) % candidates.length;
+    const next = candidates[nextIndex];
+    if (!next) throw new Error("No models are available to select.");
+    const runtimeSession = await this.getOrResume(window, sessionId, next.id);
+    if (!runtimeSession) throw new Error(`Agent session not found: ${sessionId}`);
+    await this.applyModelSelection(runtimeSession, next.id, next.thinkingVariant);
     this.emitContextUsage(runtimeSession);
     return next;
   }
@@ -4352,68 +5666,6 @@ function shouldPersistSubagentUpdate(event: AgentEvent): boolean {
     event.type === "run.cancelled" ||
     event.type === "tool.started"
   );
-}
-
-/**
- * The last assistant text produced by one run: only events after that run's
- * `run.started` count, so a run with no text never reports an earlier turn's.
- */
-function runAssistantOutput(sessionId: string, runId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
-  let inRun = false;
-  let lastAssistantMessageId: string | undefined;
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "run.started") {
-      inRun = event.runId === runId;
-      continue;
-    }
-    if (!inRun) continue;
-    if (event.type === "message.started") {
-      roles.set(event.messageId, event.role);
-      if (event.role === "assistant") {
-        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
-        lastAssistantMessageId = event.messageId;
-      }
-    } else if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-      textByMessage.set(
-        event.messageId,
-        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-      );
-      lastAssistantMessageId = event.messageId;
-    }
-  }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
-  return output || undefined;
-}
-
-function lastAssistantOutput(sessionId: string): string | undefined {
-  const roles = new Map<string, "assistant" | "user">();
-  const textByMessage = new Map<string, string>();
-  let lastAssistantMessageId: string | undefined;
-  for (const { event } of listAgentEvents(sessionId)) {
-    if (event.type === "message.started") {
-      roles.set(event.messageId, event.role);
-      if (event.role === "assistant") {
-        textByMessage.set(event.messageId, textByMessage.get(event.messageId) ?? "");
-        lastAssistantMessageId = event.messageId;
-      }
-      continue;
-    }
-    if (event.type === "message.delta" && roles.get(event.messageId) === "assistant") {
-      textByMessage.set(
-        event.messageId,
-        `${textByMessage.get(event.messageId) ?? ""}${event.delta}`,
-      );
-      lastAssistantMessageId = event.messageId;
-      continue;
-    }
-    if (event.type === "message.completed" && roles.get(event.messageId) === "assistant") {
-      lastAssistantMessageId = event.messageId;
-    }
-  }
-  const output = lastAssistantMessageId ? textByMessage.get(lastAssistantMessageId)?.trim() : "";
-  return output || undefined;
 }
 
 function isSubagentBusy(status: AgentSessionInfo["status"]): boolean {

@@ -70,7 +70,7 @@ export function parseSubagent(text: string, fallbackName: string): ParsedSubagen
   return {
     name,
     description,
-    model: scalar(data.model)?.trim() || "inherit",
+    model: scalar(data.model) || "inherit",
     readOnly: asBoolean(data.readonly, false),
     ...(tools ? { tools } : {}),
     ...(disallowedTools ? { disallowedTools } : {}),
@@ -414,7 +414,7 @@ function toSubagentInfo(subagent: SubagentDetail): SubagentInfo {
 
 function renderSubagentFile(input: CreateSubagentInput): string {
   const name = normalizeSkillName(input.name);
-  const model = input.model?.trim() || "inherit";
+  const model = input.model || "inherit";
   const lines = [
     "---",
     `name: ${name}`,

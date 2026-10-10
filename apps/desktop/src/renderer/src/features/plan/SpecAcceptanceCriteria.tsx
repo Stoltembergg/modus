@@ -82,12 +82,20 @@ export function criterionEvidenceStatus(
   status: PlanAcceptanceCriterion["status"],
   evidence: PlanEvidenceRef[],
   requiredCheckKinds: PlanAcceptanceCriterion["requiredCheckKinds"] = [],
+  currentWorkspaceRevision?: string,
 ): CriterionReviewStatus {
   if (status !== "passed") return status;
   const latestRunId = evidence.at(-1)?.runId;
   if (!latestRunId || evidence.some((item) => item.runId !== latestRunId)) return "unverified";
   if (evidence.some(({ status: evidenceStatus }) => evidenceStatus !== "passed")) {
     return evidenceContradictionStatus(evidence);
+  }
+  if (
+    requiredCheckKinds.length > 0 &&
+    (!currentWorkspaceRevision ||
+      evidence.some((item) => item.revision !== currentWorkspaceRevision))
+  ) {
+    return "unverified";
   }
   if (requiredCheckKinds.some((kind) => !hasRequiredCheckEvidence(evidence, kind, latestRunId))) {
     return "unverified";
@@ -137,7 +145,13 @@ function EvidenceList({ evidence }: { evidence: PlanEvidenceRef[] }) {
   );
 }
 
-export function SpecAcceptanceCriteria({ spec }: { spec: PlanSpec }) {
+export function SpecAcceptanceCriteria({
+  spec,
+  currentWorkspaceRevisions = new Map(),
+}: {
+  spec: PlanSpec;
+  currentWorkspaceRevisions?: ReadonlyMap<string, string | undefined>;
+}) {
   if (spec.acceptanceCriteria.length === 0) return null;
 
   const requirements = new Map(
@@ -158,6 +172,7 @@ export function SpecAcceptanceCriteria({ spec }: { spec: PlanSpec }) {
             criterion.status,
             currentRun,
             criterion.requiredCheckKinds,
+            latestRunId ? currentWorkspaceRevisions.get(latestRunId) : undefined,
           );
           const earlierEvidenceCount =
             earlierRuns.reduce((count, group) => count + group.evidence.length, 0) +

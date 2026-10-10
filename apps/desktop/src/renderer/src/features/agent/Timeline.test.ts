@@ -85,6 +85,113 @@ describe("buildBlocks", () => {
     ]);
   });
 
+  it("does not present page-local run sources as complete while the full lookup is pending or failed", () => {
+    const events = [
+      item("run", { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" }),
+      item("tool-started", {
+        type: "tool.started",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "call",
+        toolName: "web_search",
+        args: { query: "partial page source" },
+      } as AgentEvent),
+      item("tool-ended", {
+        type: "tool.ended",
+        sessionId: "s",
+        runId: "r",
+        toolCallId: "call",
+        toolName: "web_search",
+        isError: false,
+      } as AgentEvent),
+      item("answer-started", {
+        type: "message.started",
+        sessionId: "s",
+        runId: "r",
+        messageId: "answer",
+        role: "assistant",
+      } as AgentEvent),
+      item("answer", {
+        type: "message.completed",
+        sessionId: "s",
+        runId: "r",
+        messageId: "answer",
+        role: "assistant",
+        content: "Done",
+      } as AgentEvent),
+      item("complete", { type: "run.completed", sessionId: "s", runId: "r" }),
+    ];
+    const pending = buildBlocks(events, {
+      requestedRunIds: new Set(["r"]),
+      loadingRunIds: new Set(["r"]),
+      failedRunIds: new Set(),
+      sourcesByRun: new Map(),
+    });
+    const pendingAnswer = pending.find(
+      (block) => block.type === "message" && block.role === "assistant",
+    );
+    expect(pendingAnswer).toEqual(expect.objectContaining({ sourceStatus: "loading" }));
+    expect(pendingAnswer?.type === "message" ? pendingAnswer.sources : undefined).toBeUndefined();
+
+    const failed = buildBlocks(events, {
+      requestedRunIds: new Set(["r"]),
+      loadingRunIds: new Set(),
+      failedRunIds: new Set(["r"]),
+      sourcesByRun: new Map(),
+    });
+    const failedAnswer = failed.find(
+      (block) => block.type === "message" && block.role === "assistant",
+    );
+    expect(failedAnswer).toEqual(expect.objectContaining({ sourceStatus: "unavailable" }));
+    expect(failedAnswer?.type === "message" ? failedAnswer.sources : undefined).toBeUndefined();
+  });
+
+  it("uses complete run-scoped sources when older tool events are outside the visible page", () => {
+    const completeSources = [
+      {
+        id: "file:src/earlier.ts",
+        kind: "file" as const,
+        label: "earlier.ts",
+        path: "src/earlier.ts",
+      },
+    ];
+    const blocks = buildVisibleTimelineBlocks(
+      [
+        item("run", { type: "run.started", sessionId: "s", runId: "r", delivery: "normal" }),
+        item("answer-start", {
+          type: "message.started",
+          sessionId: "s",
+          messageId: "answer",
+          role: "assistant",
+        }),
+        item("answer-text", {
+          type: "message.delta",
+          sessionId: "s",
+          messageId: "answer",
+          delta: "The answer uses the earlier source.",
+        }),
+        item("answer-done", { type: "message.completed", sessionId: "s", messageId: "answer" }),
+        item("run-done", { type: "run.completed", sessionId: "s", runId: "r" }),
+      ],
+      {
+        requestedRunIds: new Set(["r"]),
+        loadingRunIds: new Set(),
+        failedRunIds: new Set(),
+        sourcesByRun: new Map([["r", completeSources]]),
+      },
+    );
+
+    expect(blocks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          role: "assistant",
+          sources: completeSources,
+        }),
+      ]),
+    );
+  });
+
   it("renders adaptive decision and failure notices", () => {
     const blocks = buildBlocks([
       item("d1", {

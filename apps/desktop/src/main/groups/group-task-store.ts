@@ -172,7 +172,7 @@ const evidence = (value: unknown): value is GroupTaskEvidenceRef[] =>
       typeof row.sessionId === "string" &&
       typeof row.runId === "string" &&
       Number.isSafeInteger(row.eventRowId) &&
-      typeof row.evidenceId === "string" &&
+      (row.evidenceId === undefined || typeof row.evidenceId === "string") &&
       (row.checkName === undefined ||
         ["tests", "typecheck", "lint", "build"].includes(String(row.checkName))) &&
       typeof row.sourceFingerprint === "string"
@@ -881,7 +881,6 @@ function validateEvidenceRefs(task: GroupTask, refs: GroupTaskEvidenceRef[]): vo
       ref.eventRowId < 1 ||
       !ref.sessionId ||
       !ref.runId ||
-      !ref.evidenceId ||
       !ref.sourceFingerprint
     ) {
       throw new GroupStoreError(
@@ -905,7 +904,9 @@ function validateEvidenceRefs(task: GroupTask, refs: GroupTaskEvidenceRef[]): vo
       !qa?.result.sourceFingerprint ||
       qa.result.sourceFingerprint !== ref.sourceFingerprint ||
       !qa.result.evidence.some(
-        (item) => item.id === ref.evidenceId && item.checkName === ref.checkName,
+        (item) =>
+          item.checkName === ref.checkName &&
+          (ref.evidenceId === undefined ? item.id === undefined : item.id === ref.evidenceId),
       )
     ) {
       throw new GroupStoreError("stale-evidence", "Evidence reference has no matching QA event.");
