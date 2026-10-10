@@ -24,6 +24,7 @@ type ToolCall = {
   toolName: string;
   args?: unknown;
   output: string;
+  tracksOutput: boolean;
   completedSuccessfully: boolean;
 };
 
@@ -168,59 +169,28 @@ export function collectRunSources(
   items: readonly AgentEventItem[],
   targetRunId: string,
 ): RunSource[] {
+  const collector = createRunSourceCollector(targetRunId);
+  collector.append(items);
+  return collector.finish();
+}
+
+/** Incremental source extraction for bounded event-page consumers. */
+export function createRunSourceCollector(targetRunId: string): {
+  append(items: readonly AgentEventItem[]): void;
+  finish(): RunSource[];
+} {
   const calls = new Map<string, ToolCall>();
-  const completed: ToolCall[] = [];
+  const sources = new Map<string, RunSource>();
   let activeRunId: string | undefined;
 
-  for (const { event } of items) {
-    if (event.type === "run.started") {
-      activeRunId = event.runId;
-      continue;
-    }
-    if (
-      event.type === "run.completed" ||
-      event.type === "run.failed" ||
-      event.type === "run.blocked" ||
-      event.type === "run.cancelled"
-    ) {
-      if (activeRunId === event.runId) activeRunId = undefined;
-      continue;
-    }
-    if (event.type === "tool.started") {
-      const runId = event.runId ?? activeRunId;
-      calls.set(event.toolCallId, {
-        ...(runId ? { runId } : {}),
-        toolName: event.toolName,
-        ...(event.args !== undefined ? { args: event.args } : {}),
-        output: "",
-        completedSuccessfully: false,
-      });
-      continue;
-    }
-    if (event.type === "tool.output") {
-      const call = calls.get(event.toolCallId);
-      if (call) call.output += event.output;
-      continue;
-    }
-    if (event.type === "tool.ended") {
-      const call = calls.get(event.toolCallId);
-      if (!call) continue;
-      const runId = event.runId ?? call.runId ?? activeRunId;
-      if (runId) call.runId = runId;
-      call.toolName = event.toolName ?? call.toolName;
-      call.completedSuccessfully = !event.isError && !event.aborted && !event.skipped;
-      completed.push(call);
-    }
-  }
-
-  const sources = new Map<string, RunSource>();
   const add = (source: RunSource): void => {
     const key = sourceKey(source);
-    if (!sources.has(key)) sources.set(key, { ...source, id: key });
+    if (sources.has(key) || sources.size >= 24) return;
+    sources.set(key, { ...source, id: key });
   };
 
-  for (const call of completed) {
-    if (call.runId !== targetRunId || !call.completedSuccessfully) continue;
+  const addCompletedCallSources = (call: ToolCall): void => {
+    if (call.runId !== targetRunId || !call.completedSuccessfully) return;
     const integration = integrationName(call.toolName);
     if (integration) {
       const action = call.toolName
@@ -248,7 +218,53 @@ export function collectRunSources(
         add({ id: "", kind: sourceKindForUrl(href), label: new URL(href).hostname, href });
       }
     }
-  }
+  };
 
-  return [...sources.values()].slice(0, 24);
+  const append = (items: readonly AgentEventItem[]): void => {
+    for (const { event } of items) {
+      if (event.type === "run.started") {
+        activeRunId = event.runId;
+        continue;
+      }
+      if (
+        event.type === "run.completed" ||
+        event.type === "run.failed" ||
+        event.type === "run.blocked" ||
+        event.type === "run.cancelled"
+      ) {
+        if (activeRunId === event.runId) activeRunId = undefined;
+        continue;
+      }
+      if (event.type === "tool.started") {
+        const runId = event.runId ?? activeRunId;
+        const tracksArgs = isFileReadTool(event.toolName) || isExternalSourceTool(event.toolName);
+        calls.set(event.toolCallId, {
+          ...(runId ? { runId } : {}),
+          toolName: event.toolName,
+          ...(tracksArgs && event.args !== undefined ? { args: event.args } : {}),
+          output: "",
+          tracksOutput: isExternalSourceTool(event.toolName),
+          completedSuccessfully: false,
+        });
+        continue;
+      }
+      if (event.type === "tool.output") {
+        const call = calls.get(event.toolCallId);
+        if (call?.tracksOutput) call.output += event.output;
+        continue;
+      }
+      if (event.type === "tool.ended") {
+        const call = calls.get(event.toolCallId);
+        if (!call) continue;
+        const runId = event.runId ?? call.runId ?? activeRunId;
+        if (runId) call.runId = runId;
+        call.toolName = event.toolName ?? call.toolName;
+        call.completedSuccessfully = !event.isError && !event.aborted && !event.skipped;
+        addCompletedCallSources(call);
+        calls.delete(event.toolCallId);
+      }
+    }
+  };
+
+  return { append, finish: () => [...sources.values()] };
 }

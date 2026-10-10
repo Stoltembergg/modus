@@ -1073,13 +1073,28 @@ while preserving legacy prompt backfill and message trimming.
   parent revision. Independent re-review found no blocker and verified both
   duplicate-stream fixes. The raw-page API explicitly documents legacy prompt
   backfill; those synthetic prompt items still have no byte cap.
+- Run-source accumulation follow-up: `useRunSources` and the main-chat group
+  source loader previously retained every event from each selected run until
+  extraction finished. They now feed each fixed-snapshot page directly into a
+  collector, which retains active tool-call state and at most 24 extracted
+  references rather than a run-wide event array. RED: the collector regression
+  failed because the incremental API did not exist; the hook regression now
+  splits a real source-producing call across two pages and asserts the pinned
+  snapshot/cursor requests. GREEN: the two source test files passed **9/9**;
+  the source/timeline/history/event-hub regression set passed **39/39**;
+  desktop typecheck, targeted Biome and `git diff --check` passed. Independent
+  review found no blocker and confirmed run-scoped snapshot paging, cancellation
+  guards, and source compatibility. It identified the byte-cap gap below.
+  Remote CI for this follow-up is pending publication.
 
 ### Limits
 
 `listAgentEvents` still drains every page into one array for compatibility
-consumers, including the legacy session IPC result. Run-source loading
-accumulates all selected-run events while a lookup is in flight, but completed
-event arrays are no longer kept in the renderer cache after the lookup settles.
+consumers, including the legacy session IPC result. Run-source loading no
+longer retains the full selected-run event array; while a lookup is in flight,
+it retains active tool-call state and the bounded source list. Active calls,
+their selected arguments, and output text from an unfinished external-source
+tool still have no byte cap.
 The final assistant-output helpers retain the complete selected message, and a
 single raw event row can still contain an arbitrarily large payload. Inactive
 EventHub buffers are released after the short subscriber handoff window; live

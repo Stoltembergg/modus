@@ -1,23 +1,19 @@
 import { useEffect, useState } from "react";
-import type {
-  AgentEventItem,
-  AgentEventPage,
-  AgentEventPageOptions,
-} from "../../../../shared/agent-events";
-import { collectRunSources, type RunSource, type RunSourcesSnapshot } from "./runSources";
+import type { AgentEventPage, AgentEventPageOptions } from "../../../../shared/agent-events";
+import { createRunSourceCollector, type RunSource, type RunSourcesSnapshot } from "./runSources";
 
 const EVENT_PAGE_SIZE = 256;
-const pendingRunEvents = new Map<string, Promise<AgentEventItem[]>>();
+const pendingRunSources = new Map<string, Promise<RunSource[]>>();
 
-async function loadRunEvents(sessionId: string, runId: string): Promise<AgentEventItem[]> {
+async function loadRunSources(sessionId: string, runId: string): Promise<RunSource[]> {
   const cacheKey = `${sessionId}\0${runId}`;
-  const pending = pendingRunEvents.get(cacheKey);
+  const pending = pendingRunSources.get(cacheKey);
   if (pending) return pending;
 
   const listEventPage = window.modus?.agent?.listEventPage;
   if (!listEventPage) return [];
   const request = (async () => {
-    const events: AgentEventItem[] = [];
+    const collector = createRunSourceCollector(runId);
     let afterCursor = 0;
     let snapshotCursor: number | undefined;
     while (true) {
@@ -33,20 +29,20 @@ async function loadRunEvents(sessionId: string, runId: string): Promise<AgentEve
         throw new Error("Run event page snapshot changed during pagination.");
       }
       snapshotCursor = page.snapshotCursor;
-      events.push(...page.events);
+      collector.append(page.events);
       if (!page.hasMore) break;
       if (page.nextCursor === undefined || page.nextCursor <= afterCursor) {
         throw new Error("Run event page cursor did not advance.");
       }
       afterCursor = page.nextCursor;
     }
-    return events;
+    return collector.finish();
   })();
-  pendingRunEvents.set(cacheKey, request);
+  pendingRunSources.set(cacheKey, request);
   try {
     return await request;
   } finally {
-    pendingRunEvents.delete(cacheKey);
+    pendingRunSources.delete(cacheKey);
   }
 }
 
@@ -61,9 +57,9 @@ export function useRunSources(
     let cancelled = false;
     setSources([]);
     if (!sessionId || !runId || !enabled || !window.modus?.agent?.listEventPage) return;
-    void loadRunEvents(sessionId, runId)
-      .then((items) => {
-        if (!cancelled) setSources(collectRunSources(items, runId));
+    void loadRunSources(sessionId, runId)
+      .then((sources) => {
+        if (!cancelled) setSources(sources);
       })
       .catch(() => {
         if (!cancelled) setSources([]);
@@ -127,8 +123,7 @@ export function useRunSourcesForRuns(
     void Promise.all(
       requestedRunIds.map(async (runId) => {
         try {
-          const items = await loadRunEvents(sessionId, runId);
-          const sources = collectRunSources(items, runId);
+          const sources = await loadRunSources(sessionId, runId);
           if (cancelled) return;
           setSnapshot((previous) => {
             if (previous.key !== requestKey) return previous;

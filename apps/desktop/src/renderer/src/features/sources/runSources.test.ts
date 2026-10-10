@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AgentEventItem } from "../agent/agentEventHub";
-import { collectRunSources } from "./runSources";
+import { collectRunSources, createRunSourceCollector } from "./runSources";
 
 function entry(id: string, event: AgentEventItem["event"]): AgentEventItem {
   return { id, event };
@@ -124,5 +124,43 @@ describe("collectRunSources", () => {
       }),
     ]);
     expect(JSON.stringify(sources)).not.toContain("private messages");
+  });
+
+  it("collects source references incrementally across event pages", () => {
+    const collector = createRunSourceCollector("run-a");
+    collector.append([
+      entry("run", { type: "run.started", sessionId: "s", runId: "run-a", delivery: "normal" }),
+      entry("start", {
+        type: "tool.started",
+        sessionId: "s",
+        runId: "run-a",
+        toolCallId: "lookup",
+        toolName: "web_search",
+        args: { query: "docs" },
+      }),
+    ]);
+    collector.append([
+      entry("output", {
+        type: "tool.output",
+        sessionId: "s",
+        toolCallId: "lookup",
+        output: "Found https://docs.example.test/guide",
+      }),
+      entry("end", {
+        type: "tool.ended",
+        sessionId: "s",
+        runId: "run-a",
+        toolCallId: "lookup",
+        toolName: "web_search",
+        isError: false,
+      }),
+    ]);
+
+    expect(collector.finish()).toEqual([
+      expect.objectContaining({
+        kind: "documentation",
+        href: "https://docs.example.test/guide",
+      }),
+    ]);
   });
 });

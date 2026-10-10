@@ -65,18 +65,27 @@ describe("useRunSources", () => {
         event: { type: "run.completed", sessionId: "s", runId: "run-target", eventCursor: 5 },
       },
     ];
-    const page: AgentEventPage = {
-      events: events.map((item) => ({
+    const page = (
+      pageEvents: AgentEventItem[],
+      nextCursor: number,
+      hasMore: boolean,
+    ): AgentEventPage => ({
+      events: pageEvents.map((item) => ({
         ...item,
         createdAt: item.createdAt ?? "2026-10-01T12:00:00.000Z",
       })),
       summaryEvents: [],
       activityEvents: [],
       snapshotCursor: 5,
-      nextCursor: 5,
-      hasMore: false,
-    };
-    const listEventPage = vi.fn(async (): Promise<AgentEventPage> => page);
+      nextCursor,
+      hasMore,
+    });
+    const firstPage = page(events.slice(0, 2), 2, true);
+    const secondPage = page(events.slice(2), 5, false);
+    const listEventPage = vi
+      .fn()
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce(secondPage);
     const listEvents = vi.fn(async (): Promise<AgentEventItem[]> => events);
     Object.assign(window, { modus: { agent: { listEventPage, listEvents } } });
 
@@ -89,8 +98,20 @@ describe("useRunSources", () => {
     );
     expect(listEventPage).toHaveBeenCalledWith(
       "s",
-      expect.objectContaining({ runId: "run-target", direction: "forward" }),
+      expect.objectContaining({
+        runId: "run-target",
+        direction: "forward",
+        afterCursor: 0,
+        limit: 256,
+      }),
     );
+    expect(listEventPage).toHaveBeenNthCalledWith(2, "s", {
+      direction: "forward",
+      runId: "run-target",
+      afterCursor: 2,
+      limit: 256,
+      snapshotCursor: 5,
+    });
     expect(listEvents).not.toHaveBeenCalled();
   });
 
