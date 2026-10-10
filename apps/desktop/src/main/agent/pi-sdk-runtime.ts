@@ -900,7 +900,7 @@ function composeSubagentPrompt(input: {
 type PromptProbe = { runId?: string; joined?: boolean };
 
 export class PiSdkRuntime implements AgentRuntime {
-  private harnessKernel = new HarnessKernel();
+  #harnessKernel = new HarnessKernel();
   #capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
   #pluginLoader: PluginLoader = new PluginLoader(this.#capabilityRegistry);
   #pluginStateStore?: PluginStateStore | undefined;
@@ -950,13 +950,13 @@ export class PiSdkRuntime implements AgentRuntime {
   >();
 
   constructor() {
-    this.harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
-    this.harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
-    this.harnessKernel.registerHook(promptBuildHook);
-    this.harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
-    this.harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
-    this.harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
-    this.harnessKernel.registerHook(defaultTurnSettleGroupMailboxHook);
+    this.#harnessKernel.registerHook(defaultToolCallRepeatGuardHook);
+    this.#harnessKernel.registerHook(defaultToolResultRepeatGuardHook);
+    this.#harnessKernel.registerHook(promptBuildHook);
+    this.#harnessKernel.registerHook(defaultPromptBuildResponsePolicyHook);
+    this.#harnessKernel.registerHook(defaultTurnSettleResponsePolicyHook);
+    this.#harnessKernel.registerHook(defaultObservabilityTurnSettleHook);
+    this.#harnessKernel.registerHook(defaultTurnSettleGroupMailboxHook);
 
     // Make the agent terminal tools (run/read/list/write/kill), the built-in
     // web tools (search/fetch), and the live to-do tool available to the chat
@@ -1756,7 +1756,7 @@ export class PiSdkRuntime implements AgentRuntime {
       this.cancelPendingSpillToolCall(sessionId, input.toolCallId);
       return { block: true, reason: "The session run is no longer active." };
     }
-    const output = await this.harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
+    const output = await this.#harnessKernel.executePhase<ToolCallInput, ToolCallOutput>(
       "tool_call",
       input,
       context,
@@ -1973,7 +1973,7 @@ export class PiSdkRuntime implements AgentRuntime {
       progressFingerprint,
     };
     const context = this.createToolGuardContext(runtimeSession, tracker);
-    await this.harnessKernel.executePhase<ToolResultInput, ToolResultOutput>(
+    await this.#harnessKernel.executePhase<ToolResultInput, ToolResultOutput>(
       "tool_result",
       resultInput,
       context,
@@ -2661,7 +2661,7 @@ export class PiSdkRuntime implements AgentRuntime {
         mode: "build",
         state: new Map(),
       };
-      const promptBuild = await this.harnessKernel.executePhase<
+      const promptBuild = await this.#harnessKernel.executePhase<
         PromptBuildInput,
         PromptBuildOutput
       >("prompt_build", { basePrompt: "" }, promptBuildContext);
@@ -2849,7 +2849,7 @@ export class PiSdkRuntime implements AgentRuntime {
       state,
     };
     try {
-      const assembled = await this.harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
+      const assembled = await this.#harnessKernel.executePhase<PromptBuildInput, PromptBuildOutput>(
         "prompt_build",
         { basePrompt: "", systemSections },
         context,
@@ -2996,7 +2996,7 @@ export class PiSdkRuntime implements AgentRuntime {
       turnTokens: tracker.tokenUsage.totalTokens,
       ...(tracker.hasReportedUsage ? { providerTokenUsage: tracker.tokenUsage } : {}),
     };
-    await this.harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+    await this.#harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
       "turn_settle",
       turn,
       context,

@@ -205,6 +205,33 @@ const groupStore = await import("../groups/group-store");
 const groupTaskStore = await import("../groups/group-task-store");
 const { resolveGroupTaskEvidence } = await import("../groups/group-task-evidence");
 
+async function createRuntimeWithHarnessKernel(): Promise<{
+  runtime: InstanceType<typeof PiSdkRuntime>;
+  kernel: HarnessKernel;
+}> {
+  const { HarnessKernel: HarnessKernelClass } = await import("./harness/kernel/harness-kernel");
+  let kernel: HarnessKernel | undefined;
+  const originalRegisterHook = HarnessKernelClass.prototype.registerHook;
+  const registerHookSpy = vi
+    .spyOn(HarnessKernelClass.prototype, "registerHook")
+    .mockImplementation(function (this: HarnessKernel, hook) {
+      kernel ??= this;
+      return originalRegisterHook.call(this, hook);
+    });
+
+  let runtime: InstanceType<typeof PiSdkRuntime>;
+  try {
+    runtime = new PiSdkRuntime();
+  } finally {
+    registerHookSpy.mockRestore();
+  }
+
+  if (!kernel) {
+    throw new Error("PiSdkRuntime did not register its HarnessKernel hooks");
+  }
+  return { runtime, kernel };
+}
+
 function createMockPiSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const { prompt: promptOverride, deferPreflight, ...sessionOverrides } = overrides;
   const prompt = vi.fn(
@@ -765,6 +792,7 @@ describe("PiSdkRuntime", () => {
       "pluginLifecycleService",
       "bootstrapPromise",
       "pluginSyncPromise",
+      "harnessKernel",
       "pluginInstrumentation",
       "pluginHealthMonitor",
       "pluginFailureCorrelation",
@@ -810,7 +838,7 @@ describe("PiSdkRuntime", () => {
       MODUS_OBSERVABILITY: false,
     });
 
-    const runtime = new PiSdkRuntime() as unknown as { harnessKernel: HarnessKernel };
+    const { kernel } = await createRuntimeWithHarnessKernel();
 
     const registeredNames = toolRegistry
       .getCustomToolDefinitions("chat")
@@ -818,11 +846,11 @@ describe("PiSdkRuntime", () => {
     expect(registeredNames).toContain("group_mailbox_send");
     expect(registeredNames).toContain("group_mailbox_receive");
     expect(registeredNames).toContain("group_mailbox_ack");
-    expect(
-      runtime.harnessKernel.getHooksForPhase("turn_settle").map((hook) => hook.name),
-    ).toContain("harness_group_mailbox_turn_settle");
+    expect(kernel.getHooksForPhase("turn_settle").map((hook) => hook.name)).toContain(
+      "harness_group_mailbox_turn_settle",
+    );
     const runId = `mailbox-settle-${crypto.randomUUID()}`;
-    const settled = await runtime.harnessKernel.executePhase<TurnSettleInput, TurnSettleOutput>(
+    const settled = await kernel.executePhase<TurnSettleInput, TurnSettleOutput>(
       "turn_settle",
       {
         runId,
@@ -9928,7 +9956,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
   it("discards a pending stale turn-settle hook after release and recreation", async () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
-    const runtime = new PiSdkRuntime();
+    const { runtime, kernel } = await createRuntimeWithHarnessKernel();
     const sessionId = `observer-pending-${crypto.randomUUID()}`;
     let notifyPending!: () => void;
     let resumePending!: () => void;
@@ -9940,19 +9968,6 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     });
     let shouldPause = true;
     const laterHook = vi.fn();
-    const kernel = (
-      runtime as unknown as {
-        harnessKernel: {
-          registerHook(hook: {
-            name: string;
-            phase: "turn_settle";
-            priority: number;
-            isCritical: boolean;
-            execute: (input: unknown) => Promise<unknown> | unknown;
-          }): void;
-        };
-      }
-    ).harnessKernel;
     kernel.registerHook({
       name: "test-pending-session-release",
       phase: "turn_settle",
@@ -10010,7 +10025,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
   it("invalidates pending turn-settle hooks on cancellation and starts a fresh observer lifetime", async () => {
     setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
-    const runtime = new PiSdkRuntime();
+    const { runtime, kernel } = await createRuntimeWithHarnessKernel();
     const sessionId = `observer-cancelled-${crypto.randomUUID()}`;
     let notifyPending!: () => void;
     let resumePending!: () => void;
@@ -10022,19 +10037,6 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     });
     let shouldPause = true;
     const laterHook = vi.fn();
-    const kernel = (
-      runtime as unknown as {
-        harnessKernel: {
-          registerHook(hook: {
-            name: string;
-            phase: "turn_settle";
-            priority: number;
-            isCritical: boolean;
-            execute: (input: unknown) => Promise<unknown> | unknown;
-          }): void;
-        };
-      }
-    ).harnessKernel;
     kernel.registerHook({
       name: "test-pending-session-cancel",
       phase: "turn_settle",
@@ -10143,8 +10145,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
       enforcementMode: "strict",
     });
 
-    const runtime = new PiSdkRuntime();
-    const kernel = (runtime as unknown as { harnessKernel: HarnessKernel }).harnessKernel;
+    const { kernel } = await createRuntimeWithHarnessKernel();
     let arrivals = 0;
     let releaseObservers!: () => void;
     const bothEvaluated = new Promise<void>((resolve) => {
