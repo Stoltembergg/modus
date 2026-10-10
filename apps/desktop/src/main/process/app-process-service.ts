@@ -223,7 +223,9 @@ export function isAppId(id: string): boolean {
 
 /**
  * Request platform process-tree termination for a tracked app. Returns false
- * for unknown ids and refuses to signal an exited leader whose PID may be reused.
+ * for unknown ids or an app whose original leader has already exited, avoiding
+ * an unsafe signal to a potentially reused PID. A successful request returns
+ * true only after the platform backend confirms termination.
  */
 export async function killApp(id: string): Promise<boolean> {
   const info = apps.get(id);
@@ -234,7 +236,7 @@ export async function killApp(id: string): Promise<boolean> {
   if ((leader && leader.exitCode !== null) || !ops.isAlive(info.pid)) {
     info.status = "exited";
     publishManagedProcessChange();
-    throw identityUnavailable(info.pid);
+    return false;
   }
   await ops.killTree(info.pid);
   info.status = "exited";

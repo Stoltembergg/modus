@@ -30,6 +30,7 @@ function setExitCode(child: ChildProcess, exitCode: number | null): void {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.clearAllMocks();
 });
@@ -64,7 +65,7 @@ describe("app-process-service cancellation cleanup", () => {
     expect(mocks.killTree).toHaveBeenCalledWith(42);
   });
 
-  it("refuses to signal a pid after its tracked process leader has exited", async () => {
+  it("treats a process that exited before the stop request as an idempotent no-op", async () => {
     vi.useFakeTimers();
     const child = new EventEmitter() as ChildProcess;
     Object.defineProperty(child, "pid", { value: 43 });
@@ -82,9 +83,7 @@ describe("app-process-service cancellation cleanup", () => {
     const app = await launch;
     setExitCode(child, 0);
 
-    await expect(killApp(app.id)).rejects.toMatchObject({
-      name: "ProcessIdentityUnavailableError",
-    });
+    await expect(killApp(app.id)).resolves.toBe(false);
     expect(mocks.killTree).not.toHaveBeenCalled();
   });
 

@@ -953,6 +953,28 @@ of being swallowed.
 - Safe tests: process operations, app cancellation, and existing benign Node
   timer launch/cleanup tests passed **17/17**. These tests use synthetic process
   objects and a benign local timer only; they do not execute plugin code.
+- A second independent review found that a stale UI click rejected through IPC,
+  the renderer dropped process-stop promises, and the `terminal_kill` tool
+  reported success when the original app leader was already gone. The service
+  now makes that already-exited case an idempotent `false` without signaling;
+  the tool reports that descendant cleanup is unconfirmed, and the renderer
+  reports rejected and `false` stop results in session-scoped notices keyed by
+  process id. A result for one process cannot clear another process's notice;
+  the renderer clears that id's notice only after an affirmative stop result.
+  For terminals this means the host accepted the kill request, not that exit
+  was observed. Fake timers are restored after cancellation tests.
+- RED/GREEN: the new stop-request test first failed because a resolved `false`
+  produced no visible report. It now reports that termination was not
+  confirmed. Additional tests confirm that a prior notice is cleared only
+  after a resolved `true`, and concurrent outcomes stay keyed to their own
+  process ids. A terminal-tool regression test also failed against the old
+  behavior, which reported success after `killApp` resolved `false`; the tool
+  now returns an explicit error explaining that descendant cleanup was not
+  confirmed. The stop UI suppresses duplicate in-flight requests and keeps
+  notices scoped to the current workspace/session and process id. Current
+  targeted tests pass **32/32 across six files**; Biome passes on all 11
+  changed source/test files, `git diff --check` passes, and desktop typecheck
+  passes. No hostile process or plugin code was executed.
 - Independent review identified Windows leader-only confirmation, stale app
   IDs, and POSIX descendants that escape the original process group. The
   stale-ID case is guarded when Node has delivered the original leader's exit

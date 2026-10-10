@@ -735,6 +735,32 @@ export function ChatPane({
     createEmptyChatComposerDraft,
   );
   const [promptError, setPromptError] = useState<string | undefined>();
+  const processStopScope = JSON.stringify([workspace?.id ?? null, sessionId]);
+  const processStopScopeRef = useRef(processStopScope);
+  processStopScopeRef.current = processStopScope;
+  const [processStopErrorState, setProcessStopErrorState] = useState<{
+    scope: string;
+    notices: ReadonlyMap<string, string>;
+  }>(() => ({ scope: processStopScope, notices: new Map() }));
+  const processStopErrors =
+    processStopErrorState.scope === processStopScope ? [...processStopErrorState.notices] : [];
+  const updateProcessStopNotice = (
+    scope: string,
+    processId: string,
+    message: string | undefined,
+  ): void => {
+    if (processStopScopeRef.current !== scope) return;
+    setProcessStopErrorState((previous) => {
+      if (processStopScopeRef.current !== scope) return previous;
+      const notices = new Map(previous.scope === scope ? previous.notices : []);
+      if (message) {
+        notices.set(processId, message);
+      } else {
+        notices.delete(processId);
+      }
+      return { scope, notices };
+    });
+  };
   // L2: the session's saved branch no longer exists -> sending is blocked until replaced.
   const [branchBlocked, setBranchBlocked] = useState(false);
   const [pendingPrompt, setPendingPrompt] = useState(false);
@@ -1568,6 +1594,15 @@ export function ChatPane({
           {promptError}
         </div>
       ) : null}
+      {processStopErrors.map(([processId, message]) => (
+        <div
+          className="mx-4 mt-2 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger"
+          key={processId}
+          role="alert"
+        >
+          {message}
+        </div>
+      ))}
 
       {isRunning ? (
         <div
@@ -1760,6 +1795,12 @@ export function ChatPane({
                               <RunningProcessBar
                                 nowMs={managedProcesses.nowMs}
                                 onStop={managedProcesses.kill}
+                                onStopError={(processId, message) =>
+                                  updateProcessStopNotice(processStopScope, processId, message)
+                                }
+                                onStopSuccess={(processId) =>
+                                  updateProcessStopNotice(processStopScope, processId, undefined)
+                                }
                                 processes={runningProcesses}
                                 {...(onOpenTerminal ? { onOpenTerminal } : {})}
                               />

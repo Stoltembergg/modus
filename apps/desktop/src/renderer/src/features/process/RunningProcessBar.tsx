@@ -1,9 +1,10 @@
 import { IconAppWindow, IconTerminal2, IconTrash } from "@tabler/icons-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ManagedProcessInfo } from "../../../../shared/contracts";
 import { formatElapsed } from "../../../../shared/managed-process";
 import { cn } from "../../lib/cn";
 import { ComposerRail } from "../composer/ComposerRail";
+import { requestManagedProcessStop } from "./processStopRequest";
 
 /**
  * Background-terminal rail in the independent status card above the composer
@@ -14,11 +15,15 @@ export function RunningProcessBar({
   processes,
   nowMs,
   onStop,
+  onStopError,
+  onStopSuccess,
   onOpenTerminal,
 }: {
   processes: ManagedProcessInfo[];
   nowMs: number;
-  onStop(id: string): void;
+  onStop(id: string): Promise<boolean>;
+  onStopError?(id: string, message: string): void;
+  onStopSuccess?(id: string): void;
   /** Open the inspector Terminal tab and select this process (terminal ids only). */
   onOpenTerminal?(terminalId: string): void;
 }) {
@@ -41,6 +46,8 @@ export function RunningProcessBar({
             nowMs={nowMs}
             onOpenTerminal={onOpenTerminal}
             onStop={onStop}
+            onStopError={onStopError}
+            onStopSuccess={onStopSuccess}
             process={process}
           />
         ))}
@@ -53,13 +60,20 @@ function ProcessRow({
   process,
   nowMs,
   onStop,
+  onStopError,
+  onStopSuccess,
   onOpenTerminal,
 }: {
   process: ManagedProcessInfo;
   nowMs: number;
-  onStop: (id: string) => void;
+  onStop: (id: string) => Promise<boolean>;
+  onStopError?: ((id: string, message: string) => void) | undefined;
+  onStopSuccess?: ((id: string) => void) | undefined;
   onOpenTerminal?: ((terminalId: string) => void) | undefined;
 }) {
+  const [stopError, setStopError] = useState<string>();
+  const [stopping, setStopping] = useState(false);
+  const stopInFlight = useRef(false);
   const elapsed = formatElapsed(nowMs - Date.parse(process.startedAt));
   const isTerminal = process.kind === "terminal";
   const canOpen = isTerminal && Boolean(onOpenTerminal);
@@ -68,7 +82,7 @@ function ProcessRow({
   return (
     <li
       className={cn(
-        "group/row flex items-center gap-2 rounded-md px-2 py-1.5",
+        "group/row flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5",
         canOpen && "cursor-pointer hover:bg-hover",
       )}
       onClick={canOpen ? () => onOpenTerminal?.(process.id) : undefined}
@@ -103,14 +117,41 @@ function ProcessRow({
         )}
         onClick={(event) => {
           event.stopPropagation();
-          onStop(process.id);
+          if (stopInFlight.current) return;
+          stopInFlight.current = true;
+          setStopping(true);
+          void requestManagedProcessStop(
+            onStop,
+            process.id,
+            (id, message) => {
+              const labeledMessage = `${process.label}: ${message}`;
+              if (onStopError) {
+                onStopError(id, labeledMessage);
+              } else {
+                setStopError(labeledMessage);
+              }
+            },
+            (id) => {
+              setStopError(undefined);
+              onStopSuccess?.(id);
+            },
+          ).finally(() => {
+            stopInFlight.current = false;
+            setStopping(false);
+          });
         }}
         onMouseDown={(event) => event.preventDefault()}
+        disabled={stopping}
         tabIndex={-1}
         type="button"
       >
         <IconTrash size={13} stroke={1.8} />
       </button>
+      {stopError ? (
+        <span className="basis-full text-xs text-danger" role="alert">
+          {stopError}
+        </span>
+      ) : null}
     </li>
   );
 }

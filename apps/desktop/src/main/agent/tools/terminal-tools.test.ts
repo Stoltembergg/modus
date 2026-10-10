@@ -4,7 +4,11 @@ import { toolRegistry } from "./registry";
 import { formatRun, registerTerminalTools } from "./terminal-tools";
 import { runWithAgentToolContext } from "./tool-context";
 
-const terminalMocks = vi.hoisted(() => ({ runAgentCommand: vi.fn() }));
+const terminalMocks = vi.hoisted(() => ({
+  isAppId: vi.fn(() => false),
+  killApp: vi.fn(),
+  runAgentCommand: vi.fn(),
+}));
 
 vi.mock("../../terminal/terminal-service", () => ({
   killTerminal: vi.fn(),
@@ -15,8 +19,8 @@ vi.mock("../../terminal/terminal-service", () => ({
 }));
 
 vi.mock("../../process/app-process-service", () => ({
-  isAppId: vi.fn(() => false),
-  killApp: vi.fn(),
+  isAppId: terminalMocks.isAppId,
+  killApp: terminalMocks.killApp,
   listApps: vi.fn(() => []),
 }));
 
@@ -151,6 +155,23 @@ describe("terminal_run cancellation ownership", () => {
 
     expect(terminalMocks.runAgentCommand).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal, sessionId, runId, background: true }),
+    );
+  });
+});
+
+describe("terminal_kill confirmation", () => {
+  it("does not report success when an app leader already exited", async () => {
+    registerTerminalTools();
+    terminalMocks.isAppId.mockReturnValue(true);
+    terminalMocks.killApp.mockResolvedValue(false);
+    const tool = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((entry) => entry.name === "terminal_kill") as unknown as {
+      execute: (toolCallId: string, params: { terminal_id: string }) => Promise<unknown>;
+    };
+
+    await expect(tool.execute("tool-call", { terminal_id: "app-exited-1" })).rejects.toThrow(
+      "descendant termination was not confirmed",
     );
   });
 });
