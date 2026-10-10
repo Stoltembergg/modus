@@ -510,6 +510,10 @@ counting cancellation as a plugin failure.
   process-map tests **16 passed**; registry signal propagation **1 passed**
   (23 name-filtered tests skipped). No adversarial probe or external plugin
   code was run.
+- Current A15 revalidation: the synthetic PTY cancellation test passed **1/1**;
+  the exact Pi runtime ownership test passed **1/1** (229 name-filtered cases
+  skipped). Both use mocked process spawns/process registries and execute no
+  command or external plugin code.
 - Desktop TypeScript typecheck: passed, exit 0. Targeted Biome on the original
   A15 patch exited 0 with **19 warnings and 1 info**; the follow-up registry
   files exited 0 with **14 warnings and 1 info**; no errors, rules disabled, or
@@ -970,20 +974,20 @@ pending or unavailable, and the UI reports that state.
   pass. Independent review found no blocker and confirmed the pagination,
   snapshot guards, and in-flight deduplication remain. In-flight full-run
   accumulation is still unbounded.
-- The EventHub also retained folded session history after all views had
-  unsubscribed. RED: focused tests showed completed history remained in memory
-  after the last subscriber left, while a second session stayed independent.
-  GREEN: the hub now releases only inactive sessions whose latest run event is
-  terminal (`completed`, `failed`, `cancelled`, or persisted `blocked`), and
-  keeps an active run or prepared handoff. The persisted event store remains
-  the source for later paged reload. The latest focused renderer integration
-  run passed **30/30 tests** across the hub, activity timeline, and chat history;
-  desktop typecheck passed, targeted Biome and `git diff --check` pass.
-  Independent review found no blocker; it
-  confirmed `run.blocked` is persisted and reloadable and the pre-dispatch
-  prepared intent remains protected. A failed early prompt path without a
-  persisted run event may retain a local-only optimistic item and remains a
-  bounded follow-up risk.
+- The EventHub retained folded history from active sessions after all views
+  unsubscribed. RED: the new active-run regression expected release after the
+  handoff timer but received the retained `run.started` event. GREEN: inactive
+  buffers are released once the 16 ms pending window closes; other sessions
+  remain isolated, and the existing prepared-handoff test still retains and
+  delivers events across a flush. The persisted event store remains the source
+  for later paged reload. The latest focused renderer integration run passed
+  **30/30 tests** across the hub, activity timeline, and chat history; desktop
+  typecheck passed, targeted Biome and `git diff --check` pass.
+  Independent review found no blocker; it confirmed paged reload and
+  pre-dispatch prepared-intent protection. A volatile `tool.delta` preview can
+  disappear if a call is interrupted before durable `tool.started` while no
+  pane is subscribed. A failed early prompt path without a persisted run event
+  may retain a local-only optimistic item and remains a bounded follow-up risk.
 - Independent review confirmed the main-chat source lookup is run-scoped and
   requested explicit pending/failure state and inclusion of `thinking.completed`
   in stream expansion. A later review found and drove two run-association fixes;
@@ -996,14 +1000,15 @@ pending or unavailable, and the UI reports that state.
 and the Pi SDK runtime plus subagent context helpers still reconstruct session
 history through it. Run-source loading accumulates all selected-run events
 while a lookup is in flight, but completed event arrays are no longer kept in
-the renderer cache after the lookup settles. Inactive terminal session history
-is released from the renderer hub; active runs and prepared handoffs remain
-until safe to reload or consume.
+the renderer cache after the lookup settles. Inactive EventHub buffers are
+released after the short subscriber handoff window; live subscribers and
+prepared handoffs retain their events.
 Base row count is capped, but companion stream expansion and individual
 serialized payloads have no byte cap, so memory and IPC size can still be large
-for unusually long results. The renderer event hub retains history while a run
-is active and may retain local optimistic events when a prompt fails before
-any durable run marker. These remain follow-up gaps; A22 is partial. Cursor
+for unusually long results. A volatile partial `tool.delta` can be unavailable
+after an inactive handoff buffer is released if the call never reaches a
+durable `tool.started`; a failed early prompt can also retain local optimistic
+events. These remain follow-up gaps; A22 is partial. Cursor
 order is insertion order rather than
 `created_at, rowid`; inverted timestamps and page continuity are covered, but
 broader product ordering expectations remain a compatibility risk. Run IDs
@@ -1077,22 +1082,32 @@ rejected rather than mixed.
   passed. The benchmark failure remains unresolved and is not classified as
   pre-existing or exclusively flaky.
 
-### EventHub transient-history follow-up
+### EventHub transient-history follow-up on `c63d53a`
 
-- RED/GREEN: the two new hub regressions first failed because terminal session
-  history was retained after the last view unsubscribed. After the fix, the
-  event hub releases only when no chat/history subscriber or prepared handoff
-  remains and the latest run state is terminal. Active runs remain buffered;
-  `run.blocked` is releasable because the event is durable and the session's
-  future view reloads paged history. A seed merge is not released mid-merge.
+- The first EventHub fix released terminal sessions on last unsubscribe; this
+  follow-up also bounds inactive active-run history. RED: after the last
+  subscriber left, the new regression still found `run.started` in memory after
+  the 16 ms flush. GREEN: the hub releases that buffer once the handoff window
+  closes and no subscriber or prepared dispatch exists. Prepared events are
+  explicitly tested across a timer flush and delivered exactly once. A seed
+  merge is not released mid-merge.
 - Runtime UI integration passed **30/30 tests** across
   `agentEventHub.test.ts`, `ActivityTimeline.test.tsx`, and
   `ChatPane.history.test.tsx`; desktop typecheck, targeted Biome, and
   `git diff --check` passed.
-- Independent review found no blocker. It verified the durable blocked event,
-  reload path, and protection for a prepared pre-dispatch handoff. A rejected
-  early prompt without a durable run marker can still leave an optimistic
-  renderer item; that residual does not create persisted audit evidence.
+- Independent review found no blocker. It verified the paged reload path and
+  protection for a prepared pre-dispatch handoff. It noted that a volatile
+  `tool.delta` preview can be lost if a call stops before durable `tool.started`
+  while no pane is subscribed. A rejected early prompt without a durable run
+  marker can still leave an optimistic renderer item; that residual does not
+  create persisted audit evidence.
+- Remote CI `38043797775` on `c63d53a`: Biome/typecheck passed; Vitest passed
+  **4,589 tests with 8 skipped across 406 files**; plugin containment passed on
+  Ubuntu/macOS/Windows; Verifier-First regressions passed; sandbox targets were
+  compile-only. The sole failure was pgTAP test 22 in
+  `17_free_monthly_renewal.test.sql` (expected 2026-10-31, got 2026-10-30).
+  Windows packaging passed; macOS packaging was still running at the last
+  status check.
 
 ## Current matrix
 
@@ -1119,7 +1134,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub transient history RED/GREEN: hub/timeline/chat-history integration 30/30; desktop typecheck, targeted Biome and diff check pass. CI on `12f1dc6` passed 4,586 tests, typecheck/Biome, all three OS containment jobs, and Windows/macOS packaging; only the pgTAP renewal assertion failed. CI on `43485f6` passed typecheck/Biome, OS containment, verifier regressions, compile-only sandbox, and Windows/macOS packaging; it failed one `FastVectorDistance <0.1ms` timing assertion (0.124834ms) and the same pgTAP test. Review found no blocker in run/session/snapshot isolation, source cache removal, or terminal EventHub release. Legacy `listAgentEvents` callers, in-flight full-run accumulation, active-run history, unbounded bytes per companion stream/result, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
+| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub RED/GREEN: hub/timeline/chat-history integration 30/30, including active-run buffer release after the handoff window and prepared handoff retention; desktop typecheck, targeted Biome and diff check pass. CI on `12f1dc6` passed 4,586 tests, typecheck/Biome, all three OS containment jobs, and Windows/macOS packaging; only the pgTAP renewal assertion failed. CI on `43485f6` passed typecheck/Biome, OS containment, verifier regressions, compile-only sandbox, and Windows/macOS packaging; it failed one `FastVectorDistance <0.1ms` timing assertion (0.124834ms) and the same pgTAP test. CI on `c63d53a` passed 4,589 tests/8 skipped, typecheck/Biome, containment on all three OSes, Verifier-First regressions, and compile-only sandbox; only pgTAP failed, Windows packaging passed and macOS was pending at last check. Review found no blocker in run/session/snapshot isolation, source cache removal, or EventHub release. Legacy `listAgentEvents` callers, in-flight full-run accumulation, unbounded bytes per companion stream/result, volatile partial tool previews before durable `tool.started`, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |

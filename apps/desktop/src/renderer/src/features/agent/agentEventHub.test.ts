@@ -350,32 +350,13 @@ describe("AgentEventHub", () => {
     }
   });
 
-  it("retains an unobserved active run, then releases it after its terminal event", () => {
+  it("releases inactive active-run history after the buffered handoff window", () => {
     vi.useFakeTimers();
     try {
       const hub = new AgentEventHub();
       const unsubscribe = hub.subscribe("s", vi.fn());
       hub.publish(item(runStarted, "run-start"));
       unsubscribe();
-      vi.advanceTimersByTime(16);
-      expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["run-start"]);
-
-      hub.publish(
-        item({
-          type: "run.blocked",
-          sessionId: "s",
-          runId: "r",
-          requestId: "permission",
-          reason: "permission required",
-        }),
-      );
-      vi.advanceTimersByTime(16);
-      expect(hub.getHistory("s")).toEqual([]);
-
-      hub.publish(item({ ...runStarted, runId: "next-run" }, "next-run-start"));
-      vi.advanceTimersByTime(16);
-      expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["next-run-start"]);
-      hub.publish(item({ ...runCompleted, runId: "next-run" }, "run-completed"));
       vi.advanceTimersByTime(16);
       expect(hub.getHistory("s")).toEqual([]);
     } finally {
@@ -430,18 +411,30 @@ describe("AgentEventHub", () => {
   });
 
   it("hands prepared events to the first subscriber exactly once", () => {
-    const hub = new AgentEventHub();
-    const event = item({ type: "run.started", sessionId: "s", runId: "r", delivery: "normal" });
-    hub.prepare("s");
-    hub.publish(event);
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const event = item({
+        type: "run.started",
+        sessionId: "s",
+        runId: "r",
+        delivery: "normal",
+      });
+      hub.prepare("s");
+      hub.publish(event);
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s")).toEqual([event]);
 
-    const first = vi.fn();
-    hub.subscribe("s", first);
-    expect(first).toHaveBeenCalledWith(event);
+      const first = vi.fn();
+      hub.subscribe("s", first);
+      expect(first).toHaveBeenCalledWith(event);
 
-    const second = vi.fn();
-    hub.subscribe("s", second);
-    expect(second).not.toHaveBeenCalled();
+      const second = vi.fn();
+      hub.subscribe("s", second);
+      expect(second).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("drops events after a prepared handoff is cancelled", () => {
