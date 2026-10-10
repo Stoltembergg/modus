@@ -145,8 +145,9 @@ terminate a process or prove that an in-flight OS operation was preempted.
 
 **Status: implemented, locally verified, independently reviewed, and CI-green.** This is the
 incremental Supabase quality-gate fix requested for the mission, outside the
-A01–A25 finding matrix. Windows/macOS packaging workflows for the current PR
-head are still completing separately.
+A01–A25 finding matrix. Its pgTAP suite passed in CI run `38088870451` and in
+the earlier green Supabase run `38076843678`; Windows and macOS packaging for
+the completed PR head `7e9e835` also passed.
 
 The failure was a real month-end drift. Renewal used an already-clipped monthly
 boundary as the next anchor; for a Jan 31 grant, February clips to Feb 28/29,
@@ -339,14 +340,15 @@ authorization wiring and OS-level enforcement remain open.**
 - A09 shell checks reject the tested shell-composition metacharacters and no
   longer accept caller-supplied core trust. When the shell allow-list includes
   `git`, direct recognized Git commands also require the matching explicit Git
-  grant, including `.exe` names. Common shell interpreters and launchers such
-  as `sh`, `bash`, `cmd`, `powershell`, `node`, and `python` are denied; this
-  cannot identify arbitrary user-defined wrappers or aliases. An allowed
-  executable may itself launch child processes or evaluate project scripts,
-  so the launcher list is not a general execution boundary. The brokers have
-  no production callsites; the shell API still accepts a command string, does
-  not parse structured argv, and does not constrain the Git repository/resource.
-  A09 is partially mitigated, not complete.
+  grant, including `.exe` names. Common shell interpreters, package managers,
+  and selected command wrappers are denied even when their full command is
+  allow-listed. The finite list cannot identify arbitrary wrappers or aliases;
+  allowed executables may launch children or evaluate project scripts. The
+  brokers have no production callsites; the shell API accepts a command string,
+  does not parse structured argv, and does not constrain the Git
+  repository/resource. Its conservative syntax gate also rejects quotes,
+  backslashes, and `=`, denying some legitimate quoted arguments, Windows
+  paths, and `--option=value` forms. A09 is partially mitigated, not complete.
 
 ### Evidence
 
@@ -932,6 +934,38 @@ counting cancellation as a plugin failure.
   Supabase pgTAP test 22 expected `2026-10-31` but received `2026-10-30`.
   Windows x64 and macOS x64/arm64 packaging later completed successfully. No
   blocked probe was rerun.
+
+#### Managed-app process identity follow-up
+
+The current incremental fix keeps the original `ChildProcess` record for each
+tracked app. Cancellation and `killApp` refuse to signal its numeric PID after
+Node reports that leader exited; app listing also keeps an exited leader from
+appearing live merely because the OS reused its PID. Cancellation cleanup
+errors remain attached to `AbortError` with `cleanupConfirmed: false` instead
+of being swallowed.
+
+- RED/GREEN: a synthetic tracked-process test first resolved `killApp` and
+  called the termination backend after setting the original child's `exitCode`;
+  after the guard it rejects with `ProcessIdentityUnavailableError` without
+  signaling. The cancellation regression likewise failed because cancellation
+  called the backend for an exited leader; it now returns `AbortError` with
+  `cleanupConfirmed: false` and the identity error as its cause, without a kill.
+- Safe tests: process operations, app cancellation, and existing benign Node
+  timer launch/cleanup tests passed **17/17**. These tests use synthetic process
+  objects and a benign local timer only; they do not execute plugin code.
+- Independent review identified Windows leader-only confirmation, stale app
+  IDs, and POSIX descendants that escape the original process group. The
+  stale-ID case is guarded when Node has delivered the original leader's exit
+  status. Platform API documentation now limits its confirmation scope to the
+  original POSIX process group or Windows leader PID; it does not claim proof
+  that escaped descendants are absent.
+
+Remaining limits: without retained OS process handles/Windows Job Objects or a
+containment boundary, a narrow exit/reuse race cannot be eliminated between
+the identity check and signal; Windows does not independently verify
+descendants; and POSIX cannot observe descendants that create a new process
+group/session. These are not proven hard-preemption or whole-tree-reap
+guarantees. A15 remains partially mitigated.
 
 ### Limits
 
@@ -1744,26 +1778,26 @@ cancellation follow-up above.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. The shared protocol validates bounded frames and strict schemas; v2 adds distinct cancellation and rejects v1 on both worker handshake and host-response decode. No OS process executor or production caller exists; isolation and productive wiring remain unproven. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries now expose immutable metadata descriptors without lifecycle/implementation callbacks. Exact source references remain private to the trusted in-process loader wiring; this is API encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader` now also rejects a catalog's self-declared trust unless the exact catalog/source pair is registered by host-owned wiring. Exact source references remain private to trusted in-process loader wiring; this is API encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
-| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::/` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
-| A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
+| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::1` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
+| A09 | Partially mitigated | Tested shell composition, common interpreter/package-manager launchers, selected wrappers, forged trust, and direct Git operation grant bypasses are rejected. The API remains a raw command-string predicate with no production callsites. Arbitrary wrappers (`make`, `wsl`, `parallel`, `runuser`), structured argv, resource scoping, and execution enforcement remain open. Conservative syntax rejection also blocks some quoted, backslash, and `=` arguments. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, startup promises, and HarnessKernel are ECMAScript-private; no in-repository production caller used the removed getters. This does not create a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
-| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
+| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Latest recorded workflow `38081920060` passed Biome/typecheck, Supabase pgTAP (20 files/1,041 tests), PTY/protocol/security regression jobs and platform packaging. Its global Vitest job had one `FastVectorDistance` timing failure; it is not classified as pre-existing or solely environmental. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated; same-connection mutation detection added | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention, append-time verification on audit revision changes, and checkpoint comparisons detect ordinary record changes through the same or another connection. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Windows/macOS packaging later passed. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
+| A22 | Partially mitigated; productive readers page and source extraction is incremental | Cursor-page reads now drive IPC, timeline/history, source lookup and Pi output; the unbounded `agent:list-events` bridge endpoint is removed. Store/helper/context tests passed 89/89, offline Pi runtime 232/232; source/timeline/history/EventHub regressions passed 39/39; the A22 IPC follow-up passed 87/87 and independent review found no blocker. The internal `listAgentEvents` helper still aggregates if explicitly called but has no productive callsite. CI on `e1f175e` passed Biome/typecheck, containment on all three platforms, Verifier-First, sandbox compile-only and PTY cancellation. Global Vitest recorded 4,606 passed, 8 skipped, one `FastVectorDistance` timing failure at 0.113051 ms against <0.1 ms; pgTAP test 22 received 2026-10-30 and expected 2026-10-31. Subsequent pgTAP CI after migration `6844254` passed (20 files/1,041 tests; see the renewal follow-up above). Windows/macOS packaging later passed. No baseline or instability classification is claimed. Active source-tool arguments/output, individual raw event payloads, synthetic prompt backfill and volatile partial previews remain byte/retention limitations. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38081920060` passed the relevant feature jobs, Supabase pgTAP (20 files/1,041 tests), containment, compile-only sandbox and Windows/macOS packaging. The same run had one unrelated-to-A23 global Vitest timing failure, without a baseline classification. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
@@ -1815,6 +1849,79 @@ the existing registry dispatcher and lifecycle service.
   not proven. This increment does not start Guardian Tasks 5–7 or change any
   checkpoint.
 
+#### A03 host-registered catalog provenance follow-up
+
+`PluginLoader.authorizedEntry` previously accepted an executable source when
+an arbitrary `PluginManifestCatalog` returned a descriptor labeled `core` or
+`official`, even when that exact catalog/source pair had never been registered
+by host-owned catalog wiring. The loader now requires both catalog approval
+and the matching private trusted-entry registration. The shipped built-in
+catalog and `TestPluginCatalog` keep their registration path; arbitrary custom
+catalog implementations can no longer turn their returned trust label into
+execution authority.
+
+- RED: the focused regression showed the unregistered catalog's `core` claim
+  caused `PluginLoader.load` to resolve with status `loaded`; the stronger
+  focused assertion observed `rejected: false`, `lifecycleHookCalled: true`,
+  and active provider `@test/unregistered-trust-catalog`. This test ran only a
+  synthetic manifest, its `execute` callback was not invoked, and its lifecycle
+  callback was a `vi.fn()`.
+- GREEN: the loader now rejects before the provider/lifecycle registration
+  path. The same focused case passed; the catalog/loader/lifecycle/rollback
+  suite passed **121/121** tests across four files. Desktop typecheck passed;
+  targeted Biome exited successfully with 17 warnings on existing lines in the
+  two files; `git diff --check` passed.
+- Independent read-only review found no regression for `HostPluginCatalog` or
+  `TestPluginCatalog`, and no alternate loader bypass. The reviewer confirmed
+  the rejection precedes provider registration and lifecycle callbacks. This
+  proves in-process catalog provenance only; it does not isolate hostile code
+  from the host. The source fix is in `a47e00d`; the stronger observable
+  regression assertion is in `7e9e835`. Workflow `38088870451` completed on
+  that head; A03 regressions passed and both platform packaging jobs passed.
+- Workflow `38088517162` on `a47e00d` completed with the safe IPC fixtures,
+  compile-only sandbox, PTY cancellation, A17 regressions, Supabase integration,
+  and Ubuntu/Windows containment passing. The global Vitest job failed two
+  timing assertions in `wasm-sandbox.test.ts` (`FastVectorDistance` measured
+  **0.116007 ms** and `FastContextCompactor` **0.316488 ms**, both against
+  `<0.1 ms`); its summary was 4,616 passed, 8 skipped, 2 failed across 409
+  files. The filtered macOS containment job also failed the existing
+  `FastContextCompactor` assertion at **0.113 ms** (289 passed, 7 skipped, 1
+  failed). No benchmark, threshold, filter, or plugin execution was changed.
+  These results are not classified as pre-existing or solely environmental.
+  Windows x64 packaging (`38088517239`) and macOS arm64/x64 packaging
+  (`38088517146`) completed successfully.
+- Workflow `38088870451` on `7e9e835` passed the safe IPC, compile-only
+  sandbox, PTY cancellation, Verifier-First, A17, Supabase, macOS containment,
+  and Windows containment jobs. Global Vitest reported **4,617 passed, 8
+  skipped, 1 failed across 409 files**; the failure was `FastVectorDistance`
+  at **0.107971 ms** against `<0.1 ms`. Safe-filtered Ubuntu containment failed
+  the same assertion at **0.105688 ms** (289 passed, 7 skipped, 1 failed).
+  The A03 regression itself passed in this run. The benchmark, threshold, and
+  filters remain unchanged; no baseline or instability classification is
+  claimed. Windows packaging `38088870260` and macOS packaging `38088870377`
+  both completed successfully.
+
+#### A01/A02 process-executor status at `a47e00d`
+
+The shared IPC v2 dispatcher and `APPROVED_RESOURCE_POLICY` are contracts only:
+the Electron application does not depend on the protocol crate, and the policy
+is consumed only by that crate's tests. The registry invokes trusted provider
+callbacks in-process, and `PluginLoader` invokes trusted lifecycle hooks in
+process; both paths still lack an external worker supervisor. Preserve these
+trusted built-ins, Pi-owned extension factories, and Harness hooks during any
+future external-plugin migration.
+
+Platform evidence remains insufficient for an external worker on every current
+target. Linux performs read-only feasibility inspection and installs no
+confinement; Windows probe code is diagnostic and does not satisfy the approved
+RSS and handle ceilings; macOS currently reports unsupported. Therefore the
+external-origin gate stays closed on all platforms. No process probe, hostile
+plugin, or enforcement scenario ran. The next implementation tranche must add
+one host-owned per-plugin/run supervisor that owns both capability and
+lifecycle dispatch, with platform launchers default-deny until they satisfy
+the complete approved policy; the protocol crate or a feature flag alone is
+not an executor.
+
 ### A08 IPv6 destination classification follow-up
 
 The static `NetworkBroker.canConnect` destination predicate now blocks IPv6
@@ -1842,3 +1949,75 @@ connection, and the broker has no DNS pinning or redirect enforcement path.
   enforcement are implemented and safely validated. This predicate classifies
   literal IP hosts only; a hostname resolving into a reserved IPv6 range still
   requires enforcement in the unresolved connection path.
+
+### CI follow-up on shared temporary-ancestor fixture commit `b12fd7b`
+
+The fixture-only update in `qa-evidence.test.ts` stabilizes metadata for the
+shared OS temporary directory in the simulated-root and unknown-UID cases;
+the actual sandbox/container directory identities remain observed, and the
+tests still require a fingerprint change after their local topology mutation.
+It does not change QA recognition or acceptance logic.
+
+- Workflow `38087277016` on `b12fd7bf`: the global `typecheck · test · biome`
+  job passed. Biome and desktop typecheck passed; Vitest passed **4,616 tests**
+  across **409 files**, with **8 skipped**, in **87.12 s**. The A17 QA file
+  passed in the complete run. This confirms the current fixture passes in the
+  global suite; it does not by itself prove the exact cause of the earlier
+  CI-only assertion failures.
+- The same workflow's safe-filtered Ubuntu plugin-containment job failed only
+  the existing `FastVectorDistance` timing assertion: **0.103716 ms** against
+  `<0.1 ms` (**287 passed, 7 skipped, 1 failed** across 10 files). Its
+  macOS and Windows containment jobs passed. The benchmark and threshold were
+  not changed, and the timing result is not classified as pre-existing or
+  solely environmental. No enforcement probe ran.
+- The Supabase pgTAP/integration job passed, including the corrected monthly
+  renewal tests. The separate macOS packaging workflow passed for arm64 and
+  x64; the Windows x64 packaging workflow also passed. These packaging results
+  are for `b12fd7b`.
+- The focused QA regression passed **105/105** locally; focused Biome and
+  desktop typecheck also passed. An independent source review found the test
+  fixture adjustment preserves the production fingerprint checks. The review
+  was static and does not establish why the earlier global failures differed
+  from isolated runs.
+- Current state remains: A17 production integrity is preserved; the test
+  fixture is stabilized, while the intermittent cross-suite discrepancy is
+  not assigned a definitive root cause. A01–A04 still have no OS process
+  executor or productive caller; external plugin execution remains blocked.
+
+### A09 follow-up — nested command launchers
+
+The shell broker previously accepted a broad exact grant such as `npm` or
+`npm test`. Because package managers can dispatch project scripts, an allow
+entry for a package-manager executable cannot be treated as authority for the
+nested code. The predicate now denies package managers and selected common
+wrappers/interpreters before evaluating allow entries. It also rejects quoted,
+escaped, and environment-assignment syntax that its command-string parser
+cannot safely classify. The earlier Fase 13 note that `npm test` passed records
+the historical prefix-allow-list test; it is not evidence that the current
+broker authorizes package-manager launches.
+
+- RED: the regression first observed `npm test` as allowed under an exact
+  `npm` grant. Subsequent variants exposed quoted `npm`, `command npm`, and
+  Windows `call npm` forms as allowed. Those predicate-only cases required no
+  child process or plugin execution.
+- GREEN: the focused safe subset passed **48 tests, 5 skipped** across the
+  broker and plugin-isolation files. Desktop TypeScript typecheck passed;
+  Biome error-level checking passed on the three changed TypeScript files;
+  `git diff --check` passed.
+- Independent review found the listed wrappers blocked, but confirmed that
+  finite enumeration does not cover arbitrary intermediaries such as `make`,
+  `wsl`, `parallel`, or `runuser`. The new tests call only `canExecute`; no
+  production broker callsite was found. This is a policy predicate
+  improvement, not execution containment or an A09 closure.
+- The conservative syntax gate rejects otherwise valid quoted arguments,
+  backslash paths, and `--option=value`. No production callsite currently
+  depends on this API, but compatibility is restricted if one is added. A
+  structured argv contract and a real execution enforcement boundary remain
+  required before enabling external plugin shell use.
+- Workflow `38088161902` on `3a3aa69` passed Biome/typecheck, safe protocol,
+  filtered plugin-containment, Verifier-First, PTY cancellation, sandbox
+  compile-only, Supabase integration, and Windows/macOS packaging. Global
+  Vitest reported **4,616 passed, 8 skipped, 1 failed across 409 files**; the
+  failure was `FastVectorDistance` at **0.117430 ms** against `<0.1 ms`. The
+  timing result is not classified as pre-existing or solely environmental.
+  No probe ran and no benchmark or threshold was changed.

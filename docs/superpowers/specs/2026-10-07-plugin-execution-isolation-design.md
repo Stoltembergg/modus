@@ -12,7 +12,10 @@
 - `CapabilityRegistry`, `PluginLoader`, `PluginLifecycleService`, catálogo, permissions, tracing, dependency graph, rollback, Safe Mode e `PiSdkRuntime` permanecem o control plane único. Não criar segundo registry ou lifecycle manager.
 - Falha de adapter, política incompleta, quota não aplicada ou reap não confirmado significa negação fail-closed; nunca iniciar helper sem sandbox como fallback.
 - Filesystem, network, shell, Git e credentials ficam sem grants até os brokers e respectivos riscos A07–A09 serem remediados e provados.
-- Não stage/commit; preservar alterações locais preexistentes.
+- The active user authorization governs implementation, verification, commits,
+  and publication. This mission permits safe synthetic fixtures and commits;
+  blocked probes, enforcement scenarios, root-resume, and untrusted plugin
+  execution remain prohibited.
 
 ## Fronteira e fluxo
 
@@ -38,7 +41,7 @@ Imports WASM são somente funções `modus:host` allowlisted de capabilities con
 - **macOS:** XPC em `Host.app/Contents/XPCServices/<Service>.xpc` continua candidato apenas para isolamento de acesso ambiente; **XPC sozinho está NO-GO no contrato atual**. Pesquisa Apple não documenta CPU-rate, orçamento de CPU por serviço, RSS/VA rígido, processos por serviço ou deadline XPC: `RLIMIT_CPU` é acumulado/sinalizado, `RLIMIT_RSS` é advisory e `RLIMIT_NPROC` é por UID. `NSXPCConnection.invalidate()` não mata o serviço; PID sinalizável não o torna filho waitable. Antes de qualquer probe XPC, identificar mecanismo macOS suportado que aplique cada quota obrigatória antes dos bytes do guest e permita confirmar ausência de execução. Não substituir limites por fuel, memória máxima de guest, watchdog, telemetria ou `RLIMIT_CPU`; não relaxar a política. O serviço pode ser encerrado pelo `launchd` quando ocioso e relançado após crash/conexão; toda conexão nova exige reautorização e geração/estado novos. Sem mecanismo compatível identificado e demonstrado, macOS permanece NO-GO e a tranche não avança ao runner/integração multiplataforma. Ad-hoc signing é somente prova local/CI, não evidência de distribuição.
 - **Linux:** namespaces compatíveis, `no_new_privs`, seccomp e Landlock; cgroup v2 para CPU/memória/processos quando realmente disponível. Pesquisa oficial encontrou `cpu.max`, `pids.max`, `cgroup.kill` e `RLIMIT_NOFILE`; `memory.max` é limite hard para memória cobrada pelo cgroup, não uma quota RSS-only. Não tratar como equivalente ao requisito explícito de 256 MiB RSS sem decisão do usuário. Kernel/permissões/delegação ausentes significam NO-GO, sem fallback.
 
-**Autorização de execução atual:** o usuário autorizou somente probes exploratórios de viabilidade em Windows e Linux enquanto macOS permanece NO-GO. Esses resultados parciais não fecham A01–A04, não liberam plugins externos e não autorizam runner nem integração host-side. Os limites aprovados e o critério final Windows/macOS/Linux permanecem inalterados.
+**Autorização de execução atual (2026-10-10):** esta missão autoriza implementação e verificações sintéticas seguras, mas não autoriza probes, cenários de enforcement, execução de plugins não confiáveis ou retomada de processos root. As observações exploratórias anteriores de Windows e Linux continuam sendo apenas diagnóstico; não satisfazem quotas nem fecham A01–A04. macOS permanece NO-GO. Plugins de origem externa ficam bloqueados em todas as plataformas enquanto um adapter não comprovar cada controle aprovado. Os limites e critérios de segurança permanecem inalterados.
 
 O deliverable exploratório é prova de viabilidade, não runner de produção: processo benigno de probe lançado sob cada política, canários controlados para ambiente/arquivo/rede/processo filho, limites e kill/reap. Registrar versões, política aplicada, recursos medidos e resultado real de cada runner. Um SO não prova outro.
 
@@ -71,7 +74,7 @@ A05–A06 para WASM/WASI legado in-process; A07–A09 (filesystem junction/TOCTO
 
 ## Adenda — Prova real de enforcement do probe Windows (não produção)
 
-**Autorização:** o usuário aprovou um supervisor Rust para provar quotas Windows em worker descartável. Esta adenda não autoriza runner de produção, integração ao loader, execução de artefatos WASM, reabertura de plugins, alteração de quotas, nem fechamento de A01–A04. Gate externo continua fechado e macOS continua NO-GO. O escopo Linux só poderá avançar depois que todos os oito casos Windows passarem; não presumir equivalência de mecanismos.
+**Autorização histórica (substituída pela missão de 2026-10-10):** o usuário aprovou um supervisor Rust para provar quotas Windows em worker descartável. A autorização ativa não permite probes ou cenários de enforcement. Esta adenda não autoriza runner de produção, integração ao loader, execução de artefatos WASM, reabertura de plugins, alteração de quotas, nem fechamento de A01–A04. Gate externo continua fechado e macOS continua NO-GO. O escopo Linux só poderá avançar depois que todos os oito casos Windows passarem; não presumir equivalência de mecanismos. Os oito casos não podem ser executados até que o usuário autorize especificamente esses testes.
 
 ### Worker e lançamento
 
