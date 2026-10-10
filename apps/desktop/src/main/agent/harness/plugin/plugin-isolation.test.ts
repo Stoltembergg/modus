@@ -716,7 +716,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         };
 
         expect(broker.canExecute("git status", perms)).toBe(true);
-        expect(broker.canExecute("npm test", perms)).toBe(true);
+        expect(broker.canExecute("npm test", perms)).toBe(false);
         expect(broker.canExecute("git push origin main", perms)).toBe(false);
         expect(broker.canExecute("npm publish", perms)).toBe(false);
         expect(broker.canExecute("curl http://malicious.com", perms)).toBe(false);

@@ -493,23 +493,36 @@ export class NetworkBroker {
 // -----------------------------------------------------------------------------
 
 export class ShellBroker {
+  // These launchers can delegate to nested commands or arbitrary package
+  // scripts, so a broad executable grant cannot safely authorize them.
   private static readonly COMMAND_LAUNCHERS = new Set([
     "bash",
     "bun",
+    "bunx",
     "busybox",
-    "csh",
+    "builtin",
+    "call",
     "cmd",
+    "command",
+    "corepack",
+    "csh",
     "dash",
     "deno",
+    "exec",
     "env",
     "fish",
     "find",
     "ksh",
+    "nice",
     "node",
+    "npm",
+    "npx",
     "nu",
+    "nohup",
     "osascript",
     "perl",
     "php",
+    "pnpm",
     "powershell",
     "pypy",
     "python",
@@ -517,8 +530,16 @@ export class ShellBroker {
     "python3",
     "pwsh",
     "ruby",
+    "setsid",
     "sh",
+    "start",
+    "start-process",
+    "sudo",
+    "time",
+    "timeout",
     "xargs",
+    "yarn",
+    "yarnpkg",
     "zsh",
   ]);
 
@@ -583,7 +604,7 @@ export class ShellBroker {
     }
 
     const lower = command.toLowerCase();
-    const containsShellSyntax = /[;&|<>`$()\r\n\0%!*?^\[\]]/u.test(command);
+    const containsShellSyntax = /[;&|<>`$'"()=\\\r\n\0%!*?^\[\]]/u.test(command);
     const commandTokens = lower.trim().split(/\s+/);
     const executable = commandTokens[0];
     const executableName =
