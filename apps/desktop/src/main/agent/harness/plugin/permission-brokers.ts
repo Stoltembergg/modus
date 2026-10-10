@@ -7,7 +7,6 @@
 
 import fs from "fs";
 import path from "path";
-import type { TrustLevel } from "../capability/capability-types";
 import { CredentialGuard } from "./credential-guard";
 import { type ExtendedPluginPermissions, PermissionDeniedError } from "./plugin-isolation-types";
 import { SecurityAuditLogger } from "./security-audit-logger";
@@ -23,24 +22,62 @@ export class FilesystemBroker {
   ) {}
 
   /**
-   * Resolves symlinks when the target exists so a link planted inside a
-   * scope cannot silently redirect reads/writes outside of it. Missing
-   * paths fall back to the lexical resolution (best available).
+   * Resolves a path through its nearest existing ancestor. This catches a
+   * symlink/junction in a parent even when the final file does not exist.
    */
-  private resolveWithinRoot(targetPath: string): string {
-    const resolved = path.resolve(this.workspaceRoot, targetPath);
-    try {
-      return fs.realpathSync(resolved);
-    } catch {
-      return resolved;
+  private resolveWithinRoot(targetPath: string): string | undefined {
+    const unresolvedParts: string[] = [];
+    let candidate = path.resolve(this.workspaceRoot, targetPath);
+
+    while (true) {
+      try {
+        return path.resolve(fs.realpathSync(candidate), ...unresolvedParts.reverse());
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+
+        try {
+          if (fs.lstatSync(candidate).isSymbolicLink()) return undefined;
+        } catch (lstatError) {
+          const lstatCode = (lstatError as NodeJS.ErrnoException).code;
+          if (lstatCode !== "ENOENT" && lstatCode !== "ENOTDIR") return undefined;
+        }
+
+        const parent = path.dirname(candidate);
+        if (parent === candidate) return undefined;
+        unresolvedParts.push(path.basename(candidate));
+        candidate = parent;
+      }
     }
+  }
+
+  private pathIsAllowed(targetPath: string, scopes: string[]): boolean {
+    const resolved = this.resolveWithinRoot(targetPath);
+    if (!resolved) return false;
+
+    return scopes.some((scope) => {
+      const resolvedScope = this.resolveWithinRoot(scope);
+      return (
+        resolvedScope !== undefined &&
+        (resolved === resolvedScope || resolved.startsWith(resolvedScope + path.sep))
+      );
+    });
+  }
+
+  private denyIoWithoutSafeBackend(
+    action: "filesystem.read" | "filesystem.write",
+    targetPath: string,
+    pluginId: string,
+  ): never {
+    const reason = "race-free filesystem backend is unavailable";
+    this.audit.log({ pluginId, action, resource: targetPath, decision: "deny", reason });
+    throw new PermissionDeniedError(action, targetPath, pluginId, reason);
   }
 
   public canRead(
     targetPath: string,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): boolean {
     const action = "filesystem.read";
 
@@ -56,19 +93,6 @@ export class FilesystemBroker {
       return false;
     }
 
-    // Core / official plugins have workspace access by default
-    if (trustLevel === "core") {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "allow",
-        reason: "Core plugin authorized",
-      });
-      return true;
-    }
-
-    const resolved = this.resolveWithinRoot(targetPath);
     const readScopes = permissions.filesystem?.read ?? [];
 
     if (readScopes.length === 0) {
@@ -82,10 +106,7 @@ export class FilesystemBroker {
       return false;
     }
 
-    const allowed = readScopes.some((scope) => {
-      const resolvedScope = this.resolveWithinRoot(scope);
-      return resolved === resolvedScope || resolved.startsWith(resolvedScope + path.sep);
-    });
+    const allowed = this.pathIsAllowed(targetPath, readScopes);
 
     this.audit.log({
       pluginId,
@@ -102,7 +123,6 @@ export class FilesystemBroker {
     targetPath: string,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): boolean {
     const action = "filesystem.write";
 
@@ -118,19 +138,6 @@ export class FilesystemBroker {
       return false;
     }
 
-    // Core plugins have workspace write access
-    if (trustLevel === "core") {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: targetPath,
-        decision: "allow",
-        reason: "Core plugin authorized",
-      });
-      return true;
-    }
-
-    const resolved = this.resolveWithinRoot(targetPath);
     const writeScopes = permissions.filesystem?.write ?? [];
 
     if (writeScopes.length === 0) {
@@ -144,10 +151,7 @@ export class FilesystemBroker {
       return false;
     }
 
-    const allowed = writeScopes.some((scope) => {
-      const resolvedScope = this.resolveWithinRoot(scope);
-      return resolved === resolvedScope || resolved.startsWith(resolvedScope + path.sep);
-    });
+    const allowed = this.pathIsAllowed(targetPath, writeScopes);
 
     this.audit.log({
       pluginId,
@@ -164,14 +168,13 @@ export class FilesystemBroker {
     targetPath: string,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
     encoding: BufferEncoding = "utf-8",
   ): Promise<string> {
-    if (!this.canRead(targetPath, permissions, pluginId, trustLevel)) {
+    if (!this.canRead(targetPath, permissions, pluginId)) {
       throw new PermissionDeniedError("filesystem.read", targetPath, pluginId);
     }
-    const resolved = path.resolve(this.workspaceRoot, targetPath);
-    return await fs.promises.readFile(resolved, encoding);
+    void encoding;
+    return this.denyIoWithoutSafeBackend("filesystem.read", targetPath, pluginId);
   }
 
   public async writeFile(
@@ -179,14 +182,12 @@ export class FilesystemBroker {
     content: string | Uint8Array,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): Promise<void> {
-    if (!this.canWrite(targetPath, permissions, pluginId, trustLevel)) {
+    if (!this.canWrite(targetPath, permissions, pluginId)) {
       throw new PermissionDeniedError("filesystem.write", targetPath, pluginId);
     }
-    const resolved = path.resolve(this.workspaceRoot, targetPath);
-    await fs.promises.mkdir(path.dirname(resolved), { recursive: true });
-    await fs.promises.writeFile(resolved, content);
+    void content;
+    return this.denyIoWithoutSafeBackend("filesystem.write", targetPath, pluginId);
   }
 }
 
@@ -217,8 +218,31 @@ export class NetworkBroker {
     let h = host.toLowerCase();
     if (h.endsWith(".")) h = h.slice(0, -1);
 
-    if (h === "::1" || h === "::ffff:127.0.0.1") return "127.0.0.1";
-    if (h === "::" || h === "::ffff:0.0.0.0") return "0.0.0.0";
+    if (h.startsWith("[") && h.endsWith("]")) {
+      const literal = h.slice(1, -1);
+      try {
+        h = new URL(`http://[${literal}]/`).hostname.slice(1, -1);
+      } catch {
+        return literal;
+      }
+    }
+
+    if (h.startsWith("::ffff:")) {
+      const mapped = h.slice("::ffff:".length);
+      if (mapped.includes(".")) return NetworkBroker.normalizeHost(mapped);
+
+      const words = mapped.split(":");
+      if (words.length === 2 && words.every((word) => /^[0-9a-f]{1,4}$/u.test(word))) {
+        const high = Number.parseInt(words[0] ?? "", 16);
+        const low = Number.parseInt(words[1] ?? "", 16);
+        return NetworkBroker.normalizeHost(
+          [high >>> 8, high & 255, low >>> 8, low & 255].join("."),
+        );
+      }
+    }
+
+    if (h === "::1") return "127.0.0.1";
+    if (h === "::") return "0.0.0.0";
 
     const canonicalIpv4 = NetworkBroker.parseObscuredIpv4(h);
     if (canonicalIpv4) return canonicalIpv4;
@@ -253,11 +277,26 @@ export class NetworkBroker {
     return undefined;
   }
 
+  private static isLoopbackHost(host: string): boolean {
+    if (NetworkBroker.LOCALHOST_HOSTS.has(host)) return true;
+    const address = host.split(".").map((part) => Number(part));
+    return address.length === 4 && address.every(Number.isInteger) && address[0] === 127;
+  }
+
+  private static isBlockedHost(host: string): boolean {
+    if (NetworkBroker.BLOCKED_HOSTS.has(host)) return true;
+    const address = host.split(".").map((part) => Number(part));
+    return (
+      address.length === 4 &&
+      address.every(Number.isInteger) &&
+      (address[0] === 0 || (address[0] === 169 && address[1] === 254))
+    );
+  }
+
   public canConnect(
     urlString: string,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): boolean {
     const action = "network.connect";
     let url: URL;
@@ -291,7 +330,7 @@ export class NetworkBroker {
     }
 
     // 1. Block metadata endpoints universally
-    if (NetworkBroker.BLOCKED_HOSTS.has(host)) {
+    if (NetworkBroker.isBlockedHost(host)) {
       this.audit.log({
         pluginId,
         action,
@@ -303,11 +342,7 @@ export class NetworkBroker {
     }
 
     // 2. Localhost policy
-    if (
-      NetworkBroker.LOCALHOST_HOSTS.has(host) &&
-      !permissions.network?.allowLocalhost &&
-      trustLevel !== "core"
-    ) {
+    if (NetworkBroker.isLoopbackHost(host) && !permissions.network?.allowLocalhost) {
       this.audit.log({
         pluginId,
         action,
@@ -316,18 +351,6 @@ export class NetworkBroker {
         reason: "Localhost network access prohibited without allowLocalhost permission",
       });
       return false;
-    }
-
-    // Core plugins have broad network access
-    if (trustLevel === "core") {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: urlString,
-        decision: "allow",
-        reason: "Core plugin authorized",
-      });
-      return true;
     }
 
     const allowedDomains = permissions.network?.domains ?? [];
@@ -397,6 +420,35 @@ export class NetworkBroker {
 // -----------------------------------------------------------------------------
 
 export class ShellBroker {
+  private static readonly COMMAND_LAUNCHERS = new Set([
+    "bash",
+    "bun",
+    "busybox",
+    "csh",
+    "cmd",
+    "dash",
+    "deno",
+    "env",
+    "fish",
+    "find",
+    "ksh",
+    "node",
+    "nu",
+    "osascript",
+    "perl",
+    "php",
+    "powershell",
+    "pypy",
+    "python",
+    "python2",
+    "python3",
+    "pwsh",
+    "ruby",
+    "sh",
+    "xargs",
+    "zsh",
+  ]);
+
   private static readonly DANGEROUS_COMMANDS = [
     /\brm\s+-rf\s+\//i,
     /\brm\s+.*(?:~|\$HOME|\$HOMEPATH|%HOME%|\/\*|--no-preserve-root)/i,
@@ -417,7 +469,6 @@ export class ShellBroker {
     command: string,
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): boolean {
     const action = "shell.execute";
 
@@ -431,18 +482,6 @@ export class ShellBroker {
         reason: "Dangerous system destruction command pattern detected",
       });
       return false;
-    }
-
-    // Core plugins have shell access
-    if (trustLevel === "core") {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: command,
-        decision: "allow",
-        reason: "Core plugin authorized",
-      });
-      return true;
     }
 
     // Check deny list first
@@ -470,23 +509,49 @@ export class ShellBroker {
       return false;
     }
 
-    // Command must be exactly an allowed entry or start with it on a token
-    // boundary. A bare prefix match would authorize unrelated binaries
-    // ("github-evil" via allow "git") or everything (allow "").
     const lower = command.toLowerCase();
-    const allowed = allowList.some((allowedPrefix) => {
-      const pref = allowedPrefix.toLowerCase().trim();
-      if (!pref) return false;
-      if (lower === pref) return true;
-      return lower.startsWith(pref) && /\s/.test(lower.charAt(pref.length));
-    });
+    const containsShellSyntax = /[;&|<>`$()\r\n\0%!*?^\[\]]/u.test(command);
+    const commandTokens = lower.trim().split(/\s+/);
+    const executable = commandTokens[0];
+    const executableName =
+      executable
+        ?.replaceAll("\\", "/")
+        .split("/")
+        .pop()
+        ?.replace(/\.(exe|cmd|bat|com|ps1)$/u, "") ?? "";
+    let allowed =
+      !containsShellSyntax &&
+      !ShellBroker.COMMAND_LAUNCHERS.has(executableName) &&
+      allowList.some((allowEntry) => {
+        const entry = allowEntry.trim().toLowerCase();
+        if (!entry) return false;
+        return lower.trim() === entry || executable === entry;
+      });
+    let reason = allowed ? "Command allowed by shell whitelist" : "Command not in shell whitelist";
+
+    if (allowed && executableName === "git") {
+      const grantByOperation = {
+        push: "allowPush",
+        pull: "allowPull",
+        clone: "allowClone",
+        fetch: "allowFetch",
+        commit: "allowCommit",
+        status: "allowStatus",
+      } as const;
+      const operation = commandTokens[1] as keyof typeof grantByOperation | undefined;
+      const grant = operation ? grantByOperation[operation] : undefined;
+      allowed = grant !== undefined && permissions.git?.[grant] === true;
+      reason = allowed
+        ? `Git ${operation} explicitly authorized`
+        : `Git ${operation ?? "command"} requires an explicit operation grant`;
+    }
 
     this.audit.log({
       pluginId,
       action,
       resource: command,
       decision: allowed ? "allow" : "deny",
-      reason: allowed ? "Command allowed by shell whitelist" : "Command not in shell whitelist",
+      reason,
     });
 
     return allowed;
@@ -504,51 +569,30 @@ export class GitBroker {
     operation: "push" | "pull" | "clone" | "fetch" | "commit" | "status",
     permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
-    trustLevel: TrustLevel = "community",
   ): boolean {
     const action = `git.${operation}`;
 
-    if (trustLevel === "core") {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: operation,
-        decision: "allow",
-        reason: "Core plugin authorized",
-      });
-      return true;
-    }
-
-    if (operation === "push" && !permissions.git?.allowPush) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: operation,
-        decision: "deny",
-        reason: "Git push prohibited without explicit allowPush permission",
-      });
-      return false;
-    }
-
-    if (operation === "clone" && permissions.git && permissions.git.allowClone === false) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: operation,
-        decision: "deny",
-        reason: "Git clone explicitly denied",
-      });
-      return false;
-    }
+    const grantByOperation = {
+      push: "allowPush",
+      pull: "allowPull",
+      clone: "allowClone",
+      fetch: "allowFetch",
+      commit: "allowCommit",
+      status: "allowStatus",
+    } as const;
+    const grant = grantByOperation[operation];
+    const allowed = permissions.git?.[grant] === true;
 
     this.audit.log({
       pluginId,
       action,
       resource: operation,
-      decision: "allow",
-      reason: "Git operation authorized by policy",
+      decision: allowed ? "allow" : "deny",
+      reason: allowed
+        ? `Git ${operation} explicitly authorized`
+        : `Git ${operation} prohibited without explicit ${grant} permission`,
     });
 
-    return true;
+    return allowed;
   }
 }

@@ -1,7 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import fs, { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import path, { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
 import {
   resetFeatureFlagOverrides,
@@ -186,6 +186,88 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
           PermissionDeniedError,
         );
       });
+
+      it("denies a missing target when its nearest existing parent resolves outside scope", () => {
+        const scope = path.resolve(process.cwd(), "synthetic-workspace");
+        const redirectedParent = path.join(scope, "redirected-parent");
+        const outside = path.resolve(process.cwd(), "synthetic-outside");
+        const missing = Object.assign(new Error("synthetic missing path"), { code: "ENOENT" });
+        const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
+          const candidatePath = path.resolve(candidate.toString());
+          if (candidatePath === scope) return scope;
+          if (candidatePath === redirectedParent) return outside;
+          throw missing;
+        });
+
+        try {
+          const broker = new FilesystemBroker(undefined, scope);
+          const permissions: ExtendedPluginPermissions = {
+            filesystem: { write: ["."] },
+          };
+
+          expect(broker.canWrite("redirected-parent/new-file.txt", permissions, "p1")).toBe(false);
+        } finally {
+          realpath.mockRestore();
+        }
+      });
+
+      it("denies a missing target below a dangling symbolic link", () => {
+        const scope = path.resolve(process.cwd(), "synthetic-workspace");
+        const linkPath = path.join(scope, "dangling-link");
+        const missing = Object.assign(new Error("synthetic missing path"), { code: "ENOENT" });
+        const realpath = vi.spyOn(fs, "realpathSync").mockImplementation((candidate) => {
+          const candidatePath = path.resolve(candidate.toString());
+          if (candidatePath === scope) return scope;
+          throw missing;
+        });
+        const lstat = vi.spyOn(fs, "lstatSync").mockImplementation((candidate) => {
+          if (path.resolve(candidate.toString()) === linkPath) {
+            return { isSymbolicLink: () => true } as never;
+          }
+          throw missing;
+        });
+
+        try {
+          const broker = new FilesystemBroker(undefined, scope);
+          const permissions: ExtendedPluginPermissions = {
+            filesystem: { write: ["."] },
+          };
+
+          expect(broker.canWrite("dangling-link/new-file.txt", permissions, "p1")).toBe(false);
+        } finally {
+          realpath.mockRestore();
+          lstat.mockRestore();
+        }
+      });
+
+      it("does not perform filesystem IO when no race-free host backend is available", async () => {
+        const scope = path.resolve(process.cwd(), "synthetic-workspace");
+        const broker = new FilesystemBroker(undefined, scope);
+        const permissions: ExtendedPluginPermissions = {
+          filesystem: { read: ["."], write: ["."] },
+        };
+        const readFile = vi
+          .spyOn(fs.promises, "readFile")
+          .mockResolvedValue("synthetic content" as never);
+        const writeFile = vi.spyOn(fs.promises, "writeFile").mockResolvedValue();
+        const mkdir = vi.spyOn(fs.promises, "mkdir").mockResolvedValue(undefined);
+
+        try {
+          await expect(broker.readFile("document.txt", permissions, "p1")).rejects.toThrow(
+            "race-free filesystem backend is unavailable",
+          );
+          await expect(
+            broker.writeFile("document.txt", "content", permissions, "p1"),
+          ).rejects.toThrow("race-free filesystem backend is unavailable");
+          expect(readFile).not.toHaveBeenCalled();
+          expect(writeFile).not.toHaveBeenCalled();
+          expect(mkdir).not.toHaveBeenCalled();
+        } finally {
+          readFile.mockRestore();
+          writeFile.mockRestore();
+          mkdir.mockRestore();
+        }
+      });
     });
 
     describe("NetworkBroker", () => {
@@ -215,6 +297,24 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canConnect("http://localhost:8080/api", permsWithLocalhost)).toBe(true);
       });
 
+      it("blocks bracketed and mapped IPv6 loopback literals", () => {
+        const broker = new NetworkBroker();
+        const openDomain: ExtendedPluginPermissions = { network: { domains: ["*"] } };
+
+        expect(broker.canConnect("http://[::1]/", openDomain)).toBe(false);
+        expect(broker.canConnect("http://[0:0:0:0:0:0:0:1]/", openDomain)).toBe(false);
+        expect(broker.canConnect("http://[::ffff:7f00:1]/", openDomain)).toBe(false);
+      });
+
+      it("blocks the full IPv4 loopback, unspecified, and link-local ranges", () => {
+        const broker = new NetworkBroker();
+        const openDomain: ExtendedPluginPermissions = { network: { domains: ["*"] } };
+
+        expect(broker.canConnect("http://127.0.0.2/", openDomain)).toBe(false);
+        expect(broker.canConnect("http://0.0.0.1/", openDomain)).toBe(false);
+        expect(broker.canConnect("http://169.254.0.1/", openDomain)).toBe(false);
+      });
+
       it("validates destination domain against domain whitelist and wildcards", () => {
         const broker = new NetworkBroker();
         const perms: ExtendedPluginPermissions = {
@@ -224,6 +324,22 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canConnect("https://api.modus.org/v1", perms)).toBe(true);
         expect(broker.canConnect("https://sub.service.io/data", perms)).toBe(true);
         expect(broker.canConnect("https://evil.attacker.com", perms)).toBe(false);
+      });
+
+      it("does not accept a caller-supplied core trust label as network authority", () => {
+        const broker = new NetworkBroker();
+
+        expect(
+          Reflect.apply(broker.canConnect, broker, ["https://unlisted.example", {}, "p1", "core"]),
+        ).toBe(false);
+        expect(
+          Reflect.apply(broker.canConnect, broker, [
+            "http://localhost:8080/api",
+            { network: { domains: ["localhost"] } },
+            "p1",
+            "core",
+          ]),
+        ).toBe(false);
       });
     });
 
@@ -246,6 +362,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
             allow: ["git", "npm"],
             deny: ["npm publish", "git push"],
           },
+          git: { allowStatus: true },
         };
 
         expect(broker.canExecute("git status", perms)).toBe(true);
@@ -254,21 +371,73 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canExecute("npm publish", perms)).toBe(false);
         expect(broker.canExecute("curl http://malicious.com", perms)).toBe(false);
       });
-    });
 
-    describe("GitBroker", () => {
-      it("prohibits git push without explicit allowPush permission", () => {
-        const broker = new GitBroker();
-        const permsNoPush: ExtendedPluginPermissions = {
-          git: { allowPush: false },
-        };
-        const permsWithPush: ExtendedPluginPermissions = {
+      it("requires the matching Git operation grant when shell allows Git", () => {
+        const broker = new ShellBroker();
+        const shellOnly: ExtendedPluginPermissions = { shell: { allow: ["git"] } };
+        const pushGranted: ExtendedPluginPermissions = {
+          shell: { allow: ["git"] },
           git: { allowPush: true },
         };
 
-        expect(broker.canPerform("push", permsNoPush, "p1")).toBe(false);
-        expect(broker.canPerform("status", permsNoPush, "p1")).toBe(true);
-        expect(broker.canPerform("push", permsWithPush, "p1")).toBe(true);
+        expect(broker.canExecute("git push origin main", shellOnly, "p1")).toBe(false);
+        expect(broker.canExecute("git push origin main", pushGranted, "p1")).toBe(true);
+      });
+
+      it("denies shell interpreter wrappers and applies Git grants to executable variants", () => {
+        const broker = new ShellBroker();
+        const interpreterAllowed: ExtendedPluginPermissions = { shell: { allow: ["sh"] } };
+        const gitExecutableAllowed: ExtendedPluginPermissions = {
+          shell: { allow: ["git.exe"] },
+        };
+
+        expect(broker.canExecute('sh -c "git push origin main"', interpreterAllowed, "p1")).toBe(
+          false,
+        );
+        expect(broker.canExecute("git.exe push origin main", gitExecutableAllowed, "p1")).toBe(
+          false,
+        );
+      });
+
+      it("denies shell composition even when the executable is allow-listed", () => {
+        const broker = new ShellBroker();
+        const permissions: ExtendedPluginPermissions = { shell: { allow: ["npm"] } };
+
+        expect(broker.canExecute("npm test; echo harmless", permissions, "p1")).toBe(false);
+        expect(broker.canExecute("npm test && echo harmless", permissions, "p1")).toBe(false);
+        expect(broker.canExecute("npm $(printf harmless)", permissions, "p1")).toBe(false);
+      });
+
+      it("does not accept a caller-supplied core trust label as shell authority", () => {
+        const broker = new ShellBroker();
+
+        expect(Reflect.apply(broker.canExecute, broker, ["whoami", {}, "p1", "core"])).toBe(false);
+      });
+    });
+
+    describe("GitBroker", () => {
+      it("denies every Git operation unless its exact operation is granted", () => {
+        const broker = new GitBroker();
+        const operations = ["push", "pull", "clone", "fetch", "commit", "status"] as const;
+        const grants: Record<(typeof operations)[number], ExtendedPluginPermissions> = {
+          push: { git: { allowPush: true } },
+          pull: { git: { allowPull: true } },
+          clone: { git: { allowClone: true } },
+          fetch: { git: { allowFetch: true } },
+          commit: { git: { allowCommit: true } },
+          status: { git: { allowStatus: true } },
+        };
+
+        for (const operation of operations) {
+          expect(broker.canPerform(operation, {}, "p1")).toBe(false);
+          expect(broker.canPerform(operation, grants[operation], "p1")).toBe(true);
+        }
+      });
+
+      it("does not accept a caller-supplied core trust label as Git authority", () => {
+        const broker = new GitBroker();
+
+        expect(Reflect.apply(broker.canPerform, broker, ["clone", {}, "p1", "core"])).toBe(false);
       });
     });
   });

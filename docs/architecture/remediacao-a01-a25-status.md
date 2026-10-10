@@ -16,6 +16,12 @@ blocked hostile-plugin or enforcement scenarios remains explicitly pending.
   of a regression.
 - No hostile plugin, root-resume, adversarial probe, or Guardian enforcement
   scenario is authorized by this remediation.
+- During the earlier A01/A02 local validation, an unfiltered plugin test run
+  also executed the repository's synthetic symlink/junction test. It created a
+  temporary junction and read only a synthetic fixture; it did not execute
+  plugin code or access outside data. The CI workflow excludes the entire
+  `adversarial bypass hardening` group, and the junction test was absent from
+  its test output. That test will not be rerun under this authorization.
 
 ## Milestone 1 — A01/A02 in-process facade
 
@@ -62,6 +68,57 @@ execution remains unavailable through the changed facade.
   called directly by future host code; this patch does not certify or remove
   that utility.
 
+## Milestone 2 — A07–A09 broker fail-closed tightening
+
+**Status: partial broker hardening implemented and locally checked; productive
+authorization wiring and OS-level enforcement remain open.**
+
+- A07 now resolves a path through its nearest existing ancestor before scope
+  comparison, rejects missing targets below existing redirected or dangling
+  symlink parents, and no longer falls back to lexical resolution for those
+  cases. The canonicalization regressions use mocked filesystem metadata; they
+  do not establish race-free enforcement against real path replacement. Since
+  Node's current broker has no race-free, handle-relative filesystem backend,
+  `readFile` and `writeFile` now fail closed after permission evaluation. No
+  production consumer was found, and usable scoped filesystem I/O remains
+  unavailable.
+- A08 no longer accepts a caller-supplied `trustLevel: "core"` as network
+  authority. The predicate canonicalizes bracketed and IPv4-mapped IPv6
+  literals, identifies the IPv4 loopback range, blocks unspecified IPv4 and
+  link-local IPv4 ranges, and retains explicit localhost/domain grants. Other
+  private ranges and IPv6 metadata destinations are not comprehensively
+  classified. These are predicate-only checks. DNS resolution/pinning, redirect
+  validation, connection-level enforcement, and production wiring are absent;
+  A08 remains open.
+- A09 shell checks reject the tested shell-composition metacharacters and no
+  longer accept caller-supplied core trust. When the shell allow-list includes
+  `git`, direct recognized Git commands also require the matching explicit Git
+  grant, including `.exe` names. Common shell interpreters and launchers such
+  as `sh`, `bash`, `cmd`, `powershell`, `node`, and `python` are denied; this
+  cannot identify arbitrary user-defined wrappers or aliases. An allowed
+  executable may itself launch child processes or evaluate project scripts,
+  so the launcher list is not an execution boundary. The brokers have no
+  production callsites; the shell API still accepts a command string, does not
+  parse structured argv, and does not constrain the Git repository/resource.
+  A09 is partially mitigated, not complete.
+
+### Evidence
+
+- RED: twelve regression tests reproduced missing-parent and dangling-link scope
+  escapes, unsafe filesystem I/O availability, bracketed/mapped IPv6 loopback
+  bypass, the rest of IPv4 loopback/unspecified/link-local ranges, shell
+  composition and forged trust, interpreter/Git executable wrapper bypass,
+  Git grant bypass through shell, and missing/forged Git operation grants.
+- GREEN: thirteen selected tests passed (the twelve regressions plus the existing
+  shell whitelist behavior check); only exact safe test names were selected,
+  and the `adversarial bypass hardening` group was not executed.
+- Desktop typecheck: passed, exit 0.
+- Targeted Biome: passed with existing warnings/infos; no rules were disabled
+  and no bulk formatting was applied.
+- `git diff --check`: passed.
+- Static callsite search found no production use of `FilesystemBroker`,
+  `NetworkBroker`, `ShellBroker`, or `GitBroker` outside their definitions.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -72,9 +129,9 @@ execution remains unavailable through the changed facade.
 | A04 | Pending validation | Registry and lifecycle invoke callbacks directly, but the productive loader uses the internal host catalog; keep external origins blocked and verify remaining provider-ingress calls. |
 | A05 | Pending | WASM memory accounting and aggregate limits. |
 | A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
-| A07 | Pending | Filesystem broker junction/TOCTOU handling. |
-| A08 | Pending | Network resolution, rebinding, redirects, and IP policy. |
-| A09 | Pending | Shell argv and Git deny-default grants. |
+| A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
+| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
+| A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
 | A10 | Pending | Restart state versus executable artifact identity. |
 | A11 | Pending | Atomic lifecycle rollback and runtime/database consistency. |
 | A12 | Pending | Serialization and concurrent lifecycle operations. |

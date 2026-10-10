@@ -71,9 +71,12 @@ export interface ExtendedPluginPermissions {
     | undefined;
   git?:
     | {
-        allowPush?: boolean | undefined;
         allowClone?: boolean | undefined;
+        allowCommit?: boolean | undefined;
         allowFetch?: boolean | undefined;
+        allowPull?: boolean | undefined;
+        allowPush?: boolean | undefined;
+        allowStatus?: boolean | undefined;
       }
     | undefined;
   memory?:
