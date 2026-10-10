@@ -182,6 +182,7 @@ async function runPiReview(
   const loader = new DefaultResourceLoader({
     cwd,
     agentDir,
+    noExtensions: true,
     settingsManager,
     systemPromptOverride: () =>
       "You are a read-only code reviewer. You must never edit files or run destructive commands. Return strict JSON only.",

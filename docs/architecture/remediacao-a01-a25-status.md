@@ -43,6 +43,11 @@ extension auto-loading and every capability ingress remain under review. A01
 and A02 therefore remain **partially mitigated, not proven**. External plugin
 execution remains unavailable through the changed facade.
 
+The separate Pi SDK code-review path was also found to auto-discover project
+and user extension directories. That path now sets `noExtensions: true` before
+`reload()`. This closes that specific external-extension ingress; it does not
+add an OS boundary or change the direct built-in Harness dispatcher.
+
 ### Evidence
 
 - RED: before the guard, the community callback ran successfully; a forged
@@ -148,8 +153,12 @@ runtime-level regression test exercises that exact loader and confirms the
 forged manifest's hook is never called. Existing capability-registry tests
 cover unauthenticated same-ID replacement attempts, non-replaceable
 capabilities, and provider-switch denial. The Pi SDK resource loader also uses
-`noExtensions: true`; the extension-containment check passed in the remote CI
-run for `ac8b50f`.
+`noExtensions: true`; the review-service loader now sets the same option before
+`reload()`. A runtime-path test reaches `startAgentReview`, asserts extension
+discovery is disabled, preserves the explicitly selected model, and checks the
+read-only review tool profile. The SDK containment test also confirms that the
+option prevents project and agent-directory extension discovery. No external
+extension code is executed by these tests.
 
 The remaining dispatcher and lifecycle calls are direct, same-process calls
 for shipped catalogued built-ins. `PluginIsolationHost` now denies execution
@@ -165,6 +174,25 @@ dispatcher can be introduced and safely validated.
 - Runtime path test: **1 passed**, **219 skipped** by the exact test-name
   filter. The synthetic forged manifest was rejected before its hook or
   provider implementation was invoked.
+- Review ingress RED/GREEN: the new `review-service-runtime.test.ts` failed
+  before the fix because the loader options omitted `noExtensions`; it passes
+  after the fix. It exercises `startAgentReview` with a non-empty synthetic
+  diff, verifies `loader.reload()`, preserves the chosen model, and checks the
+  `review` tool profile. The focused review-service and Pi SDK containment
+  suites passed **6/6**. Containment uses only synthetic inert test fixtures.
+- Independent read-only review: no blocker. It confirmed Pi SDK 0.80.6 honors
+  `noExtensions` on the productive review path and noted the need to protect
+  the read-only tool profile; the runtime regression now asserts that profile.
+- Desktop typecheck: passed, exit 0. Targeted Biome and `git diff --check`
+  passed.
+- The full CI-filtered desktop Vitest run completed **401 files passed, 4
+  failed; 4,564 tests passed, 8 failed, 8 skipped**. Failures observed were
+  two external OAuth fetches (`ECONNREFUSED`), four headless-Chrome style
+  measurements without values, the packaged-glass headless verifier receiving
+  `undefined`, and `FastVectorDistance` measuring 0.400156 ms against its
+  0.1 ms assertion. These failures were not compared against `main`; they are
+  unresolved and are not classified as pre-existing. The authorized adversarial
+  and runaway-test filters remained in place.
 - Desktop typecheck: passed, exit 0. Targeted Biome: no errors; eight existing
   warnings remain in the large runtime test file. `git diff --check`: passed.
 - Remote CI on `ac8b50f`: `typecheck · test · biome`, Verifier-First runtime
@@ -980,10 +1008,10 @@ rejected rather than mixed.
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
-| A01 | Partially mitigated | Facade fails closed; process isolation is absent. Audit every ingress; hostile execution proof remains blocked. |
-| A02 | Partially mitigated | Facade no longer claims a timeout is containment; preemption/budgets remain absent. Do not run blocked loop probes. |
-| A03 | Partially mitigated | Production loader uses exact host-catalog identity and host-derived trust; runtime test rejects forged manifests before hooks. Same-process provenance is not an isolation boundary. |
-| A04 | Partially mitigated | Direct dispatch and hooks remain for catalogued built-ins; production loader blocks external manifests. A single OS-backed dispatcher and lifecycle boundary remain open. |
+| A01 | Partially mitigated | Facade fails closed and Pi review no longer auto-loads project/user extensions; OS process isolation is absent. Audit all other ingress; hostile execution proof remains blocked. |
+| A02 | Partially mitigated | Review auto-discovery is disabled; the facade no longer claims timeout is containment. Preemption/budgets remain absent. Do not run blocked loop probes. |
+| A03 | Partially mitigated | Chat and review loaders block Pi auto-discovery; host-catalog identity and host-derived trust remain tested. Same-process built-in provenance is not an isolation boundary. |
+| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; direct dispatch/hooks remain for catalogued built-ins. A single OS-backed dispatcher and lifecycle boundary remain open. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
@@ -1001,7 +1029,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, and companion-stream completion/run association are wired. 264/264 related tests, TypeScript, and Biome passed locally; new PR CI is pending. Review found no blocker in run/session/snapshot isolation. Legacy `listAgentEvents` callers, full-run source accumulation, hub retention, and unbounded bytes per companion stream/result remain. |
+| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, and companion-stream completion/run association are wired. 264/264 related tests, TypeScript, and Biome passed locally; workflow `38040823561` for `23cb8ed` failed the Supabase renewal assertion, a `FastVectorDistance` 0.1 ms timing assertion, and the full desktop suite also failed environment-sensitive OAuth/headless-Chrome tests locally. These are not classified as pre-existing without a base run. Review found no blocker in run/session/snapshot isolation. Legacy `listAgentEvents` callers, full-run source accumulation, hub retention, and unbounded bytes per companion stream/result remain. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
