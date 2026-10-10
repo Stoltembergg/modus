@@ -23,11 +23,30 @@ blocked hostile-plugin or enforcement scenarios remains explicitly pending.
   `adversarial bypass hardening` group, and the junction test was absent from
   its test output. That test will not be rerun under this authorization.
 
+## A01–A04 — shared process protocol foundation
+
+**Status: in progress; no productive executor integration or security proof.**
+The new `modus-plugin-execution-protocol` workspace crate defines the shared
+length-prefixed JSON worker envelope and synthetic tests for the 256 KiB frame
+limit and rejection of worker-supplied host identity. Its dedicated CI job
+executes only this crate’s safe unit fixtures. The current codec is an
+unhardened baseline for the RED tests; hard limits and strict schema rejection
+are not implemented yet.
+
+No child process is launched, no plugin/WASM bytes are handled, and no OS
+adapter or Pi SDK callsite was added. The worker message has no `plugin_id`
+field; host provenance will be attached by the host dispatcher, not accepted
+from IPC. Windows, Linux, and macOS enforcement, resource guarantees, and
+preemptible process-tree termination remain unimplemented. External plugin
+execution stays blocked, while built-in Harness execution remains on the
+existing trusted host-catalog path.
+
 ## Mission CI prerequisite — Free monthly renewal calendar
 
-**Status: implemented, locally verified, and independently reviewed; remote CI pending.** This is the
+**Status: implemented, locally verified, independently reviewed, and CI-green.** This is the
 incremental Supabase quality-gate fix requested for the mission, outside the
-A01–A25 finding matrix.
+A01–A25 finding matrix. Windows/macOS packaging workflows for the current PR
+head are still completing separately.
 
 The failure was a real month-end drift. Renewal used an already-clipped monthly
 boundary as the next anchor; for a Jan 31 grant, February clips to Feb 28/29,
@@ -68,8 +87,7 @@ RED/GREEN evidence:
   uncredited canceled preapproval. Existing renewal, idempotency, ledger,
   grace, and batch tests also passed. The independent review was static; it
   found no remaining security finding in helper privileges/search paths,
-  trigger qualification, or Mercado Pago attribution. Remote CI remains
-  pending before this gate is considered complete.
+  trigger qualification, or Mercado Pago attribution.
 
 Remote CI follow-up: run `38076269061` applied the migration and the renewal
 suite passed **113/113**, but failed `01_rpc_privileges.test.sql` tests 28–30.
@@ -79,7 +97,11 @@ is now 37; 35 are `SECURITY DEFINER`, while the two pure calendar helpers are
 functions and required every private helper to be `SECURITY DEFINER`. The
 inventory test now records the actual set and separately asserts empty
 `search_path` for all invoker helpers. The two affected pgTAP files pass
-locally after all migrations: **127/127**. Remote CI rerun is pending.
+locally after all migrations: **127/127**. The independent static review found
+no new issue. CI run `38076843678` on commit `c3b423e3` is green: pgTAP passed
+**1,041/1,041** across 20 files, Deno database integrations passed **13/13**,
+and typecheck, Biome, Vitest, verifier-first, containment, PTY, and compile-only
+Rust jobs all passed. The compile-only sandbox job did not execute probes.
 
 Known legacy limitation: Stripe's historical credit ledger stores invoice
 ids but not their subscription ids. For former Stripe subscribers already on

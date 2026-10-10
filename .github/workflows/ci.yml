@@ -161,6 +161,23 @@ jobs:
       - name: Test managed PTY process-tree cancellation
         run: cargo test --locked -p modus-pty-host
 
+  plugin-execution-protocol-tests:
+    name: plugin execution protocol tests · safe fixtures
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check shared protocol formatting
+        run: cargo fmt --manifest-path crates/plugin-execution-protocol/Cargo.toml -- --check
+
+      - name: Test shared protocol using synthetic frames only
+        run: cargo test --locked -p modus-plugin-execution-protocol
+
   plugin-containment:
     name: plugin-containment · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

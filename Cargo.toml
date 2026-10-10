@@ -1,3 +1,3 @@
 [workspace]
-members = ["crates/pty-host", "crates/plugin-sandbox-probe"]
+members = ["crates/pty-host", "crates/plugin-sandbox-probe", "crates/plugin-execution-protocol"]
 resolver = "3"
