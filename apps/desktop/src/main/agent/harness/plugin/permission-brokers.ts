@@ -493,171 +493,21 @@ export class NetworkBroker {
 // -----------------------------------------------------------------------------
 
 export class ShellBroker {
-  // These launchers can delegate to nested commands or arbitrary package
-  // scripts, so a broad executable grant cannot safely authorize them.
-  private static readonly COMMAND_LAUNCHERS = new Set([
-    "bash",
-    "bun",
-    "bunx",
-    "busybox",
-    "builtin",
-    "call",
-    "cmd",
-    "command",
-    "corepack",
-    "csh",
-    "dash",
-    "deno",
-    "doas",
-    "exec",
-    "env",
-    "fish",
-    "gmake",
-    "find",
-    "ksh",
-    "make",
-    "nice",
-    "node",
-    "npm",
-    "npx",
-    "nu",
-    "nohup",
-    "osascript",
-    "parallel",
-    "pkexec",
-    "perl",
-    "php",
-    "pnpm",
-    "powershell",
-    "pypy",
-    "python",
-    "python2",
-    "python3",
-    "pwsh",
-    "ruby",
-    "runuser",
-    "run0",
-    "setsid",
-    "sem",
-    "sh",
-    "start",
-    "start-process",
-    "sudo",
-    "time",
-    "timeout",
-    "wsl",
-    "xargs",
-    "yarn",
-    "yarnpkg",
-    "zsh",
-  ]);
-
-  private static readonly DANGEROUS_COMMANDS = [
-    /\brm\s+-rf\s+\//i,
-    /\brm\s+.*(?:~|\$HOME|\$HOMEPATH|%HOME%|\/\*|--no-preserve-root)/i,
-    /\bmkfs\b/i,
-    /\bshutdown\b/i,
-    /\breboot\b/i,
-    /\bformat\s+[a-z]:/i,
-    /:>{1,2}&/i, // fork bombs
-    /\bdd\s+if=/i,
-    /\bdeltree\b/i,
-    /\b(del|rmdir|rd)\b.*\/s/i,
-    /remove-item\b.*-recurse/i,
-  ];
-
   constructor(private audit = SecurityAuditLogger.getInstance()) {}
 
   public canExecute(
     command: string,
-    permissions: ExtendedPluginPermissions = {},
+    _permissions: ExtendedPluginPermissions = {},
     pluginId = "unknown",
   ): boolean {
-    const action = "shell.execute";
-
-    // 1. Block destructive / system wipe commands universally
-    if (ShellBroker.DANGEROUS_COMMANDS.some((pat) => pat.test(command))) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: command,
-        decision: "deny",
-        reason: "Dangerous system destruction command pattern detected",
-      });
-      return false;
-    }
-
-    // Check deny list first
-    const denyList = permissions.shell?.deny ?? [];
-    if (denyList.some((denied) => command.toLowerCase().includes(denied.toLowerCase()))) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: command,
-        decision: "deny",
-        reason: "Command matches shell deny list",
-      });
-      return false;
-    }
-
-    const allowList = permissions.shell?.allow ?? [];
-    if (allowList.length === 0) {
-      this.audit.log({
-        pluginId,
-        action,
-        resource: command,
-        decision: "deny",
-        reason: "No shell permissions declared",
-      });
-      return false;
-    }
-
-    const lower = command.toLowerCase();
-    const containsShellSyntax = /[;&|<>`$'"()=\\\r\n\0%!*?^\[\]]/u.test(command);
-    const commandTokens = lower.trim().split(/\s+/);
-    const executable = commandTokens[0];
-    const executableName =
-      executable
-        ?.replaceAll("\\", "/")
-        .split("/")
-        .pop()
-        ?.replace(/\.(exe|cmd|bat|com|ps1)$/u, "") ?? "";
-    let allowed =
-      !containsShellSyntax &&
-      !ShellBroker.COMMAND_LAUNCHERS.has(executableName) &&
-      allowList.some((allowEntry) => {
-        const entry = allowEntry.trim().toLowerCase();
-        if (!entry) return false;
-        return lower.trim() === entry || executable === entry;
-      });
-    let reason = allowed ? "Command allowed by shell whitelist" : "Command not in shell whitelist";
-
-    if (allowed && executableName === "git") {
-      const grantByOperation = {
-        push: "allowPush",
-        pull: "allowPull",
-        clone: "allowClone",
-        fetch: "allowFetch",
-        commit: "allowCommit",
-        status: "allowStatus",
-      } as const;
-      const operation = commandTokens[1] as keyof typeof grantByOperation | undefined;
-      const grant = operation ? grantByOperation[operation] : undefined;
-      allowed = grant !== undefined && permissions.git?.[grant] === true;
-      reason = allowed
-        ? `Git ${operation} explicitly authorized`
-        : `Git ${operation ?? "command"} requires an explicit operation grant`;
-    }
-
     this.audit.log({
       pluginId,
-      action,
+      action: "shell.execute",
       resource: command,
-      decision: allowed ? "allow" : "deny",
-      reason,
+      decision: "deny",
+      reason: "Shell execution is unavailable until a platform-isolated executor is integrated.",
     });
-
-    return allowed;
+    return false;
   }
 }
 

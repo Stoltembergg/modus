@@ -694,7 +694,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
     });
 
     describe("ShellBroker", () => {
-      it("blocks dangerous system destruction commands", () => {
+      it("keeps shell execution blocked with or without destructive syntax", () => {
         const broker = new ShellBroker();
         const perms: ExtendedPluginPermissions = {
           shell: { allow: ["rm", "shutdown", "format"] },
@@ -705,7 +705,7 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         expect(broker.canExecute("format c:", perms)).toBe(false);
       });
 
-      it("enforces command allow and deny lists", () => {
+      it("does not authorize shell strings through command or Git grants", () => {
         const broker = new ShellBroker();
         const perms: ExtendedPluginPermissions = {
           shell: {
@@ -715,14 +715,14 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
           git: { allowStatus: true },
         };
 
-        expect(broker.canExecute("git status", perms)).toBe(true);
+        expect(broker.canExecute("git status", perms)).toBe(false);
         expect(broker.canExecute("npm test", perms)).toBe(false);
         expect(broker.canExecute("git push origin main", perms)).toBe(false);
         expect(broker.canExecute("npm publish", perms)).toBe(false);
         expect(broker.canExecute("curl http://malicious.com", perms)).toBe(false);
       });
 
-      it("requires the matching Git operation grant when shell allows Git", () => {
+      it("does not route Git commands through the unavailable shell executor", () => {
         const broker = new ShellBroker();
         const shellOnly: ExtendedPluginPermissions = { shell: { allow: ["git"] } };
         const pushGranted: ExtendedPluginPermissions = {
@@ -731,10 +731,10 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
         };
 
         expect(broker.canExecute("git push origin main", shellOnly, "p1")).toBe(false);
-        expect(broker.canExecute("git push origin main", pushGranted, "p1")).toBe(true);
+        expect(broker.canExecute("git push origin main", pushGranted, "p1")).toBe(false);
       });
 
-      it("denies shell interpreter wrappers and applies Git grants to executable variants", () => {
+      it("denies interpreter wrappers and direct executable variants", () => {
         const broker = new ShellBroker();
         const interpreterAllowed: ExtendedPluginPermissions = { shell: { allow: ["sh"] } };
         const gitExecutableAllowed: ExtendedPluginPermissions = {
@@ -954,21 +954,19 @@ describe("Fase 13 — Plugin Isolation & Security", () => {
       expect(broker.canConnect("http://localhost./", perms)).toBe(false);
     });
 
-    it("requires token boundary on allow-list prefixes and rejects empty entries", () => {
+    it("keeps shell execution blocked even with a valid executable prefix grant", () => {
       const broker = new ShellBroker();
       expect(broker.canExecute("github-evil --steal", { shell: { allow: ["git"] } })).toBe(false);
       expect(broker.canExecute("anything at all", { shell: { allow: [""] } })).toBe(false);
-      // Legit prefix uses keep working.
-      expect(broker.canExecute("git status", { shell: { allow: ["git"] } })).toBe(true);
+      expect(broker.canExecute("git status", { shell: { allow: ["git"] } })).toBe(false);
     });
 
-    it("catches home-wipe spellings through an allowed rm", () => {
+    it("keeps shell execution blocked even for a workspace-relative command", () => {
       const broker = new ShellBroker();
       const perms: ExtendedPluginPermissions = { shell: { allow: ["rm"] } };
       expect(broker.canExecute("rm -rf $HOME", perms)).toBe(false);
       expect(broker.canExecute("rm -rf ~", perms)).toBe(false);
-      // Scoped legitimate use (relative path, no absolute root) still allow-listed.
-      expect(broker.canExecute("rm -rf tmp/cache", perms)).toBe(true);
+      expect(broker.canExecute("rm -rf tmp/cache", perms)).toBe(false);
     });
   });
 });

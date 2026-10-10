@@ -43,105 +43,39 @@ describe("NetworkBroker safe destination classification", () => {
   });
 });
 
-describe("ShellBroker nested package execution policy", () => {
-  it("denies package managers and shell wrappers even when the command is allow-listed", () => {
-    const broker = createShellBroker();
+describe("ShellBroker fail-closed execution policy", () => {
+  it("fails closed until a platform-isolated shell executor is integrated", () => {
+    const audit = { log: vi.fn() } as unknown as SecurityAuditLogger;
+    const broker = new ShellBroker(audit);
     const permissions: ExtendedPluginPermissions = {
-      shell: {
-        allow: [
-          "npm",
-          "npm test",
-          "npm.cmd test",
-          '"npm" test',
-          "command npm test",
-          "exec npm test",
-          "call npm test",
-          "start npm test",
-          "Start-Process npm test",
-          "builtin npm test",
-          "sudo npm test",
-          "timeout 5 npm test",
-          "time npm test",
-          "nice npm test",
-          "nohup npm test",
-          "setsid npm test",
-          "FOO=1 npm test",
-          "n\\pm test",
-          "npx",
-          "npx vitest run",
-          "npx.cmd vitest run",
-          "'npx' vitest run",
-          '"C:\\Program Files\\nodejs\\npm.cmd" test',
-          "pnpm",
-          "pnpm exec tsc",
-          "pnpm.cmd exec tsc",
-          "bunx vitest run",
-          "yarn",
-          "yarn test",
-          "yarn.cmd test",
-          "yarnpkg test",
-          "corepack",
-          "corepack npm test",
-          "corepack.cmd npm test",
-          "make test",
-          "wsl npm test",
-          "parallel npm test",
-          "runuser -u nobody npm test",
-          "gmake test",
-          "sem npm test",
-          "doas npm test",
-        ],
-      },
+      shell: { allow: ["git status"] },
+      git: { allowStatus: true },
     };
 
-    for (const command of [
-      "npm test",
-      "npm.cmd test",
-      '"npm" test',
-      "command npm test",
-      "exec npm test",
-      "call npm test",
-      "start npm test",
-      "Start-Process npm test",
-      "builtin npm test",
-      "sudo npm test",
-      "timeout 5 npm test",
-      "time npm test",
-      "nice npm test",
-      "nohup npm test",
-      "setsid npm test",
-      "FOO=1 npm test",
-      "n\\pm test",
-      "npx vitest run",
-      "npx.cmd vitest run",
-      "'npx' vitest run",
-      '"C:\\Program Files\\nodejs\\npm.cmd" test',
-      "pnpm exec tsc",
-      "pnpm.cmd exec tsc",
-      "bunx vitest run",
-      "yarn test",
-      "yarn.cmd test",
-      "yarnpkg test",
-      "corepack npm test",
-      "corepack.cmd npm test",
-      "make test",
-      "wsl npm test",
-      "parallel npm test",
-      "runuser -u nobody npm test",
-      "gmake test",
-      "sem npm test",
-      "doas npm test",
-    ]) {
-      expect(broker.canExecute(command, permissions, "synthetic-plugin"), command).toBe(false);
-    }
+    expect(broker.canExecute("git status", permissions, "synthetic-plugin")).toBe(false);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "shell.execute",
+        decision: "deny",
+        reason: expect.stringContaining("platform-isolated executor"),
+      }),
+    );
   });
 
   it.each([
+    "echo safe",
+    "git status",
+    "npm test",
+    "make test",
     "pkexec npm test",
     "run0 npm test",
-  ])("denies privileged launcher %s under an exact grant", (command) => {
+    "unlisted-launcher --argument",
+  ])("denies %s even under an exact grant without an executor", (command) => {
     const broker = createShellBroker();
-    const permissions: ExtendedPluginPermissions = { shell: { allow: [command] } };
+    const permissions: ExtendedPluginPermissions = {
+      shell: { allow: [command] },
+      git: { allowStatus: true },
+    };
 
     expect(broker.canExecute(command, permissions, "synthetic-plugin")).toBe(false);
   });

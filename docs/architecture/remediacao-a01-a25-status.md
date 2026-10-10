@@ -1833,7 +1833,7 @@ cancellation follow-up above.
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::1` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
-| A09 | Partially mitigated | Tested shell composition, common interpreter/package-manager launchers, selected wrappers (including `make`, `wsl`, `parallel`, `runuser`, `gmake`, `sem`, `doas`, `pkexec`, and `run0`), forged trust, and direct Git operation grant bypasses are rejected. The API remains a raw command-string predicate with no production callsites; unenumerated aliases/wrappers, structured argv, resource scoping, and execution enforcement remain open. Conservative syntax rejection also blocks some quoted, backslash, and `=` arguments. |
+| A09 | Partially mitigated; ShellBroker now fails closed | `ShellBroker.canExecute` always denies and audits until a platform-isolated executor is integrated, so exact grants cannot authorize known or unknown command strings. Static search found no production caller; trusted Harness and separate `GitBroker` remain independent. A production dispatcher, scoped argv authority, and OS execution boundary are still absent. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
@@ -2071,7 +2071,7 @@ broker authorizes package-manager launches.
   timing result is not classified as pre-existing or solely environmental.
   No probe ran and no benchmark or threshold was changed.
 
-### A09 launcher-denylist follow-up
+### A09 launcher-denylist history (superseded by fail-closed execution)
 
 Independent source reviews identified exact grants for `make`, `wsl`,
 `parallel`, `runuser`, `gmake`, `sem`, `doas`, `pkexec`, and `run0` as ways to
@@ -2098,13 +2098,46 @@ matching.
   informational diagnostics in `permission-brokers.ts`; `git diff --check`
   passes.
 
-The independent review follow-ups reproduced `gmake test` and then
-`pkexec npm test` under exact grants. Predicate-only tests now deny
-`gmake test`, `sem npm test`, `doas npm test`, `pkexec npm test`, and
-`run0 npm test`. The tests use a synthetic audit logger only. Unenumerated
-aliases/wrappers, nested launchers outside the denylist, and wrappers that
-change execution semantics remain possible, so no execution containment claim
-is made.
+This intermediate finite list was not a complete execution boundary.
+Independent review reproduced `gmake test`, `pkexec npm test`, and
+`run0 npm test` under exact grants. Those predicate-only tests used a synthetic
+audit logger and launched no commands. The list and its compatibility effect
+are historical; current behavior is governed by the fail-closed follow-up
+below.
+
+### A09 fail-closed ShellBroker pending an OS executor
+
+Static search found no production `ShellBroker` construction or `canExecute`
+callsite; the broker is exercised only by tests. Because the raw command
+predicate cannot prove that an allowed executable will not dispatch nested
+code, a finite launcher list would leave the same authorization flaw for
+unlisted wrappers. The broker now always emits an audited denial with an
+explicit “platform-isolated executor” reason, regardless of shell/Git grants
+or command text. This affects only the unused external-plugin shell broker;
+the trusted Harness path and the separate `GitBroker` permission API are
+unchanged. No process was launched.
+
+- RED: `git status` with exact shell and Git status grants was accepted while
+  there was no platform-isolated executor. GREEN: `canExecute` always denies;
+  parameterized fixtures confirm exact grants for a benign command, Git,
+  package manager, known privilege wrappers, and an unlisted launcher all
+  remain denied. The broker and selected existing ShellBroker tests passed
+  **16/16** across two files, with 44 other plugin-isolation tests filtered
+  out. The filtered tests are string predicates only.
+- Targeted Biome passed with pre-existing informational diagnostics in
+  `permission-brokers.ts` and diagnostics in the broad
+  `plugin-isolation.test.ts`; these diagnostics were not compared against the
+  base, so they are not classified as pre-existing. `git diff --check` and
+  `npm run typecheck --workspace @modus/desktop` passed. Independent
+  read-only review found no concrete defect in this fail-closed policy and
+  confirmed there are no production callsites; its architectural limitation
+  remains that no process containment is provided.
+
+This is policy denial, not a process sandbox. The separate `GitBroker` still
+answers whether a Git operation grant exists, but has no production caller and
+does not execute Git. A future OS executor must add a host-owned, scoped
+dispatcher before either permission result can be used to authorize a child
+process.
 
 #### Remote CI on `a1a4e35` before the `pkexec`/`run0` follow-up
 
@@ -2116,6 +2149,6 @@ jobs also passed. The macOS safe-filtered plugin-containment job failed only
 at the unchanged `FastVectorDistance` assertion: **0.104750 ms** against
 `<0.1 ms` (289 passed, 7 skipped). The benchmark and threshold were not
 changed, and this result is not classified as pre-existing or solely
-environmental. macOS and Windows packaging were still running when this status
-was recorded; their later completion is not inferred here. This workflow ran
-the previous commit, before `pkexec` and `run0` were added.
+environmental. Windows packaging (`38091868609`) and macOS packaging
+(`38091868537`) later completed successfully. This workflow ran the previous
+commit, before `pkexec` and `run0` were added.
