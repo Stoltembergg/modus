@@ -994,16 +994,6 @@ export class PiSdkRuntime implements AgentRuntime {
       registerCoreCapabilities(this.capabilityRegistry);
     }
 
-    if (isFeatureFlagEnabled("MODUS_PLUGINS")) {
-      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader, {
-        deferActivation: isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE"),
-      })
-        .then(() => {})
-        .catch((err) => {
-          console.error("[modus] Failed to bootstrap plugins:", err);
-        });
-    }
-
     if (isFeatureFlagEnabled("MODUS_PLUGIN_TRACING")) {
       this.pluginInstrumentation = new PluginInstrumentation();
       this.pluginHealthMonitor = new PluginHealthMonitor(this.pluginInstrumentation);
@@ -1015,13 +1005,44 @@ export class PiSdkRuntime implements AgentRuntime {
       this.pluginIsolationHost = new PluginIsolationHost({ auditLogger: this.securityAuditLogger });
     }
 
-    if (isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE")) {
-      const svc = this.getPluginLifecycleService();
-      this.pluginSyncPromise = (this.bootstrapPromise ?? Promise.resolve())
-        .then(() => svc.syncOnStartup())
+    const pluginsEnabled = isFeatureFlagEnabled("MODUS_PLUGINS");
+    const lifecycleEnabled = isFeatureFlagEnabled("MODUS_PLUGIN_LIFECYCLE");
+    if (lifecycleEnabled) {
+      try {
+        // Open durable lifecycle state before any plugin is loaded. If the
+        // store is unavailable, keep this optional subsystem inactive while
+        // the rest of the agent runtime remains available.
+        const service = this.getPluginLifecycleService();
+        if (pluginsEnabled) {
+          this.bootstrapPromise = bootstrapModusPlugins(
+            this.capabilityRegistry,
+            this.pluginLoader,
+            {
+              deferActivation: true,
+            },
+          )
+            .then(() => {})
+            .catch((err) => {
+              console.error("[modus] Failed to prepare plugins for lifecycle sync:", err);
+            });
+        }
+        this.pluginSyncPromise = (this.bootstrapPromise ?? Promise.resolve())
+          .then(() => service.syncOnStartup())
+          .catch((err) => {
+            console.error("[modus] Failed to sync plugins on startup:", err);
+            return [];
+          });
+      } catch (err) {
+        console.error(
+          "[modus] Plugin lifecycle state is unavailable; plugins remain unloaded:",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+    } else if (pluginsEnabled) {
+      this.bootstrapPromise = bootstrapModusPlugins(this.capabilityRegistry, this.pluginLoader)
+        .then(() => {})
         .catch((err) => {
-          console.error("[modus] Failed to sync plugins on startup:", err);
-          return [];
+          console.error("[modus] Failed to bootstrap plugins:", err);
         });
     }
   }
@@ -1037,16 +1058,8 @@ export class PiSdkRuntime implements AgentRuntime {
 
   getPluginStateStore(): PluginStateStore {
     if (!this.pluginStateStore) {
-      try {
-        const userData = app.getPath("userData");
-        this.pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
-      } catch (err) {
-        console.warn(
-          "[modus] plugin state falling back to in-memory store (persistence disabled):",
-          err instanceof Error ? err.message : String(err),
-        );
-        this.pluginStateStore = new PluginStateStore(":memory:");
-      }
+      const userData = app.getPath("userData");
+      this.pluginStateStore = new PluginStateStore(join(userData, "plugins.db"));
     }
     return this.pluginStateStore;
   }

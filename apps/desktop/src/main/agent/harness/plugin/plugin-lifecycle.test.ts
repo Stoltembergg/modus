@@ -488,16 +488,26 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       expect(await freshRegistry.execute("cache.query", {})).toEqual({ hit: true });
     });
 
-    it("keeps a durably disabled built-in inactive after runtime bootstrap", async () => {
-      const bootstrapRegistry = new CapabilityRegistry();
-      const bootstrapResult = await bootstrapModusPlugins(bootstrapRegistry);
+    it("does not load a durably disabled built-in during deferred startup bootstrap", async () => {
       const memoryEntry = BUILT_IN_PLUGIN_ENTRIES.find(
         (entry) => entry.manifest.id === "@modus/memory",
       );
       if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
       const manifest = memoryEntry.manifest;
+      const lifecycle = manifest.lifecycle;
+      const originalOnLoad = lifecycle?.onLoad;
+      if (!lifecycle || !originalOnLoad)
+        throw new Error("Built-in memory plugin has no onLoad hook");
+      const onLoad = vi.fn(originalOnLoad);
+      lifecycle.onLoad = onLoad;
+      const bootstrapRegistry = new CapabilityRegistry();
+      const bootstrapResult = await bootstrapModusPlugins(bootstrapRegistry, undefined, {
+        deferActivation: true,
+      });
       const memoryProvision = manifest.provides[0];
       if (!memoryProvision) throw new Error("Built-in memory plugin has no capability provision");
+      const pluginImplementation = memoryProvision.implementation?.execute;
+      if (!pluginImplementation) throw new Error("Built-in memory plugin has no implementation");
       const capabilityId = memoryProvision.capability;
       const now = new Date().toISOString();
       store.savePlugin({
@@ -514,7 +524,8 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         previouslyEnabled: [manifest.id],
         disabledPlugins: [manifest.id],
       });
-      expect(bootstrapResult.loader.getPlugin(manifest.id)?.status).toBe("enabled");
+      expect(bootstrapResult.loader.getPlugin(manifest.id)).toBeUndefined();
+      expect(onLoad).not.toHaveBeenCalled();
 
       const restartedService = new PluginLifecycleService(
         store,
@@ -524,13 +535,18 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       try {
         await restartedService.syncOnStartup();
 
-        expect(bootstrapResult.loader.getPlugin(manifest.id)?.status).toBe("disabled");
-        expect(bootstrapRegistry.isProviderQuarantined(manifest.id)).toBe(true);
-        expect(bootstrapRegistry.getActiveProvider(capabilityId)?.providerId).not.toBe(manifest.id);
+        expect(bootstrapResult.loader.getPlugin(manifest.id)).toBeUndefined();
+        expect(onLoad).not.toHaveBeenCalled();
+        expect(
+          bootstrapRegistry
+            .listProviders(capabilityId)
+            .some((provider) => provider.implementation.execute === pluginImplementation),
+        ).toBe(false);
       } finally {
         for (const pluginId of bootstrapResult.loadedPlugins) {
           await bootstrapResult.loader.unload(pluginId).catch(() => undefined);
         }
+        lifecycle.onLoad = originalOnLoad;
       }
     });
 
@@ -638,8 +654,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         firstBootstrap = await bootstrapModusPlugins(firstRegistry, firstLoader, {
           deferActivation: true,
         });
-        expect(firstLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
-        expect(firstRegistry.isProviderQuarantined("@modus/memory")).toBe(true);
+        expect(firstLoader.getPlugin("@modus/memory")).toBeUndefined();
         const firstService = new PluginLifecycleService(durableStore, firstLoader, firstRegistry);
         const restored = await firstService.syncOnStartup();
         expect(restored).toContain("@modus/memory");
@@ -657,7 +672,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         secondBootstrap = await bootstrapModusPlugins(secondRegistry, secondLoader, {
           deferActivation: true,
         });
-        expect(secondLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
+        expect(secondLoader.getPlugin("@modus/memory")).toBeUndefined();
         const secondService = new PluginLifecycleService(
           durableStore,
           secondLoader,
@@ -666,14 +681,16 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         await secondService.syncOnStartup();
 
         expect(durableStore.getPlugin("@modus/memory")).toBeNull();
-        expect(secondLoader.getPlugin("@modus/memory")?.status).toBe("disabled");
-        expect(secondRegistry.isProviderQuarantined("@modus/memory")).toBe(true);
-        expect(secondRegistry.getActiveProvider("memory.retrieve")?.providerId).not.toBe(
-          "@modus/memory",
-        );
-        await expect(
-          secondRegistry.execute("memory.retrieve", { query: "private" }),
-        ).rejects.toThrow();
+        expect(secondLoader.getPlugin("@modus/memory")).toBeUndefined();
+        const memoryImplementation = BUILT_IN_PLUGIN_ENTRIES.find(
+          (entry) => entry.manifest.id === "@modus/memory",
+        )?.manifest.provides[0]?.implementation?.execute;
+        expect(memoryImplementation).toBeDefined();
+        expect(
+          secondRegistry
+            .listProviders("memory.retrieve")
+            .some((provider) => provider.implementation.execute === memoryImplementation),
+        ).toBe(false);
       } finally {
         for (const pluginId of firstBootstrap?.loadedPlugins ?? []) {
           await firstLoader.unload(pluginId).catch(() => undefined);

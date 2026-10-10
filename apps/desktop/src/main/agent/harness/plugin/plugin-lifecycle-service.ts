@@ -990,18 +990,18 @@ export class PluginLifecycleService {
       this.loader.disableForHostSafety(tombstone.pluginId);
     }
 
-    // Built-ins were historically enabled by bootstrap without durable rows.
-    // Persist that default only when the host actually preloaded the exact
-    // built-in and there is no explicit uninstall tombstone or user record.
+    // Seed first-install defaults from exact host catalog entries. Startup
+    // bootstrap leaves plugins unloaded so no lifecycle hook runs until this
+    // durable state and every explicit user decision have been read.
     for (const entry of BUILT_IN_PLUGIN_ENTRIES) {
       if (tombstonedPluginIds.has(entry.manifest.id) || this.store.getPlugin(entry.manifest.id)) {
         continue;
       }
-      const loaded = this.loader.getPlugin(entry.manifest.id);
-      if (loaded?.manifest !== entry.manifest) continue;
+      const manifest = this.resolveManifest(entry.manifest.id, entry.manifest.version);
+      if (manifest !== entry.manifest) continue;
       try {
-        this.loader.authorizeManifest(loaded.manifest);
-        await this.installUnlocked(entry.manifest, undefined, "enabled");
+        this.loader.authorizeManifest(manifest);
+        await this.installUnlocked(manifest, undefined, "enabled");
       } catch (error) {
         this.registry.quarantineProvider(entry.manifest.id, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
         this.loader.disableForHostSafety(entry.manifest.id);

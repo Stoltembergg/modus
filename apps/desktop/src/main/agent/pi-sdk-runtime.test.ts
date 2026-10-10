@@ -1392,12 +1392,15 @@ describe("PiSdkRuntime", () => {
     const bootstrapGate = new Promise<void>((resolve) => {
       releaseBootstrap = resolve;
     });
+    const bootstrapModule = await import("./harness/plugin/bootstrap");
+    const originalBootstrap = bootstrapModule.bootstrapModusPlugins;
+    const bootstrapSpy = vi
+      .spyOn(bootstrapModule, "bootstrapModusPlugins")
+      .mockImplementation(async (...args) => {
+        await bootstrapGate;
+        return originalBootstrap(...args);
+      });
     const sync = vi.fn(async () => [] as string[]);
-    const { PluginLoader } = await import("./harness/plugin/plugin-loader");
-    vi.spyOn(PluginLoader.prototype, "load").mockImplementation(async () => {
-      await bootstrapGate;
-      throw new Error("controlled bootstrap stop");
-    });
     const lifecycleSpy = vi
       .spyOn(PiSdkRuntime.prototype, "getPluginLifecycleService")
       .mockReturnValue({
@@ -1416,7 +1419,50 @@ describe("PiSdkRuntime", () => {
     releaseBootstrap();
     await runtime.waitForPlugins();
     expect(sync).toHaveBeenCalledOnce();
+    bootstrapSpy.mockRestore();
     lifecycleSpy.mockRestore();
+  });
+
+  it("keeps plugin code unloaded when persistent lifecycle state cannot be opened", async () => {
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: true,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
+    await rm(userData, { recursive: true, force: true });
+    await writeFile(userData, "not a directory");
+
+    const runtime = new PiSdkRuntime();
+    await runtime.waitForPlugins();
+
+    expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
+    expect(() => runtime.getPluginStateStore()).toThrow();
+  });
+
+  it("does not let lifecycle startup activate plugins when MODUS_PLUGINS is disabled", async () => {
+    const memoryEntry = (
+      await import("./harness/plugin/plugin-catalog")
+    ).BUILT_IN_PLUGIN_ENTRIES.find((entry) => entry.manifest.id === "@modus/memory");
+    if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
+    const lifecycle = memoryEntry.manifest.lifecycle;
+    const originalOnLoad = lifecycle?.onLoad;
+    if (!lifecycle || !originalOnLoad) throw new Error("Built-in memory plugin has no onLoad hook");
+    const onLoad = vi.fn(originalOnLoad);
+    lifecycle.onLoad = onLoad;
+    setFeatureFlagOverrides({
+      MODUS_CAPABILITY_REGISTRY: true,
+      MODUS_PLUGINS: false,
+      MODUS_PLUGIN_LIFECYCLE: true,
+    });
+
+    try {
+      const runtime = new PiSdkRuntime();
+      await runtime.waitForPlugins();
+      expect(runtime.getPluginLoader().listPlugins()).toEqual([]);
+      expect(onLoad).not.toHaveBeenCalled();
+    } finally {
+      lifecycle.onLoad = originalOnLoad;
+    }
   });
 
   it("production runtime loader rejects a forged core manifest before running its hooks", async () => {

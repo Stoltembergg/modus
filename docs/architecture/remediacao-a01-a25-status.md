@@ -182,8 +182,8 @@ dispatcher can be introduced and safely validated.
 
 ## Milestone 3 — A10–A14 lifecycle and dependency integrity
 
-**Status: lifecycle service paths are implemented and locally checked; this
-patch is awaiting its own CI run.**
+**Status: lifecycle service paths are implemented and locally checked; the
+startup ordering patch is awaiting its own CI run.**
 
 - A10 startup reconciliation now resolves the exact installed version from
   the host catalog, includes exact authorized preloaded manifests in the
@@ -236,6 +236,23 @@ patch is awaiting its own CI run.**
   quarantine during Safe Mode. The service now derives the allow-list itself,
   rejects those transitions before loading candidate code, and retains
   quarantine (RED/GREEN).
+- Startup RED/GREEN: with lifecycle enabled, the previous deferred bootstrap
+  loaded built-ins and ran `onLoad` before durable disabled/tombstone state was
+  reconciled. A failed user-data path also fell back to `:memory:` and could
+  activate built-ins without persistent decisions. Lifecycle-enabled startup
+  now opens the existing SQLite store first, leaves built-ins unloaded during
+  bootstrap, then seeds first-install defaults durably and restores only the
+  resulting enabled records. Store initialization failure leaves the plugin
+  loader empty while the rest of the runtime remains constructible. The
+  runtime regression uses a regular file as the user-data directory so SQLite
+  store initialization itself fails; it does not only mock `app.getPath()`.
+- The lifecycle-off configuration remains an explicit legacy opt-out: when
+  `MODUS_PLUGINS=true` and `MODUS_PLUGIN_LIFECYCLE=false`, ordinary built-in
+  bootstrap does not consult durable plugin state. The independent review
+  flagged this conditional path; the feature flag is currently treated as
+  disabling lifecycle persistence/reconciliation, and the matrix does not
+  claim tombstone or disabled-state enforcement in that mode. External plugin
+  execution remains unavailable.
 - Targeted Vitest: **4 files, 137 tests passed** (`plugin.test.ts`,
   `plugin-lifecycle.test.ts`, `plugin-dependency.test.ts`, and
   `plugin-rollback.test.ts`). Tests use only synthetic in-process fixtures; no
@@ -245,6 +262,14 @@ patch is awaiting its own CI run.**
   then GREEN. Desktop typecheck passes. Targeted Biome passes with two existing
   warnings and no errors; `git diff --check` passes.
 - Desktop TypeScript typecheck: passed, exit 0.
+- Startup patch focused Vitest: **3 files, 308 tests passed** across
+  `plugin-lifecycle.test.ts`, `plugin-rollback.test.ts`, and
+  `pi-sdk-runtime.test.ts`. This includes the store-initialization failure
+  regression and deferred-bootstrap lifecycle assertions; fixtures use only
+  host-catalog built-ins and synthetic state.
+- Startup patch desktop TypeScript typecheck: passed, exit 0. Targeted Biome
+  on the six changed TypeScript files: exit 0 with 14 warnings and no errors;
+  warning origins were not baseline-classified. `git diff --check` passed.
 - Targeted Biome on 11 changed TypeScript files: exit 0 with 57 warnings and 1
   info, and no errors after correcting one formatting diagnostic. Warning
   origins were not baseline-classified; no lint rule was disabled and no bulk
@@ -258,15 +283,15 @@ patch is awaiting its own CI run.**
   objects; there are no in-repository production callers, external plugin
   execution remains denied, and that accessor surface remains a residual API
   concern. Review was static and did not execute tests.
-- Remote CI for `d77cf0e` predates this local A13 patch. The global and Ubuntu
-  plugin test jobs each failed only the WASM `FastVectorDistance` timing
-  assertion (`0.161752 ms` and `0.104707 ms`; required `<0.1 ms`). Global
-  Vitest totals were 1 failed, 4,536 passed, and 8 skipped across 402 files.
-  pgTAP failed test 22 in `17_free_monthly_renewal.test.sql`: actual period end
-  was Oct 30, expected Oct 31, 2026. Windows x64 and macOS arm64/x64 packaging
-  subsequently passed. These failures are recorded without changing the
-  benchmark or classifying them as pre-existing; this patch needs its own CI
-  run after publication.
+- Remote CI for `47889cb` completed: the global TypeScript/Biome/Vitest job,
+  Linux/macOS/Windows plugin-containment jobs, and Windows x64 plus macOS
+  arm64/x64 packaging all passed. Supabase pgTAP failed one assertion in
+  `17_free_monthly_renewal.test.sql` (test 22: have `2026-10-30`, want
+  `2026-10-31`). Earlier CI on `d77cf0e` also failed the WASM
+  `FastVectorDistance` timing assertion (`0.161752 ms` and `0.104707 ms`,
+  required `<0.1 ms`); on `47889cb` that benchmark passed. These outcomes are
+  recorded without classifying either failure as pre-existing. The current
+  startup patch still needs a CI run after publication.
 - Remaining limits: this does not create an OS execution boundary, prove
   crash-consistent external artifact deployment, or enable external plugins.
   Safe Mode is persisted in the existing plugin state database; full corruption
@@ -757,7 +782,7 @@ acknowledged.
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
 | A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
-| A10 | Mitigated | Startup uses exact host-catalog versions, reconciles disabled state before activation, and orders dependency restoration; external artifact identity remains unavailable. |
+| A10 | Mitigated when lifecycle is enabled; conditional legacy mode remains | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. If `MODUS_PLUGIN_LIFECYCLE=false`, the existing direct built-in bootstrap path intentionally skips store reconciliation; external artifact identity remains unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated | Persisted Safe Mode policy is service-derived; disallowed upgrade/downgrade transitions are rejected before hot reload, and restore retains quarantine. Same-process runtime accessors still expose internal loader/service objects; no production caller was found, but the API surface remains a residual concern. Storage corruption/power-loss proof remains open. |
@@ -772,7 +797,7 @@ acknowledged.
 | A22 | Pending | Bounded event-history reads. |
 | A23 | Pending | Synthetic built-in plugin services and their production claims. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
-| A25 | Prior fix preserved | Workspace-scoped permissions. |
+| A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
 This matrix will be updated as each independent remediation is completed and
 checked. No Checkpoint 2/3 or Guardian Task 5–7 status is changed here.
