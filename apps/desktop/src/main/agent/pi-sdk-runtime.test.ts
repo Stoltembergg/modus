@@ -263,6 +263,7 @@ async function useOfflinePiToolSessions(
     contextWindow?: number;
     assistantUsageTotalTokens?: number;
     assistantText?: string;
+    assistantTextChunks?: string[];
     assistantStopReason?: AssistantMessage["stopReason"];
     responseGate?: Promise<void>;
     captureContextHandlers?: boolean;
@@ -426,9 +427,11 @@ async function useOfflinePiToolSessions(
           stream.push({ type: "start", partial: emptyPartial });
 
           const splitAt = Math.ceil(responseText.length / 2);
-          const chunks = [responseText.slice(0, splitAt), responseText.slice(splitAt)].filter(
-            (chunk) => chunk.length > 0,
-          );
+          const chunks =
+            offlineOptions.assistantTextChunks ??
+            [responseText.slice(0, splitAt), responseText.slice(splitAt)].filter(
+              (chunk) => chunk.length > 0,
+            );
           let accumulatedText = "";
           for (const chunk of chunks) {
             accumulatedText += chunk;
@@ -9392,6 +9395,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
   async function runOfflinePiTurn(input: {
     sessionId: string;
     text: string;
+    assistantTextChunks?: string[];
     stopReason?: AssistantMessage["stopReason"];
   }): Promise<{ sessionId: string; systemPrompt: string }> {
     insertSession(
@@ -9401,6 +9405,7 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
     );
     const offline = await createOfflinePiToolSessions({
       assistantText: input.text,
+      ...(input.assistantTextChunks ? { assistantTextChunks: input.assistantTextChunks } : {}),
       ...(input.stopReason ? { assistantStopReason: input.stopReason } : {}),
     });
     const runtime = new PiSdkRuntime();
@@ -9470,6 +9475,43 @@ describe("PiSdkRuntime Phase 8 observability wiring", () => {
 
     expect(deliveredResponse).toBe(response);
     expect(responseMetrics.violationsDetected).toBe(1);
+  });
+
+  it("evaluates the complete streamed assistant response across event pages", async () => {
+    setFeatureFlagOverrides({
+      MODUS_USE_KERNEL: true,
+      MODUS_RESPONSE_POLICY: true,
+      MODUS_OBSERVABILITY: true,
+    });
+    const sessionId = `response-paged-${crypto.randomUUID()}`;
+    const paragraphs = Array.from({ length: 130 }, (_, index) => `Paragraph ${index + 1}.`);
+    const response = paragraphs.join("\n\n");
+    const chunks = paragraphs.map((paragraph, index) =>
+      index === paragraphs.length - 1 ? paragraph : `${paragraph}\n\n`,
+    );
+    ResponsePolicyRegistry.getInstance().setSessionPolicy(sessionId, {
+      maxParagraphs: 129,
+      enforcementMode: "strict",
+    });
+
+    await runOfflinePiTurn({ sessionId, text: response, assistantTextChunks: chunks });
+
+    const rows = listAgentEvents(sessionId).map(({ event }) => event);
+    const assistantMessageIds = new Set(
+      rows
+        .filter((event) => event.type === "message.started" && event.role === "assistant")
+        .map((event) => (event.type === "message.started" ? event.messageId : "")),
+    );
+    const deliveredResponse = rows
+      .filter((event) => event.type === "message.delta" && assistantMessageIds.has(event.messageId))
+      .map((event) => (event.type === "message.delta" ? event.delta : ""))
+      .join("");
+
+    expect(deliveredResponse).toBe(response);
+    expect(HarnessObserver.getInstance().snapshot().response).toMatchObject({
+      evaluatedCount: 1,
+      violationsDetected: 1,
+    });
   });
 
   it("does not evaluate a partial assistant message from a failed Pi SDK turn as a final response", async () => {

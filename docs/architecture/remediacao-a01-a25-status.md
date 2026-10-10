@@ -1109,6 +1109,47 @@ rejected rather than mixed.
   Windows packaging passed; macOS packaging was still running at the last
   status check.
 
+### Run-scoped assistant-output paging follow-up
+
+- Root cause: `PiSdkRuntime.runAssistantOutput(sessionId, runId)` called the
+  compatibility `listAgentEvents(sessionId)` API, which folded every run in a
+  session into memory before discarding events outside the target run. The
+  output is used by ResponsePolicy and Verifier-First settlement, so reducing
+  this read must keep all assistant deltas from the exact completed run.
+- Added `listAgentRunMessagePage`, which validates the existing single-run
+  boundary, pins a snapshot cursor, caps each read at the existing page limit,
+  and returns only message lifecycle/delta events within that run. The runtime
+  now concatenates those pages in cursor order; the streamed and persisted
+  assistant text remains unchanged. A16/A17 and ResponsePolicy state contracts
+  are unchanged.
+- RED/GREEN: the store test failed before implementation because the run-scoped
+  message-page reader did not exist. GREEN: tests cover prior/target/later run
+  isolation, a delta split across pages, and 130 delta rows across the default
+  128-row page boundary (128 + 4 rows; no delta loss or duplication). An
+  offline Pi SDK integration streamed 130 assistant chunks through the
+  production runtime; the exact transcript was preserved and ResponsePolicy
+  evaluated all 130 paragraphs, crossing a threshold set at 129.
+- Targeted Vitest: store paging **2 passed, 70 skipped**; productive Pi runtime
+  multi-page response **1 passed, 230 skipped**. Desktop TypeScript typecheck
+  passed. Targeted Biome passed with **9 warnings** at existing diagnostics in
+  the runtime/test files and no errors; no formatter was run over unrelated
+  files. `git diff --check` passed.
+- Independent review found no blocker in the fixed snapshot, cursor ordering,
+  boundary isolation, or response preservation. It reviewed the 130-delta
+  fixture and confirmed it exercises the default-page continuation without
+  synthetic concurrency. Remaining full-history consumers include the legacy
+  `lastAssistantOutput` helper and explicitly selected past-chat context; the
+  compatibility `listAgentEvents` IPC/API also still aggregates a full session.
+- Parent commit `87e6466` remote CI (`38044280905`) passed typecheck/Biome,
+  Verifier-First regressions, plugin-containment on Ubuntu/macOS/Windows, and
+  compile-only sandbox targets. Vitest reported **4,588 passed, 8 skipped,
+  1 failed across 406 files**: `FastVectorDistance` measured
+  **0.13537399999995614 ms** against its **<0.1 ms** benchmark assertion.
+  pgTAP test 22 again expected `2026-10-31` and received `2026-10-30`;
+  neither failure is attributed to this A22 change. Windows x64 packaging
+  (`38044280896`) and macOS x64/arm64 packaging (`38044280877`) passed. The
+  current run-scoped paging change awaits its own remote CI after publication.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
@@ -1134,7 +1175,7 @@ rejected rather than mixed.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub RED/GREEN: hub/timeline/chat-history integration 30/30, including active-run buffer release after the handoff window and prepared handoff retention; desktop typecheck, targeted Biome and diff check pass. CI on `12f1dc6` passed 4,586 tests, typecheck/Biome, all three OS containment jobs, and Windows/macOS packaging; only the pgTAP renewal assertion failed. CI on `43485f6` passed typecheck/Biome, OS containment, verifier regressions, compile-only sandbox, and Windows/macOS packaging; it failed one `FastVectorDistance <0.1ms` timing assertion (0.124834ms) and the same pgTAP test. CI on `c63d53a` passed 4,589 tests/8 skipped, typecheck/Biome, containment on all three OSes, Verifier-First regressions, and compile-only sandbox; only pgTAP failed, Windows packaging passed and macOS was pending at last check. Review found no blocker in run/session/snapshot isolation, source cache removal, or EventHub release. Legacy `listAgentEvents` callers, in-flight full-run accumulation, unbounded bytes per companion stream/result, volatile partial tool previews before durable `tool.started`, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
+| A22 | Partially mitigated; renderer and run-response paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, exact-run assistant-output pages, companion-stream completion/run association, and release of completed source-page arrays are wired. Source cache RED/GREEN: six source/chat/group UI files pass 83/83; source hook 6/6. EventHub RED/GREEN: hub/timeline/chat-history integration 30/30, including active-run buffer release after the handoff window and prepared handoff retention. Run-response RED/GREEN: bounded per-run message pages, 130 deltas across the default page boundary, and an offline Pi runtime ResponsePolicy evaluation preserving the exact text. Parent CI `87e6466`: 4,588 passed/8 skipped/1 benchmark failure (`FastVectorDistance` 0.135374ms vs <0.1ms), plus the recurring pgTAP date assertion; typecheck/Biome, containment on all three OSes, Verifier-First, compile-only sandbox, and both package workflows passed. Independent reviewers found no blocker. Legacy `lastAssistantOutput`, past-chat transcript, and `listAgentEvents` compatibility paths still materialize broad history; individual event/result byte caps, volatile partial tool previews before durable `tool.started`, and early local prompt failure retention remain. A local broad suite attempt was cancelled after its fixed file list ignored the requested filter; a sandbox test file had started, so execution of restricted cases cannot be ruled out. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |

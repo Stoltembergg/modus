@@ -1717,6 +1717,61 @@ export function listAgentEventPage(
   };
 }
 
+/** Read one bounded page of message events for exactly one assistant run. */
+export function listAgentRunMessagePage(
+  sessionId: string,
+  runId: string,
+  options: { afterCursor?: number; snapshotCursor?: number; limit?: number } = {},
+): AgentEventPageResult {
+  if (!runId.trim() || runId.length > 128) {
+    throw new RangeError("Agent run ID must be a non-empty string of at most 128 characters.");
+  }
+  const afterCursor = options.afterCursor ?? 0;
+  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  const requestedLimit = options.limit ?? DEFAULT_AGENT_EVENT_PAGE_SIZE;
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+    throw new RangeError("Agent event page size must be a positive safe integer.");
+  }
+  const limit = Math.min(requestedLimit, MAX_AGENT_EVENT_PAGE_SIZE);
+  const db = getDatabase();
+  const snapshotCursor =
+    options.snapshotCursor ??
+    Number(
+      (
+        db
+          .prepare(
+            "select coalesce(max(rowid), 0) as cursor from agent_events where session_id = ?",
+          )
+          .get(sessionId) as { cursor: number }
+      ).cursor,
+    );
+  if (!Number.isSafeInteger(snapshotCursor) || snapshotCursor < 0) {
+    throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
+  }
+
+  const rows = listAgentRunAssistantMessageRows(
+    sessionId,
+    runId,
+    afterCursor,
+    snapshotCursor,
+    limit + 1,
+  );
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const events = pageRows.map(parseAgentEventRow);
+  const nextCursor = pageRows.at(-1)?.event_cursor;
+  return {
+    events,
+    summaryEvents: [],
+    activityEvents: [],
+    snapshotCursor,
+    ...(nextCursor === undefined ? {} : { nextCursor }),
+    hasMore,
+  };
+}
+
 /**
  * A page can cut through one streamed message or tool result. Expand only those
  * streams that have matching deltas outside the page's cursor range, so callers
@@ -1929,6 +1984,46 @@ function listAgentRunToolEventRows(
   snapshotCursor: number,
   limit: number,
 ): AgentEventRow[] {
+  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+  const db = getDatabase();
+  return db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+         and type in (
+           'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+           'tool.started', 'tool.output', 'tool.ended'
+         )
+       order by rowid asc limit ?`,
+    )
+    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+}
+
+function listAgentRunAssistantMessageRows(
+  sessionId: string,
+  runId: string,
+  afterCursor: number,
+  snapshotCursor: number,
+  limit: number,
+): AgentEventRow[] {
+  const range = getAgentRunEventRange(sessionId, runId, snapshotCursor);
+  return getDatabase()
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+         and type in ('message.started', 'message.delta', 'message.completed')
+       order by rowid asc limit ?`,
+    )
+    .all(sessionId, range.startCursor, range.endCursor, afterCursor, limit) as AgentEventRow[];
+}
+
+function getAgentRunEventRange(
+  sessionId: string,
+  runId: string,
+  snapshotCursor: number,
+): { startCursor: number; endCursor: number } {
   const db = getDatabase();
   const start = db
     .prepare(
@@ -1993,24 +2088,12 @@ function listAgentRunToolEventRows(
        limit 1`,
     )
     .get(sessionId, start.event_cursor, overlapEndCursor, runId) as { found: number } | undefined;
-  // A session is single-run. If that invariant is violated, do not mix tool output
-  // from overlapping runs into a different run's source list.
+  // A session is single-run. If that invariant is violated, do not mix events
+  // from overlapping runs into another run's result.
   if (overlappingRun) {
     throw new Error("Run-scoped event history is unavailable because run boundaries overlap.");
   }
-
-  return db
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
-         and type in (
-           'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
-           'tool.started', 'tool.output', 'tool.ended'
-         )
-       order by rowid asc limit ?`,
-    )
-    .all(sessionId, start.event_cursor, endCursor, afterCursor, limit) as AgentEventRow[];
+  return { startCursor: start.event_cursor, endCursor };
 }
 
 function listAgentEventSummary(sessionId: string, snapshotCursor: number): AgentEventItem[] {

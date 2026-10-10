@@ -26,6 +26,7 @@ const {
   getRunToolEvidence,
   getHarnessQAEventByRowId,
   listAgentEventPage,
+  listAgentRunMessagePage,
   listAgentEvents,
   MAX_AGENT_EVENT_PAGE_SIZE,
   recordAgentEvent,
@@ -2472,6 +2473,136 @@ fs.renameSync("original-manifest-link", "package.json");
         ({ event }) => event.type === "tool.started" && event.toolCallId === "other-tool",
       ),
     ).toBe(false);
+  });
+
+  it("pages assistant message events inside only the requested run", () => {
+    const sessionId = `run-message-pages-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const priorRun = createAgentRun({ sessionId, prompt: "prior" });
+    const targetRun = createAgentRun({ sessionId, prompt: "target" });
+    const laterRun = createAgentRun({ sessionId, prompt: "later" });
+    recordAgentEvent({ type: "run.started", sessionId, runId: priorRun.id, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "prior-assistant",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "prior-assistant",
+      delta: "prior output",
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: priorRun.id });
+    recordAgentEvent({ type: "run.started", sessionId, runId: targetRun.id, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "target-assistant",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "target-assistant",
+      delta: "target ",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "target-assistant",
+      delta: "output",
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "target-assistant",
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: targetRun.id });
+    recordAgentEvent({ type: "run.started", sessionId, runId: laterRun.id, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "later-assistant",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "later-assistant",
+      delta: "later output",
+    });
+
+    const first = listAgentRunMessagePage(sessionId, targetRun.id, { limit: 2 });
+    if (first.nextCursor === undefined) throw new Error("Expected a message page cursor.");
+    const second = listAgentRunMessagePage(sessionId, targetRun.id, {
+      afterCursor: first.nextCursor,
+      snapshotCursor: first.snapshotCursor,
+      limit: 2,
+    });
+    const events = [...first.events, ...second.events].map(({ event }) => event);
+
+    expect(first.events).toHaveLength(2);
+    expect(first.hasMore).toBe(true);
+    expect(second.events).toHaveLength(2);
+    expect(second.hasMore).toBe(false);
+    expect(events.map((event) => event.type)).toEqual([
+      "message.started",
+      "message.delta",
+      "message.delta",
+      "message.completed",
+    ]);
+    expect(
+      events.every((event) =>
+        event.type === "message.started" ||
+        event.type === "message.delta" ||
+        event.type === "message.completed"
+          ? event.messageId === "target-assistant"
+          : false,
+      ),
+    ).toBe(true);
+  });
+
+  it("streams run output across the default page boundary without losing deltas", () => {
+    const sessionId = `run-message-page-boundary-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({ sessionId, prompt: "long output" });
+    recordAgentEvent({ type: "run.started", sessionId, runId: run.id, delivery: "normal" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "long-assistant",
+      role: "assistant",
+    });
+    const chunks = Array.from({ length: 130 }, (_, index) => `chunk-${index};`);
+    for (const delta of chunks) {
+      recordAgentEvent({ type: "message.delta", sessionId, messageId: "long-assistant", delta });
+    }
+    recordAgentEvent({ type: "message.completed", sessionId, messageId: "long-assistant" });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: run.id });
+
+    const pageSizes: number[] = [];
+    const deltas: string[] = [];
+    let afterCursor = 0;
+    let snapshotCursor: number | undefined;
+    while (true) {
+      const page = listAgentRunMessagePage(sessionId, run.id, {
+        afterCursor,
+        ...(snapshotCursor === undefined ? {} : { snapshotCursor }),
+      });
+      snapshotCursor = page.snapshotCursor;
+      pageSizes.push(page.events.length);
+      for (const { event } of page.events) {
+        if (event.type === "message.delta") deltas.push(event.delta);
+      }
+      if (!page.hasMore || page.nextCursor === undefined) break;
+      afterCursor = page.nextCursor;
+    }
+
+    expect(pageSizes).toEqual([128, 4]);
+    expect(deltas).toEqual(chunks);
+    expect(deltas.join("")).toBe(chunks.join(""));
   });
 
   it("fails closed when a scoped run page has no matching run boundary", () => {
