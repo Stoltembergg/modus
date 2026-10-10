@@ -6,6 +6,13 @@
 import type { WasmFuelMeter } from "./wasm-fuel-meter";
 import { type WasmExecutionMetrics, WasmMemoryOutOfBoundsError } from "./wasm-types";
 
+type EscapedWasmFunction = (...args: unknown[]) => unknown;
+
+type EscapedFunctionReference = {
+  target: EscapedWasmFunction | null;
+  wrapper: (...args: unknown[]) => unknown;
+};
+
 export class WasmPluginInstance {
   #wasmInstance: WebAssembly.Instance | null;
   public readonly fuelMeter: WasmFuelMeter;
@@ -14,7 +21,10 @@ export class WasmPluginInstance {
   private readonly textEncoder = new TextEncoder();
   private readonly textDecoder = new TextDecoder();
   #disposed = false;
+  #activeCalls = 0;
+  #resourcesReleased = false;
   #releaseMemoryReservation: (() => void) | null;
+  #escapedFunctionReferences = new Map<EscapedWasmFunction, EscapedFunctionReference>();
 
   constructor(
     instance: WebAssembly.Instance,
@@ -65,8 +75,18 @@ export class WasmPluginInstance {
   public dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    if (this.#activeCalls === 0) this.releaseResources();
+  }
+
+  private releaseResources(): void {
+    if (this.#resourcesReleased) return;
+    this.#resourcesReleased = true;
     this.#wasmInstance = null;
     this.#memory = null;
+    for (const reference of this.#escapedFunctionReferences.values()) {
+      reference.target = null;
+    }
+    this.#escapedFunctionReferences.clear();
     const releaseMemoryReservation = this.#releaseMemoryReservation;
     this.#releaseMemoryReservation = null;
     releaseMemoryReservation?.();
@@ -89,10 +109,52 @@ export class WasmPluginInstance {
       );
     }
 
-    // Deduct standard invocation fuel cost
-    this.fuelMeter.consume(10n);
+    return this.invokeExport(fn as EscapedWasmFunction, args);
+  }
 
-    return fn(...args);
+  private invokeExport(fn: EscapedWasmFunction, args: unknown[]): unknown {
+    this.assertActive();
+    this.fuelMeter.consume(10n);
+    this.#activeCalls += 1;
+
+    try {
+      const result = Reflect.apply(fn, undefined, args);
+      this.assertActive();
+      return this.guardReturnedFunctionReferences(result);
+    } finally {
+      this.#activeCalls -= 1;
+      if (this.#disposed && this.#activeCalls === 0) this.releaseResources();
+    }
+  }
+
+  private guardReturnedFunctionReferences(result: unknown): unknown {
+    if (Array.isArray(result)) {
+      return result.map((value) => this.guardReturnedFunctionReferences(value));
+    }
+
+    if (typeof result === "function") {
+      const wasmFunction = result as EscapedWasmFunction;
+      const cached = this.#escapedFunctionReferences.get(wasmFunction);
+      if (cached) return cached.wrapper;
+
+      const reference: EscapedFunctionReference = {
+        target: wasmFunction,
+        wrapper: (...args: unknown[]): unknown => {
+          this.assertActive();
+          const target = reference.target;
+          if (!target) throw new Error("WASM plugin instance has been disposed");
+          return this.invokeExport(target, args);
+        },
+      };
+      this.#escapedFunctionReferences.set(wasmFunction, reference);
+      return reference.wrapper;
+    }
+
+    if (result !== null && typeof result === "object") {
+      throw new Error("WASM object references cannot be returned to the host");
+    }
+
+    return result;
   }
 
   public writeBytes(offset: number, bytes: Uint8Array): void {
@@ -137,35 +199,36 @@ export class WasmPluginInstance {
     if (!instance) {
       throw new Error("WASM plugin instance has been disposed");
     }
-    const allocFn = instance.exports.alloc;
-    const deallocFn = instance.exports.dealloc;
+    const hasJsonMemoryApi =
+      typeof instance.exports.alloc === "function" &&
+      typeof instance.exports.dealloc === "function";
 
     const jsonString = JSON.stringify(input);
     const bytes = this.textEncoder.encode(jsonString);
 
-    if (typeof allocFn === "function" && typeof deallocFn === "function") {
-      const inputPtr = Number(allocFn(bytes.length));
-      this.writeBytes(inputPtr, bytes);
+    if (hasJsonMemoryApi) {
+      const inputPtr = Number(this.invoke("alloc", bytes.length));
 
       try {
+        this.writeBytes(inputPtr, bytes);
         const packedRes = this.invoke(functionName, inputPtr, bytes.length);
 
         if (typeof packedRes === "bigint") {
           const resPtr = Number(packedRes >> 32n);
           const resLen = Number(packedRes & 0xffffffffn);
           const resultStr = this.readString(resPtr, resLen);
-          deallocFn(resPtr, resLen);
+          this.invoke("dealloc", resPtr, resLen);
           return JSON.parse(resultStr) as TOut;
         } else if (typeof packedRes === "number") {
           // If 32-bit pointer, read 4 bytes length header prefix
           const lenBytes = this.readBytes(packedRes, 4);
           const resLen = new DataView(lenBytes.buffer, lenBytes.byteOffset, 4).getUint32(0, true);
           const resultStr = this.readString(packedRes + 4, resLen);
-          deallocFn(packedRes, resLen + 4);
+          this.invoke("dealloc", packedRes, resLen + 4);
           return JSON.parse(resultStr) as TOut;
         }
       } finally {
-        deallocFn(inputPtr, bytes.length);
+        if (!this.#disposed) this.invoke("dealloc", inputPtr, bytes.length);
       }
     }
 

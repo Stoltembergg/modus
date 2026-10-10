@@ -4,6 +4,7 @@
  */
 
 import { DatabaseSync } from "node:sqlite";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CapabilityRegistry } from "../../capability/capability-registry";
 import {
@@ -24,6 +25,8 @@ import {
   buildImportedMemoryModule,
   buildImportedMemoryStartTrapModule,
   buildMemoryModule,
+  createSection,
+  encodeUleb128,
   FastAstTokenizer,
   FastContextCompactor,
   FastVectorDistance,
@@ -34,7 +37,348 @@ import {
   WasmFuelMeter,
   WasmMemoryOutOfBoundsError,
   WasmMemoryPolicyError,
+  WasmPluginInstance,
 } from "./index";
+
+function buildHostFunctionReferenceModule(): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [
+    0x04,
+    0x60,
+    0x00,
+    0x01,
+    0x7f, // () -> i32, internal target
+    0x60,
+    0x01,
+    0x70,
+    0x00, // (funcref) -> (), host import
+    0x60,
+    0x00,
+    0x00, // () -> (), exported caller
+    0x60,
+    0x01,
+    0x7f,
+    0x01,
+    0x7f, // (i32) -> i32, ordinary host import
+  ]);
+  const importSection = createSection(0x02, [
+    0x02,
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    0x06,
+    0x72,
+    0x65,
+    0x74,
+    0x61,
+    0x69,
+    0x6e, // field "retain"
+    0x00,
+    0x01, // function import, type 1
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    0x09,
+    0x69,
+    0x6e,
+    0x63,
+    0x72,
+    0x65,
+    0x6d,
+    0x65,
+    0x6e,
+    0x74, // field "increment"
+    0x00,
+    0x03, // function import, type 3
+  ]);
+  const functionSection = createSection(0x03, [0x03, 0x00, 0x02, 0x00]);
+  const exportSection = createSection(0x07, [
+    0x02,
+    0x09,
+    0x63,
+    0x61,
+    0x6c,
+    0x6c,
+    0x5f,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // "call_host"
+    0x00,
+    0x03, // function index 3
+    0x0b,
+    0x63,
+    0x61,
+    0x6c,
+    0x6c,
+    0x5f,
+    0x6e,
+    0x75,
+    0x6d,
+    0x62,
+    0x65,
+    0x72, // "call_number"
+    0x00,
+    0x04, // function index 4
+  ]);
+  const elementSection = createSection(0x09, [
+    0x01, // one element segment
+    0x03, // declarative segment
+    0x00, // elemkind: funcref
+    0x01,
+    0x02, // declare function index 2 for ref.func
+  ]);
+  const getValueBody = [0x00, 0x41, 0x2a, 0x0b];
+  const callHostBody = [0x00, 0xd2, 0x02, 0x10, 0x00, 0x0b];
+  const callNumberBody = [0x00, 0x41, 0x29, 0x10, 0x01, 0x0b];
+  const codeSection = createSection(0x0a, [
+    0x03,
+    ...encodeUleb128(getValueBody.length),
+    ...getValueBody,
+    ...encodeUleb128(callHostBody.length),
+    ...callHostBody,
+    ...encodeUleb128(callNumberBody.length),
+    ...callNumberBody,
+  ]);
+
+  return new Uint8Array([
+    ...header,
+    ...typeSection,
+    ...importSection,
+    ...functionSection,
+    ...exportSection,
+    ...elementSection,
+    ...codeSection,
+  ]);
+}
+
+function buildImportedFunctionReferenceStorageModule(kind: "table" | "global"): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [0x01, 0x60, 0x00, 0x00]);
+  const importDescription =
+    kind === "table"
+      ? [0x01, 0x70, 0x00, 0x01] // funcref table, minimum one entry
+      : [0x03, 0x70, 0x01]; // mutable funcref global
+  const importName =
+    kind === "table"
+      ? [0x05, 0x74, 0x61, 0x62, 0x6c, 0x65] // "table"
+      : [0x06, 0x67, 0x6c, 0x6f, 0x62, 0x61, 0x6c]; // "global"
+  const importSection = createSection(0x02, [
+    0x01,
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    ...importName,
+    ...importDescription,
+  ]);
+  const functionSection = createSection(0x03, [0x01, 0x00]);
+  const exportSection = createSection(0x07, [
+    0x01,
+    0x09,
+    0x73,
+    0x74,
+    0x6f,
+    0x72,
+    0x65,
+    0x5f,
+    0x72,
+    0x65,
+    0x66, // "store_ref"
+    0x00,
+    0x00,
+  ]);
+  const elementSection = createSection(0x09, [0x01, 0x03, 0x00, 0x01, 0x00]);
+  const codeBody =
+    kind === "table"
+      ? [0x00, 0x41, 0x00, 0xd2, 0x00, 0x26, 0x00, 0x0b]
+      : [0x00, 0xd2, 0x00, 0x24, 0x00, 0x0b];
+  const codeSection = createSection(0x0a, [0x01, ...encodeUleb128(codeBody.length), ...codeBody]);
+
+  return new Uint8Array([
+    ...header,
+    ...typeSection,
+    ...importSection,
+    ...functionSection,
+    ...exportSection,
+    ...elementSection,
+    ...codeSection,
+  ]);
+}
+
+function buildImportedExternrefGlobalModule(): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [0x01, 0x60, 0x00, 0x01, 0x6f]);
+  const importSection = createSection(0x02, [
+    0x01,
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    0x06,
+    0x67,
+    0x6c,
+    0x6f,
+    0x62,
+    0x61,
+    0x6c, // field "global"
+    0x03,
+    0x6f,
+    0x01, // mutable externref global
+  ]);
+  const functionSection = createSection(0x03, [0x01, 0x00]);
+  const exportSection = createSection(0x07, [
+    0x01,
+    0x0b,
+    0x72,
+    0x65,
+    0x61,
+    0x64,
+    0x5f,
+    0x67,
+    0x6c,
+    0x6f,
+    0x62,
+    0x61,
+    0x6c, // export "read_global"
+    0x00,
+    0x00,
+  ]);
+  const codeBody = [0x00, 0x23, 0x00, 0x0b]; // global.get 0
+  const codeSection = createSection(0x0a, [0x01, ...encodeUleb128(codeBody.length), ...codeBody]);
+
+  return new Uint8Array([
+    ...header,
+    ...typeSection,
+    ...importSection,
+    ...functionSection,
+    ...exportSection,
+    ...codeSection,
+  ]);
+}
+
+function buildImportedExternrefFunctionModule(): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [0x01, 0x60, 0x00, 0x01, 0x6f]);
+  const importSection = createSection(0x02, [
+    0x01,
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    0x0a,
+    0x67,
+    0x65,
+    0x74,
+    0x5f,
+    0x6f,
+    0x62,
+    0x6a,
+    0x65,
+    0x63,
+    0x74, // field "get_object"
+    0x00,
+    0x00, // function import, type 0
+  ]);
+  const exportSection = createSection(0x07, [
+    0x01,
+    0x12,
+    0x72,
+    0x65,
+    0x74,
+    0x75,
+    0x72,
+    0x6e,
+    0x5f,
+    0x68,
+    0x6f,
+    0x73,
+    0x74,
+    0x5f,
+    0x6f,
+    0x62,
+    0x6a,
+    0x65,
+    0x63,
+    0x74, // export "return_host_object"
+    0x00,
+    0x00, // function index 0
+  ]);
+
+  return new Uint8Array([...header, ...typeSection, ...importSection, ...exportSection]);
+}
+
+function buildImportedFunctionReferenceTagModule(): Uint8Array {
+  const header = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+  const typeSection = createSection(0x01, [
+    0x03,
+    0x60,
+    0x00,
+    0x01,
+    0x7f, // () -> i32, referenced function
+    0x60,
+    0x01,
+    0x70,
+    0x00, // (funcref) -> (), exception payload
+    0x60,
+    0x00,
+    0x00, // () -> (), exported thrower
+  ]);
+  const importSection = createSection(0x02, [
+    0x01,
+    0x04,
+    0x68,
+    0x6f,
+    0x73,
+    0x74, // module "host"
+    0x03,
+    0x74,
+    0x61,
+    0x67, // field "tag"
+    0x04,
+    0x00,
+    0x01, // exception tag import, type 1
+  ]);
+  const functionSection = createSection(0x03, [0x02, 0x00, 0x02]);
+  const exportSection = createSection(0x07, [
+    0x01,
+    0x05,
+    0x74,
+    0x68,
+    0x72,
+    0x6f,
+    0x77, // "throw"
+    0x00,
+    0x01, // function index 1
+  ]);
+  const elementSection = createSection(0x09, [0x01, 0x03, 0x00, 0x01, 0x00]);
+  const targetBody = [0x00, 0x41, 0x2a, 0x0b];
+  const throwBody = [0x00, 0xd2, 0x00, 0x08, 0x00, 0x0b];
+  const codeSection = createSection(0x0a, [
+    0x02,
+    ...encodeUleb128(targetBody.length),
+    ...targetBody,
+    ...encodeUleb128(throwBody.length),
+    ...throwBody,
+  ]);
+
+  return new Uint8Array([
+    ...header,
+    ...typeSection,
+    ...importSection,
+    ...functionSection,
+    ...exportSection,
+    ...elementSection,
+    ...codeSection,
+  ]);
+}
 
 describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   let wasmHost: WasmCapabilityHost;
@@ -155,6 +499,22 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       }
     });
 
+    it("does not allow host imports to replace the built-in fuel meter", async () => {
+      const consumeFuel = vi.fn();
+      const { instance } = await wasmHost.createInstance(buildFuelLoopModule(), {
+        fuel: { initialFuel: 100n },
+        hostImports: { env: { consume_fuel: consumeFuel } },
+      });
+
+      try {
+        expect(instance.invoke("run_loop", 2)).toBe(0);
+        expect(consumeFuel).not.toHaveBeenCalled();
+        expect(instance.fuelMeter.getConsumedFuel()).toBe(12n);
+      } finally {
+        instance.dispose();
+      }
+    });
+
     it("captures fuel exhaustion gracefully in executeWasm without crashing host", async () => {
       const bytes = buildFuelLoopModule();
 
@@ -169,6 +529,211 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
   });
 
   describe("19.4 — Linear Memory Bounds & Isolation", () => {
+    it("invalidates returned function references when the wrapper is disposed", () => {
+      const returnedFunction = vi.fn(() => 42);
+      const rawInstance = {
+        exports: {
+          getFunctionReference: () => returnedFunction,
+          getMultiValueFunctionReference: () => [returnedFunction, 7],
+        },
+      } as unknown as WebAssembly.Instance;
+      const releaseReservation = vi.fn();
+      const fuelMeter = new WasmFuelMeter({ initialFuel: 1000n });
+      const instance = new WasmPluginInstance(
+        rawInstance,
+        fuelMeter,
+        undefined,
+        undefined,
+        undefined,
+        releaseReservation,
+      );
+
+      const functionReference = instance.invoke("getFunctionReference");
+      const multiValue = instance.invoke("getMultiValueFunctionReference");
+      if (typeof functionReference !== "function" || !Array.isArray(multiValue)) {
+        throw new Error("Expected synthetic function references from the fixture.");
+      }
+      const multiValueFunction = multiValue[0];
+      if (typeof multiValueFunction !== "function") {
+        throw new Error("Expected a function reference in the multi-value fixture.");
+      }
+
+      expect(fuelMeter.getConsumedFuel()).toBe(20n);
+      expect(functionReference()).toBe(42);
+      expect(multiValueFunction()).toBe(42);
+      expect(fuelMeter.getConsumedFuel()).toBe(40n);
+      expect(returnedFunction).toHaveBeenCalledTimes(2);
+
+      instance.dispose();
+
+      expect(releaseReservation).toHaveBeenCalledTimes(1);
+      expect(() => functionReference()).toThrow("WASM plugin instance has been disposed");
+      expect(() => multiValueFunction()).toThrow("WASM plugin instance has been disposed");
+      expect(fuelMeter.getConsumedFuel()).toBe(40n);
+      expect(returnedFunction).toHaveBeenCalledTimes(2);
+    });
+
+    it("defers disposal cleanup until a reentrant export has returned", () => {
+      const returnedFunction = vi.fn(() => 42);
+      const releaseReservation = vi.fn();
+      let instance: WasmPluginInstance;
+      let releasedDuringExport = false;
+      const rawInstance = {
+        exports: {
+          disposeDuringCall: () => {
+            instance.dispose();
+            releasedDuringExport = releaseReservation.mock.calls.length > 0;
+            return returnedFunction;
+          },
+        },
+      } as unknown as WebAssembly.Instance;
+      instance = new WasmPluginInstance(
+        rawInstance,
+        new WasmFuelMeter({ initialFuel: 100n }),
+        undefined,
+        undefined,
+        undefined,
+        releaseReservation,
+      );
+
+      expect(() => instance.invoke("disposeDuringCall")).toThrow(
+        "WASM plugin instance has been disposed",
+      );
+      expect(releasedDuringExport).toBe(false);
+      expect(releaseReservation).toHaveBeenCalledTimes(1);
+      expect(returnedFunction).not.toHaveBeenCalled();
+    });
+
+    it("charges fuel for alloc and dealloc calls in the JSON invocation path", () => {
+      const memory = new WebAssembly.Memory({ initial: 1, maximum: 1 });
+      const encodedResult = new TextEncoder().encode(JSON.stringify({ ok: true }));
+      const alloc = vi.fn(() => 128);
+      const dealloc = vi.fn();
+      const getJson = vi.fn(() => {
+        new DataView(memory.buffer).setUint32(256, encodedResult.length, true);
+        new Uint8Array(memory.buffer).set(encodedResult, 260);
+        return 256;
+      });
+      const instance = new WasmPluginInstance(
+        {
+          exports: { alloc, dealloc, getJson },
+        } as unknown as WebAssembly.Instance,
+        new WasmFuelMeter({ initialFuel: 100n }),
+        undefined,
+        memory,
+      );
+
+      expect(instance.invokeJson("getJson", { prompt: "safe" })).toEqual({ ok: true });
+      expect(alloc).toHaveBeenCalledWith(JSON.stringify({ prompt: "safe" }).length);
+      expect(dealloc).toHaveBeenCalledTimes(2);
+      expect(instance.fuelMeter.getConsumedFuel()).toBe(40n);
+      instance.dispose();
+    });
+
+    it("does not pass internal function references to custom host imports", async () => {
+      const retainFunction = vi.fn();
+      const increment = vi.fn((value: number) => value + 1);
+      const { instance } = await wasmHost.createInstance(buildHostFunctionReferenceModule(), {
+        pluginId: "@test/function-reference-boundary",
+        hostImports: { host: { retain: retainFunction, increment } },
+      });
+
+      try {
+        expect(instance.invoke("call_number")).toBe(42);
+        expect(increment).toHaveBeenCalledWith(41);
+        expect(() => instance.invoke("call_host")).toThrow(
+          "WASM function references cannot be passed to host imports",
+        );
+        expect(retainFunction).not.toHaveBeenCalled();
+      } finally {
+        instance.dispose();
+      }
+    });
+
+    it("rejects imported tables that could retain internal function references", async () => {
+      const table = runInNewContext(
+        'new WebAssembly.Table({ initial: 1, element: "anyfunc" })',
+      ) as WebAssembly.Table;
+      await expect(
+        wasmHost.createInstance(buildImportedFunctionReferenceStorageModule("table"), {
+          hostImports: { host: { table } },
+        }),
+      ).rejects.toThrow("Host imports cannot provide WebAssembly tables");
+      expect(table.get(0)).toBeNull();
+    });
+
+    it("rejects nullable function-reference globals from host imports", async () => {
+      const global = runInNewContext(
+        'new WebAssembly.Global({ value: "anyfunc", mutable: true })',
+      ) as WebAssembly.Global;
+      await expect(
+        wasmHost.createInstance(buildImportedFunctionReferenceStorageModule("global"), {
+          hostImports: { host: { global } },
+        }),
+      ).rejects.toThrow(
+        "Host imports cannot provide nullable or reference-valued WebAssembly globals",
+      );
+      expect(global.value).toBeNull();
+    });
+
+    it("rejects object-valued externref globals from host imports", async () => {
+      const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+      const global = new WebAssembly.Global({ value: "externref", mutable: true }, memory);
+      const bytes = buildImportedExternrefGlobalModule();
+      expect(WebAssembly.validate(bytes as unknown as BufferSource)).toBe(true);
+
+      await expect(
+        wasmHost.createInstance(bytes, { hostImports: { host: { global } } }),
+      ).rejects.toThrow(
+        "Host imports cannot provide nullable or reference-valued WebAssembly globals",
+      );
+      expect(memory.buffer.byteLength).toBe(65536);
+    });
+
+    it("does not let host imports return object references through WASM exports", async () => {
+      const memory = new WebAssembly.Memory({ initial: 1, maximum: 2 });
+      const { instance } = await wasmHost.createInstance(buildImportedExternrefFunctionModule(), {
+        hostImports: { host: { get_object: () => memory } },
+      });
+
+      try {
+        expect(() => instance.invoke("return_host_object")).toThrow(
+          "Host imports cannot return object references to WebAssembly",
+        );
+      } finally {
+        instance.dispose();
+      }
+    });
+
+    it("does not return object-valued externrefs from module exports to the host", () => {
+      const instance = new WasmPluginInstance(
+        {
+          exports: { return_object: () => ({ capability: "host object" }) },
+        } as unknown as WebAssembly.Instance,
+        new WasmFuelMeter({ initialFuel: 100n }),
+      );
+
+      try {
+        expect(() => instance.invoke("return_object")).toThrow(
+          "WASM object references cannot be returned to the host",
+        );
+      } finally {
+        instance.dispose();
+      }
+    });
+
+    it("rejects exception tags that could carry internal function references", async () => {
+      const tag = runInNewContext('new WebAssembly.Tag({ parameters: ["anyfunc"] })');
+      const bytes = buildImportedFunctionReferenceTagModule();
+      expect(WebAssembly.validate(bytes as unknown as BufferSource)).toBe(true);
+      await expect(
+        wasmHost.createInstance(bytes, {
+          // The current TypeScript WebAssembly.ImportValue union omits Tag.
+          hostImports: { host: { tag: tag as unknown as WebAssembly.ImportValue } },
+        }),
+      ).rejects.toThrow("Modules that import WebAssembly exception tags are not supported");
+    });
+
     it("reports the module-owned memory instead of an unused host allocation", async () => {
       const bytes = buildMemoryModule(1, 2);
       const { instance } = await wasmHost.createInstance(bytes, {
@@ -447,6 +1012,18 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       } finally {
         instantiate.mockRestore();
       }
+    });
+
+    it("rejects cross-realm memories supplied outside the host-managed import", async () => {
+      const memory = runInNewContext(
+        "new WebAssembly.Memory({ initial: 1, maximum: 2 })",
+      ) as WebAssembly.Memory;
+      await expect(
+        wasmHost.createInstance(buildImportedMemoryModule(1, 2), {
+          hostImports: { env: { memory } },
+        }),
+      ).rejects.toThrow("Host imports cannot provide unmanaged linear memory");
+      expect(memory.buffer.byteLength).toBe(65_536);
     });
 
     it("initializes WASI sandbox and provides preview1 imports", () => {

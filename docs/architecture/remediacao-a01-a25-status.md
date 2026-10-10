@@ -306,15 +306,63 @@ host-imported memory remains measurable after a failed start.
   metrics, and a retained reservation callback after disposal. These were
   fixed before the final pass, which found no blocking defect and confirmed
   direct test instances and the CLI benchmark release their reservations.
+- A later read-only review identified a returned callable WASM function
+  reference that could outlive `dispose()` after reservation release, and
+  function references that custom host imports could retain. Returned
+  references now receive the same 10-unit invocation charge as direct calls;
+  `dispose()` clears their targets before releasing the reservation. Custom
+  host-import wrappers reject callable arguments and object-valued callback
+  results. Host imports reject tables, exception tags, and nullable or
+  object/function-valued globals because those reference containers cannot
+  otherwise be safely revoked. Brand checks use built-in internal-slot
+  accessors so values from a different JavaScript realm are also recognized.
+  Custom `env` imports cannot replace the host's fuel-meter functions.
+- RED/GREEN: the returned-reference test first failed because the wrappers did
+  not charge fuel. Host-boundary tests first failed because callbacks received
+  function references or reference containers were accepted, including an
+  exception tag configured to carry a function reference. All pass after the
+  fixes, while a numeric host import remains usable. The returned-reference
+  fixture uses a synthetic `WebAssembly.Instance` shape; boundary fixtures are
+  internally generated and compile-only where they exercise exception tags.
+  Cross-realm cases use `node:vm`-created memory, table, global, and tag
+  objects. No external plugin code or adversarial probe was run.
+- A re-review found two additional lifecycle gaps: `dispose()` could release a
+  reservation while a reentrant export was still on the stack, and the JSON
+  adapter called `alloc`/`dealloc` exports directly without the shared fuel
+  accounting. Active export frames now defer resource cleanup until they unwind
+  and discard any result produced after reentrant disposal; JSON allocation and
+  cleanup exports now use the common metered invocation path. Both regression
+  tests failed before their fixes and pass afterward.
+- The final independent review found that an object-valued `externref` global
+  could expose a host `WebAssembly.Memory` through a guest return, and a custom
+  host import could return an object reference through an export. Generated
+  finite modules reproduced both paths. The host now rejects nullable and
+  object/function-valued imported globals and object-valued callback results;
+  the instance wrapper also rejects object-valued results recursively while
+  retaining scalar values and guarded function references. The regressions
+  failed before the guards and pass afterward.
+- Safe targeted Vitest follow-up: **21 passed, 22 skipped** across bounded
+  memory, snapshot, invocation-failure, disposal, callable-reference fuel and
+  host-import boundary cases, including reentrant disposal, metered JSON helpers
+  and object-valued externref rejection. It excluded start-trap, runaway
+  fuel-enforcement and adversarial tests; the finite fuel-accounting test passed.
+- Targeted Biome and `git diff --check` pass. Biome reports one unchanged
+  warning for the unused `TIn` parameter in `executeWasm`; the same line exists
+  in the HEAD before this follow-up. No rule was disabled.
+- Full `npm run check`: exit 0. Biome scanned 1,136 files with 363 warnings and
+  49 infos, and no errors; the desktop TypeScript typecheck completed without
+  diagnostics.
 - Remote CI on `ed00347` passed `typecheck · test · biome`, Verifier-First
   runtime regressions, compile-only sandbox targets, plugin containment on
   Linux/macOS/Windows, Windows x64 packaging, and macOS x64/arm64 packaging.
   Supabase pgTAP again failed test 22 with expected `2026-10-31` and actual
   `2026-10-30`.
 - Residual limits: only core 32-bit, non-shared memories with a maximum and an
-  observable export are accepted; current memory metrics do not report process
-  RSS. No external plugin, enforcement probe, or blocked hostile scenario was
-  run, so A05 is not a proof of isolation or whole-process memory containment.
+  observable export are accepted; object-valued `externref` imports/exports are
+  intentionally unsupported, and no non-test host-import callsite uses them.
+  Current memory metrics do not report process RSS. No external plugin,
+  enforcement probe, or blocked hostile scenario was run, so A05 is not a proof
+  of isolation or whole-process memory containment.
 
 ## Milestone 5 — A15 run cancellation and managed-process cleanup
 
@@ -470,7 +518,7 @@ boundary.
 | A02 | Partially mitigated | Facade no longer claims a timeout is containment; preemption/budgets remain absent. Do not run blocked loop probes. |
 | A03 | Partially mitigated | Production loader uses exact host-catalog identity and host-derived trust; runtime test rejects forged manifests before hooks. Same-process provenance is not an isolation boundary. |
 | A04 | Partially mitigated | Direct dispatch and hooks remain for catalogued built-ins; production loader blocks external manifests. A single OS-backed dispatcher and lifecycle boundary remain open. |
-| A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, and reports actual live memory; external plugin wiring and blocked enforcement proof remain unavailable. |
+| A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |

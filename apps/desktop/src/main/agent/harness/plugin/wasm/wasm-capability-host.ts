@@ -24,6 +24,29 @@ import {
 type WasmInstantiationFailureMetrics = Omit<WasmExecutionMetrics, "latencyMs">;
 const instantiationFailureMetrics = new WeakMap<object, WasmInstantiationFailureMetrics>();
 
+function hasWebAssemblyInternalSlot(value: unknown, prototype: object, property: string): boolean {
+  const getter = Object.getOwnPropertyDescriptor(prototype, property)?.get;
+  if (!getter) return false;
+  try {
+    Reflect.apply(getter, value, []);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function readWebAssemblyGlobalValue(
+  value: unknown,
+): { recognized: false } | { recognized: true; value: unknown } {
+  const getter = Object.getOwnPropertyDescriptor(WebAssembly.Global.prototype, "value")?.get;
+  if (!getter) return { recognized: false };
+  try {
+    return { recognized: true, value: Reflect.apply(getter, value, []) };
+  } catch {
+    return { recognized: false };
+  }
+}
+
 export class WasmCapabilityHost {
   private readonly moduleCache = new Map<string, WebAssembly.Module>();
   private readonly maxMemoryPagesPerInstance: number;
@@ -143,6 +166,12 @@ export class WasmCapabilityHost {
     if (inspection.wasiDetected) {
       throw new Error("WASI imports are not authorized by the host");
     }
+    if (inspection.importedModules.some(({ kind }) => kind === "tag")) {
+      throw new WasmMemoryPolicyError(
+        "Modules that import WebAssembly exception tags are not supported",
+        options.pluginId,
+      );
+    }
 
     const fuelMeter = new WasmFuelMeter(
       options.fuel ?? { initialFuel: 1_000_000n },
@@ -163,9 +192,35 @@ export class WasmCapabilityHost {
     // 2. User host imports
     if (options.hostImports) {
       for (const [mod, fns] of Object.entries(options.hostImports)) {
-        importObject[mod] = { ...(importObject[mod] ?? {}), ...fns };
+        const guardedImports: Record<string, WebAssembly.ImportValue> = {};
+        for (const [name, value] of Object.entries(fns)) {
+          if (typeof value !== "function") {
+            guardedImports[name] = value;
+            continue;
+          }
+
+          guardedImports[name] = (...args: unknown[]): unknown => {
+            if (args.some((argument) => typeof argument === "function")) {
+              throw new WasmMemoryPolicyError(
+                "WASM function references cannot be passed to host imports",
+                options.pluginId,
+              );
+            }
+            const result = Reflect.apply(value, undefined, args);
+            if (result !== null && typeof result === "object") {
+              throw new WasmMemoryPolicyError(
+                "Host imports cannot return object references to WebAssembly",
+                options.pluginId,
+              );
+            }
+            return result;
+          };
+        }
+        importObject[mod] = { ...(importObject[mod] ?? {}), ...guardedImports };
       }
     }
+    // Callers cannot replace the host's fuel-accounting imports.
+    importObject.env = { ...(importObject.env ?? {}), ...fuelImports };
 
     const memoryPolicyMax = options.memory?.maxPages ?? this.maxMemoryPagesPerInstance;
     if (
@@ -260,14 +315,33 @@ export class WasmCapabilityHost {
     }
 
     if (options.hostImports) {
-      const hasUnmanagedMemory = Object.values(options.hostImports).some((imports) =>
-        Object.values(imports).some((value) => value instanceof WebAssembly.Memory),
-      );
-      if (hasUnmanagedMemory) {
-        throw new WasmMemoryPolicyError(
-          "Host imports cannot provide unmanaged linear memory",
-          options.pluginId,
-        );
+      for (const imports of Object.values(options.hostImports)) {
+        for (const value of Object.values(imports)) {
+          if (hasWebAssemblyInternalSlot(value, WebAssembly.Memory.prototype, "buffer")) {
+            throw new WasmMemoryPolicyError(
+              "Host imports cannot provide unmanaged linear memory",
+              options.pluginId,
+            );
+          }
+          if (hasWebAssemblyInternalSlot(value, WebAssembly.Table.prototype, "length")) {
+            throw new WasmMemoryPolicyError(
+              "Host imports cannot provide WebAssembly tables",
+              options.pluginId,
+            );
+          }
+          const global = readWebAssemblyGlobalValue(value);
+          if (
+            global.recognized &&
+            (global.value === null ||
+              typeof global.value === "object" ||
+              typeof global.value === "function")
+          ) {
+            throw new WasmMemoryPolicyError(
+              "Host imports cannot provide nullable or reference-valued WebAssembly globals",
+              options.pluginId,
+            );
+          }
+        }
       }
     }
 
