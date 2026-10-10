@@ -1478,6 +1478,17 @@ used by the real service callsite.
 - Windows and macOS package workflows for `5d002c7` remain in progress at this
   update. PR #191 remains open and Draft.
 
+### Remote CI on documentation-only commit `8a47dbb`
+
+This commit changes only the remediation report. Workflow `38054681114` again
+passed Biome/typecheck and global Vitest (**4,608 passed, 8 skipped across 408
+files**, **149.31s**). Verifier-First, sandbox compile-only, PTY cancellation,
+and plugin containment on Ubuntu, macOS and Windows all passed. pgTAP test 22
+again failed with `2026-10-30` received and `2026-10-31` expected. The
+`FastVectorDistance` failure from the prior Ubuntu run did not recur in this
+run; no baseline comparison or instability classification is claimed. Windows
+and macOS packaging runs for this commit remain in progress at this update.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
