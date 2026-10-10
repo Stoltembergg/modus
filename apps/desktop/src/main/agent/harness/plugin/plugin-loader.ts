@@ -134,11 +134,8 @@ export class PluginLoader {
     }
     const trustedEntry = resolveTrustedPluginCatalogEntry(this.catalog, source);
     if (trustedEntry) return trustedEntry;
-    if ("provides" in source && source.provides.some((provision) => provision.implementation)) {
-      return { manifest: source as PluginManifest, trustLevel: authorization.trustLevel };
-    }
     throw new PluginValidationError(
-      `Plugin manifest "${manifest.id}@${manifest.version}" has no trusted executable source`,
+      `Plugin manifest "${manifest.id}@${manifest.version}" has no host-registered trusted source`,
     );
   }
 

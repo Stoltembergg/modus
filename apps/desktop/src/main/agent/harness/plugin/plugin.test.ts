@@ -12,7 +12,8 @@ import {
 import { registerCoreCapabilities } from "../capability/core-capabilities";
 import { resetFeatureFlagOverrides, setFeatureFlagOverrides } from "../feature-flags";
 import { bootstrapModusPlugins } from "./bootstrap";
-import { BUILT_IN_PLUGIN_ENTRIES } from "./plugin-catalog";
+import type { PluginManifestCatalog } from "./plugin-catalog";
+import { BUILT_IN_PLUGIN_ENTRIES, createPluginManifestDescriptor } from "./plugin-catalog";
 import { PluginLoader } from "./plugin-loader";
 import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
@@ -54,6 +55,43 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   });
 
   describe("10.1 — Plugin Manifest & Descriptor Validation", () => {
+    it("rejects executable manifests from catalogs without host-registered provenance", async () => {
+      const onLoad = vi.fn();
+      const manifest: PluginManifest = {
+        id: "@test/unregistered-trust-catalog",
+        name: "Unregistered trust catalog fixture",
+        version: "1.0.0",
+        author: "test",
+        description: "The catalog's self-declared trust must not authorize execution",
+        trustLevel: "core",
+        provides: [
+          {
+            capability: "test.unregistered-trust",
+            apiVersion: "1.0",
+            implementation: { execute: () => "must not execute" },
+          },
+        ],
+        requires: { modus: "*" },
+        permissions: { required: {} },
+        lifecycle: { onLoad },
+      };
+      const unregisteredCatalog: PluginManifestCatalog = {
+        authorize(input) {
+          return input.id === manifest.id && input.version === manifest.version
+            ? { manifest: createPluginManifestDescriptor(manifest), trustLevel: "core" }
+            : undefined;
+        },
+        resolve: () => undefined,
+      };
+      const untrustedLoader = new PluginLoader(registry, unregisteredCatalog);
+
+      await expect(untrustedLoader.load(manifest)).rejects.toThrow(
+        /host-registered trusted source/,
+      );
+      expect(onLoad).not.toHaveBeenCalled();
+      expect(registry.getActiveProvider("test.unregistered-trust")).toBeUndefined();
+    });
+
     it("does not expose executable references in loader results or host manifests", async () => {
       const manifest: PluginManifest = {
         id: "@test/no-executable-escape",
