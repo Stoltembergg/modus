@@ -320,6 +320,69 @@ describe("AgentEventHub", () => {
     ]);
   });
 
+  it("releases a completed session's transient history after its last subscriber leaves", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const unsubscribeSession = hub.subscribe("s", vi.fn());
+      const unsubscribeOther = hub.subscribe("other", vi.fn());
+      hub.publish(item(runStarted, "run-start"));
+      hub.publish(item(runCompleted, "run-completed"));
+      hub.publish(
+        item(
+          { type: "run.started", sessionId: "other", runId: "other-run", delivery: "normal" },
+          "other-run",
+        ),
+      );
+      vi.advanceTimersByTime(16);
+
+      expect(hub.getHistory("s").map((entry) => entry.event.type)).toEqual([
+        "run.started",
+        "run.completed",
+      ]);
+      unsubscribeSession();
+      expect(hub.getHistory("s")).toEqual([]);
+      expect(hub.getHistory("other").map((entry) => entry.id)).toEqual(["other-run"]);
+
+      unsubscribeOther();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains an unobserved active run, then releases it after its terminal event", () => {
+    vi.useFakeTimers();
+    try {
+      const hub = new AgentEventHub();
+      const unsubscribe = hub.subscribe("s", vi.fn());
+      hub.publish(item(runStarted, "run-start"));
+      unsubscribe();
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["run-start"]);
+
+      hub.publish(
+        item({
+          type: "run.blocked",
+          sessionId: "s",
+          runId: "r",
+          requestId: "permission",
+          reason: "permission required",
+        }),
+      );
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s")).toEqual([]);
+
+      hub.publish(item({ ...runStarted, runId: "next-run" }, "next-run-start"));
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["next-run-start"]);
+      hub.publish(item({ ...runCompleted, runId: "next-run" }, "run-completed"));
+      vi.advanceTimersByTime(16);
+      expect(hub.getHistory("s")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps live events concurrent with a persisted snapshot that ends in the same millisecond", () => {
     const hub = new AgentEventHub();
     const timestamp = "2026-10-01T12:00:00.000Z";

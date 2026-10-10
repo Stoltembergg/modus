@@ -108,6 +108,24 @@ export function affectsActivity(event: AgentEvent): boolean {
 type Subscriber = (item: AgentEventItem) => void;
 type HistorySubscriber = (items: AgentEventItem[]) => void;
 
+function latestRunIsTerminal(items: AgentEventItem[] | undefined): boolean | undefined {
+  if (!items) return undefined;
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    switch (items[index]?.event.type) {
+      case "run.started":
+        return false;
+      case "run.completed":
+      case "run.failed":
+      case "run.cancelled":
+      case "run.blocked":
+        return true;
+      default:
+        break;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Per-session fanout. Multiple panes may subscribe to the same session (the
  * same conversation opened twice stays in sync because both receive the
@@ -172,6 +190,7 @@ export class AgentEventHub {
     return () => {
       set.delete(subscriber);
       if (set.size === 0) this.historySubscribers.delete(sessionId);
+      this.releaseInactiveTerminalHistory(sessionId);
     };
   }
 
@@ -206,6 +225,29 @@ export class AgentEventHub {
       this.pendingHistoryBySession.delete(sessionId);
     }
     if (notify && this.historySubscribers.has(sessionId)) this.notifyHistory(sessionId);
+    if (notify) this.releaseInactiveTerminalHistory(sessionId);
+  }
+
+  private releaseInactiveTerminalHistory(sessionId: string): void {
+    if (
+      (this.subscribers.get(sessionId)?.size ?? 0) > 0 ||
+      (this.historySubscribers.get(sessionId)?.size ?? 0) > 0 ||
+      this.prepared.has(sessionId)
+    ) {
+      return;
+    }
+    const pending = this.pendingHistoryBySession.get(sessionId);
+    const history = this.historyBySession.get(sessionId);
+    const latestRunState = latestRunIsTerminal(pending) ?? latestRunIsTerminal(history);
+    if (latestRunState !== true) return;
+
+    const timer = this.historyFlushTimers.get(sessionId);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.historyFlushTimers.delete(sessionId);
+    }
+    this.pendingHistoryBySession.delete(sessionId);
+    this.historyBySession.delete(sessionId);
   }
 
   prepare(sessionId: string): void {
@@ -216,6 +258,7 @@ export class AgentEventHub {
 
   cancelPrepare(sessionId: string): void {
     this.prepared.delete(sessionId);
+    this.releaseInactiveTerminalHistory(sessionId);
   }
 
   subscribe(sessionId: string, subscriber: Subscriber): () => void {
@@ -232,6 +275,7 @@ export class AgentEventHub {
       if (set.size === 0) {
         this.subscribers.delete(sessionId);
       }
+      this.releaseInactiveTerminalHistory(sessionId);
     };
   }
 
