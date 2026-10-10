@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getAgentSession: vi.fn(),
   getAgentRuntime: vi.fn(),
   getRunWorkspaceRevision: vi.fn(),
+  listAgentEventPage: vi.fn(),
   isWorkspaceWatched: vi.fn(),
   readPlanById: vi.fn(),
   updatePlanContentById: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock("../agent/agent-store", () => ({
   getAgentSession: mocks.getAgentSession,
 }));
 vi.mock("../agent/agent-event-store", () => ({
+  listAgentEventPage: mocks.listAgentEventPage,
   listAgentEvents: vi.fn(() => []),
   recordAgentEvent: mocks.recordAgentEvent,
   getRunWorkspaceRevision: mocks.getRunWorkspaceRevision,
@@ -159,6 +161,80 @@ describe("permission decision IPC", () => {
       ),
     ).toThrow("Permission request is no longer active.");
     expect(mocks.recordPermissionDecision).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent event page IPC", () => {
+  const sender = { mainFrame: { url: "file:///app/index.html" } };
+  const trustedEvent = { sender, senderFrame: sender.mainFrame };
+
+  beforeEach(() => {
+    mocks.handlers.clear();
+    mocks.listAgentEventPage.mockReset();
+    registerTrustedSender(sender, "file:///app/index.html");
+    registerAppIpc();
+  });
+
+  it("passes trusted bounded page requests to the stable-cursor store", () => {
+    const page = { events: [], snapshotCursor: 42, hasMore: true, nextCursor: 31 };
+    mocks.listAgentEventPage.mockReturnValue(page);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "backward", beforeCursor: 31, snapshotCursor: 42, limit: 128 },
+        } as never,
+      ),
+    ).toEqual(page);
+    expect(mocks.listAgentEventPage).toHaveBeenCalledWith("session-a", {
+      direction: "backward",
+      beforeCursor: 31,
+      snapshotCursor: 42,
+      limit: 128,
+    });
+  });
+
+  it("routes run-scoped tool history requests through the same bounded store", () => {
+    const page = { events: [], snapshotCursor: 42, hasMore: false };
+    mocks.listAgentEventPage.mockReturnValue(page);
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "forward", runId: "run-a", afterCursor: 0, limit: 64 },
+        } as never,
+      ),
+    ).toEqual(page);
+    expect(mocks.listAgentEventPage).toHaveBeenCalledWith("session-a", {
+      direction: "forward",
+      runId: "run-a",
+      afterCursor: 0,
+      limit: 64,
+    });
+  });
+
+  it("rejects malformed page cursors before querying the store", () => {
+    const handler = mocks.handlers.get(IPC_CHANNELS.agentListEventPage);
+    if (!handler) throw new Error("Agent event page IPC handler was not registered.");
+
+    expect(() =>
+      handler(
+        trustedEvent as never,
+        {
+          sessionId: "session-a",
+          options: { direction: "backward", beforeCursor: -1 },
+        } as never,
+      ),
+    ).toThrow("Invalid IPC payload");
+    expect(mocks.listAgentEventPage).not.toHaveBeenCalled();
   });
 });
 

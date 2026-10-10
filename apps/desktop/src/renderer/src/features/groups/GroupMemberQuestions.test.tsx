@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEventItem } from "../../../../shared/agent-events";
+import type { AgentEventItem, AgentEventPage } from "../../../../shared/agent-events";
 import type { AgentEvent } from "../../../../shared/contracts";
 import { useGroupMemberQuestions } from "./GroupMemberQuestions";
 
@@ -21,12 +21,22 @@ afterEach(cleanup);
 function setup() {
   let listener!: (event: AgentEvent) => void;
   const seeds = new Map<string, (events: AgentEventItem[]) => void>();
+  const toPage = (items: AgentEventItem[]): AgentEventPage => ({
+    events: items as Array<AgentEventItem & { createdAt: string }>,
+    summaryEvents: items as Array<AgentEventItem & { createdAt: string }>,
+    activityEvents: items as Array<AgentEventItem & { createdAt: string }>,
+    snapshotCursor: items.length,
+    hasMore: false,
+  });
   Object.assign(window, {
     modus: {
       agent: {
-        listEvents: vi.fn(
+        listEvents: vi.fn(async () => []),
+        listEventPage: vi.fn(
           (sessionId: string) =>
-            new Promise<AgentEventItem[]>((resolve) => seeds.set(sessionId, resolve)),
+            new Promise<AgentEventPage>((resolve) =>
+              seeds.set(sessionId, (items) => resolve(toPage(items))),
+            ),
         ),
         onEvent: vi.fn((fn: (event: AgentEvent) => void) => {
           listener = fn;
@@ -41,6 +51,10 @@ describe("question hydration", () => {
   it("does not restore a question resolved while its seed was pending", async () => {
     const fake = setup();
     const hook = renderHook(() => useGroupMemberQuestions(["s"]));
+    expect(window.modus.agent.listEventPage).toHaveBeenCalledWith(
+      "s",
+      expect.objectContaining({ includeSummary: true }),
+    );
     act(() => fake.emit(resolved("s", "q")));
     await act(async () => {
       fake.seeds.get("s")?.([{ id: "q-request", event: requested("s", "q") }]);
@@ -59,7 +73,7 @@ describe("question hydration", () => {
     hook.rerender({ ids: ["s", "other"] });
     act(() => fake.emit(resolved("s", "q")));
     await waitFor(() => expect(hook.result.current.has("s")).toBe(false));
-    expect(window.modus.agent.listEvents).toHaveBeenCalledTimes(2);
+    expect(window.modus.agent.listEventPage).toHaveBeenCalledTimes(2);
     expect(window.modus.agent.onEvent).toHaveBeenCalledTimes(1);
   });
   it("ignores seeds and events for sessions that left the waiting set", async () => {

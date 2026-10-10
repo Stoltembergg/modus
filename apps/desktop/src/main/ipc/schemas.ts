@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_AGENT_EVENT_PAGE_SIZE } from "../../shared/agent-events";
 import {
   AGENT_AVATAR_COLORS,
   AGENT_AVATAR_FACES,
@@ -116,6 +117,36 @@ export const agentPromptSchema = z.object({
 });
 
 export const sessionIdSchema = nonEmptyString;
+const safeEventCursorSchema = z.number().int().safe().nonnegative();
+const eventPageLimitSchema = z.number().int().min(1).max(MAX_AGENT_EVENT_PAGE_SIZE).optional();
+export const agentEventPageRequestSchema = z
+  .object({
+    sessionId: nonEmptyString,
+    options: z.union([
+      z
+        .object({
+          direction: z.literal("backward"),
+          beforeCursor: safeEventCursorSchema.optional(),
+          snapshotCursor: safeEventCursorSchema.optional(),
+          limit: eventPageLimitSchema,
+          includeSummary: z.boolean().optional(),
+          includeActivity: z.boolean().optional(),
+        })
+        .strict(),
+      z
+        .object({
+          direction: z.literal("forward").optional(),
+          afterCursor: safeEventCursorSchema.optional(),
+          snapshotCursor: safeEventCursorSchema.optional(),
+          limit: eventPageLimitSchema,
+          runId: nonEmptyString.max(128).optional(),
+          includeSummary: z.boolean().optional(),
+          includeActivity: z.boolean().optional(),
+        })
+        .strict(),
+    ]),
+  })
+  .strict();
 export const agentRunWorkspaceRevisionSchema = z
   .object({ sessionId: sourceSnapshotIdSchema, runId: sourceSnapshotIdSchema })
   .strict();

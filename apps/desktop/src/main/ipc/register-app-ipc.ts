@@ -15,6 +15,7 @@ import {
 import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contracts";
 import {
   getRunWorkspaceRevision,
+  listAgentEventPage,
   listAgentEvents,
   recordAgentEvent,
 } from "../agent/agent-event-store";
@@ -263,6 +264,7 @@ import { registerProviderLimitsIpcHandlers } from "./provider-limits-ipc";
 import {
   agentCreateSchema,
   agentCycleModelSchema,
+  agentEventPageRequestSchema,
   agentListSchema,
   agentPromptSchema,
   agentRollbackSchema,
@@ -531,6 +533,16 @@ export function registerAppIpc({
   ipcMain.handle(IPC_CHANNELS.agentListEvents, (event, sessionId: string) => {
     assertTrustedSender(event);
     return listAgentEvents(parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentListEvents));
+  });
+
+  ipcMain.handle(IPC_CHANNELS.agentListEventPage, (event, input) => {
+    assertTrustedSender(event);
+    const { sessionId, options } = parseIpcInput(
+      agentEventPageRequestSchema,
+      input,
+      IPC_CHANNELS.agentListEventPage,
+    );
+    return listAgentEventPage(sessionId, options);
   });
 
   ipcMain.handle(IPC_CHANNELS.agentListRuns, (event, sessionId: string) => {

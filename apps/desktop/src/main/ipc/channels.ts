@@ -63,6 +63,7 @@ export const IPC_CHANNELS = {
   agentList: "agent:list",
   agentListArchived: "agent:list-archived",
   agentListEvents: "agent:list-events",
+  agentListEventPage: "agent:list-event-page",
   agentListRuns: "agent:list-runs",
   agentRunWorkspaceRevision: "agent:run-workspace-revision",
   agentEnsure: "agent:ensure",

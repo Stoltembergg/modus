@@ -863,20 +863,33 @@ Permission metadata reconciliation requires exact host plugin ID
 and version identity; unsupported persisted versions remain quarantined under
 the existing startup rules and are not rewritten from a different manifest.
 
-## Milestone 10 — A22 durable event cursor and bounded page reads
+## Milestone 10 — A22 durable event cursor, bounded reads and renderer paging
 
-**Status: partially mitigated; independent review found no migration blocker. The renderer/IPC still materialize a session's complete folded history.**
+**Status: partially mitigated; page APIs now drive timeline/history/source reads. Individual payloads and some compatibility/runtime consumers remain unbounded.**
 
 The `agent_events` table now has a monotonic `INTEGER PRIMARY KEY AUTOINCREMENT`
 cursor while retaining the existing public event identity. Existing databases
 are migrated transactionally by copying rowids and all payload fields, then
 recreating the session foreign key. A session index supports keyset reads.
 `listAgentEventPage` validates cursor inputs, captures a fixed upper cursor on
-the first read, and returns at most 256 parsed events in cursor order. This
-keeps each SQLite result allocation and JSON parse batch bounded and prevents
+the first read, and returns at most 256 base rows in cursor order. This keeps
+each base SQLite result allocation and JSON parse batch bounded and prevents
 timestamps that move backward from reordering replay. The complete-list
 compatibility API folds page results through one accumulator, so deltas that
-cross page boundaries still fold correctly.
+cross page boundaries still fold correctly. Pages expand matching message,
+thinking, and tool-result streams when their lifecycle or completion event is
+visible, so a page boundary does not turn a complete answer/output into a
+suffix or hide it entirely. Expansion preserves the raw page cursor, but can
+add companion events beyond the base row cap.
+
+The main activity timeline and transcript now consume cursor pages. The
+activity view loads older pages on demand, fences late page completions across
+session changes, and preserves a fixed snapshot. The transcript starts from
+the newest page and can load earlier history without replacing the selected
+session's state. Prompt backfill, pending questions, group summaries and source
+references use scoped page queries. Main-chat sources load the full run through
+run-scoped pages; partial page-local references are suppressed while lookup is
+pending or unavailable, and the UI reports that state.
 
 ### Evidence
 
@@ -887,7 +900,8 @@ cross page boundaries still fold correctly.
   result-column name behavior for `rowid`; aliasing those selected columns
   restored the rowid consumers. The A17 runtime test that reads a `run.started`
   row also now guards the corrected alias.
-- GREEN: `agent-event-store.test.ts` plus `agent-events.test.ts`: **55/55**.
+- Earlier store GREEN: `agent-event-store.test.ts` plus `agent-events.test.ts`:
+  **55/55**.
   Coverage includes inverted timestamps, fixed-snapshot paging, inserts after
   page one, a session-index query plan, deltas folded across a page boundary,
   maximum page size, sanitized malformed-payload errors, row/payload/timestamp
@@ -902,17 +916,43 @@ cross page boundaries still fold correctly.
   blocker. It confirmed bounded SQL batches and preservation of A17 fields,
   while identifying the remaining unbounded aggregate response below. Review
   did not execute tests.
+- Additional RED/GREEN regressions reproduced and fixed a newest-page read
+  returning only the last message delta, completion-only pages omitting a full
+  assistant/tool result, and a thinking completion marker omitted at a page
+  boundary. Source-hook tests now distinguish pending, failed, and successfully
+  empty run lookups. The timeline suppresses page-local partial source sets
+  while a full run-scoped lookup is pending or failed.
+- Run association is restored with the assistant message only when the prior
+  run boundary is unambiguous in the same session and before the fixed page
+  snapshot. A late response after a terminal marker is not attributed to the
+  old run. Run-scoped source paging fails closed for missing boundaries,
+  overlapping runs, non-advancing cursors, or a changed snapshot; the renderer
+  reports those lookups as unavailable instead of successful empty results.
+- Latest local validation: **264/264 tests in 12 changed-area Vitest files**;
+  desktop TypeScript typecheck passed; Biome passed for all 26 changed code
+  files; `git diff --check` passed. This revision has not yet received PR CI.
+- Independent review confirmed the main-chat source lookup is run-scoped and
+  requested explicit pending/failure state and inclusion of `thinking.completed`
+  in stream expansion. A later review found and drove two run-association fixes;
+  final review found no blocker in the session/snapshot/terminal/overlap guards.
+  The review did not run tests.
 
 ### Limits
 
-`listAgentEvents` still drains every page into one array and the existing IPC
-handler returns that entire result to the renderer. Total work, folded-history
-memory, and IPC response size therefore still grow with unique events/parts.
-The page API is not yet consumed by the UI. Cursor order also changes the
-observable order from `created_at, rowid` to insertion cursor order; this is
-the intended durable replay order but needs explicit presentation compatibility
-coverage. A22 is not marked complete because productive consumers still
-materialize the complete transcript.
+`listAgentEvents` still drains every page into one array for legacy consumers,
+and the Pi SDK runtime plus subagent context helpers still reconstruct session
+history through it. Run-source loading accumulates all selected-run events.
+Base row count is capped, but companion stream expansion and individual
+serialized payloads have no byte cap, so memory and IPC size can still be large
+for unusually long results. The renderer event hub also retains per-session
+history without an explicit release/eviction bound. These remain follow-up
+gaps; A22 is partial. Cursor order is insertion order rather than
+`created_at, rowid`; inverted timestamps and page continuity are covered, but
+broader product ordering expectations remain a compatibility risk. Run IDs
+are inferred from serialized event order because assistant lifecycle events do
+not persist a run ID; malformed or missing terminal events intentionally make
+source history unavailable, and simultaneous runs within one session are
+rejected rather than mixed.
 
 ### Integrated remote validation on `effa4ee`
 
@@ -961,7 +1001,7 @@ materialize the complete transcript.
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated; integrated checks passed | AUTOINCREMENT event cursor, session index, fixed-snapshot pages capped at 256, cross-page folds, and migration checks are implemented. `listAgentEvents` and IPC still materialize complete session history; renderer pagination and ordering compatibility coverage remain. Workflow `38034484183` passed the full filtered Vitest/typecheck/Biome jobs; Windows/macOS packages passed. |
+| A22 | Partially mitigated; renderer paging implemented and independently reviewed | Durable AUTOINCREMENT cursor, session index, fixed-snapshot keyset pages, page-driven activity/transcript, run-scoped sources, and companion-stream completion/run association are wired. 264/264 related tests, TypeScript, and Biome passed locally; new PR CI is pending. Review found no blocker in run/session/snapshot isolation. Legacy `listAgentEvents` callers, full-run source accumulation, hub retention, and unbounded bytes per companion stream/result remain. |
 | A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |

@@ -1,8 +1,10 @@
 import {
   type AgentEventItem,
   appendAgentEvents,
+  appendUniqueAgentEvents,
   foldAgentEvents,
   optimisticUserPromptEvents,
+  prependAgentEventPage,
 } from "../../../../shared/agent-events";
 import type { AgentEvent } from "../../../../shared/contracts";
 
@@ -19,7 +21,14 @@ import type { AgentEvent } from "../../../../shared/contracts";
  * renderer and the main-process event store fold identically.
  */
 
-export { type AgentEventItem, appendAgentEvents, foldAgentEvents, optimisticUserPromptEvents };
+export {
+  type AgentEventItem,
+  appendAgentEvents,
+  appendUniqueAgentEvents,
+  foldAgentEvents,
+  optimisticUserPromptEvents,
+  prependAgentEventPage,
+};
 
 export type SessionActivity = {
   /** A run is currently executing. */
@@ -119,9 +128,9 @@ export class AgentEventHub {
   }
 
   /** Seed persisted events, then retain any newer events streamed during the fetch. */
-  seedHistory(sessionId: string, items: AgentEventItem[]): void {
+  seedHistory(sessionId: string, items: AgentEventItem[], snapshotCursor?: number): void {
     this.flushHistory(sessionId, false);
-    if (items.length === 0) {
+    if (items.length === 0 && snapshotCursor === undefined) {
       this.notifyHistory(sessionId);
       return;
     }
@@ -142,6 +151,9 @@ export class AgentEventHub {
     const seededIds = new Set(mergedSeed.map((item) => item.id));
     const newerLiveItems = current.filter((item) => {
       if (seededIds.has(item.id)) return false;
+      const cursor = (item.event as AgentEvent & { eventCursor?: number }).eventCursor;
+      if (snapshotCursor !== undefined && cursor !== undefined) return cursor > snapshotCursor;
+      if (item.optimistic) return true;
       const timestamp = Date.parse(item.updatedAt ?? item.createdAt ?? "");
       return !Number.isFinite(timestamp) || timestamp >= seededThrough;
     });

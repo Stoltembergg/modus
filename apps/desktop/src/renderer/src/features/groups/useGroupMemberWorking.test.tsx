@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEventItem } from "../../../../shared/agent-events";
+import type { AgentEventItem, AgentEventPage } from "../../../../shared/agent-events";
 import type { AgentEvent, GroupMemberStates } from "../../../../shared/contracts";
 import { useGroupMemberWorking } from "./useGroupMemberWorking";
 import type { GroupMemberStatesById } from "./useWorkingGroups";
@@ -40,14 +40,27 @@ async function seed(sessionId: string, items: AgentEventItem[]) {
     await Promise.resolve();
   });
 }
+function page(items: AgentEventItem[]): AgentEventPage {
+  return {
+    events: items as Array<AgentEventItem & { createdAt: string }>,
+    summaryEvents: items as Array<AgentEventItem & { createdAt: string }>,
+    activityEvents: items as Array<AgentEventItem & { createdAt: string }>,
+    snapshotCursor: Math.max(0, ...items.map((entry) => entry.event.eventCursor ?? 0)),
+    hasMore: false,
+  };
+}
 beforeEach(() => {
   listeners = new Set();
   seeds = new Map();
   Object.assign(window, {
     modus: {
       agent: {
-        listEvents: vi.fn(
-          (id: string) => new Promise<AgentEventItem[]>((resolve) => seeds.set(id, resolve)),
+        listEvents: vi.fn(async () => []),
+        listEventPage: vi.fn(
+          (id: string) =>
+            new Promise<AgentEventPage>((resolve) =>
+              seeds.set(id, (items) => resolve(page(items))),
+            ),
         ),
         onEvent: vi.fn((listener: (event: AgentEvent) => void) => {
           listeners.add(listener);
@@ -60,6 +73,15 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("useGroupMemberWorking hydration", () => {
+  it("requests only the bounded activity suffix for running members", () => {
+    renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
+
+    expect(window.modus.agent.listEventPage).toHaveBeenCalledWith(
+      "s",
+      expect.objectContaining({ includeActivity: true, includeSummary: false }),
+    );
+  });
+
   it("merges the seed prefix with a live suffix even when the suffix is longer", async () => {
     const hook = renderHook(() => useGroupMemberWorking("g-1", states(["s"])));
     act(() => emit(delta("defghi"), 3));
@@ -100,7 +122,7 @@ describe("useGroupMemberWorking hydration", () => {
         "prefix suffix",
       ),
     );
-    expect(window.modus.agent.listEvents).toHaveBeenCalledTimes(2);
+    expect(window.modus.agent.listEventPage).toHaveBeenCalledTimes(2);
     expect(window.modus.agent.onEvent).toHaveBeenCalledTimes(1);
   });
   it("batches a burst of deltas into one frame publication", async () => {
@@ -136,7 +158,7 @@ describe("useGroupMemberWorking hydration", () => {
       emit(start("r"), 1);
       for (let i = 0; i < 600; i++) emit(delta("x"), i + 2);
     });
-    expect(window.modus.agent.listEvents).toHaveBeenCalledTimes(2);
+    expect(window.modus.agent.listEventPage).toHaveBeenCalledTimes(2);
     await seed("s", [item(start("r"), 1), item(delta("x".repeat(512)), 513)]);
     await act(async () => {
       firstSeed?.([item(start("r"), 1)]);

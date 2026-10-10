@@ -5,9 +5,11 @@ import {
   type AgentEventItem,
   affectsActivity,
   appendAgentEvents,
+  appendUniqueAgentEvents,
   foldAgentEvents,
   IDLE_ACTIVITY,
   optimisticUserPromptEvents,
+  prependAgentEventPage,
   reduceActivity,
 } from "./agentEventHub";
 
@@ -249,6 +251,57 @@ describe("appendAgentEvents", () => {
 });
 
 describe("AgentEventHub", () => {
+  it("replaces persisted history through its snapshot cursor and retains only newer live events", () => {
+    const hub = new AgentEventHub();
+    const old = {
+      ...item(runStarted, "old"),
+      event: { ...runStarted, eventCursor: 20 } as AgentEvent,
+      createdAt: "2030-01-01T00:00:00.000Z",
+    };
+    const newest = {
+      ...item(runCompleted, "newest"),
+      event: { ...runCompleted, eventCursor: 100 } as AgentEvent,
+      createdAt: "2020-01-01T00:00:00.000Z",
+    };
+    const live = {
+      ...item(runStarted, "live"),
+      event: { ...runStarted, eventCursor: 101 } as AgentEvent,
+      createdAt: "2020-01-01T00:00:01.000Z",
+    };
+    hub.seedHistory("s", [old]);
+    hub.publish(live);
+    hub.seedHistory("s", [newest], 100);
+
+    expect(hub.getHistory("s").map((entry) => entry.id)).toEqual(["newest", "live"]);
+  });
+
+  it("folds older-page deltas before the current page and de-duplicates live echoes", () => {
+    const older = item(
+      {
+        type: "message.delta",
+        sessionId: "s",
+        messageId: "m",
+        delta: "older ",
+        eventCursor: 10,
+      } as AgentEvent,
+      "chunk-older",
+    );
+    const newer = item(
+      {
+        type: "message.delta",
+        sessionId: "s",
+        messageId: "m",
+        delta: "newer",
+        eventCursor: 11,
+      } as AgentEvent,
+      "chunk-newer",
+    );
+    const merged = prependAgentEventPage([newer], [older]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.event).toMatchObject({ type: "message.delta", delta: "older newer" });
+    expect(appendUniqueAgentEvents(merged, [newer])).toEqual(merged);
+  });
+
   it("seeds full session history and notifies Activity subscribers about live changes", async () => {
     const hub = new AgentEventHub();
     const subscriber = vi.fn<(items: AgentEventItem[]) => void>();

@@ -90,6 +90,13 @@ beforeEach(() => {
     modus: {
       agent: {
         listEvents: vi.fn(async () => []),
+        listEventPage: vi.fn(async () => ({
+          events: [],
+          summaryEvents: [],
+          activityEvents: [],
+          snapshotCursor: 0,
+          hasMore: false,
+        })),
         onEvent: vi.fn((listener: (event: AgentEvent) => void) => {
           agentListeners.push(listener);
           return () => {

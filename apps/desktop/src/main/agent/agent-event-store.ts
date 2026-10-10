@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { createAgentEventAccumulator, foldAgentEvents } from "../../shared/agent-events";
+import {
+  type AgentEventPageOptions,
+  type AgentEventPage as AgentEventPageResult,
+  createAgentEventAccumulator,
+  foldAgentEvents,
+  MAX_AGENT_EVENT_PAGE_SIZE,
+  type AgentEventItem as SharedAgentEventItem,
+} from "../../shared/agent-events";
 import type {
   AgentEvent,
   CodeGraphDiscoveryRef,
@@ -25,6 +32,8 @@ import {
 } from "./harness/task-state";
 import { getWorkspaceSourceRevision } from "./workspace-source-revision";
 
+export { MAX_AGENT_EVENT_PAGE_SIZE };
+
 type AgentEventRow = {
   event_cursor: number;
   id: string;
@@ -39,9 +48,10 @@ type AgentRunPromptRow = {
   started_at: string;
 };
 
-type AgentEventItem = { id: string; event: AgentEvent; createdAt: string };
-export const MAX_AGENT_EVENT_PAGE_SIZE = 256;
+type AgentEventItem = SharedAgentEventItem & { createdAt: string };
 const DEFAULT_AGENT_EVENT_PAGE_SIZE = 128;
+const MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND = 512;
+const MAX_AGENT_GROUP_ACTIVITY_EVENTS = 512;
 const MAX_RUN_TOOL_EVENTS = 500;
 // Main-owned fields stored beside durable events; listAgentEvents strips them before IPC.
 const QA_CHECK_SNAPSHOT_FIELD = "__qaCheckSnapshot";
@@ -1606,21 +1616,26 @@ export function listAgentEvents(
   return foldAgentEvents(backfillUserPromptEvents(sessionId, events, runs));
 }
 
-export type AgentEventPage = {
-  events: AgentEventItem[];
-  snapshotCursor: number;
-  nextCursor?: number;
-  hasMore: boolean;
-};
-
 /** Read one bounded keyset page in the same order as the persisted event cursor. */
 export function listAgentEventPage(
   sessionId: string,
-  options: { afterCursor?: number; snapshotCursor?: number; limit?: number } = {},
-): AgentEventPage {
-  const afterCursor = options.afterCursor ?? 0;
+  options: AgentEventPageOptions = {},
+): AgentEventPageResult {
+  const direction = options.direction ?? "forward";
+  const runId = "runId" in options ? options.runId : undefined;
+  const afterCursor = options.direction === "backward" ? undefined : (options.afterCursor ?? 0);
+  const beforeCursor = options.direction === "backward" ? options.beforeCursor : undefined;
   const requestedLimit = options.limit ?? DEFAULT_AGENT_EVENT_PAGE_SIZE;
-  if (!Number.isSafeInteger(afterCursor) || afterCursor < 0) {
+  if (runId !== undefined && (!runId.trim() || runId.length > 128)) {
+    throw new RangeError("Agent run ID must be a non-empty string of at most 128 characters.");
+  }
+  if (runId !== undefined && direction === "backward") {
+    throw new RangeError("Run-scoped agent event pages only support forward traversal.");
+  }
+  if (afterCursor !== undefined && (!Number.isSafeInteger(afterCursor) || afterCursor < 0)) {
+    throw new RangeError("Agent event cursor must be a non-negative safe integer.");
+  }
+  if (beforeCursor !== undefined && (!Number.isSafeInteger(beforeCursor) || beforeCursor < 0)) {
     throw new RangeError("Agent event cursor must be a non-negative safe integer.");
   }
   if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
@@ -1639,25 +1654,567 @@ export function listAgentEventPage(
     throw new RangeError("Agent event snapshot cursor must be a non-negative safe integer.");
   }
 
-  const rows = db
-    .prepare(
-      `select id, payload_json, created_at, rowid as event_cursor
-       from agent_events
-       where session_id = ? and rowid > ? and rowid <= ?
-       order by rowid asc
-       limit ?`,
-    )
-    .all(sessionId, afterCursor, snapshotCursor, limit + 1) as AgentEventRow[];
+  const rows = runId
+    ? listAgentRunToolEventRows(sessionId, runId, afterCursor ?? 0, snapshotCursor, limit + 1)
+    : direction === "forward"
+      ? (db
+          .prepare(
+            `select id, payload_json, created_at, rowid as event_cursor
+             from agent_events
+             where session_id = ? and rowid > ? and rowid <= ?
+             order by rowid asc
+             limit ?`,
+          )
+          .all(sessionId, afterCursor ?? 0, snapshotCursor, limit + 1) as AgentEventRow[])
+      : beforeCursor === undefined
+        ? (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid <= ?
+               order by rowid desc
+               limit ?`,
+            )
+            .all(sessionId, snapshotCursor, limit + 1) as AgentEventRow[])
+        : (db
+            .prepare(
+              `select id, payload_json, created_at, rowid as event_cursor
+               from agent_events
+               where session_id = ? and rowid < ? and rowid <= ?
+               order by rowid desc
+               limit ?`,
+            )
+            .all(sessionId, beforeCursor, snapshotCursor, limit + 1) as AgentEventRow[]);
   const hasMore = rows.length > limit;
   const pageRows = hasMore ? rows.slice(0, limit) : rows;
-  const events = pageRows.map(parseAgentEventRow);
-  const nextCursor = pageRows.at(-1)?.event_cursor;
+  if (direction === "backward") pageRows.reverse();
+  const parsedEvents = pageRows.map(parseAgentEventRow);
+  const expandedStreamEvents = runId
+    ? undefined
+    : expandAgentEventPageStreams(sessionId, pageRows, parsedEvents, snapshotCursor);
+  const events = runId
+    ? parsedEvents
+    : backfillUserPromptEventsForPage(
+        sessionId,
+        expandedStreamEvents ? foldAgentEvents(expandedStreamEvents) : parsedEvents,
+        snapshotCursor,
+      );
+  const summaryEvents =
+    !runId && options.includeSummary ? listAgentEventSummary(sessionId, snapshotCursor) : [];
+  const activityEvents =
+    !runId && options.includeActivity
+      ? listAgentGroupActivityEvents(sessionId, snapshotCursor)
+      : [];
+  const nextCursor =
+    direction === "backward" ? pageRows[0]?.event_cursor : pageRows.at(-1)?.event_cursor;
   return {
     events,
+    summaryEvents,
+    activityEvents,
     snapshotCursor,
     ...(nextCursor === undefined ? {} : { nextCursor }),
     hasMore,
   };
+}
+
+/**
+ * A page can cut through one streamed message or tool result. Expand only those
+ * streams that have matching deltas outside the page's cursor range, so callers
+ * never render a suffix as a complete result. The cursor used to fetch the next
+ * page remains based on the bounded page rows.
+ */
+function expandAgentEventPageStreams(
+  sessionId: string,
+  pageRows: AgentEventRow[],
+  pageEvents: AgentEventItem[],
+  snapshotCursor: number,
+): AgentEventItem[] | undefined {
+  if (pageRows.length === 0) return undefined;
+  const firstCursor = pageRows[0]?.event_cursor;
+  const lastCursor = pageRows.at(-1)?.event_cursor;
+  if (firstCursor === undefined || lastCursor === undefined) return undefined;
+
+  const messageIds = new Set<string>();
+  const toolCallIds = new Set<string>();
+  const messageDeltaTypes = ["message.delta", "thinking.delta"] as const;
+  const toolDeltaTypes = ["tool.output"] as const;
+  const pageMessageIds = new Set<string>();
+  const pageToolCallIds = new Set<string>();
+  for (const { event } of pageEvents) {
+    if (
+      (event.type === "message.started" ||
+        event.type === "message.completed" ||
+        event.type === "thinking.completed" ||
+        event.type === "message.delta" ||
+        event.type === "thinking.delta") &&
+      typeof event.messageId === "string"
+    ) {
+      pageMessageIds.add(event.messageId);
+    } else if (
+      (event.type === "tool.started" ||
+        event.type === "tool.output" ||
+        event.type === "tool.ended") &&
+      typeof event.toolCallId === "string"
+    ) {
+      pageToolCallIds.add(event.toolCallId);
+    }
+  }
+
+  const db = getDatabase();
+  const findCrossBoundaryIds = (
+    types: readonly string[],
+    identityField: "messageId" | "toolCallId",
+    ids: Set<string>,
+  ): Set<string> => {
+    if (ids.size === 0) return new Set();
+    const typePlaceholders = types.map(() => "?").join(", ");
+    const idPlaceholders = [...ids].map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `select payload_json from agent_events
+         where session_id = ? and rowid <= ? and type in (${typePlaceholders})
+           and (rowid < ? or rowid > ?) and json_valid(payload_json)
+           and json_extract(payload_json, '$.${identityField}') in (${idPlaceholders})`,
+      )
+      .all(sessionId, snapshotCursor, ...types, firstCursor, lastCursor, ...ids) as Array<{
+      payload_json: string;
+    }>;
+    const crossed = new Set<string>();
+    for (const row of rows) {
+      try {
+        const payload = JSON.parse(row.payload_json) as Record<string, unknown>;
+        const identity = payload[identityField];
+        if (typeof identity === "string") crossed.add(identity);
+      } catch {
+        // Invalid records are surfaced when their cursor is read as a page.
+      }
+    }
+    return crossed;
+  };
+
+  for (const id of findCrossBoundaryIds(messageDeltaTypes, "messageId", pageMessageIds)) {
+    messageIds.add(id);
+  }
+  for (const id of findCrossBoundaryIds(toolDeltaTypes, "toolCallId", pageToolCallIds)) {
+    toolCallIds.add(id);
+  }
+  if (messageIds.size === 0 && toolCallIds.size === 0 && pageMessageIds.size === 0) {
+    return undefined;
+  }
+
+  const expandedRows = new Map<number, AgentEventRow>(
+    pageRows.map((row) => [row.event_cursor, row]),
+  );
+  const loadRows = (
+    types: readonly string[],
+    identityField: "messageId" | "toolCallId",
+    ids: Set<string>,
+  ): void => {
+    if (ids.size === 0) return;
+    const typePlaceholders = types.map(() => "?").join(", ");
+    const idPlaceholders = [...ids].map(() => "?").join(", ");
+    const rows = db
+      .prepare(
+        `select id, payload_json, created_at, rowid as event_cursor
+         from agent_events
+         where session_id = ? and rowid <= ? and type in (${typePlaceholders})
+           and json_valid(payload_json)
+           and json_extract(payload_json, '$.${identityField}') in (${idPlaceholders})
+         order by rowid asc`,
+      )
+      .all(sessionId, snapshotCursor, ...types, ...ids) as AgentEventRow[];
+    for (const row of rows) expandedRows.set(row.event_cursor, row);
+  };
+
+  loadRows(
+    [
+      "message.started",
+      "message.delta",
+      "message.completed",
+      "thinking.delta",
+      "thinking.completed",
+    ],
+    "messageId",
+    messageIds,
+  );
+  loadRows(["tool.started", "tool.output", "tool.delta", "tool.ended"], "toolCallId", toolCallIds);
+  if (pageMessageIds.size > 0) {
+    const ids = [...pageMessageIds];
+    const placeholders = ids.map(() => "?").join(", ");
+    const runRows = db
+      .prepare(
+        `select r.id, r.payload_json, r.created_at, r.rowid as event_cursor
+         from agent_events as message
+         join agent_events as r
+           on r.session_id = message.session_id
+          and r.type = 'run.started'
+          and r.rowid = (
+            select max(previous.rowid)
+            from agent_events as previous
+            where previous.session_id = message.session_id
+              and previous.type = 'run.started'
+              and previous.rowid < message.rowid
+          )
+          and not exists (
+            select 1
+            from agent_events as terminal
+            where terminal.session_id = message.session_id
+              and terminal.rowid > r.rowid
+              and terminal.rowid < message.rowid
+              and terminal.type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+              and json_valid(terminal.payload_json)
+              and json_extract(terminal.payload_json, '$.runId') =
+                json_extract(r.payload_json, '$.runId')
+          )
+          and not exists (
+            select 1
+            from agent_events as earlier_run
+            where earlier_run.session_id = message.session_id
+              and earlier_run.type = 'run.started'
+              and earlier_run.rowid < r.rowid
+              and json_valid(earlier_run.payload_json)
+              and not exists (
+                select 1
+                from agent_events as earlier_terminal
+                where earlier_terminal.session_id = message.session_id
+                  and earlier_terminal.rowid > earlier_run.rowid
+                  and earlier_terminal.rowid < message.rowid
+                  and earlier_terminal.type in (
+                    'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
+                  )
+                  and json_valid(earlier_terminal.payload_json)
+                  and json_extract(earlier_terminal.payload_json, '$.runId') =
+                    json_extract(earlier_run.payload_json, '$.runId')
+              )
+          )
+         where message.session_id = ? and message.rowid <= ?
+           and message.type = 'message.started' and json_valid(message.payload_json)
+           and json_extract(message.payload_json, '$.role') = 'assistant'
+           and json_extract(message.payload_json, '$.messageId') in (${placeholders})
+           and (
+             message.rowid between ? and ?
+             or message.rowid = (
+               select max(previous.rowid)
+               from agent_events as previous
+               where previous.session_id = message.session_id
+                 and previous.type = 'message.started'
+                 and json_valid(previous.payload_json)
+                 and json_extract(previous.payload_json, '$.role') = 'assistant'
+                 and json_extract(previous.payload_json, '$.messageId') =
+                   json_extract(message.payload_json, '$.messageId')
+                 and previous.rowid < ?
+             )
+           )
+         order by r.rowid asc`,
+      )
+      .all(
+        sessionId,
+        snapshotCursor,
+        ...ids,
+        firstCursor,
+        lastCursor,
+        firstCursor,
+      ) as AgentEventRow[];
+    for (const row of runRows) expandedRows.set(row.event_cursor, row);
+  }
+  return [...expandedRows.values()]
+    .sort((left, right) => left.event_cursor - right.event_cursor)
+    .map(parseAgentEventRow);
+}
+
+function listAgentRunToolEventRows(
+  sessionId: string,
+  runId: string,
+  afterCursor: number,
+  snapshotCursor: number,
+  limit: number,
+): AgentEventRow[] {
+  const db = getDatabase();
+  const start = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid <= ? and type = 'run.started'
+         and json_valid(payload_json) and json_extract(payload_json, '$.runId') = ?
+       order by rowid desc limit 1`,
+    )
+    .get(sessionId, snapshotCursor, runId) as { event_cursor: number } | undefined;
+  if (!start) {
+    throw new Error("Run-scoped event history is unavailable: run start was not found.");
+  }
+
+  const overlappingPriorRun = db
+    .prepare(
+      `select 1 as found
+       from agent_events as previous
+       where previous.session_id = ? and previous.rowid < ?
+         and previous.type = 'run.started' and json_valid(previous.payload_json)
+         and coalesce(json_extract(previous.payload_json, '$.runId'), '') <> ?
+         and not exists (
+           select 1
+           from agent_events as terminal
+           where terminal.session_id = previous.session_id
+             and terminal.rowid > previous.rowid and terminal.rowid < ?
+             and terminal.type in (
+               'run.completed', 'run.failed', 'run.blocked', 'run.cancelled'
+             )
+             and json_valid(terminal.payload_json)
+             and json_extract(terminal.payload_json, '$.runId') =
+               json_extract(previous.payload_json, '$.runId')
+         )
+       limit 1`,
+    )
+    .get(sessionId, start.event_cursor, runId, start.event_cursor) as { found: number } | undefined;
+  if (overlappingPriorRun) {
+    throw new Error("Run-scoped event history is unavailable because run boundaries overlap.");
+  }
+
+  const terminal = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid > ? and rowid <= ?
+         and type in ('run.completed', 'run.failed', 'run.blocked', 'run.cancelled')
+         and json_valid(payload_json) and json_extract(payload_json, '$.runId') = ?
+       order by rowid asc limit 1`,
+    )
+    .get(sessionId, start.event_cursor, snapshotCursor, runId) as
+    | { event_cursor: number }
+    | undefined;
+  const endCursor = terminal?.event_cursor ?? snapshotCursor;
+  const overlapEndCursor = terminal ? terminal.event_cursor - 1 : snapshotCursor;
+  const overlappingRun = db
+    .prepare(
+      `select 1 as found
+       from agent_events
+       where session_id = ? and rowid > ? and rowid <= ? and type = 'run.started'
+         and json_valid(payload_json)
+         and coalesce(json_extract(payload_json, '$.runId'), '') <> ?
+       limit 1`,
+    )
+    .get(sessionId, start.event_cursor, overlapEndCursor, runId) as { found: number } | undefined;
+  // A session is single-run. If that invariant is violated, do not mix tool output
+  // from overlapping runs into a different run's source list.
+  if (overlappingRun) {
+    throw new Error("Run-scoped event history is unavailable because run boundaries overlap.");
+  }
+
+  return db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and rowid > ?
+         and type in (
+           'run.started', 'run.completed', 'run.failed', 'run.blocked', 'run.cancelled',
+           'tool.started', 'tool.output', 'tool.ended'
+         )
+       order by rowid asc limit ?`,
+    )
+    .all(sessionId, start.event_cursor, endCursor, afterCursor, limit) as AgentEventRow[];
+}
+
+function listAgentEventSummary(sessionId: string, snapshotCursor: number): AgentEventItem[] {
+  const db = getDatabase();
+  const queries: Array<{ types: string[]; limit: number }> = [
+    { types: ["plan.updated"], limit: 1 },
+    { types: ["session.status"], limit: 1 },
+    {
+      types: ["subagent.started", "subagent.updated"],
+      limit: MAX_AGENT_EVENT_SUMMARY_ROWS_PER_KIND,
+    },
+  ];
+  const rows: AgentEventRow[] = [];
+  for (const query of queries) {
+    const placeholders = query.types.map(() => "?").join(", ");
+    const groupRows = db
+      .prepare(
+        `select id, payload_json, created_at, rowid as event_cursor
+         from agent_events
+         where session_id = ? and rowid <= ? and type in (${placeholders})
+         order by rowid desc
+         limit ?`,
+      )
+      .all(sessionId, snapshotCursor, ...query.types, query.limit) as AgentEventRow[];
+    rows.push(...groupRows);
+  }
+  rows.push(
+    ...listLatestPendingRequest(
+      sessionId,
+      snapshotCursor,
+      "permission.requested",
+      "permission.resolved",
+    ),
+    ...listLatestPendingRequest(
+      sessionId,
+      snapshotCursor,
+      "question.requested",
+      "question.resolved",
+    ),
+  );
+  return rows.sort((left, right) => left.event_cursor - right.event_cursor).map(parseAgentEventRow);
+}
+
+function listLatestPendingRequest(
+  sessionId: string,
+  snapshotCursor: number,
+  requestType: "permission.requested" | "question.requested",
+  resolutionType: "permission.resolved" | "question.resolved",
+): AgentEventRow[] {
+  return getDatabase()
+    .prepare(
+      `select request.id, request.payload_json, request.created_at, request.rowid as event_cursor
+       from agent_events request
+       where request.session_id = ?
+         and request.rowid <= ?
+         and request.type = ?
+         and json_valid(request.payload_json)
+         and json_type(request.payload_json, '$.request.id') = 'text'
+         and not exists (
+           select 1 from agent_events resolution
+           where resolution.session_id = request.session_id
+             and resolution.rowid > request.rowid
+             and resolution.rowid <= ?
+             and resolution.type = ?
+             and json_valid(resolution.payload_json)
+             and json_type(resolution.payload_json, '$.requestId') = 'text'
+             and json_extract(resolution.payload_json, '$.requestId') =
+               json_extract(request.payload_json, '$.request.id')
+         )
+       order by request.rowid desc
+       limit 1`,
+    )
+    .all(sessionId, snapshotCursor, requestType, snapshotCursor, resolutionType) as AgentEventRow[];
+}
+
+function backfillUserPromptEventsForPage(
+  sessionId: string,
+  events: AgentEventItem[],
+  snapshotCursor: number,
+): AgentEventItem[] {
+  const runIds = events.flatMap(({ event }) => (event.type === "run.started" ? [event.runId] : []));
+  if (runIds.length === 0) return events;
+
+  const placeholders = runIds.map(() => "?").join(", ");
+  const runs = getDatabase()
+    .prepare(
+      `select id, user_message_id, prompt, started_at
+       from agent_runs
+       where session_id = ? and id in (${placeholders})`,
+    )
+    .all(sessionId, ...runIds) as AgentRunPromptRow[];
+  if (runs.length === 0) return events;
+
+  const messageIds = [...new Set(runs.map((run) => run.user_message_id ?? `user:${run.id}`))];
+  const messagePlaceholders = messageIds.map(() => "?").join(", ");
+  const persistedPromptRows = getDatabase()
+    .prepare(
+      `select distinct json_extract(delta.payload_json, '$.messageId') as message_id
+       from agent_events delta
+       where delta.session_id = ?
+         and delta.rowid <= ?
+         and delta.type = 'message.delta'
+         and json_valid(delta.payload_json)
+         and json_type(delta.payload_json, '$.messageId') = 'text'
+         and trim(coalesce(json_extract(delta.payload_json, '$.delta'), '')) <> ''
+         and json_extract(delta.payload_json, '$.messageId') in (${messagePlaceholders})
+         and exists (
+           select 1 from agent_events started
+           where started.session_id = delta.session_id
+             and started.rowid <= ?
+             and started.type = 'message.started'
+             and json_valid(started.payload_json)
+             and json_extract(started.payload_json, '$.role') = 'user'
+             and json_extract(started.payload_json, '$.messageId') =
+               json_extract(delta.payload_json, '$.messageId')
+         )`,
+    )
+    .all(sessionId, snapshotCursor, ...messageIds, snapshotCursor) as Array<{ message_id: string }>;
+  const persistedPromptIds = new Set(persistedPromptRows.map(({ message_id }) => message_id));
+  const missingPrompts = new Map<string, AgentEventItem[]>();
+  for (const run of runs) {
+    const messageId = run.user_message_id ?? `user:${run.id}`;
+    if (persistedPromptIds.has(messageId)) continue;
+    missingPrompts.set(run.id, [
+      {
+        id: `backfill:${run.id}:user:start`,
+        event: { type: "message.started", sessionId, messageId, role: "user" },
+        createdAt: run.started_at,
+      },
+      {
+        id: `backfill:${run.id}:user:delta`,
+        event: { type: "message.delta", sessionId, messageId, delta: run.prompt },
+        createdAt: run.started_at,
+      },
+      {
+        id: `backfill:${run.id}:user:completed`,
+        event: { type: "message.completed", sessionId, messageId },
+        createdAt: run.started_at,
+      },
+    ]);
+  }
+  if (missingPrompts.size === 0) return events;
+
+  return events.flatMap((item) => {
+    if (item.event.type !== "run.started") return [item];
+    const backfill = missingPrompts.get(item.event.runId);
+    if (!backfill) return [item];
+    missingPrompts.delete(item.event.runId);
+    return [...backfill, item];
+  });
+}
+
+function listAgentGroupActivityEvents(sessionId: string, snapshotCursor: number): AgentEventItem[] {
+  const db = getDatabase();
+  const latestRun = db
+    .prepare(
+      `select rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid <= ? and type = 'run.started'
+       order by rowid desc limit 1`,
+    )
+    .get(sessionId, snapshotCursor) as { event_cursor: number } | undefined;
+  if (!latestRun) return [];
+  const startRow = db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events where session_id = ? and rowid = ? and rowid <= ?`,
+    )
+    .get(sessionId, latestRun.event_cursor, snapshotCursor) as AgentEventRow | undefined;
+  const eventTypes = [
+    "run.started",
+    "run.completed",
+    "run.failed",
+    "run.blocked",
+    "run.cancelled",
+    "message.started",
+    "message.delta",
+    "message.completed",
+    "thinking.delta",
+    "thinking.completed",
+    "tool.started",
+    "tool.delta",
+    "tool.ended",
+  ];
+  const recentRows = db
+    .prepare(
+      `select id, payload_json, created_at, rowid as event_cursor
+       from agent_events
+       where session_id = ? and rowid >= ? and rowid <= ? and type in (${eventTypes.map(() => "?").join(", ")})
+       order by rowid desc limit ?`,
+    )
+    .all(
+      sessionId,
+      latestRun.event_cursor,
+      snapshotCursor,
+      ...eventTypes,
+      MAX_AGENT_GROUP_ACTIVITY_EVENTS - 1,
+    ) as AgentEventRow[];
+  const byCursor = new Map<number, AgentEventRow>();
+  if (startRow) byCursor.set(startRow.event_cursor, startRow);
+  for (const row of recentRows) byCursor.set(row.event_cursor, row);
+  return [...byCursor.values()]
+    .sort((left, right) => left.event_cursor - right.event_cursor)
+    .map(parseAgentEventRow);
 }
 
 function parseAgentEventRow(row: AgentEventRow): AgentEventItem {

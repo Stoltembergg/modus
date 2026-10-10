@@ -1,3 +1,4 @@
+import type { AgentEventPage, AgentEventPageOptions } from "../shared/agent-events";
 import type { AppearanceSetInput, AppearanceState } from "../shared/appearance";
 import type { AuthCredentialsInput, AuthOAuthInput, AuthState } from "../shared/auth";
 import type { BillingBuyCreditsInput, BillingCheckoutInput, BillingState } from "../shared/billing";
@@ -354,6 +355,7 @@ export type ModusApi = {
     listEvents(
       sessionId: string,
     ): Promise<Array<{ id: string; event: AgentEvent; createdAt?: string }>>;
+    listEventPage(sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage>;
     listRuns(sessionId: string): Promise<AgentRunInfo[]>;
     /** Current source-content revision for one exact run and its owning session. */
     runWorkspaceRevision(input: { sessionId: string; runId: string }): Promise<string | undefined>;

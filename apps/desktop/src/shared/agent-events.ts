@@ -7,8 +7,44 @@ export type AgentEventItem = {
   createdAt?: string;
   /** Last streamed chunk time for folded deltas (thinking / message / tool). */
   updatedAt?: string;
+  /** Cursor span of folded deltas, used to suppress live/persisted overlap in constant space. */
+  sourceCursorRange?: { first: number; last: number };
   optimistic?: boolean;
 };
+
+export const MAX_AGENT_EVENT_PAGE_SIZE = 256;
+
+export type AgentEventPage = {
+  events: Array<AgentEventItem & { createdAt: string }>;
+  /** Bounded latest state needed for session controls that must outlive the visible page. */
+  summaryEvents: Array<AgentEventItem & { createdAt: string }>;
+  /** Bounded suffix for Agent Group working/activity summaries. */
+  activityEvents: Array<AgentEventItem & { createdAt: string }>;
+  snapshotCursor: number;
+  /** Continuation cursor: last event for forward pages, first event for backward pages. */
+  nextCursor?: number;
+  hasMore: boolean;
+};
+
+export type AgentEventPageOptions =
+  | {
+      direction?: "forward" | undefined;
+      afterCursor?: number | undefined;
+      snapshotCursor?: number | undefined;
+      limit?: number | undefined;
+      /** Return only tool activity inside this session's exact run boundary. */
+      runId?: string | undefined;
+      includeSummary?: boolean | undefined;
+      includeActivity?: boolean | undefined;
+    }
+  | {
+      direction: "backward";
+      beforeCursor?: number | undefined;
+      snapshotCursor?: number | undefined;
+      limit?: number | undefined;
+      includeSummary?: boolean | undefined;
+      includeActivity?: boolean | undefined;
+    };
 
 /**
  * Fold key = the event's own authoritative stream identity.
@@ -45,6 +81,17 @@ function foldKey(event: AgentEvent): string | undefined {
   }
 }
 
+function eventCursor(item: AgentEventItem): number | undefined {
+  const cursor = (item.event as AgentEvent & { eventCursor?: number }).eventCursor;
+  return Number.isSafeInteger(cursor) && cursor !== undefined ? cursor : undefined;
+}
+
+function cursorRange(item: AgentEventItem): { first: number; last: number } | undefined {
+  if (item.sourceCursorRange) return item.sourceCursorRange;
+  const cursor = eventCursor(item);
+  return cursor === undefined ? undefined : { first: cursor, last: cursor };
+}
+
 /**
  * Accumulate `next` into the matching `previous` item. The accumulation rule is
  * a property of the field, not the tool/message identity: text-bearing deltas
@@ -60,8 +107,33 @@ function foldInto<T extends AgentEventItem>(previous: T, next: T): T {
   }
   const prev = previous.event;
   const cur = next.event;
+  const previousRange = cursorRange(previous);
+  const nextRange = cursorRange(next);
+  const sourceCursorRange =
+    previousRange && nextRange
+      ? {
+          first: Math.min(previousRange.first, nextRange.first),
+          last: Math.max(previousRange.last, nextRange.last),
+        }
+      : (previousRange ?? nextRange);
   const withEnd = (item: T): T =>
-    next.createdAt !== undefined ? ({ ...item, updatedAt: next.createdAt } as T) : item;
+    ({
+      ...item,
+      ...(sourceCursorRange ? { sourceCursorRange } : {}),
+      ...(next.createdAt !== undefined ? { updatedAt: next.createdAt } : {}),
+    }) as T;
+  const isAccumulatedText =
+    (prev.type === "message.delta" && cur.type === "message.delta") ||
+    (prev.type === "thinking.delta" && cur.type === "thinking.delta") ||
+    (prev.type === "tool.output" && cur.type === "tool.output");
+  if (isAccumulatedText && previousRange && nextRange) {
+    const nextContainsPrevious =
+      nextRange.first <= previousRange.first && nextRange.last >= previousRange.last;
+    if (nextContainsPrevious) return withEnd(next);
+    const previousContainsNext =
+      previousRange.first <= nextRange.first && previousRange.last >= nextRange.last;
+    if (previousContainsNext) return withEnd(previous);
+  }
   if (prev.type === "message.delta" && cur.type === "message.delta") {
     return withEnd({ ...previous, event: { ...prev, ...cur, delta: prev.delta + cur.delta } } as T);
   }
@@ -88,6 +160,62 @@ export function appendAgentEvents<T extends AgentEventItem>(events: T[], nextIte
   const accumulator = createAgentEventAccumulator(events);
   accumulator.append(nextItems);
   return accumulator.items();
+}
+
+/** Append event echoes only once when a live stream overlaps a persisted page fetch. */
+export function appendUniqueAgentEvents<T extends AgentEventItem>(
+  events: T[],
+  nextItems: T[],
+): T[] {
+  const knownIds = new Set(events.map((item) => item.id));
+  const rangesByKey = new Map<string, Array<{ first: number; last: number }>>();
+  for (const item of events) {
+    const key = foldKey(item.event);
+    const range = cursorRange(item);
+    if (!key || !range) continue;
+    const ranges = rangesByKey.get(key) ?? [];
+    ranges.push(range);
+    rangesByKey.set(key, ranges);
+  }
+  const uniqueItems = nextItems.filter((item) => {
+    if (knownIds.has(item.id)) return false;
+    knownIds.add(item.id);
+    const key = foldKey(item.event);
+    const cursor = eventCursor(item);
+    return !(
+      key &&
+      cursor !== undefined &&
+      rangesByKey.get(key)?.some((range) => cursor >= range.first && cursor <= range.last)
+    );
+  });
+  return appendAgentEvents(events, uniqueItems);
+}
+
+/** Prepend one older raw page, then fold deltas across the page boundary. */
+export function prependAgentEventPage<T extends AgentEventItem>(current: T[], older: T[]): T[] {
+  const currentIds = new Set(current.map((item) => item.id));
+  const currentRanges = new Map<string, Array<{ first: number; last: number }>>();
+  for (const item of current) {
+    const key = foldKey(item.event);
+    const range = cursorRange(item);
+    if (!key || !range) continue;
+    const ranges = currentRanges.get(key) ?? [];
+    ranges.push(range);
+    currentRanges.set(key, ranges);
+  }
+  return foldAgentEvents([
+    ...older.filter((item) => {
+      if (currentIds.has(item.id)) return false;
+      const key = foldKey(item.event);
+      const cursor = eventCursor(item);
+      return !(
+        key &&
+        cursor !== undefined &&
+        currentRanges.get(key)?.some((range) => cursor >= range.first && cursor <= range.last)
+      );
+    }),
+    ...current,
+  ]);
 }
 
 /** Fold pages into one history without rebuilding the event index per page. */

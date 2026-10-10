@@ -11,6 +11,14 @@ export type RunSource = {
   detail?: string;
 };
 
+/** State of complete, run-scoped source history loaded for visible chat runs. */
+export type RunSourcesSnapshot = {
+  requestedRunIds: ReadonlySet<string>;
+  loadingRunIds: ReadonlySet<string>;
+  failedRunIds: ReadonlySet<string>;
+  sourcesByRun: ReadonlyMap<string, RunSource[]>;
+};
+
 type ToolCall = {
   runId?: string;
   toolName: string;

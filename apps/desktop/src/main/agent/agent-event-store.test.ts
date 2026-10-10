@@ -2262,6 +2262,76 @@ fs.renameSync("original-manifest-link", "package.json");
     );
   });
 
+  it("backfills legacy user prompts into a bounded event page", () => {
+    const sessionId = `paged-backfill-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const run = createAgentRun({
+      sessionId,
+      prompt: "legacy prompt only stored with the run",
+      userMessageId: "legacy-user-message",
+    });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: run.id,
+      userMessageId: "legacy-user-message",
+      delivery: "normal",
+    });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: {
+            type: "message.delta",
+            sessionId,
+            messageId: "legacy-user-message",
+            delta: "legacy prompt only stored with the run",
+          },
+        }),
+      ]),
+    );
+  });
+
+  it("keeps old pending group questions visible after many resolved questions", () => {
+    const sessionId = `old-pending-question-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "question.requested",
+      sessionId,
+      request: { id: "still-pending", sessionId, questions: [] },
+    });
+    for (let index = 0; index < 520; index += 1) {
+      const requestId = `resolved-${index}`;
+      recordAgentEvent({
+        type: "question.requested",
+        sessionId,
+        request: { id: requestId, sessionId, questions: [] },
+      });
+      recordAgentEvent({
+        type: "question.resolved",
+        sessionId,
+        requestId,
+        answers: [],
+        skipped: false,
+      });
+    }
+
+    const page = listAgentEventPage(sessionId, { includeSummary: true, limit: 1 });
+
+    expect(page.summaryEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: expect.objectContaining({
+            type: "question.requested",
+            request: expect.objectContaining({ id: "still-pending" }),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it("pages events by stable insertion cursor and excludes events after the page snapshot", () => {
     const sessionId = `paged-events-${crypto.randomUUID()}`;
     insertSession(sessionId);
@@ -2290,8 +2360,15 @@ fs.renameSync("original-manifest-link", "package.json");
       .run(first, "2030-01-03", second, "2030-01-02", third, "2030-01-01", sessionId);
 
     const page1 = listAgentEventPage(sessionId, { limit: 2 });
-    expect(page1.events.map(({ event }) => event.type)).toEqual(["run.started", "message.started"]);
-    expect(page1.events.map(({ event }) => event.eventCursor)).toEqual([first, second]);
+    expect(page1.events.map(({ event }) => event.type)).toEqual([
+      "run.started",
+      "message.started",
+      "message.delta",
+    ]);
+    expect(page1.summaryEvents).toEqual([]);
+    expect(page1.activityEvents).toEqual([]);
+    expect(page1.events.map(({ event }) => event.eventCursor)).toEqual([first, second, third]);
+    expect(page1.nextCursor).toBe(second);
     expect(page1.hasMore).toBe(true);
     if (page1.nextCursor === undefined) throw new Error("Expected page to expose its last cursor.");
     expect(listAgentEvents(sessionId).map(({ event }) => event.eventCursor)).toEqual([
@@ -2310,10 +2387,547 @@ fs.renameSync("original-manifest-link", "package.json");
       snapshotCursor: page1.snapshotCursor,
       limit: 2,
     });
-    expect(page2.events.map(({ event }) => event.type)).toEqual(["message.delta"]);
-    expect(page2.events[0]?.event.eventCursor).toBe(third);
+    expect(page2.events.map(({ event }) => event.type)).toEqual(["run.started", "message.delta"]);
+    expect(page2.events.map(({ event }) => event.eventCursor)).toEqual([first, third]);
+    expect(page2.nextCursor).toBe(third);
     expect(page2.snapshotCursor).toBe(page1.snapshotCursor);
     expect(page2.hasMore).toBe(false);
+  });
+
+  it("pages only tool events attributed to the requested run", () => {
+    const sessionId = `run-events-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const targetRun = createAgentRun({ sessionId, prompt: "target" });
+    const otherRun = createAgentRun({ sessionId, prompt: "other" });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: targetRun.id,
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      runId: targetRun.id,
+      toolCallId: "target-tool",
+      toolName: "read_file",
+      args: { path: "target.ts" },
+    });
+    recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId: "target-tool",
+      output: "https://example.test/target",
+    });
+    recordAgentEvent({
+      type: "tool.ended",
+      sessionId,
+      runId: targetRun.id,
+      toolCallId: "target-tool",
+      toolName: "read_file",
+      isError: false,
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: targetRun.id });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: otherRun.id,
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      runId: otherRun.id,
+      toolCallId: "other-tool",
+      toolName: "read_file",
+      args: { path: "other.ts" },
+    });
+    recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId: "other-tool",
+      output: "https://example.test/other",
+    });
+    recordAgentEvent({
+      type: "tool.ended",
+      sessionId,
+      runId: otherRun.id,
+      toolCallId: "other-tool",
+      toolName: "read_file",
+      isError: false,
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: otherRun.id });
+
+    const page = listAgentEventPage(sessionId, { runId: targetRun.id, limit: 20 } as never);
+
+    expect(page.events.map(({ event }) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "tool.output",
+      "tool.ended",
+      "run.completed",
+    ]);
+    expect(
+      page.events.some(
+        ({ event }) => event.type === "tool.started" && event.toolCallId === "other-tool",
+      ),
+    ).toBe(false);
+  });
+
+  it("fails closed when a scoped run page has no matching run boundary", () => {
+    const sessionId = `missing-run-boundary-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+
+    expect(() => listAgentEventPage(sessionId, { runId: "missing-run", limit: 20 })).toThrow(
+      /run start.*not found/i,
+    );
+  });
+
+  it("fails closed when scoped run events overlap another run in the same session", () => {
+    const sessionId = `overlapping-run-boundary-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "first-run",
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      runId: "first-run",
+      toolCallId: "first-tool",
+      toolName: "read_file",
+    });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "overlapping-run",
+      delivery: "normal",
+    });
+
+    expect(() => listAgentEventPage(sessionId, { runId: "first-run", limit: 20 })).toThrow(
+      /overlap/i,
+    );
+  });
+
+  it("fails closed when a scoped run starts while an earlier run is still open", () => {
+    const sessionId = `prior-overlapping-run-boundary-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "prior-run",
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "target-run",
+      delivery: "normal",
+    });
+
+    expect(() => listAgentEventPage(sessionId, { runId: "target-run", limit: 20 })).toThrow(
+      /overlap/i,
+    );
+  });
+
+  it("loads the newest page first and walks older pages with one fixed snapshot", () => {
+    const sessionId = `reverse-paged-events-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const cursors = Array.from({ length: 5 }, (_, index) =>
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `reverse-paged-run-${index}`,
+        delivery: "normal",
+      }),
+    );
+
+    const newest = listAgentEventPage(sessionId, { direction: "backward", limit: 2 });
+    expect(newest.events.map(({ event }) => event.eventCursor)).toEqual(cursors.slice(3));
+    expect(newest.hasMore).toBe(true);
+    expect(newest.nextCursor).toBe(cursors[3]);
+
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "reverse-paged-late-run",
+      delivery: "normal",
+    });
+    const older = listAgentEventPage(sessionId, {
+      direction: "backward",
+      ...(newest.nextCursor === undefined ? {} : { beforeCursor: newest.nextCursor }),
+      snapshotCursor: newest.snapshotCursor,
+      limit: 2,
+    });
+    expect(older.events.map(({ event }) => event.eventCursor)).toEqual(cursors.slice(1, 3));
+    expect(older.hasMore).toBe(true);
+    expect(older.nextCursor).toBe(cursors[1]);
+    expect(older.snapshotCursor).toBe(newest.snapshotCursor);
+
+    const oldest = listAgentEventPage(sessionId, {
+      direction: "backward",
+      ...(older.nextCursor === undefined ? {} : { beforeCursor: older.nextCursor }),
+      snapshotCursor: older.snapshotCursor,
+      limit: 2,
+    });
+    expect(oldest.events.map(({ event }) => event.eventCursor)).toEqual(cursors.slice(0, 1));
+    expect(oldest.hasMore).toBe(false);
+  });
+
+  it("returns a complete streamed message when its deltas cross the page boundary", () => {
+    const sessionId = `paged-long-message-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const messageId = "long-assistant-message";
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId,
+      role: "assistant",
+    });
+    const expectedText = Array.from({ length: MAX_AGENT_EVENT_PAGE_SIZE + 17 }, (_, index) => {
+      const delta = `chunk-${index};`;
+      recordAgentEvent({ type: "message.delta", sessionId, messageId, delta });
+      return delta;
+    }).join("");
+    recordAgentEvent({ type: "message.completed", sessionId, messageId });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 32 });
+    const message = page.events.find(
+      ({ event }) => event.type === "message.delta" && event.messageId === messageId,
+    );
+
+    expect(message?.event).toMatchObject({ type: "message.delta", delta: expectedText });
+  });
+
+  it("restores the run boundary for a complete in-page assistant response from a long run", () => {
+    const sessionId = `paged-in-page-assistant-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const runId = "long-run-before-response";
+    const messageId = "in-page-assistant-response";
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId,
+      delivery: "normal",
+    });
+    for (let index = 0; index < 12; index += 1) {
+      recordAgentEvent({
+        type: "runtime.error",
+        sessionId,
+        message: `synthetic progress ${index}`,
+      });
+    }
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId,
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId,
+      delta: "whole response is inside the visible page",
+    });
+    recordAgentEvent({ type: "message.completed", sessionId, messageId });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 3 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("message.started");
+    expect(page.events.map(({ event }) => event.type)).toContain("message.completed");
+    expect(page.events.find(({ event }) => event.type === "run.started")?.event).toMatchObject({
+      type: "run.started",
+      runId,
+    });
+  });
+
+  it("restores the run boundary when an assistant message start predates its visible page", () => {
+    const sessionId = `paged-assistant-start-outside-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const runId = "run-start-outside-page";
+    const messageId = "assistant-start-outside-page";
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId,
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId,
+      role: "assistant",
+    });
+    for (let index = 0; index < 8; index += 1) {
+      recordAgentEvent({
+        type: "runtime.error",
+        sessionId,
+        message: `synthetic progress ${index}`,
+      });
+    }
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId,
+      delta: "the remaining response is in this page",
+    });
+    recordAgentEvent({ type: "message.completed", sessionId, messageId });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 2 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("message.completed");
+    expect(page.events.map(({ event }) => event.type)).toContain("message.delta");
+    expect(page.events.find(({ event }) => event.type === "run.started")?.event).toMatchObject({
+      type: "run.started",
+      runId,
+    });
+  });
+
+  it("returns a complete streamed tool result when its output crosses the page boundary", () => {
+    const sessionId = `paged-long-tool-output-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const toolCallId = "long-tool-output";
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      toolCallId,
+      toolName: "read_file",
+      args: { path: "large.txt" },
+    });
+    const expectedOutput = Array.from({ length: MAX_AGENT_EVENT_PAGE_SIZE + 17 }, (_, index) => {
+      const output = `line-${index}\n`;
+      recordAgentEvent({ type: "tool.output", sessionId, toolCallId, output });
+      return output;
+    }).join("");
+    recordAgentEvent({
+      type: "tool.ended",
+      sessionId,
+      toolCallId,
+      toolName: "read_file",
+      isError: false,
+    });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 32 });
+    const output = page.events.find(
+      ({ event }) => event.type === "tool.output" && event.toolCallId === toolCallId,
+    );
+
+    expect(output?.event).toMatchObject({ type: "tool.output", output: expectedOutput });
+    expect(page.events.map(({ event }) => event.type)).toContain("tool.started");
+    expect(page.events.map(({ event }) => event.type)).toContain("tool.ended");
+  });
+
+  it("restores an assistant response when the newest page starts at message completion", () => {
+    const sessionId = `paged-completed-message-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const runId = "completed-message-run";
+    const messageId = "completed-assistant-message";
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId,
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId,
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId,
+      delta: "complete answer before the page boundary",
+    });
+    recordAgentEvent({ type: "message.completed", sessionId, messageId });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("message.completed");
+    expect(page.events.find(({ event }) => event.type === "run.started")?.event).toMatchObject({
+      type: "run.started",
+      runId,
+    });
+    expect(page.events.find(({ event }) => event.type === "message.delta")?.event).toMatchObject({
+      type: "message.delta",
+      messageId,
+      delta: "complete answer before the page boundary",
+    });
+  });
+
+  it("does not associate a late assistant message with a run that already terminated", () => {
+    const sessionId = `paged-late-assistant-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "finished-run",
+      delivery: "normal",
+    });
+    recordAgentEvent({ type: "run.completed", sessionId, runId: "finished-run" });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "orphan-assistant-message",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "orphan-assistant-message",
+      delta: "late response",
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "orphan-assistant-message",
+    });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("message.completed");
+    expect(page.events.map(({ event }) => event.type)).not.toContain("run.started");
+  });
+
+  it("does not infer an assistant run boundary while two runs overlap", () => {
+    const sessionId = `paged-overlapping-assistant-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "first-overlapping-run",
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "run.started",
+      sessionId,
+      runId: "second-overlapping-run",
+      delivery: "normal",
+    });
+    recordAgentEvent({
+      type: "message.started",
+      sessionId,
+      messageId: "ambiguous-assistant-message",
+      role: "assistant",
+    });
+    recordAgentEvent({
+      type: "message.delta",
+      sessionId,
+      messageId: "ambiguous-assistant-message",
+      delta: "ambiguous response",
+    });
+    recordAgentEvent({
+      type: "message.completed",
+      sessionId,
+      messageId: "ambiguous-assistant-message",
+    });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("message.completed");
+    expect(page.events.map(({ event }) => event.type)).not.toContain("run.started");
+  });
+
+  it("restores a tool result when the newest page starts at tool completion", () => {
+    const sessionId = `paged-ended-tool-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const toolCallId = "completed-tool-output";
+    recordAgentEvent({
+      type: "tool.started",
+      sessionId,
+      toolCallId,
+      toolName: "read_file",
+      args: { path: "output.txt" },
+    });
+    recordAgentEvent({
+      type: "tool.output",
+      sessionId,
+      toolCallId,
+      output: "complete tool output before the page boundary",
+    });
+    recordAgentEvent({
+      type: "tool.ended",
+      sessionId,
+      toolCallId,
+      toolName: "read_file",
+      isError: false,
+    });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("tool.ended");
+    expect(page.events.find(({ event }) => event.type === "tool.output")?.event).toMatchObject({
+      type: "tool.output",
+      toolCallId,
+      output: "complete tool output before the page boundary",
+    });
+  });
+
+  it("restores streamed thinking when the newest page starts at thinking completion", () => {
+    const sessionId = `paged-completed-thinking-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    const messageId = "completed-thinking-message";
+    recordAgentEvent({
+      type: "thinking.delta",
+      sessionId,
+      messageId,
+      delta: "complete reasoning before the page boundary",
+    });
+    recordAgentEvent({ type: "thinking.completed", sessionId, messageId });
+
+    const page = listAgentEventPage(sessionId, { direction: "backward", limit: 1 });
+
+    expect(page.events.map(({ event }) => event.type)).toContain("thinking.completed");
+    expect(page.events.find(({ event }) => event.type === "thinking.delta")?.event).toMatchObject({
+      type: "thinking.delta",
+      messageId,
+      delta: "complete reasoning before the page boundary",
+    });
+  });
+
+  it("returns bounded session-control evidence outside the visible page", () => {
+    const sessionId = `paged-state-${crypto.randomUUID()}`;
+    insertSession(sessionId);
+    recordAgentEvent({
+      type: "session.status",
+      sessionId,
+      status: { type: "busy" },
+    });
+    recordAgentEvent({
+      type: "permission.requested",
+      sessionId,
+      request: {
+        id: "pending-permission",
+        sessionId,
+        action: "shell.execute",
+        target: "workspace command",
+        reason: "Approval required",
+      },
+    });
+    for (let index = 0; index < 5; index += 1) {
+      recordAgentEvent({
+        type: "run.started",
+        sessionId,
+        runId: `paged-state-run-${index}`,
+        delivery: "normal",
+      });
+    }
+
+    const page = listAgentEventPage(sessionId, {
+      direction: "backward",
+      includeSummary: true,
+      includeActivity: true,
+      limit: 2,
+    });
+    expect(page.events.map(({ event }) => event.type)).toEqual(["run.started", "run.started"]);
+    expect(page.summaryEvents.map(({ event }) => event.type)).toContain("session.status");
+    expect(page.summaryEvents.map(({ event }) => event.type)).toContain("permission.requested");
+    expect(page.summaryEvents).toHaveLength(2);
+    expect(page.activityEvents.map(({ event }) => event.type)).toEqual(["run.started"]);
+    expect(page.activityEvents[0]?.event).toMatchObject({ runId: "paged-state-run-4" });
   });
 
   it("folds delta records across bounded database pages", () => {
