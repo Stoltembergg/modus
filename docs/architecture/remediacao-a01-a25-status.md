@@ -183,7 +183,8 @@ dispatcher can be introduced and safely validated.
 ## Milestone 3 — A10–A14 lifecycle and dependency integrity
 
 **Status: lifecycle service paths are implemented and locally checked; the
-startup ordering patch is awaiting its own CI run.**
+latest desktop CI and containment checks pass. The documented legacy mode and
+host-process boundary limitations remain.**
 
 - A10 startup reconciliation now resolves the exact installed version from
   the host catalog, includes exact authorized preloaded manifests in the
@@ -558,7 +559,9 @@ singleton logger when the isolation feature is enabled.
 - Independent review caught reprocessing the retained chain on every append and
   missing record IDs in the hash; the implementation was bounded with SQLite
   `data_version`, the ID regression went RED/GREEN, and final follow-up found no
-  remaining blocker. Remote CI remains pending publication.
+  remaining blocker. The integrated workflow on `effa4ee` passed the desktop
+  typecheck/test/Biome job and all three plugin-containment jobs; pgTAP's
+  unrelated monthly-renewal test remains the sole CI failure.
 
 ### Limits
 
@@ -660,7 +663,7 @@ is not captured or made available; the grantless host denial remains intact.
 
 ## Milestone 8 — A18 durable, paged and group-scoped mailbox
 
-**Status: implemented locally; independent review passed; remote CI is pending.**
+**Status: implementation and independent review pass; integrated desktop CI passes.**
 
 The mailbox previously treated SQLite as a best-effort mirror. Direct ACKs
 updated memory before ignoring persistence failure, broadcast ACKs existed only
@@ -752,8 +755,10 @@ in-memory mirror was added.
   regressed to 115–143 ms after durable transactions; the threshold is
   unchanged. Cached statements and a production-equivalent compound index
   restore the exact benchmark and complete group suite to green. Targeted
-  Targeted Biome exits successfully with 18 warnings and no errors; Typecheck
-  passes. Independent re-review found no blocker; remote CI is pending.
+  Biome exits successfully with 18 warnings and no errors; Typecheck
+  passes. Independent re-review found no blocker. The integrated workflow on
+  `effa4ee` passed the full filtered desktop suite and all three plugin-
+  containment jobs; no blocked probes ran.
 - No external plugin, network, process, or enforcement scenario ran.
 
 ### Limits
@@ -906,8 +911,30 @@ memory, and IPC response size therefore still grow with unique events/parts.
 The page API is not yet consumed by the UI. Cursor order also changes the
 observable order from `created_at, rowid` to insertion cursor order; this is
 the intended durable replay order but needs explicit presentation compatibility
-coverage. A22 is not marked complete. Remote CI for the current A22 diff is
-pending publication.
+coverage. A22 is not marked complete because productive consumers still
+materialize the complete transcript.
+
+### Integrated remote validation on `effa4ee`
+
+- Workflow `38034484183`: `typecheck · test · biome` passed. Biome checked
+  **1,139 files** with **325 warnings, 50 infos, and no errors**; workspace
+  TypeScript checks passed. Vitest passed **403/403 files, 4,551 tests**, with
+  **8 skipped** of 4,559 in **91.34s**. The workflow's explicit test-name
+  filter excluded the authorized blocked adversarial/runaway cases.
+- Verifier-First runtime regressions passed, including A17 evidence and A21.2
+  lifecycle checks. Plugin-containment passed on Ubuntu, macOS, and Windows.
+  The sandbox job only compiled probe targets; it did not run probes.
+- Windows x64 packaging (`38034483781`) and macOS x64/arm64 packaging
+  (`38034483855`) passed, including artifact uploads.
+- The global workflow's only failure was Supabase pgTAP test 22 in
+  `17_free_monthly_renewal.test.sql` (**1,021/1,022 passed**): expected
+  `2026-10-31`, received `2026-10-30`. On the run date, the fixture's 40-day
+  backdated signup lands on August 31; the function's `signup + 1 month` anchor
+  clamps to September 30, then its next month-end becomes October 30, while the
+  assertion computes `signup + 2 months` directly. The test and migration
+  have zero diff against `origin/main`, and the same assertion failed on
+  earlier PR runs. This billing issue is outside A01–A25 and was not changed.
+- No enforcement or adversarial probes ran; `PR #191` remains open and Draft.
 
 ## Current matrix
 
@@ -930,12 +957,12 @@ pending publication.
 | A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
-| A18 | Implemented and independently reviewed; latest desktop CI passed, pgTAP still fails | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. The latest desktop test/Biome/typecheck, containment jobs and Windows/macOS packaging passed; pgTAP date assertion remains unresolved. |
+| A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Workflow `38034484183` passed desktop tests/typecheck/Biome and containment; Windows/macOS packaging passed. The unrelated pgTAP renewal assertion remains unresolved. |
 | A19 | Prior A21.4 implementation preserved | Spill authorization, persistence, quotas, and recovery. |
 | A20 | Partially mitigated | Audit events and checkpoints persist in SQLite; immutable snapshots, transactional retention and verification detect ordinary record changes. No independent signing key or database access boundary exists. |
 | A21 | Prior A21.1–A21.6 implementation preserved | Harness integrations and lifecycle; no broad reimplementation. |
-| A22 | Partially mitigated | AUTOINCREMENT event cursor, session index, fixed-snapshot pages capped at 256, cross-page folds, and migration checks are implemented. `listAgentEvents` and IPC still materialize complete session history; renderer pagination and ordering compatibility coverage remain. |
-| A23 | Mitigated; desktop CI and packages passed, pgTAP unresolved | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38033646784` passed the desktop/global feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging jobs; pgTAP test 22 failed with Oct 30 versus Oct 31. |
+| A22 | Partially mitigated; integrated checks passed | AUTOINCREMENT event cursor, session index, fixed-snapshot pages capped at 256, cross-page folds, and migration checks are implemented. `listAgentEvents` and IPC still materialize complete session history; renderer pagination and ordering compatibility coverage remain. Workflow `38034484183` passed the full filtered Vitest/typecheck/Biome jobs; Windows/macOS packages passed. |
+| A23 | Mitigated; integrated checks pass | Synthetic capability outputs and the generic core `status: ok` fallback now fail explicitly with `CapabilityUnavailableError`; stale declared grants are reconciled by exact host identity/version; separate Pi runtime services, A16 selection, and A17 evidence flows are preserved. Independent review found no blocker. Workflow `38034484183` passed the desktop feature job, containment, runtime regression, compile-only sandbox, and Windows/macOS packaging. The unrelated pgTAP test 22 still fails. |
 | A24 | Partially mitigated | Compiled-module cache has LRU entry/source-byte caps and hashes caller namespaces; cache counters do not measure native compiled memory. A05 supplies measured failure metrics. WASI remains denied and stdio capture is unavailable. |
 | A25 | Mitigated; prior fix preserved and revalidated | `allow-workspace` requires workspace+tool identity and lookup keys include both plus action/target; the Pi runtime supplies persisted host workspace identity across worktree cwd changes. Unknown tools are blocked before permission prompting and are not read-only safe. Safe focused validation: 52 permission-store/permission-extension/tool-registry tests and one productive Pi runtime workspace-scope test passed. A two-workspace synthetic store test passes; external tool/plugin execution remains disabled. |
 
