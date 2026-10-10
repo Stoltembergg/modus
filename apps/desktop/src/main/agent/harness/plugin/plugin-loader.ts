@@ -6,11 +6,38 @@
 import semver from "semver";
 import { HOST_CAPABILITY_REGISTRATION_AUTHORITY } from "../capability/capability-registration-authority";
 import type { CapabilityRegistry } from "../capability/capability-registry";
-import type { Capability, CapabilityProvider, TrustLevel } from "../capability/capability-types";
-import type { HostPluginEntry, PluginManifestCatalog } from "./plugin-catalog";
-import { BUILT_IN_PLUGIN_CATALOG } from "./plugin-catalog";
-import type { LoadedPlugin, PluginManifest } from "./plugin-types";
+import type {
+  Capability,
+  CapabilityProvider,
+  ProviderRegistrationCheckpoint,
+  TrustLevel,
+} from "../capability/capability-types";
+import type {
+  HostPluginEntry,
+  HostPluginEntryDescriptor,
+  PluginManifestCatalog,
+} from "./plugin-catalog";
+import { BUILT_IN_PLUGIN_CATALOG, createPluginManifestDescriptor } from "./plugin-catalog";
+import {
+  resolveTrustedPluginCatalogEntry,
+  resolveTrustedPluginCatalogEntryById,
+} from "./plugin-catalog-internal";
+import type {
+  LoadedPlugin,
+  PluginManifest,
+  PluginManifestDescriptor,
+  PluginManifestInput,
+  PluginStatus,
+} from "./plugin-types";
 import { PluginDependencyError, PluginLifecycleError, PluginValidationError } from "./plugin-types";
+
+interface InternalLoadedPlugin {
+  manifest: PluginManifest;
+  status: PluginStatus;
+  loadedAt: Date;
+  error?: string | undefined;
+  publicState?: { status: PluginStatus; error?: string | undefined } | undefined;
+}
 
 function normalizeApiVersion(version: string): string | undefined {
   const partial = version.match(/^(\d+)\.(\d+)$/);
@@ -33,7 +60,10 @@ function isApiVersionSatisfied(registered: string, requiredRange: string): boole
 }
 
 interface RegistryPluginLoaderState {
-  plugins: Map<string, LoadedPlugin>;
+  plugins: Map<string, InternalLoadedPlugin>;
+  publicViews: WeakMap<InternalLoadedPlugin, LoadedPlugin>;
+  publicManifestBySource: WeakMap<PluginManifest, PluginManifestDescriptor>;
+  sourceManifestByPublic: WeakMap<object, PluginManifest>;
   loadingPluginIds: Set<string>;
   lifecycleOperations: Map<string, string>;
 }
@@ -41,9 +71,12 @@ interface RegistryPluginLoaderState {
 const pluginLoaderStateByRegistry = new WeakMap<CapabilityRegistry, RegistryPluginLoaderState>();
 
 export class PluginLoader {
-  private plugins: Map<string, LoadedPlugin>;
+  private plugins: Map<string, InternalLoadedPlugin>;
+  private publicViews: WeakMap<InternalLoadedPlugin, LoadedPlugin>;
   private loadingPluginIds: Set<string>;
   private lifecycleOperations: Map<string, string>;
+  private publicManifestBySource: WeakMap<PluginManifest, PluginManifestDescriptor>;
+  private sourceManifestByPublic: WeakMap<object, PluginManifest>;
 
   constructor(
     private registry: CapabilityRegistry,
@@ -52,13 +85,19 @@ export class PluginLoader {
     let state = pluginLoaderStateByRegistry.get(registry);
     if (!state) {
       state = {
-        plugins: new Map<string, LoadedPlugin>(),
+        plugins: new Map<string, InternalLoadedPlugin>(),
+        publicViews: new WeakMap<InternalLoadedPlugin, LoadedPlugin>(),
+        publicManifestBySource: new WeakMap<PluginManifest, PluginManifestDescriptor>(),
+        sourceManifestByPublic: new WeakMap<object, PluginManifest>(),
         loadingPluginIds: new Set<string>(),
         lifecycleOperations: new Map<string, string>(),
       };
       pluginLoaderStateByRegistry.set(registry, state);
     }
     this.plugins = state.plugins;
+    this.publicViews = state.publicViews;
+    this.publicManifestBySource = state.publicManifestBySource;
+    this.sourceManifestByPublic = state.sourceManifestByPublic;
     this.loadingPluginIds = state.loadingPluginIds;
     this.lifecycleOperations = state.lifecycleOperations;
   }
@@ -75,29 +114,58 @@ export class PluginLoader {
     this.lifecycleOperations.delete(pluginId);
   }
 
-  public authorizeManifest(manifest: PluginManifest): HostPluginEntry {
-    const entry = this.catalog.authorize(manifest);
-    if (!entry) {
+  private publicManifest(manifest: PluginManifest): PluginManifestDescriptor {
+    const existing = this.publicManifestBySource.get(manifest);
+    if (existing) return existing;
+    const descriptor = createPluginManifestDescriptor(manifest);
+    this.publicManifestBySource.set(manifest, descriptor);
+    this.sourceManifestByPublic.set(descriptor, manifest);
+    return descriptor;
+  }
+
+  private authorizedEntry(manifest: PluginManifestInput): HostPluginEntry {
+    const source =
+      this.sourceManifestByPublic.get(manifest as object) ?? (manifest as PluginManifest);
+    const authorization = this.catalog.authorize(source);
+    if (!authorization) {
       throw new PluginValidationError(
         `Plugin manifest "${manifest.id}@${manifest.version}" is not authorized by the host catalog`,
       );
     }
-    return entry;
+    const trustedEntry = resolveTrustedPluginCatalogEntry(this.catalog, source);
+    if (trustedEntry) return trustedEntry;
+    if ("provides" in source && source.provides.some((provision) => provision.implementation)) {
+      return { manifest: source as PluginManifest, trustLevel: authorization.trustLevel };
+    }
+    throw new PluginValidationError(
+      `Plugin manifest "${manifest.id}@${manifest.version}" has no trusted executable source`,
+    );
   }
 
-  public resolveHostManifest(id: string, version: string): PluginManifest | undefined {
-    return this.catalog.resolve(id, version)?.manifest;
+  public authorizeManifest(manifest: PluginManifestInput): HostPluginEntryDescriptor {
+    const entry = this.authorizedEntry(manifest);
+    return Object.freeze({
+      manifest: this.publicManifest(entry.manifest),
+      trustLevel: entry.trustLevel,
+    });
   }
 
-  public resolveHostManifestById(id: string): PluginManifest | undefined {
-    return this.catalog.resolveById?.(id)?.manifest;
+  public resolveHostManifest(id: string, version: string): PluginManifestDescriptor | undefined {
+    const entry = resolveTrustedPluginCatalogEntryById(this.catalog, id, version);
+    return entry ? this.publicManifest(entry.manifest) : undefined;
+  }
+
+  public resolveHostManifestById(id: string): PluginManifestDescriptor | undefined {
+    const entry = resolveTrustedPluginCatalogEntryById(this.catalog, id);
+    return entry ? this.publicManifest(entry.manifest) : undefined;
   }
 
   public getRegistry(): CapabilityRegistry {
     return this.registry;
   }
 
-  public validateManifest(manifest: PluginManifest): void {
+  public validateManifest(input: PluginManifestInput): void {
+    const manifest = this.sourceManifestByPublic.get(input as object) ?? (input as PluginManifest);
     if (!manifest.id || typeof manifest.id !== "string") {
       throw new PluginValidationError('Plugin manifest must contain a valid string "id"');
     }
@@ -159,7 +227,7 @@ export class PluginLoader {
     return isApiVersionSatisfied(registered, requiredRange);
   }
 
-  public checkDependencies(manifest: PluginManifest): void {
+  public checkDependencies(manifest: PluginManifestInput): void {
     if (!manifest.requires) return;
 
     if (manifest.requires.capabilities) {
@@ -200,9 +268,10 @@ export class PluginLoader {
     }
   }
 
-  public async load(manifest: PluginManifest): Promise<LoadedPlugin> {
-    const hostEntry = this.authorizeManifest(manifest);
-    const pluginId = hostEntry.manifest.id;
+  public async load(input: PluginManifestInput): Promise<LoadedPlugin> {
+    const hostEntry = this.authorizedEntry(input);
+    const manifest = hostEntry.manifest;
+    const pluginId = manifest.id;
     const hostTrustLevel = hostEntry.trustLevel;
 
     // 1. Validate manifest
@@ -219,12 +288,11 @@ export class PluginLoader {
 
     // 2. Check dependencies
     this.checkDependencies(manifest);
-    const implementations: Record<string, any> = {};
     const registeredCapabilities: string[] = [];
     const createdCapabilities: string[] = [];
     const previousProviders = new Map<
       string,
-      { provider: CapabilityProvider; wasActive: boolean }
+      { checkpoint: ProviderRegistrationCheckpoint; wasActive: boolean }
     >();
     this.loadingPluginIds.add(pluginId);
 
@@ -254,8 +322,6 @@ export class PluginLoader {
           }
         }
 
-        implementations[provision.capability] = provision.implementation;
-
         const provider: CapabilityProvider = {
           providerId: pluginId,
           providerVersion: manifest.version,
@@ -272,7 +338,7 @@ export class PluginLoader {
         };
 
         const previous = !previousProviders.has(provision.capability)
-          ? this.registry.getProviderRegistration(
+          ? this.registry.captureProviderRegistration(
               provision.capability,
               pluginId,
               HOST_CAPABILITY_REGISTRATION_AUTHORITY,
@@ -283,7 +349,7 @@ export class PluginLoader {
           : false;
         this.registry.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
         if (previous)
-          previousProviders.set(provision.capability, { provider: previous, wasActive });
+          previousProviders.set(provision.capability, { checkpoint: previous, wasActive });
         registeredCapabilities.push(provision.capability);
 
         // If active provider is core or not set, bind it
@@ -314,15 +380,29 @@ export class PluginLoader {
         );
       }
 
-      const loadedPlugin: LoadedPlugin = {
-        manifest,
+      const publicState: { status: PluginStatus; error?: string | undefined } = {
         status: "loaded",
+      };
+      const loadedPlugin: InternalLoadedPlugin = {
+        manifest,
+        get status() {
+          return publicState.status;
+        },
+        set status(status: PluginStatus) {
+          publicState.status = status;
+        },
+        get error() {
+          return publicState.error;
+        },
+        set error(error: string | undefined) {
+          publicState.error = error;
+        },
         loadedAt: new Date(),
-        implementations,
+        publicState,
       };
 
       this.plugins.set(pluginId, loadedPlugin);
-      return loadedPlugin;
+      return this.publicLoadedPlugin(loadedPlugin);
     } catch (error) {
       for (const capabilityId of registeredCapabilities) {
         try {
@@ -337,7 +417,10 @@ export class PluginLoader {
       }
       for (const [capabilityId, previous] of previousProviders) {
         try {
-          this.registry.registerProvider(previous.provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+          this.registry.restoreProviderRegistration(
+            previous.checkpoint,
+            HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+          );
           if (previous.wasActive && !this.registry.isProviderQuarantined(pluginId)) {
             try {
               this.registry.activateProvider(capabilityId, pluginId);
@@ -387,14 +470,10 @@ export class PluginLoader {
   }
 
   /** Host lifecycle hook runner. Quarantine recovery belongs to PluginLifecycleService. */
-  public async enableFromHostLifecycle(manifest: PluginManifest): Promise<void> {
-    const hostEntry = this.authorizeManifest(manifest);
-    if (hostEntry.manifest !== manifest) {
-      throw new PluginValidationError(
-        `Plugin manifest "${manifest.id}@${manifest.version}" is not the exact host catalog entry`,
-      );
-    }
-    const pluginId = hostEntry.manifest.id;
+  public async enableFromHostLifecycle(input: PluginManifestInput): Promise<void> {
+    const hostEntry = this.authorizedEntry(input);
+    const manifest = hostEntry.manifest;
+    const pluginId = manifest.id;
     const plugin = this.plugins.get(pluginId);
     if (!plugin || plugin.manifest !== manifest) {
       throw new PluginLifecycleError(
@@ -410,7 +489,7 @@ export class PluginLoader {
     }
   }
 
-  private async enablePlugin(plugin: LoadedPlugin): Promise<void> {
+  private async enablePlugin(plugin: InternalLoadedPlugin): Promise<void> {
     const pluginId = plugin.manifest.id;
 
     if (plugin.status === "enabled" && !this.registry.isProviderQuarantined(pluginId)) return;
@@ -428,7 +507,7 @@ export class PluginLoader {
     plugin.status = "enabled";
   }
 
-  private activatePluginProviders(plugin: LoadedPlugin): void {
+  private activatePluginProviders(plugin: InternalLoadedPlugin): void {
     for (const provision of plugin.manifest.provides) {
       try {
         this.registry.activateProvider(provision.capability, plugin.manifest.id);
@@ -469,7 +548,7 @@ export class PluginLoader {
     }
   }
 
-  private async disablePlugin(pluginId: string, plugin: LoadedPlugin): Promise<void> {
+  private async disablePlugin(pluginId: string, plugin: InternalLoadedPlugin): Promise<void> {
     if (plugin.status === "disabled") return;
 
     if (plugin.manifest.lifecycle?.onDisable) {
@@ -529,12 +608,34 @@ export class PluginLoader {
     }
   }
 
+  private publicLoadedPlugin(plugin: InternalLoadedPlugin): LoadedPlugin {
+    const existing = this.publicViews.get(plugin);
+    if (existing) return existing;
+    const state = plugin.publicState ?? { status: plugin.status, error: plugin.error };
+    const loadedAt = new Date(plugin.loadedAt.getTime());
+    const view = Object.freeze({
+      manifest: this.publicManifest(plugin.manifest),
+      get status() {
+        return state.status;
+      },
+      get loadedAt() {
+        return new Date(loadedAt.getTime());
+      },
+      get error() {
+        return state.error;
+      },
+    }) as LoadedPlugin;
+    this.publicViews.set(plugin, view);
+    return view;
+  }
+
   public getPlugin(pluginId: string): LoadedPlugin | undefined {
-    return this.plugins.get(pluginId);
+    const plugin = this.plugins.get(pluginId);
+    return plugin ? this.publicLoadedPlugin(plugin) : undefined;
   }
 
   public listPlugins(): LoadedPlugin[] {
-    return Array.from(this.plugins.values());
+    return Array.from(this.plugins.values(), (plugin) => this.publicLoadedPlugin(plugin));
   }
 
   public clear(): void {

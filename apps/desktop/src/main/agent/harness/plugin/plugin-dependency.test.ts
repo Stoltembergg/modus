@@ -847,8 +847,10 @@ describe("Fase 14 — Dependency Intelligence", () => {
       await service.install(manifest);
       await service.uninstall("@test/svc");
 
-      expect(service.resolveManifest("@test/svc", "1.0.0")).toBe(manifest);
-      expect(service.resolveManifest("@test/svc")).toBe(manifest);
+      const descriptor = loader.authorizeManifest(manifest).manifest;
+      expect(service.resolveManifest("@test/svc", "1.0.0")).toBe(descriptor);
+      expect(service.resolveManifest("@test/svc")).toBe(descriptor);
+      expect(descriptor.provides[0]).not.toHaveProperty("implementation");
     });
 
     it("plans updates across cyclic graphs without throwing", () => {

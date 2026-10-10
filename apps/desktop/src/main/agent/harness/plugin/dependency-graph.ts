@@ -12,7 +12,7 @@ import {
   type DependencyNode,
   type TransitiveDependent,
 } from "./plugin-dependency-types";
-import type { PluginManifest } from "./plugin-types";
+import type { PluginManifestInput } from "./plugin-types";
 
 export class DependencyGraph {
   private nodes = new Map<string, DependencyNode>();
@@ -23,7 +23,7 @@ export class DependencyGraph {
   /**
    * Adds or updates a plugin node in the graph, linking dependencies and dependents.
    */
-  public addPlugin(manifest: PluginManifest): void {
+  public addPlugin(manifest: PluginManifestInput): void {
     const previousNode = this.nodes.get(manifest.id);
     const previousNodeSnapshot = previousNode
       ? {
@@ -68,7 +68,7 @@ export class DependencyGraph {
     }
   }
 
-  public assertCanAddPlugin(manifest: PluginManifest): void {
+  public assertCanAddPlugin(manifest: PluginManifestInput): void {
     const candidate = new DependencyGraph();
     candidate.nodes = new Map(
       Array.from(this.nodes, ([id, node]) => [
@@ -115,7 +115,7 @@ export class DependencyGraph {
   /**
    * Clears and rebuilds the dependency graph from an array of manifests.
    */
-  public rebuild(manifests: PluginManifest[]): void {
+  public rebuild(manifests: PluginManifestInput[]): void {
     this.nodes.clear();
     this.capabilityProviders.clear();
 

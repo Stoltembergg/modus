@@ -23,6 +23,130 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
   });
 
   describe("9.1 — Capability Registration and Version Decoupling", () => {
+    it("keeps provider implementations behind the registry execution dispatcher", async () => {
+      const execute = vi.fn(() => "dispatched result");
+      registry.registerCapability({
+        id: "dispatcher.boundary",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: {},
+      });
+      registry.registerProvider(
+        {
+          providerId: "@host/dispatcher-boundary",
+          providerVersion: "1.0.0",
+          capabilityId: "dispatcher.boundary",
+          capabilityApiVersion: "1.0",
+          trustLevel: "core",
+          permissions: {},
+          implementation: { execute },
+          registeredAt: new Date("2025-01-01T00:00:00.000Z"),
+          metadata: {},
+        },
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+
+      const active = registry.getActiveProvider("dispatcher.boundary");
+      const listed = registry.listProviders("dispatcher.boundary");
+
+      expect(active).toBeDefined();
+      expect(active).not.toHaveProperty("implementation");
+      expect(listed[0]).not.toHaveProperty("implementation");
+      await expect(registry.execute("dispatcher.boundary", {})).resolves.toBe("dispatched result");
+      expect(execute).toHaveBeenCalledOnce();
+    });
+
+    it("omits extra callable properties from provider descriptors", () => {
+      registry.registerCapability({
+        id: "dispatcher.extra-alias",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: {},
+      });
+      const execute = vi.fn(() => "dispatched result");
+      const provider = {
+        providerId: "@host/extra-alias",
+        providerVersion: "1.0.0",
+        capabilityId: "dispatcher.extra-alias",
+        capabilityApiVersion: "1.0",
+        trustLevel: "core" as const,
+        permissions: {},
+        implementation: { execute },
+        registeredAt: new Date("2025-01-01T00:00:00.000Z"),
+        metadata: {},
+        debugExecute: execute,
+      };
+
+      registry.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+
+      const active = registry.getActiveProvider("dispatcher.extra-alias");
+      const listed = registry.listProviders("dispatcher.extra-alias")[0];
+      expect(active).not.toHaveProperty("debugExecute");
+      expect(listed).not.toHaveProperty("debugExecute");
+      expect(active && Object.values(active).some((value) => typeof value === "function")).toBe(
+        false,
+      );
+    });
+
+    it("captures rollback state without exposing a callable provider implementation", async () => {
+      registry.registerCapability({
+        id: "dispatcher.rollback",
+        apiVersion: "1.0",
+        replaceable: true,
+        dependencies: [],
+        metadata: {},
+      });
+      registry.registerProvider(
+        {
+          providerId: "@host/rollback",
+          providerVersion: "1.0.0",
+          capabilityId: "dispatcher.rollback",
+          capabilityApiVersion: "1.0",
+          trustLevel: "core",
+          permissions: {},
+          implementation: { execute: () => "restored through dispatcher" },
+          registeredAt: new Date("2025-01-01T00:00:00.000Z"),
+          metadata: {},
+        },
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+
+      const checkpoint = registry.captureProviderRegistration(
+        "dispatcher.rollback",
+        "@host/rollback",
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+
+      expect(checkpoint).toBeDefined();
+      if (!checkpoint) throw new Error("Expected a provider registration checkpoint.");
+      expect(checkpoint).not.toHaveProperty("implementation");
+      expect(checkpoint).not.toHaveProperty("provider");
+      registry.forceUnregisterProvider(
+        "dispatcher.rollback",
+        "@host/rollback",
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+      registry.restoreProviderRegistration(checkpoint, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+
+      expect(await registry.execute("dispatcher.rollback", {})).toBe("restored through dispatcher");
+
+      const staleCheckpoint = registry.captureProviderRegistration(
+        "dispatcher.rollback",
+        "@host/rollback",
+        HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+      );
+      if (!staleCheckpoint) throw new Error("Expected a second registration checkpoint.");
+      registry.clear();
+      expect(
+        registry.restoreProviderRegistration(
+          staleCheckpoint,
+          HOST_CAPABILITY_REGISTRATION_AUTHORITY,
+        ),
+      ).toBe(false);
+    });
+
     it("isolates registered capability and provider data from inputs and public snapshots", async () => {
       const cap: Capability = {
         id: "snapshot.cap",
@@ -66,10 +190,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       const active = registry.getActiveProvider("snapshot.cap")!;
       const providers = registry.listProviders("snapshot.cap");
       for (const snapshot of [active, providers[0]!]) {
-        expect(snapshot.implementation).not.toBe(implementation);
-        expect(() => {
-          snapshot.implementation.execute = () => "facade attack";
-        }).toThrow();
+        expect(snapshot).not.toHaveProperty("implementation");
       }
       for (const snapshot of [capability, capabilityList[0]!]) {
         expect(() => {
@@ -350,16 +471,8 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
       implementation.execute = () => 99;
       const active = registry.getActiveProvider("immutable.impl")!;
       const listed = registry.listProviders("immutable.impl")[0]!;
-      try {
-        active.implementation.execute = () => "snapshot mutated";
-      } catch {
-        /* frozen facade */
-      }
-      try {
-        listed.implementation.execute = () => "list mutated";
-      } catch {
-        /* frozen facade */
-      }
+      expect(active).not.toHaveProperty("implementation");
+      expect(listed).not.toHaveProperty("implementation");
 
       expect(await registry.execute("immutable.impl", {})).toBe(1);
       expect(await registry.execute("immutable.impl", {})).toBe(2);
@@ -450,9 +563,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
           implementation: { execute: () => "attacker" },
         }),
       ).toThrow(CapabilityConflictError);
-      expect(registry.getActiveProvider("memory.retrieve")?.implementation).not.toBe(
-        original.implementation,
-      );
+      expect(registry.getActiveProvider("memory.retrieve")).not.toHaveProperty("implementation");
       expect(registry.listProviders("memory.retrieve")).toHaveLength(1);
     });
 
@@ -485,7 +596,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
           implementation: { execute: () => "hijacked" },
         }),
       ).toThrow(CapabilityConflictError);
-      expect(registry.getActiveProvider("agent.loop")?.implementation).not.toBe(implementation);
+      expect(registry.getActiveProvider("agent.loop")).not.toHaveProperty("implementation");
       expect(registry.listProviders("agent.loop")).toHaveLength(1);
     });
 
@@ -626,7 +737,7 @@ describe("Fase 9 — Capability Registry & Provenance Architecture", () => {
           HOST_CAPABILITY_REGISTRATION_AUTHORITY,
         ),
       ).toThrow(CapabilityConflictError);
-      expect(registry.getActiveProvider("agent.loop")?.implementation).not.toBe(implementation);
+      expect(registry.getActiveProvider("agent.loop")).not.toHaveProperty("implementation");
       expect(registry.listProviders("agent.loop")).toHaveLength(1);
     });
 

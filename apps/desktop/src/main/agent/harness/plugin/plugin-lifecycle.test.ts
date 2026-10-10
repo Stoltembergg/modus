@@ -15,6 +15,7 @@ import { PluginLoader } from "./plugin-loader";
 import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import type { PluginManifest } from "./plugin-types";
+import { memoryPluginManifest } from "./plugins/memory-plugin";
 
 describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
   let db: DatabaseSync;
@@ -400,7 +401,9 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
 
       expect(results.every((result) => result.status === "fulfilled")).toBe(true);
       expect(store.getPlugin(sampleManifestV1.id)?.version).toBe("1.0.0");
-      expect(loader.getPlugin(sampleManifestV1.id)?.manifest).toBe(sampleManifestV1);
+      expect(loader.getPlugin(sampleManifestV1.id)?.manifest).toBe(
+        loader.resolveHostManifest(sampleManifestV1.id, sampleManifestV1.version),
+      );
       expect(await registry.execute("cache.query", {})).toEqual({ hit: true });
     });
 
@@ -493,7 +496,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         (entry) => entry.manifest.id === "@modus/memory",
       );
       if (!memoryEntry) throw new Error("Built-in memory plugin is missing from the host catalog");
-      catalog.add(memoryEntry.manifest, memoryEntry.trustLevel);
+      catalog.add(memoryPluginManifest, memoryEntry.trustLevel);
 
       const now = new Date().toISOString();
       store.savePlugin({
@@ -539,9 +542,8 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       const load = vi.spyOn(bootstrapResult.loader, "load");
       const memoryProvision = manifest.provides[0];
       if (!memoryProvision) throw new Error("Built-in memory plugin has no capability provision");
-      const pluginImplementation = memoryProvision.implementation?.execute;
-      if (!pluginImplementation) throw new Error("Built-in memory plugin has no implementation");
       const capabilityId = memoryProvision.capability;
+      const providersBeforeSync = bootstrapRegistry.listProviders(capabilityId);
       const now = new Date().toISOString();
       store.savePlugin({
         id: manifest.id,
@@ -571,11 +573,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
         expect(load.mock.calls.map(([loadedManifest]) => loadedManifest.id)).not.toContain(
           manifest.id,
         );
-        expect(
-          bootstrapRegistry
-            .listProviders(capabilityId)
-            .some((provider) => provider.implementation.execute === pluginImplementation),
-        ).toBe(false);
+        expect(bootstrapRegistry.listProviders(capabilityId)).toEqual(providersBeforeSync);
       } finally {
         load.mockRestore();
         for (const pluginId of bootstrapResult.loadedPlugins) {
@@ -707,6 +705,7 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
           deferActivation: true,
         });
         expect(secondLoader.getPlugin("@modus/memory")).toBeUndefined();
+        const memoryProvidersBeforeSync = secondRegistry.listProviders("memory.retrieve");
         const secondService = new PluginLifecycleService(
           durableStore,
           secondLoader,
@@ -716,15 +715,8 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
 
         expect(durableStore.getPlugin("@modus/memory")).toBeNull();
         expect(secondLoader.getPlugin("@modus/memory")).toBeUndefined();
-        const memoryImplementation = BUILT_IN_PLUGIN_ENTRIES.find(
-          (entry) => entry.manifest.id === "@modus/memory",
-        )?.manifest.provides[0]?.implementation?.execute;
-        expect(memoryImplementation).toBeDefined();
-        expect(
-          secondRegistry
-            .listProviders("memory.retrieve")
-            .some((provider) => provider.implementation.execute === memoryImplementation),
-        ).toBe(false);
+        expect(memoryProvidersBeforeSync).toHaveLength(1);
+        expect(secondRegistry.listProviders("memory.retrieve")).toEqual([]);
       } finally {
         for (const pluginId of firstBootstrap?.loadedPlugins ?? []) {
           await firstLoader.unload(pluginId).catch(() => undefined);
@@ -812,7 +804,9 @@ describe("Fase 11 — Plugin Lifecycle & State Storage", () => {
       const restored = await service.syncOnStartup();
 
       expect(restored).toContain(sampleManifestV1.id);
-      expect(loader.getPlugin(sampleManifestV1.id)?.manifest).toBe(sampleManifestV1);
+      expect(loader.getPlugin(sampleManifestV1.id)?.manifest).toBe(
+        loader.resolveHostManifest(sampleManifestV1.id, sampleManifestV1.version),
+      );
       expect(loader.getPlugin(sampleManifestV1.id)?.manifest.version).toBe("1.0.0");
       expect(store.getPlugin(sampleManifestV1.id)?.state).toBe("enabled");
     });

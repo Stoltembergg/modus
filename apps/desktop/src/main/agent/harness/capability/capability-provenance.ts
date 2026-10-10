@@ -6,7 +6,7 @@
 import type {
   CapabilityExecutionTrace,
   CapabilityProvenance,
-  CapabilityProvider,
+  CapabilityProviderDescriptor,
 } from "./capability-types";
 
 interface ProviderStats {
@@ -107,8 +107,8 @@ export class ProvenanceTracker {
   public getProvenance(
     capabilityId: string,
     apiVersion: string,
-    activeProvider: CapabilityProvider,
-    allProviders: CapabilityProvider[],
+    activeProvider: CapabilityProviderDescriptor,
+    allProviders: CapabilityProviderDescriptor[],
   ): CapabilityProvenance {
     const key = this.getKey(capabilityId, activeProvider.providerId);
     const stats = this.statsByCapabilityProvider.get(key);

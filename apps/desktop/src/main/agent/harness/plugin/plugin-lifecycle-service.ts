@@ -20,6 +20,7 @@ import type {
   PluginRecord,
   PluginStateStore,
 } from "./plugin-state-store";
+import type { PluginManifestDescriptor, PluginManifestInput } from "./plugin-types";
 import {
   PluginDependencyError,
   PluginLifecycleError,
@@ -318,7 +319,7 @@ export class PluginLifecycleService {
     this.dependencyGraph.addPlugin(manifest);
   }
 
-  private assertDependentCapabilitiesCompatible(manifest: PluginManifest): void {
+  private assertDependentCapabilitiesCompatible(manifest: PluginManifestInput): void {
     const graphNode = this.dependencyGraph.getPlugin(manifest.id);
     if (!graphNode) return;
 
@@ -374,7 +375,7 @@ export class PluginLifecycleService {
   }
 
   private async installUnlocked(
-    manifest: PluginManifest,
+    manifest: PluginManifestInput,
     config?: Record<string, unknown>,
     initialState: PersistentPluginState = "installed",
   ): Promise<PluginRecord> {
@@ -998,7 +999,12 @@ export class PluginLifecycleService {
         continue;
       }
       const manifest = this.resolveManifest(entry.manifest.id, entry.manifest.version);
-      if (manifest !== entry.manifest) continue;
+      if (!manifest) continue;
+      try {
+        if (manifest !== this.loader.authorizeManifest(entry.manifest).manifest) continue;
+      } catch {
+        continue;
+      }
       try {
         this.loader.authorizeManifest(manifest);
         await this.installUnlocked(manifest, undefined, "enabled");
@@ -1017,10 +1023,12 @@ export class PluginLifecycleService {
       const builtInEntry = BUILT_IN_PLUGIN_ENTRIES.find(
         (entry) => entry.manifest.id === record.id && entry.manifest.version === record.version,
       );
-      if (
-        !builtInEntry ||
-        this.resolveManifest(record.id, record.version) !== builtInEntry.manifest
-      ) {
+      if (!builtInEntry) continue;
+      const manifest = this.resolveManifest(record.id, record.version);
+      if (!manifest) continue;
+      try {
+        if (manifest !== this.loader.authorizeManifest(builtInEntry.manifest).manifest) continue;
+      } catch {
         continue;
       }
 
@@ -1040,7 +1048,7 @@ export class PluginLifecycleService {
       });
     }
 
-    const startupManifestsById = new Map<string, PluginManifest>();
+    const startupManifestsById = new Map<string, PluginManifestDescriptor>();
     for (const record of records) {
       const manifest = this.resolveManifest(record.id, record.version);
       if (manifest) startupManifestsById.set(record.id, manifest);

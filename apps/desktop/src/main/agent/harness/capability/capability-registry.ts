@@ -11,7 +11,9 @@ import type {
   Capability,
   CapabilityProvenance,
   CapabilityProvider,
+  CapabilityProviderDescriptor,
   DiscoveredCapability,
+  ProviderRegistrationCheckpoint,
 } from "./capability-types";
 import {
   CapabilityConflictError,
@@ -28,6 +30,10 @@ export class CapabilityRegistry {
   private implementationExecutors = new WeakMap<
     CapabilityProvider,
     CapabilityProvider["implementation"]["execute"]
+  >();
+  private providerRegistrationCheckpoints = new WeakMap<
+    ProviderRegistrationCheckpoint,
+    CapabilityProvider
   >();
   private tracker = new ProvenanceTracker();
   private instrumentation?: PluginInstrumentation | undefined;
@@ -67,35 +73,35 @@ export class CapabilityRegistry {
   private immutableSnapshot<T>(value: T): T {
     if (value instanceof Date) return new Date(value.getTime()) as T;
     if (Array.isArray(value)) {
-      return Object.freeze(value.map((item) => this.immutableSnapshot(item))) as T;
+      return Object.freeze(
+        value
+          .filter((item) => typeof item !== "function")
+          .map((item) => this.immutableSnapshot(item)),
+      ) as T;
     }
     if (value && typeof value === "object") {
       const snapshot = Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [key, this.immutableSnapshot(item)]),
+        Object.entries(value)
+          .filter(([, item]) => typeof item !== "function")
+          .map(([key, item]) => [key, this.immutableSnapshot(item)]),
       );
       return Object.freeze(snapshot) as T;
     }
     return value;
   }
 
-  private providerSnapshot(
-    provider: CapabilityProvider,
-    preserveSourceImplementation = false,
-  ): CapabilityProvider {
-    const { implementation, ...data } = provider;
-    const sourceImplementation = this.implementationSources.get(provider);
-    const execute = this.implementationExecutors.get(provider);
-    const snapshot = Object.freeze({
-      ...this.immutableSnapshot(data),
-      implementation: preserveSourceImplementation
-        ? Object.freeze({ execute: execute ?? implementation.execute })
-        : implementation,
-    }) as CapabilityProvider;
-    if (preserveSourceImplementation && sourceImplementation) {
-      this.implementationSources.set(snapshot, sourceImplementation);
-      if (execute) this.implementationExecutors.set(snapshot, execute);
-    }
-    return snapshot;
+  private providerDescriptor(provider: CapabilityProvider): CapabilityProviderDescriptor {
+    const metadata: CapabilityProviderDescriptor = {
+      providerId: provider.providerId,
+      providerVersion: provider.providerVersion,
+      capabilityId: provider.capabilityId,
+      capabilityApiVersion: provider.capabilityApiVersion,
+      trustLevel: provider.trustLevel,
+      permissions: provider.permissions,
+      registeredAt: provider.registeredAt,
+      metadata: provider.metadata,
+    };
+    return this.immutableSnapshot(metadata) as CapabilityProviderDescriptor;
   }
 
   // ---------------------------------------------------------------------------
@@ -195,38 +201,55 @@ export class CapabilityRegistry {
     }
   }
 
-  public getActiveProvider(capabilityId: string): CapabilityProvider | undefined {
+  public getActiveProvider(capabilityId: string): CapabilityProviderDescriptor | undefined {
     const activeId = this.activeProviders.get(capabilityId);
     if (!activeId) return undefined;
     const list = this.providers.get(capabilityId) ?? [];
     const provider = this.quarantinedProviderIds.has(activeId)
       ? list.find((p) => !this.quarantinedProviderIds.has(p.providerId))
       : list.find((p) => p.providerId === activeId);
-    return provider ? this.providerSnapshot(provider) : undefined;
+    return provider ? this.providerDescriptor(provider) : undefined;
   }
 
-  public listProviders(capabilityId: string): CapabilityProvider[] {
+  public listProviders(capabilityId: string): CapabilityProviderDescriptor[] {
     return Object.freeze(
       (this.providers.get(capabilityId) ?? [])
         .filter((provider) => !this.quarantinedProviderIds.has(provider.providerId))
-        .map((provider) => this.providerSnapshot(provider)),
-    ) as unknown as CapabilityProvider[];
+        .map((provider) => this.providerDescriptor(provider)),
+    ) as CapabilityProviderDescriptor[];
   }
 
-  public getProviderRegistration(
+  /** Capture private rollback state behind a non-executable, registry-owned handle. */
+  public captureProviderRegistration(
     capabilityId: string,
     providerId: string,
     authority?: symbol,
-  ): CapabilityProvider | undefined {
+  ): ProviderRegistrationCheckpoint | undefined {
     if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
-      throw new CapabilityConflictError(
-        "Provider registration inspection is reserved for the host.",
-      );
+      throw new CapabilityConflictError("Provider registration capture is reserved for the host.");
     }
     const provider = (this.providers.get(capabilityId) ?? []).find(
       (item) => item.providerId === providerId,
     );
-    return provider ? this.providerSnapshot(provider, true) : undefined;
+    if (!provider) return undefined;
+    const checkpoint = Object.freeze({}) as ProviderRegistrationCheckpoint;
+    this.providerRegistrationCheckpoints.set(checkpoint, this.cloneProvider(provider));
+    return checkpoint;
+  }
+
+  /** Restore a provider captured by this registry without returning its code to the caller. */
+  public restoreProviderRegistration(
+    checkpoint: ProviderRegistrationCheckpoint,
+    authority?: symbol,
+  ): boolean {
+    if (authority !== HOST_CAPABILITY_REGISTRATION_AUTHORITY) {
+      throw new CapabilityConflictError("Provider registration restore is reserved for the host.");
+    }
+    const provider = this.providerRegistrationCheckpoints.get(checkpoint);
+    if (!provider) return false;
+    this.registerProvider(provider, HOST_CAPABILITY_REGISTRATION_AUTHORITY);
+    this.providerRegistrationCheckpoints.delete(checkpoint);
+    return true;
   }
 
   public quarantineProvider(providerId: string, authority?: symbol): void {
@@ -535,6 +558,9 @@ export class CapabilityRegistry {
     this.providers.clear();
     this.activeProviders.clear();
     this.quarantinedProviderIds.clear();
+    this.implementationSources = new WeakMap();
+    this.implementationExecutors = new WeakMap();
+    this.providerRegistrationCheckpoints = new WeakMap();
     this.tracker.clear();
   }
 }

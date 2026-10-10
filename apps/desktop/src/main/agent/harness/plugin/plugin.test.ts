@@ -38,13 +38,65 @@ describe("Fase 10 — Modus Internal Plugins", () => {
     memoryStore.clear();
     registry = new CapabilityRegistry();
     catalog = new TestPluginCatalog();
-    for (const entry of BUILT_IN_PLUGIN_ENTRIES) catalog.add(entry.manifest, entry.trustLevel);
+    for (const manifest of [
+      memoryPluginManifest,
+      modelRouterPluginManifest,
+      contextEnginePluginManifest,
+      verifierPluginManifest,
+      failureIntelPluginManifest,
+      groupsPluginManifest,
+    ]) {
+      catalog.add(manifest, "core");
+    }
     loader = new PluginLoader(registry, catalog);
     registerCoreCapabilities(registry);
     resetFeatureFlagOverrides();
   });
 
   describe("10.1 — Plugin Manifest & Descriptor Validation", () => {
+    it("does not expose executable references in loader results or host manifests", async () => {
+      const manifest: PluginManifest = {
+        id: "@test/no-executable-escape",
+        name: "No executable escape fixture",
+        version: "1.0.0",
+        author: "test",
+        description: "Exercises the loader metadata boundary",
+        trustLevel: "official",
+        provides: [
+          {
+            capability: "memory.retrieve",
+            apiVersion: "1.0",
+            implementation: { execute: () => "through dispatcher" },
+            config: { visible: true, hiddenFunction: () => "must not escape" },
+          },
+        ],
+        requires: { modus: ">=0.8.0" },
+        permissions: { required: {} },
+        lifecycle: { onLoad: () => undefined },
+      };
+      catalog.add(manifest);
+
+      const loaded = await loader.load(manifest);
+      const fromGetter = loader.getPlugin(manifest.id);
+      const fromList = loader.listPlugins().find((plugin) => plugin.manifest.id === manifest.id);
+      const fromCatalog = loader.resolveHostManifest(manifest.id, manifest.version);
+      if (!fromCatalog) throw new Error("Expected the host catalog manifest descriptor.");
+
+      for (const result of [loaded, fromGetter, fromList]) {
+        expect(result).toBeDefined();
+        expect(result).not.toHaveProperty("implementations");
+        expect(result?.manifest).not.toHaveProperty("lifecycle");
+        expect(result?.manifest.provides[0]).not.toHaveProperty("implementation");
+      }
+      expect(fromCatalog?.provides[0]?.config).toEqual({ visible: true });
+      expect(fromCatalog).not.toHaveProperty("lifecycle");
+      expect(fromCatalog?.provides[0]).not.toHaveProperty("implementation");
+      expect(loader.authorizeManifest(manifest).manifest).toBe(fromCatalog);
+      const forgedDescriptor = { ...fromCatalog, name: "forged descriptor" };
+      expect(() => loader.authorizeManifest(forgedDescriptor)).toThrow(PluginValidationError);
+      await expect(registry.execute("memory.retrieve", {})).resolves.toBe("through dispatcher");
+    });
+
     it("does not request unused permissions or dependencies from built-in adapters", () => {
       for (const manifest of [
         memoryPluginManifest,
@@ -102,6 +154,7 @@ describe("Fase 10 — Modus Internal Plugins", () => {
   it("rejects a self-declared core clone before provider registration or hooks", async () => {
     const onLoad = vi.fn();
     const execute = vi.fn();
+    const providersBefore = registry.listProviders("memory.retrieve");
     const forged = {
       ...memoryPluginManifest,
       trustLevel: "core" as const,
@@ -114,9 +167,8 @@ describe("Fase 10 — Modus Internal Plugins", () => {
 
     await expect(loader.load(forged)).rejects.toThrow(PluginValidationError);
     expect(onLoad).not.toHaveBeenCalled();
-    expect(
-      registry.listProviders("memory.retrieve").some((p) => p.implementation.execute === execute),
-    ).toBe(false);
+    expect(registry.listProviders("memory.retrieve")).toEqual(providersBefore);
+    expect(registry.listProviders("memory.retrieve")[0]).not.toHaveProperty("implementation");
   });
 
   describe("10.2 — Dependency Checking & Resolution", () => {
@@ -1014,15 +1066,8 @@ describe("Fase 10 — Modus Internal Plugins", () => {
       expect(registry.getCapability("test.transaction.created")).toBeUndefined();
       expect(registry.listProviders("test.transaction.created")).toEqual([]);
       expect(await registry.execute(replaceableCapability, {})).toBe("original");
-      expect(
-        registry
-          .getProviderRegistration(
-            lockedCapability,
-            pluginId,
-            HOST_CAPABILITY_REGISTRATION_AUTHORITY,
-          )
-          ?.implementation.execute({}),
-      ).toBe("locked owner");
+      expect(registry.getActiveProvider(lockedCapability)).not.toHaveProperty("implementation");
+      expect(await registry.execute(lockedCapability, {})).toBe("locked owner");
       expect(registry.isProviderQuarantined("@test/keep-quarantine")).toBe(true);
       expect(registry.isProviderQuarantined(pluginId)).toBe(false);
     });

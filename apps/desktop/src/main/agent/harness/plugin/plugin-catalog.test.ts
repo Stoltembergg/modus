@@ -1,15 +1,46 @@
 import { describe, expect, it } from "vitest";
-import { HostPluginCatalog } from "./plugin-catalog";
+import { BUILT_IN_PLUGIN_ENTRIES, HostPluginCatalog } from "./plugin-catalog";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import { memoryPluginManifest } from "./plugins/memory-plugin";
 
 describe("HostPluginCatalog", () => {
+  it("exports built-in catalog entries as metadata-only descriptors", () => {
+    expect(BUILT_IN_PLUGIN_ENTRIES.length).toBeGreaterThan(0);
+    for (const entry of BUILT_IN_PLUGIN_ENTRIES) {
+      expect(entry.manifest).not.toHaveProperty("lifecycle");
+      for (const provision of entry.manifest.provides) {
+        expect(provision).not.toHaveProperty("implementation");
+      }
+      expect(JSON.stringify(entry)).not.toContain("execute");
+    }
+  });
+
   it("authorizes only the exact manifest object", () => {
     const catalog = new HostPluginCatalog([
       { manifest: memoryPluginManifest, trustLevel: "official" },
     ]);
     expect(catalog.authorize(memoryPluginManifest)?.trustLevel).toBe("official");
     expect(catalog.authorize({ ...memoryPluginManifest })).toBeUndefined();
+  });
+
+  it("returns metadata-only entries from the public catalog methods", () => {
+    const catalog = new HostPluginCatalog([
+      { manifest: memoryPluginManifest, trustLevel: "official" },
+    ]);
+
+    for (const entry of [
+      catalog.authorize(memoryPluginManifest),
+      catalog.resolve(memoryPluginManifest.id, memoryPluginManifest.version),
+      catalog.resolveById(memoryPluginManifest.id),
+    ]) {
+      expect(entry).toBeDefined();
+      expect(entry).not.toHaveProperty("sourceManifest");
+      expect(entry?.manifest).not.toHaveProperty("lifecycle");
+      expect(entry?.manifest.provides[0]).not.toHaveProperty("implementation");
+      expect(
+        Object.values(entry?.manifest ?? {}).some((value) => typeof value === "function"),
+      ).toBe(false);
+    }
   });
 
   it("freezes the trusted manifest graph after the catalog captures its identity", () => {
@@ -44,8 +75,9 @@ describe("HostPluginCatalog", () => {
       implementation.execute = replacement;
     }).toThrow();
     expect(implementation.execute).toBe(originalExecute);
-    expect(catalog.authorize(manifest)?.manifest.provides[0]?.implementation?.execute).toBe(
-      originalExecute,
+    expect(catalog.authorize(manifest)?.manifest.provides[0]).not.toHaveProperty("implementation");
+    expect(catalog.resolve(manifest.id, manifest.version)?.manifest).not.toHaveProperty(
+      "lifecycle",
     );
   });
 

@@ -79,6 +79,16 @@ export interface CapabilityProvider<TContext = unknown, TResult = unknown> {
   };
 }
 
+/** Public provider data omits executable code; invocation must go through the registry. */
+export type CapabilityProviderDescriptor = Omit<CapabilityProvider, "implementation">;
+
+declare const providerRegistrationCheckpointBrand: unique symbol;
+
+/** Opaque rollback handle; the registered implementation remains private to CapabilityRegistry. */
+export type ProviderRegistrationCheckpoint = {
+  readonly [providerRegistrationCheckpointBrand]: "ProviderRegistrationCheckpoint";
+};
+
 export interface CapabilityExecutionTrace {
   traceId: string;
   capability: string;

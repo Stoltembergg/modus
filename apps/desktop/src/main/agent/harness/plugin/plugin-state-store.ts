@@ -6,7 +6,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { TrustLevel } from "../capability/capability-types";
 import type { SafeModeLevel } from "./plugin-rollback-types";
-import type { PluginManifest } from "./plugin-types";
+import type { PluginManifestInput } from "./plugin-types";
 
 export type PersistentPluginState = "installed" | "enabled" | "disabled" | "error";
 
@@ -35,7 +35,7 @@ export interface PluginRecord {
 export interface PluginVersionRecord {
   plugin_id: string;
   version: string;
-  manifest: PluginManifest;
+  manifest: PluginManifestInput;
   installed_at: string;
 }
 
@@ -362,7 +362,7 @@ export class PluginStateStore {
   public saveVersion(
     pluginId: string,
     version: string,
-    manifest: PluginManifest,
+    manifest: PluginManifestInput,
     installedAt?: string,
   ): void {
     const stmt = this.db.prepare(`

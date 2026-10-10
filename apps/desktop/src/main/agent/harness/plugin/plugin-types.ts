@@ -52,13 +52,19 @@ export interface PluginManifest {
   lifecycle?: PluginLifecycleHooks | undefined;
 }
 
+/** Host-visible plugin metadata; executable provisions and lifecycle callbacks stay in the loader. */
+export type PluginManifestDescriptor = Omit<PluginManifest, "provides" | "lifecycle"> & {
+  provides: Array<Omit<CapabilityProvision, "implementation">>;
+};
+
+export type PluginManifestInput = PluginManifest | PluginManifestDescriptor;
+
 export type PluginStatus = "unloaded" | "loaded" | "enabled" | "disabled" | "error";
 
 export interface LoadedPlugin {
-  manifest: PluginManifest;
+  manifest: PluginManifestDescriptor;
   status: PluginStatus;
   loadedAt: Date;
-  implementations: Record<string, CapabilityImplementation>;
   error?: string | undefined;
 }
 

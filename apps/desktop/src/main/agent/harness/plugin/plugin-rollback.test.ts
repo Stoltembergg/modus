@@ -223,7 +223,9 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       await expect(service.upgrade(officialCandidate)).rejects.toThrow(/Safe Mode 'core'/);
 
       expect(store.getPlugin(pluginV1.id)).toMatchObject({ version: "1.0.0", trust_level: "core" });
-      expect(loader.getPlugin(pluginV1.id)?.manifest).toBe(pluginV1);
+      expect(loader.getPlugin(pluginV1.id)?.manifest).toBe(
+        loader.resolveHostManifest(pluginV1.id, pluginV1.version),
+      );
       expect(onLoad).not.toHaveBeenCalled();
       expect(registry.isProviderQuarantined(pluginV1.id)).toBe(false);
     });
@@ -245,7 +247,9 @@ describe("Fase 15 — Rollback e Safe Mode", () => {
       );
 
       expect(store.getPlugin(pluginV2.id)).toMatchObject({ version: "2.0.0", trust_level: "core" });
-      expect(loader.getPlugin(pluginV2.id)?.manifest).toBe(pluginV2);
+      expect(loader.getPlugin(pluginV2.id)?.manifest).toBe(
+        loader.resolveHostManifest(pluginV2.id, pluginV2.version),
+      );
       expect(onLoad).not.toHaveBeenCalled();
       expect(registry.isProviderQuarantined(pluginV2.id)).toBe(false);
     });
