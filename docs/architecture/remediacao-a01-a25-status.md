@@ -45,21 +45,41 @@ crate’s safe unit fixtures.
   the shared serializer now writes into a byte-limited buffer and stops when
   the configured ceiling is reached.
 - GREEN: local `cargo test --locked -p modus-plugin-execution-protocol` on
-  Rust 1.85.1 passed **11/11** synthetic protocol tests. Rustfmt 1.85.1 and
-  `git diff --check` passed. Remote CI for the fix is pending.
+  Rust 1.85.1 passed **14/14** synthetic protocol and fixed-policy tests.
+  Follow-up RED runs caught missing 100 ms cooperative-cancel and 2 s
+  kill/reap ceilings, and showed the prior encoder/decoder could accept a
+  256 KiB payload plus a four-byte header. The shared policy now records both
+  cleanup limits, and the frame ceiling counts the header in the 256 KiB cap.
+  Rustfmt 1.85.1 and `git diff --check` passed. Remote CI for this follow-up is
+  pending.
 - Independent static review found no further protocol-schema or handshake
   blocker. It explicitly confirmed that `close()` cannot revoke an invocation
   already returned to a future asynchronous caller; any real dispatcher must
   recheck cancellation and run generation before side effects. No such caller
   is integrated yet.
 
+The shared `resource_policy` module now records the existing approved ceilings
+for artifacts, IPC/results, output, WASM memory, helper RSS, aggregate memory,
+fuel, one-core CPU, timeouts, cancellation grace, reap deadline, hostcalls,
+pending requests, helper concurrency, guest children, and handles/file
+descriptors. The IPC-related values reuse the codec constants so they cannot
+drift, and `MAX_IPC_FRAME_BYTES` includes the length prefix. Fixed-value tests
+failed RED when the artifact cap was zero and when cancel/reap limits were
+missing; both now match the approved values. The protocol plus policy crate
+tests pass **14/14** locally. This is a policy contract, not enforcement: no platform
+adapter or runtime gate consumes it yet. In particular the Linux cgroup
+memory ceiling is not the required RSS ceiling, and the reviewed Windows
+mechanisms do not enforce the required general handle cap or strict RSS; no
+macOS adapter is present. All three platforms therefore remain blocked for
+external execution.
+
 No child process is launched, no plugin/WASM bytes are handled, and no OS
 adapter or Pi SDK callsite was added. The worker message has no `plugin_id`
 field; the dispatcher copies identity from the host-bound session. Windows,
-Linux, and macOS enforcement, the full CPU/RSS/deadline/process/handle policy,
-and preemptible process-tree termination remain unimplemented. External
-plugin execution stays blocked, while built-in Harness execution remains on
-the existing trusted host-catalog path.
+Linux, and macOS enforcement of the shared policy and preemptible process-tree
+termination remain unimplemented. External plugin execution stays blocked,
+while built-in Harness execution remains on the existing trusted host-catalog
+path.
 
 ## Mission CI prerequisite — Free monthly renewal calendar
 
@@ -131,6 +151,21 @@ current due date and stops future repeated month clipping, but cannot restore
 the original day-of-month for a legacy Stripe wallet whose deadline had
 already drifted. A future transaction-to-subscription relation can improve
 provenance for cycles recorded after that schema change.
+
+## Remote CI on IPC protocol commit `f0e41d3`
+
+Workflow `38078478316` completed its `typecheck · test · biome` job
+successfully. Global Vitest passed **4,608 tests** across **408 files**, with
+**8 skipped** (**131.66 s**). The safe protocol job passed formatting and its
+then-current **11/11** synthetic tests. Supabase pgTAP/integration,
+Verifier-First runtime regressions, PTY cancellation, and Windows/macOS plugin
+containment passed; the sandbox job only compiled and did not launch probes.
+Ubuntu plugin containment failed the `FastVectorDistance` assertion at
+**0.102602 ms** against `<0.1 ms` (**279 passed, 1 failed, 7 skipped** in that
+subset). No base-branch comparison was performed, so this is recorded without
+a baseline or instability classification. Windows and macOS packaging runs
+`38078478287` and `38078478240` were still running at this update. The resource
+policy follow-up is not part of this run.
 
 ## Milestone 1 — A01/A02 in-process facade
 
@@ -1602,10 +1637,10 @@ and macOS packaging runs for this commit remain in progress at this update.
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
-| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. Commit `5d002c7` adds a RED/GREEN review-service loader regression guard; separate containment tests exercise the real Pi loader. OS process isolation remains absent; hostile execution proof remains blocked. |
-| A02 | Partially mitigated | Review auto-discovery is disabled; the facade no longer claims timeout is containment. Preemption/budgets remain absent. Do not run blocked loop probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog now freezes trusted manifest graphs and authorizes by exact host identity/derived trust. This protects against post-registration manifest mutation, but same-process built-in provenance is not an isolation boundary. |
-| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Direct dispatch/hooks remain for catalogued built-ins. A single OS-backed dispatcher and lifecycle boundary remain open. |
+| A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. Commit `f0e41d3` adds shared bounded IPC framing and strict worker schemas; real OS isolation and host-runtime integration remain absent. Hostile execution proof remains blocked. |
+| A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The IPC dispatcher attaches provenance from its host-bound session, but is not wired to a catalog or productive runtime and does not establish trust on its own. |
+| A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. The shared IPC dispatcher enforces exact grants in synthetic fixtures, but direct dispatch/hooks remain for catalogued built-ins and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |

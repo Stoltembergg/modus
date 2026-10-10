@@ -12,11 +12,15 @@ use std::io::{self, Write};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod resource_policy;
+
 pub const PROTOCOL_VERSION: u16 = 1;
+/// Maximum on-wire frame size, including the four-byte length prefix.
 pub const MAX_IPC_FRAME_BYTES: usize = 256 * 1024;
 pub const MAX_RESULT_BYTES: usize = 64 * 1024;
 pub const MAX_PENDING_REQUESTS: usize = 16;
 const FRAME_HEADER_BYTES: usize = 4;
+const MAX_IPC_PAYLOAD_BYTES: usize = MAX_IPC_FRAME_BYTES - FRAME_HEADER_BYTES;
 const MAX_ID_BYTES: usize = 128;
 
 /// Message schema for the worker-to-host direction. Identity, trust, grants,
@@ -388,7 +392,7 @@ fn encode_host_frame(message: &HostFrame) -> Result<Vec<u8>, ProtocolError> {
 }
 
 fn encode_message(message: &impl Serialize) -> Result<Vec<u8>, ProtocolError> {
-    let payload = serialize_bounded(message, MAX_IPC_FRAME_BYTES, ProtocolError::FrameTooLarge)?;
+    let payload = serialize_bounded(message, MAX_IPC_PAYLOAD_BYTES, ProtocolError::FrameTooLarge)?;
     if payload.is_empty() {
         return Err(ProtocolError::InvalidLength);
     }
@@ -442,6 +446,9 @@ fn serialize_bounded<T: Serialize>(
 }
 
 fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, ProtocolError> {
+    if frame.len() > MAX_IPC_FRAME_BYTES {
+        return Err(ProtocolError::FrameTooLarge);
+    }
     if frame.len() < FRAME_HEADER_BYTES {
         return Err(ProtocolError::InvalidLength);
     }
@@ -453,7 +460,7 @@ fn decode_message<T: for<'de> Deserialize<'de>>(frame: &[u8]) -> Result<T, Proto
     if declared == 0 {
         return Err(ProtocolError::InvalidLength);
     }
-    if declared > MAX_IPC_FRAME_BYTES {
+    if declared > MAX_IPC_PAYLOAD_BYTES {
         return Err(ProtocolError::FrameTooLarge);
     }
     if frame.len() != FRAME_HEADER_BYTES + declared {
@@ -575,6 +582,25 @@ mod tests {
             decode_worker_frame(&raw_frame(json.as_bytes())),
             Err(ProtocolError::FrameTooLarge),
         );
+    }
+
+    #[test]
+    fn wire_frame_limit_includes_the_length_prefix() {
+        let exact_value = "x".repeat(MAX_IPC_FRAME_BYTES - FRAME_HEADER_BYTES - 2);
+        let exact_frame = encode_message(&exact_value).unwrap();
+        assert_eq!(exact_frame.len(), MAX_IPC_FRAME_BYTES);
+        assert_eq!(decode_message::<String>(&exact_frame), Ok(exact_value),);
+
+        let oversized_value = "x".repeat(MAX_IPC_FRAME_BYTES - FRAME_HEADER_BYTES - 1);
+        assert!(matches!(
+            encode_message(&oversized_value),
+            Err(ProtocolError::FrameTooLarge)
+        ));
+        let oversized_payload = serde_json::to_vec(&oversized_value).unwrap();
+        assert!(matches!(
+            decode_message::<String>(&raw_frame(&oversized_payload)),
+            Err(ProtocolError::FrameTooLarge)
+        ));
     }
 
     #[test]
