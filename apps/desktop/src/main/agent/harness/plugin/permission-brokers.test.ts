@@ -83,6 +83,10 @@ describe("ShellBroker nested package execution policy", () => {
           "corepack",
           "corepack npm test",
           "corepack.cmd npm test",
+          "make test",
+          "wsl npm test",
+          "parallel npm test",
+          "runuser -u nobody npm test",
         ],
       },
     };
@@ -117,6 +121,10 @@ describe("ShellBroker nested package execution policy", () => {
       "yarnpkg test",
       "corepack npm test",
       "corepack.cmd npm test",
+      "make test",
+      "wsl npm test",
+      "parallel npm test",
+      "runuser -u nobody npm test",
     ]) {
       expect(broker.canExecute(command, permissions, "synthetic-plugin"), command).toBe(false);
     }

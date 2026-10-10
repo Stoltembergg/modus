@@ -1833,7 +1833,7 @@ cancellation follow-up above.
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
 | A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::1` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
-| A09 | Partially mitigated | Tested shell composition, common interpreter/package-manager launchers, selected wrappers, forged trust, and direct Git operation grant bypasses are rejected. The API remains a raw command-string predicate with no production callsites. Arbitrary wrappers (`make`, `wsl`, `parallel`, `runuser`), structured argv, resource scoping, and execution enforcement remain open. Conservative syntax rejection also blocks some quoted, backslash, and `=` arguments. |
+| A09 | Partially mitigated | Tested shell composition, common interpreter/package-manager launchers, selected wrappers (including `make`, `wsl`, `parallel`, and `runuser`), forged trust, and direct Git operation grant bypasses are rejected. The API remains a raw command-string predicate with no production callsites. Other intermediaries such as `gmake`, `sem`, and `doas`, structured argv, resource scoping, and execution enforcement remain open. Conservative syntax rejection also blocks some quoted, backslash, and `=` arguments. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
@@ -2070,3 +2070,22 @@ broker authorizes package-manager launches.
   failure was `FastVectorDistance` at **0.117430 ms** against `<0.1 ms`. The
   timing result is not classified as pre-existing or solely environmental.
   No probe ran and no benchmark or threshold was changed.
+
+### A09 launcher-denylist follow-up
+
+The previous source review identified exact grants for `make`, `wsl`,
+`parallel`, and `runuser` as a way to enter nested project commands or change
+execution context. These names now join the shell broker's conservative
+launcher denylist before exact allow-list matching.
+
+- RED: `make test` was accepted under an exact `make test` grant. GREEN: the
+  safe predicate tests deny `make`, `wsl`, `parallel`, and `runuser` while
+  preserving existing explicit operation checks. The test uses `canExecute`
+  with a synthetic audit logger only; no command, plugin, or network operation
+  ran. Combined focused regression set: **36/36 tests across eight files**.
+- Independent review found no defect in these four additions and confirmed
+  the tests do not launch processes. The finite list still misses variants
+  such as `gmake`, `sem`, and `doas`; A09 remains a partial policy predicate,
+  not a sandbox or execution boundary. Exact grants for the four newly denied
+  names intentionally stop working if any future caller uses this API.
+- Targeted Biome and `git diff --check` pass. Desktop typecheck passed.
