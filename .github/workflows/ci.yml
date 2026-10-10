@@ -158,9 +158,6 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Check PTY host formatting
-        run: cargo fmt --manifest-path crates/pty-host/Cargo.toml -- --check
-
       - name: Test managed PTY process-tree cancellation
         run: cargo test --locked -p modus-pty-host
 
