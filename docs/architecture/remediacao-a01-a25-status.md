@@ -119,14 +119,56 @@ authorization wiring and OS-level enforcement remain open.**
 - Static callsite search found no production use of `FilesystemBroker`,
   `NetworkBroker`, `ShellBroker`, or `GitBroker` outside their definitions.
 
+## A03/A04 boundary check — host-catalog ingress
+
+**Status: partially mitigated; no safe boundary implementation is available in
+this scope without disabling shipped Harness behavior.**
+
+The productive `PiSdkRuntime` constructs its `PluginLoader` with the built-in
+host catalog. The catalog authorizes the exact manifest object and the loader
+derives trust from the catalog entry, so a cloned or self-declared `core`
+manifest is rejected before provider registration or lifecycle hooks. A new
+runtime-level regression test exercises that exact loader and confirms the
+forged manifest's hook is never called. Existing capability-registry tests
+cover unauthenticated same-ID replacement attempts, non-replaceable
+capabilities, and provider-switch denial. The Pi SDK resource loader also uses
+`noExtensions: true`; the extension-containment check passed in the remote CI
+run for `ac8b50f`.
+
+The remaining dispatcher and lifecycle calls are direct, same-process calls
+for shipped catalogued built-ins. `PluginIsolationHost` now denies execution
+and is not an OS executor, so routing the built-ins through it would stop core
+Harness functionality without providing containment. Third-party manifests
+remain unavailable through the production catalog. This does not prove
+isolation against code already executing in the host process; A03/A04 remain
+partially mitigated until a real external execution boundary and one authorized
+dispatcher can be introduced and safely validated.
+
+### Evidence
+
+- Runtime path test: **1 passed**, **219 skipped** by the exact test-name
+  filter. The synthetic forged manifest was rejected before its hook or
+  provider implementation was invoked.
+- Desktop typecheck: passed, exit 0. Targeted Biome: no errors; eight existing
+  warnings remain in the large runtime test file. `git diff --check`: passed.
+- Remote CI on `ac8b50f`: `typecheck · test · biome`, Verifier-First runtime
+  regressions, plugin containment on Linux/macOS/Windows, and compile-only
+  sandbox targets all passed; no probe was executed. The Supabase pgTAP job
+  failed test 22 in `17_free_monthly_renewal.test.sql`: at 2026-10-10 it
+  expected `2026-10-31` but received `2026-10-30` for the second monthly
+  period end. The same failure was observed on the prior CI run at `fdefe34`;
+  the test is outside the changed files and is not classified as pre-existing
+  or unrelated without further evidence. Windows and macOS package jobs were
+  still running when this status was recorded.
+
 ## Current matrix
 
 | Finding | Current status | Implementation state / next evidence |
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed; process isolation is absent. Audit every ingress; hostile execution proof remains blocked. |
 | A02 | Partially mitigated | Facade no longer claims a timeout is containment; preemption/budgets remain absent. Do not run blocked loop probes. |
-| A03 | Partially mitigated | Loader requires exact host-catalog manifests and the Pi loader sets `noExtensions: true`; registry authority still shares the host process, so provenance is not fully proven. |
-| A04 | Pending validation | Registry and lifecycle invoke callbacks directly, but the productive loader uses the internal host catalog; keep external origins blocked and verify remaining provider-ingress calls. |
+| A03 | Partially mitigated | Production loader uses exact host-catalog identity and host-derived trust; runtime test rejects forged manifests before hooks. Same-process provenance is not an isolation boundary. |
+| A04 | Partially mitigated | Direct dispatch and hooks remain for catalogued built-ins; production loader blocks external manifests. A single OS-backed dispatcher and lifecycle boundary remain open. |
 | A05 | Pending | WASM memory accounting and aggregate limits. |
 | A06 | Prior fix preserved | Deny ungranted WASI imports; recheck static contracts without running enforcement probes. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |

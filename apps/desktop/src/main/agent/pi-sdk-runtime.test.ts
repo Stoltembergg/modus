@@ -25,6 +25,7 @@ import type {
   TurnSettleOutput,
 } from "./harness/kernel/harness-hooks";
 import type { HarnessKernel } from "./harness/kernel/harness-kernel";
+import type { PluginManifest } from "./harness/plugin/plugin-types";
 
 let userData: string;
 let cwd: string;
@@ -1096,6 +1097,25 @@ describe("PiSdkRuntime", () => {
     await runtime.waitForPlugins();
     expect(sync).toHaveBeenCalledOnce();
     lifecycleSpy.mockRestore();
+  });
+
+  it("production runtime loader rejects a forged core manifest before running its hooks", async () => {
+    setFeatureFlagOverrides({ MODUS_PLUGINS: false });
+    const runtime = new PiSdkRuntime();
+    const { memoryPluginManifest } = await import("./harness/plugin/plugins/memory-plugin");
+    const onLoad = vi.fn();
+    const forgedManifest: PluginManifest = {
+      ...memoryPluginManifest,
+      id: `@untrusted/runtime-${crypto.randomUUID()}`,
+      trustLevel: "core",
+      lifecycle: { onLoad },
+    };
+
+    await expect(runtime.getPluginLoader().load(forgedManifest)).rejects.toThrow(
+      "is not authorized by the host catalog",
+    );
+    expect(onLoad).not.toHaveBeenCalled();
+    expect(runtime.getCapabilityRegistry().listProviders("memory.retrieve")).toHaveLength(0);
   });
 
   it("restrictive extension loader", async () => {
