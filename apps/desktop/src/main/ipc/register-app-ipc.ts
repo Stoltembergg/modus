@@ -16,7 +16,6 @@ import type { DiffReview, DiffReviewReady, DiffTarget } from "../../shared/contr
 import {
   getRunWorkspaceRevision,
   listAgentEventPage,
-  listAgentEvents,
   recordAgentEvent,
 } from "../agent/agent-event-store";
 import { listAgentRuns } from "../agent/agent-run-store";
@@ -528,11 +527,6 @@ export function registerAppIpc({
     assertTrustedSender(event);
     const id = parseIpcInput(sessionIdSchema, workspaceId, IPC_CHANNELS.agentListArchived);
     return listArchivedAgentSessions(id);
-  });
-
-  ipcMain.handle(IPC_CHANNELS.agentListEvents, (event, sessionId: string) => {
-    assertTrustedSender(event);
-    return listAgentEvents(parseIpcInput(sessionIdSchema, sessionId, IPC_CHANNELS.agentListEvents));
   });
 
   ipcMain.handle(IPC_CHANNELS.agentListEventPage, (event, input) => {

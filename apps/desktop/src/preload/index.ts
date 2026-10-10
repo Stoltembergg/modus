@@ -160,7 +160,6 @@ const api: ModusApi = {
     create: (input) => ipcRenderer.invoke("agent:create", input),
     list: (input) => ipcRenderer.invoke("agent:list", input),
     listArchived: (workspaceId) => ipcRenderer.invoke("agent:list-archived", workspaceId),
-    listEvents: (sessionId) => ipcRenderer.invoke("agent:list-events", sessionId),
     listEventPage: (sessionId, options) =>
       ipcRenderer.invoke("agent:list-event-page", { sessionId, options }),
     listRuns: (sessionId) => ipcRenderer.invoke("agent:list-runs", sessionId),

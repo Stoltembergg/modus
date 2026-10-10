@@ -86,8 +86,7 @@ describe("useRunSources", () => {
       .fn()
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce(secondPage);
-    const listEvents = vi.fn(async (): Promise<AgentEventItem[]> => events);
-    Object.assign(window, { modus: { agent: { listEventPage, listEvents } } });
+    Object.assign(window, { modus: { agent: { listEventPage } } });
 
     const hook = renderHook(() => useRunSources("s", "run-target", true));
 
@@ -112,7 +111,6 @@ describe("useRunSources", () => {
       limit: 256,
       snapshotCursor: 5,
     });
-    expect(listEvents).not.toHaveBeenCalled();
   });
 
   it("does not retain the full event page after the source view unmounts", async () => {

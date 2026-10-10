@@ -352,9 +352,6 @@ export type ModusApi = {
     }): Promise<AgentSessionInfo>;
     list(input?: { includeSessionId?: string }): Promise<AgentSessionInfo[]>;
     listArchived(workspaceId: string): Promise<AgentSessionInfo[]>;
-    listEvents(
-      sessionId: string,
-    ): Promise<Array<{ id: string; event: AgentEvent; createdAt?: string }>>;
     listEventPage(sessionId: string, options: AgentEventPageOptions): Promise<AgentEventPage>;
     listRuns(sessionId: string): Promise<AgentRunInfo[]>;
     /** Current source-content revision for one exact run and its owning session. */

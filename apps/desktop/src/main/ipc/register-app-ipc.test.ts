@@ -48,7 +48,6 @@ vi.mock("../agent/agent-store", () => ({
 }));
 vi.mock("../agent/agent-event-store", () => ({
   listAgentEventPage: mocks.listAgentEventPage,
-  listAgentEvents: vi.fn(() => []),
   recordAgentEvent: mocks.recordAgentEvent,
   getRunWorkspaceRevision: mocks.getRunWorkspaceRevision,
   getWorkspaceHarnessInsightEvidence: vi.fn(() => ({ runs: [], events: [] })),
@@ -173,6 +172,11 @@ describe("agent event page IPC", () => {
     mocks.listAgentEventPage.mockReset();
     registerTrustedSender(sender, "file:///app/index.html");
     registerAppIpc();
+  });
+
+  it("does not expose unbounded full-history event reads over IPC", () => {
+    expect(mocks.handlers.has("agent:list-events")).toBe(false);
+    expect(mocks.handlers.has(IPC_CHANNELS.agentListEventPage)).toBe(true);
   });
 
   it("passes trusted bounded page requests to the stable-cursor store", () => {

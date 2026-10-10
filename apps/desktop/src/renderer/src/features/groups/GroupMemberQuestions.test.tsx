@@ -31,7 +31,6 @@ function setup() {
   Object.assign(window, {
     modus: {
       agent: {
-        listEvents: vi.fn(async () => []),
         listEventPage: vi.fn(
           (sessionId: string) =>
             new Promise<AgentEventPage>((resolve) =>

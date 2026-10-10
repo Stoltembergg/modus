@@ -89,7 +89,6 @@ beforeEach(() => {
   Object.assign(window, {
     modus: {
       agent: {
-        listEvents: vi.fn(async () => []),
         listEventPage: vi.fn(async () => ({
           events: [],
           summaryEvents: [],
