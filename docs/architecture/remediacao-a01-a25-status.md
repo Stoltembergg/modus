@@ -66,20 +66,33 @@ descriptors. The IPC-related values reuse the codec constants so they cannot
 drift, and `MAX_IPC_FRAME_BYTES` includes the length prefix. Fixed-value tests
 failed RED when the artifact cap was zero and when cancel/reap limits were
 missing; both now match the approved values. The protocol plus policy crate
-tests pass **14/14** locally. This is a policy contract, not enforcement: no platform
-adapter or runtime gate consumes it yet. In particular the Linux cgroup
+tests pass **14/14** locally. This is a policy contract, not enforcement: no
+platform adapter or runtime gate consumes it yet. In particular the Linux cgroup
 memory ceiling is not the required RSS ceiling, and the reviewed Windows
 mechanisms do not enforce the required general handle cap or strict RSS; no
 macOS adapter is present. All three platforms therefore remain blocked for
 external execution.
 
-No child process is launched, no plugin/WASM bytes are handled, and no OS
-adapter or Pi SDK callsite was added. The worker message has no `plugin_id`
-field; the dispatcher copies identity from the host-bound session. Windows,
-Linux, and macOS enforcement of the shared policy and preemptible process-tree
-termination remain unimplemented. External plugin execution stays blocked,
-while built-in Harness execution remains on the existing trusted host-catalog
-path.
+Platform split for the next executor tranche:
+
+| Platform | Existing component | Verified gap | Admission state |
+|---|---|---|---|
+| Linux | `plugin-sandbox-probe/src/platform/linux.rs` performs read-only cgroup/namespace preflight. | No child process is placed into a configured policy; `memory.max` is not treated as proof of the approved RSS-only ceiling; no installed and verified seccomp/Landlock policy or bounded reap path. | External worker denied. A production adapter must require delegated cgroup v2 controls, install the complete policy before exec, and fail closed when any controller or reap guarantee is missing. |
+| Windows | `plugin-sandbox-probe/src/platform/windows.rs` reports diagnostic Job Object and process-tree evidence. | Job memory limits constrain commit rather than strict RSS; no tamper-resistant general kernel-handle cap of 64; diagnostic tree handling is not an integrated worker lifecycle supervisor. | External worker denied. A production adapter must enforce the exact RSS and handle ceilings, own the process tree, and meet the termination/reap deadline before admission. |
+| macOS | No process-isolation adapter is present. | No supported mechanism has been implemented and reviewed against the full shared policy. | External worker denied. The adapter must meet every shared limit and preemptible process-tree cleanup before admission. |
+
+The shared protocol and dispatcher remain platform-neutral and testable with
+synthetic frames. The platform rows above are separate from the trusted
+in-process HostPluginCatalog path; they do not disable built-in Harness
+plugins, Pi-owned extension factories, or existing trusted providers.
+
+No external-plugin child process is launched and no plugin/WASM bytes are
+handled by an executor; no OS adapter or Pi SDK callsite was added. The worker
+message has no `plugin_id` field; the dispatcher copies identity from the
+host-bound session. Windows, Linux, and macOS enforcement of the shared policy
+and preemptible process-tree termination remain unimplemented. External plugin
+execution stays blocked, while built-in Harness execution remains on the
+existing trusted host-catalog path.
 
 The next A03 increment extends host-only provenance with exact plugin version,
 artifact origin, catalog-resolved trust level, session id, and workspace id in
@@ -1829,7 +1842,7 @@ cancellation follow-up above.
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No platform adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
 | A03 | Partially mitigated | Chat/review auto-discovery remains blocked. Host catalog lookups, built-in catalog entries, loader results, and capability provider queries expose immutable metadata descriptors without lifecycle/implementation callbacks. `PluginLoader` now also rejects a catalog's self-declared trust unless the exact catalog/source pair is registered by host-owned wiring. Exact source references remain private to trusted in-process loader wiring; this is API encapsulation, not process isolation. The v2 IPC contract carries host-only digest, origin, trust, session/workspace/run and generation provenance, but has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. Registry provider execution remains dispatched through `CapabilityRegistry.execute`; rollback uses opaque registry-owned checkpoints. Public catalog/registry lookup APIs no longer return implementation references. The shared IPC dispatcher validates exact grants and cancellation in synthetic fixtures, but built-ins remain trusted in-process and no OS-backed dispatcher/lifecycle boundary is integrated. |
-| A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
+| A05 | Partially mitigated; WASM watchdog cleanup fixed | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, keeps fuel imports host-owned, and now clears the host timeout timer on every settled invocation. External plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated; FilesystemBroker now fails closed before metadata lookup | All path grants return denial before filesystem metadata or content I/O; `readFile`/`writeFile` audit and throw until a handle-bound executor exists. This is no longer a path-containment proof. No production consumer; scoped safe I/O and OS-handle binding remain open. |
 | A08 | Partially mitigated; NetworkBroker now fails closed | Exact public-domain/IP grants no longer return allow without DNS-pinned connection enforcement. Audit reasons still distinguish protected ranges from ordinary public destinations denied for absent I/O. The broker has no production caller. DNS pinning, redirect enforcement, actual connection control, and production wiring remain open. |
@@ -2139,7 +2152,7 @@ does not execute Git. A future OS executor must add a host-owned, scoped
 dispatcher before either permission result can be used to authorize a child
 process.
 
-### A07/A08 broker fail-closed follow-up pending remote CI
+### A07/A08 broker fail-closed follow-up and remote CI
 
 Static search found no productive constructors or callers for
 `FilesystemBroker` or `NetworkBroker`; the only internal calls are the
@@ -2169,27 +2182,60 @@ I/O was performed.
   `scripts/audit-phase19/probes.ts` still uses the old two-argument broker
   constructor and expects successful file operations. This non-production
   probe was not executed and is not valid evidence for the new fail-closed
-  contract; it is outside the desktop typecheck. The review also confirmed the
-  no-content/no-socket paths and the audit-reason assertions below.
+  contract; its `brokers` mode stops at the expected filesystem denial before
+  reaching its network summary. It is outside the desktop typecheck. The fresh
+  review also confirmed the no-content/no-socket paths and found no product
+  regression.
 - Desktop typecheck passed after the final no-metadata change. Targeted Biome
   exits 0 with 6 informational diagnostics (5 in
   `plugin-isolation.test.ts`, 1 in `permission-brokers.ts`); these lines were
   not compared against base and are not classified as pre-existing. No
   warnings or errors remain in the touched-file check. `git diff --check`
   passed.
-- Remote CI is pending for the change. The prior workflow `38092837910` on
-  `9df3e23` (before this A07/A08 patch) completed with **4,638 passed, 8
-  skipped, 1 failed** across 413 files. Its only failure was
-  `FastVectorDistance` at **0.118112 ms** against `<0.1 ms`; the benchmark and
-  filters were unchanged. No baseline or instability classification is
-  claimed. Its other jobs, including pgTAP, safe IPC, safe-filtered
-  containment, A17/A21 and PTY, passed. This workflow is not evidence for the
-  current patch.
+- Remote workflow `38093868417` on `e86b2dc` completed with failure in the
+  global `typecheck · test · biome` job. Biome and typecheck succeeded; Vitest
+  reported **4,639 passed, 8 skipped, 1 failed** across 413 files. The sole
+  failure was `FastVectorDistance` at **0.158736 ms** against `<0.1 ms`; no
+  benchmark, threshold, filter, or productive code was changed. The same test
+  failed on the previous head `9df3e23` at **0.118112 ms**. These repeated
+  observations do not establish a baseline. An official rerun of only the
+  failed job passed on the same `e86b2dc` head with **4,640 passed, 8 skipped,
+  0 failed** across 413 files; the site test command then passed **5/5**.
+  The cause of the differing benchmark outcomes remains unidentified. No
+  benchmark, threshold, or filter was changed. The run's Supabase
+  pgTAP/integration, safe IPC fixtures,
+  safe-filtered containment on Ubuntu/macOS/Windows, A17/A21 regressions, PTY
+  cancellation, and sandbox compile-only jobs all passed. The sandbox was
+  compiled only; no probe executed. Windows x64 and macOS x64/arm64 packaging
+  all passed.
 
 The APIs remain exported, so future callers fail closed until they are
 replaced by host-owned operations that bind permission evaluation to the
 actual filesystem handle or network socket. This is not a certified
 containment boundary.
+
+### A05 watchdog timer cleanup
+
+`WasmCapabilityHost.executeWasm` used a `Promise.race` deadline timer but did
+not clear the timer when the invocation completed first. That retained one
+host timer until the configured deadline after every successful bounded call.
+The change clears the same timer from the race's `finally`, preserving the
+deadline, error, fuel/memory behavior, and instance-disposal path.
+
+- RED: a safe synthetic `buildAddModule()` call completed successfully while
+  Vitest still reported one pending timer.
+- GREEN: the same test now reports zero pending timers. The focused
+  `wasm-sandbox.test.ts` run passed **43 tests**, with 5 filtered by name,
+  including the blocked infinite-loop cases and the high-throughput benchmark
+  group. Desktop typecheck passed. Targeted Biome exited 0 with no errors; it
+  still reports one warning and one informational diagnostic on untouched
+  lines, which have not been compared against base.
+- Fresh independent review found no code regression. It observed that the
+  runtime assertion directly exercises successful settlement; rejection and
+  timeout cleanup share the same source `finally` but do not have separate
+  new runtime assertions. Static call-site search found no productive callers
+  of `executeWasm`/`executeAsPluginRpc`, and external plugin execution remains
+  blocked.
 
 #### Remote CI on `a1a4e35` before the `pkexec`/`run0` follow-up
 

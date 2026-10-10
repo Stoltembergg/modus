@@ -452,15 +452,19 @@ export class WasmCapabilityHost {
       // Timeout watchdog
       if (options.timeoutMs && options.timeoutMs > 0) {
         const timeoutMs = options.timeoutMs;
+        let watchdog: ReturnType<typeof setTimeout> | undefined;
         const result = await Promise.race([
           Promise.resolve().then(() => instance.invoke(functionName, ...args)),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new WasmExecutionTimeoutError(timeoutMs, options.pluginId)),
-              timeoutMs,
-            ),
+          new Promise<never>(
+            (_, reject) =>
+              (watchdog = setTimeout(
+                () => reject(new WasmExecutionTimeoutError(timeoutMs, options.pluginId)),
+                timeoutMs,
+              )),
           ),
-        ]);
+        ]).finally(() => {
+          if (watchdog !== undefined) clearTimeout(watchdog);
+        });
 
         const metrics = instance.getMetrics(start);
         return {

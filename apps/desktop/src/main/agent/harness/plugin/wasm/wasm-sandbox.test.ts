@@ -948,6 +948,20 @@ describe("Fase 19 — High-Performance Sandboxing (WASM & Micro-VMs)", () => {
       expect(host.getReservedMemoryPages()).toBe(0);
     });
 
+    it("clears the watchdog timer when execution completes before its deadline", async () => {
+      vi.useFakeTimers();
+      try {
+        const result = await wasmHost.executeWasm(buildAddModule(), "add", [2, 3], {
+          timeoutMs: 60_000,
+        });
+
+        expect(result.success).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("preserves actual memory metrics when a call fails after instantiation", async () => {
       const result = await wasmHost.executeWasm(buildMemoryModule(1, 2), "missing_function");
 
