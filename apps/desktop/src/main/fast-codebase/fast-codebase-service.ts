@@ -1,6 +1,7 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { createPlatformProcessOps } from "../process/platform-process-ops";
 
 const OUTPUT_CAP = 60_000;
 const RESULT_BODY_CAP = 24_000;
@@ -12,6 +13,7 @@ const MAX_DISCOVERY_HITS = 50;
 const MAX_DISCOVERY_PATH_LENGTH = 512;
 const MAX_DISCOVERY_SYMBOL_LENGTH = 256;
 const MAX_DISCOVERY_KIND_LENGTH = 64;
+const processOps = createPlatformProcessOps();
 // biome-ignore lint/complexity/useRegexLiterals: regex literals with ESC trip noControlCharactersInRegex.
 const ANSI_ESCAPE = new RegExp("\\x1b(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])", "g");
 
@@ -159,22 +161,6 @@ export function resolveFastCodebaseBinary(): string {
   return resolveCodeGraphCommand().label;
 }
 
-function killProcessTree(child: ChildProcess): void {
-  if (!child.pid) {
-    child.kill("SIGTERM");
-    return;
-  }
-  if (process.platform === "win32") {
-    const killer = spawn("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    killer.on("error", () => child.kill("SIGKILL"));
-    return;
-  }
-  child.kill("SIGTERM");
-}
-
 export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
   new Promise<CodeGraphCallResult>((resolveCall, reject) => {
     if (options.signal?.aborted) {
@@ -185,9 +171,11 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
     let stdout = "";
     let stderr = "";
     let lastProgress = "";
-    let aborted = false;
-    let timedOut = false;
     let settled = false;
+    let terminationCause: "abort" | "timeout" | undefined;
+    let termination: Promise<void> | undefined;
+    let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+    let abort = (): void => {};
     const child = spawn(executable.command, [...executable.args, ...args], {
       cwd: options.cwd,
       env: {
@@ -197,16 +185,10 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
         NO_COLOR: "1",
       },
       shell: false,
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
-    const timeout =
-      options.timeoutMs && options.timeoutMs > 0
-        ? globalThis.setTimeout(() => {
-            timedOut = true;
-            killProcessTree(child);
-          }, options.timeoutMs)
-        : undefined;
     const finish = (fn: () => void): void => {
       if (settled) {
         return;
@@ -218,11 +200,59 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
       options.signal?.removeEventListener("abort", abort);
       fn();
     };
-    const abort = (): void => {
-      aborted = true;
-      killProcessTree(child);
+    const terminate = (cause: "abort" | "timeout"): void => {
+      terminationCause ??= cause;
+      if (termination) return;
+      if (timeout !== undefined) {
+        globalThis.clearTimeout(timeout);
+        timeout = undefined;
+      }
+      const pid = child.pid;
+      termination =
+        pid !== undefined && Number.isSafeInteger(pid) && pid > 0
+          ? Promise.resolve().then(() => processOps.killTree(pid))
+          : (() => {
+              try {
+                child.kill("SIGKILL");
+              } catch {
+                // Report the missing identity as unconfirmed cleanup below.
+              }
+              return Promise.reject(new Error("CodeGraph child has no valid process identity."));
+            })();
+      void termination.then(
+        () =>
+          finish(() =>
+            reject(
+              terminationCause === "abort"
+                ? abortError()
+                : new Error(
+                    `Fast Codebase timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)}s.`,
+                  ),
+            ),
+          ),
+        (cleanupError: unknown) =>
+          finish(() =>
+            reject(
+              processTreeTerminationError(
+                terminationCause ?? cause,
+                options.timeoutMs,
+                cleanupError,
+              ),
+            ),
+          ),
+      );
     };
+    abort = (): void => {
+      terminate("abort");
+    };
+    timeout =
+      options.timeoutMs && options.timeoutMs > 0
+        ? globalThis.setTimeout(() => {
+            terminate("timeout");
+          }, options.timeoutMs)
+        : undefined;
     options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
     const onData = (chunk: unknown, stream: "stdout" | "stderr"): void => {
       const text = String(chunk);
       if (stream === "stdout") {
@@ -242,6 +272,7 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
     child.stdout.on("data", (chunk) => onData(chunk, "stdout"));
     child.stderr.on("data", (chunk) => onData(chunk, "stderr"));
     child.on("error", (error) => {
+      if (terminationCause) return;
       finish(() =>
         reject(
           new Error(
@@ -251,19 +282,8 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
       );
     });
     child.on("close", (code) => {
+      if (terminationCause) return;
       finish(() => {
-        if (aborted || options.signal?.aborted) {
-          reject(abortError());
-          return;
-        }
-        if (timedOut) {
-          reject(
-            new Error(
-              `Fast Codebase timed out after ${Math.round((options.timeoutMs ?? 0) / 1000)}s.`,
-            ),
-          );
-          return;
-        }
         resolveCall({
           exitCode: code ?? 0,
           isError: (code ?? 0) !== 0,
@@ -277,6 +297,20 @@ export const runCodeGraphCli: CodeGraphRunner = (args, options) =>
 function abortError(): Error {
   const error = new Error("Fast Codebase cancelled.");
   error.name = "AbortError";
+  return error;
+}
+
+function processTreeTerminationError(
+  cause: "abort" | "timeout",
+  timeoutMs: number | undefined,
+  cleanupError: unknown,
+): Error {
+  const message =
+    cause === "abort"
+      ? "Fast Codebase was cancelled, but process-tree termination could not be confirmed."
+      : `Fast Codebase timed out after ${Math.round((timeoutMs ?? 0) / 1000)}s, but process-tree termination could not be confirmed.`;
+  const error = new Error(message, { cause: cleanupError });
+  error.name = "ProcessTreeTerminationError";
   return error;
 }
 

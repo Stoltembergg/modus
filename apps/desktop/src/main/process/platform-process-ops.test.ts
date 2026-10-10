@@ -1,5 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parseUnixProcess, parseWindowsProcess, pidAlive } from "./platform-process-ops";
+
+const mocks = vi.hoisted(() => ({ execFile: vi.fn() }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, execFile: mocks.execFile };
+});
+
+import {
+  createPlatformProcessOps,
+  parseUnixProcess,
+  parseWindowsProcess,
+  pidAlive,
+} from "./platform-process-ops";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -49,6 +62,69 @@ describe("pidAlive", () => {
   it("reports an unused pid as not alive", () => {
     // A pid far above any plausible live process on a test machine.
     expect(pidAlive(2_000_000_000)).toBe(false);
+  });
+});
+
+describe("Windows process-tree termination", () => {
+  it("does not confirm tree cleanup when the leader is already absent", async () => {
+    const pid = 12_349;
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === pid && signal === 0) {
+        throw Object.assign(new Error("leader has exited"), { code: "ESRCH" });
+      }
+      throw new Error(`unexpected process signal ${String(signal)} for ${target}`);
+    });
+
+    await expect(createPlatformProcessOps("win32").killTree(pid)).rejects.toMatchObject({
+      name: "ProcessTreeTerminationError",
+      message: expect.stringContaining("could not be confirmed"),
+    });
+    expect(mocks.execFile).not.toHaveBeenCalled();
+  });
+
+  it("bounds taskkill and reports when the leader remains alive", async () => {
+    const pid = 12_347;
+    const taskkillTimeout = Object.assign(new Error("taskkill timed out"), {
+      killed: true,
+    });
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === pid && signal === 0) return true;
+      throw new Error(`unexpected process signal ${String(signal)} for ${target}`);
+    });
+    mocks.execFile.mockImplementation((_command, _args, options, callback) => {
+      expect(options).toMatchObject({ timeout: 2_000, windowsHide: true });
+      callback(taskkillTimeout);
+    });
+
+    await expect(createPlatformProcessOps("win32").killTree(pid)).rejects.toBe(taskkillTimeout);
+    expect(mocks.execFile).toHaveBeenCalledWith(
+      "taskkill",
+      ["/PID", String(pid), "/T", "/F"],
+      expect.objectContaining({ timeout: 2_000 }),
+      expect.any(Function),
+    );
+  });
+
+  it("does not treat taskkill timeout as confirmed when the leader exits", async () => {
+    const pid = 12_348;
+    const taskkillTimeout = Object.assign(new Error("taskkill timed out"), {
+      killed: true,
+    });
+    let leaderAlive = true;
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === pid && signal === 0) {
+        if (leaderAlive) return true;
+        throw Object.assign(new Error("leader has exited"), { code: "ESRCH" });
+      }
+      throw new Error(`unexpected process signal ${String(signal)} for ${target}`);
+    });
+    mocks.execFile.mockImplementation((_command, _args, options, callback) => {
+      expect(options).toMatchObject({ timeout: 2_000, windowsHide: true });
+      leaderAlive = false;
+      callback(taskkillTimeout);
+    });
+
+    await expect(createPlatformProcessOps("win32").killTree(pid)).rejects.toBe(taskkillTimeout);
   });
 });
 

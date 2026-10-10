@@ -117,12 +117,11 @@ class WindowsProcessOps implements PlatformProcessOps {
   }
 
   async killTree(pid: number): Promise<void> {
-    if (!pidAlive(pid)) return;
-    try {
-      await run("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
-    } catch (error) {
-      if (pidAlive(pid)) throw error;
-    }
+    if (!pidAlive(pid)) throw terminationUnconfirmed(pid);
+    await run("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      timeout: TERMINATION_REAP_DEADLINE_MS,
+      windowsHide: true,
+    });
     if (!(await waitForExit(() => pidAlive(pid), TERMINATION_REAP_DEADLINE_MS))) {
       throw terminationUnconfirmed(pid);
     }

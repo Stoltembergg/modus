@@ -1852,7 +1852,7 @@ cancellation follow-up above.
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated; plugin internals encapsulated | Persisted Safe Mode policy is service-derived; transitions are validated before reload and restoration retains quarantine. Runtime registry, loader, store/service, managers, startup promises, and HarnessKernel are ECMAScript-private; no in-repository production caller used the removed getters. This does not create a process isolation boundary. Storage corruption/power-loss proof and a read-only diagnostics API remain open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
-| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. UI reports unconfirmed stop outcomes in workspace/session/process scope with an explicit dismiss action. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
+| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches and the trusted CodeGraph CLI; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. App cancellation preserves cleanup errors and refuses to signal an exited tracked leader. UI reports unconfirmed stop outcomes in workspace/session/process scope with an explicit dismiss action. CodeGraph abort/timeout now waits for the shared process-ops result; Windows taskkill is time-bounded. POSIX confirms the original process group; Windows confirms the leader PID after a tree-termination request. Escaped descendants, PID/PGID reuse races without stable OS handles, non-cooperative in-process work, and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Implemented and independently reviewed; integrated checks pass | SQLite source of truth, durable per-recipient broadcast ACKs, bounded inbox queries, host-derived group scope, expiry-safe ACKs and lazy cleanup. Latest recorded workflow `38081920060` passed Biome/typecheck, Supabase pgTAP (20 files/1,041 tests), PTY/protocol/security regression jobs and platform packaging. Its global Vitest job had one `FastVectorDistance` timing failure; it is not classified as pre-existing or solely environmental. |
@@ -2250,3 +2250,61 @@ changed, and this result is not classified as pre-existing or solely
 environmental. Windows packaging (`38091868609`) and macOS packaging
 (`38091868537`) later completed successfully. This workflow ran the previous
 commit, before `pkexec` and `run0` were added.
+
+### A15 trusted CodeGraph runner cancellation follow-up
+
+`runCodeGraphCli`, used by the trusted CodeGraph feature, previously sent only
+`SIGTERM` on POSIX and launched Windows `taskkill /T /F` without awaiting it.
+Cancellation or timeout could therefore return before the shared process
+supervisor had observed cleanup, and an `error` event could race a pending
+cleanup result. The runner now creates a dedicated POSIX process group, routes
+abort/timeout through the existing `PlatformProcessOps.killTree`, waits for
+that result before rejecting, preserves cleanup failures as
+`ProcessTreeTerminationError`, and prevents child `error`/`close` events from
+settling the request while termination is pending. The Windows taskkill
+invocation now has a 2-second command timeout, in addition to the existing
+bounded leader-exit observation. No process was launched by these tests; spawn
+and process operations use synthetic mocks.
+
+- RED/GREEN: four initial synthetic runner cases failed before wiring: abort,
+  timeout, unconfirmed cleanup, and missing POSIX group isolation. The five
+  runner cases now pass, including a race fixture where a child `error` cannot
+  hide failed cleanup. The Windows taskkill-options test failed RED without
+  its timeout. Independent review then found two false-confirmation cases: a
+  taskkill timeout after the leader exits, and a leader already absent when
+  cleanup begins. Each new fixture failed RED on the former behavior; errors
+  are now preserved and an absent leader produces
+  `ProcessTreeTerminationError`. The combined runner and process-ops suite
+  passes **18/18**.
+- Desktop TypeScript typecheck passed. Targeted Biome passed on the four
+  changed source/test files; `git diff --check` passed.
+- Independent review confirmed that `error` and `close` defer settlement to
+  the shared termination promise, identified both Windows false-confirmation
+  paths, and approved their RED/GREEN fixes on final review. The taskkill
+  subprocess has a 2-second timeout and successful return is followed by up to
+  2 seconds of leader-exit observation. Residual limits: process identity is
+  numeric PID/PGID and has a reuse race; POSIX only observes the original
+  process group and descendants can escape; Windows observes the leader after
+  `/T` and does not independently prove every descendant exited. A missing
+  Windows leader is conservatively reported as unconfirmed even if its entire
+  tree happened to exit naturally. These changes improve cooperative
+  cancellation for this trusted tool but do not establish plugin isolation or
+  hard whole-tree preemption.
+
+#### Remote CI evidence before the CodeGraph runner follow-up
+
+Workflow `38094951293` on `1d41b208` passed the other recorded jobs, including
+Verifier-First, PTY cancellation, safe IPC fixtures, compile-only sandbox,
+Supabase renewal/pgTAP, and safe-filtered Windows/Ubuntu/macOS containment.
+The global Vitest job reported **4,640 passed, 8 skipped, 1 failed across 413
+files**; the sole failure was the unchanged `FastVectorDistance` benchmark at
+`0.263551 ms` against `<0.1 ms`. The official rerun of only the failed job
+(`114339590762`) again failed that same assertion at `0.104506 ms`, with the
+same counts. The isolated local benchmark also failed at `0.136241 ms`. The
+same benchmark failed on parent `e86b2dc` at `0.158736 ms`, while an official
+rerun on that parent passed; earlier observations also differ. This evidence
+does not establish the cause or justify classifying the failure as pre-existing
+or solely environmental. The threshold, benchmark, filters, and production
+benchmark implementation were not changed. Windows x64 packaging
+(`38094951266`) and macOS x64/arm64 packaging (`38094951288`) passed. The
+upcoming CodeGraph change has not yet run remote CI.
