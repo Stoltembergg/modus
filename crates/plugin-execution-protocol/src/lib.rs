@@ -78,6 +78,17 @@ pub enum ProtocolError {
     SequenceOverflow,
 }
 
+/// Trust classification resolved by the host catalog. It is never accepted
+/// from worker IPC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostTrustLevel {
+    Core,
+    Official,
+    Verified,
+    Community,
+    Local,
+}
+
 impl fmt::Display for ProtocolError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{self:?}")
@@ -91,7 +102,12 @@ impl std::error::Error for ProtocolError {}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostProvenance {
     plugin_id: String,
+    plugin_version: String,
     artifact_sha256: String,
+    artifact_origin: String,
+    trust_level: HostTrustLevel,
+    session_id: String,
+    workspace_id: String,
     run_id: String,
     generation: u64,
 }
@@ -100,15 +116,28 @@ impl HostProvenance {
     /// Construct from host-owned catalog and run state, never from IPC data.
     pub fn from_host_catalog(
         plugin_id: impl Into<String>,
+        plugin_version: impl Into<String>,
         artifact_sha256: impl Into<String>,
+        artifact_origin: impl Into<String>,
+        trust_level: HostTrustLevel,
+        session_id: impl Into<String>,
+        workspace_id: impl Into<String>,
         run_id: impl Into<String>,
         generation: u64,
     ) -> Result<Self, ProtocolError> {
         let plugin_id = plugin_id.into();
+        let plugin_version = plugin_version.into();
         let artifact_sha256 = artifact_sha256.into();
+        let artifact_origin = artifact_origin.into();
+        let session_id = session_id.into();
+        let workspace_id = workspace_id.into();
         let run_id = run_id.into();
         if !valid_opaque_id(&plugin_id)
+            || !valid_opaque_id(&plugin_version)
             || !valid_sha256(&artifact_sha256)
+            || !valid_opaque_id(&artifact_origin)
+            || !valid_opaque_id(&session_id)
+            || !valid_opaque_id(&workspace_id)
             || !valid_opaque_id(&run_id)
             || generation == 0
         {
@@ -116,7 +145,12 @@ impl HostProvenance {
         }
         Ok(Self {
             plugin_id,
+            plugin_version,
             artifact_sha256,
+            artifact_origin,
+            trust_level,
+            session_id,
+            workspace_id,
             run_id,
             generation,
         })
@@ -128,6 +162,26 @@ impl HostProvenance {
 
     pub fn artifact_sha256(&self) -> &str {
         &self.artifact_sha256
+    }
+
+    pub fn plugin_version(&self) -> &str {
+        &self.plugin_version
+    }
+
+    pub fn artifact_origin(&self) -> &str {
+        &self.artifact_origin
+    }
+
+    pub fn trust_level(&self) -> HostTrustLevel {
+        self.trust_level
+    }
+
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub fn workspace_id(&self) -> &str {
+        &self.workspace_id
     }
 
     pub fn run_id(&self) -> &str {
@@ -508,7 +562,18 @@ mod tests {
     }
 
     fn provenance() -> HostProvenance {
-        HostProvenance::from_host_catalog("@modus/fixture", DIGEST, "run-fixture-1", 1).unwrap()
+        HostProvenance::from_host_catalog(
+            "@modus/fixture",
+            "1.2.3",
+            DIGEST,
+            "host://bundled",
+            HostTrustLevel::Core,
+            "session-fixture-1",
+            "workspace-fixture-1",
+            "run-fixture-1",
+            1,
+        )
+        .unwrap()
     }
 
     fn new_dispatcher() -> Dispatcher {
@@ -619,11 +684,48 @@ mod tests {
 
     #[test]
     fn rejects_guest_supplied_host_identity_fields() {
-        let json = br#"{"type":"invoke","protocol_version":1,"sequence":1,"capability":"memory.read","payload":{},"plugin_id":"forged"}"#;
+        let json = br#"{"type":"invoke","protocol_version":1,"sequence":1,"capability":"memory.read","payload":{},"plugin_id":"forged","plugin_version":"9.9.9","artifact_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_origin":"host://bundled","trust_level":"core","session_id":"other-session","workspace_id":"other-workspace","run_id":"other-run","generation":99}"#;
 
         assert_eq!(
             decode_worker_frame(&raw_frame(json)),
             Err(ProtocolError::InvalidJson),
+        );
+    }
+
+    #[test]
+    fn provenance_requires_nonempty_host_scope_and_artifact_identity() {
+        let invalid_scopes = [("", "workspace-fixture-1"), ("session-fixture-1", "")];
+
+        for (session_id, workspace_id) in invalid_scopes {
+            assert_eq!(
+                HostProvenance::from_host_catalog(
+                    "@modus/fixture",
+                    "1.2.3",
+                    DIGEST,
+                    "host://bundled",
+                    HostTrustLevel::Core,
+                    session_id,
+                    workspace_id,
+                    "run-fixture-1",
+                    1,
+                ),
+                Err(ProtocolError::InvalidIdentity),
+            );
+        }
+
+        assert_eq!(
+            HostProvenance::from_host_catalog(
+                "@modus/fixture",
+                "",
+                DIGEST,
+                "host://bundled",
+                HostTrustLevel::Core,
+                "session-fixture-1",
+                "workspace-fixture-1",
+                "run-fixture-1",
+                1,
+            ),
+            Err(ProtocolError::InvalidIdentity),
         );
     }
 
@@ -681,7 +783,15 @@ mod tests {
         assert_eq!(invocation.sequence(), 1);
         assert_eq!(invocation.capability(), "memory.read");
         assert_eq!(invocation.provenance().plugin_id(), "@modus/fixture");
+        assert_eq!(invocation.provenance().plugin_version(), "1.2.3");
         assert_eq!(invocation.provenance().artifact_sha256(), DIGEST);
+        assert_eq!(invocation.provenance().artifact_origin(), "host://bundled");
+        assert_eq!(invocation.provenance().trust_level(), HostTrustLevel::Core);
+        assert_eq!(invocation.provenance().session_id(), "session-fixture-1");
+        assert_eq!(
+            invocation.provenance().workspace_id(),
+            "workspace-fixture-1"
+        );
         assert_eq!(invocation.provenance().run_id(), "run-fixture-1");
         assert_eq!(invocation.provenance().generation(), 1);
 

@@ -51,7 +51,7 @@ crate’s safe unit fixtures.
   256 KiB payload plus a four-byte header. The shared policy now records both
   cleanup limits, and the frame ceiling counts the header in the 256 KiB cap.
   Rustfmt 1.85.1 and `git diff --check` passed. Remote CI for this follow-up is
-  pending.
+  recorded below for commit `f3102af`.
 - Independent static review found no further protocol-schema or handshake
   blocker. It explicitly confirmed that `close()` cannot revoke an invocation
   already returned to a future asynchronous caller; any real dispatcher must
@@ -80,6 +80,17 @@ Linux, and macOS enforcement of the shared policy and preemptible process-tree
 termination remain unimplemented. External plugin execution stays blocked,
 while built-in Harness execution remains on the existing trusted host-catalog
 path.
+
+The next A03 increment extends host-only provenance with exact plugin version,
+artifact origin, catalog-resolved trust level, session id, and workspace id in
+addition to digest, run, and generation. All remain absent from guest frames;
+the constructor rejects empty or oversized scope/identity values. RED/GREEN:
+the strict-frame regression failed when `deny_unknown_fields` was temporarily
+removed, and the provenance test failed when session validation was removed;
+the full protocol crate then passed **15/15**. Independent read-only review
+found no concrete bypass or regression. Repository search found no production
+constructor or dispatcher caller, so this is a host-side contract only and not
+productive provenance wiring.
 
 ## Mission CI prerequisite — Free monthly renewal calendar
 
@@ -166,6 +177,38 @@ subset). No base-branch comparison was performed, so this is recorded without
 a baseline or instability classification. Windows and macOS packaging runs
 `38078478287` and `38078478240` were still running at this update. The resource
 policy follow-up is not part of this run.
+
+## Remote CI on resource-policy commit `f3102af`
+
+Run `38078980190` passed Biome and desktop typecheck, the safe IPC protocol
+job (**14/14** at that commit), Verifier-First/A21.2 regressions, PTY
+cancellation, Supabase, compile-only sandbox, and Ubuntu/Windows containment
+jobs. The full Vitest step reported **4,606 passed, 8 skipped, 2 failed**;
+both failures were in `qa-evidence.test.ts` and expected
+`recognizeCheckInvocation(...).checkName === "tests"` but received `undefined`
+at lines 143 and 209. That file is unchanged since `f0e41d3`, whose full Vitest
+run passed; the focused file also passed locally (**105/105**). This is not a
+base-branch comparison and does not establish an instability-only cause, so
+the CI discrepancy remains unresolved pending another identical safe run.
+
+macOS containment failed its unchanged `FastVectorDistance` timing assertion
+at **0.143916 ms** against `<0.1 ms` (**279 passed, 7 skipped, 1 failed** in
+that subset). Ubuntu passed the same containment job on this run. No benchmark
+or threshold was changed; the timing failure is not classified as preexisting
+or solely environmental. Windows x64 packaging and artifact upload passed;
+macOS x64 and arm64 packaging and artifact uploads also passed. The safe
+protocol job, sandbox job, and CI filters did not execute guest plugins or
+enforcement probes.
+
+The same full-suite command was run locally with the same safe exclusions. It
+passed `qa-evidence.test.ts` (the focused file passed **105/105**) but overall
+reported **4,586 passed, 8 failed, 8 skipped across 407 files** in **403.37s**.
+The eight local failures were two OAuth-provider requests (`ECONNREFUSED` to
+GitHub/Google), one Composio connectivity-probe test timeout, one packaged
+glass headless-Chrome verifier error (`undefined` parsed as JSON), and four
+computed-style headless-Chrome measurements returning undefined. These are
+recorded as environment/test failures without baseline or instability claims;
+the local run does not explain the two remote QA assertions.
 
 ## Milestone 1 — A01/A02 in-process facade
 
@@ -1639,7 +1682,7 @@ and macOS packaging runs for this commit remain in progress at this update.
 |---|---|---|
 | A01 | Partially mitigated | Facade fails closed and Pi chat/review no longer auto-load project/user extensions. Commit `f0e41d3` adds shared bounded IPC framing and strict worker schemas; real OS isolation and host-runtime integration remain absent. Hostile execution proof remains blocked. |
 | A02 | Partially mitigated | The shared resource-policy contract records the approved CPU, memory, time, output, IPC, process, hostcall and concurrency ceilings. No adapter enforces them, and no process-tree preemption/reap path is integrated. Do not run blocked probes. |
-| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The IPC dispatcher attaches provenance from its host-bound session, but is not wired to a catalog or productive runtime and does not establish trust on its own. |
+| A03 | Partially mitigated | Chat/review auto-discovery remains blocked; the catalog freezes trusted manifest graphs and authorizes exact host identity. The shared IPC contract now carries host-only version, digest, origin, trust, session/workspace/run and generation provenance, but it has no production caller and does not establish trust on its own. |
 | A04 | Partially mitigated | External Pi extension ingress is disabled for chat and review; the review callsite guard covers loader flags and session creation. The shared IPC dispatcher enforces exact grants in synthetic fixtures, but direct dispatch/hooks remain for catalogued built-ins and no OS-backed dispatcher/lifecycle boundary is integrated. |
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
