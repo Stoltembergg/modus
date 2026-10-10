@@ -27,6 +27,7 @@ export type AppProcessInfo = {
   windowTitle?: string;
   workspaceId?: string;
   sessionId?: string;
+  runId?: string;
   startedAt: string;
   status: "running" | "exited";
 };
@@ -43,10 +44,29 @@ const APP_VERIFY_DELAY_MS = 1000;
 
 const apps = new Map<string, AppProcessInfo>();
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
+function abortError(): Error {
+  const error = new Error("Process launch aborted by user.");
+  error.name = "AbortError";
+  return error;
+}
+
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    const timer = setTimeout(finish, ms);
     timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
@@ -75,7 +95,10 @@ export async function launchApp(input: {
   cwd: string;
   workspaceId?: string;
   sessionId?: string;
+  runId?: string;
+  signal?: AbortSignal;
 }): Promise<LaunchAppResult> {
+  if (input.signal?.aborted) throw abortError();
   const start = Date.now();
   const exe = isAbsolute(input.path) ? input.path : resolve(input.cwd, input.path);
 
@@ -107,29 +130,51 @@ export async function launchApp(input: {
   if (pid === undefined) {
     throw new Error(`Failed to launch ${exe}: the OS returned no process id.`);
   }
+  if (input.signal?.aborted) {
+    await ops.killTree(pid).catch(() => undefined);
+    throw abortError();
+  }
   // Detach so the app's lifetime is independent of Modus.
   child.unref();
 
-  await delay(APP_VERIFY_DELAY_MS);
-  const alive = ops.isAlive(pid);
-  const description = alive ? await ops.describe(pid) : { pid, name: basename(exe) };
-
-  const info: AppProcessInfo = {
-    id: randomUUID(),
-    pid,
-    command: exe,
-    args: input.args ?? [],
-    cwd: input.cwd,
-    name: description.name,
-    ...(description.windowTitle ? { windowTitle: description.windowTitle } : {}),
-    ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
-    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    startedAt: new Date().toISOString(),
-    status: alive ? "running" : "exited",
+  let abortCleanup: Promise<void> | undefined;
+  const onAbort = (): void => {
+    abortCleanup ??= ops.killTree(pid).catch(() => undefined);
   };
-  apps.set(info.id, info);
-  publishManagedProcessChange();
-  return { ...info, alive, durationMs: Date.now() - start };
+  input.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    await delay(APP_VERIFY_DELAY_MS, input.signal);
+    if (input.signal?.aborted) throw abortError();
+    const alive = ops.isAlive(pid);
+    const description = alive ? await ops.describe(pid) : { pid, name: basename(exe) };
+    if (input.signal?.aborted) throw abortError();
+
+    const info: AppProcessInfo = {
+      id: randomUUID(),
+      pid,
+      command: exe,
+      args: input.args ?? [],
+      cwd: input.cwd,
+      name: description.name,
+      ...(description.windowTitle ? { windowTitle: description.windowTitle } : {}),
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(input.runId ? { runId: input.runId } : {}),
+      startedAt: new Date().toISOString(),
+      status: alive ? "running" : "exited",
+    };
+    apps.set(info.id, info);
+    publishManagedProcessChange();
+    return { ...info, alive, durationMs: Date.now() - start };
+  } catch (error) {
+    if (input.signal?.aborted) {
+      await (abortCleanup ?? ops.killTree(pid).catch(() => undefined));
+      throw abortError();
+    }
+    throw error;
+  } finally {
+    input.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 export function isAppId(id: string): boolean {

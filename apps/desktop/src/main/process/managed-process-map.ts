@@ -37,6 +37,7 @@ export function terminalToManaged(info: TerminalInfo): ManagedProcessInfo {
     origin: info.origin,
     workspaceId: info.workspaceId,
     ...(info.sessionId !== undefined ? { sessionId: info.sessionId } : {}),
+    ...(info.runId !== undefined ? { runId: info.runId } : {}),
     label: terminalLabel(info),
     status: info.status,
     startedAt: info.startedAt,
@@ -52,6 +53,7 @@ export function appToManaged(info: AppProcessInfo): ManagedProcessInfo {
     origin: "agent",
     ...(info.workspaceId !== undefined ? { workspaceId: info.workspaceId } : {}),
     ...(info.sessionId !== undefined ? { sessionId: info.sessionId } : {}),
+    ...(info.runId !== undefined ? { runId: info.runId } : {}),
     label: info.name,
     status: info.status,
     startedAt: info.startedAt,
@@ -85,6 +87,7 @@ export function matchesScope(
 export type ManagedProcessQuery = {
   workspaceId?: string | undefined;
   sessionId?: string | undefined;
+  runId?: string | undefined;
   origin?: ManagedProcessOrigin | undefined;
 };
 
@@ -100,6 +103,7 @@ export function selectManagedProcesses(
 ): ManagedProcessInfo[] {
   return all
     .filter((process) => matchesScope(process, query))
+    .filter((process) => query.runId === undefined || process.runId === query.runId)
     .filter((process) => query.origin === undefined || process.origin === query.origin)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt));
 }

@@ -3,7 +3,7 @@
  * Type definitions for plugin execution traces, health monitoring, and failure correlation.
  */
 
-export type PluginTraceStatus = "success" | "error" | "timeout";
+export type PluginTraceStatus = "success" | "error" | "timeout" | "cancelled";
 
 export interface PluginTraceMetadata {
   inputSize?: number | undefined;

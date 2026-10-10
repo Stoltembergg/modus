@@ -1,6 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RunCommandResult } from "../../terminal/terminal-service";
-import { formatRun } from "./terminal-tools";
+import { toolRegistry } from "./registry";
+import { formatRun, registerTerminalTools } from "./terminal-tools";
+import { runWithAgentToolContext } from "./tool-context";
+
+const terminalMocks = vi.hoisted(() => ({ runAgentCommand: vi.fn() }));
+
+vi.mock("../../terminal/terminal-service", () => ({
+  killTerminal: vi.fn(),
+  listTerminals: vi.fn(() => []),
+  readTerminal: vi.fn(),
+  runAgentCommand: terminalMocks.runAgentCommand,
+  writeTerminal: vi.fn(),
+}));
+
+vi.mock("../../process/app-process-service", () => ({
+  isAppId: vi.fn(() => false),
+  killApp: vi.fn(),
+  listApps: vi.fn(() => []),
+}));
 
 /**
  * Base result for a finished command. Tests override only the fields that
@@ -96,5 +114,43 @@ describe("formatRun — authoritative signals still produce notes", () => {
       "npm install",
     );
     expect(text).toContain("still running after the foreground yield");
+  });
+});
+
+describe("terminal_run cancellation ownership", () => {
+  it("passes the Pi SDK abort signal for a background process launch", async () => {
+    registerTerminalTools();
+    terminalMocks.runAgentCommand.mockResolvedValue(
+      result({ background: true, status: "running", alive: true }),
+    );
+    const tool = toolRegistry
+      .getCustomToolDefinitions("chat")
+      .find((entry) => entry.name === "terminal_run") as unknown as {
+      execute: (
+        toolCallId: string,
+        params: { command: string; background: boolean },
+        signal: AbortSignal,
+        onUpdate: undefined,
+        context: { cwd: string },
+      ) => Promise<unknown>;
+    };
+    const controller = new AbortController();
+    const cwd = "/workspace/example";
+    const sessionId = "session-background-run";
+    const runId = "run-background";
+
+    await runWithAgentToolContext({ workspaceId: "workspace-example", cwd, sessionId, runId }, () =>
+      tool.execute(
+        "tool-call",
+        { command: "node benign-fixture.js", background: true },
+        controller.signal,
+        undefined,
+        { cwd },
+      ),
+    );
+
+    expect(terminalMocks.runAgentCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal, sessionId, runId, background: true }),
+    );
   });
 });

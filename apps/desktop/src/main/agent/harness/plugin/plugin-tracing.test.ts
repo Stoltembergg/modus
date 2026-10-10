@@ -104,6 +104,74 @@ describe("Fase 12 — Plugin Tracing & Observability", () => {
       expect(trace.error).toContain("timed out after 10ms");
     });
 
+    it("aborts and drains cooperative work before returning a timeout", async () => {
+      const instrumentation = new PluginInstrumentation();
+      let signal: AbortSignal | undefined;
+      let workSettled = false;
+
+      const trace = instrumentation.trace(
+        "@modus/cancellable-plugin",
+        "vector.search",
+        async (executionSignal?: AbortSignal) => {
+          signal = executionSignal;
+          await new Promise<void>((resolve) => {
+            executionSignal?.addEventListener("abort", () => setTimeout(resolve, 5), {
+              once: true,
+            });
+          });
+          workSettled = true;
+          return "done";
+        },
+        { timeoutMs: 10 },
+      );
+
+      await expect(trace).rejects.toThrow(/timed out after 10ms/);
+      expect(signal?.aborted).toBe(true);
+      expect(workSettled).toBe(true);
+    });
+
+    it("records user cancellation separately from plugin failure", async () => {
+      setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
+      const observer = HarnessObserver.getInstance();
+      const instrumentation = new PluginInstrumentation();
+      const controller = new AbortController();
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+
+      const execution = instrumentation.trace(
+        "@modus/cancelled-plugin",
+        "vector.search",
+        async (signal) => {
+          markStarted();
+          await new Promise<void>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+          return "unreachable";
+        },
+        { sessionId: "cancelled-plugin-session", signal: controller.signal },
+      );
+
+      await started;
+      const cancellation = new Error("cancelled by user");
+      controller.abort(cancellation);
+      await expect(execution).rejects.toBe(cancellation);
+
+      expect(instrumentation.getRecentTraces("@modus/cancelled-plugin")[0]).toMatchObject({
+        status: "cancelled",
+        error: "cancelled by user",
+      });
+      expect(observer.getRecentEvents(10)).toContainEqual(
+        expect.objectContaining({
+          type: "harness.plugin.cancelled",
+          sessionId: "cancelled-plugin-session",
+          data: expect.objectContaining({ status: "cancelled" }),
+        }),
+      );
+      expect(observer.snapshot().plugins).toMatchObject({ failureCount: 0, cancellationCount: 1 });
+    });
+
     it("dispatches trace events to unified HarnessObserver", async () => {
       setFeatureFlagOverrides({ MODUS_USE_KERNEL: true, MODUS_OBSERVABILITY: true });
       const observer = HarnessObserver.getInstance();

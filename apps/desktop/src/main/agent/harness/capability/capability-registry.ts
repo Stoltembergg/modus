@@ -410,6 +410,7 @@ export class CapabilityRegistry {
   public async execute<TContext = unknown, TResult = unknown>(
     capabilityId: string,
     context: TContext,
+    signal?: AbortSignal,
   ): Promise<TResult> {
     const capability = this.capabilities.get(capabilityId);
     const activeId = this.activeProviders.get(capabilityId);
@@ -425,7 +426,7 @@ export class CapabilityRegistry {
       throw new NoProviderError(capabilityId);
     }
 
-    const runner = async (): Promise<TResult> => {
+    const runner = async (executionSignal?: AbortSignal): Promise<TResult> => {
       const traceId = randomUUID();
       this.tracker.recordStart(
         traceId,
@@ -437,7 +438,7 @@ export class CapabilityRegistry {
 
       const startTime = Date.now();
       try {
-        const result = await activeProvider.implementation.execute(context);
+        const result = await activeProvider.implementation.execute(context, executionSignal);
         const durationMs = Date.now() - startTime;
         this.tracker.recordSuccess(traceId, capabilityId, activeProvider.providerId, durationMs);
         return result as TResult;
@@ -457,10 +458,16 @@ export class CapabilityRegistry {
     if (this.instrumentation) {
       return await this.instrumentation.trace(activeProvider.providerId, capabilityId, runner, {
         version: activeProvider.providerVersion,
+        ...(signal ? { signal } : {}),
       });
     }
 
-    return await runner();
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error
+        ? signal.reason
+        : new Error("Capability execution cancelled.");
+    }
+    return await runner(signal);
   }
 
   public getProvenance(capabilityId: string): CapabilityProvenance {

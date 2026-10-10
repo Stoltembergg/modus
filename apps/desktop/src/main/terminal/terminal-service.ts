@@ -369,6 +369,7 @@ type SpawnTerminalInput = {
   command?: string;
   title?: string;
   sessionId?: string;
+  runId?: string;
   args?: string[];
   window?: BrowserWindowType;
 };
@@ -391,6 +392,7 @@ function spawnTerminal(input: SpawnTerminalInput): TerminalRecord {
     ...(input.command !== undefined ? { command: input.command } : {}),
     ...(input.title !== undefined ? { title: input.title } : {}),
     ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+    ...(input.runId !== undefined ? { runId: input.runId } : {}),
   };
 
   const record: TerminalRecord = {
@@ -537,16 +539,35 @@ export type ReadyWhen = {
   httpUrl?: string;
 };
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(abortError());
+    };
+    const timer = setTimeout(finish, ms);
     timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
 /** Resolve true if a TCP connection to the port succeeds within `timeoutMs`. */
-function checkPort(port: number, host = "127.0.0.1", timeoutMs = 500): Promise<boolean> {
-  return new Promise((resolve) => {
+function checkPort(
+  port: number,
+  host = "127.0.0.1",
+  timeoutMs = 500,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
     const socket = netConnect({ port, host });
     let settled = false;
     const done = (ok: boolean): void => {
@@ -554,28 +575,44 @@ function checkPort(port: number, host = "127.0.0.1", timeoutMs = 500): Promise<b
         return;
       }
       settled = true;
+      signal?.removeEventListener("abort", onAbort);
       socket.destroy();
       resolve(ok);
+    };
+    const onAbort = (): void => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      socket.destroy();
+      reject(abortError());
     };
     socket.setTimeout(timeoutMs);
     socket.once("connect", () => done(true));
     socket.once("timeout", () => done(false));
     socket.once("error", () => done(false));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
 }
 
 /** Resolve true if `url` answers with a 2xx status within `timeoutMs`. */
-async function checkHttp(url: string, timeoutMs = 1500): Promise<boolean> {
+async function checkHttp(url: string, timeoutMs = 1500, signal?: AbortSignal): Promise<boolean> {
+  if (signal?.aborted) throw abortError();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
+  const onAbort = (): void => controller.abort();
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const response = await fetch(url, { signal: controller.signal, redirect: "manual" });
+    if (signal?.aborted) throw abortError();
     return response.status >= 200 && response.status < 400;
   } catch {
+    if (signal?.aborted) throw abortError();
     return false;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -583,16 +620,18 @@ async function checkHttp(url: string, timeoutMs = 1500): Promise<boolean> {
 async function evaluateReady(
   record: TerminalRecord,
   readyWhen: ReadyWhen,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  if (signal?.aborted) throw abortError();
   if (readyWhen.log) {
     if (matchesReadyLog(record.grid.render(), readyWhen.log)) {
       return `log matched /${readyWhen.log}/`;
     }
   }
-  if (readyWhen.port !== undefined && (await checkPort(readyWhen.port))) {
+  if (readyWhen.port !== undefined && (await checkPort(readyWhen.port, "127.0.0.1", 500, signal))) {
     return `port ${readyWhen.port} is accepting connections`;
   }
-  if (readyWhen.httpUrl && (await checkHttp(readyWhen.httpUrl))) {
+  if (readyWhen.httpUrl && (await checkHttp(readyWhen.httpUrl, 1500, signal))) {
     return `${readyWhen.httpUrl} returned a successful response`;
   }
   return undefined;
@@ -613,29 +652,37 @@ type BackgroundOutcome =
  */
 async function waitForReadyOrExit(
   record: TerminalRecord,
-  options: { yieldMs: number; readyWhen?: ReadyWhen | undefined },
+  options: {
+    yieldMs: number;
+    readyWhen?: ReadyWhen | undefined;
+    signal?: AbortSignal | undefined;
+  },
 ): Promise<BackgroundOutcome> {
+  if (options.signal?.aborted) {
+    killTerminal(record.info.id);
+    throw abortError();
+  }
+  const onAbort = (): void => killTerminal(record.info.id);
+  options.signal?.addEventListener("abort", onAbort, { once: true });
   const deadline = Date.now() + options.yieldMs;
-  while (true) {
-    if (record.exited) {
-      return { kind: "exited" };
-    }
-    if (options.readyWhen) {
-      const signal = await evaluateReady(record, options.readyWhen);
-      if (signal) {
-        return { kind: "ready", signal };
+  try {
+    while (true) {
+      if (options.signal?.aborted) throw abortError();
+      if (record.exited) return { kind: "exited" };
+      if (options.readyWhen) {
+        const readySignal = await evaluateReady(record, options.readyWhen, options.signal);
+        if (readySignal) return { kind: "ready", signal: readySignal };
       }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await sleep(Math.min(BACKGROUND_POLL_MS, remaining), options.signal);
     }
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      break;
-    }
-    await sleep(Math.min(BACKGROUND_POLL_MS, remaining));
+    if (options.signal?.aborted) throw abortError();
+    if (record.exited) return { kind: "exited" };
+    return options.readyWhen ? { kind: "alive-not-ready" } : { kind: "alive" };
+  } finally {
+    options.signal?.removeEventListener("abort", onAbort);
   }
-  if (record.exited) {
-    return { kind: "exited" };
-  }
-  return options.readyWhen ? { kind: "alive-not-ready" } : { kind: "alive" };
 }
 
 /** Normalize a command for reuse matching (collapse whitespace). */
@@ -689,6 +736,7 @@ export async function runAgentCommand(input: {
   command: string;
   background: boolean;
   sessionId?: string;
+  runId?: string;
   yieldMs?: number;
   readyWhen?: ReadyWhen;
   reuse?: boolean;
@@ -698,6 +746,7 @@ export async function runAgentCommand(input: {
   signal?: AbortSignal;
   window?: BrowserWindowType;
 }): Promise<RunCommandResult> {
+  if (input.signal?.aborted) throw abortError();
   const outputBytes = input.outputBytes ?? 12 * 1024;
   const startedAt = Date.now();
 
@@ -732,6 +781,7 @@ export async function runAgentCommand(input: {
     });
     if (existing) {
       await existing.grid.flush();
+      if (input.signal?.aborted) throw abortError();
       return resultFor(existing, { alive: true, reused: true });
     }
   }
@@ -741,13 +791,13 @@ export async function runAgentCommand(input: {
   // occupied), so a fresh launch will likely fail to bind.
   let portInUse: number | undefined;
   if (input.background && input.readyWhen?.port !== undefined) {
-    if (await checkPort(input.readyWhen.port)) {
+    if (await checkPort(input.readyWhen.port, "127.0.0.1", 500, input.signal)) {
       portInUse = input.readyWhen.port;
     }
   }
 
   const execution = agentCommandExecution(input.command, input.cwd, defaultShell());
-  input.signal?.throwIfAborted();
+  if (input.signal?.aborted) throw abortError();
   const record = spawnTerminal({
     workspaceId: input.workspaceId,
     cwd: input.cwd,
@@ -759,6 +809,7 @@ export async function runAgentCommand(input: {
     title: deriveTitle(input.command),
     args: execution.args,
     ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+    ...(input.runId !== undefined ? { runId: input.runId } : {}),
     ...(input.window !== undefined ? { window: input.window } : {}),
   });
 
@@ -770,9 +821,14 @@ export async function runAgentCommand(input: {
     const outcome = await waitForReadyOrExit(record, {
       yieldMs,
       ...(input.readyWhen ? { readyWhen: input.readyWhen } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
     });
     const extra: Partial<RunCommandResult> = portInUse !== undefined ? { portInUse } : {};
     await record.grid.flush();
+    if (input.signal?.aborted) {
+      killTerminal(record.info.id);
+      throw abortError();
+    }
     switch (outcome.kind) {
       case "exited":
         return resultFor(record, extra);
@@ -796,6 +852,10 @@ export async function runAgentCommand(input: {
   );
   const outcome = await waitForExit(record, yieldMs, input.signal);
   await record.grid.flush();
+  if (input.signal?.aborted) {
+    killTerminal(record.info.id);
+    throw abortError();
+  }
   return resultFor(record, { timedOut: outcome === "timeout" });
 }
 

@@ -77,6 +77,7 @@ export type PerformanceMetrics = {
 export type PluginTracingMetrics = {
   totalExecutions: number;
   failureCount: number;
+  cancellationCount: number;
   totalDurationMs: number;
   avgDurationMs: number;
   p95DurationMs: number;
@@ -130,7 +131,8 @@ export type TelemetryEventType =
   | "harness.turn.settled"
   | "harness.gate.evaluated"
   | "harness.plugin.executed"
-  | "harness.plugin.failed";
+  | "harness.plugin.failed"
+  | "harness.plugin.cancelled";
 
 export type TelemetryEvent = {
   type: TelemetryEventType;

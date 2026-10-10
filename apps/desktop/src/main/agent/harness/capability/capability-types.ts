@@ -54,7 +54,7 @@ export interface Capability<TContext = unknown, TResult = unknown> {
 
 export interface CapabilityImplementation<TContext = unknown, TResult = unknown> {
   /** Implementations are receiver-independent; use closures for state rather than `this`. */
-  execute(this: void, context: TContext): Promise<TResult> | TResult;
+  execute(this: void, context: TContext, signal?: AbortSignal): Promise<TResult> | TResult;
 }
 
 export interface CapabilityProvider<TContext = unknown, TResult = unknown> {

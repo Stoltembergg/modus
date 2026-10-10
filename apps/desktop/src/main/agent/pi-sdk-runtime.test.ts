@@ -39,11 +39,12 @@ const mocks = vi.hoisted(() => {
   return {
     createAgentSession: vi.fn(),
     killManagedProcess: vi.fn(async () => true),
-    listManagedProcesses: vi.fn((query: { sessionId?: string; origin?: string }) =>
+    listManagedProcesses: vi.fn((query: { sessionId?: string; runId?: string; origin?: string }) =>
       processState.processes.filter((process) => {
-        const item = process as { sessionId?: string; origin?: string };
+        const item = process as { sessionId?: string; runId?: string; origin?: string };
         return (
           (query.sessionId === undefined || item.sessionId === query.sessionId) &&
+          (query.runId === undefined || item.runId === query.runId) &&
           (query.origin === undefined || item.origin === query.origin)
         );
       }),
@@ -5998,6 +5999,112 @@ describe("PiSdkRuntime", () => {
       .prepare("select status from agent_sessions where id = ?")
       .get(childSessionId) as { status: string };
     expect(child.status).toBe("idle");
+  });
+
+  it("aborting a session stops only its own managed agent processes", async () => {
+    const sessionId = `session-${crypto.randomUUID()}`;
+    insertSession(sessionId, `workspace-${crypto.randomUUID()}`, join(userData, "missing.jsonl"));
+    const run = createAgentRun({ sessionId, prompt: "Start managed work" });
+    const session = createMockPiSession();
+    mocks.createAgentSession.mockImplementationOnce(async () => ({ session }));
+    const runtime = new PiSdkRuntime();
+    await runtime.ensure(createWindowStub(), sessionId);
+    mocks.setManagedProcesses([
+      {
+        id: "owned-agent-terminal",
+        origin: "agent",
+        sessionId,
+        runId: run.id,
+        status: "running",
+      },
+      {
+        id: "older-agent-terminal",
+        origin: "agent",
+        sessionId,
+        runId: "older-run",
+        status: "running",
+      },
+      {
+        id: "other-session-terminal",
+        origin: "agent",
+        sessionId: "another-session",
+        status: "running",
+      },
+      {
+        id: "user-terminal",
+        origin: "user",
+        sessionId,
+        status: "running",
+      },
+    ]);
+
+    await runtime.abort(sessionId);
+
+    expect(mocks.listManagedProcesses).toHaveBeenCalledWith({
+      sessionId,
+      runId: run.id,
+      origin: "agent",
+    });
+    expect(mocks.killManagedProcess).toHaveBeenCalledExactlyOnceWith("owned-agent-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("older-agent-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("other-session-terminal");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("user-terminal");
+  });
+
+  it("does not abort a replacement run while waiting for the old child tree", async () => {
+    const parentSessionId = `session-${crypto.randomUUID()}`;
+    const childSessionId = `session-${crypto.randomUUID()}`;
+    const workspaceId = `workspace-${crypto.randomUUID()}`;
+    insertSession(parentSessionId, workspaceId, join(userData, "missing-parent.jsonl"), "Parent");
+    insertSubagentSession(childSessionId, parentSessionId, workspaceId);
+
+    let releaseChildAbort!: () => void;
+    const childAbort = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseChildAbort = resolve;
+        }),
+    );
+    const parentPi = createMockPiSession();
+    const childPi = createMockPiSession({ abort: childAbort });
+    mocks.createAgentSession
+      .mockImplementationOnce(async () => ({ session: parentPi }))
+      .mockImplementationOnce(async () => ({ session: childPi }));
+    const runtime = new PiSdkRuntime();
+    const window = createWindowStub();
+    await runtime.ensure(window, parentSessionId);
+    await runtime.ensure(window, childSessionId);
+
+    const oldRun = createAgentRun({ sessionId: parentSessionId, prompt: "Old run" });
+    const aborting = runtime.abort(parentSessionId);
+    await vi.waitFor(() => expect(childAbort).toHaveBeenCalledOnce());
+
+    updateAgentRunStatus(oldRun.id, "completed");
+    const replacementRun = createAgentRun({ sessionId: parentSessionId, prompt: "New run" });
+    mocks.setManagedProcesses([
+      {
+        id: "old-run-process",
+        origin: "agent",
+        sessionId: parentSessionId,
+        runId: oldRun.id,
+        status: "running",
+      },
+      {
+        id: "replacement-run-process",
+        origin: "agent",
+        sessionId: parentSessionId,
+        runId: replacementRun.id,
+        status: "running",
+      },
+    ]);
+
+    releaseChildAbort();
+    await aborting;
+
+    expect(parentPi.abort).not.toHaveBeenCalled();
+    expect(getActiveAgentRun(parentSessionId)?.id).toBe(replacementRun.id);
+    expect(mocks.killManagedProcess).toHaveBeenCalledExactlyOnceWith("old-run-process");
+    expect(mocks.killManagedProcess).not.toHaveBeenCalledWith("replacement-run-process");
   });
 
   it("records the user prompt as persisted message events before running PI", async () => {

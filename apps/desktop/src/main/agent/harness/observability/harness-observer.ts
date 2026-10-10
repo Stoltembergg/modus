@@ -84,6 +84,7 @@ export class HarnessObserver {
   private pluginDurationsMs: number[] = [];
   private pluginExecutions = 0;
   private pluginFailures = 0;
+  private pluginCancellations = 0;
   private activePlugins = new Set<string>();
 
   // Session-level tracking
@@ -157,6 +158,7 @@ export class HarnessObserver {
     this.pluginDurationsMs = [];
     this.pluginExecutions = 0;
     this.pluginFailures = 0;
+    this.pluginCancellations = 0;
     this.activePlugins.clear();
     this.sessionMetrics.clear();
     this.sessionLifetimes.clear();
@@ -430,7 +432,7 @@ export class HarnessObserver {
       capability: string;
       version: string;
       durationMs?: number | undefined;
-      status: "success" | "error" | "timeout";
+      status: "success" | "error" | "timeout" | "cancelled";
       error?: string | undefined;
       metadata?: Record<string, unknown> | undefined;
     },
@@ -445,12 +447,20 @@ export class HarnessObserver {
       this.pluginDurationsMs.shift();
     }
 
-    const isFailure = trace.status !== "success";
+    const isCancelled = trace.status === "cancelled";
+    const isFailure = trace.status === "error" || trace.status === "timeout";
     if (isFailure) {
       this.pluginFailures++;
     }
+    if (isCancelled) {
+      this.pluginCancellations++;
+    }
 
-    const eventType = isFailure ? "harness.plugin.failed" : "harness.plugin.executed";
+    const eventType = isCancelled
+      ? "harness.plugin.cancelled"
+      : isFailure
+        ? "harness.plugin.failed"
+        : "harness.plugin.executed";
     this.emitEvent(
       eventType,
       {
@@ -630,6 +640,7 @@ export class HarnessObserver {
     const plugins: PluginTracingMetrics = {
       totalExecutions: totalPluginExec,
       failureCount: this.pluginFailures,
+      cancellationCount: this.pluginCancellations,
       totalDurationMs: totalPluginDur,
       avgDurationMs: Math.round(avgPluginDur * 100) / 100,
       p95DurationMs: Math.round(p95PluginDur * 100) / 100,

@@ -5327,10 +5327,18 @@ export class PiSdkRuntime implements AgentRuntime {
   async abort(sessionId: string): Promise<void> {
     this.cancelPendingIntentGate(sessionId);
     clearTodoSessionCache(sessionId);
-    await this.closeSubagentTree(sessionId, "Parent session aborted");
-    this.clearBackgroundTasksForParent(sessionId);
-    this.backgroundChildTasks.delete(sessionId);
-    await this.abortSessionOnly(sessionId);
+    const activeRunId = getActiveAgentRun(sessionId)?.id;
+    try {
+      await this.closeSubagentTree(sessionId, "Parent session aborted");
+      const currentRunId = getActiveAgentRun(sessionId)?.id;
+      if (currentRunId === undefined || currentRunId === activeRunId) {
+        this.clearBackgroundTasksForParent(sessionId);
+        this.backgroundChildTasks.delete(sessionId);
+        await this.abortSessionOnly(sessionId);
+      }
+    } finally {
+      if (activeRunId) await this.cleanupRunProcesses(sessionId, activeRunId);
+    }
   }
 
   private async abortSessionOnly(sessionId: string): Promise<void> {
@@ -5463,6 +5471,14 @@ export class PiSdkRuntime implements AgentRuntime {
   private async cleanupSessionProcesses(sessionId: string): Promise<void> {
     await Promise.all(
       listManagedProcesses({ sessionId, origin: "agent" }).map((process) =>
+        killManagedProcess(process.id).catch(() => false),
+      ),
+    );
+  }
+
+  private async cleanupRunProcesses(sessionId: string, runId: string): Promise<void> {
+    await Promise.all(
+      listManagedProcesses({ sessionId, runId, origin: "agent" }).map((process) =>
         killManagedProcess(process.id).catch(() => false),
       ),
     );

@@ -61,6 +61,7 @@ describe("terminalToManaged", () => {
         id: "term-7",
         origin: "agent",
         sessionId: "sess-A",
+        runId: "run-A",
         command: "npm run dev",
         title: "npm run dev",
         pid: 9090,
@@ -72,6 +73,7 @@ describe("terminalToManaged", () => {
       origin: "agent",
       workspaceId: "ws1",
       sessionId: "sess-A",
+      runId: "run-A",
       label: "npm run dev",
       status: "running",
       pid: 9090,
@@ -97,6 +99,7 @@ describe("appToManaged", () => {
       appProcess({
         id: "app-3",
         sessionId: "sess-A",
+        runId: "run-A",
         workspaceId: "ws1",
         name: "Solers",
         windowTitle: "Solers — main",
@@ -108,6 +111,7 @@ describe("appToManaged", () => {
       kind: "app",
       origin: "agent",
       sessionId: "sess-A",
+      runId: "run-A",
       workspaceId: "ws1",
       label: "Solers",
       windowTitle: "Solers — main",
@@ -216,5 +220,34 @@ describe("selectManagedProcesses", () => {
         (process) => process.id,
       ),
     ).toEqual(["user-1"]);
+  });
+
+  it("filters cancellation cleanup to the exact run while preserving session scope", () => {
+    const olderRun = terminalToManaged(
+      terminal({
+        id: "older-run-terminal",
+        origin: "agent",
+        sessionId: "sess-A",
+        runId: "run-old",
+        workspaceId: "ws1",
+      }),
+    );
+    const currentRun = terminalToManaged(
+      terminal({
+        id: "current-run-terminal",
+        origin: "agent",
+        sessionId: "sess-A",
+        runId: "run-current",
+        workspaceId: "ws1",
+      }),
+    );
+
+    expect(
+      selectManagedProcesses([olderRun, currentRun], {
+        sessionId: "sess-A",
+        runId: "run-current",
+        origin: "agent",
+      }).map((process) => process.id),
+    ).toEqual(["current-run-terminal"]);
   });
 });

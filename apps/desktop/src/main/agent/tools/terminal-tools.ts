@@ -190,10 +190,11 @@ const runTool: ToolDefinition = defineTool({
       sessionId: context.sessionId,
       command: params.command,
       background: params.background ?? false,
+      ...(context.runId ? { runId: context.runId } : {}),
       ...(params.yield_time_ms !== undefined ? { yieldMs: params.yield_time_ms } : {}),
       ...(readyWhen ? { readyWhen } : {}),
       ...(params.reuse !== undefined ? { reuse: params.reuse } : {}),
-      ...(!params.background && signal ? { signal } : {}),
+      ...(signal ? { signal } : {}),
       ...(context.window ? { window: context.window } : {}),
     });
     return toResult(formatRun(result, params.command), result);

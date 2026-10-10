@@ -6,13 +6,14 @@
 import { randomUUID } from "node:crypto";
 import { isFeatureFlagEnabled } from "../feature-flags";
 import { HarnessObserver } from "../observability/harness-observer";
-import type { PluginTrace, PluginTraceMetadata, PluginTraceStatus } from "./plugin-tracing-types";
+import type { PluginTrace, PluginTraceMetadata } from "./plugin-tracing-types";
 
 export interface PluginTraceOptions {
   version?: string | undefined;
   metadata?: PluginTraceMetadata | undefined;
   timeoutMs?: number | undefined;
   sessionId?: string | undefined;
+  signal?: AbortSignal | undefined;
 }
 
 export type TraceCollector = (trace: PluginTrace) => void;
@@ -48,7 +49,7 @@ export class PluginInstrumentation {
   public async trace<T>(
     pluginId: string,
     capability: string,
-    fn: () => Promise<T>,
+    fn: (signal: AbortSignal) => Promise<T>,
     options?: PluginTraceOptions,
   ): Promise<T> {
     const traceId = randomUUID();
@@ -65,26 +66,51 @@ export class PluginInstrumentation {
       metadata: options?.metadata ?? {},
     };
 
+    const controller = new AbortController();
     let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    const onAbort = (): void => controller.abort(options?.signal?.reason);
+    options?.signal?.addEventListener("abort", onAbort, { once: true });
 
     try {
-      let promise = fn();
+      if (options?.signal?.aborted) throw this.abortError(options.signal.reason);
+      const execution = Promise.resolve().then(() => fn(controller.signal));
+      let result: T;
 
       if (options?.timeoutMs && options.timeoutMs > 0) {
-        const timeoutPromise = new Promise<never>((_, reject) => {
+        const timeoutPromise = new Promise<{ kind: "timeout" }>((resolve) => {
           timeoutTimer = setTimeout(() => {
-            const timeoutErr = new Error(
-              `Plugin "${pluginId}" execution timed out after ${options.timeoutMs}ms for capability "${capability}"`,
-            );
-            (timeoutErr as unknown as { isPluginTimeout: boolean }).isPluginTimeout = true;
-            reject(timeoutErr);
+            resolve({ kind: "timeout" });
           }, options.timeoutMs);
         });
 
-        promise = Promise.race([promise, timeoutPromise]);
+        const outcome = await Promise.race([
+          execution.then(
+            (value) => ({ kind: "success" as const, value }),
+            (error: unknown) => ({ kind: "error" as const, error }),
+          ),
+          timeoutPromise,
+        ]);
+        if (outcome.kind === "timeout") {
+          timedOut = true;
+          const timeoutErr = new Error(
+            `Plugin "${pluginId}" execution timed out after ${options.timeoutMs}ms for capability "${capability}"`,
+          );
+          (timeoutErr as unknown as { isPluginTimeout: boolean }).isPluginTimeout = true;
+          controller.abort(timeoutErr);
+          // The host may report a timeout only after cooperative work has stopped.
+          // This prevents a timed-out promise from continuing side effects after
+          // its caller has already observed completion.
+          await execution.catch(() => undefined);
+          throw timeoutErr;
+        }
+        if (outcome.kind === "error") throw outcome.error;
+        result = outcome.value;
+      } else {
+        result = await execution;
       }
 
-      const result = await promise;
+      if (options?.signal?.aborted) throw this.abortError(options.signal.reason);
       if (timeoutTimer) clearTimeout(timeoutTimer);
 
       trace.endTime = Date.now();
@@ -97,16 +123,27 @@ export class PluginInstrumentation {
       if (timeoutTimer) clearTimeout(timeoutTimer);
 
       const err = error as Error & { isPluginTimeout?: boolean };
-      const isTimeout = err?.isPluginTimeout === true;
+      const isTimeout = timedOut || err?.isPluginTimeout === true;
+      const isCancelled = !isTimeout && (options?.signal?.aborted || controller.signal.aborted);
 
       trace.endTime = Date.now();
       trace.durationMs = trace.endTime - trace.startTime;
-      trace.status = (isTimeout ? "timeout" : "error") as PluginTraceStatus;
+      trace.status = isTimeout ? "timeout" : isCancelled ? "cancelled" : "error";
       trace.error = err?.message ?? String(error);
 
       this.recordTrace(trace, options?.sessionId);
       throw error;
+    } finally {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      options?.signal?.removeEventListener("abort", onAbort);
     }
+  }
+
+  private abortError(reason: unknown): Error {
+    if (reason instanceof Error) return reason;
+    const error = new Error("Plugin execution was cancelled.");
+    error.name = "AbortError";
+    return error;
   }
 
   private recordTrace(trace: PluginTrace, sessionId?: string): void {

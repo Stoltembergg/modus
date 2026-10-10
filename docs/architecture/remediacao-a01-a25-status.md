@@ -306,11 +306,86 @@ host-imported memory remains measurable after a failed start.
   metrics, and a retained reservation callback after disposal. These were
   fixed before the final pass, which found no blocking defect and confirmed
   direct test instances and the CLI benchmark release their reservations.
-  Remote CI remains before publication.
+- Remote CI on `ed00347` passed `typecheck · test · biome`, Verifier-First
+  runtime regressions, compile-only sandbox targets, plugin containment on
+  Linux/macOS/Windows, Windows x64 packaging, and macOS x64/arm64 packaging.
+  Supabase pgTAP again failed test 22 with expected `2026-10-31` and actual
+  `2026-10-30`.
 - Residual limits: only core 32-bit, non-shared memories with a maximum and an
   observable export are accepted; current memory metrics do not report process
   RSS. No external plugin, enforcement probe, or blocked hostile scenario was
   run, so A05 is not a proof of isolation or whole-process memory containment.
+
+## Milestone 5 — A15 run cancellation and managed-process cleanup
+
+**Status: cooperative cancellation and run-scoped cleanup implemented; hard
+preemption of non-cooperative in-process work remains unproven.**
+
+The root cause was split across the runtime and process APIs: `PiSdkRuntime.abort`
+aborted the Pi session and descendant sessions but did not clean root-run
+processes; process records had session identity but no owning run identity; the
+process facade requires a session scope when listing agent processes; and
+`terminal_run` omitted the Pi cancellation signal for background launches.
+`launch_app` and capability instrumentation also did not accept the signal.
+
+The runtime now queries and terminates managed agent processes with both the
+active `sessionId` and `runId`, leaving older runs, other sessions, and user
+processes untouched. Terminal and app records carry the creating `runId` into
+the existing managed-process facade. Terminal foreground/background readiness,
+port/HTTP waits, and app launch verification observe the tool signal; cancellation
+requests termination of only the process owned by that call and avoids recording
+an app launch as successful. Pi's signal now reaches these productive tool
+paths. Capability implementations receive a cooperative `AbortSignal`; a
+timeout aborts and drains cooperative work before returning, and traces record
+cancelled separately from failure. Observer events and aggregates now retain a
+separate cancellation event/count instead of counting cancellation as a plugin
+failure.
+
+### Evidence
+
+- RED: the runtime abort regression failed because its process query omitted
+  `sessionId`; the process map's scope rule would therefore return no agent
+  processes. Adding the session to the regression made the missing scope
+  observable before changing the cleanup query. GREEN: it now requests the
+  exact session/run pair and terminates only the matching agent process.
+- RED: the tool registration regression observed no `AbortSignal` in
+  `runAgentCommand` for a background call. GREEN: the Pi tool now passes the
+  signal and run identity; a synthetic PTY-host protocol test confirms an
+  aborted background call sends `kill` and records the terminal as exited.
+- RED/GREEN: the app launch cancellation fixture first returned a live detached
+  process after abort; it now rejects with `AbortError` and leaves no app record.
+  This test runs only a benign local Node timer fixture and cleans it in `finally`.
+- RED/GREEN: cooperative capability timeout tests show the callback receives
+  an aborted signal and settles before timeout returns. A separate cancellation
+  regression initially recorded `harness.plugin.failed`; it now emits
+  `harness.plugin.cancelled`, increments `cancellationCount`, and leaves
+  `failureCount` unchanged.
+- Targeted Vitest: runtime cancellation and replacement-run race **2 passed**
+  (220 name-filtered tests skipped); terminal tools **7 passed**; synthetic
+  terminal service **1 passed**; plugin tracing **20 passed**; observer metrics
+  **27 passed**; app-process cancellation/cleanup **3 passed** (1 skipped);
+  process-map tests **16 passed**. No adversarial probe or external plugin code
+  was run.
+- Desktop TypeScript typecheck: passed, exit 0. Targeted Biome: exit 0 with
+  **19 warnings and 1 info** remaining; no errors, rules disabled, or
+  indiscriminate formatting. `git diff --check`: passed.
+- Independent review first identified the run replacement race, early detached
+  app cancellation path, and non-cooperative timeout limitation. The first two
+  were fixed with RED/GREEN regressions; a second pass found no remaining
+  concrete blocker. The reviewer confirmed that non-cooperative in-process
+  callbacks remain a limitation, as documented above. Remote CI for this A15
+  patch is pending publication.
+
+### Limits
+
+JavaScript cannot forcibly preempt a same-thread callback that ignores its
+signal. Instrumentation waits for cancellation-aware work to settle, so a
+non-cooperative callback can delay timeout completion. External/untrusted
+plugin execution remains denied by the A01/A02 facade; no hostile callback or
+enforcement test was run. Terminal-host termination is an asynchronous kill
+request, and OS-level process-tree cleanup is only directly exercised for the
+benign app process fixture. A15 therefore remains **partially mitigated**, not
+a proof of hard preemption or a general containment boundary.
 
 ## Current matrix
 
@@ -330,7 +405,7 @@ host-imported memory remains measurable after a failed start.
 | A12 | Mitigated | Per-store lifecycle queue serializes shared DB/graph operations; stress/fault injection beyond targeted tests remains open. |
 | A13 | Mitigated | Safe Mode state and restoration are durable and restartable; storage corruption/power-loss proof remains open. |
 | A14 | Mitigated | SemVer constraints, active-provider checks, cycle preflight/recovery, and dependent suspension are covered; an OS boundary remains absent. |
-| A15 | Pending | Cancellation and child-resource cleanup. |
+| A15 | Partially mitigated | Pi cancellation propagates to terminal/app launches; active root-run agent processes are selected by session+run and cancelled, and cancellation telemetry is distinct. Non-cooperative in-process work and hard OS preemption remain unproven. |
 | A16 | Prior fix preserved | Explicit user-selected model identity and provider. |
 | A17 | Prior fix preserved | Verification evidence integrity. |
 | A18 | Pending | Group mailbox replay/ack consistency; keep distinct from the active group runtime. |
