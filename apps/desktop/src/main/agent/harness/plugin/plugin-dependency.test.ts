@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PiSdkRuntime } from "../../pi-sdk-runtime";
@@ -16,6 +19,9 @@ import { PluginStateStore } from "./plugin-state-store";
 import { TestPluginCatalog } from "./plugin-test-catalog";
 import { PluginDependencyError, PluginLifecycleError, type PluginManifest } from "./plugin-types";
 import { UpdatePlanner } from "./update-planner";
+
+const runtimeElectronState = vi.hoisted(() => ({ userData: "" }));
+vi.mock("electron", () => ({ app: { getPath: () => runtimeElectronState.userData } }));
 
 describe("Fase 14 — Dependency Intelligence", () => {
   let db: DatabaseSync;
@@ -897,7 +903,7 @@ describe("Fase 14 — Dependency Intelligence", () => {
       );
     });
 
-    it("accesses live dependency graph through PiSdkRuntime", () => {
+    it("accesses live dependency graph through PiSdkRuntime", async () => {
       setFeatureFlagOverrides({
         MODUS_USE_KERNEL: true,
         MODUS_CAPABILITY_REGISTRY: true,
@@ -906,9 +912,18 @@ describe("Fase 14 — Dependency Intelligence", () => {
         MODUS_PLUGIN_DEPENDENCY_INTELLIGENCE: true,
       });
 
-      const runtime = new PiSdkRuntime();
-      const graph = runtime.getDependencyGraph();
-      expect(graph).toBeInstanceOf(DependencyGraph);
+      const userData = mkdtempSync(join(tmpdir(), "modus-plugin-dependency-runtime-"));
+      runtimeElectronState.userData = userData;
+      let runtime: PiSdkRuntime | undefined;
+      try {
+        runtime = new PiSdkRuntime();
+        await runtime.waitForPlugins();
+        const graph = runtime.getDependencyGraph();
+        expect(graph).toBeInstanceOf(DependencyGraph);
+      } finally {
+        runtime?.getPluginStateStore().close();
+        rmSync(userData, { recursive: true, force: true });
+      }
     });
   });
 });
