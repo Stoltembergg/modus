@@ -116,13 +116,13 @@ fn spawn_session(
         }
     }
 
-    let mut child = pair.slave.spawn_command(command)?;
-    let pid = child.process_id();
-    let killer = child.clone_killer();
     let mut reader = pair.master.try_clone_reader()?;
     // `mut` required on Windows for the ConPTY CPR write below; unused on Unix.
     #[cfg_attr(not(windows), allow(unused_mut))]
     let mut pty_writer = pair.master.take_writer()?;
+    let mut child = pair.slave.spawn_command(command)?;
+    let pid = child.process_id();
+    let killer = child.clone_killer();
 
     // ── ConPTY unblock (Windows) ─────────────────────────────────────────────────────────────
     // portable-pty 0.9.0 creates the ConPTY with PSEUDOCONSOLE_INHERIT_CURSOR,
@@ -353,6 +353,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     struct ProcessGroupCleanup {
         pgid: Option<libc::pid_t>,
+        child_pid: Option<libc::pid_t>,
         pid_file: PathBuf,
         sessions: Sessions,
         session_id: String,
@@ -366,6 +367,11 @@ mod tests {
                 .lock()
                 .ok()
                 .and_then(|mut sessions| sessions.remove(&self.session_id));
+            let child_pid = self.child_pid.or_else(|| {
+                std::fs::read_to_string(&self.pid_file)
+                    .ok()
+                    .and_then(|contents| contents.parse().ok())
+            });
             let pgid = self.pgid.or_else(|| {
                 session
                     .as_ref()
@@ -377,6 +383,11 @@ mod tests {
                 // setup failures. A zombie is already terminated and harmless.
                 unsafe {
                     libc::kill(-pgid, libc::SIGKILL);
+                }
+            }
+            if let Some(child_pid) = child_pid {
+                unsafe {
+                    libc::kill(child_pid, libc::SIGKILL);
                 }
             }
             if let Some(mut session) = session {
@@ -413,6 +424,7 @@ mod tests {
         ));
         let mut cleanup = ProcessGroupCleanup {
             pgid: None,
+            child_pid: None,
             pid_file: pid_file.clone(),
             sessions: Arc::clone(&sessions),
             session_id: id.clone(),
@@ -455,6 +467,7 @@ mod tests {
                     && let Ok(child_pid) = contents.parse::<libc::pid_t>()
                     && let Some((_, child_group)) = linux_process_state_and_group(child_pid)
                 {
+                    cleanup.child_pid = Some(child_pid);
                     assert_eq!(child_group, pgid, "synthetic child escaped the PTY group");
                     break child_pid;
                 }
