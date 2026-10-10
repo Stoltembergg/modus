@@ -25,21 +25,41 @@ blocked hostile-plugin or enforcement scenarios remains explicitly pending.
 
 ## A01–A04 — shared process protocol foundation
 
-**Status: in progress; no productive executor integration or security proof.**
-The new `modus-plugin-execution-protocol` workspace crate defines the shared
-length-prefixed JSON worker envelope and synthetic tests for the 256 KiB frame
-limit and rejection of worker-supplied host identity. Its dedicated CI job
-executes only this crate’s safe unit fixtures. The current codec is an
-unhardened baseline for the RED tests; hard limits and strict schema rejection
-are not implemented yet.
+**Status: shared protocol implemented and locally tested; no productive
+executor integration or security proof.** The new
+`modus-plugin-execution-protocol` workspace crate defines the length-prefixed
+JSON worker envelope, strict message schemas, a per-worker handshake/sequence
+dispatcher, host-owned provenance, exact capability grants, bounded results,
+and close-on-protocol-error behavior. Its dedicated CI job executes only this
+crate’s safe unit fixtures.
+
+- RED: CI run `38077266288`, job `114286746069`, showed the baseline decoder
+  accepted both a frame above 256 KiB and a guest-supplied `plugin_id` field.
+- Independent review found that escaped control characters could make a
+  failure response exceed the 64 KiB serialized-result limit while its source
+  string remained under the limit. A fixed synthetic newline fixture
+  reproduced this before the correction; completion now rejects the encoded
+  result and closes the generation, and host-frame decoding enforces the same
+  serialized-byte limit. Review also found that outbound serialization could
+  allocate an oversized temporary buffer before applying the frame/result cap;
+  the shared serializer now writes into a byte-limited buffer and stops when
+  the configured ceiling is reached.
+- GREEN: local `cargo test --locked -p modus-plugin-execution-protocol` on
+  Rust 1.85.1 passed **11/11** synthetic protocol tests. Rustfmt 1.85.1 and
+  `git diff --check` passed. Remote CI for the fix is pending.
+- Independent static review found no further protocol-schema or handshake
+  blocker. It explicitly confirmed that `close()` cannot revoke an invocation
+  already returned to a future asynchronous caller; any real dispatcher must
+  recheck cancellation and run generation before side effects. No such caller
+  is integrated yet.
 
 No child process is launched, no plugin/WASM bytes are handled, and no OS
 adapter or Pi SDK callsite was added. The worker message has no `plugin_id`
-field; host provenance will be attached by the host dispatcher, not accepted
-from IPC. Windows, Linux, and macOS enforcement, resource guarantees, and
-preemptible process-tree termination remain unimplemented. External plugin
-execution stays blocked, while built-in Harness execution remains on the
-existing trusted host-catalog path.
+field; the dispatcher copies identity from the host-bound session. Windows,
+Linux, and macOS enforcement, the full CPU/RSS/deadline/process/handle policy,
+and preemptible process-tree termination remain unimplemented. External
+plugin execution stays blocked, while built-in Harness execution remains on
+the existing trusted host-catalog path.
 
 ## Mission CI prerequisite — Free monthly renewal calendar
 
