@@ -1749,7 +1749,7 @@ cancellation follow-up above.
 | A05 | Partially mitigated | `WasmCapabilityHost` validates a single bounded memory, reserves per-instance/aggregate maximum capacity, reports actual live memory, charges returned callable and JSON helper calls, defers reservation release until active exports unwind, invalidates returned callables on disposal, recognizes cross-realm resources, rejects object-valued globals/callback returns/exports and blocks function-reference escape through host imports/tables/tags/globals, and keeps fuel imports host-owned; external plugin wiring and blocked enforcement proof remain unavailable. |
 | A06 | Partially mitigated; no-grant WASI denial revalidated | All imported WASI modules are denied before instantiation; exact synthetic tests ran with instantiation asserted unused. Grant-backed env/preopens and host isolation remain unavailable. |
 | A07 | Partially mitigated | Missing-path parent and dangling-link predicates are canonicalized; filesystem I/O fails closed without a race-free backend. No production consumer; scoped safe I/O and race proof remain open. |
-| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
+| A08 | Partially mitigated | Caller trust override removed; bracketed/mapped IPv6 and selected local ranges are normalized by a predicate. This follow-up also blocks documentation prefix `3fff::/20` and local-use NAT64 `64:ff9b:1::/48`, including globally encoded payload addresses. Boundary tests confirm `3fff:1000::/` is outside the documentation prefix. DNS pinning, redirects, connection enforcement, and production wiring remain open. |
 | A09 | Partially mitigated | Tested shell composition, common interpreter wrappers, forged trust, and direct Git operation grant bypasses are rejected. Arbitrary wrappers, structured argv, resource scoping, and production wiring remain open. |
 | A10 | Mitigated for host-catalog plugins; legacy activation blocked | Startup uses exact host-catalog versions, opens the durable store before deferred activation, reconciles disabled/tombstoned state, and restores dependency order. `MODUS_PLUGINS` now requires `MODUS_PLUGIN_LIFECYCLE`; no direct bootstrap path remains. External artifact identity and crash-consistent package deployment remain unavailable. |
 | A11 | Mitigated | Disable transaction rollback restores runtime or leaves provider quarantined; broader crash atomicity remains unproven. |
@@ -1797,16 +1797,48 @@ the existing registry dispatcher and lifecycle service.
 - Biome passed the touched-file set with no errors (**38 warnings, 2 infos**);
   no mass formatting or rule suppression was used. Desktop typecheck passed and
   `git diff --check` passed.
-- Before this patch, remote HEAD `c63b4e6` had all package jobs complete and
-  Supabase pgTAP/Deno passed (**20 files, 1,041 tests**). The global Vitest run
-  had **4,607 passed, 8 skipped, 1 failed** across 408 files; the failure was
-  `FastVectorDistance` at **0.116127 ms** against `<0.1 ms`. No base comparison
-  supports classifying it as pre-existing or solely environmental. Safe
-  protocol, PTY, Verifier-First, and filtered containment jobs passed; no probe
-  ran. Windows x64 and macOS x64/arm64 packaging completed successfully. CI for
-  this incremental patch is pending publication.
+- Workflow `38085364845` on `31f9d02`: Biome/typecheck, Supabase pgTAP/Deno
+  (**20 files, 1,041 tests**), PTY cancellation, safe IPC protocol fixtures,
+  Verifier-First, compile-only sandbox, and filtered containment on Ubuntu,
+  macOS, and Windows passed; no probe ran. Windows x64 and macOS x64/arm64
+  packaging also completed successfully in workflows `38085364862` and
+  `38085364853`.
+- The global Vitest job reported **4,611 passed, 8 skipped, 3 failed across 408
+  files**. Two `qa-evidence.test.ts` ancestor/UID assertions expected `tests`
+  but received `undefined`; the third was `FastVectorDistance` at **0.115946
+  ms** against `<0.1 ms`. The targeted QA tests passed locally on the same
+  commit, but the discrepancy has not been explained. No failure is classified
+  as pre-existing or solely environmental.
 - Residual: trusted built-in callback code still runs in the host process.
   External plugin execution remains disabled. The IPC v2 dispatcher still has
   no platform executor or productive caller, so A01–A04 process containment is
   not proven. This increment does not start Guardian Tasks 5–7 or change any
   checkpoint.
+
+### A08 IPv6 destination classification follow-up
+
+The static `NetworkBroker.canConnect` destination predicate now blocks IPv6
+documentation addresses in `3fff::/20` and the local-use NAT64 prefix
+`64:ff9b:1::/48`. Classification still does not perform or authorize a socket
+connection, and the broker has no DNS pinning or redirect enforcement path.
+
+- RED: the existing focused regression reproduced that `3fff::1` was allowed
+  under a wildcard network grant. GREEN: after the classifier change, it and
+  `64:ff9b:1::a00:1` are blocked. Boundary coverage checks that
+  `3fff:0fff::1` remains inside the `/20`, `3fff:1000::1` is outside it, and
+  local-use NAT64 stays blocked even when it encodes a public IPv4 address.
+  Explicitly matched global IPv6 remains permitted. The tests invoke only
+  `canConnect`; they do not create network connections.
+- Focused Vitest passed **2/2**. Desktop typecheck passed. Biome identified one
+  formatting issue in the new test, which was corrected; four existing
+  informational diagnostics in the production file were left unchanged.
+- Independent source review found no defect in the prefix matching and
+  recommended the `/20` and public-payload boundary cases now present in the
+  test. The follow-up review confirmed those boundaries and found no defect;
+  both reviews were source-only and did not validate DNS or connection
+  enforcement.
+- Residual: this is a classification improvement only. A08 remains partial
+  until production wiring, DNS pinning, redirect handling, and connection-time
+  enforcement are implemented and safely validated. This predicate classifies
+  literal IP hosts only; a hostname resolving into a reserved IPv6 range still
+  requires enforcement in the unresolved connection path.
