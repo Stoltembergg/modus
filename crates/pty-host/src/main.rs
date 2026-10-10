@@ -287,6 +287,43 @@ fn unix_process_group_exists(process_group: libc::pid_t) -> bool {
     io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+#[cfg(target_os = "linux")]
+fn linux_process_state_and_group(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat.rsplit_once(')')?.1.split_whitespace();
+    let mut fields = fields;
+    let state = fields.next()?.chars().next()?;
+    let _parent_pid = fields.next()?;
+    let process_group = fields.next()?.parse().ok()?;
+    Some((state, process_group))
+}
+
+#[cfg(target_os = "linux")]
+fn unix_process_group_has_live_members(process_group: libc::pid_t) -> bool {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return unix_process_group_exists(process_group);
+    };
+
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<libc::pid_t>() else {
+            continue;
+        };
+        if let Some((state, member_group)) = linux_process_state_and_group(pid)
+            && member_group == process_group
+            && !matches!(state, 'Z' | 'X')
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn unix_process_group_has_live_members(process_group: libc::pid_t) -> bool {
+    unix_process_group_exists(process_group)
+}
+
 fn terminate_process_group_after_leader_exit(pid: Option<u32>) {
     if let Some(task) = kill_process_tree(pid) {
         let _ = task.join();
@@ -296,7 +333,7 @@ fn terminate_process_group_after_leader_exit(pid: Option<u32>) {
     if let Some(pid) = pid
         && let Ok(process_group) = libc::pid_t::try_from(pid)
     {
-        while unix_process_group_exists(process_group) {
+        while unix_process_group_has_live_members(process_group) {
             thread::sleep(PROCESS_TREE_POLL_INTERVAL);
         }
     }
@@ -318,10 +355,28 @@ fn schedule_process_tree_kill(pid: Option<u32>, tasks: &mut TerminationTasks) {
 }
 
 fn terminate_sessions(sessions: &Sessions, tasks: &mut TerminationTasks) {
-    let sessions = std::mem::take(&mut *sessions.lock().expect("session lock poisoned"));
+    let mut locked_sessions = sessions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let sessions = std::mem::take(&mut *locked_sessions);
+    drop(locked_sessions);
     for (_, mut session) in sessions {
         schedule_process_tree_kill(session.pid, tasks);
         let _ = session.killer.kill();
+    }
+}
+
+struct HostCleanup {
+    sessions: Sessions,
+    termination_tasks: TerminationTasks,
+}
+
+impl Drop for HostCleanup {
+    fn drop(&mut self) {
+        terminate_sessions(&self.sessions, &mut self.termination_tasks);
+        for task in self.termination_tasks.drain(..) {
+            let _ = task.join();
+        }
     }
 }
 
@@ -423,15 +478,12 @@ fn run_host_commands(
 fn main() -> Result<()> {
     let sessions = Arc::new(Mutex::new(HashMap::new()));
     let writer = Arc::new(Mutex::new(io::stdout()));
-    let mut termination_tasks = Vec::new();
-    let run_result = run_host_commands(&sessions, &writer, &mut termination_tasks);
-
-    // EOF is also a host shutdown; do not leave child process groups behind.
-    terminate_sessions(&sessions, &mut termination_tasks);
-    for task in termination_tasks {
-        let _ = task.join();
-    }
-
+    let mut cleanup = HostCleanup {
+        sessions: Arc::clone(&sessions),
+        termination_tasks: Vec::new(),
+    };
+    let run_result = run_host_commands(&sessions, &writer, &mut cleanup.termination_tasks);
+    drop(cleanup);
     run_result
 }
 
@@ -509,7 +561,9 @@ mod tests {
                 let child_group = linux_process_state_and_group(child_pid)?.1;
                 (child_group == reported_pgid).then_some(reported_pgid)
             });
-            if let Some(pgid) = pgid {
+            if let Some(pgid) = pgid
+                && unix_process_group_has_live_members(pgid)
+            {
                 // Always clean up the synthetic child, including assertion and
                 // setup failures. A zombie is already terminated and harmless.
                 unsafe {
@@ -529,17 +583,6 @@ mod tests {
             }
             let _ = std::fs::remove_file(&self.pid_file);
         }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn linux_process_state_and_group(pid: libc::pid_t) -> Option<(char, libc::pid_t)> {
-        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-        let fields = stat.rsplit_once(')')?.1.split_whitespace();
-        let mut fields = fields;
-        let state = fields.next()?.chars().next()?;
-        let _parent_pid = fields.next()?;
-        let process_group = fields.next()?.parse().ok()?;
-        Some((state, process_group))
     }
 
     #[cfg(target_os = "linux")]
