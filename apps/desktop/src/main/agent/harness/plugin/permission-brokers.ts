@@ -342,7 +342,8 @@ export class NetworkBroker {
 
     const groups = NetworkBroker.parseIpv6Groups(host);
     if (!groups) return false;
-    const [first, second] = groups;
+    const [first, second, third] = groups;
+    const localUseNat64 = first === 0x0064 && second === 0xff9b && third === 0x0001;
     if (first === 0x0064 && second === 0xff9b && groups.slice(2, 6).every((group) => group === 0)) {
       const [high, low] = groups.slice(6, 8);
       if (high === undefined || low === undefined) return true;
@@ -357,6 +358,8 @@ export class NetworkBroker {
       (first !== undefined && (first & 0xffc0) === 0xfe80) ||
       (first !== undefined && (first & 0xff00) === 0xff00) ||
       groups.slice(0, 6).every((group) => group === 0) ||
+      (first === 0x3fff && second !== undefined && (second & 0xf000) === 0) ||
+      localUseNat64 ||
       (first === 0x2001 && second === 0x0db8) ||
       (first === 0x2001 && second === 0x0000) ||
       first === 0x2002
